@@ -213,14 +213,14 @@ answer_ask() {
     c_claims)
       code="$(code_file "$ask" code-2.json)"
       # Another cell's token; a recovery code of an identity the directory
-      # never saw; and a code of this identity whose secret holds no
-      # recovery key of it. Each code is composed here as
-      # Prima.RecoveryCode composes one, the one place outside Prima that
-      # does; proof.mjs holds each refusal to its reason, so a code
-      # composed wrongly is refused as not_a_code or typo and fails the
-      # step.
+      # never saw; a code of this identity whose secret holds no recovery
+      # key of it; and this identity's code with one symbol changed. Each
+      # forged code is composed here as Prima.RecoveryCode composes one, the
+      # one place outside Prima that does; proof.mjs holds each refusal to
+      # its reason, so a code composed wrongly is refused as not_a_code and
+      # fails the step.
       other="$(identity_restore_post "$C" /restore "$SECRETS/token-c2" "$code" "$WORK/answer.json")"
-      python3 - "$ask" "$SECRETS/unknown.json" "$SECRETS/wrong-secret.json" <<'PY'
+      python3 - "$ask" "$SECRETS/unknown.json" "$SECRETS/wrong-secret.json" "$SECRETS/typo.json" <<'PY'
 import hashlib, json, os, sys
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 def recovery_code(identifier, secret):
@@ -229,15 +229,18 @@ def recovery_code(identifier, secret):
     n = int.from_bytes(digest + secret + check, "big")
     symbols = "".join(ALPHABET[(n >> (5 * (111 - i))) & 31] for i in range(112))
     return "CYFR-" + "-".join(symbols[i:i + 8] for i in range(0, 112, 8))
-identifier = json.load(open(sys.argv[1]))["code"]["identifier"]
+held = json.load(open(sys.argv[1]))["code"]
+identifier, code = held["identifier"], held["code"]
 json.dump({"recovery_code": recovery_code("per_" + os.urandom(32).hex(), os.urandom(32))}, open(sys.argv[2], "w"))
 json.dump({"recovery_code": recovery_code(identifier, os.urandom(32))}, open(sys.argv[3], "w"))
+json.dump({"recovery_code": code[:-1] + ("1" if code[-1] == "0" else "0")}, open(sys.argv[4], "w"))
 PY
       unknown="$(post_restore "$C" "$SECRETS/unknown.json")"
       wrong="$(post_restore "$C" "$SECRETS/wrong-secret.json")"
+      typo="$(post_restore "$C" "$SECRETS/typo.json")"
       attempts="$(identity_fixture "$C" restores | python3 -c "import json, sys; print(len(json.load(sys.stdin)['restores']))")"
-      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'other_token': int(sys.argv[1]), 'unknown_identity': json.loads(sys.argv[2]), 'wrong_secret': json.loads(sys.argv[3]), 'attempts': int(sys.argv[4])}))" \
-        "$other" "$unknown" "$wrong" "$attempts")"
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'other_token': int(sys.argv[1]), 'unknown_identity': json.loads(sys.argv[2]), 'wrong_secret': json.loads(sys.argv[3]), 'typo': json.loads(sys.argv[4]), 'attempts': int(sys.argv[5])}))" \
+        "$other" "$unknown" "$wrong" "$typo" "$attempts")"
       ;;
     c_phases)
       code="$(code_file "$ask" code-2.json)"

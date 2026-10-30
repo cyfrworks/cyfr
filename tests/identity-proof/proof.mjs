@@ -418,8 +418,9 @@ async function main(browser, proxy) {
   if (!row("claims",
     claims.other_token === 401 &&
       claims.unknown_identity?.status === 422 && claims.unknown_identity?.error === "unknown_identity" &&
-      claims.wrong_secret?.status === 422 && claims.wrong_secret?.error === "not_a_holder" && claims.attempts === 0,
-    "C's own token alone opens it: another cell's token is refused, and so are a recovery code of an identity the directory never saw and one whose secret holds no recovery key of the identity, each for its reason, and nothing is claimed", claims)) return;
+      claims.wrong_secret?.status === 422 && claims.wrong_secret?.error === "not_a_holder" &&
+      claims.typo?.status === 422 && claims.typo?.error === "typo" && claims.attempts === 0,
+    "C's own token alone opens it: another cell's token is refused, and so are a recovery code of an identity the directory never saw, one whose secret holds no recovery key of the identity and the person's own code with one symbol changed, each for its reason, and nothing is claimed", claims)) return;
 
   const phases = await ask({ op: "c_phases", code: code2 }, { secret: true, timeoutMs: 900_000 });
   record.phases = phases;
