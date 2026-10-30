@@ -3,10 +3,8 @@
   <%!-- The person's mode: Canvas on the shell's page, the Dashboard on every
         other. The Canvas mode fills everything under the top bar. --%>
   <% canvas? = assigns[:active_nav] == "canvas" %>
-  <!-- The chrome: brand, the athanor switcher, the drawer, the person — and in dev the live indicators.
-       A page whose own layer covers the chrome (`covered`, the shell under a full frame) takes it out
-       of reach, so no key reaches a control nobody can see. -->
-  <div id="chrome-top" class="contents" inert={assigns[:covered]}>
+  <!-- The chrome: brand, the athanor switcher, the drawer, the person — and in dev the live indicators. -->
+  <div id="chrome-top" class="contents">
     {live_render(@socket, PrismWeb.TopbarLive,
       id: "topbar",
       session: %{
@@ -21,7 +19,7 @@
   <!-- Body row: in the Dashboard, sidebar (dev, wide screens) + drawer (both UI modes);
        then the main content -->
   <div class="flex flex-1 overflow-hidden">
-    <div :if={not canvas?} id="chrome-side" class="contents" inert={assigns[:covered]}>
+    <div :if={not canvas?} id="chrome-side" class="contents">
       <.sidebar
         :if={Prism.Labels.dev?(mode)}
         mode={mode}

@@ -228,11 +228,10 @@ defmodule PrismWeb.ShellLive do
   bridge alone, and keeps none. A frozen frame is not renewed, so a canvas
   hidden past its deadline is refused when it is shown again.
 
-  While a full frame is shown it covers everything under it, so the
-  shell sets `covered`: the layout takes its chrome (the top bar, the
-  sidebar and the drawer) out of reach with `inert`, and the canvas does
-  the same to every layer under the full frame. The full frame and its
-  capsule, the system layer and the assistant's panel stay reachable.
+  A full frame fills the apps' area between the top bar and the shelf, and
+  the canvas makes every layer under it `inert`. The top bar, the shelf,
+  the full frame and its capsule, the system layer and the assistant's
+  panel stay reachable.
 
   Activation, a press and the system layer's restore run in this view's
   own callbacks; it starts no task for them. Every credential this view
@@ -280,7 +279,6 @@ defmodule PrismWeb.ShellLive do
       |> assign(:active_nav, "canvas")
       |> assign(:frames, Frames.new())
       |> assign(:renewals, %{})
-      |> assign(:covered, false)
       |> assign(:posture, "desk")
       |> assign(:arrangement, nil)
       |> assign(:layout_base, nil)
@@ -704,7 +702,7 @@ defmodule PrismWeb.ShellLive do
     socket =
       replacements
       |> Enum.reduce(socket, &push_event(&2, "frame_bearer", &1))
-      |> assign(frames: later, covered: Frames.active(later) != nil)
+      |> assign(:frames, later)
       |> arm_renewals(before, later)
       |> ready_deadlines(later)
 

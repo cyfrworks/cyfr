@@ -552,7 +552,7 @@ defmodule PrismWeb.CanvasLiveTest do
     # The edge strip is gone: the shelf takes its swipe. The apps stand
     # above the shelf.
     refute has_element?(view, "#canvas-edge-strip")
-    assert has_element?(view, ~s(#canvas-frames[class*="bottom-[52px]"]))
+    assert has_element?(view, ~s{#canvas-frames[class*="bottom-[var(--canvas-shelf-height)]"]})
   end
 
   test "a canvas placed as an app is refused, and mints nothing", %{

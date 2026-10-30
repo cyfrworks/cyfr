@@ -831,7 +831,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert row(id).state == "active"
     end
 
-    test "a shown full frame takes everything it covers out of reach, and only that",
+    test "a shown full frame takes the canvas under it out of reach, and only that: the top bar stays",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       tincture!(ctx, "app-dash")
 
@@ -844,36 +844,61 @@ defmodule PrismWeb.ShellCanvasTest do
       # The Canvas mode draws no sidebar and no drawer.
       refute has_element?(view, "#chrome-side")
 
-      for covered <- ~w(#chrome-top [data-canvas-place="canvas"]) do
-        refute has_element?(view, "#{covered}[inert]"), covered
-      end
+      refute has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
 
-      # The chrome and every canvas layer under the full frame.
-      for covered <- ~w(#chrome-top [data-canvas-place="canvas"]) do
-        assert has_element?(view, "#{covered}[inert]"), covered
-      end
+      # Every canvas layer under the full frame.
+      assert has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
-      assert has_element?(view, "#chrome-top[inert] #topbar")
-
-      # The full frame and its capsule, the shell's own Devices control,
-      # the switcher, the system layer and the assistant's panel stay
-      # reachable.
+      # The full frame and its capsule, the top bar with its mode switch,
+      # the shell's own Devices control, the switcher, the system layer and
+      # the assistant's panel stay reachable.
       refute has_element?(view, ~s([data-canvas-place="full"][inert]))
       refute has_element?(view, ~s([inert] button[phx-click="close_active_tincture"]))
 
-      for reachable <- ~w(#shell-devices #canvas-switcher #system-layer #aqua-panel) do
+      for reachable <-
+            ~w(#chrome-top #topbar #shell-devices #canvas-switcher #system-layer #aqua-panel) do
         assert has_element?(view, reachable), reachable
         refute has_element?(view, "[inert] #{reachable}"), reachable
         refute has_element?(view, "#{reachable}[inert]"), reachable
       end
 
       render_click(view, "close_active_tincture", %{})
+      refute has_element?(view, ~s([data-canvas-place="canvas"][inert]))
+    end
 
-      for covered <- ~w(#chrome-top [data-canvas-place="canvas"]) do
-        refute has_element?(view, "#{covered}[inert]"), covered
+    test "a full app fills the apps' area, from the top bar's bottom edge to the shelf's top edge, its capsule inside",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "full", 0, true)])
+      })
+
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
+      html = render(view)
+
+      classes = fn tag ->
+        tag |> then(&Regex.run(~r/class="([^"]*)"/, &1)) |> List.last() |> String.split()
       end
+
+      # Inside the frames' box, which starts under the top bar and ends at
+      # the shelf's top edge, the shelf's height read from its stylesheet.
+      [frames] = Regex.run(~r/<div[^>]*id="canvas-frames"[^>]*>/, html)
+      assert "bottom-[var(--canvas-shelf-height)]" in classes.(frames)
+      assert "top-0" in classes.(frames)
+
+      [full] = Regex.run(~r/<div[^>]*data-canvas-place="full"[^>]*>/, html)
+      assert ~w(absolute inset-0 z-[64]) -- classes.(full) == []
+      refute "fixed" in classes.(full)
+      assert html =~ ~r/data-canvas-place="full".*role="toolbar" aria-label="Tincture controls"/s
+
+      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
+      assert [_one] = Regex.scan(~r/--canvas-shelf-height: [0-9]+px;/, css)
+      assert css =~ ~r/\.canvas-shelf \{[^}]*height: var\(--canvas-shelf-height\);/
+      assert [_only_the_property] = Regex.scan(~r/52px/, css)
     end
 
     test "a layout published by another session of the same person is read again here; another person's is not",
@@ -3094,12 +3119,13 @@ defmodule PrismWeb.ShellCanvasTest do
       refute "fixed" in classes.(notice)
 
       # The apps stand above the shelf, and the shelf's stylesheet centres
-      # the line in its 52 pixels with the chips: 13 + 26 is within 52.
-      assert has_element?(view, ~s(#canvas-frames[class*="bottom-[52px]"]))
+      # the line in its strip with the chips, half the room its 26 pixels
+      # leave on each side.
+      assert has_element?(view, ~s{#canvas-frames[class*="bottom-[var(--canvas-shelf-height)]"]})
       css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
 
       assert css =~
-               ~r/#shell:has\(#canvas-shelf\) #shell-devices,\s*#shell:has\(#canvas-shelf\) #system-layer-notice \{ bottom: 13px; \}/
+               ~r/#shell:has\(#canvas-shelf\) #shell-devices,\s*#shell:has\(#canvas-shelf\) #system-layer-notice \{ bottom: calc\(\(var\(--canvas-shelf-height\) - 26px\) \/ 2\); \}/
 
       # Its width is the room the chips' spacer widens by while it stands,
       # so nothing of the shelf is under it.

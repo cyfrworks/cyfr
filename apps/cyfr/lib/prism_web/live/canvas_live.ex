@@ -13,7 +13,10 @@ defmodule PrismWeb.CanvasLive do
   a hidden canvas's frame is held invisible and frozen, and a validation
   frame is hidden and inert), narrowed by the tiles beside it; its tiles
   at their edge and share; its windows at their geometry; and the active
-  `full` frame over everything, with its capsule. Geometry and shares are
+  `full` frame over the whole apps' area, with its capsule inside it.
+  The apps' area runs from the top bar's bottom edge to the shelf's top
+  edge, so nothing of an app, a full one included, stands under the bar or
+  the shelf. Geometry and shares are
   hundredths of a percent of the apps' area. While a full frame is shown
   every other layer is `inert`, so no key reaches a control it covers; the
   full frame and its capsule stay reachable.
@@ -50,7 +53,8 @@ defmodule PrismWeb.CanvasLive do
   shell's arrangement events (`PrismWeb.ShellLive`), one per settled
   gesture.
 
-  The shelf (`#canvas-shelf`, 52 pixels along the bottom, drawn with the
+  The shelf (`#canvas-shelf`, along the bottom, its height
+  `--canvas-shelf-height` in `canvas_chrome.css`, drawn with the
   visible canvas, and like the canvas's other
   controls above a full app and within reach) holds, from the left: room for
   the shell's own chips, which `PrismWeb.ShellLive` draws; with more than
@@ -268,7 +272,7 @@ defmodule PrismWeb.CanvasLive do
         phx-update="stream"
         class={[
           "pointer-events-none absolute inset-x-0 top-0 overflow-hidden",
-          if(@shelf, do: "bottom-[52px]", else: "bottom-0")
+          if(@shelf, do: "bottom-[var(--canvas-shelf-height)]", else: "bottom-0")
         ]}
       >
         <div
@@ -686,7 +690,7 @@ defmodule PrismWeb.CanvasLive do
 
   defp frame_class(%{placement: :full, visible: visible}, _active) do
     [
-      "pointer-events-auto fixed inset-0 z-[64] flex flex-col bg-surface-base",
+      "pointer-events-auto absolute inset-0 z-[64] flex flex-col bg-surface-base",
       if(not visible, do: "hidden")
     ]
   end
