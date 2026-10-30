@@ -3539,29 +3539,28 @@ defmodule PrismWeb.ShellCanvasTest do
 
       Process.cancel_timer(assigns(view).write_timer)
 
-      # The store refuses every write: its root is a file.
+      # The store refuses every write while its root is a file.
       original = Application.fetch_env!(:arca, :base_path)
-      on_exit(fn -> Application.put_env(:arca, :base_path, original) end)
       blocked = Path.join(original, "arrange-blocked-#{System.unique_integer([:positive])}")
       File.write!(blocked, "not a directory")
-      Application.put_env(:arca, :base_path, blocked)
 
-      for attempt <- 1..5 do
+      Prima.Test.Env.with_app_env(:arca, :base_path, blocked, fn ->
+        for attempt <- 1..5 do
+          written!(view)
+          assert assigns(view).pending != [], "attempt #{attempt}"
+          assert is_reference(assigns(view).write_timer), "attempt #{attempt}"
+          Process.cancel_timer(assigns(view).write_timer)
+        end
+
         written!(view)
-        assert assigns(view).pending != [], "attempt #{attempt}"
-        assert is_reference(assigns(view).write_timer), "attempt #{attempt}"
-        Process.cancel_timer(assigns(view).write_timer)
-      end
+      end)
 
-      written!(view)
+      File.rm(blocked)
       assert assigns(view).pending == []
       assert assigns(view).write_timer == nil
       assert %{placement: ^saved} = app_frame(view, "app-dash")
       assert identity(app_frame(view, "app-dash")) == identity(dash)
       assert render(view) =~ "Your arrangement could not be saved"
-
-      Application.put_env(:arca, :base_path, original)
-      File.rm(blocked)
 
       layout!(user, athanor, [
         entry("home", "tincture:local.markets", %{

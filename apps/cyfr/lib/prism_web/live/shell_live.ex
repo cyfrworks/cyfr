@@ -884,8 +884,8 @@ defmodule PrismWeb.ShellLive do
   defp open_from_canvas(socket, canvas_id, ref) do
     with :ok <- arranging(socket),
          %{} = card <- listed(socket, ref),
-         {:ok, socket} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
-      socket
+         {:ok, opened} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
+      opened
     else
       _refused -> drop_message(socket)
     end
