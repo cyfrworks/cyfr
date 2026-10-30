@@ -227,7 +227,7 @@ defmodule PrismWeb.IdentityCard do
   end
 
   defp act("show_kit", %{"attempt" => attempt_id}, socket),
-    do: {:noreply, show(socket, &Recovery.kit(&1, attempt_id))}
+    do: {:noreply, show(socket, &Recovery.recovery_code(&1, attempt_id))}
 
   defp act("claim", _params, socket), do: {:noreply, claim(socket)}
 
