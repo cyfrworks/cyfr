@@ -5,10 +5,11 @@ defmodule PrismWeb.CanvasLiveTest do
   @moduledoc """
   The canvas layer draws the person's layout for the posture their client
   reports, and the shell holds the frames that arrangement places over the
-  visible canvas: its frame, and a window's or a tile's tincture as a
-  column at its order; nothing for a minimised app or a tincture nobody
-  installed. A `full` app opens only when the canvas asks for it. A posture report that is
-  neither `hand` nor `desk` is ignored. The switcher and the edge strip are
+  visible canvas: its frame narrowed by its tiles, each window at its
+  geometry and each tile at its edge and share, stacked by their order;
+  nothing for a minimised app or a tincture nobody installed. In the hand
+  every app is full. A posture report that is neither `hand` nor `desk`
+  is ignored. The switcher and the edge strip are
   drawn for more than one canvas. Opening a full frame over the canvas
   freezes the frames beneath it, and closing it lets them run again. The
   frames' wrappers are a stream, after only the layer's always-present
@@ -136,8 +137,8 @@ defmodule PrismWeb.CanvasLiveTest do
     )
   end
 
-  # Desk: a window, a full app, a window nobody installed, a tile and a
-  # minimised window. Hand: one window of another tincture. A second
+  # Desk: a window, a minimised full app, a window nobody installed, a
+  # tile and a minimised window. Hand: one window of another tincture. A second
   # canvas places nothing.
   defp canvases do
     [
@@ -148,7 +149,7 @@ defmodule PrismWeb.CanvasLiveTest do
           "desk" => %{
             "apps" => [
               app("tincture:local.slot-dash", "window", 0),
-              app("tincture:local.icon-dash", "full", 1),
+              app("tincture:local.icon-dash", "full", 1, true),
               app("tincture:acme.gone", "window", 2),
               app("tincture:local.tile-dash", "tile", 3),
               app("tincture:local.hidden-dash", "window", 4, true)
@@ -171,6 +172,12 @@ defmodule PrismWeb.CanvasLiveTest do
   end
 
   defp frames(view), do: :sys.get_state(view.pid).socket.assigns.frames
+
+  # The opening tag of the wrapper around frame `frame_id`.
+  defp wrapper_tag(html, frame_id) do
+    [tag] = Regex.run(~r/<div[^>]*data-canvas-frame="#{frame_id}"[^>]*>/, html)
+    tag
+  end
 
   defp by_key(view, key), do: Prism.Frames.get(frames(view), key)
 
@@ -314,27 +321,35 @@ defmodule PrismWeb.CanvasLiveTest do
     assert %{state: :live, visible: true, placement: :canvas} = canvas
     assert html =~ ~r/data-canvas-place="canvas"[^>]*>\s*<iframe[^>]*id="#{canvas.id}"/
 
-    # A window is its tincture's own frame, at its order's column.
+    # A window is its tincture's own frame, at its geometry and stack.
     column = by_key(view, {:app, "home", "tincture:local.slot-dash"})
-    assert %{state: :live, visible: true, placement: {:column, 0}, arranged: true} = column
+
+    assert %{
+             state: :live,
+             visible: true,
+             placement: {:window, %{x: 2500, y: 5000, w: 3000, h: 4000}},
+             stack: 0
+           } = column
+
     assert row(column.id).state == "active"
-    assert html =~ ~s(data-canvas-column="#{column.id}")
+    window = wrapper_tag(html, column.id)
+    assert window =~ ~s(data-canvas-place="window")
+    assert window =~ ~s(data-canvas-geometry="2500 5000 3000 4000")
+    assert window =~ ~s(data-canvas-stack="0")
+    assert window =~ "left: 25.00%; top: 50.00%; width: 30.00%; height: 40.00%; z-index: 30;"
 
-    # A tile is a column at its order too.
+    # A tile stands at its edge and share, and narrows the canvas beside it.
     tile = by_key(view, {:app, "home", "tincture:local.tile-dash"})
-    assert %{state: :live, visible: true, placement: {:column, 3}, arranged: true} = tile
+    assert %{state: :live, visible: true, placement: {:tile, :right, 2500}, stack: 3} = tile
+    tiled = wrapper_tag(html, tile.id)
+    assert tiled =~ ~s(data-canvas-place="tile")
+    assert tiled =~ ~s(data-canvas-side="right")
+    assert tiled =~ ~s(data-canvas-share="2500")
+    assert tiled =~ "left: 75.00%; width: 25.00%; z-index: 20;"
+    assert wrapper_tag(html, canvas.id) =~ "left: 0.00%; right: 25.00%;"
 
-    # The shown columns the hook lays out, in order.
-    [_, columns] = Regex.run(~r/data-columns="([^"]*)"/, html)
-
-    assert columns |> String.replace("&quot;", "\"") |> Jason.decode!() == [
-             %{"frame" => column.id, "order" => 0},
-             %{"frame" => tile.id, "order" => 3}
-           ]
-
-    # A full app is not opened until the canvas asks for it, a minimised
-    # one not with the canvas, and the canvas, the window and the tile are
-    # all that were.
+    # A minimised app, full or not, is not opened with the canvas, and the
+    # canvas, the window and the tile are all that were.
     assert by_key(view, {:app, "home", "tincture:local.icon-dash"}) == nil
     assert by_key(view, {:app, "home", "tincture:local.hidden-dash"}) == nil
     assert length(rows()) == 3
@@ -467,8 +482,9 @@ defmodule PrismWeb.CanvasLiveTest do
     html = render(view)
     assert html =~ ~s(data-posture="hand")
 
+    # In the hand every app is full, whatever the layout stores for it.
     pocket = by_key(view, {:app, "home", "tincture:local.icon-dash"})
-    assert %{tincture_id: "iframe_icon-dash", state: :live, placement: {:column, 0}} = pocket
+    assert %{tincture_id: "iframe_icon-dash", state: :live, placement: :full} = pocket
     assert by_key(view, {:app, "home", "tincture:local.slot-dash"}) == nil
     assert by_key(view, {:app, "home", "tincture:local.tile-dash"}) == nil
     assert row(desk_column.id).state == "revoked"

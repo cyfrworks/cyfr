@@ -285,16 +285,24 @@ async function feedState(feed) {
 // user activation, whether the canvas's iframe is the document's active
 // element, and whether the bridge dropped that message (its frame's
 // data-dropped moved as the handler ran). It counts the messages it saw and
-// the ones it handed on, and records nothing else.
+// the ones it handed on, records each load of a frame's iframe (a
+// capture-phase load on the document, since a load's path stops short of
+// the window, seen before the bridge's own handler counts it) with the
+// frame and its place (`data-canvas-place`), and records nothing else.
 const INSTRUMENT = `(() => {
   if (window.top !== window) return;
-  const marks = { clicks: [], receipts: [], seen: 0, handed: 0 };
+  const marks = { clicks: [], receipts: [], loads: [], seen: 0, handed: 0 };
   Object.defineProperty(window, "__canvasInstrument", { value: marks, configurable: true });
   const frameEl = (id) => {
     try { return document.querySelector('iframe[data-frame-id="' + (window.CSS ? CSS.escape(id) : id) + '"]'); }
     catch (_error) { return null; }
   };
   const droppedOf = (el) => (el ? Number(el.dataset.dropped || "0") : null);
+  document.addEventListener("load", (event) => {
+    const el = event.target;
+    if (el && el.tagName === "IFRAME" && el.dataset && el.dataset.frameId)
+      marks.loads.push({ at: performance.now(), frame: el.dataset.frameId, place: (el.closest("[data-canvas-place]") || { dataset: {} }).dataset.canvasPlace || null });
+  }, true);
   window.addEventListener("click", (event) => {
     const target = event.target && event.target.closest
       ? event.target.closest("#canvas-switcher button[data-canvas]") : null;
@@ -348,7 +356,7 @@ const INSTRUMENT = `(() => {
 const instrument = (page) =>
   page.evaluate(() => {
     const m = window.__canvasInstrument;
-    return m ? { clicks: [...m.clicks], receipts: [...m.receipts], seen: m.seen, handed: m.handed } : null;
+    return m ? { clicks: [...m.clicks], receipts: [...m.receipts], loads: [...m.loads], seen: m.seen, handed: m.handed } : null;
   });
 
 // The instrument's receipts after index `from`, of `frame` and `verb`.
@@ -646,13 +654,14 @@ async function diagnose(page) {
 const posture = (apps = []) => ({ desk: { apps }, hand: { apps } });
 
 // The proof's layout: the shipped canvas `start` (canvas-full as its full
-// app), markets (canvas-full as a window on the desk, which the shell shows
-// as a column, the sibling the activation step records a click in; in the
-// hand a column is laid over the whole canvas, so markets has none there),
-// the probe (canvas-full as its full app), canvas-broken, and any canvas a
-// step adds or puts in another's place.
+// app, minimised, so it opens when the canvas asks for it), markets
+// (canvas-full as a window on the desk, the sibling the activation step
+// records a click in; in the hand every app is full over the whole canvas,
+// so markets has none there), the probe (canvas-full as its full app,
+// minimised), canvas-broken, and any canvas a step adds or puts in
+// another's place.
 function layout(extra = [], { without = [] } = {}) {
-  const full = [{ tincture: "tincture:local.canvas-full", placement: "full", order: 0, minimised: false }];
+  const full = [{ tincture: "tincture:local.canvas-full", placement: "full", order: 0, minimised: true }];
   const window = [{
     tincture: "tincture:local.canvas-full", placement: "window", order: 0, minimised: false,
     geometry: { x: 5000, y: 0, w: 5000, h: 10000 },
@@ -894,9 +903,11 @@ async function showCanvasAway(page, id) {
 // shell last told it; switched away, once it has heard `frozen` no stream
 // open of it reaches the server, a new feed result reaches it not, and a
 // press it sends is dropped (counted in the frame's data-dropped, never
-// received by the shell); switched back, its stream refreshes to the new
-// result, and no feed event it ever read is tagged `frozen`. Nothing here
-// reads the page's own timer as proof it stopped.
+// received by the shell), a count that outlives the next switch, which
+// draws every frame again, the hidden one's iframe included; switched
+// back, its stream refreshes to the new result, and no feed event it ever
+// read is tagged `frozen`. Nothing here reads the page's own timer as proof
+// it stopped.
 async function stepHiddenCanvas(page, name, proxy) {
   const probe = await showCanvas(page, "probe");
   const before = await until(probe.frame, probeState, (s) => s.stream.settled && s.stream.events >= 1 && s.candles === 6 && s.told === "live", "the probe reading its stream");
@@ -922,6 +933,26 @@ async function stepHiddenCanvas(page, name, proxy) {
   const pressReceipts = receiptsOf(await instrument(page), from, probe.id, "press");
   const pressForwarded = pressReceipts.filter((r) => r.dropped === false).length;
 
+  // Another switch while the probe stays hidden draws every frame again,
+  // which patches the probe's iframe to the view's attributes: its count
+  // stays. The patch is watched on the iframe, so the record says whether
+  // one came.
+  await page.evaluate((id) => {
+    const el = document.querySelector(`iframe[data-frame-id="${id}"]`);
+    const seen = [];
+    const observer = new MutationObserver((records) => { for (const r of records) seen.push(r.attributeName); });
+    observer.observe(el, { attributes: true });
+    window.__probePatch = { seen, observer };
+  }, probe.id);
+  await showCanvas(page, "markets");
+  const patch = await page.evaluate(() => {
+    const { seen, observer } = window.__probePatch;
+    observer.disconnect();
+    delete window.__probePatch;
+    return { patched: seen.length > 0, attributes: [...new Set(seen)] };
+  });
+  const droppedAfterSwitch = Number((await canvasFrame(page, probe.id)).dropped);
+
   // The probe asks for its stream again on a timer while it is hidden; no
   // open of it reached the server since it heard `frozen`.
   const streamPath = `/_f/v1/o/${probe.id}/stream`;
@@ -937,7 +968,7 @@ async function stepHiddenCanvas(page, name, proxy) {
     back.id === probe.id && frozen.state === "frozen" &&
       whileHidden.stream.events === before.stream.events && whileHidden.revision === before.revision &&
       opensWhileHidden === 0 &&
-      droppedAfterPress === droppedBefore + 1 && pressForwarded === 0 &&
+      droppedAfterPress === droppedBefore + 1 && pressForwarded === 0 && droppedAfterSwitch === droppedAfterPress &&
       after.stream.events > whileHidden.stream.events && after.revision === accepted.revision &&
       after.tagged.frozen === 0 && after.tagged.none === 0 && after.tagged.live === after.stream.events,
     {
@@ -950,8 +981,10 @@ async function stepHiddenCanvas(page, name, proxy) {
         revision: whileHidden.revision,
         stream_event_reached_it: whileHidden.stream.events !== before.stream.events,
         stream_opens_reaching_the_server: opensWhileHidden,
+        press_received: pressReceipts.length,
         press_dropped: droppedAfterPress - droppedBefore,
         press_forwarded: pressForwarded,
+        after_another_switch: { patched: patch.patched, attributes: patch.attributes, dropped_kept: droppedAfterSwitch === droppedAfterPress },
         tagged: whileHidden.tagged,
       },
       shown_again: { same_frame: back.id === probe.id, told: after.told, events: after.stream.events, refresh: after.stream.refresh, revision: after.revision, tagged: after.tagged },
@@ -1016,18 +1049,30 @@ async function stepValidationFailures(page, name) {
 }
 
 // crash_safe_mode: a version that becomes ready is validated and activated,
-// then crashes live after ready(): the SDK reports failed at stage runtime,
-// safe mode is `crashed`, offering retry, the kept version and the shipped
-// canvas, and the kept version is restored and opens.
+// then its live frame dies after ready(): the page reloads itself, a second
+// load of its frame (desktop.md section 6: a live canvas is crashed when its
+// frame dies, not when its page throws), and safe mode is `crashed`,
+// offering retry, the kept version and the shipped canvas, and the kept
+// version is restored and opens.
 async function stepCrashSafeMode(page, name) {
   const written = await ask({ op: "write", canvas: "canvas-broken", kind: "broken-crash", streams: [{ name: "feed.results", subject: "broken-crash" }] });
   if (!OK(written)) throw new Error(`canvas.write refused canvas-broken: ${JSON.stringify(written)}`);
   const before = await versions("canvas-broken");
   await publish(page, layout([{ id: "crash", tincture: "tincture:local.canvas-broken" }], { without: ["broken"] }));
-  const from = (await instrument(page)).receipts.length;
+  const start = await instrument(page);
+  const from = start.receipts.length;
+  const loadsFrom = start.loads.length;
   await page.click('#canvas-switcher button[data-canvas="crash"]');
   const safe = await safeModePrompt(page, 40_000);
   const marks = await instrument(page);
+  // The loads of each frame since the switch, by place: the validation
+  // frame loads once; the live canvas frame, which reloaded itself, twice.
+  const loadsOf = (place) => {
+    const by = {};
+    for (const l of marks.loads.slice(loadsFrom).filter((l) => l.place === place)) by[l.frame] = (by[l.frame] || 0) + 1;
+    return Object.values(by);
+  };
+  const reloaded = loadsOf("canvas").filter((n) => n >= 2).length;
   const activated = await versions("canvas-broken");
   const kept = safe.offers.find((o) => o.offer === "kept");
   // The kept version reads no stream, the crashed one's grant names one: its
@@ -1045,14 +1090,15 @@ async function stepCrashSafeMode(page, name) {
 
   note("crash_safe_mode", name,
     activated.working === written.ok.version && activated.kept === before.working &&
-      receiptsOf(marks, from, null, "ready").length >= 1 && receiptsOf(marks, from, null, "failed").length >= 1 &&
+      receiptsOf(marks, from, null, "ready").length >= 1 && reloaded === 1 &&
+      receiptsOf(marks, from, null, "failed").length === 0 &&
       safe.kind === "safe_mode" && !!kept && safe.offers.some((o) => o.offer === "retry") && safe.offers.some((o) => o.offer === "shipped") &&
       regrant.asked_for && regrant.meanwhile.working === written.ok.version && regrant.meanwhile.kept === before.working &&
       regrant.place.frame === null &&
       restored.working === before.working && restored.kept === written.ok.version && text === `broken ${before.working}`,
     {
       activated: { version: written.ok.version, working: activated.working, kept: activated.kept, validation_readies: receiptsOf(marks, from, null, "ready").length },
-      crashed: { live_failed_verbs: receiptsOf(marks, from, null, "failed").length, stage: "runtime", safe_mode: safe.description, offers: safe.offers.map((o) => o.offer), kept_offer: kept && kept.label },
+      crashed: { canvas_frame_loads: loadsOf("canvas"), validation_frame_loads: loadsOf("validation"), canvas_frames_loaded_twice: reloaded, failed_verbs: receiptsOf(marks, from, null, "failed").length, safe_mode: safe.description, offers: safe.offers.map((o) => o.offer), kept_offer: kept && kept.label },
       regrant: { title: regrant.title, asked_for: regrant.asked_for, place: regrant.place, working: regrant.meanwhile.working, kept: regrant.meanwhile.kept },
       restored: { working: restored.working, kept: restored.kept, opened: text },
     });
@@ -1107,9 +1153,9 @@ async function stepActivation(page, name) {
   const several = classify(await handled(page, mark, shown.id, "press", 3));
 
   // The residual cases, recorded per browser, no drop asserted. A click
-  // elsewhere (the markets switcher button, in the shell; the sibling column
+  // elsewhere (the markets switcher button, in the shell; the sibling window
   // frame), then the canvas focuses itself and presses from a timer.
-  const siblingBox = await page.$('[data-canvas-place="column"][data-canvas-shown="true"] iframe')
+  const siblingBox = await page.$('[data-canvas-place="window"][data-canvas-shown="true"] iframe')
     .then((el) => el && el.boundingBox()).catch(() => null);
   const switcherBox = await page.$('#canvas-switcher button[data-canvas="markets"]').then((el) => el && el.boundingBox()).catch(() => null);
   const recorded = {};

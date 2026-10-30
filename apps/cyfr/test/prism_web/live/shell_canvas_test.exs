@@ -549,7 +549,7 @@ defmodule PrismWeb.ShellCanvasTest do
   # it, which freezes it while it stays the visible canvas.
   defp hidden_canvas!(conn, ctx, user, athanor, hidden_by) do
     tincture!(ctx, "app-dash")
-    full = %{"desk" => posture([app("tincture:local.app-dash", "full")])}
+    full = %{"desk" => posture([app("tincture:local.app-dash", "full", 0, true)])}
     two_canvases!(ctx, user, athanor, if(hidden_by == :full_frame, do: full, else: %{}))
     canvas!(ctx, "markets", "1.0.1")
     versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
@@ -576,7 +576,7 @@ defmodule PrismWeb.ShellCanvasTest do
   # shows it.
   defp opened_hidden!(conn, ctx, user, athanor) do
     tincture!(ctx, "app-dash")
-    full = %{"desk" => posture([app("tincture:local.app-dash", "full")])}
+    full = %{"desk" => posture([app("tincture:local.app-dash", "full", 0, true)])}
     two_canvases!(ctx, user, athanor, full)
     view = shell!(conn)
     first = canvas(view)
@@ -762,10 +762,10 @@ defmodule PrismWeb.ShellCanvasTest do
       assert validation(view) == nil
       assert render(view) =~ ~s(id="shell-picker")
 
-      assert %{state: :live, visible: true, placement: {:column, 0}} =
+      assert %{state: :live, visible: true, placement: {:window, %{x: 1000, w: 3000}}} =
                Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
 
-      assert %{state: :live, visible: true, placement: {:column, 1}} =
+      assert %{state: :live, visible: true, placement: {:tile, :right, 2500}} =
                Frames.get(frames(view), {:app, "home", "tincture:local.clock"})
     end
 
@@ -816,7 +816,7 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
 
       two_canvases!(ctx, user, athanor, %{
-        "desk" => posture([app("tincture:local.app-dash", "full")])
+        "desk" => posture([app("tincture:local.app-dash", "full", 0, true)])
       })
 
       view = shell!(conn)
@@ -841,7 +841,7 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
 
       two_canvases!(ctx, user, athanor, %{
-        "desk" => posture([app("tincture:local.app-dash", "full")])
+        "desk" => posture([app("tincture:local.app-dash", "full", 0, true)])
       })
 
       view = shell!(conn)
@@ -2284,8 +2284,8 @@ defmodule PrismWeb.ShellCanvasTest do
       two_canvases!(ctx, user, athanor, %{
         "desk" =>
           posture([
-            app("tincture:local.full-dash", "full", 0),
-            app("tincture:local.clock", "window", 0, true)
+            app("tincture:local.full-dash", "full", 0, true),
+            app("tincture:local.clock", "window", 1, true)
           ]),
         "hand" => posture([])
       })
@@ -2293,38 +2293,54 @@ defmodule PrismWeb.ShellCanvasTest do
       :ok
     end
 
-    test "opens a listed tincture where the arrangement puts it, or as the next column on the desk",
+    test "opens a listed tincture where the arrangement puts it, or as a window on the desk, and writes it",
          %{conn: conn} do
       view = shell!(conn)
       id = canvas(view).id
 
       # A minimised app is placed but not opened with the canvas.
       assert Frames.get(frames(view), {:app, "home", "tincture:local.clock"}) == nil
+      assert Frames.get(frames(view), {:app, "home", "tincture:local.full-dash"}) == nil
 
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.full-dash"})
 
       assert %{placement: :full, visible: true, state: :live} =
                Frames.get(frames(view), {:app, "home", "tincture:local.full-dash"})
 
+      # Closing it closes the app on the layout too.
       render_click(view, "close_active_tincture", %{})
+      assert Frames.get(frames(view), {:app, "home", "tincture:local.full-dash"}) == nil
 
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.loose-dash"})
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.column-dash"})
 
-      assert %{placement: {:column, 1}, visible: true} =
+      assert %{placement: {:window, loose}, visible: true} =
                Frames.get(frames(view), {:app, "home", "tincture:local.loose-dash"})
 
-      assert %{placement: {:column, 2}, visible: true} =
+      assert %{placement: {:window, column}, visible: true} =
                Frames.get(frames(view), {:app, "home", "tincture:local.column-dash"})
 
-      # The minimised window, asked for, opens as a column at its own order.
+      assert column.x > loose.x
+
+      # The minimised window, asked for, comes back where it stood.
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.clock"})
 
-      assert %{placement: {:column, 0}, visible: true} =
+      assert %{placement: {:window, %{x: 1000, y: 1000}}, visible: true} =
                Frames.get(frames(view), {:app, "home", "tincture:local.clock"})
 
-      # Nothing was written to the layout.
-      assert {:ok, %{revision: 1}} = Compendium.layout(person_of(view), "desk")
+      # Every open is the person's, written once the gestures settle.
+      send(view.pid, :write_layout)
+      _ = render(view)
+
+      assert {:ok, %{revision: 2, arrangement: [home | _]}} =
+               Compendium.layout(person_of(view), "desk")
+
+      assert Enum.map(home.apps, &{&1.tincture, &1.minimised}) == [
+               {"tincture:local.loose-dash", false},
+               {"tincture:local.column-dash", false},
+               {"tincture:local.clock", false}
+             ]
+
       assert dropped(view) == 0
     end
 
@@ -2519,7 +2535,7 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
 
       two_canvases!(ctx, user, athanor, %{
-        "desk" => posture([app("tincture:local.app-dash", "full")])
+        "desk" => posture([app("tincture:local.app-dash", "full", 0, true)])
       })
 
       view = shell!(conn)
@@ -2581,7 +2597,7 @@ defmodule PrismWeb.ShellCanvasTest do
       refute render(view) =~ ~s(id="shell-picker")
     end
 
-    test "the shipped canvas is shown on this glass alone, and nothing is written",
+    test "the shipped canvas is shown on this glass alone, nothing is written, and it stays until the layout names another canvas",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       # The install media ships the canvas: a seed tree of this test's own,
       # restored when it ends.
@@ -2600,6 +2616,7 @@ defmodule PrismWeb.ShellCanvasTest do
       end)
 
       shipped!(ctx)
+      tincture!(ctx, "fallback-app")
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
       layout!(user, athanor, [entry("home", "tincture:local.markets")])
@@ -2623,9 +2640,27 @@ defmodule PrismWeb.ShellCanvasTest do
       assert {:error, :not_found} = Arca.CanvasVersions.get(Sanctum.Context.actor(ctx), "canvas")
       assert %{working: "1.0.0"} = versions(ctx, "markets")
 
-      # The layout changed: the shipped canvas goes, and the layout's opens.
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
-      settle!(view, fn -> match?(%{reference: %{name: "markets"}}, canvas(view)) end)
+      # A publication that only arranges, the canvas's tincture kept, keeps
+      # the shipped canvas: saving a gesture never opens the failed one.
+      shipped_id = canvas(view).id
+      layout!(user, athanor, [entry("home", "tincture:local.markets", %{"desk" => posture([])})])
+      settle!(view, fn -> assigns(view).layout_base.revision == layout_revision + 1 end)
+      assert %{id: ^shipped_id, reference: %{name: "canvas"}} = canvas(view)
+
+      # A layout naming another tincture for the canvas lets it go, and
+      # that canvas opens; read when a gesture's write meets it as a newer
+      # revision, it lets it go all the same.
+      canvas!(ctx, "markets-two")
+      versions!(ctx, "markets-two", %{working: "1.0.0"})
+      render_hook(view, "app_open", %{"ref" => "tincture:local.fallback-app"})
+      assert_reply(view, %{ok: true})
+      layout!(user, athanor, [entry("home", "tincture:local.markets-two")])
+      send(view.pid, :write_layout)
+      _ = render(view)
+      assert assigns(view).pending == []
+      assert assigns(view).shipped == nil
+      settle!(view, fn -> match?(%{reference: %{name: "markets-two"}}, canvas(view)) end)
+      assert row(shipped_id).state == "revoked"
     end
 
     test "a canvas that sends ready before its deadline is not safe mode; one that never does is",
@@ -3152,6 +3187,533 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{reference: %{name: "canvas"}, state: :live} = canvas(view)
       assert assigns(view).shipped == "home"
       assert layout_notes(view) == 0
+    end
+  end
+
+  describe "arranging" do
+    @moved %{"x" => 500, "y" => 600, "w" => 4000, "h" => 5000}
+
+    setup %{ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      tincture!(ctx, "side-dash")
+      tincture!(ctx, "loose-dash")
+
+      placed =
+        posture([
+          app("tincture:local.app-dash", "window", 0),
+          app("tincture:local.side-dash", "tile", 1)
+        ])
+
+      two_canvases!(ctx, user, athanor, %{"desk" => placed, "hand" => placed})
+
+      actor = Sanctum.Context.actor(person(user, athanor))
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, user.user_id))
+      :ok
+    end
+
+    defp app_frame(view, name),
+      do: Frames.get(frames(view), {:app, "home", "tincture:local.#{name}"})
+
+    defp gesture!(view, event, params) do
+      render_hook(view, event, params)
+      assert_reply(view, reply)
+      reply
+    end
+
+    defp written!(view) do
+      send(view.pid, :write_layout)
+      _ = render(view)
+    end
+
+    defp stored(user, athanor) do
+      {:ok, layout} = Compendium.layout(person(user, athanor), "desk")
+      layout
+    end
+
+    defp stored_app(user, athanor, name) do
+      %{arrangement: [home | _]} = stored(user, athanor)
+      Enum.find(home.apps, &(&1.tincture == "tincture:local.#{name}"))
+    end
+
+    defp identity(frame), do: Map.take(frame, [:id, :credential_id, :src])
+
+    test "a settled move writes exactly one edit, at the revision read, and the next reload keeps the view",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      assert %{revision: 1} = stored(user, athanor)
+      dash = app_frame(view, "app-dash")
+      assert %{placement: {:window, _}, state: :live} = dash
+
+      assert gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved}) == %{
+               ok: true
+             }
+
+      assert gesture!(view, "frame_resize", %{
+               "frame" => app_frame(view, "side-dash").id,
+               "share" => 3500
+             }) ==
+               %{ok: true}
+
+      # Made at once on the frames, before any write.
+      moved = %{x: 500, y: 600, w: 4000, h: 5000}
+      assert %{placement: {:window, ^moved}} = app_frame(view, "app-dash")
+      assert identity(app_frame(view, "app-dash")) == identity(dash)
+      assert %{revision: 1} = stored(user, athanor)
+      refute_received %Cyfr.Bus.LayoutPublished{}
+
+      written!(view)
+      # A second wake finds nothing left to write.
+      written!(view)
+
+      assert %{revision: 2} = stored(user, athanor)
+      assert %{placement: :window, geometry: ^moved} = stored_app(user, athanor, "app-dash")
+      assert %{placement: :tile, share: 3500} = stored_app(user, athanor, "side-dash")
+      assert_receive %Cyfr.Bus.LayoutPublished{revision: 2}
+      refute_receive %Cyfr.Bus.LayoutPublished{}, 100
+      assert assigns(view).pending == []
+      assert assigns(view).layout_base.revision == 2
+
+      # Its own announcement read back changes nothing it holds.
+      settle!(view, fn -> assigns(view).layout_changed == false end)
+      assert identity(app_frame(view, "app-dash")) == identity(dash)
+      assert row(dash.id).state == "active"
+
+      # Another shell of the person opens the frames where they were left.
+      again = shell!(conn)
+      assert %{placement: {:window, ^moved}} = app_frame(again, "app-dash")
+      assert %{placement: {:tile, :right, 3500}} = app_frame(again, "side-dash")
+    end
+
+    test "a frame keeps its id and credential through a move, a resize, a raise, a tile and a full",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      dash = app_frame(view, "app-dash")
+      render_hook(view, "frame_handshake", %{"frame" => dash.id})
+      assert_reply(view, %{credential: bearer})
+
+      for {event, params} <- [
+            {"frame_move", %{"geometry" => @moved}},
+            {"frame_resize", %{"geometry" => %{@moved | "w" => 9000}}},
+            {"frame_raise", %{}},
+            {"frame_tile", %{"side" => "left", "share" => 2000}},
+            {"frame_full", %{}}
+          ] do
+        assert gesture!(view, event, Map.put(params, "frame", dash.id)) == %{ok: true}, event
+        assert identity(app_frame(view, "app-dash")) == identity(dash), event
+      end
+
+      assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
+      assert %{key: {:app, "home", "tincture:local.app-dash"}} = Frames.active(frames(view))
+      assert {:ok, _} = verify(bearer)
+
+      written!(view)
+      assert %{placement: :full, order: 1} = stored_app(user, athanor, "app-dash")
+    end
+
+    test "minimise, restore, close and open follow the layout, and each tells the canvas what is open",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      home = canvas(view)
+      _ = handshake!(view, home.id)
+      home_id = home.id
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id})
+      dash = app_frame(view, "app-dash")
+
+      assert gesture!(view, "frame_minimise", %{"frame" => dash.id}) == %{ok: true}
+      assert %{minimised: true, visible: false} = app_frame(view, "app-dash")
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert %{open: true} = Enum.find(installed, &(&1.name == "app-dash"))
+
+      assert gesture!(view, "app_restore", %{"ref" => "tincture:local.app-dash"}) == %{ok: true}
+      assert %{minimised: false, visible: true} = app_frame(view, "app-dash")
+      assert identity(app_frame(view, "app-dash")) == identity(dash)
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id})
+
+      assert gesture!(view, "frame_close", %{"frame" => dash.id}) == %{ok: true}
+      assert app_frame(view, "app-dash") == nil
+      assert row(dash.id).state == "revoked"
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert %{open: false} = Enum.find(installed, &(&1.name == "app-dash"))
+
+      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      assert %{placement: {:window, _}, visible: true} = app_frame(view, "loose-dash")
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert %{open: true} = Enum.find(installed, &(&1.name == "loose-dash"))
+
+      written!(view)
+      assert stored_app(user, athanor, "app-dash") == nil
+      assert %{placement: :window, order: 1} = stored_app(user, athanor, "loose-dash")
+    end
+
+    test "a gesture outside its bounds, on a frame not held or on a hidden canvas is refused and changes nothing",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      dash = app_frame(view, "app-dash")
+      side = app_frame(view, "side-dash")
+      before = frames(view)
+
+      for {event, params, error} <- [
+            {"frame_move", %{"frame" => "frm_nobody_held", "geometry" => @moved}, "not_held"},
+            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "x" => 10_001}},
+             "invalid"},
+            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "w" => 0}}, "invalid"},
+            {"frame_move", %{"frame" => dash.id, "geometry" => %{@moved | "h" => 2.5}},
+             "malformed"},
+            {"frame_resize", %{"frame" => side.id, "share" => 0}, "invalid"},
+            {"frame_resize", %{"frame" => side.id, "share" => 10_001}, "invalid"},
+            {"frame_tile", %{"frame" => dash.id, "share" => 2000}, "malformed"},
+            {"frame_tile", %{"frame" => dash.id, "side" => "top", "share" => 2000}, "malformed"},
+            {"frame_raise", %{"frame" => canvas(view).id}, "not_held"},
+            {"app_open", %{"ref" => "tincture:local.nobody"}, "not_listed"},
+            {"app_restore", %{"ref" => "tincture:local.loose-dash"}, "not_placed"}
+          ] do
+        assert gesture!(view, event, params) == %{error: error}, inspect({event, params})
+      end
+
+      assert frames(view) == before
+      assert assigns(view).pending == []
+
+      # An app of a canvas the glass no longer shows is not arranged.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert gesture!(view, "frame_raise", %{"frame" => dash.id}) == %{error: "hidden"}
+
+      written!(view)
+      assert %{revision: 1} = stored(user, athanor)
+    end
+
+    test "a write refused for a newer revision reloads and makes again the gestures that still apply",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      dash = app_frame(view, "app-dash")
+      side = app_frame(view, "side-dash")
+
+      assert gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved}) == %{
+               ok: true
+             }
+
+      assert gesture!(view, "frame_minimise", %{"frame" => side.id}) == %{ok: true}
+
+      # Another screen of the person arranges meanwhile: it closes the tile
+      # and opens another app.
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" =>
+            posture([
+              app("tincture:local.app-dash", "window", 0),
+              app("tincture:local.loose-dash", "tile", 1)
+            ])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      assert_receive %Cyfr.Bus.LayoutPublished{revision: 2}
+      # The view keeps its gestures while they wait: its read leaves them.
+      _ = render(view)
+      assert %{placement: {:window, %{x: 500}}} = app_frame(view, "app-dash")
+
+      written!(view)
+
+      assert %{revision: 3} = stored(user, athanor)
+
+      assert %{placement: :window, geometry: %{x: 500, y: 600}} =
+               stored_app(user, athanor, "app-dash")
+
+      assert %{placement: :tile} = stored_app(user, athanor, "loose-dash")
+      # The tile the other screen closed is not brought back by its minimise.
+      assert stored_app(user, athanor, "side-dash") == nil
+      assert app_frame(view, "side-dash") == nil
+      assert identity(app_frame(view, "app-dash")) == identity(dash)
+      assert assigns(view).pending == []
+    end
+
+    test "an app raised or reopened while another is full is brought forward, and the full one waits hidden",
+         %{conn: conn} do
+      view = shell!(conn)
+      dash = app_frame(view, "app-dash")
+      assert gesture!(view, "frame_full", %{"frame" => dash.id}) == %{ok: true}
+      assert %{key: {:app, "home", "tincture:local.app-dash"}} = Frames.active(frames(view))
+      assert %{visible: false} = app_frame(view, "side-dash")
+
+      assert gesture!(view, "app_open", %{"ref" => "tincture:local.side-dash"}) == %{ok: true}
+      assert Frames.active(frames(view)) == nil
+      assert %{visible: true, state: :live} = app_frame(view, "side-dash")
+      assert %{visible: false, placement: :full} = app_frame(view, "app-dash")
+      assert %{state: :live, visible: true} = canvas(view)
+
+      assert gesture!(view, "frame_raise", %{"frame" => dash.id}) == %{ok: true}
+      assert %{key: {:app, "home", "tincture:local.app-dash"}} = Frames.active(frames(view))
+    end
+
+    test "windows stack by their rank, distinct whatever orders the layout holds",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+
+      z = fn name ->
+        html = render(view)
+        frame = app_frame(view, name)
+        [tag] = Regex.run(~r/<div[^>]*data-canvas-frame="#{frame.id}"[^>]*>/, html)
+        [_, z] = Regex.run(~r/z-index: ([0-9]+)/, tag)
+        String.to_integer(z)
+      end
+
+      for {a, b} <- [{100, 200}, {300, 200}] do
+        layout!(user, athanor, [
+          entry("home", "tincture:local.markets", %{
+            "desk" =>
+              posture([
+                app("tincture:local.app-dash", "window", a),
+                app("tincture:local.side-dash", "window", b)
+              ])
+          }),
+          entry("work", "tincture:local.notes-canvas")
+        ])
+
+        settle!(view, fn -> app_frame(view, "app-dash").stack == a end)
+      end
+
+      assert {z.("side-dash"), z.("app-dash")} == {30, 31}
+    end
+
+    test "an app that closes itself is closed on the layout and stays closed after another gesture",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      dash = app_frame(view, "app-dash")
+      side = app_frame(view, "side-dash")
+
+      render_hook(view, "frame_verb", %{
+        "frame" => dash.id,
+        "message" => Prima.TinctureWire.shell_message(:close, dash.id)
+      })
+
+      assert app_frame(view, "app-dash") == nil
+      assert row(dash.id).state == "revoked"
+
+      assert gesture!(view, "frame_move", %{"frame" => side.id, "geometry" => @moved}) == %{
+               ok: true
+             }
+
+      assert app_frame(view, "app-dash") == nil
+
+      written!(view)
+      assert stored_app(user, athanor, "app-dash") == nil
+      assert %{placement: :window} = stored_app(user, athanor, "side-dash")
+    end
+
+    test "each canvas is told the apps open over it, a hidden one included",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      home = canvas(view)
+      home_id = home.id
+      _ = handshake!(view, home_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: first})
+      assert %{open: true} = Enum.find(first, &(&1.name == "app-dash"))
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      work = canvas(view, "work")
+      work_id = work.id
+      _ = handshake!(view, work_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^work_id, tinctures: told})
+      assert %{open: false} = Enum.find(told, &(&1.name == "app-dash"))
+
+      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: hidden})
+      assert %{open: true} = Enum.find(hidden, &(&1.name == "app-dash"))
+      assert %{open: false} = Enum.find(hidden, &(&1.name == "loose-dash"))
+      assert_push_event(view, "canvas_installed", %{frame: ^work_id, tinctures: shown})
+      assert %{open: false} = Enum.find(shown, &(&1.name == "app-dash"))
+      assert %{open: true} = Enum.find(shown, &(&1.name == "loose-dash"))
+
+      written!(view)
+      assert %{revision: 2} = stored(user, athanor)
+    end
+
+    test "a publication from elsewhere tells each held canvas its open apps again",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      home_id = canvas(view).id
+      _ = handshake!(view, home_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: initial})
+      assert %{open: false} = Enum.find(initial, &(&1.name == "loose-dash"))
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" =>
+            posture([
+              app("tincture:local.app-dash", "window", 0),
+              app("tincture:local.side-dash", "tile", 1),
+              app("tincture:local.loose-dash", "window", 2)
+            ])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      settle!(view, fn ->
+        assigns(view).layout_base.revision == 2 and app_frame(view, "loose-dash") != nil
+      end)
+
+      assert app_frame(view, "loose-dash").visible
+      assert canvas(view).id == home_id
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: later})
+      assert %{open: true} = Enum.find(later, &(&1.name == "loose-dash"))
+    end
+
+    test "a change of posture tells the canvas its open apps again",
+         %{conn: conn, user: user, athanor: athanor} do
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" => posture([app("tincture:local.app-dash", "window", 0)]),
+          "hand" => posture([])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      home_id = canvas(view).id
+      _ = handshake!(view, home_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: initial})
+      assert %{open: true} = Enum.find(initial, &(&1.name == "app-dash"))
+
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+
+      settle!(view, fn ->
+        assigns(view).posture == "hand" and app_frame(view, "app-dash") == nil
+      end)
+
+      assert canvas(view).id == home_id
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: later})
+      assert %{open: false} = Enum.find(later, &(&1.name == "app-dash"))
+    end
+
+    test "the topmost of many windows stays under the canvas's switcher",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      apps =
+        for n <- 1..27 do
+          name = "many-#{n}"
+          tincture!(ctx, name)
+
+          app("tincture:local.#{name}", "window", n)
+          |> Map.put("geometry", %{"x" => 0, "y" => 0, "w" => 10_000, "h" => 10_000})
+        end
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{"desk" => posture(apps)}),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :ready)
+      top = app_frame(view, "many-27")
+      assert top.visible
+      assert Enum.count(opened(view), &match?(%{key: {:app, "home", _}}, &1)) == 27
+
+      html = render(view)
+      [tag] = Regex.run(~r/<div[^>]*data-canvas-frame="#{top.id}"[^>]*>/, html)
+      assert tag =~ "left: 0.00%; top: 0.00%; width: 100.00%; height: 100.00%;"
+      [_, app_z] = Regex.run(~r/z-index: ([0-9]+)/, tag)
+      [switcher] = Regex.run(~r/<nav[^>]*id="canvas-switcher"[^>]*>/, html)
+      [_, switcher_z] = Regex.run(~r/z-\[([0-9]+)\]/, switcher)
+      assert String.to_integer(app_z) < String.to_integer(switcher_z)
+    end
+
+    test "a write the store cannot answer is tried five more times, then let go: the saved arrangement is back and later publications are followed",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      dash = app_frame(view, "app-dash")
+      saved = dash.placement
+
+      assert gesture!(view, "frame_move", %{"frame" => dash.id, "geometry" => @moved}) == %{
+               ok: true
+             }
+
+      Process.cancel_timer(assigns(view).write_timer)
+
+      # The store refuses every write while its root is a file.
+      original = Application.fetch_env!(:arca, :base_path)
+      blocked = Path.join(original, "arrange-blocked-#{System.unique_integer([:positive])}")
+      File.write!(blocked, "not a directory")
+
+      Prima.Test.Env.with_app_env(:arca, :base_path, blocked, fn ->
+        for attempt <- 1..5 do
+          written!(view)
+          assert assigns(view).pending != [], "attempt #{attempt}"
+          assert is_reference(assigns(view).write_timer), "attempt #{attempt}"
+          Process.cancel_timer(assigns(view).write_timer)
+        end
+
+        written!(view)
+      end)
+
+      File.rm(blocked)
+      assert assigns(view).pending == []
+      assert assigns(view).write_timer == nil
+      assert %{placement: ^saved} = app_frame(view, "app-dash")
+      assert identity(app_frame(view, "app-dash")) == identity(dash)
+      assert render(view) =~ "Your arrangement could not be saved"
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" => posture([app("tincture:local.app-dash", "tile", 0)])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      settle!(view, fn -> assigns(view).layout_base.revision == 2 end)
+      assert %{placement: {:tile, :right, 2500}} = app_frame(view, "app-dash")
+      assert app_frame(view, "side-dash") == nil
+    end
+
+    test "in the hand every app shows full in stacking order, and a placement gesture is refused",
+         %{conn: conn} do
+      view = shell!(conn)
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+      settle!(view, fn -> assigns(view).posture == "hand" end)
+
+      dash = app_frame(view, "app-dash")
+
+      assert gesture!(view, "frame_tile", %{"frame" => dash.id, "side" => "left", "share" => 2000}) ==
+               %{error: "hand"}
+
+      assert gesture!(view, "frame_raise", %{"frame" => dash.id}) == %{ok: true}
+      assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
+      assert %{placement: :full, visible: false} = app_frame(view, "side-dash")
+    end
+  end
+
+  describe "a canvas's failure after it reported ready" do
+    test "changes nothing while it is shown", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      canvas_verb!(view, home.id, :ready)
+
+      canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
+
+      assert assigns(view).safe_mode == nil
+      assert %{id: id, state: :live} = canvas(view)
+      assert id == home.id
+    end
+
+    test "changes nothing while it is hidden, nor once it is shown again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      canvas_verb!(view, home.id, :ready)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :frozen} = canvas(view)
+
+      canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
+      refute MapSet.member?(assigns(view).canvas_died, home.id)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert assigns(view).safe_mode == nil
+      assert %{id: id, state: :live} = canvas(view)
+      assert id == home.id
     end
   end
 
