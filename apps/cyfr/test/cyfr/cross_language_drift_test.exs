@@ -443,7 +443,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(directory entries keys scenarios)},
       {"tests/handle-proof/models-test.mjs", ~w(entries)}
     ],
-    # cyfr.run reads its vendored copy too (internal/identity/log_test.go,
+    # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
     # beside internal/identity/testdata/SOURCE, which names this file's
     # SHA-256), outside this roster's reach.
     "identity.json" => [
@@ -520,13 +520,18 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/compose-proof/run.sh", ~w(refusals boot)},
       {"tests/release-boot/boot.sh", ~w(boot)}
     ],
-    # cyfr.run reads its vendored copy too (internal/identity/request_test.go
-    # and handle_test.go, beside internal/identity/testdata/SOURCE, which
-    # names this file's SHA-256), outside this roster's reach.
+    "recovery_code.json" => [
+      {"apps/cyfr/assets/test/system_layer/recovery_code.test.mjs", ~w(refused spellings valid)},
+      {"apps/prima/test/prima/recovery_code_test.exs", ~w(protocol refused spellings valid)}
+    ],
+    # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
+    # beside internal/identity/testdata/SOURCE, which names this file's
+    # SHA-256), outside this roster's reach.
     "registry_wire.json" => [
       {"apps/prima/test/prima/handle_answer_test.exs", ~w(answers identity slugs)},
       {"apps/prima/test/prima/registry_request_test.exs",
-       ~w(answers codes envelopes identity keys refusals requests slugs verify)}
+       ~w(answers codes envelopes identity keys refusals requests slugs verify)},
+      {"apps/sanctum/test/sanctum/handle_test.exs", ~w(answers)}
     ],
     "release_manifest.json" => [
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
