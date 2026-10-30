@@ -30,10 +30,13 @@ defmodule Prima.Manifest.Tincture do
   (`Prima.JCS`): sets sorted and deduplicated, absent fields omitted. The
   consent shape carries it as `tincture_digest`
   (`Sanctum.Consent.ShapeDerivation`), and a stream grant binds to it, so
-  a version that declares more asks again. `frame.size` is a presentation
-  hint, not reach: the digest leaves it out, and a frame block that holds
-  only `size` declares nothing (`declared?/1`), so a version that only
-  adds or changes a hint asks nothing again.
+  a version that declares more asks again.
+
+  A frame block declares something only when it names reach: a
+  capability, a placement, or `background` true. A block that names none,
+  empty or holding only its `size` hint, declares nothing (`declared?/1`),
+  and the digest leaves `size` out, so a version that only adds or changes
+  a hint asks nothing again, whatever its frame block held before.
   """
 
   defmodule Size do
@@ -164,9 +167,10 @@ defmodule Prima.Manifest.Tincture do
   def connect(_manifest), do: []
 
   @doc """
-  Whether the manifest's `tincture` object declares any of the blocks. A
-  tincture that declares none has no digest in its consent shape. A frame
-  block holding only its size hint declares nothing.
+  Whether the manifest's `tincture` object declares any of the blocks: a
+  `streams` or `actions` block present, or a frame block that names reach
+  (see the module's documentation). A tincture that declares none has no
+  digest in its consent shape.
   """
   @spec declared?(term()) :: boolean()
   def declared?(%{"tincture" => %{} = tincture}),
@@ -174,8 +178,14 @@ defmodule Prima.Manifest.Tincture do
 
   def declared?(_manifest), do: false
 
-  defp declares?(%{"frame" => %{} = frame}, "frame"), do: Map.keys(frame) != ["size"]
+  defp declares?(%{"frame" => %{} = frame}, "frame"), do: reaches?(frame)
   defp declares?(tincture, block), do: Map.has_key?(tincture, block)
+
+  defp reaches?(frame) do
+    Map.get(frame, "capabilities", []) not in [[], nil] or
+      not is_nil(Map.get(frame, "placement")) or
+      Map.get(frame, "background") == true
+  end
 
   @doc """
   The blocks of a decoded manifest, held to their shapes. A manifest with

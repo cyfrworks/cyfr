@@ -200,10 +200,27 @@ defmodule Prima.ManifestTinctureTest do
       assert Tincture.digest(sized) == Tincture.digest(plain)
       refute Map.has_key?(Tincture.canonical(sized)["frame"], "size")
 
-      refute Tincture.declared?(manifest(%{"frame" => %{"size" => @size}}))
-      refute Tincture.declared?(manifest(%{"entry" => "index.html", "frame" => %{"size" => %{}}}))
-      assert Tincture.declared?(manifest(%{"frame" => %{"size" => @size, "background" => false}}))
-      assert Tincture.declared?(manifest(%{"frame" => %{}}))
+      # A frame block declares only what names reach: a capability, a
+      # placement or background true.
+      for frame <- [
+            %{},
+            %{"size" => @size},
+            %{"size" => %{}},
+            %{"capabilities" => []},
+            %{"background" => false, "size" => @size}
+          ] do
+        refute Tincture.declared?(manifest(%{"entry" => "index.html", "frame" => frame})),
+               inspect(frame)
+      end
+
+      for frame <- [
+            %{"capabilities" => ["pointer_lock"]},
+            %{"placement" => "canvas"},
+            %{"background" => true, "size" => @size}
+          ] do
+        assert Tincture.declared?(manifest(%{"frame" => frame})), inspect(frame)
+      end
+
       assert Tincture.declared?(manifest(%{"frame" => %{"size" => @size}, "actions" => []}))
     end
   end

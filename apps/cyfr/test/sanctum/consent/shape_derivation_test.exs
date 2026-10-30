@@ -863,24 +863,40 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       refute wider_digest == before_digest
     end
 
-    # A size hint is presentation, not reach: a frameless version followed
-    # by one whose frame block holds only `size` keeps the shape its grant
-    # binds, as does a framed version that adds a hint.
-    test "a version that only adds a size hint keeps the shape, frameless before or not",
-         %{ctx: ctx} do
-      hint = %{"preferred" => %{"w" => 400, "h" => 640}, "aspect" => %{"w" => 5, "h" => 8}}
+    # A size hint is presentation, not reach. Whatever a tincture's frame
+    # block held before, when it named no reach (none at all, an empty one,
+    # or one holding only a hint), a version whose frame block holds only a
+    # hint keeps the shape its grant binds and carries no tincture digest;
+    # and a framed version that adds a hint keeps its own. The empty block
+    # is the start a block counted as declared would break.
+    for {start, frame} <- [
+          {"no frame block", nil},
+          {"an empty frame block", %{}},
+          {"a frame block holding only a hint", %{"size" => %{"tile" => "left"}}}
+        ] do
+      @tag frame: frame
+      test "a version that only adds a size hint keeps the shape, after #{start}",
+           %{ctx: ctx, frame: frame} do
+        hint = %{"preferred" => %{"w" => 400, "h" => 640}, "aspect" => %{"w" => 5, "h" => 8}}
+        name = "shape-sized-#{System.unique_integer([:positive])}"
+        first = if frame, do: %{"frame" => frame}, else: %{}
 
-      ref = tincture!(ctx, "shape-sized", "1.0.0", %{})
-      {:ok, frameless} = ShapeDerivation.live_digest(ctx, ref)
+        ref = tincture!(ctx, name, "1.0.0", first)
+        {:ok, before_digest} = ShapeDerivation.live_digest(ctx, ref)
+        {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
+        refute Map.has_key?(input, :tincture_digest)
 
-      tincture!(ctx, "shape-sized", "1.1.0", %{"frame" => %{"size" => hint}})
-      Arca.Cache.delete_match(:_)
-      {:ok, sized} = ShapeDerivation.live_digest(ctx, ref)
-      assert sized == frameless
+        tincture!(ctx, name, "1.1.0", %{"frame" => %{"size" => hint}})
+        Arca.Cache.delete_match(:_)
+        assert {:ok, ^before_digest} = ShapeDerivation.live_digest(ctx, ref)
 
-      {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
-      refute Map.has_key?(input, :tincture_digest)
+        {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
+        refute Map.has_key?(input, :tincture_digest)
+      end
+    end
 
+    test "a framed version that adds a size hint keeps the shape", %{ctx: ctx} do
+      hint = %{"preferred" => %{"w" => 400, "h" => 640}}
       framed = tincture!(ctx, "shape-sized-framed", "1.0.0", @frame)
       {:ok, before_digest} = ShapeDerivation.live_digest(ctx, framed)
 
