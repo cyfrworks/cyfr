@@ -1523,8 +1523,13 @@ async function stepActivation(page, name) {
 // which the shell receives inside the click with its activation and the
 // canvas its active element, and forwards; the same request sent from a
 // timer with no input near it is dropped (the frame's `data-dropped`
-// moves). The shell's offer of the grant, in the system layer, is checked
-// once the shell handles the verb.
+// moves). The forwarded request raises the shell's grant offer for
+// catalyst:local.claude, a component with no frame, in the system layer of
+// the shell's own page and nowhere in the canvas's document; it is
+// dismissed, and the timer's request raises no offer.
+const offerInCanvas = (frame) =>
+  frame.evaluate(() => document.querySelector('[data-kind="grant"], .consent-sheet, #system-layer-dialog') !== null).catch(() => null);
+
 async function stepGrantControl(page, name) {
   const { shown, centers } = await marketsBound(page);
   if (!centers.grant) throw new Error("the markets grant control could not be measured");
@@ -1535,20 +1540,35 @@ async function stepGrantControl(page, name) {
   await personClick(page, shown.id, centers.grant.x, centers.grant.y);
   const inside = classify(await handled(page, mark, shown.id, "grant", 1));
 
+  // The offer: the shell's system layer, for the component the canvas
+  // named, and nothing of it in the canvas's document.
+  const offered = await lib.waitFor(async () => {
+    const p = await prompt(page);
+    return p && p.kind === "grant" ? p : null;
+  }, { timeoutMs: 20_000, what: "the grant offer in the system layer" }).catch(() => null);
+  const names = offered !== null && /catalyst:local\.claude/.test(`${offered.title} ${offered.description} ${await page.$eval("#system-layer-dialog", (d) => d.textContent).catch(() => "")}`);
+  const inCanvas = await offerInCanvas(shown.frame);
+  if (offered) {
+    await page.click('#system-layer-dialog button[phx-click="dismiss"]');
+    await lib.waitFor(async () => ((await prompt(page)) === null ? true : null), { timeoutMs: 15_000, what: "the grant offer dismissed" });
+  }
+
   const dropped0 = Number((await canvasFrame(page, shown.id)).dropped);
   mark = (await instrument(page)).receipts.length;
   await shown.frame.evaluate(() => window.__canvas && window.__canvas.grantAfter(9000));
   await sleep(9800);
   const noInput = classify(receiptsOf(await instrument(page), mark, shown.id, "grant"));
   const dropped1 = Number((await canvasFrame(page, shown.id)).dropped);
+  const offeredAfterTimer = await prompt(page);
 
   note("grant_control", name,
     inside.forwarded === 1 && inside.total === 1 && inside.receipts[0].active === true && inside.receipts[0].activeElementIsFrame === true &&
-      noInput.total === 1 && noInput.forwarded === 0 && dropped1 > dropped0,
+      noInput.total === 1 && noInput.forwarded === 0 && dropped1 > dropped0 &&
+      offered !== null && names && inCanvas === false && offeredAfterTimer === null,
     {
       inside_click: { forwarded: inside.forwarded, total: inside.total, active: inside.receipts[0] && inside.receipts[0].active, active_element_is_frame: inside.receipts[0] && inside.receipts[0].activeElementIsFrame },
       scripted_no_input: { received: noInput.total, forwarded: noInput.forwarded, dropped_delta: dropped1 - dropped0 },
-      offer: "not checked: the shell's handling of grant comes after S6",
+      offer: { in_system_layer: offered !== null, names_the_component: names, in_canvas: inCanvas, after_the_timer: offeredAfterTimer },
     });
   await showCanvas(page, "start");
 }
