@@ -84,7 +84,7 @@ mkdirSync(outDir, { recursive: true });
 const { homes } = readHomes(homesFile);
 const home = homes[0];
 const base = home.origin;
-const shell = `${base}/a/${encodeURIComponent(segment)}/tinctures`;
+const shell = `${base}/a/${encodeURIComponent(segment)}/canvas`;
 const vault = `${base}/a/${encodeURIComponent(segment)}/vault`;
 const MEASURED = 100;
 const rows = [];

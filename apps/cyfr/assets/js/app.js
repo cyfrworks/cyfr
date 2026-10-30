@@ -6,6 +6,7 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import IframeBridge from "./hooks/iframe_bridge"
 import CommandPalette from "./hooks/command_palette"
+import ModeSwitch from "./hooks/mode_switch"
 import PageLoadingIndicator from "./hooks/page_loading_indicator"
 import OptimisticNav from "./hooks/optimistic_nav"
 import Thread from "./hooks/thread"
@@ -32,6 +33,7 @@ let csrfToken = document.querySelector("meta[name='csrf-token']")?.getAttribute(
 let Hooks = {}
 Hooks.IframeBridge = IframeBridge
 Hooks.CommandPalette = CommandPalette
+Hooks.ModeSwitch = ModeSwitch
 Hooks.PageLoadingIndicator = PageLoadingIndicator
 Hooks.OptimisticNav = OptimisticNav
 Hooks.Thread = Thread

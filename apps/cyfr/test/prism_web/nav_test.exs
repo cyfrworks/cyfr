@@ -6,17 +6,16 @@ defmodule PrismWeb.NavTest do
 
   alias PrismWeb.Nav
 
-  test "lite is chat and a drawer: the everyday pages, flat, apps first-named" do
+  test "lite is chat and a drawer: the everyday pages, flat" do
     keys = Enum.map(Nav.items("lite"), & &1.key)
 
     assert keys ==
-             ~w(chat aqua files tinctures members vault schedules webhooks mcp_servers settings legal)
+             ~w(chat aqua files members vault schedules webhooks mcp_servers settings legal)
 
     refute "executions" in keys
     refute "api_keys" in keys
     assert [{nil, items}] = Nav.sections("lite")
     assert length(items) == length(keys)
-    assert Enum.find(items, &(&1.key == "tinctures")).label == "Apps"
   end
 
   test "dev is every page, sectioned, webhooks and enforcements included" do
@@ -29,7 +28,19 @@ defmodule PrismWeb.NavTest do
 
     titles = Nav.sections("dev") |> Enum.map(&elem(&1, 0))
     assert titles == [nil, "Observability", "Components", "Configuration", "Other"]
-    assert Enum.find(Nav.items("dev"), &(&1.key == "tinctures")).label == "Tinctures"
+  end
+
+  test "a mode shows its pages, a record under one and the Canvas, and nothing else" do
+    assert Nav.shown?("/vault", "lite")
+    assert Nav.shown?("/schedules/sched_abc?tab=runs", "lite")
+    refute Nav.shown?("/executions", "lite")
+    assert Nav.shown?("/executions/exec_abc", "dev")
+
+    for mode <- ~w(lite dev) do
+      assert Nav.shown?(Nav.canvas_path(), mode)
+      assert Nav.shown?(Nav.canvas_path() <> "?publisher=acme&tincture_name=widget", mode)
+      refute Nav.shown?("/tinctures", mode)
+    end
   end
 
   test "an unknown mode is the default, lite, and ids keep the sidebar's spelling" do

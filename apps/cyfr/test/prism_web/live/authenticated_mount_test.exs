@@ -120,7 +120,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
              PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(seated_athanor()))
   end
 
-  test "lite mode hides the developer views and speaks the everyday words", %{conn: conn} do
+  test "lite mode hides the developer views and their words", %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
 
@@ -133,17 +133,16 @@ defmodule PrismWeb.AuthenticatedMountTest do
     {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
     {:ok, row} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
 
-    {_view, html} = mount_athanor(conn, "/settings")
-    assert html =~ "nav-executions"
-    assert html =~ "Tinctures"
+    {view, _html} = mount_athanor(conn, "/settings")
+    assert has_element?(view, "#nav-executions", "Executions")
 
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
 
-    {_view, html} = mount_athanor(conn, "/settings")
+    {view, html} = mount_athanor(conn, "/settings")
     refute html =~ "nav-executions"
     refute html =~ "nav-api-keys"
     assert html =~ "nav-chat"
-    assert html =~ "Apps"
+    refute has_element?(view, "#drawer", "Executions")
     refute html =~ ">Tinctures<"
   end
 
@@ -172,7 +171,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     refute html =~ ~s(id="nav-webhooks")
 
     for key <-
-          ~w(chat aqua tinctures members vault schedules webhooks mcp-servers settings) do
+          ~w(chat aqua members vault schedules webhooks mcp-servers settings) do
       assert has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer lacks #{key}"
     end
 

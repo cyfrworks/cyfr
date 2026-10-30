@@ -39,7 +39,7 @@ const A = homeNamed("a").origin;
 const C = homeNamed("c").origin;
 const C3 = homeNamed("c3").origin;
 const settingsOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/settings`;
-const shellOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/tinctures`;
+const shellOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/canvas`;
 const rows = [];
 const record = {};
 // Every recovery code, its secret and every token the proof handled, so

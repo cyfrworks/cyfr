@@ -5,11 +5,11 @@ defmodule PrismWeb.TopbarLive do
   @moduledoc """
   The chrome — a nested LiveView mounted via `live_render` in the app
   layout, remounted with every page: the brand, the athanor switcher (You,
-  then your groups; the one create, New group…), the drawer button, a
-  search icon for the palette, the person, how many files people have
-  offered the person and wait for their answer (`file/offers`, read again
-  whenever their own topic, `Cyfr.Bus.file_offers/1`, says one moved),
-  and — for a platform admin — how many door requests wait.
+  then your groups; the one create, New group…), the mode switch, the
+  drawer button, a search icon for the palette, the person, how many files
+  people have offered the person and wait for their answer (`file/offers`,
+  read again whenever their own topic, `Cyfr.Bus.file_offers/1`, says one
+  moved), and — for a platform admin — how many door requests wait.
 
   In `dev` it also carries the live indicators, each a small icon/badge
   with a click-to-expand popover:
@@ -36,6 +36,21 @@ defmodule PrismWeb.TopbarLive do
   workbench page, and on the chat page whichever athanor the page has open
   — the chat says so (`viewing/2`) each time it moves, since it moves by
   patch and this bar does not remount for a patch.
+
+  ## The mode switch
+
+  Dashboard | Canvas (`#mode-switch`), in every posture: the page this bar
+  sits on is the Canvas mode when it is the shell, the Dashboard
+  otherwise (the layout says which, `surface`). Each half is a link: the
+  Canvas to `/a/<athanor>/canvas`, the Dashboard to the Dashboard page the
+  person last had open in this browser session, or the chat. Ctrl+Alt+`
+  (Control and Option on a Mac) follows the other half, as a click would
+  (the `ModeSwitch` hook); the shell's document alone hears it, so no
+  app's frame sees it, and nothing else in the shell binds it. A switch is
+  a page navigation. The connected mount remembers the mode and the
+  Dashboard page per browser session (`PrismWeb.Surface`). The Canvas mode
+  draws no drawer, so the drawer button shows in the Dashboard alone; in
+  the hand the drawer is the Dashboard's page list.
   """
 
   use PrismWeb, :live_view
@@ -77,6 +92,9 @@ defmodule PrismWeb.TopbarLive do
       send(self(), :load_topbar)
     end
 
+    surface = PrismWeb.Surface.read(session["surface"])
+    page = if connected?(socket), do: kept_page(token, surface, session["page"])
+
     # Use cheap defaults for the disconnected render. Defer database reads,
     # cache writes and tool calls to the connected mount.
     {:ok,
@@ -86,6 +104,8 @@ defmodule PrismWeb.TopbarLive do
      |> assign(:tray_key, Prism.Tray.session_hash(token))
      |> assign(:ui_mode, ui_mode)
      |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
+     |> assign(:surface, surface)
+     |> assign(:dashboard_path, dashboard_path(ui_mode, page, PrismWeb.Focus.route_of(ctx)))
      |> assign(:viewing, ctx.athanor_id)
      |> assign(:badges, %{})
      |> assign(:platform_requests, 0)
@@ -593,6 +613,7 @@ defmodule PrismWeb.TopbarLive do
           type="button"
           id="open-drawer"
           phx-click={Phoenix.LiveView.JS.show(to: "#drawer")}
+          hidden={@surface == "canvas"}
           class={[
             "rounded-md p-1.5 text-gray-400 hover:bg-gray-800 hover:text-gray-200",
             if(@ui_mode == "dev", do: "lg:hidden", else: "")
@@ -709,6 +730,37 @@ defmodule PrismWeb.TopbarLive do
         </div>
       </div>
 
+      <nav
+        :if={@authenticated}
+        id="mode-switch"
+        phx-hook="ModeSwitch"
+        aria-label="Mode"
+        title="Switch with Ctrl+Alt+`"
+        class="flex shrink-0 items-center rounded-lg border border-gray-800 bg-gray-950 p-0.5"
+      >
+        <.link
+          :for={
+            {surface, label, path} <- [
+              {"dashboard", "Dashboard", @dashboard_path},
+              {"canvas", "Canvas", PrismWeb.Surface.canvas_path(@athanor_route)}
+            ]
+          }
+          id={"mode-#{surface}"}
+          navigate={path}
+          data-mode={surface}
+          aria-current={if @surface == surface, do: "page"}
+          class={[
+            "rounded-md px-2.5 py-1 font-medium",
+            if(@surface == surface,
+              do: "bg-gray-800 text-white",
+              else: "text-gray-400 hover:text-gray-200"
+            )
+          ]}
+        >
+          {label}
+        </.link>
+      </nav>
+
       <div class="flex items-center gap-2">
         <!-- Door requests: an operator's chip -->
         <.link
@@ -796,10 +848,10 @@ defmodule PrismWeb.TopbarLive do
                 <% end %>
               </ul>
               <.link
-                navigate={PrismWeb.Focus.path(@athanor_route, "/tinctures")}
+                navigate={PrismWeb.Surface.canvas_path(@athanor_route)}
                 class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
               >
-                Open Tinctures →
+                Open in Canvas →
               </.link>
             </:popover>
           </.indicator>
@@ -1097,5 +1149,26 @@ defmodule PrismWeb.TopbarLive do
       </div>
     </div>
     """
+  end
+
+  # The mode this bar's page is in, remembered for the browser session,
+  # and the Dashboard page the Dashboard half leads back to: this page in
+  # the Dashboard, the one remembered in the Canvas.
+  defp kept_page(token, "canvas", _page) do
+    PrismWeb.Surface.remember(token, "canvas")
+    PrismWeb.Surface.recall(token).page
+  end
+
+  defp kept_page(token, "dashboard", page) do
+    PrismWeb.Surface.remember(token, "dashboard", page)
+    page
+  end
+
+  # The Dashboard page a nav key names, or the chat for none.
+  defp dashboard_path(ui_mode, page, route) do
+    case Enum.find(PrismWeb.Nav.items(ui_mode), &(&1.key == page)) do
+      %{path: path} -> PrismWeb.Nav.href(path, route)
+      nil -> PrismWeb.Nav.href("/chat", route)
+    end
   end
 end

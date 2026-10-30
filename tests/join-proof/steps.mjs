@@ -20,7 +20,7 @@ import {
 
 const b64url = (object) => Buffer.from(JSON.stringify(object)).toString("base64url");
 const settingsAt = (base, slug) => `${base}/a/${encodeURIComponent(slug)}/settings`;
-const shellAt = (base, slug) => `${base}/a/${encodeURIComponent(slug)}/tinctures`;
+const shellAt = (base, slug) => `${base}/a/${encodeURIComponent(slug)}/canvas`;
 const seconds = (ms) => Math.round(ms / 100) / 10;
 
 // The person's state at H, through run.sh.
