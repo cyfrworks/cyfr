@@ -24,12 +24,22 @@
 #            test's ports, and its proxy listener answers readiness.
 #
 #   headless a headless cell (`CYFR_HEADLESS=on`) whose deployment file
-#            `cyfr init` wrote, its setup token among it: the boot says no
-#            one is set up and names `cyfr login --setup`, never the token;
-#            `cyfr login --setup`, the command line built from this tree,
-#            makes the first person with a command-line session that
-#            `cyfr whoami` answers under, and run again signs the same
-#            person in again with a second session, no other person made.
+#            `cyfr init` wrote, its setup token among it, and whose
+#            registry and directory are the cyfr.run stand-in
+#            (tests/registry-stand-in/standin.py) on 127.78.0.1, at a port
+#            it picks: the boot says no one is set up and names `cyfr
+#            login --setup`, never the token; `cyfr login --setup --name
+#            proof`, the command line built from this tree, makes the
+#            first person, registers their identity and their name at the
+#            stand-in, prints their recovery code, which names that
+#            identity, and, once Enter is pressed, signs them in with a
+#            command-line session that `cyfr whoami` answers under; run
+#            again it signs the same person in again with a second
+#            session and no code, no other person made. A second cell,
+#            whose registry and directory are `.invalid` names, meets a
+#            cyfr.run that does not answer: the command exits 1 saying so,
+#            having made one person, the platform administrator, whose
+#            name and recovery code wait in an open attempt.
 #
 #   refuses  the same environment with the wildcard CORS allowlist, which a
 #            release with authentication configured must refuse at boot.
@@ -99,11 +109,11 @@
 #
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
 # schema in it, as a role that may create databases: the boots case's public
-# home, the headless case and the restores case create four databases beside
-# it, named for this run (`pg_run_database`), and drop them when it ends; it
-# drops no database it did not create, so runs that share one server and one
-# URL leave each other's alone. A run killed before its cleanup leaves its
-# four behind, under its own names. The dump and the
+# home, the headless case's two cells and the restores case create five
+# databases beside it, named for this run (`pg_run_database`), and drop them
+# when it ends; it drops no database it did not create, so runs that share
+# one server and one URL leave each other's alone. A run killed before its
+# cleanup leaves its five behind, under its own names. The dump and the
 # restore run in the postgres:18.6 image, with this host's network. The
 # cells' deployment files come from the `cyfr` command line, built from
 # apps/codex with this host's go, whose access switch asks Docker for the
@@ -249,6 +259,51 @@ access_vector_boot() {
   cell_env "$cell" ${words[@]+"${words[@]}"} timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$release/bin/cyfr" start
 }
 
+# The cyfr.run stand-in (tests/registry-stand-in/standin.py) the headless
+# case registers its first person at: on STAND_IN_ADDRESS, a loopback
+# address no other proof uses, at the port it picks free (STAND_IN_PORT),
+# serving the registry and, at its own address, the directory. Its
+# process is STAND_IN_PID, which the run's cleanup stops.
+STAND_IN_ADDRESS=127.78.0.1
+STAND_IN_PID=""
+STAND_IN_PORT=""
+
+# Start the stand-in with its state file, ready file and log in the
+# directory `$1`. A stand-in that ends, or names no port within 30 s,
+# fails the run.
+stand_in_start() {
+  local dir="$1" closes=$((SECONDS + 30))
+  mkdir -p "$dir"
+  python3 -I "$ROOT/tests/registry-stand-in/standin.py" --address "$STAND_IN_ADDRESS" --port 0 \
+    --state "$dir/state.json" --ready-file "$dir/ready" </dev/null >"$dir/log" 2>&1 &
+  STAND_IN_PID=$!
+  until [ -s "$dir/ready" ]; do
+    if ! kill -0 "$STAND_IN_PID" 2>/dev/null; then
+      tail -n 20 "$dir/log" >&2 || true
+      fail "the cyfr.run stand-in ended before it served on $STAND_IN_ADDRESS"
+    fi
+    [ "$SECONDS" -lt "$closes" ] || fail "the cyfr.run stand-in named no port within 30 s"
+    sleep 0.1
+  done
+  STAND_IN_PORT="$(tr -d '\n' <"$dir/ready")"
+  [[ "$STAND_IN_PORT" =~ ^[0-9]+$ ]] || fail "the cyfr.run stand-in named no port: '$STAND_IN_PORT'"
+}
+
+# Stop the stand-in by SIGTERM, which it takes, killing it after five
+# seconds, and wait for it.
+stand_in_stop() {
+  [ -n "$STAND_IN_PID" ] || return 0
+  local _
+  kill "$STAND_IN_PID" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    kill -0 "$STAND_IN_PID" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -9 "$STAND_IN_PID" 2>/dev/null || true
+  wait "$STAND_IN_PID" 2>/dev/null || true
+  STAND_IN_PID=""
+}
+
 # Sourced (tests/release-boot/names-test.sh, access-test.sh), the script
 # defines the functions above and runs nothing.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
@@ -281,7 +336,7 @@ cleanup() {
   # The cell started last is the one a failed step was asking.
   if [ "$code" -ne 0 ]; then
     local cell
-    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$ADDRESS" "$CELL"; do
+    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$SILENT" "$HEADLESS" "$ADDRESS" "$CELL"; do
       if [ -n "$cell" ] && [ -f "$cell/boot.log" ]; then
         log_tail "$cell"
         break
@@ -289,6 +344,8 @@ cleanup() {
     done
   fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
+  # The stand-in after the server that calls it.
+  stand_in_stop
   # The reserve case's filesystem goes with the container that holds it,
   # and the access case's namespace with its own.
   [ -z "$RESERVE_HOLDER" ] || docker rm -f "$RESERVE_HOLDER" >/dev/null 2>&1 || true
@@ -303,7 +360,7 @@ cleanup() {
 }
 # The cells whose log a failed run prints, named before the trap reads
 # them.
-CELL="" ADDRESS="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER="" NS_HOLDER=""
+CELL="" ADDRESS="" HEADLESS="" SILENT="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER="" NS_HOLDER=""
 trap cleanup EXIT
 
 # How many of a server's last log lines a failed run prints.
@@ -423,17 +480,73 @@ server_stop "$ADDRESS"
 # Case 2: a headless CYFR set up from the command line
 # ---------------------------------------------------------------------------
 
-# What cell `$1`'s release answers of its people and of the sessions setup
-# minted: `<count> <id> <admission>` and the number of `setup` sessions.
-people_of() {
+# What cell `$1`'s release holds of its people, as one JSON object: each
+# person's id, admission, recorded name and whether they are the platform
+# administrator; the number of sessions setup minted; each identity row
+# (its person, identifier and enrollment); and each identity attempt (its
+# person, kind, phase, wanted name, identifier and directory).
+headless_state() {
   cell_cyfr "$1" rpc '
     people = Arca.Repo.all(Arca.Schemas.User)
-    sessions = Enum.count(Arca.Repo.all(Arca.Schemas.Session), &(&1.provider == "setup"))
-    IO.puts("CYFR_PEOPLE=" <> Enum.join([length(people) | Enum.flat_map(people, &[&1.id, &1.admission])], " ") <> " " <> Integer.to_string(sessions))' |
-    sed -n 's/^CYFR_PEOPLE=//p' | tail -1
+    IO.puts("CYFR_HEADLESS=" <> JSON.encode!(%{
+      people: Enum.map(people, &%{id: &1.id, admission: &1.admission, name: &1.namespace,
+        admin: Sanctum.Tenancy.platform_admin?(&1.id)}),
+      setup_sessions: Enum.count(Arca.Repo.all(Arca.Schemas.Session), &(&1.provider == "setup")),
+      identities: Enum.map(Arca.Repo.all(Arca.Schemas.PersonIdentity),
+        &%{user_id: &1.user_id, identifier: &1.identifier, enrollment: &1.enrollment}),
+      attempts: Enum.map(Arca.Repo.all(Arca.Schemas.IdentityAttempt),
+        &%{user_id: &1.user_id, kind: &1.kind, phase: &1.phase, name: &1.name,
+          identifier: &1.identifier, directory: &1.directory_url})
+    }))' |
+    sed -n 's/^CYFR_HEADLESS=//p' | tail -1
 }
 
-step "headless: a CYFR with no person names cyfr login --setup, which makes its first person and then signs them in again"
+# `cyfr $3...` for cell `$1` as `cell_cli` runs it (release.sh), from a
+# directory of its own holding the cell's deployment file, with HOME the
+# cell's and nothing else of the caller's environment but PATH and how
+# Docker is reached; but with the text `$2` as its standard input, where a
+# person answers it, and its exit status left in CLI_STATUS rather than
+# failing the run. Its output is `$1/login.log`, written over, and is
+# appended to the cell's cli.log.
+CLI_STATUS=0
+headless_cli() {
+  local cell="$1" input="$2" dir
+  shift 2
+  cell_cli_build
+  dir="$WORK/cyfr-cell-$(basename "$cell")-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  mkdir -p "$dir" "$cell/home"
+  cp "$ROOT/.env.example" "$dir/.env.example"
+  cp "$cell/.env" "$dir/.env"
+  printf '%s' "$input" >"$dir/input"
+  CLI_STATUS=0
+  (
+    cd "$dir" || exit 1
+    env -i HOME="$cell/home" PATH="$PATH" LANG="${LANG:-en_US.UTF-8}" TERM=dumb \
+      DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
+      ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
+      "$CELL_CLI" "$@" <input
+  ) >"$cell/login.log" 2>&1 || CLI_STATUS=$?
+  { printf '\n$ cyfr %s\n' "$*"; cat "$cell/login.log"; } >>"$cell/cli.log"
+  rm -rf "$dir"
+}
+
+# Fail the run with `$2`, after cell `$1`'s last command-line output
+# (`headless_cli`), redacted.
+headless_failed() {
+  echo "----- the command line's output for cell $1 -----" >&2
+  redact_log "$1" <"$1/login.log" >&2 || echo "(the output could not be redacted, so it is not printed)" >&2
+  fail "$2"
+}
+
+# What `cyfr login --setup` prints once the name is registered, before the
+# person presses Enter, and once the session is saved (the 4.3 texts).
+SAY_NAME="Your name is @proof."
+SAY_CODE="Your recovery code:"
+SAY_SAVE="If this CYFR is ever lost, this is the one thing that brings you back. Save it in your password manager. Press Enter once you saved it."
+SAY_SIGNED_IN="Signed in as @proof. Add another recovery code in Settings."
+SAY_SILENT="cyfr.run did not answer. Run cyfr login --setup again to finish."
+
+step "headless: a CYFR with no person names cyfr login --setup, which makes its first person, registers their name at the cyfr.run stand-in, prints their recovery code and, once it is saved, signs them in, and then signs them in again"
 HEADLESS="$WORK/headless"
 HEADLESS_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -447,6 +560,19 @@ token="$(cell_value "$HEADLESS" CYFR_SETUP_TOKEN)"
 [[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail "cyfr init wrote no setup token of 64 lowercase hexadecimal characters"
 grep -q '/setup#'"$token" "$HEADLESS/cli.log" ||
   grep -q 'cyfr login --setup' "$HEADLESS/cli.log" || fail "cyfr init printed neither the setup link nor cyfr login --setup"
+
+# The stand-in is the cell's registry and its directory, over plain HTTP
+# on loopback, its address a private egress target as an operator names
+# one, and the cell pulls from no OCI registry: nothing reaches cyfr.run.
+stand_in_start "$WORK/cyfr-run"
+STAND_IN_URL="http://$STAND_IN_ADDRESS:$STAND_IN_PORT"
+cell_set "$HEADLESS" CYFR_REGISTRY_URL "$STAND_IN_ADDRESS:$STAND_IN_PORT"
+cell_set "$HEADLESS" CYFR_DIRECTORY_URL "$STAND_IN_URL"
+cell_set "$HEADLESS" CYFR_OCI_REGISTRY_URL none
+targets="$(cell_value "$HEADLESS" CYFR_PRIVATE_EGRESS_TARGETS)"
+cell_set "$HEADLESS" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$STAND_IN_ADDRESS"
+echo "the cyfr.run stand-in answers at $STAND_IN_URL"
+
 server_start "$HEADLESS"
 grep -q '\[Cyfr\] Not set up:.*`cyfr login --setup`' "$HEADLESS/boot.log" ||
   fail "the headless boot did not name cyfr login --setup"
@@ -454,22 +580,140 @@ grep -q '\[Cyfr\] Not set up:.*`cyfr login --setup`' "$HEADLESS/boot.log" ||
 echo "the boot: $(grep -o '\[Cyfr\] Not set up:.*' "$HEADLESS/boot.log" | head -1)"
 
 cell_cli "$HEADLESS" context add headless "http://127.0.0.1:$PORT"
-cell_cli "$HEADLESS" --context headless login --setup
-first="$(people_of "$HEADLESS")"
-read -r count person admission sessions <<<"$first"
-[ "$count" = 1 ] && [ "$admission" = setup ] && [ "$sessions" = 1 ] ||
-  fail "the first cyfr login --setup left '$first', not one person made by setup with one session"
+# Enter, pressed once the code is printed.
+headless_cli "$HEADLESS" $'\n' --context headless login --setup --name proof
+CODE="$(sed -n "/^$SAY_CODE\$/{n;p;q;}" "$HEADLESS/login.log")"
+[ -z "$CODE" ] || LOG_SECRETS+=("$CODE")
+[ "$CLI_STATUS" = 0 ] || headless_failed "$HEADLESS" "cyfr login --setup --name proof exited $CLI_STATUS"
+for line in "$SAY_NAME" "$SAY_CODE" "$SAY_SAVE" "$SAY_SIGNED_IN"; do
+  grep -qxF "$line" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "cyfr login --setup did not say '$line'"
+done
+[ -n "$CODE" ] || headless_failed "$HEADLESS" "cyfr login --setup printed no recovery code under '$SAY_CODE'"
+
+# CYFR holds one person, made by setup, the platform administrator, named
+# proof, with one setup session, their identity enrolled and their
+# attempt completed at the stand-in's directory; the stand-in holds their
+# genesis, their acceptance of its policy and the name, and answers the
+# name with their identifier and its directory; and the code printed is
+# the canonical recovery code (Prima.RecoveryCode) of that identifier.
+handle="$(curl -sS -m 10 "$STAND_IN_URL/v1/handles/proof")" || handle=""
+first="$(CODE="$CODE" python3 -I - "$(headless_state "$HEADLESS")" "$WORK/cyfr-run/state.json" "$handle" \
+  "$STAND_IN_URL" "$STAND_IN_ADDRESS" 2>&1 <<'PY'
+import hashlib, json, os, re, sys
+
+state = json.loads(sys.argv[1] or "null")
+stand_in = json.load(open(sys.argv[2]))
+handle = json.loads(sys.argv[3] or "null")
+url, address, code = sys.argv[4], sys.argv[5], os.environ["CODE"]
+if not state or len(state["people"]) != 1 or len(state["identities"]) != 1:
+    sys.exit("CYFR holds %s, not one person and their identity" % json.dumps(state))
+person, identifier = state["people"][0]["id"], state["identities"][0]["identifier"]
+want = {
+    "people": [{"id": person, "admission": "setup", "name": "proof", "admin": True}],
+    "setup_sessions": 1,
+    "identities": [{"user_id": person, "identifier": identifier, "enrollment": "enrolled"}],
+    "attempts": [{"user_id": person, "kind": "enrollment", "phase": "completed", "name": "proof",
+                  "identifier": identifier, "directory": url}],
+}
+if state != want:
+    sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
+if not re.fullmatch(r"per_[0-9a-f]{64}", identifier):
+    sys.exit("the person's identifier is %r" % identifier)
+held = {key: stand_in.get(key) for key in ("directory", "accepted", "names")}
+logs = stand_in.get("logs") or {}
+want_held = {"directory": url, "accepted": {identifier: "stand-in-1"}, "names": {"proof": identifier}}
+if held != want_held or list(logs) != [identifier] or logs[identifier].get("directory") != url:
+    sys.exit("the stand-in holds %s and the logs of %s, not %s and the genesis of %s at %s"
+             % (json.dumps(held), json.dumps(list(logs)), json.dumps(want_held), identifier, url))
+want_handle = {"directory": url, "handle": "proof", "identifier": identifier, "protocol": "cyfr-handle/v1",
+               "registry": address}
+if handle != want_handle:
+    sys.exit("the stand-in answers proof with %s, not %s" % (json.dumps(handle), json.dumps(want_handle)))
+alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+if not re.fullmatch(r"CYFR(-[%s]{8}){14}" % alphabet, code):
+    sys.exit("the recovery code printed is not CYFR- and 14 groups of 8 Crockford symbols")
+raw = int("".join(format(alphabet.index(c), "05b") for c in code[5:].replace("-", "")), 2).to_bytes(70, "big")
+digest, secret, check = raw[:32], raw[32:64], raw[64:]
+if "per_" + digest.hex() != identifier:
+    sys.exit("the recovery code printed names another identity than the person's")
+if hashlib.sha256(b"cyfr-recovery-code/v1\0" + digest + secret).digest()[:6] != check:
+    sys.exit("the recovery code printed does not check")
+print(person, identifier)
+PY
+)" || fail "after cyfr login --setup --name proof: $first"
+read -r person identifier <<<"$first"
+echo "cyfr login --setup --name proof: $person, made by setup, the platform administrator, named proof at the stand-in as $identifier, its recovery code printed and saved"
+
 cell_cli "$HEADLESS" --context headless whoami
 grep -qF "User ID: $person" "$HEADLESS/cli.log" || fail "cyfr whoami under the saved session did not name $person"
 grep -qx "Platform admin: yes" "$HEADLESS/cli.log" || fail "the first person set up from the command line is not the platform administrator"
 
-cell_cli "$HEADLESS" --context headless login --setup
-again="$(people_of "$HEADLESS")"
-read -r count again_person admission sessions <<<"$again"
-[ "$count" = 1 ] && [ "$again_person" = "$person" ] && [ "$sessions" = 2 ] ||
-  fail "the second cyfr login --setup left '$again', not the same person signed in again"
-echo "cyfr login --setup twice: $person, made by setup, signed in twice"
+# Run again, the same person signs in again: their code is saved, so none
+# is printed and nothing waits for Enter.
+headless_cli "$HEADLESS" "" --context headless login --setup --name proof
+[ "$CLI_STATUS" = 0 ] || headless_failed "$HEADLESS" "the second cyfr login --setup --name proof exited $CLI_STATUS"
+grep -qxF "$SAY_SIGNED_IN" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "the second cyfr login --setup did not say '$SAY_SIGNED_IN'"
+! grep -qxF "$SAY_CODE" "$HEADLESS/login.log" && ! grep -qF "$CODE" "$HEADLESS/login.log" ||
+  headless_failed "$HEADLESS" "the second cyfr login --setup printed a recovery code that is saved"
+again="$(python3 -I - "$(headless_state "$HEADLESS")" "$person" "$identifier" "$STAND_IN_URL" 2>&1 <<'PY'
+import json, sys
+state = json.loads(sys.argv[1] or "null")
+person, identifier, url = sys.argv[2:5]
+want = {
+    "people": [{"id": person, "admission": "setup", "name": "proof", "admin": True}],
+    "setup_sessions": 2,
+    "identities": [{"user_id": person, "identifier": identifier, "enrollment": "enrolled"}],
+    "attempts": [{"user_id": person, "kind": "enrollment", "phase": "completed", "name": "proof",
+                  "identifier": identifier, "directory": url}],
+}
+if state != want:
+    sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
+PY
+)" || fail "after the second cyfr login --setup: $again"
+echo "cyfr login --setup again: $person signed in a second time, no code printed, no other person made"
 server_stop "$HEADLESS"
+stand_in_stop
+
+step "headless: with cyfr.run silent, cyfr login --setup makes the first person, the platform administrator, keeps their name and recovery code waiting, and exits 1"
+SILENT="$WORK/silent"
+SILENT_URL=""
+if [ "$ADAPTER" = postgres ]; then
+  SILENT_DB="$(pg_run_database silent)"
+  pg_fresh_database "$SILENT_DB"
+  SILENT_URL="$(pg_url "$SILENT_DB")"
+fi
+cell_new "$SILENT" "$SILENT_URL"
+cell_set "$SILENT" CYFR_HEADLESS on
+# Names that resolve nowhere: the registry and the directory never answer.
+cell_set "$SILENT" CYFR_REGISTRY_URL registry.invalid
+cell_set "$SILENT" CYFR_DIRECTORY_URL https://directory.invalid
+cell_set "$SILENT" CYFR_OCI_REGISTRY_URL none
+server_start "$SILENT"
+cell_cli "$SILENT" context add silent "http://127.0.0.1:$PORT"
+headless_cli "$SILENT" "" --context silent login --setup --name proof
+[ "$CLI_STATUS" = 1 ] || headless_failed "$SILENT" "cyfr login --setup with cyfr.run silent exited $CLI_STATUS, not 1"
+grep -qF "$SAY_SILENT" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup with cyfr.run silent did not say '$SAY_SILENT'"
+! grep -qxF "$SAY_CODE" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup printed a recovery code while cyfr.run was silent"
+silent="$(python3 -I - "$(headless_state "$SILENT")" 2>&1 <<'PY'
+import json, sys
+state = json.loads(sys.argv[1] or "null")
+if not state or len(state["people"]) != 1 or len(state["identities"]) != 1:
+    sys.exit("CYFR holds %s, not one person and their identity" % json.dumps(state))
+person, identifier = state["people"][0]["id"], state["identities"][0]["identifier"]
+want = {
+    "people": [{"id": person, "admission": "setup", "name": None, "admin": True}],
+    "identities": [{"user_id": person, "identifier": identifier, "enrollment": "pending"}],
+    "attempts": [{"user_id": person, "kind": "enrollment", "phase": "submitted", "name": "proof",
+                  "identifier": identifier, "directory": "https://directory.invalid"}],
+}
+held = {key: state[key] for key in want}
+if held != want:
+    sys.exit("CYFR holds %s, not %s" % (json.dumps(held), json.dumps(want)))
+print(person)
+PY
+)" || fail "after cyfr login --setup with cyfr.run silent: $silent"
+echo "cyfr login --setup with cyfr.run silent: exit 1, $silent made by setup, the platform administrator, its name and code waiting in a submitted attempt"
+server_stop "$SILENT"
 
 # ---------------------------------------------------------------------------
 # Case 3: a boot that raises is loud
