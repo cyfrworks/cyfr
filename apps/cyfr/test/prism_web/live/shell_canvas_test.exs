@@ -3610,9 +3610,11 @@ defmodule PrismWeb.ShellCanvasTest do
       [tag] = Regex.run(~r/<div[^>]*data-canvas-frame="#{top.id}"[^>]*>/, html)
       assert tag =~ "left: 0.00%; top: 0.00%; width: 100.00%; height: 100.00%;"
       [_, app_z] = Regex.run(~r/z-index: ([0-9]+)/, tag)
-      [switcher] = Regex.run(~r/<nav[^>]*id="canvas-switcher"[^>]*>/, html)
-      [_, switcher_z] = Regex.run(~r/z-\[([0-9]+)\]/, switcher)
-      assert String.to_integer(app_z) < String.to_integer(switcher_z)
+      # The switcher is the shelf's, which its stylesheet stacks.
+      assert html =~ ~r/<nav[^>]*id="canvas-shelf".*id="canvas-switcher"/s
+      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
+      [_, shelf_z] = Regex.run(~r/\.canvas-shelf \{[^}]*z-index: ([0-9]+);/, css)
+      assert String.to_integer(app_z) < String.to_integer(shelf_z)
     end
 
     test "a write the store cannot answer is tried five more times, then let go: the saved arrangement is back and later publications are followed",

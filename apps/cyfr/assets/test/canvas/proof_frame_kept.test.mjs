@@ -42,7 +42,7 @@ async function run(mode) {
   const context = {
     showCanvas:async()=>{},
     lib:{waitFor:async(fn)=>{const value=await fn();if(value)return value;throw new Error('condition never became true');}},
-    instrument:async()=>({loads:{[frame]:loads}}),
+    instrument:async()=>({loads:Array.from({length:loads},()=>({frame}))}),
     note:(_step,_name,held,observation)=>{result={held,observation};},
     layoutRead:async()=>({apps:[{tincture:'tincture:local.canvas-full',placement:place}]}),
     layout:()=>({}),
