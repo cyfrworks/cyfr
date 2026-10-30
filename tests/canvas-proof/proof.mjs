@@ -1524,7 +1524,8 @@ async function stepActivation(page, name) {
 // canvas its active element, and forwards; the same request sent from a
 // timer with no input near it is dropped (the frame's `data-dropped`
 // moves). The forwarded request raises the shell's grant offer for
-// catalyst:local.claude, a component with no frame, in the system layer of
+// catalyst:local.grant-target, installed, not granted and with no frame
+// (`fixture.exs` `ungranted`), in the system layer of
 // the shell's own page and nowhere in the canvas's document; it is
 // dismissed, and the timer's request raises no offer.
 const offerInCanvas = (frame) =>
@@ -1546,7 +1547,7 @@ async function stepGrantControl(page, name) {
     const p = await prompt(page);
     return p && p.kind === "grant" ? p : null;
   }, { timeoutMs: 20_000, what: "the grant offer in the system layer" }).catch(() => null);
-  const names = offered !== null && /catalyst:local\.claude/.test(`${offered.title} ${offered.description} ${await page.$eval("#system-layer-dialog", (d) => d.textContent).catch(() => "")}`);
+  const names = offered !== null && /catalyst:local\.grant-target/.test(`${offered.title} ${offered.description} ${await page.$eval("#system-layer-dialog", (d) => d.textContent).catch(() => "")}`);
   const inCanvas = await offerInCanvas(shown.frame);
   if (offered) {
     await page.click('#system-layer-dialog button[phx-click="dismiss"]');

@@ -187,6 +187,11 @@ source_answer="$(canvas_fixture source "$TOKEN" candles)"
 SOURCE="$(field "$source_answer" reference)"
 PROFILE="$(field "$source_answer" profile_id)"
 
+# A component installed and not granted, which the markets canvas's grant
+# control asks the person's grant for (grant_control).
+[ -n "$(canvas_fixture ungranted "$TOKEN" grant-target)" ] ||
+  fail "the component the grant control asks for was not published"
+
 # The person's feeds, by name: name -> binding id. Binding ids name no
 # credential; the proof names a feed by its name, or a binding the fixture
 # answered it.
