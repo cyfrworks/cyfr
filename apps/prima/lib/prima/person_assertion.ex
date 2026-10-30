@@ -19,13 +19,12 @@ defmodule Prima.PersonAssertion do
   the relying home resolved from that directory.
   """
 
-  alias Prima.Identity
+  alias Prima.{Crockford, Identity}
   alias Prima.Identity.{Encoding, Entry, State}
 
   @protocol "cyfr-person-assertion/v1"
   @challenge_bytes 32
   @code_domain "cyfr/sign-in-code/v1"
-  @code_alphabet "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
   @required ~w(protocol identifier audience challenge action_id key_epoch expires_at)
 
   @type t :: %__MODULE__{
@@ -69,20 +68,16 @@ defmodule Prima.PersonAssertion do
 
   It is the first 40 bits of SHA-256 over `"cyfr/sign-in-code/v1"`, a
   zero byte and the 32 raw challenge bytes, written in Crockford base32
-  (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, most significant bits first) as two
-  groups of four, `ABCD-EFGH`.
+  (`Prima.Crockford`, most significant bits first) as two groups of four,
+  `ABCD-EFGH`.
   """
   @spec comparison_code(binary()) :: String.t()
   def comparison_code(challenge)
       when is_binary(challenge) and byte_size(challenge) == @challenge_bytes do
-    <<bits::40, _rest::binary>> =
+    <<bits::bitstring-size(40), _rest::bitstring>> =
       :crypto.hash(:sha256, [@code_domain, <<0>>, challenge])
 
-    symbols =
-      for shift <- [35, 30, 25, 20, 15, 10, 5, 0],
-          into: "",
-          do: <<:binary.at(@code_alphabet, Bitwise.band(Bitwise.bsr(bits, shift), 31))>>
-
+    symbols = Crockford.encode(bits)
     binary_part(symbols, 0, 4) <> "-" <> binary_part(symbols, 4, 4)
   end
 
