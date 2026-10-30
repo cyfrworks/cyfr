@@ -141,7 +141,7 @@ defmodule PrismWeb.CanvasChromeTest do
   defp shell!(conn, ctx, user) do
     installed!(ctx)
     layout!(ctx, user)
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     view
   end
 
