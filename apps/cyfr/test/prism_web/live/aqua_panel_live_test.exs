@@ -272,11 +272,15 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, view, _} = live(conn, athanor_path("/members", room))
     settled_render(view)
     {panel, _html} = open_panel(view)
-    # The header's menu button opens the pane's menu, a popover.
-    assert has_element?(panel, ~s(#aqua-panel-more[popovertarget="aqua-panel-pane-menu"]))
+    # The header's toggle opens the pane's menu, an element of the panel
+    # that the hook shows; it is drawn hidden.
+    assert has_element?(
+             panel,
+             ~s(#aqua-panel-more[data-aqua-menu-toggle][aria-controls="aqua-panel-pane-menu"][aria-expanded="false"])
+           )
 
     pane = child!(panel, "aqua-panel-pane")
-    menu = ~s(#aqua-panel-pane-menu[popover])
+    menu = ~s(#aqua-panel-pane-menu[hidden])
 
     wait_until(
       fn -> has_element?(pane, ~s(#{menu} select[name="model"] option[value="kept-model-1"])) end,
@@ -649,7 +653,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a placement under the minimum, off any screen or not in whole pixels is refused, and the kept one stands",
+  test "a placement under the minimum, over the maximum, off any screen or not in whole pixels is refused, and the kept one stands",
        %{conn: conn, room: room} do
     {:ok, view, _} = live(conn, athanor_path("/members", room))
     settled_render(view)
@@ -660,7 +664,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
           %{"x" => 10, "y" => 60, "w" => 299, "h" => 400},
           %{"x" => 10, "y" => 60, "w" => 400, "h" => 359},
           %{"x" => -1, "y" => 60, "w" => 400, "h" => 400},
-          %{"x" => 10, "y" => 100_001, "w" => 400, "h" => 400},
+          # Sides over 4000, and a rectangle reaching past 16000 from the
+          # origin, whatever its sides.
+          %{"x" => 10, "y" => 60, "w" => 4001, "h" => 400},
+          %{"x" => 10, "y" => 60, "w" => 400, "h" => 4001},
+          %{"x" => 100_000, "y" => 0, "w" => 100_000, "h" => 100_000},
+          %{"x" => 15_701, "y" => 60, "w" => 300, "h" => 400},
+          %{"x" => 10, "y" => 15_641, "w" => 400, "h" => 360},
           %{"x" => 10, "y" => 60, "w" => 400.5, "h" => 400},
           %{"x" => "10", "y" => "60", "w" => "400", "h" => "400"},
           %{"x" => 10, "y" => 60, "w" => 400}
@@ -672,6 +682,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
                {"10", "300", "360"},
              inspect(refused)
     end
+
+    # The largest a screen gives is kept: both sides at 4000, reaching to
+    # 16000 exactly.
+    render_hook(panel, "place", %{"x" => 12_000, "y" => 12_000, "w" => 4000, "h" => 4000})
+
+    assert {sheet_attr(panel, "data-x"), sheet_attr(panel, "data-w"), sheet_attr(panel, "data-h")} ==
+             {"12000", "4000", "4000"}
 
     Cyfr.Test.Sandbox.end_views()
   end

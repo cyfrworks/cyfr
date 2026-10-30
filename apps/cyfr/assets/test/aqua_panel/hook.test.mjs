@@ -22,15 +22,20 @@ beforeEach(() => screen(1280, 800))
 afterEach(() => delete globalThis.window)
 
 // The panel as the server renders it: its data attributes, its style the
-// hook writes, its listeners and its pointer capture.
+// hook writes, its listeners, its pointer capture, and the thread's menu
+// (hidden) with the header's toggle.
 function panel(dataset = {}) {
   const props = {}
   const listeners = {}
   let captured = null
+  const menu = {hidden: true}
+  const toggle = {attributes: {}, focused: false, setAttribute(k, v) { this.attributes[k] = v }, focus() { this.focused = true }}
   const el = {
     dataset: {docked: "false", ...dataset},
     style: {setProperty: (name, value) => (props[name] = value)},
     addEventListener: (type, fn) => (listeners[type] = fn),
+    querySelector: (selector) =>
+      selector === "#aqua-panel-pane-menu" ? menu : selector === "[data-aqua-menu-toggle]" ? toggle : null,
     setPointerCapture: (id) => (captured = id),
     hasPointerCapture: (id) => captured === id,
     releasePointerCapture: () => (captured = null)
@@ -47,8 +52,12 @@ function panel(dataset = {}) {
     h: parseInt(props["--aqua-h"], 10)
   })
   const fire = (type, event) => listeners[type]({pointerId: 1, button: 0, preventDefault() {}, type, ...event})
-  return {el, hook, pushed, drawn, fire, captured: () => captured}
+  return {el, hook, pushed, drawn, fire, menu, toggle, captured: () => captured}
 }
+
+const TOGGLE = {closest: (selector) => (selector.includes("[data-aqua-menu-toggle]") ? {} : null)}
+const IN_MENU = {closest: (selector) => (selector.includes("#aqua-panel-pane-menu") ? {} : null)}
+const OUTSIDE = {closest: () => null}
 
 // What a press lands on: an element inside the panel that answers
 // `closest` for the selectors it matches.
@@ -153,20 +162,149 @@ describe("Escape", () => {
     assert.deepEqual(p.pushed, [{event: "close", payload: {}}])
   })
 
-  test("the page losing focus to a frame closes the thread's menu", () => {
+  test("with the thread's menu open, closes the menu alone and gives focus to its toggle", () => {
     const p = panel()
-    let hidden = 0
-    p.el.querySelector = (selector) => (selector === ":popover-open" ? {hidePopover: () => hidden++} : null)
-    windowListeners.blur()
-    assert.equal(hidden, 1)
-    p.hook.destroyed()
-    assert.equal(windowListeners.blur, undefined)
+    p.fire("click", {target: TOGGLE})
+    p.fire("keydown", {key: "Escape"})
+    assert.equal(p.menu.hidden, true)
+    assert.equal(p.toggle.focused, true)
+    assert.deepEqual(p.pushed, [])
+  })
+})
+
+describe("the thread's menu", () => {
+  test("opens and closes from the header's toggle, which says so", () => {
+    const p = panel()
+    p.fire("click", {target: TOGGLE})
+    assert.equal(p.menu.hidden, false)
+    assert.equal(p.toggle.attributes["aria-expanded"], "true")
+    p.fire("click", {target: TOGGLE})
+    assert.equal(p.menu.hidden, true)
+    assert.equal(p.toggle.attributes["aria-expanded"], "false")
   })
 
-  test("with the thread's menu open, closes the menu alone", () => {
+  test("a press outside it closes it; a press inside it or on the toggle does not", () => {
     const p = panel()
-    p.el.querySelector = (selector) => (selector === ":popover-open" ? {} : null)
-    p.fire("keydown", {key: "Escape", preventDefault: () => assert.fail("the menu's Escape is the browser's")})
+    p.fire("click", {target: TOGGLE})
+    windowListeners.pointerdown({target: IN_MENU})
+    windowListeners.pointerdown({target: TOGGLE})
+    assert.equal(p.menu.hidden, false)
+    windowListeners.pointerdown({target: OUTSIDE})
+    assert.equal(p.menu.hidden, true)
+  })
+
+  test("the window losing focus, to a frame whose presses the page never hears, closes it", () => {
+    const p = panel()
+    p.fire("click", {target: TOGGLE})
+    windowListeners.blur()
+    assert.equal(p.menu.hidden, true)
+  })
+
+  test("the command palette opening closes it", () => {
+    let observed = null
+    const palette = {dataset: {open: "false"}}
+    globalThis.document = {getElementById: (id) => (id === "command-palette" ? palette : null), addEventListener() {}, removeEventListener() {}}
+    globalThis.MutationObserver = class {
+      constructor(callback) { this.callback = callback }
+      observe(el, options) { observed = {el, options, callback: this.callback} }
+      disconnect() {}
+    }
+    try {
+      const p = panel()
+      assert.equal(observed.el, palette)
+      p.fire("click", {target: TOGGLE})
+      observed.callback()
+      assert.equal(p.menu.hidden, false, "a change that leaves the palette closed leaves the menu")
+      palette.dataset.open = "true"
+      observed.callback()
+      assert.equal(p.menu.hidden, true)
+    } finally {
+      delete globalThis.document
+      delete globalThis.MutationObserver
+    }
+  })
+})
+
+describe("an interrupted gesture", () => {
+  const KEPT = {x: "100", y: "100", w: "400", h: "500"}
+
+  // A drag under way, 60 by 30 from where it started.
+  function dragging() {
+    const p = panel(KEPT)
+    p.fire("pointerdown", {target: GRIP, clientX: 200, clientY: 120})
+    p.fire("pointermove", {clientX: 260, clientY: 150})
+    assert.equal(p.el.dataset.aquaMoving, "drag")
+    assert.deepEqual(p.drawn(), {x: 160, y: 130, w: 400, h: 500})
+    return p
+  }
+
+  // The shield is down, the panel back where it was, nothing sent, and the
+  // next drag settles and is sent.
+  function recovered(p) {
+    assert.equal(p.el.dataset.aquaMoving, undefined)
+    assert.equal(p.captured(), null)
+    assert.deepEqual(p.drawn(), {x: 100, y: 100, w: 400, h: 500})
+    assert.deepEqual(p.pushed, [])
+    p.fire("pointerdown", {target: GRIP, pointerId: 2, clientX: 150, clientY: 120})
+    p.fire("pointermove", {pointerId: 2, clientX: 200, clientY: 170})
+    p.fire("pointerup", {pointerId: 2, clientX: 200, clientY: 170})
+    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 150, y: 150, w: 400, h: 500}}])
+  }
+
+  for (const [name, interrupt] of [
+    ["is cancelled", (p) => p.fire("pointercancel", {})],
+    ["loses its capture", (p) => p.fire("lostpointercapture", {})],
+    ["loses the window's focus", () => windowListeners.blur()],
+    ["has its socket drop", (p) => p.hook.disconnected()]
+  ]) {
+    test(`ends when it ${name}`, () => {
+      const p = dragging()
+      interrupt(p)
+      recovered(p)
+    })
+  }
+
+  test("ends when the page is hidden", () => {
+    let onVisibility = null
+    globalThis.document = {
+      visibilityState: "visible",
+      getElementById: () => null,
+      addEventListener: (type, fn) => type === "visibilitychange" && (onVisibility = fn),
+      removeEventListener() {}
+    }
+    try {
+      const p = dragging()
+      onVisibility()
+      assert.equal(p.el.dataset.aquaMoving, "drag", "visible again is no interruption")
+      globalThis.document.visibilityState = "hidden"
+      onVisibility()
+      recovered(p)
+    } finally {
+      delete globalThis.document
+    }
+  })
+
+  test("a cancel of another pointer leaves it running", () => {
+    const p = dragging()
+    p.fire("pointercancel", {pointerId: 9})
+    assert.equal(p.el.dataset.aquaMoving, "drag")
+  })
+
+  test("a release anywhere, outside the window included, settles it", () => {
+    const p = dragging()
+    windowListeners.pointerup({pointerId: 1, clientX: 300, clientY: 160})
+    assert.equal(p.el.dataset.aquaMoving, undefined)
+    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 200, y: 140, w: 400, h: 500}}])
+    assert.equal(windowListeners.pointerup, undefined, "the release listener goes with the gesture")
+  })
+
+  test("a pull in the hand ends at its level", () => {
+    screen(390, 800)
+    const p = panel()
+    p.fire("pointerdown", {target: HANDLE, clientX: 195, clientY: 205})
+    p.fire("pointermove", {clientX: 195, clientY: 60})
+    windowListeners.blur()
+    assert.deepEqual(p.drawn(), {x: 0, y: 200, w: 390, h: 600})
     assert.deepEqual(p.pushed, [])
   })
 })

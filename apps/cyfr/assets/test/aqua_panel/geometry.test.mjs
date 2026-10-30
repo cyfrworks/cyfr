@@ -8,6 +8,7 @@ import {HAND_BELOW_PX as CANVAS_HAND} from "../../js/canvas/geometry.js"
 import {
   GAP,
   HAND_BELOW_PX,
+  MAX,
   MIN,
   SIZE,
   area,
@@ -147,6 +148,24 @@ describe("a resize", () => {
   test("stops at the viewport's edges", () => {
     assert.deepEqual(resized(rect, "se", 5000, 5000, DESK), {x: 400, y: 200, w: 880, h: 600})
     assert.deepEqual(resized(rect, "nw", -5000, -5000, DESK), {x: 0, y: 48, w: 780, h: 672})
+  })
+})
+
+describe("on a screen larger than the panel may grow", () => {
+  const WALL = area(9000, 6000, 48)
+
+  test("no side passes 4000, the most the server keeps", () => {
+    assert.deepEqual(MAX, {w: 4000, h: 4000})
+    assert.deepEqual(clamp({x: 0, y: 48, w: 8000, h: 5000}, WALL), {x: 0, y: 48, w: 4000, h: 4000})
+    assert.deepEqual(resized({x: 100, y: 100, w: 3900, h: 3900}, "se", 500, 500, WALL), {x: 100, y: 100, w: 4000, h: 4000})
+    assert.deepEqual(resized({x: 600, y: 600, w: 3900, h: 3900}, "nw", -500, -500, WALL), {x: 500, y: 500, w: 4000, h: 4000})
+    assert.equal(docked({x: 0, y: 0, w: 8000, h: 500}, WALL).w, 4000)
+    assert.equal(dockResized({x: 0, y: 0, w: 3900, h: 500}, -500, WALL).w, 4000)
+  })
+
+  test("a kept side longer than 4000 is no placement", () => {
+    assert.equal(parseKept({x: "0", y: "60", w: "4001", h: "500"}), null)
+    assert.deepEqual(parseKept({x: "0", y: "60", w: "4000", h: "4000"}), {x: 0, y: 60, w: 4000, h: 4000})
   })
 })
 

@@ -41,7 +41,7 @@ defmodule PrismWeb.ThreadPaneLive do
   kept), and offers to paste a line onto it (`thread.aloud`). The panel's
   own header names AQUA and the thread, so there the pane draws no name
   or thread label of its own, and its model override, soul or role and
-  token counts sit in a menu (`<dom>-menu`, a popover the panel's header
+  token counts sit in a menu (`<dom>-menu`, which the panel's header
   opens). Its status line appears only while it has something to say
   (still being prepared, no assistant, messages queued, standing answers,
   a turn being asked), and its message box and Send take the panel's
@@ -1539,13 +1539,14 @@ defmodule PrismWeb.ThreadPaneLive do
       </header>
 
       <%!-- In the panel, what the chat page's header shows lives here: the
-            model override, the soul or role and the thread's usage, opened
-            by the panel's own header button (`popovertarget`), which the
-            browser shows and dismisses. --%>
+            model override, the soul or role and the thread's usage. The
+            panel's hook shows and hides it from the panel's header, so its
+            `hidden` is the browser's to keep. --%>
       <div
         :if={@panel?}
         id={@dom <> "-menu"}
-        popover="auto"
+        hidden
+        phx-mounted={JS.ignore_attributes(["hidden"])}
         role="group"
         aria-label="This thread"
         class="aqua-panel-menu"

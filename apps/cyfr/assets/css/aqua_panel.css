@@ -68,25 +68,25 @@
 .aqua-panel-ghost:hover { background: var(--color-surface-overlay); color: var(--color-text-primary); }
 .aqua-panel-ghost:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
 
-/* The thread's menu (the pane's popover), under the header's right end. A
- * popover is drawn in the top layer, so it is placed in the viewport from
- * the panel's own rectangle, whose properties it inherits. */
+/* The thread's menu (the pane's), under the header's right end, inside
+ * the panel's own stacking context: above the panel's content and its
+ * edges, under whatever stands above the panel. */
 .aqua-panel-menu {
-  position: fixed;
-  inset: auto;
-  margin: 0;
+  position: absolute;
+  z-index: 3;
+  top: 44px;
+  right: 8px;
   width: 16rem;
-  top: calc(var(--aqua-y) + 44px);
-  left: max(8px, calc(var(--aqua-x) + var(--aqua-w) - 16rem - 8px));
+  max-width: calc(100% - 16px);
   padding: 6px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--color-accent-hover) 35%, transparent);
-  background: color-mix(in srgb, var(--color-surface-raised) 96%, transparent);
-  backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--color-surface-raised) 98%, transparent);
   box-shadow: 0 16px 40px rgb(0 0 0 / 0.55);
   color: var(--color-text-primary);
   font-size: 0.75rem;
 }
+.aqua-panel-menu[hidden] { display: none; }
 .aqua-panel-menu-row {
   display: flex;
   align-items: center;
@@ -163,7 +163,7 @@
   }
   .aqua-panel-edge,
   .aqua-panel-dock { display: none; }
-  .aqua-panel-menu { top: calc(var(--aqua-y) + 66px); }
+  .aqua-panel-menu { top: 66px; }
   .aqua-panel [data-aqua-grip] { cursor: auto; }
   .aqua-panel-handle {
     display: flex;

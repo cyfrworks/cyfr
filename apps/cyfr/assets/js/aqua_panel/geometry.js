@@ -17,15 +17,16 @@ export {HAND_BELOW_PX, postureFor}
 export const SIZE = Object.freeze({w: 380, h: 520})
 export const MIN = Object.freeze({w: 300, h: 360})
 
+// The largest a side grows, however large the screen: the server refuses a
+// placement with a longer one (PrismWeb.AquaPanelLive).
+export const MAX = Object.freeze({w: 4000, h: 4000})
+
 // How far the panel opens above its button.
 export const GAP = 8
 
 // The sheet's heights in the hand, as shares of the area: where it rests
 // when it opens and where a pull up takes it.
 export const SHEET = Object.freeze({rest: 0.75, full: 1})
-
-// A kept side longer than this is no placement any screen gives.
-const MAX_SIDE = 100000
 
 // What the panel may cover: the viewport `width` by `height` below `top`,
 // the bottom of the top bar, so the bar stays reachable.
@@ -43,16 +44,16 @@ export function area(width, height, top = 0) {
 export function parseKept({x, y, w, h} = {}) {
   const rect = {x: whole(x), y: whole(y), w: whole(w), h: whole(h)}
   if (Object.values(rect).some((side) => side === null)) return null
-  if (rect.w < MIN.w || rect.h < MIN.h || rect.w > MAX_SIDE || rect.h > MAX_SIDE) return null
+  if (rect.w < MIN.w || rect.h < MIN.h || rect.w > MAX.w || rect.h > MAX.h) return null
   return rect
 }
 
 // `rect` moved and sized to lie inside `space`: no smaller than the
 // minimum (or the whole space, when that is smaller), no larger than the
-// space.
+// space or the maximum.
 export function clamp(rect, space) {
-  const w = bound(rect.w, Math.min(MIN.w, space.w), space.w)
-  const h = bound(rect.h, Math.min(MIN.h, space.h), space.h)
+  const w = bound(rect.w, Math.min(MIN.w, space.w), Math.min(MAX.w, space.w))
+  const h = bound(rect.h, Math.min(MIN.h, space.h), Math.min(MAX.h, space.h))
   return {
     x: bound(rect.x, space.x, space.x + space.w - w),
     y: bound(rect.y, space.y, space.y + space.h - h),
@@ -82,8 +83,9 @@ export function moved(rect, dx, dy, space) {
 }
 
 // `rect` resized from `edge` (n, s, e, w, ne, nw, se or sw) by `dx`, `dy`.
-// The opposite edges stay where they are; a side stops at the minimum and
-// at the area's edge, so a resize below the minimum is refused.
+// The opposite edges stay where they are; a side stops at the minimum, at
+// the maximum and at the area's edge, so a resize below the minimum is
+// refused.
 export function resized(rect, edge, dx, dy, space) {
   const start = clamp(rect, space)
   const minW = Math.min(MIN.w, space.w)
@@ -92,23 +94,23 @@ export function resized(rect, edge, dx, dy, space) {
   const right = x + w
   const bottom = y + h
 
-  if (edge.includes("e")) w = bound(w + dx, minW, space.x + space.w - x)
+  if (edge.includes("e")) w = bound(w + dx, minW, Math.min(MAX.w, space.x + space.w - x))
   if (edge.includes("w")) {
-    x = bound(x + dx, space.x, right - minW)
+    x = bound(x + dx, Math.max(space.x, right - MAX.w), right - minW)
     w = right - x
   }
-  if (edge.includes("s")) h = bound(h + dy, minH, space.y + space.h - y)
+  if (edge.includes("s")) h = bound(h + dy, minH, Math.min(MAX.h, space.y + space.h - y))
   if (edge.includes("n")) {
-    y = bound(y + dy, space.y, bottom - minH)
+    y = bound(y + dy, Math.max(space.y, bottom - MAX.h), bottom - minH)
     h = bottom - y
   }
   return {x, y, w, h}
 }
 
 // The panel docked: against the area's right edge, its whole height, as
-// wide as `rect` (within the minimum and the area).
+// wide as `rect` (within the minimum, the maximum and the area).
 export function docked(rect, space) {
-  const w = bound(rect.w, Math.min(MIN.w, space.w), space.w)
+  const w = bound(rect.w, Math.min(MIN.w, space.w), Math.min(MAX.w, space.w))
   return {x: space.x + space.w - w, y: space.y, w, h: space.h}
 }
 
@@ -116,7 +118,7 @@ export function docked(rect, space) {
 // width changed, which is the width it keeps for when it floats again.
 export function dockResized(rect, dx, space) {
   const shown = docked(rect, space)
-  const w = bound(shown.w - dx, Math.min(MIN.w, space.w), space.w)
+  const w = bound(shown.w - dx, Math.min(MIN.w, space.w), Math.min(MAX.w, space.w))
   return {...rect, w}
 }
 

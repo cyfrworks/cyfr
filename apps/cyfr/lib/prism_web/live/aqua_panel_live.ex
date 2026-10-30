@@ -19,9 +19,11 @@ defmodule PrismWeb.AquaPanelLive do
   bottom, the page draws: the canvas's frames (the canvas z-0, column
   apps z-20, floating apps z-30, a full app z-50), the canvas's own chrome
   (the edge strip z-51, the chips and switcher z-55, its notice z-60),
-  this panel and its button (z-70), the command palette (z-80), and the
-  system layer's prompts, which the browser draws in its top layer above
-  every z-index. On the desk it moves and resizes
+  this panel and its button (z-70, the thread's menu inside the panel),
+  the command palette (z-80), and the system layer's prompts, which the
+  browser draws in its top layer above every z-index. The thread's menu
+  closes when the palette opens and goes with the panel when it closes.
+  On the desk it moves and resizes
   (`AquaPanel`, `assets/js/aqua_panel/`, which reports each settled
   gesture as `place`) and docks to the right edge as a full-height
   sidebar (`dock`); in the hand it is a sheet from the bottom. Ctrl+J
@@ -152,18 +154,22 @@ defmodule PrismWeb.AquaPanelLive do
     socket
   end
 
-  # A placement the hook reports: whole CSS pixels, inside any screen, and
-  # no smaller than the panel's minimum (the hook's own, in
-  # `assets/js/aqua_panel/geometry.js`). Anything else is refused and the
-  # kept placement stands.
+  # A placement the hook reports, in whole CSS pixels. The server does not
+  # know the viewport, so it bounds what any screen gives: sides from the
+  # panel's minimum to @max_side (the hook's own bounds, in
+  # `assets/js/aqua_panel/geometry.js`), and the whole rectangle inside
+  # @max_extent from the origin. Anything else is refused and the kept
+  # placement stands; the hook brings a kept placement inside the current
+  # viewport when the panel opens.
   @min_w 300
   @min_h 360
-  @max_px 100_000
+  @max_side 4000
+  @max_extent 16_000
 
   defp placement(%{"x" => x, "y" => y, "w" => w, "h" => h})
        when is_integer(x) and is_integer(y) and is_integer(w) and is_integer(h) and
-              x in 0..@max_px and y in 0..@max_px and w in @min_w..@max_px and
-              h in @min_h..@max_px,
+              x >= 0 and y >= 0 and w in @min_w..@max_side and h in @min_h..@max_side and
+              x + w <= @max_extent and y + h <= @max_extent,
        do: {:ok, %{x: x, y: y, w: w, h: h}}
 
   defp placement(_params), do: :error
@@ -378,11 +384,14 @@ defmodule PrismWeb.AquaPanelLive do
           </span>
           <span class="flex-1"></span>
           <%!-- The thread's model, soul or role and usage: the pane's menu,
-                which the browser opens and dismisses. --%>
+                which the panel's hook opens and closes. --%>
           <button
             id="aqua-panel-more"
             type="button"
-            popovertarget="aqua-panel-pane-menu"
+            data-aqua-menu-toggle
+            aria-controls="aqua-panel-pane-menu"
+            aria-expanded="false"
+            phx-mounted={JS.ignore_attributes(["aria-expanded"])}
             aria-label="This thread's model and usage"
             title="This thread's model and usage"
             class="aqua-panel-ghost"
