@@ -82,7 +82,8 @@ defmodule PrismWeb.ShellLive do
   `feed.press` once the served version's declaration reads that feed, and
   `grant` offers the person's grant to an installed component through the
   system layer's generic grant path, unless an offer for it is open or it
-  is granted already; its outcome opens no frame.
+  is granted with nothing its grant needs missing; its outcome opens no
+  frame.
   `ready` and `failed` report how a canvas's page loaded and runs, so they
   count from a hidden canvas too, frozen or not the one shown: its `ready`
   makes it ready, and its `failed` before that marks it died, which falls
@@ -910,13 +911,15 @@ defmodule PrismWeb.ShellLive do
   # or not), and its outcome waits on no frame, since the component is
   # most often a catalyst with none. Dropped and counted, offering nothing,
   # when the reference names nothing installed, when an offer for the
-  # component is already open, or when the component is already granted.
+  # component is already open, or when the component is granted and
+  # nothing its grant needs is missing. A grant with a connection it needs
+  # missing is offered again: its sheet asks the person to connect it.
   defp grant_from_canvas(socket, ref) do
     ctx = socket.assigns.context
 
     with {:ok, component} <- installed_component(ctx, ref),
          false <- offering?(socket.assigns.grant_prompts, component),
-         false <- granted?(ctx, component),
+         false <- granted_and_complete?(socket, component),
          {:ok, offered} <- grant_prompt(socket, {:component, component}, nil, component) do
       offered
     else
@@ -938,12 +941,17 @@ defmodule PrismWeb.ShellLive do
   defp offering?(prompts, component),
     do: Enum.any?(prompts, &match?({_id, {{:component, ^component}, _}}, &1))
 
-  # Granted: an active profile of the person's for the component. A store
-  # that cannot answer decides nothing here; the offer's own plan does.
-  defp granted?(ctx, component) do
-    case Sanctum.Consent.profiles(ctx, component) do
-      {:ok, entries} -> Enum.any?(entries, &(&1.status == :active))
-      {:error, _unreadable} -> false
+  # Granted and complete: the component's setup plan holds the person's
+  # grant and reads it ready, every need it binds still live. No grant, a
+  # grant missing a connection, and a plan that cannot be read are not, so
+  # the offer's own plan decides them.
+  defp granted_and_complete?(socket, component) do
+    case PrismWeb.Ops.call_tool(socket, "component", %{
+           "action" => "setup_plan",
+           "reference" => component
+         }) do
+      {:ok, %{consent: %{ready: true}}} -> true
+      _not_complete -> false
     end
   end
 

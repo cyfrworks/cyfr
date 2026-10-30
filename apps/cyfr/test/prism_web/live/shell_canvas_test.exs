@@ -2421,8 +2421,9 @@ defmodule PrismWeb.ShellCanvasTest do
 
   describe "a canvas's grant" do
     # A catalyst installed in the athanor, which no frame opens, with no
-    # grant of the person's yet. Answers its versionless reference.
-    defp catalyst!(ctx) do
+    # grant of the person's yet, and `manifest`'s declarations. Answers its
+    # versionless reference.
+    defp catalyst!(ctx, manifest \\ %{}) do
       name = "canvas-grant-#{System.unique_integer([:positive])}"
 
       {:ok, _} =
@@ -2431,11 +2432,30 @@ defmodule PrismWeb.ShellCanvasTest do
           version: "0.1.0",
           type: "catalyst",
           description: "A component a canvas asks a grant for",
-          manifest: Jason.encode!(%{})
+          manifest: Jason.encode!(manifest)
         })
 
       "catalyst:local.#{name}"
     end
+
+    # A connection the catalyst needs, which a grant binds to an entry.
+    @needs_account %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "required" => true,
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"],
+          "attach" => %{
+            "in" => "header",
+            "name" => "Authorization",
+            "template" => "Bearer {value}"
+          }
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
 
     setup %{ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor, %{"desk" => posture([]), "hand" => posture([])})
@@ -2486,7 +2506,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert dropped(view) == 1
     end
 
-    test "a reference that names nothing installed, or a component already granted, is dropped and offers nothing",
+    test "a reference that names nothing installed, or a component granted with nothing its grant needs missing, is dropped and offers nothing",
          %{conn: conn, ctx: ctx, catalyst: catalyst} do
       view = shell!(conn)
       home = canvas(view).id
@@ -2494,12 +2514,38 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, home, :grant, %{"ref" => "catalyst:local.nobody"})
       canvas_verb!(view, home, :grant, %{"ref" => catalyst <> ":9.9.9"})
 
+      # Granted, and needing nothing more: its setup plan reads ready.
       _profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, catalyst)
+
+      assert {:ok, %{consent: %{ready: true}}} =
+               Compendium.Component.setup_plan(person_of(view), catalyst)
+
       canvas_verb!(view, home, :grant, %{"ref" => catalyst})
 
       assert assigns(view).grant_prompts == %{}
       refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
       assert dropped(view) == 3
+    end
+
+    test "a component granted with the account it needs missing is offered again, the sheet asking for the account",
+         %{conn: conn, ctx: ctx} do
+      catalyst = catalyst!(ctx, @needs_account)
+      _profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, catalyst)
+
+      view = shell!(conn)
+
+      # Granted, its connection unbound: its setup plan does not read ready.
+      assert {:ok, %{consent: %{ready: false}}} =
+               Compendium.Component.setup_plan(person_of(view), catalyst)
+
+      canvas_verb!(view, canvas(view).id, :grant, %{"ref" => catalyst})
+
+      assert [{_prompt, {{:component, ^catalyst}, nil}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert render(view) =~ "api_key"
+      assert dropped(view) == 0
     end
 
     test "from a canvas the glass does not show, it is dropped", %{conn: conn, catalyst: catalyst} do
