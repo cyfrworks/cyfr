@@ -7,47 +7,39 @@ defmodule PrismWeb.SetupLive do
   which `cyfr init` prints and `cyfr setup`'s done screen opens). It sets
   the CYFR up by creating its first person, who administers it.
 
-  Its first step is sessionless. The token travels in the address's
-  fragment, which no server log records; the page's script hands it over
+  It is sessionless. The token travels in the address's fragment, which
+  no server log records; the page's script hands it over
   (`system_layer/index.js`, the `SystemLayer` hook in its `setup` mode),
   and the page asks whether it opens setup (`Sanctum.Newcomer.setup_open/1`)
   before any ceremony starts. A token that is not this CYFR's, or a CYFR
   set up already, is one answer: the link is not valid or setup is
-  complete, with the way to sign in. Otherwise the page asks the person to
-  create a passkey (`Sanctum.Passkeys.newcomer_options/0`); the
-  registration is the setup admission's credential
+  complete, with the way to sign in. A browser that already holds a
+  session that stands goes into CYFR.
+
+  Otherwise the person meets the two screens (`PrismWeb.AdmissionCard`):
+  their name, checked against cyfr.run under the token the page holds,
+  and a passkey (`Sanctum.Passkeys.newcomer_options/0`) whose
+  registration, with the name and the recovery secret and request id
+  the browser drew, is the setup admission's credential
   (`Sanctum.Newcomer.admit/2` with `{:setup, token}`), which makes the
-  person, their keys, their athanor, the passkey and the platform grant in
-  one transaction. A cancelled ceremony sends nothing. The admitted
-  person's session reaches the browser's cookie through the passkey
-  sign-in's one-time ticket (`PrismWeb.PasskeyController`), which brings
-  them back here.
+  person, their keys, their athanor, the passkey, the platform grant and
+  their enrollment in one transaction. A cancelled ceremony sends
+  nothing. Then screen 2 registers them at cyfr.run, shows their
+  recovery code, and "I saved it" signs them in.
 
-  Signed in, the page guards their session as every console page does
-  (`CyfrWeb.ContextGuard`) and offers a handle through the identity card
-  (`PrismWeb.IdentityCard`): skipping goes into CYFR, and choosing one
-  runs the enrollment ceremony and claims the handle once its kit is
-  acknowledged. The person, the attempt and the wanted handle are on the
-  server, so a page reloaded mid-step resumes where they stand.
-
-  Its controls carry `data-test` names: `setup-passkey` (the passkey
-  step), `setup-create`, `setup-closed`, `setup-error`, `setup-done` and
-  `setup-continue`.
+  Its root carries `setup-closed` (the link is not valid, or setup is
+  complete); the screens carry their own `data-test` names.
   """
 
   use PrismWeb, :live_view
 
-  @behaviour PrismWeb.SystemLayer.Hook
-  on_mount PrismWeb.SystemLayer.Hook
-
-  alias PrismWeb.{IdentityCard, SystemLayer}
+  alias PrismWeb.AdmissionCard
 
   # Passkey ceremonies begun per address, as the sign-in page bounds its
   # own: the page is reached over the LiveView socket, which passes no
   # rate-limit plug.
   @starts 30
   @window_ms 60_000
-  @ticket_ttl_ms 60_000
 
   @closed "This setup link is not valid, or setup is complete."
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
@@ -62,18 +54,20 @@ defmodule PrismWeb.SetupLive do
       |> assign(:step, :reading)
       |> assign(:token, nil)
       |> assign(:error, nil)
+      |> AdmissionCard.mount()
 
     {:ok, signed_in(socket, params, session), layout: false}
   end
 
-  # A browser that holds a session is guarded as every console page is; a
-  # session that no longer stands leaves the sessionless step, so a stale
-  # cookie never keeps a person from setting up.
+  # A browser that holds a session that stands is guarded as every console
+  # page is and goes into CYFR; a session that no longer stands leaves the
+  # sessionless step, so a stale cookie never keeps a person from setting
+  # up.
   defp signed_in(socket, params, session) do
     case session[to_string(CyfrWeb.ContextGuard.session_key())] do
       token when is_binary(token) and token != "" ->
         case CyfrWeb.ContextGuard.on_mount(:protected, params, session, socket) do
-          {:cont, guarded} -> assign(guarded, :step, :signed_in)
+          {:cont, guarded} -> redirect(guarded, to: ~p"/")
           {:halt, _refused} -> socket
         end
 
@@ -86,7 +80,7 @@ defmodule PrismWeb.SetupLive do
   def handle_event("setup_token", %{"token" => token}, %{assigns: %{step: :reading}} = socket)
       when is_binary(token) do
     case Sanctum.Newcomer.setup_open(token) do
-      :ok -> {:noreply, assign(socket, step: :passkey, token: token)}
+      :ok -> {:noreply, assign(socket, step: :passkey, token: token, error: nil)}
       {:error, :setup_closed} -> {:noreply, assign(socket, :step, :closed)}
       {:error, reason} -> {:noreply, assign(socket, :error, PrismWeb.Ops.error_message(reason))}
     end
@@ -94,22 +88,31 @@ defmodule PrismWeb.SetupLive do
 
   def handle_event("setup_token", _params, socket), do: {:noreply, socket}
 
+  # The name is checked under the token the page holds.
+  def handle_event("admission_check", params, %{assigns: %{step: :passkey}} = socket),
+    do: {:noreply, AdmissionCard.check(socket, params)}
+
+  def handle_event("admission_check", _params, socket), do: {:noreply, socket}
+
   def handle_event("setup_start", _params, %{assigns: %{step: :passkey, token: token}} = socket) do
     cond do
+      not AdmissionCard.startable?(socket) ->
+        {:reply, %{error: true}, socket}
+
       not Arca.ControlPlane.held?() ->
-        {:reply, %{error: @not_owner}, assign(socket, :error, @not_owner)}
+        {:reply, %{error: @not_owner}, assign(socket, :admission_error, @not_owner)}
 
       Prima.RateLimiter.check({:setup_passkey, socket.assigns.client_ip}, @starts, @window_ms) !=
           :ok ->
         message = "Too many passkey ceremonies from here. Try again in a minute."
-        {:reply, %{error: message}, assign(socket, :error, message)}
+        {:reply, %{error: message}, assign(socket, :admission_error, message)}
 
       true ->
         with :ok <- Sanctum.Newcomer.setup_open(token),
              {:ok, %{public_key: public_key, registration: registration}} <-
                Sanctum.Passkeys.newcomer_options() do
           {:reply, %{public_key: public_key, registration: registration},
-           assign(socket, :error, nil)}
+           assign(socket, :admission_error, nil)}
         else
           {:error, reason} -> {:reply, %{error: true}, refused(socket, reason)}
         end
@@ -124,11 +127,10 @@ defmodule PrismWeb.SetupLive do
         %{assigns: %{step: :passkey, token: token}} = socket
       )
       when is_map(credential) do
-    with {:ok, identity} <- Sanctum.Newcomer.identity(params),
-         {:ok, %{session_token: session_token}} <-
+    with {:ok, identity} <- AdmissionCard.identity(socket, params),
+         {:ok, admitted} <-
            Sanctum.Newcomer.admit({:setup, token}, {:passkey, credential, identity}) do
-      ticket = mint_ticket(session_token, socket.assigns.browser_binding)
-      {:noreply, redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")}
+      {:noreply, socket |> assign(:step, :admitted) |> AdmissionCard.admitted(admitted)}
     else
       {:error, reason} -> {:noreply, refused(socket, reason)}
     end
@@ -136,43 +138,29 @@ defmodule PrismWeb.SetupLive do
 
   def handle_event("setup_passkey", _params, socket), do: {:noreply, socket}
 
-  def handle_event("setup_error", _params, socket) do
-    {:noreply,
-     assign(socket, :error, "The passkey was not created, so nothing was saved. Try again.")}
-  end
+  def handle_event("setup_error", _params, %{assigns: %{step: :passkey}} = socket),
+    do: {:noreply, assign(socket, :admission_error, AdmissionCard.ceremony_failed())}
 
-  # A recovery prompt the identity card opened ended: the card reads where
-  # the person stands again.
-  @impl PrismWeb.SystemLayer.Hook
-  def system_layer_report(prompt_id, outcome, socket) do
-    if IdentityCard.prompt?(prompt_id) do
-      send_update(IdentityCard, id: IdentityCard.id(), report: {prompt_id, outcome})
-      {:noreply, socket}
-    else
-      :pass
+  def handle_event("setup_error", _params, socket), do: {:noreply, socket}
+
+  # Screen 2's events, once the person is admitted.
+  def handle_event("admission_" <> _ = event, params, %{assigns: %{step: :admitted}} = socket),
+    do: {:noreply, AdmissionCard.event(event, params, socket)}
+
+  def handle_event("admission_" <> _, _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_info(message, socket) do
+    case AdmissionCard.handle_info(message, socket) do
+      :pass -> {:noreply, socket}
+      handled -> handled
     end
   end
 
-  defp refused(socket, :setup_closed), do: assign(socket, step: :closed, error: nil)
+  defp refused(socket, :setup_closed), do: assign(socket, step: :closed, admission_error: nil)
 
-  defp refused(socket, :registration_refused),
-    do: assign(socket, :error, "That passkey could not be registered here. Try again.")
-
-  defp refused(socket, reason), do: assign(socket, :error, PrismWeb.Ops.error_message(reason))
-
-  # The passkey sign-in's ticket, bound to this browser, naming this page
-  # as where the signed-in person lands.
-  defp mint_ticket(session_token, browser_binding) do
-    ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-
-    Arca.Cache.put(
-      {:login_passkey_ticket, ticket},
-      %{session_token: session_token, browser_binding: browser_binding, to: ~p"/setup"},
-      @ticket_ttl_ms
-    )
-
-    ticket
-  end
+  defp refused(socket, reason),
+    do: assign(socket, :admission_error, AdmissionCard.refusal(reason))
 
   @impl true
   def render(assigns) do
@@ -193,37 +181,34 @@ defmodule PrismWeb.SetupLive do
 
         <div class="bg-gray-900 rounded-lg shadow-xl p-6 space-y-4">
           <div
-            :if={@error}
-            role="alert"
-            data-test="setup-error"
-            class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300"
-          >
-            {@error}
-          </div>
-
-          <div
-            :if={@step in [:reading, :passkey]}
+            :if={@step in [:reading, :passkey, :admitted]}
             id="setup-passkey"
             phx-hook="SystemLayer"
             data-webauthn="setup"
-            data-test="setup-passkey"
             class="space-y-4"
           >
-            <p :if={@step == :reading} class="text-sm text-gray-400">Reading the setup link.</p>
-            <div :if={@step == :passkey} class="space-y-4">
-              <p class="text-sm text-gray-300 leading-relaxed">
-                You are this CYFR's first person, and you administer it. Create a passkey on this
-                device: it signs you in here, with no network needed.
+            <div :if={@step == :reading} class="space-y-2">
+              <p class="text-sm text-gray-400">Reading the setup link.</p>
+              <p :if={@error} role="alert" data-test="admission-error" class="text-sm text-red-300">
+                {@error}
               </p>
-              <button
-                type="button"
-                data-webauthn-start
-                data-test="setup-create"
-                class="w-full px-4 py-3 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg transition-colors cursor-pointer"
-              >
-                Create a passkey
-              </button>
             </div>
+            <AdmissionCard.name_screen
+              :if={@step == :passkey}
+              name={@admission_name}
+              check={@admission_check}
+              error={@admission_error}
+            >
+              <p class="text-sm text-gray-300 leading-relaxed">
+                You are the first person on this CYFR, and you run it.
+              </p>
+            </AdmissionCard.name_screen>
+            <AdmissionCard.code_screen
+              :if={@step == :admitted}
+              state={@admission_state}
+              name={@admission_name}
+              error={@admission_error}
+            />
           </div>
 
           <div :if={@step == :closed} data-test="setup-closed" class="space-y-4">
@@ -235,34 +220,8 @@ defmodule PrismWeb.SetupLive do
               Sign in
             </.link>
           </div>
-
-          <div :if={@step == :signed_in} data-test="setup-done" class="space-y-4">
-            <p class="text-sm text-gray-300 leading-relaxed">
-              CYFR is set up, and you are signed in. A handle at the registry lets people find
-              you by name. It is optional, and Settings offers it later.
-            </p>
-            <.live_component
-              module={IdentityCard}
-              id={IdentityCard.id()}
-              context={@context}
-              offer="setup"
-            />
-            <.link
-              navigate={~p"/"}
-              data-test="setup-continue"
-              class="block w-full text-center px-4 py-3 text-sm text-gray-300 hover:text-white border border-gray-700 rounded-lg"
-            >
-              Continue to CYFR
-            </.link>
-          </div>
         </div>
       </div>
-      <.live_component
-        :if={@step == :signed_in}
-        module={SystemLayer}
-        id={SystemLayer.layer_id()}
-        context={@context}
-      />
     </div>
     """
   end

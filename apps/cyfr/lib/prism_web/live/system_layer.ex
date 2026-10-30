@@ -120,11 +120,10 @@ defmodule PrismWeb.SystemLayer do
       boundary, so confirming leaves for the sign-in page;
     * an unlock — no operation unlocks the vault, so an unlock prompt has
       no confirm control and can only be dismissed;
-    * recovery material (`PrismWeb.SystemLayer.Recovery`) — enrollment
-      through `person.enroll`, a recovery code again through
-      `person.recovery_code`, another code through
+    * recovery material (`PrismWeb.SystemLayer.Recovery`) — a recovery
+      code again through `person.recovery_code`, another code through
       `person.recovery_code_add`, and "I saved it" through
-      `person.recovery_code_saved`. The secret is the browser's, drawn there
+      `person.recovery_code_saved`. An added code's secret is the browser's, drawn there
       and submitted (`recovery_submit`) and submitted again once confirmed,
       never assigned; a recovery code goes to the browser in a push and is
       erased there when the prompt ends;
@@ -1342,7 +1341,7 @@ defmodule PrismWeb.SystemLayer do
       )
 
   defp mark_shown(%{assigns: %{current: %{kind: kind, id: id}}} = socket)
-       when kind in [:enrollment, :kit, :holder],
+       when kind in [:kit, :holder],
        do: assign(socket, pairing: nil, recovery: Recovery.start(id))
 
   defp mark_shown(socket), do: assign(socket, pairing: nil, recovery: nil)
@@ -2970,7 +2969,7 @@ defmodule PrismWeb.SystemLayer do
     """
   end
 
-  defp body(%{prompt: %{kind: kind}} = assigns) when kind in [:enrollment, :kit, :holder] do
+  defp body(%{prompt: %{kind: kind}} = assigns) when kind in [:kit, :holder] do
     ~H"""
     <Recovery.body
       prompt={@prompt}
@@ -3261,7 +3260,7 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :pairing}), do: "Your devices"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
-  defp title(%{kind: kind} = prompt) when kind in [:enrollment, :kit, :holder],
+  defp title(%{kind: kind} = prompt) when kind in [:kit, :holder],
     do: Recovery.title(prompt)
 
   defp description(%{kind: :grant}),
@@ -3316,7 +3315,7 @@ defmodule PrismWeb.SystemLayer do
       "A client of yours asked for a change that needs a fresh confirmation. Check what it " <>
         "would change and who asked before you confirm."
 
-  defp description(%{kind: kind} = prompt) when kind in [:enrollment, :kit, :holder],
+  defp description(%{kind: kind} = prompt) when kind in [:kit, :holder],
     do: Recovery.description(prompt)
 
   defp confirm_label(%{kind: :grant}), do: "Grant"

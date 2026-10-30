@@ -19,7 +19,17 @@ import {
   publicKeyB64
 } from "./device_key.js"
 import {nextStop, tabOrder} from "./focus.js"
-import {clearCode, clearFields, copyCode, drawCode, fieldValue, Material, RestorePage} from "./recovery.js"
+import {
+  clearCode,
+  clearFields,
+  copyCode,
+  drawCode,
+  drawRequestId,
+  drawSeed,
+  fieldValue,
+  Material,
+  RestorePage
+} from "./recovery.js"
 import {initial, transition} from "./state.js"
 import {assert as assertPasskey, register as registerPasskey, supported as passkeysSupported} from "./webauthn.js"
 
@@ -88,15 +98,26 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  *     events by that mode (`setup_…`, `invite_…`). On mount it hands the
  *     page the setup token or the invitation code the address carries in
  *     its fragment (`<mode>_token`, `{token}`), which no server log
- *     records, and a click on its `[data-webauthn-start]` asks the page for
- *     creation options (`<mode>_start`, whose reply carries `public_key`
- *     and `registration`), creates the passkey and answers it
- *     (`<mode>_passkey`, `{credential}`), or says the ceremony did not
- *     finish (`<mode>_error`). Such an element draws no prompt.
+ *     records, and a click on its `[data-webauthn-start]` draws the new
+ *     person's recovery secret (32 bytes, `drawSeed`) and its request id
+ *     (`drawRequestId`), asks the page for creation options
+ *     (`<mode>_start`, whose reply carries `public_key` and
+ *     `registration`), creates the passkey and answers it with the two
+ *     (`<mode>_passkey`, `{credential, recovery_secret, request_id}`;
+ *     the page adds the name it holds), or says the ceremony did not
+ *     finish (`<mode>_error`). The secret is held for that one ceremony
+ *     alone. Such an element draws no prompt.
  *   * On the sign-in page, an element with `data-webauthn="create"` is a
  *     newcomer's passkey under an open admission: as the setup page's,
  *     with no fragment read, through `create_start`, `create_passkey` and
  *     `create_error`. Such an element draws no prompt.
+ *   * On those three, once the person is admitted, the page pushes their
+ *     recovery code once (`admission_code`, `{code}`): it is drawn as the
+ *     text of the screen's `[data-test="recovery-code"]`, which the page's
+ *     markup leaves empty and keeps the browser's, and is held nowhere
+ *     else, so it goes when that element goes. A click on
+ *     `[data-test="admission-copy"]` writes it to the clipboard and says
+ *     "Copied.".
  *
  * A change that waits on a fresh confirmation repeats once its record is
  * confirmed. A typed value is never held by the server meanwhile: the
@@ -279,7 +300,9 @@ function watchFrames(doc) {
   frameWatch.observe(doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["inert"]})
 }
 
-// The pages whose passkey makes a newcomer, by their `data-webauthn` mode.
+// The pages whose link carries a token in its fragment, by their
+// `data-webauthn` mode; with `create`, the pages whose passkey makes a
+// newcomer.
 const NEWCOMER_MODES = new Set(["setup", "invite"])
 
 export default {
@@ -333,6 +356,7 @@ export default {
   destroyed() {
     if (this.onSignIn) {
       this.el.removeEventListener("click", this.onSignIn)
+      clearAdmissionCode(this.el)
       return
     }
 
@@ -389,21 +413,32 @@ export default {
     this.mountRegistration(this.el.dataset.webauthn)
   },
 
-  // A newcomer's passkey, once per click: `<mode>_start` for the creation
-  // options, then `<mode>_passkey` or `<mode>_error`.
+  // A newcomer's passkey, once per click: the recovery secret and request
+  // id drawn at the tap, `<mode>_start` for the creation options, then
+  // `<mode>_passkey` with the two, or `<mode>_error`. Once admitted, the
+  // page's recovery code is drawn into the screen, and Copy writes it.
   mountRegistration(mode) {
     this.onSignIn = (event) => {
-      const start = event.target && event.target.closest ? event.target.closest("[data-webauthn-start]") : null
+      const target = event.target && event.target.closest ? event.target : null
+      const copy = target ? target.closest('[data-test="admission-copy"]') : null
+      if (copy) {
+        event.preventDefault()
+        return copyCode(copy, globalThis.navigator?.clipboard)
+      }
+      const start = target ? target.closest("[data-webauthn-start]") : null
       if (!start) return
       event.preventDefault()
+      const material = {recovery_secret: drawSeed(), request_id: drawRequestId()}
       this.pushEvent(`${mode}_start`, {}, (reply) => {
         if (!reply || !reply.public_key) return
         registerPasskey(reply.public_key, reply.registration, globalThis.navigator.credentials)
-          .then((credential) => this.pushEvent(`${mode}_passkey`, {credential}))
+          .then((credential) => this.pushEvent(`${mode}_passkey`, {credential, ...material}))
           .catch(() => this.pushEvent(`${mode}_error`, {}))
       })
     }
     this.el.addEventListener("click", this.onSignIn)
+    if (typeof this.handleEvent === "function")
+      this.handleEvent("admission_code", ({code}) => drawAdmissionCode(this.el, code))
   },
 
   // The ceremonies the system layer asks for; the layer decides nothing
@@ -1067,6 +1102,20 @@ export default {
     event.preventDefault()
     if (next >= 0) stops[next].focus()
   }
+}
+
+// The recovery code an admission pushed, drawn as the text of the screen's
+// own place under `root`; nothing else holds it.
+export function drawAdmissionCode(root, code) {
+  const slot = root && typeof root.querySelector === "function" ? root.querySelector('[data-test="recovery-code"]') : null
+  if (!slot || typeof code !== "string" || !code) return
+  slot.textContent = code
+}
+
+// The screen's drawn recovery code under `root`, emptied.
+export function clearAdmissionCode(root) {
+  const slot = root && typeof root.querySelector === "function" ? root.querySelector('[data-test="recovery-code"]') : null
+  if (slot) slot.textContent = ""
 }
 
 // Every recovery prompt of the layer `hook` forgotten: the material it
