@@ -4,8 +4,8 @@
 defmodule Sanctum.Providers.Person do
   @moduledoc """
   The `person` tool: a person's identity at their own home — enrollment
-  and the printed recovery kit, another kit added by an existing one, the
-  live key's rotation, the doors they sign in through, a device
+  and the recovery code, another recovery code added by one the person
+  holds, the live key's rotation, the doors they sign in through, a device
   certificate for another home, and the sign-in carry that begins and
   completes here. The carry stores no saved-home list.
 
@@ -16,16 +16,17 @@ defmodule Sanctum.Providers.Person do
   `person.renew_certificate`, `auth: :anonymous` as `pairing.complete` is:
   a device at another home renews here holding no session of this home's,
   and the proof of its device key over this home's challenge is its only
-  credential (`Sanctum.RemoteCertification`). Enrolling, the kit and
-  adding a kit change recovery material; rotating changes the live key;
-  linking and unlinking change the sign-in methods; certifying a device
-  pairs it: each is a sensitive change Sanctum decides where it is made
-  (`Sanctum.Pairing`). `person.assert` is declared with the tool by
-  `Sanctum.Providers.Assertion`, which handles it.
+  credential (`Sanctum.RemoteCertification`). Enrolling, showing the
+  recovery code and adding one change recovery material; rotating changes
+  the live key; linking and unlinking change the sign-in methods;
+  certifying a device pairs it: each is a sensitive change Sanctum decides
+  where it is made (`Sanctum.Pairing`). `person.assert` is declared with
+  the tool by `Sanctum.Providers.Assertion`, which handles it.
 
-  A recovery seed, in or out, is the field `recovery_secret` wherever it
-  appears, nested kit structures included, so the redaction vocabulary
-  (`Prima.Sanitizer`) keeps it out of every log.
+  A recovery secret the trusted form draws is the field `recovery_secret`
+  wherever it appears, the added code's `holder` included; a recovery code
+  given is `recovery_code` and one answered is `code`. The redaction
+  vocabulary (`Prima.Sanitizer`) keeps each out of every log.
 
   What each action answers:
 
@@ -33,24 +34,25 @@ defmodule Sanctum.Providers.Person do
       as their settings show it: `provenance`, `identifier`, the
       `directory_url` this home pins (or nil), `enrollment`, `key_epoch`,
       the `kits` and `rotation` still in progress, and the linked `doors`;
-      never a seed, a sealed value or a staged key.
+      never a secret, a sealed value or a staged key.
     * `person.enroll` (`Sanctum.Recovery.enroll/3`) — the attempt's
       `attempt_id`, `request_id`, `phase` and `identifier`, and once the
-      directory accepted it the `kit`, `%{identifier, directory_url,
-      recovery_secret}`, the three lines a restore takes, until the kit is
-      acknowledged. A retry under the same `request_id` resumes the
-      attempt and registers the same genesis.
+      directory accepted it the `code`, the recovery code a restore takes,
+      until the person says it is saved. A retry under the same
+      `request_id` resumes the attempt and registers the same genesis.
     * `person.enroll_abandon` (`Sanctum.Recovery.abandon_enrollment/1`) —
       the abandoned enrollment's `request_id` and `phase: "superseded"`:
       an enrollment the directory has not accepted ends, and the person
-      may enroll again under a new kit. It asks no confirmation: it
-      discards an unfinished attempt and mints nothing.
-    * `person.kit` (`Sanctum.Recovery.kit/2`) — the same `kit` again, under
-      a fresh confirmation, until `person.kit_ack` erases its seed.
-    * `person.kit_ack` (`Sanctum.Recovery.kit_ack/2`) — `attempt_id` and
-      `phase: "completed"`.
-    * `person.enroll_holder` (`Sanctum.Recovery.enroll_holder/3`) — as
-      enroll, the `kit` being the added one's, and the new `key_epoch`.
+      may enroll again under a new recovery code. It asks no
+      confirmation: it discards an unfinished attempt and mints nothing.
+    * `person.recovery_code` (`Sanctum.Recovery.recovery_code/2`) — the
+      attempt's `attempt_id` and the same `code` again, under a fresh
+      confirmation, until `person.recovery_code_saved` erases its secret.
+    * `person.recovery_code_saved` (`Sanctum.Recovery.recovery_code_saved/2`)
+      — `attempt_id` and `phase: "completed"`.
+    * `person.recovery_code_add` (`Sanctum.Recovery.recovery_code_add/3`) —
+      as enroll, the `code` being the added one's, and the new
+      `key_epoch`. A recovery code the person holds signs it.
     * `person.rotate` (`Sanctum.IdentityFreshness.rotate_live/3`) — the
       attempt's `request_id`, its `phase` and the new `key_epoch`.
     * `person.link_door` and `person.unlink_door`
@@ -93,7 +95,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own CYFR: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
+        "A person's identity at their own CYFR: read its status, enroll and show the recovery code, abandon an unfinished enrollment, add another recovery code, rotate the live key, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
       title: "Person"
     )
   end
@@ -110,7 +112,7 @@ defmodule Sanctum.Providers.Person do
         "enroll",
         "Enroll the person's identity",
         [
-          recovery_secret("enroll: the new kit's recovery seed, drawn by the trusted form"),
+          recovery_secret("enroll: the new recovery code's secret, drawn by the trusted form"),
           request_id()
         ],
         kind: :write,
@@ -131,15 +133,15 @@ defmodule Sanctum.Providers.Person do
         planes: [:external],
         consent: :interactive
       ),
-      Operation.new("person", "kit", "Deliver a printed kit", [attempt_id()],
+      Operation.new("person", "recovery_code", "Show your recovery code", [attempt_id()],
         kind: :read,
         planes: [:external],
         consent: :interactive
       ),
       Operation.new(
         "person",
-        "kit_ack",
-        "Acknowledge a printed kit is saved",
+        "recovery_code_saved",
+        "Say your recovery code is saved",
         [attempt_id()],
         kind: :write,
         planes: [:external],
@@ -182,18 +184,18 @@ defmodule Sanctum.Providers.Person do
       ),
       Operation.new(
         "person",
-        "enroll_holder",
-        "Add another printed kit",
+        "recovery_code_add",
+        "Add another recovery code",
         [
-          recovery_secret(
-            "enroll_holder: an existing kit's recovery seed, which signs the change"
+          Arg.new("recovery_code", :string,
+            required: true,
+            description: "recovery_code_add: a recovery code you hold, which signs the change"
           ),
           Arg.new(
             "holder",
-            {:record,
-             [recovery_secret("The added kit's recovery seed, drawn by the trusted form")]},
+            {:record, [recovery_secret("The new code's secret, drawn by the trusted form")]},
             required: true,
-            description: "enroll_holder: the printed kit to add"
+            description: "recovery_code_add: the new code's secret"
           ),
           request_id()
         ],
@@ -331,14 +333,15 @@ defmodule Sanctum.Providers.Person do
       Arg.new("request_id", :string,
         required: true,
         description:
-          "The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)"
+          "The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)"
       )
 
   defp attempt_id,
     do:
       Arg.new("attempt_id", :string,
         required: true,
-        description: "The enrollment or added-kit attempt whose kit this is (kit, kit_ack)"
+        description:
+          "The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)"
       )
 
   def handle(%Context{} = ctx, %{"action" => "assert"} = args), do: Assertion.handle(ctx, args)
@@ -355,17 +358,20 @@ defmodule Sanctum.Providers.Person do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "kit", "attempt_id" => id}) when is_binary(id),
-    do: answer(Recovery.kit(ctx, id))
+  def handle(%Context{} = ctx, %{"action" => "recovery_code", "attempt_id" => id})
+      when is_binary(id),
+      do: answer(Recovery.recovery_code(ctx, id))
 
-  def handle(%Context{} = ctx, %{"action" => "kit_ack", "attempt_id" => id}) when is_binary(id),
-    do: answer(Recovery.kit_ack(ctx, id))
+  def handle(%Context{} = ctx, %{"action" => "recovery_code_saved", "attempt_id" => id})
+      when is_binary(id),
+      do: answer(Recovery.recovery_code_saved(ctx, id))
 
-  def handle(%Context{}, %{"action" => action}) when action in ["kit", "kit_ack"],
-    do: {:error, {:invalid_argument, "#{action} needs the kit's attempt_id"}}
+  def handle(%Context{}, %{"action" => action})
+      when action in ["recovery_code", "recovery_code_saved"],
+      do: {:error, {:invalid_argument, "#{action} needs the code's attempt_id"}}
 
-  def handle(%Context{} = ctx, %{"action" => "enroll_holder"} = args),
-    do: answer(Recovery.enroll_holder(ctx, args))
+  def handle(%Context{} = ctx, %{"action" => "recovery_code_add"} = args),
+    do: answer(Recovery.recovery_code_add(ctx, args))
 
   def handle(%Context{} = ctx, %{"action" => "link_door", "provider" => provider, "ticket" => t})
       when is_binary(provider) and is_binary(t),
@@ -461,8 +467,24 @@ defmodule Sanctum.Providers.Person do
           "anyone enrolls."
       )
 
+  defp refusal(:not_a_code),
+    do:
+      refused(
+        :invalid_argument,
+        :not_a_code,
+        "That is not a recovery code. A recovery code starts with CYFR-."
+      )
+
+  defp refusal(:typo),
+    do:
+      refused(
+        :invalid_argument,
+        :typo,
+        "That recovery code has a typo. Check it against the one you saved."
+      )
+
   defp refusal(:already_enrolled),
-    do: {:conflict, "Your identity is enrolled already; add another kit instead."}
+    do: {:conflict, "Your identity is enrolled already; add another recovery code instead."}
 
   defp refusal(:not_enrolled),
     do: {:conflict, "This needs an enrolled identity; enroll first."}
@@ -476,13 +498,14 @@ defmodule Sanctum.Providers.Person do
   defp refusal(:enrollment_abandoned),
     do:
       {:conflict,
-       "This enrollment was abandoned, so it gives you no identity; enroll again with a new kit."}
+       "This enrollment was abandoned, so it gives you no identity; enroll again with a new " <>
+         "recovery code."}
 
   defp refusal(:holder_refused),
-    do: {:conflict, "The directory refused this kit, so none was added."}
+    do: {:conflict, "cyfr.run refused this recovery code, so none was added."}
 
   defp refusal(:kit_acknowledged),
-    do: {:conflict, "You acknowledged saving this kit, so its seed is gone and cannot be shown."}
+    do: {:conflict, "You said your recovery code is saved, so it is gone and cannot be shown."}
 
   defp refusal(:not_accepted),
     do: {:conflict, "The directory has not accepted this yet; finish it under its request id."}
@@ -492,11 +515,11 @@ defmodule Sanctum.Providers.Person do
       refused(
         :forbidden,
         :not_a_holder,
-        "The kit that signs this is not one of your identity's recovery kits now."
+        "The recovery code that signs this is not one of your identity's codes now."
       )
 
   defp refusal(:already_a_holder),
-    do: {:conflict, "That kit is already one of your identity's recovery kits."}
+    do: {:conflict, "That is already one of your identity's recovery codes."}
 
   defp refusal(:stale_head),
     do:
@@ -597,7 +620,9 @@ defmodule Sanctum.Providers.Person do
   # An abandonment's own refusals: the accepted enrollment stands, and
   # with none in progress there is nothing to abandon.
   defp abandon_refusal(:registered),
-    do: {:conflict, "Your identity is registered; show its kit with person.kit."}
+    do:
+      {:conflict,
+       "Your identity is registered; show your recovery code with person.recovery_code."}
 
   defp abandon_refusal(:not_found),
     do: refused(:not_found, :not_found, "You have no unfinished enrollment to abandon.")

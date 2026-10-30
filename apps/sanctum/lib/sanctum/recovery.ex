@@ -4,79 +4,88 @@
 defmodule Sanctum.Recovery do
   @moduledoc """
   Recovery material and restore (`ARCHITECTURE.md` §9.1): enrollment under
-  a fresh confirmation, delivery of the printed kit until its
-  acknowledgment erases the sealed seed, another printed kit added by an
-  existing one, and restore on an installation-authorized empty node
-  through durable, resumable phases. Every use of a recovery key, and of
-  the keys a restore stages, is here; the person's online keys are used
-  only through `Sanctum.Person`.
+  a fresh confirmation, delivery of the person's recovery code until they
+  say it is saved, which erases the sealed secret, another recovery code
+  added by one the person holds, and restore on an installation-authorized
+  empty node through durable, resumable phases. Every use of a recovery
+  key, and of the keys a restore stages, is here; the person's online keys
+  are used only through `Sanctum.Person`.
 
-  A kit is three lines: the identifier, the directory URL and one
-  recovery signing seed (`recovery_secret`, 32 bytes, unpadded base64url),
-  whose Ed25519 key pair (`Prima.Identity.derive_recovery_key/1`) is one
-  recovery holder. Every seed in or out travels under the field
-  `recovery_secret`, so the redaction vocabulary keeps it out of every log.
+  A recovery code (`Prima.RecoveryCode`) is one line that spells the
+  identifier and one 32-byte recovery secret, whose Ed25519 key pair
+  (`Prima.Identity.derive_recovery_key/1`) is one recovery holder. The
+  server composes every code it answers (`Prima.RecoveryCode.encode/2`)
+  and reads every code it is given (`Prima.RecoveryCode.decode/1`); a code
+  that does not read is refused `:not_a_code` or `:typo` before anything
+  is read or sent. A secret the trusted form draws travels under the field
+  `recovery_secret`, a code given under `recovery_code` and a code
+  answered under `code`, so the redaction vocabulary (`Prima.Sanitizer`)
+  keeps each out of every log.
 
   ## Enrollment
 
   `enroll/3` gives an enrolled-to-be local person an identifier at the
   directory this deployment pins (`Sanctum.directory_url/0`; no operation
   takes a directory URL). The genesis names their live and operational
-  public keys, the seed's recovery key and that directory
+  public keys, the secret's recovery key and that directory
   (`Sanctum.Person.sign_genesis/3`). The `recovery_material` confirmation
   is asked for the exact set, directory and genesis digest before
   anything is opened (`Sanctum.Consent.Authz.check/3`), and consumed in
   the transaction that opens the one enrollment attempt, which holds the
-  immutable genesis and the sealed seed. Registration
+  immutable genesis and the sealed secret. Registration
   (`Sanctum.Directory.Client.register/3`) is retried under the same
   request id with the same genesis bytes until the directory answers: an
   acceptance writes the identifier, a refusal leaves the person without
   one and the attempt recorded. A retry resumes the attempt with the
-  authorization it committed, and only for the seed it holds.
+  authorization it committed, and only for the secret it holds.
 
-  An enrollment the directory has not accepted waits on the seed of the
-  browser that began it. A person whose browser lost that seed abandons it
-  (`abandon_enrollment/1`): the attempt ends `superseded` and the person
-  is unenrolled again, free to enroll under a new seed, so a new
+  An enrollment the directory has not accepted waits on the secret of the
+  browser that began it. A person whose browser lost that secret abandons
+  it (`abandon_enrollment/1`): the attempt ends `superseded` and the
+  person is unenrolled again, free to enroll under a new secret, so a new
   identifier. A genesis the directory may already have registered stays
-  there unused, under an identifier nobody holds a kit for. A retry under
-  the abandoned request id answers `:enrollment_abandoned` and registers
-  nothing.
+  there unused, under an identifier nobody holds a recovery code for. A
+  retry under the abandoned request id answers `:enrollment_abandoned`
+  and registers nothing.
 
-  The accepted attempt answers the kit, until `kit_ack/2` acknowledges it
-  and erases the sealed seed in the same write. `kit/2` delivers it again,
-  each time under a fresh `recovery_material` confirmation; an
-  acknowledged kit's seed is gone and is never printed again.
+  The accepted attempt answers the recovery code, until
+  `recovery_code_saved/2` records that the person saved it and erases the
+  sealed secret in the same write. `recovery_code/2` shows it again, each
+  time under a fresh `recovery_material` confirmation; once it is saved
+  its secret is gone, and the code is never shown again.
 
   `status/1` reads what the person's own settings show: the identity row,
-  the attempts still in progress and the doors, never a seed or a sealed
-  value. `enrollment_effect/1` is the sentence the enrollment preview
-  stores.
+  the attempts still in progress and the doors, never a secret or a
+  sealed value. `enrollment_effect/1` is the sentence the enrollment
+  preview stores.
 
-  ## Another printed kit
+  ## Another recovery code
 
-  `enroll_holder/3` adds a recovery holder through a `recover` signed by a
-  kit the identity already holds. It keeps the person's live and
-  operational keys and names the current recovery set with the added
-  kit's key, at the revision the directory serves now, read fresh
-  (`Sanctum.IdentityFreshness.fresh!/2`) and held to the head the person's
-  row names. A printed kit is the one kind of holder. The confirmation is
-  asked and consumed as enrollment's, and the accepted entry is the
-  person's new head (`key_epoch`): every home that relies on the identity
-  retires what was bound to the old one. The added kit is delivered and
-  acknowledged as the first.
+  `recovery_code_add/3` adds a recovery holder through a `recover` signed
+  by a recovery code the person holds, which names the person's own
+  identity. It keeps the person's live and operational keys and names the
+  current recovery set with the added code's key, at the revision the
+  directory serves now, read fresh (`Sanctum.IdentityFreshness.fresh!/2`)
+  and held to the head the person's row names. The confirmation is asked
+  and consumed as enrollment's, and the accepted entry is the person's
+  new head (`key_epoch`): every home that relies on the identity retires
+  what was bound to the old one. The added code is shown and saved as the
+  first.
 
   ## Restore
 
   `restore/3` is an ingress, not an operation: no person exists to admit
-  one. It takes the kit's three lines and the installation capability, the
-  deployment's `CYFR_RESTORE_TOKEN` (`:sanctum, :restore_token`), which
-  is checked first, in constant time: with no configured token restore
-  is disabled, and a kit without this installation's token causes no row,
-  no staged key and no outbound call. The kit's seed is then held to the
-  identifier's current recovery set by a fresh read of its directory,
-  outside any transaction and before the token is claimed, so a mistyped
-  kit spends nothing.
+  one. It takes the person's recovery code and the installation
+  capability, the deployment's `CYFR_RESTORE_TOKEN` (`:sanctum,
+  :restore_token`), which is checked first, in constant time: with no
+  configured token restore is disabled, and a code without this
+  installation's token causes no row, no staged key and no outbound call.
+  The identity is read at the directory this deployment pins
+  (`Sanctum.directory_url/0`), and a deployment that pins none restores
+  nothing. The code's secret is held to the identifier's current recovery
+  set by a fresh read of that directory, outside any transaction and
+  before the token is claimed, so a code that does not read, names no
+  identity there or holds no recovery key of it spends nothing.
 
   Its phases are `Arca.IdentityAttempts`' restore path, each durable
   before the next begins, all under one request id drawn at the first
@@ -125,8 +134,8 @@ defmodule Sanctum.Recovery do
   leaves the attempt where it stands, answered `:unavailable`.
 
   A retry under the same token finds the attempt through its claim, and
-  resumes it only for the kit whose identifier it restores and whose
-  seed signed its request; nothing resumes at boot. A completed restore
+  resumes it only for a code whose identifier it restores and whose
+  secret signed its request; nothing resumes at boot. A completed restore
   answers `:restored` and issues no session.
 
   The restored person is local, so the door admits them unless a deny
@@ -141,12 +150,12 @@ defmodule Sanctum.Recovery do
   closes before any method is installed, `restore_challenge/1` (the
   capability again) answers a server challenge alive five minutes on the
   database's clock, the clock its use is checked against, and `reproof/3`
-  takes the kit and that challenge: a challenge not held or past its
-  expiry is refused before the directory is read, the seed must be a
-  holder of the identity now and the head's online keys the ones this
-  restore introduced; the challenge is consumed once and a new `restore`
-  session issued. Neither rotates a key or repeats the restore, and both
-  close once a first method exists.
+  takes the recovery code and that challenge: a challenge not held or
+  past its expiry is refused before the directory is read, the code's
+  secret must be a holder of the identity now and the head's online keys
+  the ones this restore introduced; the challenge is consumed once and a
+  new `restore` session issued. Neither rotates a key or repeats the
+  restore, and both close once a first method exists.
   """
 
   require Logger
@@ -164,22 +173,27 @@ defmodule Sanctum.Recovery do
   @typedoc "The directory client's options: `:resolver` and `:cacerts`."
   @type opts :: [resolver: module(), cacerts: [binary()]]
 
-  @typedoc "A printed kit's three lines, as a surface received them."
-  @type kit :: %{optional(String.t()) => term()}
+  @typedoc """
+  The restore ingress's body: the person's recovery code under
+  `"recovery_code"`, and for a reproof the `"challenge"`.
+  """
+  @type code_params :: %{optional(String.t()) => term()}
 
   # ===========================================================================
   # Enrollment
   # ===========================================================================
 
   @doc """
-  Enroll the person of `ctx` (the module doc): `args` holds the new kit's
-  seed under `"recovery_secret"` and the attempt's `"request_id"`.
+  Enroll the person of `ctx` (the module doc): `args` holds the new
+  code's secret under `"recovery_secret"` and the attempt's
+  `"request_id"`.
 
-  Answers `%{attempt_id, request_id, phase, identifier, kit}` once the
-  directory accepted the genesis, `kit` being `%{identifier, directory_url,
-  recovery_secret}` while the kit is unacknowledged, and absent after.
+  Answers `%{attempt_id, request_id, phase, identifier, code}` once the
+  directory accepted the genesis, `code` being the recovery code
+  (`Prima.RecoveryCode.encode/2` over the identifier and the secret) while
+  the person has not said it is saved, and absent after.
 
-  Refusals: `{:invalid_argument, _}` (no seed, or a malformed one or
+  Refusals: `{:invalid_argument, _}` (no secret, or a malformed one or
   request id), `:no_directory` (this deployment pins none), `:not_found`
   (no local key set: the person's keys are at another home),
   `:already_enrolled`, `{:attempt_in_progress, request_id}`,
@@ -222,7 +236,7 @@ defmodule Sanctum.Recovery do
   @doc """
   What confirming an enrollment approves (`t:Sanctum.Consent.Authz.change/0`):
   the request, the genesis digest, the recovery set and the pinned
-  directory. The seed is never in it; its public key is.
+  directory. The secret is never in it; its public key is.
   """
   @spec enrollment_change(String.t(), map(), binary(), String.t()) :: Authz.change()
   def enrollment_change(request_id, genesis, recovery_key, directory) do
@@ -247,8 +261,8 @@ defmodule Sanctum.Recovery do
   @doc """
   What enrolling at `directory` means, in the words the stored preview
   and the trusted enrollment form both say: the directory pinned, what
-  its unavailability means, what losing every kit means, and that a
-  recovery restores the identity alone.
+  its unavailability means, what losing every recovery code means, and
+  that a recovery restores the identity alone.
   """
   @spec enrollment_effect(String.t()) :: String.t()
   def enrollment_effect(directory) when is_binary(directory) do
@@ -370,14 +384,14 @@ defmodule Sanctum.Recovery do
   @doc """
   Abandon the person's enrollment the directory has not accepted
   (`person.enroll_abandon`, the module doc): a `staged` or `submitted`
-  attempt ends `superseded`, its sealed seed erased, and the person is
+  attempt ends `superseded`, its sealed secret erased, and the person is
   unenrolled in the same write (`Arca.IdentityAttempts.advance/5`). It
   discards an unfinished attempt and mints nothing, so it asks no
   confirmation. Answers `%{request_id, phase: "superseded"}`, the
   abandoned request id.
 
   Refusals: `:registered` (the directory accepted it: the identity stands
-  and `kit/2` delivers its kit), `:not_found` (no enrollment of the
+  and `recovery_code/2` shows its code), `:not_found` (no enrollment of the
   person's in progress: none begun, or it completed, was refused or was
   abandoned), `:unauthenticated`, `:guest_plane`, `:unavailable`.
   """
@@ -407,7 +421,7 @@ defmodule Sanctum.Recovery do
   defp abandon(_ctx, _ended_or_none), do: {:error, :not_found}
 
   defp enrolled(attempt) do
-    with {:ok, kit} <- kit_lines(attempt) do
+    with {:ok, code} <- code(attempt) do
       answer = %{
         attempt_id: attempt.id,
         request_id: attempt.request_id,
@@ -415,11 +429,11 @@ defmodule Sanctum.Recovery do
         identifier: attempt.identifier
       }
 
-      {:ok, if(kit, do: Map.put(answer, :kit, kit), else: answer)}
+      {:ok, if(code, do: Map.put(answer, :code, code), else: answer)}
     end
   end
 
-  # The genesis the attempt holds names this seed's key as its recovery set.
+  # The genesis the attempt holds names this secret's key as its recovery set.
   defp holds_seed?(%{genesis: genesis}, recovery_key) when is_binary(genesis) do
     case Prima.Json.decode(genesis) do
       {:ok, %{} = map} -> Map.get(map, "recovery_keys") == [Encoding.b64(recovery_key)]
@@ -430,65 +444,68 @@ defmodule Sanctum.Recovery do
   defp holds_seed?(_attempt, _recovery_key), do: false
 
   # ===========================================================================
-  # The kit
+  # The recovery code
   # ===========================================================================
 
   @doc """
-  Deliver the kit of the person's accepted enrollment or added kit
-  `attempt_id` again (`person.kit`), under a fresh `recovery_material`
-  confirmation each time. Answers `%{attempt_id, identifier, kit}`.
+  Show the recovery code of the person's accepted enrollment or added code
+  `attempt_id` again (`person.recovery_code`), under a fresh
+  `recovery_material` confirmation each time. Answers `%{attempt_id,
+  code}`.
 
-  The seed is opened from the attempt read again once the confirmation
-  answers, so an acknowledgment that committed meanwhile prints nothing.
+  The secret is opened from the attempt read again once the confirmation
+  answers, so a save that committed meanwhile shows nothing.
 
-  Refusals: `{:not_found, "kit", attempt_id}` (no such attempt of the
-  person's), `:kit_acknowledged` (the seed was erased on acknowledgment),
-  `:not_accepted` (the directory has not accepted it), the consent signal
-  and the confirmation's other refusals, `:unavailable`.
+  Refusals: `{:not_found, "recovery_code", attempt_id}` (no such attempt
+  of the person's), `:kit_acknowledged` (the person said it is saved, which
+  erased the secret), `:not_accepted` (the directory has not accepted it),
+  `:enrollment_refused`, the consent signal and the confirmation's other
+  refusals, `:unavailable`.
   """
-  @spec kit(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def kit(%Context{} = ctx, attempt_id) when is_binary(attempt_id) do
+  @spec recovery_code(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def recovery_code(%Context{} = ctx, attempt_id) when is_binary(attempt_id) do
     with {:ok, user_id} <- person(ctx),
-         {:ok, attempt} <- own_kit_attempt(ctx, user_id, attempt_id),
+         {:ok, attempt} <- own_code_attempt(ctx, user_id, attempt_id),
          :ok <- deliverable(attempt),
-         :ok <- Authz.confirm(ctx, :recovery_material, kit_change(attempt)),
-         {:ok, attempt} <- own_kit_attempt(ctx, user_id, attempt_id),
+         :ok <- Authz.confirm(ctx, :recovery_material, code_change(attempt)),
+         {:ok, attempt} <- own_code_attempt(ctx, user_id, attempt_id),
          :ok <- deliverable(attempt),
-         {:ok, kit} <- kit_lines(attempt) do
-      {:ok, %{attempt_id: attempt.id, identifier: attempt.identifier, kit: kit}}
+         {:ok, code} <- code(attempt) do
+      {:ok, %{attempt_id: attempt.id, code: code}}
     end
   end
 
   @doc """
-  The person acknowledged saving the kit of `attempt_id` (`person.kit_ack`):
-  its sealed seed is erased in the acknowledgment's write, and a repeat
-  never restores it. Answers `%{attempt_id, phase: "completed"}`.
+  The person says the recovery code of `attempt_id` is saved
+  (`person.recovery_code_saved`): its sealed secret is erased in that
+  write, and a repeat never restores it. Answers `%{attempt_id, phase:
+  "completed"}`.
 
-  Refusals: `{:not_found, "kit", attempt_id}`, `:not_accepted`,
+  Refusals: `{:not_found, "recovery_code", attempt_id}`, `:not_accepted`,
   `:unavailable`.
   """
-  @spec kit_ack(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def kit_ack(%Context{} = ctx, attempt_id) when is_binary(attempt_id) do
+  @spec recovery_code_saved(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def recovery_code_saved(%Context{} = ctx, attempt_id) when is_binary(attempt_id) do
     with {:ok, user_id} <- person(ctx),
-         {:ok, attempt} <- own_kit_attempt(ctx, user_id, attempt_id) do
+         {:ok, attempt} <- own_code_attempt(ctx, user_id, attempt_id) do
       case Arca.IdentityAttempts.acknowledge_kit(Context.actor(ctx), attempt.id) do
-        {:ok, acknowledged} -> {:ok, %{attempt_id: acknowledged.id, phase: acknowledged.phase}}
+        {:ok, saved} -> {:ok, %{attempt_id: saved.id, phase: saved.phase}}
         {:error, :not_accepted} -> {:error, :not_accepted}
         {:error, _unanswered} -> {:error, :unavailable}
       end
     end
   end
 
-  defp own_kit_attempt(ctx, user_id, attempt_id) do
+  defp own_code_attempt(ctx, user_id, attempt_id) do
     case Arca.IdentityAttempts.get(Context.actor(ctx), attempt_id) do
       {:ok, %{kind: kind, user_id: ^user_id} = attempt} when kind in ["enrollment", "holder"] ->
         {:ok, attempt}
 
       {:ok, _another} ->
-        {:error, {:not_found, "kit", attempt_id}}
+        {:error, {:not_found, "recovery_code", attempt_id}}
 
       {:error, reason} when reason in [:not_found, :cross_tenant] ->
-        {:error, {:not_found, "kit", attempt_id}}
+        {:error, {:not_found, "recovery_code", attempt_id}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -500,38 +517,32 @@ defmodule Sanctum.Recovery do
   defp deliverable(%{phase: "refused"}), do: {:error, :enrollment_refused}
   defp deliverable(_attempt), do: {:error, :not_accepted}
 
-  defp kit_change(attempt) do
+  defp code_change(attempt) do
     %{
-      operation: "person.kit",
+      operation: "person.recovery_code",
       arguments: %{"attempt_id" => attempt.id},
-      resource: "recovery kit for " <> attempt.identifier,
+      resource: "recovery code for " <> attempt.identifier,
       details: %{
         "directory" => attempt.directory_url,
         "effect" =>
-          "Shows this recovery kit again. Anyone who sees it can replace your keys until you " <>
+          "Shows your recovery code again. Anyone who sees it can replace your keys until you " <>
             "have it no more."
       }
     }
   end
 
-  # The kit's three lines while its seed is sealed on the attempt; nil once
-  # its acknowledgment erased it.
-  defp kit_lines(%{kit_seed_sealed: sealed} = attempt) when is_binary(sealed) do
-    case open(sealed, CipherAAD.person_key(attempt.user_id, :kit_seed)) do
-      {:ok, seed} ->
-        {:ok,
-         %{
-           identifier: attempt.identifier,
-           directory_url: attempt.directory_url,
-           recovery_secret: Encoding.b64(seed)
-         }}
-
-      {:error, :unavailable} ->
-        {:error, :unavailable}
+  # The attempt's recovery code while its secret is sealed on it; nil once
+  # the person said it is saved, which erased the secret. Composed under
+  # `guarded/2`, since the secret is an argument of the call.
+  defp code(%{kit_seed_sealed: sealed} = attempt) when is_binary(sealed) do
+    with {:ok, secret} <- open(sealed, CipherAAD.person_key(attempt.user_id, :kit_seed)) do
+      guarded("composing a recovery code", fn ->
+        {:ok, Prima.RecoveryCode.encode(attempt.identifier, secret)}
+      end)
     end
   end
 
-  defp kit_lines(_attempt), do: {:ok, nil}
+  defp code(_attempt), do: {:ok, nil}
 
   # ===========================================================================
   # The person's identity, as their settings show it
@@ -543,13 +554,13 @@ defmodule Sanctum.Recovery do
   directory this home pins for enrollment (`CYFR_DIRECTORY_URL`), or nil
   when it pins none; `enrollment` (`none`, `pending` or `enrolled`) and
   `key_epoch`, the head their row names; `kits`, each enrollment or
-  added-kit attempt still in progress (`Arca.IdentityAttempts.in_progress/3`)
+  added-code attempt still in progress (`Arca.IdentityAttempts.in_progress/3`)
   as `%{attempt_id, kind, phase, request_id, deliverable}`, `deliverable`
-  while its kit's seed is still sealed for delivery; `rotation`, the
+  while its code's secret is still sealed for delivery; `rotation`, the
   rotation in progress as `%{request_id, phase}`, or nil; and `doors`, each
   linked door as `%{key, provider, issuer, subject}`.
 
-  Nothing in it is a seed, a sealed value or a staged key. Refusals:
+  Nothing in it is a secret, a sealed value or a staged key. Refusals:
   `:unauthenticated`, `:guest_plane`, `:unavailable`, and `{:corrupt,
   :person_identity}` for a person whose identity row, minted with their
   person row, is missing.
@@ -628,43 +639,53 @@ defmodule Sanctum.Recovery do
   end
 
   # ===========================================================================
-  # Another printed kit
+  # Another recovery code
   # ===========================================================================
 
   @doc """
-  Add another printed kit to the person's recovery set (the module doc):
-  `args` holds an existing kit's seed under `"recovery_secret"`, which
-  signs the change, the added kit as `"holder" => %{"recovery_secret" =>
-  seed}`, and the attempt's `"request_id"`.
+  Add another recovery code to the person's recovery set (the module doc):
+  `args` holds a recovery code the person holds under `"recovery_code"`,
+  which signs the change, the added code's secret as `"holder" =>
+  %{"recovery_secret" => secret}`, and the attempt's `"request_id"`.
 
-  Answers as `enroll/3` does, the kit being the added one's, and
+  Answers as `enroll/3` does, the `code` being the added one's, and
   `key_epoch` the person's new head.
 
-  Refusals: `{:invalid_argument, _}` (a missing or malformed seed, the
-  same seed twice), `:not_enrolled`, `:not_found`,
-  `:not_a_holder` (the signing seed is not a holder of the identity now),
-  `:already_a_holder`, `:stale_head` (the identity's log has moved past
-  the person's head here), `{:attempt_in_progress, _}`,
-  `:request_id_reused`, the consent signal and the confirmation's other
-  refusals, `:holder_refused` (the directory refused it), and the
-  retryable `:directory_unavailable` and `:unavailable`.
+  Refusals: `:not_a_code` and `:typo` (the signing code does not read,
+  refused before anything is read, asked or sent), `{:invalid_argument,
+  _}` (a missing or malformed secret, the same secret twice),
+  `:not_enrolled`, `:not_found`, `:not_a_holder` (the signing code names
+  another identity, refused before the directory is read, or its secret
+  is not a holder of the identity now), `:already_a_holder`,
+  `:stale_head` (the identity's log has moved past the person's head
+  here), `{:attempt_in_progress, _}`, `:request_id_reused`, the consent
+  signal and the confirmation's other refusals, `:holder_refused` (the
+  directory refused it), and the retryable `:directory_unavailable` and
+  `:unavailable`.
   """
-  @spec enroll_holder(Context.t(), map(), opts()) :: {:ok, map()} | {:error, term()}
-  def enroll_holder(%Context{} = ctx, args, opts \\ []) when is_map(args) do
+  @spec recovery_code_add(Context.t(), map(), opts()) :: {:ok, map()} | {:error, term()}
+  def recovery_code_add(%Context{} = ctx, args, opts \\ []) when is_map(args) do
     opts = client_options!(opts)
 
     with {:ok, user_id} <- person(ctx),
          {:ok, request_id} <- request_id(args),
+         {:ok, signer} <- Prima.RecoveryCode.decode(Map.get(args, "recovery_code")),
          {:ok, added_seed} <- holder(Map.get(args, "holder")),
-         {:ok, signer_seed} <- seed(Map.get(args, "recovery_secret")),
-         :ok <- distinct_seeds(signer_seed, added_seed),
-         {:ok, {signer_key, signer_private}} <- Identity.derive_recovery_key(signer_seed),
+         :ok <- distinct_seeds(signer.secret, added_seed),
+         {:ok, {signer_key, signer_private}} <- Identity.derive_recovery_key(signer.secret),
          {:ok, {added_key, _}} <- Identity.derive_recovery_key(added_seed) do
       case Arca.IdentityAttempts.get_by_request(Context.actor(ctx), request_id) do
         {:ok, %{kind: "holder", user_id: ^user_id} = attempt} ->
-          if signed_by?(attempt, signer_key) and adds?(attempt, added_key),
-            do: continue_holder(ctx, attempt, opts),
-            else: {:error, :request_id_reused}
+          cond do
+            attempt.identifier != signer.identifier ->
+              {:error, :not_a_holder}
+
+            signed_by?(attempt, signer_key) and adds?(attempt, added_key) ->
+              continue_holder(ctx, attempt, opts)
+
+            true ->
+              {:error, :request_id_reused}
+          end
 
         {:ok, _another} ->
           {:error, :request_id_reused}
@@ -673,7 +694,12 @@ defmodule Sanctum.Recovery do
           {:error, :request_id_reused}
 
         {:error, :not_found} ->
-          seeds = %{signer: {signer_key, signer_private}, added: {added_key, added_seed}}
+          seeds = %{
+            identifier: signer.identifier,
+            signer: {signer_key, signer_private},
+            added: {added_key, added_seed}
+          }
+
           begin_holder(ctx, user_id, request_id, seeds, opts)
 
         {:error, _unanswered} ->
@@ -683,9 +709,11 @@ defmodule Sanctum.Recovery do
   end
 
   defp begin_holder(ctx, user_id, request_id, seeds, opts) do
-    %{signer: {signer_key, signer_private}, added: {added_key, added_seed}} = seeds
+    %{identifier: named, signer: {signer_key, signer_private}, added: {added_key, added_seed}} =
+      seeds
 
     with {:ok, identity} <- enrolled_identity(ctx, user_id),
+         :ok <- own_identity(identity, named),
          {:ok, %{genesis: genesis}} <- own_genesis(ctx, user_id),
          {:ok, state} <- live_state(identity.identifier, genesis, opts),
          :ok <- at_own_head(state, identity),
@@ -735,25 +763,25 @@ defmodule Sanctum.Recovery do
   end
 
   @doc false
-  # What confirming an added kit approves: the request by its digest, and
-  # the whole recovery set it installs. The seeds are never in it.
+  # What confirming an added code approves: the request by its digest, and
+  # the whole recovery set it installs. The secrets are never in it.
   @spec holder_change(RecoverRequest.t(), binary()) :: Authz.change()
   def holder_change(%RecoverRequest{} = request, added_key) do
     keys = Encoding.b64_keys(request.recovery_keys)
 
     %{
-      operation: "person.enroll_holder",
+      operation: "person.recovery_code_add",
       arguments: %{
         "request_id" => request.request_id,
         "request" => Identity.request_digest(request),
         "recovery_keys" => keys
       },
-      resource: "recovery kits for " <> request.identifier,
+      resource: "recovery codes for " <> request.identifier,
       details: %{
         "added_recovery_key" => Encoding.b64(added_key),
         "recovery_keys" => keys,
         "effect" =>
-          "Adds another printed kit. Each kit alone can replace your keys, and every other " <>
+          "Adds another recovery code. Each code alone can replace your keys, and every other " <>
             "CYFR ends what it bound to your current keys once it sees the change."
       }
     }
@@ -790,15 +818,25 @@ defmodule Sanctum.Recovery do
 
   defp continue_holder(_ctx, %{phase: "refused"}, _opts), do: {:error, :holder_refused}
 
-  defp holder(%{"recovery_secret" => seed}), do: seed(seed)
+  defp holder(%{"recovery_secret" => secret}), do: seed(secret)
 
   defp holder(_holder),
-    do: {:error, {:invalid_argument, "The holder to add is a printed kit and its seed"}}
+    do:
+      {:error,
+       {:invalid_argument,
+        "The holder to add is the new code's 32-byte secret under holder.recovery_secret, " <>
+          "drawn by the trusted form"}}
 
-  defp distinct_seeds(seed, seed),
-    do: {:error, {:invalid_argument, "The added kit must be another kit than the one signing"}}
+  defp distinct_seeds(secret, secret),
+    do: {:error, {:invalid_argument, "The added code must be another than the one signing"}}
 
   defp distinct_seeds(_signer, _added), do: :ok
+
+  # A recovery code names the identity it recovers: one naming another
+  # identity holds nothing of this person's, refused before the directory
+  # is read.
+  defp own_identity(%{identifier: identifier}, identifier), do: :ok
+  defp own_identity(_identity, _named), do: {:error, :not_a_holder}
 
   defp enrolled_identity(ctx, user_id) do
     case Arca.PersonIdentities.get(Context.actor(ctx), user_id) do
@@ -829,7 +867,7 @@ defmodule Sanctum.Recovery do
   end
 
   # The directory's head is the one the person's row names, with the keys
-  # it holds: an added kit's `recover` keeps exactly those.
+  # it holds: an added code's `recover` keeps exactly those.
   defp at_own_head(%State{} = state, identity) do
     if state.head == identity.head_hash and state.live_key == identity.live_public_key and
          state.operational_key == identity.operational_public_key,
@@ -849,7 +887,7 @@ defmodule Sanctum.Recovery do
   end
 
   # ===========================================================================
-  # After a declared restore: the checklist and the kit
+  # After a declared restore: the checklist and the recovery code's proof
   # ===========================================================================
 
   @kit_challenge_ms 5 * 60 * 1000
@@ -858,9 +896,10 @@ defmodule Sanctum.Recovery do
   @reenables ~w(key.reenable webhook.reenable pairing.reenable passkey.reenable)
 
   @typedoc """
-  What a kit credential admits, as `Sanctum.Caller.establish_kit/2` hands
-  it on: the person, their open restore and the credential's digest, which
-  each re-enable reads standing again in its own transaction.
+  What a restore credential (`kit_proof/2`) admits, as
+  `Sanctum.Caller.establish_kit/2` hands it on: the person, their open
+  restore and the credential's digest, which each re-enable reads
+  standing again in its own transaction.
   """
   @type kit_grant :: %{user_id: String.t(), restore_id: String.t(), credential_digest: String.t()}
 
@@ -909,9 +948,9 @@ defmodule Sanctum.Recovery do
   A platform administrator ends the person `user_id`'s recovery from a
   declared restore (`person.close_recovery`): their `restore_people` row
   closes, so a group waiting on them admits members again and their
-  confirmations are no longer held to a door or their kit, while every
-  key, webhook, device and passkey the restore suspended stays suspended.
-  A sensitive change (`restore_close`): the administrator's fresh
+  confirmations are no longer held to a door or their recovery code,
+  while every key, webhook, device and passkey the restore suspended stays
+  suspended. A sensitive change (`restore_close`): the administrator's fresh
   confirmation is asked first and consumed in the transaction that closes
   the row, under the restore's own source rule for the administrator
   (`Sanctum.Pairing.restore_confirmed/1`). Another person's recovery is
@@ -968,14 +1007,15 @@ defmodule Sanctum.Recovery do
   def close_recovery(%Context{}, _user_id), do: {:error, :platform_admin_required}
 
   @doc """
-  A kit challenge for the person `identifier` names, while their row of a
-  declared restore is open (the kit ingress, `POST /restore/kit/challenge`):
-  32 random bytes, held by their digest for five minutes on the database's
-  clock, and the restore id the proof must name. The identifier must name
-  a local person of this home who is enrolled and in good standing;
-  anyone else, and a person whose row has closed, are refused alike as
-  `:not_recovering`. Counted against the person's own budget, twenty a
-  minute, on the cell's clock (`Arca.RequestRateWindows`).
+  A challenge for the proof of a recovery code, for the person
+  `identifier` names while their row of a declared restore is open (`POST
+  /restore/kit/challenge`): 32 random bytes, held by their digest for
+  five minutes on the database's clock, and the restore id the proof must
+  name. The identifier must name a local person of this home who is
+  enrolled and in good standing; anyone else, and a person whose row has
+  closed, are refused alike as `:not_recovering`. Counted against the
+  person's own budget, twenty a minute, on the cell's clock
+  (`Arca.RequestRateWindows`).
   """
   @spec kit_challenge(term()) ::
           {:ok, %{challenge: String.t(), restore_id: String.t(), expires_at: DateTime.t()}}
@@ -984,7 +1024,7 @@ defmodule Sanctum.Recovery do
     with {:ok, user_id, restore_id} <- recovering(identifier),
          :ok <- kit_budget(user_id),
          {:ok, now} <-
-           guarded("kit challenge clock", fn -> {:ok, Arca.ServerMetaStorage.now!()} end) do
+           guarded("restore challenge clock", fn -> {:ok, Arca.ServerMetaStorage.now!()} end) do
       challenge = :crypto.strong_rand_bytes(32)
       expires_at = DateTime.add(now, @kit_challenge_ms, :millisecond)
 
@@ -1009,14 +1049,15 @@ defmodule Sanctum.Recovery do
   end
 
   @doc """
-  Verify a kit proof (`Prima.Identity.RestoreKit`, protocol
-  `cyfr/restore-kit/v1`) and answer the person's kit credential (the kit
-  ingress, `POST /restore/kit`). The proof names the person's identifier,
-  their open restore and a challenge this home holds for them; it must be
-  signed by a recovery key of the identity's head read fresh from its
-  directory now, never by a key the restored home holds. The challenge is
-  redeemed once, in the transaction that records the credential, with
-  the person's open row locked.
+  Verify the proof of a recovery code (`Prima.Identity.RestoreKit`,
+  protocol `cyfr/restore-kit/v1`), signed in the browser by the code's
+  secret, and answer the person's restore credential (`POST
+  /restore/kit`). The proof names the person's identifier, their open
+  restore and a challenge this home holds for them; it must be signed by a
+  recovery key of the identity's head read fresh from its directory now,
+  never by a key the restored home holds. The challenge is redeemed once,
+  in the transaction that records the credential, with the person's open
+  row locked.
 
   The credential is the token `rkc_` and 32 random bytes
   (`Prima.CredentialShape`'s `:restore_kit_credential`, which the sanitizer
@@ -1045,7 +1086,7 @@ defmodule Sanctum.Recovery do
          {:ok, state} <- live_state(proof.identifier, genesis, opts),
          {:ok, _key} <- kit_signer(proof, state),
          {:ok, now} <-
-           guarded("kit credential clock", fn -> {:ok, Arca.ServerMetaStorage.now!()} end) do
+           guarded("restore credential clock", fn -> {:ok, Arca.ServerMetaStorage.now!()} end) do
       token = Prima.CredentialShape.mint(:restore_kit_credential)
       expires_at = DateTime.add(now, @kit_credential_ms, :millisecond)
 
@@ -1067,7 +1108,7 @@ defmodule Sanctum.Recovery do
 
   @doc false
   @spec kit_grant(term()) :: {:ok, kit_grant()} | {:error, :invalid_credential | :unavailable}
-  # The kit credential `token` presents, read standing now: its person is
+  # The restore credential `token` presents, read standing now: its person is
   # in good standing and their row under its restore is open. What
   # `Sanctum.Caller.establish_kit/2` admits on; each write reads it again.
   def kit_grant(token) when is_binary(token) do
@@ -1085,13 +1126,13 @@ defmodule Sanctum.Recovery do
   def kit_grant(_token), do: {:error, :invalid_credential}
 
   @doc """
-  The re-enable operations a kit credential admits, and nothing else.
+  The re-enable operations a restore credential admits, and nothing else.
   """
   @spec kit_operations() :: [String.t()]
   def kit_operations, do: @reenables
 
   @doc """
-  One re-enable, or its preview, under a kit credential
+  One re-enable, or its preview, under a restore credential
   (`Sanctum.Caller.establish_kit/2` admitted it for exactly `operation`):
   with no item named, the person's items of that class held suspended
   (`key.reenable` their keys, `webhook.reenable` their webhooks,
@@ -1101,10 +1142,11 @@ defmodule Sanctum.Recovery do
   write's own transaction. Re-enabling a device or a passkey closes the
   person's row, and with it the credential.
 
-  The kit is an ingress, not a gate operation, so a kit re-enable is
-  admitted while the home's storage reserve is depleted
-  (`Arca.StorageReserve`), though the gate refuses the same re-enable
-  then: a re-enable gives authority back rather than taking it away.
+  `POST /restore/kit/reenable` is an ingress, not a gate operation, so a
+  re-enable there is admitted while the home's storage reserve is
+  depleted (`Arca.StorageReserve`), though the gate refuses the same
+  re-enable then: a re-enable gives authority back rather than taking it
+  away.
   """
   @spec kit_reenable(Context.t(), kit_grant(), String.t(), map()) ::
           {:ok, map()} | {:error, term()}
@@ -1142,7 +1184,7 @@ defmodule Sanctum.Recovery do
   defp preview_class("pairing.reenable"), do: :paired_clients
   defp preview_class("passkey.reenable"), do: :passkeys
 
-  # The person a kit names, recovering: a local, enrolled person of this
+  # The person a proof names, recovering: a local, enrolled person of this
   # home, in good standing, with a row of a declared restore open. Every
   # other answer is the same refusal, so the ingress says nothing more
   # about an identifier than that it is not recovering here.
@@ -1207,9 +1249,10 @@ defmodule Sanctum.Recovery do
   # ===========================================================================
 
   @doc """
-  Restore an identity on this empty installation (the module doc): `kit`
-  holds `"identifier"`, `"directory_url"` and `"recovery_secret"`, and
-  `capability` is the installation token the request presented.
+  Restore an identity on this empty installation (the module doc):
+  `params` holds the person's recovery code under `"recovery_code"`, and
+  `capability` is the installation token the request presented. The
+  identity is read at the directory this deployment pins.
 
   Answers `{:ok, %{status: "completed", identifier, user_id,
   session_token}}`: the new session's token, for the surface to hand the
@@ -1217,11 +1260,12 @@ defmodule Sanctum.Recovery do
 
   Refusals, each without touching anything the ones before it guard:
   `:restore_disabled` (no token configured), `:invalid_token`,
-  `:invalid_kit` (a malformed kit), `:unknown_identity` (the directory
-  serves no such identifier), `:not_a_holder` (the seed holds no
+  `:no_directory` (this deployment pins none), `:not_a_code` and `:typo`
+  (the code does not read), `:unknown_identity` (the pinned directory
+  serves no such identifier), `:not_a_holder` (the code's secret holds no
   recovery key of the identity now), `:token_claimed` (another restore
-  holds the installation, or this token's attempt restores another kit),
-  `:token_spent`, `:not_empty` (the node holds a person),
+  holds the installation, or this token's attempt restores another
+  code's identity), `:token_spent`, `:not_empty` (the node holds a person),
   `:superseded`, `:refused` (the directory refused the recovery; the
   token is spent), `:restored` (a completed restore, which issues no
   session), and the retryable `{:retry, phase, seconds}` and
@@ -1230,22 +1274,23 @@ defmodule Sanctum.Recovery do
   takes authority away, is refused `{:unavailable, :storage_reserve}`
   once the capability is checked, before anything is read or written.
   """
-  @spec restore(kit(), String.t() | nil, opts()) :: {:ok, map()} | {:error, term()}
-  def restore(kit, capability, opts \\ []) do
+  @spec restore(code_params(), String.t() | nil, opts()) :: {:ok, map()} | {:error, term()}
+  def restore(params, capability, opts \\ []) do
     opts = client_options!(opts)
 
     with {:ok, token_digest} <- capability(capability),
          :ok <- reserve_held(),
-         {:ok, kit} <- parse_kit(kit) do
+         {:ok, directory} <- pinned_directory(),
+         {:ok, code} <- parse_code(params) do
       case Arca.IdentityAttempts.get_by_token(system(), token_digest) do
         {:ok, attempt} ->
-          case bound_kit(attempt, kit) do
-            :ok -> resume_restore(attempt, kit, opts)
-            {:error, _another} -> {:error, another_kit(attempt)}
+          case bound_code(attempt, code) do
+            :ok -> resume_restore(attempt, code, opts)
+            {:error, _another} -> {:error, another_code(attempt)}
           end
 
         {:error, :not_found} ->
-          begin_restore(token_digest, kit, opts)
+          begin_restore(token_digest, code, directory, opts)
 
         {:error, _unanswered} ->
           {:error, :unavailable}
@@ -1295,30 +1340,32 @@ defmodule Sanctum.Recovery do
   end
 
   @doc """
-  Reprove the kit against a reproof challenge (the module doc): `params`
-  holds the kit's three lines and `"challenge"`, and `capability` is the
-  installation token. Answers as `restore/3` does, with a new session.
+  Reprove the recovery code against a reproof challenge (the module doc):
+  `params` holds the code under `"recovery_code"` and the `"challenge"`,
+  and `capability` is the installation token. Answers as `restore/3`
+  does, with a new session.
 
-  Refusals: `restore_challenge/1`'s, `:invalid_kit`, `:token_spent` (a
-  kit this restore did not restore), `:not_a_holder`, `:superseded` (a
-  later recovery replaced this restore's keys), `:challenge_refused` (no
-  challenge held, another, an expired one or one already used), and the
-  retryable `{:retry, "completed", seconds}` (the directory could not be
-  read).
+  Refusals: `restore_challenge/1`'s, `:not_a_code` and `:typo` (the code
+  does not read), `:token_spent` (a code of an identity this restore did
+  not restore, or one whose secret did not sign it), `:not_a_holder`,
+  `:superseded` (a later recovery replaced this restore's keys),
+  `:challenge_refused` (no challenge held, another, an expired one or one
+  already used), and the retryable `{:retry, "completed", seconds}` (the
+  directory could not be read).
   """
-  @spec reproof(map(), String.t() | nil, opts()) :: {:ok, map()} | {:error, term()}
+  @spec reproof(code_params(), String.t() | nil, opts()) :: {:ok, map()} | {:error, term()}
   def reproof(params, capability, opts \\ []) when is_map(params) do
     opts = client_options!(opts)
 
     with {:ok, token_digest} <- capability(capability),
-         {:ok, kit} <- parse_kit(params),
+         {:ok, code} <- parse_code(params),
          {:ok, challenge} <- challenge(Map.get(params, "challenge")),
          {:ok, attempt} <- completed_restore(token_digest),
-         :ok <- bound_kit(attempt, kit) |> or_spent(attempt),
+         :ok <- bound_code(attempt, code) |> or_spent(attempt),
          :ok <- held_challenge(attempt, challenge),
          {:ok, state} <-
            live_state(attempt.identifier, attempt.genesis, opts) |> retry_at("completed"),
-         :ok <- holds(state, kit.recovery_key),
+         :ok <- holds(state, code.recovery_key),
          :ok <- current_keys(state, attempt) do
       case Arca.IdentityAttempts.consume_reproof(
              system(),
@@ -1362,29 +1409,16 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  defp parse_kit(%{
-         "identifier" => identifier,
-         "directory_url" => directory,
-         "recovery_secret" => seed
-       })
-       when is_binary(identifier) and is_binary(directory) do
-    with true <- Encoding.identifier?(identifier),
-         true <- Sanctum.enrollment_directory?(directory),
-         {:ok, seed} <- seed(seed),
-         {:ok, {public, private}} <- Identity.derive_recovery_key(seed) do
-      {:ok,
-       %{
-         identifier: identifier,
-         directory_url: directory,
-         recovery_key: public,
-         recovery_private: private
-       }}
-    else
-      _malformed -> {:error, :invalid_kit}
+  # The person's recovery code as `Prima.RecoveryCode.decode/1` reads it:
+  # the identifier it names and the recovery key pair its secret derives.
+  defp parse_code(%{"recovery_code" => text}) do
+    with {:ok, %{identifier: identifier, secret: secret}} <- Prima.RecoveryCode.decode(text),
+         {:ok, {public, private}} <- Identity.derive_recovery_key(secret) do
+      {:ok, %{identifier: identifier, recovery_key: public, recovery_private: private}}
     end
   end
 
-  defp parse_kit(_kit), do: {:error, :invalid_kit}
+  defp parse_code(_params), do: {:error, :not_a_code}
 
   defp challenge(value) when is_binary(value) do
     case Encoding.unb64(value, 32) do
@@ -1407,10 +1441,10 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  # The attempt this token claimed resumes only for the kit it restores:
-  # the same identifier, and a seed that signed its request.
-  defp bound_kit(attempt, kit) do
-    if attempt.identifier == kit.identifier and signed_by?(attempt, kit.recovery_key),
+  # The attempt this token claimed resumes only for a code of the identity
+  # it restores, whose secret signed its request.
+  defp bound_code(attempt, code) do
+    if attempt.identifier == code.identifier and signed_by?(attempt, code.recovery_key),
       do: :ok,
       else: {:error, :token_claimed}
   end
@@ -1419,28 +1453,28 @@ defmodule Sanctum.Recovery do
   defp retry_at(answer, _phase), do: answer
 
   defp or_spent(:ok, _attempt), do: :ok
-  defp or_spent({:error, _another}, attempt), do: {:error, another_kit(attempt)}
+  defp or_spent({:error, _another}, attempt), do: {:error, another_code(attempt)}
 
-  # Another kit under a token already bound: the token is still another
+  # Another code under a token already bound: the token is still another
   # restore's while it runs, and spent for good once that one ended.
-  defp another_kit(%{phase: phase}) when phase in ["refused", "superseded", "completed"],
+  defp another_code(%{phase: phase}) when phase in ["refused", "superseded", "completed"],
     do: :token_spent
 
-  defp another_kit(_running), do: :token_claimed
+  defp another_code(_running), do: :token_claimed
 
-  defp resume_restore(%{phase: "completed"}, _kit, _opts), do: {:error, :restored}
-  defp resume_restore(%{phase: "superseded"}, _kit, _opts), do: {:error, :superseded}
-  defp resume_restore(%{phase: "refused"}, _kit, _opts), do: {:error, :refused}
-  defp resume_restore(attempt, _kit, opts), do: continue_restore(attempt, opts)
+  defp resume_restore(%{phase: "completed"}, _code, _opts), do: {:error, :restored}
+  defp resume_restore(%{phase: "superseded"}, _code, _opts), do: {:error, :superseded}
+  defp resume_restore(%{phase: "refused"}, _code, _opts), do: {:error, :refused}
+  defp resume_restore(attempt, _code, opts), do: continue_restore(attempt, opts)
 
-  defp begin_restore(token_digest, kit, opts) do
+  defp begin_restore(token_digest, code, directory, opts) do
     with :ok <- unclaimed(token_digest),
          :ok <- empty_node(),
-         {:ok, genesis} <- kit_genesis(kit, opts),
-         {:ok, state} <- live_state(kit.identifier, genesis, opts) |> retry_at("none"),
-         :ok <- holds(state, kit.recovery_key),
-         {:ok, staged} <- stage(kit, state),
-         {:ok, attempt} <- open_restore(token_digest, kit, genesis, staged) do
+         {:ok, genesis} <- code_genesis(code, directory, opts),
+         {:ok, state} <- live_state(code.identifier, genesis, opts) |> retry_at("none"),
+         :ok <- holds(state, code.recovery_key),
+         {:ok, staged} <- stage(code, state),
+         {:ok, attempt} <- open_restore(token_digest, code, directory, genesis, staged) do
       continue_restore(attempt, opts)
     end
   end
@@ -1465,8 +1499,9 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  defp kit_genesis(kit, opts) do
-    case Client.genesis(kit.identifier, kit.directory_url, opts) do
+  # The genesis of the identity the code names, at the pinned directory.
+  defp code_genesis(code, directory, opts) do
+    case Client.genesis(code.identifier, directory, opts) do
       {:ok, genesis} ->
         {:ok, genesis}
 
@@ -1482,9 +1517,9 @@ defmodule Sanctum.Recovery do
   end
 
   # New live and operational keys, sealed in the restore's own frame, and
-  # the `recover` naming them, signed by the kit's seed at the revision the
-  # directory serves now. The request id is this attempt's for good.
-  defp stage(kit, %State{} = state) do
+  # the `recover` naming them, signed by the code's secret at the revision
+  # the directory serves now. The request id is this attempt's for good.
+  defp stage(code, %State{} = state) do
     request_id = Prima.UUID7.generate_id("rst")
     frame = "restore:" <> request_id
 
@@ -1500,7 +1535,7 @@ defmodule Sanctum.Recovery do
 
       {:ok, request} =
         RecoverRequest.new(
-          identifier: kit.identifier,
+          identifier: code.identifier,
           directory: state.directory,
           live_key: live,
           operational_key: operational,
@@ -1511,7 +1546,7 @@ defmodule Sanctum.Recovery do
       {:ok,
        %{
          request_id: request_id,
-         request: Identity.sign(request, kit.recovery_private),
+         request: Identity.sign(request, code.recovery_private),
          staged_live_public_key: live,
          staged_operational_public_key: operational,
          staged_live_key_sealed: live_sealed,
@@ -1520,12 +1555,12 @@ defmodule Sanctum.Recovery do
     end)
   end
 
-  defp open_restore(token_digest, kit, genesis, staged) do
+  defp open_restore(token_digest, code, directory, genesis, staged) do
     attrs = %{
       kind: "restore",
       request_id: staged.request_id,
-      identifier: kit.identifier,
-      directory_url: kit.directory_url,
+      identifier: code.identifier,
+      directory_url: directory,
       genesis: genesis,
       entry: Identity.canonical(staged.request),
       request_digest: Identity.request_digest(staged.request),
@@ -1955,21 +1990,21 @@ defmodule Sanctum.Recovery do
   defp seed_refusal,
     do:
       {:invalid_argument,
-       "The recovery_secret is a kit's 32-byte seed, in unpadded base64url, drawn by the " <>
-         "trusted form"}
+       "The recovery_secret is a recovery code's 32-byte secret, in unpadded base64url, " <>
+         "drawn by the trusted form"}
 
   defp seal(plaintext, aad) do
-    guarded("sealing a kit seed", fn -> Sanctum.Cipher.encrypt(plaintext, aad) end)
+    guarded("sealing a recovery secret", fn -> Sanctum.Cipher.encrypt(plaintext, aad) end)
   end
 
   defp open(sealed, aad) do
-    guarded("opening a kit seed", fn ->
+    guarded("opening a recovery secret", fn ->
       case Sanctum.Cipher.decrypt(sealed, aad) do
         {:ok, seed} when byte_size(seed) == @seed_bytes ->
           {:ok, seed}
 
         _unopened ->
-          Logger.error("[Sanctum.Recovery] a sealed kit seed does not open")
+          Logger.error("[Sanctum.Recovery] a sealed recovery secret does not open")
           {:error, :unavailable}
       end
     end)
@@ -2070,7 +2105,7 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  # Every step that holds a private key or a seed runs here. A raise inside
+  # Every step that holds a private key or a secret runs here. A raise inside
   # one would carry the key into a crash report through its stacktrace's
   # arguments, so it is answered `:unavailable` and only the exception's
   # module is logged.

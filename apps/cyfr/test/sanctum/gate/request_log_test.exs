@@ -371,22 +371,27 @@ defmodule Sanctum.Gate.RequestLogTest do
   end
 
   describe "an identity's recovery material" do
-    # A printed kit's seed, as the enrollment form draws it and the kit
-    # answers it: the field is `recovery_secret` wherever it appears.
+    # A recovery secret, as the trusted form draws it: the field is
+    # `recovery_secret` wherever it appears.
     defp seed, do: Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(32))
 
-    test "the enrollment's input is stored with every seed redacted", %{ctx: ctx} do
-      decision = decision(ctx, tool: "person", action: "enroll_holder")
-      signing = seed()
+    # A recovery code (`Prima.RecoveryCode`) over a fresh secret.
+    defp recovery_code(identifier),
+      do: Prima.RecoveryCode.encode(identifier, :crypto.strong_rand_bytes(32))
+
+    test "an added code's input is stored with the signing code and the new secret redacted",
+         %{ctx: ctx} do
+      decision = decision(ctx, tool: "person", action: "recovery_code_add")
+      signing = recovery_code("per_" <> String.duplicate("4", 64))
       added = seed()
 
       :ok =
         Decisions.open(ctx, decision, %{
           input: %{
-            "action" => "enroll_holder",
-            "recovery_secret" => signing,
+            "action" => "recovery_code_add",
+            "recovery_code" => signing,
             "holder" => %{"recovery_secret" => added},
-            "request_id" => "req_kit"
+            "request_id" => "req_code"
           }
         })
 
@@ -395,9 +400,9 @@ defmodule Sanctum.Gate.RequestLogTest do
       refute stored =~ added
 
       input = decode_json(stored)
-      assert input["recovery_secret"] == "[REDACTED]"
+      assert input["recovery_code"] == "[REDACTED]"
       assert input["holder"] == %{"recovery_secret" => "[REDACTED]"}
-      assert input["request_id"] == "req_kit"
+      assert input["request_id"] == "req_code"
     end
 
     # A person's recovery code (`Prima.RecoveryCode`), the one line that
@@ -430,10 +435,10 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert input["recovery_phase"] == "add"
     end
 
-    test "the kit answered is stored redacted, in the MCP text block and the structured content",
+    test "the code answered is stored redacted, in the MCP text block and the structured content",
          %{ctx: ctx} do
-      secret = seed()
       identifier = "per_" <> String.duplicate("d", 64)
+      code = recovery_code(identifier)
 
       # What `person.enroll` answers, as the MCP router encodes a result:
       # the JSON text of the structured value, and the value itself.
@@ -441,11 +446,7 @@ defmodule Sanctum.Gate.RequestLogTest do
         attempt_id: "iat_x",
         phase: "accepted",
         identifier: identifier,
-        kit: %{
-          identifier: identifier,
-          directory_url: "https://dir.example",
-          recovery_secret: secret
-        }
+        code: code
       }
 
       output =
@@ -455,19 +456,18 @@ defmodule Sanctum.Gate.RequestLogTest do
           "isError" => false
         })
 
-      refute output =~ secret
+      refute output =~ code
       [%{"text" => text}] = decode_json(output)["content"]
       inner = Jason.decode!(text)
-      assert inner["kit"]["recovery_secret"] == "[REDACTED]"
-      assert inner["kit"]["identifier"] == identifier
-      assert inner["kit"]["directory_url"] == "https://dir.example"
+      assert inner["code"] == "[REDACTED]"
+      assert inner["identifier"] == identifier
 
       structured = decode_json(output)["structuredContent"]
-      assert structured["kit"]["recovery_secret"] == "[REDACTED]"
+      assert structured["code"] == "[REDACTED]"
       assert structured["identifier"] == identifier
     end
 
-    test "the ingress and the console log neither a seed nor the installation token" do
+    test "the ingress and the console log neither a code nor the installation token" do
       previous = Logger.level()
       token = String.duplicate("8d", 32)
       restore_token = Application.fetch_env(:sanctum, :restore_token)
@@ -484,12 +484,13 @@ defmodule Sanctum.Gate.RequestLogTest do
       end)
 
       secret = seed()
+      code = recovery_code("per_" <> String.duplicate("e", 64))
 
-      kit = %{
-        "identifier" => "per_" <> String.duplicate("e", 64),
-        "directory_url" => "http://not-https.example",
-        "recovery_secret" => secret
-      }
+      # A code with its last symbol changed reads, and its check fails: the
+      # ingress refuses it before the directory it pins is read.
+      Prima.Test.Env.put_app_env(:sanctum, :directory_url, "https://directory.invalid")
+      {kept, last} = String.split_at(code, -1)
+      typo = kept <> if(last == "0", do: "1", else: "0")
 
       log =
         ExUnit.CaptureLog.capture_log([level: :debug], fn ->
@@ -497,23 +498,30 @@ defmodule Sanctum.Gate.RequestLogTest do
             Phoenix.ConnTest.build_conn()
             |> Plug.Conn.put_req_header("content-type", "application/json")
             |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
-            |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/restore", Jason.encode!(kit))
+            |> Phoenix.ConnTest.dispatch(
+              CyfrWeb.Endpoint,
+              :post,
+              "/restore",
+              Jason.encode!(%{"recovery_code" => typo})
+            )
 
           assert conn.status == 422
         end)
 
       assert log =~ "/restore"
-      refute log =~ secret
+      refute log =~ typo
+      refute log =~ kept
       refute log =~ token
 
       # A console event carrying the field is logged filtered too.
       console =
         ExUnit.CaptureLog.capture_log([level: :debug], fn ->
           {:ok, view, _html} = live(Phoenix.ConnTest.build_conn(), "/login")
-          render_hook(view, "cancel", %{"recovery_secret" => secret})
+          render_hook(view, "cancel", %{"recovery_secret" => secret, "recovery_code" => code})
         end)
 
       refute console =~ secret
+      refute console =~ code
     end
   end
 

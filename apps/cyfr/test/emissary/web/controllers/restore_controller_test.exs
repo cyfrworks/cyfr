@@ -4,13 +4,15 @@
 defmodule Emissary.Web.RestoreControllerTest do
   @moduledoc """
   The restore ingress, through the endpoint: the installation capability
-  in the authorization header and nowhere else, the kit in a body bounded
-  before it is decoded, each refusal on the wire as its own code (absent
-  capability, wrong token, claimed or spent token, non-empty node,
-  superseded attempt, a completed one), a restore standing at a phase
-  answered as retryable, a completed restore handing its session to the
-  holder of the capability in the cookie alone, and a reproof challenge
-  refused once the database's clock passes its five minutes.
+  in the authorization header and nowhere else, the recovery code in a
+  body bounded before it is decoded and read before anything else is,
+  each refusal on the wire as its own code (absent capability, wrong
+  token, a code that does not read, an unknown identity, no pinned
+  directory, claimed or spent token, non-empty node, superseded attempt, a
+  completed one), a restore standing at a phase answered as retryable, a
+  completed restore handing its session to the holder of the capability
+  in the cookie alone and leaving the code in no log, and a reproof
+  challenge refused once the database's clock passes its five minutes.
 
   The restore's phases against a directory are `Sanctum.RecoveryTest`'s;
   here an attempt is seeded at the phase a case needs, as the restore
@@ -60,6 +62,9 @@ defmodule Emissary.Web.RestoreControllerTest do
     directory = Directory.start!(tls)
     Directory.seam!(tls)
 
+    # The directory this installation pins, which every restore reads.
+    Prima.Test.Env.put_app_env(:sanctum, :directory_url, directory.url)
+
     # An empty installation configured for restore.
     Arca.Repo.delete_all(User)
     Application.put_env(:sanctum, :restore_token, @token)
@@ -73,7 +78,7 @@ defmodule Emissary.Web.RestoreControllerTest do
   defp system, do: Prima.Actor.system()
 
   # An identity held elsewhere, its genesis at the scripted directory, and
-  # its printed kit.
+  # its recovery code.
   defp identity(directory) do
     seed = :crypto.strong_rand_bytes(32)
     {:ok, {recovery, recovery_private}} = Identity.derive_recovery_key(seed)
@@ -92,21 +97,26 @@ defmodule Emissary.Web.RestoreControllerTest do
     identifier = Identity.identifier(genesis)
     Directory.publish(directory.dir, identifier, [genesis])
 
+    code = Prima.RecoveryCode.encode(identifier, seed)
+
     %{
       identifier: identifier,
       genesis: genesis,
       recovery_private: recovery_private,
-      kit: %{
-        "identifier" => identifier,
-        "directory_url" => directory.url,
-        "recovery_secret" => Encoding.b64(seed)
-      }
+      code: code,
+      body: %{"recovery_code" => code}
     }
+  end
+
+  # `code` with its last symbol changed: it reads, and its check fails.
+  defp typo(code) do
+    {kept, last} = String.split_at(code, -1)
+    kept <> if(last == "0", do: "1", else: "0")
   end
 
   # The restore attempt this token opened for `identity`, moved through
   # `phases` as the restore moves it: its keys staged in its own frame, its
-  # recover signed by the kit, and from `accepted` on, that recover
+  # recover signed by the code's secret, and from `accepted` on, that recover
   # committed at the directory as the head the acceptance names.
   defp attempt!(directory, identity, phases, token \\ @token) do
     request_id = Prima.UUID7.generate_id("rst")
@@ -166,7 +176,7 @@ defmodule Emissary.Web.RestoreControllerTest do
     Identity.hash(entry)
   end
 
-  # A later recovery, made elsewhere with the same kit: new online keys
+  # A later recovery, made elsewhere with the same code: new online keys
   # after whatever the directory serves.
   defp recovered_elsewhere!(directory, identity) do
     log = Directory.log(directory.dir, identity.identifier)
@@ -207,6 +217,13 @@ defmodule Emissary.Web.RestoreControllerTest do
     |> post("/restore", Jason.encode!(body))
   end
 
+  defp reproof(conn, body) do
+    conn
+    |> put_req_header("content-type", "application/json")
+    |> put_req_header("authorization", "Bearer " <> @token)
+    |> post("/restore/reproof", Jason.encode!(body))
+  end
+
   defp counts do
     %{
       attempts: Arca.Repo.aggregate(IdentityAttempt, :count),
@@ -222,44 +239,90 @@ defmodule Emissary.Web.RestoreControllerTest do
   describe "the installation capability" do
     test "with none configured, restore is disabled", %{conn: conn, directory: directory} do
       Application.delete_env(:sanctum, :restore_token)
-      conn = restore(conn, identity(directory).kit)
+      conn = restore(conn, identity(directory).body)
       assert json_response(conn, 404) == %{"error" => "restore_disabled"}
       assert counts() == @nothing
     end
 
-    test "a kit without this installation's token writes nothing and calls nowhere", %{
+    test "a code without this installation's token writes nothing and calls nowhere", %{
       conn: conn,
       directory: directory
     } do
-      kit = identity(directory).kit
+      body = identity(directory).body
 
-      assert json_response(restore(conn, kit, nil), 401) == %{"error" => "invalid_token"}
+      assert json_response(restore(conn, body, nil), 401) == %{"error" => "invalid_token"}
 
-      assert json_response(restore(build_conn(), kit, String.duplicate("0", 64)), 401) ==
+      # Another installation's token.
+      assert json_response(restore(build_conn(), body, String.duplicate("0", 64)), 401) ==
                %{"error" => "invalid_token"}
 
       # The token is the header's alone: not a query, not a body field.
       conn =
         build_conn()
         |> put_req_header("content-type", "application/json")
-        |> post("/restore?token=" <> @token, Jason.encode!(Map.put(kit, "token", @token)))
+        |> post("/restore?token=" <> @token, Jason.encode!(Map.put(body, "token", @token)))
 
       assert json_response(conn, 401) == %{"error" => "invalid_token"}
+      assert Directory.requests() == []
       assert counts() == @nothing
     end
 
-    test "a malformed kit is refused before anything is read", %{
+    test "a code that does not read is refused before anything is read", %{
       conn: conn,
       directory: directory
     } do
-      kit = identity(directory).kit
+      identity = identity(directory)
 
-      assert json_response(restore(conn, %{kit | "recovery_secret" => "short"}), 422) ==
-               %{"error" => "invalid_kit"}
+      assert json_response(restore(conn, %{"recovery_code" => typo(identity.code)}), 422) ==
+               %{"error" => "typo"}
 
-      assert json_response(restore(build_conn(), %{kit | "directory_url" => "http://x"}), 422) ==
-               %{"error" => "invalid_kit"}
+      for body <- [
+            %{"recovery_code" => "CYFR-" <> String.duplicate("0", 8)},
+            %{"recovery_code" => 12},
+            %{
+              "identifier" => identity.identifier,
+              "directory_url" => directory.url,
+              "recovery_secret" => Encoding.b64(:crypto.strong_rand_bytes(32))
+            },
+            %{}
+          ] do
+        assert json_response(restore(build_conn(), body), 422) == %{"error" => "not_a_code"}
+      end
 
+      mistyped = %{"recovery_code" => typo(identity.code), "challenge" => "x"}
+      assert json_response(reproof(build_conn(), mistyped), 422) == %{"error" => "typo"}
+
+      assert Directory.requests() == []
+      assert counts() == @nothing
+    end
+
+    test "a code of an identity the pinned directory does not know, or of no holder, claims nothing",
+         %{conn: conn, directory: directory} do
+      unknown = "per_" <> String.duplicate("0", 64)
+      stranger = Prima.RecoveryCode.encode(unknown, :crypto.strong_rand_bytes(32))
+
+      assert json_response(restore(conn, %{"recovery_code" => stranger}), 422) ==
+               %{"error" => "unknown_identity"}
+
+      identity = identity(directory)
+      no_holder = Prima.RecoveryCode.encode(identity.identifier, :crypto.strong_rand_bytes(32))
+
+      assert json_response(restore(build_conn(), %{"recovery_code" => no_holder}), 422) ==
+               %{"error" => "not_a_holder"}
+
+      assert counts() == @nothing
+    end
+
+    test "with no directory pinned, restore is refused before anything is read", %{
+      conn: conn,
+      directory: directory
+    } do
+      Prima.Test.Env.delete_app_env(:sanctum, :directory_url)
+
+      assert json_response(restore(conn, identity(directory).body), 404) ==
+               %{"error" => "no_directory"}
+
+      assert Directory.requests() == []
       assert counts() == @nothing
     end
 
@@ -267,7 +330,7 @@ defmodule Emissary.Web.RestoreControllerTest do
       conn: conn,
       directory: directory
     } do
-      body = Map.put(identity(directory).kit, "padding", String.duplicate("x", 17_000))
+      body = Map.put(identity(directory).body, "padding", String.duplicate("x", 17_000))
 
       assert_error_sent 413, fn -> restore(conn, body) end
       assert counts() == @nothing
@@ -281,18 +344,18 @@ defmodule Emissary.Web.RestoreControllerTest do
          %{conn: conn, directory: directory} do
       on_exit(fn -> Arca.StorageReserve.put(:ok) end)
       Arca.StorageReserve.put(:depleted)
-      kit = identity(directory).kit
+      body = identity(directory).body
 
       # The capability is checked first: a request without it learns nothing.
-      assert json_response(restore(conn, kit, nil), 401) == %{"error" => "invalid_token"}
+      assert json_response(restore(conn, body, nil), 401) == %{"error" => "invalid_token"}
 
-      conn = restore(build_conn(), kit)
+      conn = restore(build_conn(), body)
       assert json_response(conn, 503) == %{"status" => "unavailable", "retry_after" => 1}
       assert get_resp_header(conn, "retry-after") == ["1"]
       assert counts() == @nothing
 
       assert {:error, {:unavailable, :storage_reserve}} =
-               Sanctum.Recovery.restore(kit, @token)
+               Sanctum.Recovery.restore(body, @token)
 
       assert counts() == @nothing
     end
@@ -315,24 +378,24 @@ defmodule Emissary.Web.RestoreControllerTest do
 
       InstallationClaims.install_mode!(:restore_reserved)
 
-      assert json_response(restore(conn, identity(directory).kit), 409) ==
+      assert json_response(restore(conn, identity(directory).body), 409) ==
                %{"error" => "not_empty"}
 
       assert %{attempts: 0, claims: 0} = counts()
     end
 
-    test "a token bound to another kit's running restore is claimed; once ended, spent", %{
+    test "a token bound to another identity's running restore is claimed; once ended, spent", %{
       conn: conn,
       directory: directory
     } do
       attempt = attempt!(directory, identity(directory), ["submitted"])
 
-      assert json_response(restore(conn, identity(directory).kit), 409) ==
+      assert json_response(restore(conn, identity(directory).body), 409) ==
                %{"error" => "token_claimed"}
 
       {:ok, _} = Arca.IdentityAttempts.advance(system(), attempt.id, "submitted", "refused")
 
-      assert json_response(restore(build_conn(), identity(directory).kit), 409) ==
+      assert json_response(restore(build_conn(), identity(directory).body), 409) ==
                %{"error" => "token_spent"}
     end
 
@@ -342,7 +405,7 @@ defmodule Emissary.Web.RestoreControllerTest do
     } do
       identity = identity(directory)
       attempt!(directory, identity, ["submitted", "accepted", "superseded"])
-      assert json_response(restore(conn, identity.kit), 409) == %{"error" => "superseded"}
+      assert json_response(restore(conn, identity.body), 409) == %{"error" => "superseded"}
 
       assert json_response(
                build_conn()
@@ -362,7 +425,7 @@ defmodule Emissary.Web.RestoreControllerTest do
 
       # Its directory cannot be read to check the head the acceptance names.
       unreachable!(tls)
-      {conn, _log} = with_log(fn -> restore(conn, identity.kit) end)
+      {conn, _log} = with_log(fn -> restore(conn, identity.body) end)
       assert %{"status" => "accepted", "retry_after" => seconds} = json_response(conn, 503)
       assert get_resp_header(conn, "retry-after") == [Integer.to_string(seconds)]
       assert counts().people == 0
@@ -376,7 +439,7 @@ defmodule Emissary.Web.RestoreControllerTest do
       attempt = attempt!(directory, identity, ["submitted", "accepted", "keys_active"])
       recovered_elsewhere!(directory, identity)
 
-      conn = restore(conn, identity.kit)
+      conn = restore(conn, identity.body)
       assert json_response(conn, 409) == %{"error" => "superseded"}
       refute get_session(conn, CyfrWeb.SignInResponse.session_key())
       assert counts().people == 0
@@ -388,14 +451,14 @@ defmodule Emissary.Web.RestoreControllerTest do
   # ---- completion ----------------------------------------------------------------
 
   describe "completion" do
-    test "the bound kit mints the person and the cookie, alone, carries the session", %{
+    test "the bound code mints the person and the cookie, alone, carries the session", %{
       conn: conn,
       directory: directory
     } do
       identity = identity(directory)
       attempt = attempt!(directory, identity, ["submitted", "accepted", "keys_active"])
 
-      conn = restore(conn, identity.kit)
+      conn = restore(conn, identity.body)
 
       assert json_response(conn, 200) == %{
                "status" => "completed",
@@ -417,7 +480,7 @@ defmodule Emissary.Web.RestoreControllerTest do
       assert {:ok, %{state: "ended", outcome: "completed"}} = InstallationClaims.get(system())
 
       # A plain retry issues no session.
-      retried = restore(build_conn(), identity.kit)
+      retried = restore(build_conn(), identity.body)
       assert json_response(retried, 409) == %{"error" => "restored"}
       refute get_session(retried, CyfrWeb.SignInResponse.session_key())
 
@@ -434,24 +497,53 @@ defmodule Emissary.Web.RestoreControllerTest do
       assert json_response(build_conn() |> post("/restore/challenge"), 401) ==
                %{"error" => "invalid_token"}
 
-      # A kit this restore did not restore reproves nothing.
-      reproof =
-        build_conn()
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("authorization", "Bearer " <> @token)
-        |> post(
-          "/restore/reproof",
-          Jason.encode!(Map.put(identity(directory).kit, "challenge", challenge))
-        )
-
+      # A code of an identity this restore did not restore reproves nothing.
+      reproof = reproof(build_conn(), Map.put(identity(directory).body, "challenge", challenge))
       assert json_response(reproof, 409) == %{"error" => "token_spent"}
+    end
+
+    test "a restore with a valid code leaves the code in no request-log row and no log line", %{
+      conn: conn,
+      directory: directory
+    } do
+      identity = identity(directory)
+      symbols = String.replace(identity.code, "-", "")
+
+      log =
+        Prima.Test.Env.with_logger([level: :debug], fn ->
+          capture_log([level: :debug], fn ->
+            assert json_response(restore(conn, identity.body), 200) == %{
+                     "status" => "completed",
+                     "identifier" => identity.identifier
+                   }
+
+            # A refused retry records its decision as well.
+            assert json_response(restore(build_conn(), identity.body), 409) ==
+                     %{"error" => "restored"}
+          end)
+        end)
+
+      assert log =~ "/restore"
+      refute log =~ identity.code
+      refute log =~ symbols
+
+      # The ingress decides with no athanor, so its refused retry is in the
+      # decision log; no request-log row, of an athanor's or not, holds it.
+      decisions = Arca.Repo.all(Arca.Schemas.DecisionLog)
+      assert decisions != []
+
+      for row <- Arca.Repo.all(Arca.Schemas.McpLog) ++ decisions do
+        stored = inspect(row, limit: :infinity, printable_limit: :infinity)
+        refute stored =~ identity.code
+        refute stored =~ symbols
+      end
     end
 
     test "a reproof challenge lives five minutes on the database's clock, and past them is refused",
          %{conn: conn, directory: directory, tls: tls} do
       identity = identity(directory)
       attempt = attempt!(directory, identity, ["submitted", "accepted", "keys_active"])
-      assert %{"status" => "completed"} = json_response(restore(conn, identity.kit), 200)
+      assert %{"status" => "completed"} = json_response(restore(conn, identity.body), 200)
 
       issued = Arca.ServerMetaStorage.now!()
 
@@ -473,12 +565,7 @@ defmodule Emissary.Web.RestoreControllerTest do
       held = Arca.Repo.get!(IdentityAttempt, attempt.id)
       assert DateTime.compare(held.reproof_expires_at, expires_at) == :eq
 
-      reprove = fn ->
-        build_conn()
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("authorization", "Bearer " <> @token)
-        |> post("/restore/reproof", Jason.encode!(Map.put(identity.kit, "challenge", challenge)))
-      end
+      reprove = fn -> reproof(build_conn(), Map.put(identity.body, "challenge", challenge)) end
 
       # Alive, it passes to the directory, which this node cannot reach.
       unreachable!(tls)

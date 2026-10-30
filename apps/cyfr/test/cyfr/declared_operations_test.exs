@@ -54,7 +54,7 @@ defmodule Cyfr.DeclaredOperationsTest do
             {"pairing", "list"},
             {"passkey", "list"},
             {"confirmation", "pending"},
-            {"person", "kit"},
+            {"person", "recovery_code"},
             {"person", "carry_list"},
             {"person", "status"}
           ] do
@@ -66,7 +66,8 @@ defmodule Cyfr.DeclaredOperationsTest do
       # enrollment is a write that takes no arguments.
       assert operation("person", "enroll_abandon").args == []
 
-      for action <- ~w(carry_cancel carry_complete enroll_abandon) do
+      for action <-
+            ~w(carry_cancel carry_complete enroll_abandon recovery_code_saved recovery_code_add) do
         assert operation("person", action).kind == :write, "person.#{action}"
       end
 
@@ -84,17 +85,26 @@ defmodule Cyfr.DeclaredOperationsTest do
                })
     end
 
-    test "a recovery seed is a field the redaction vocabulary keeps out of every log" do
+    test "a recovery secret and a recovery code are fields the redaction vocabulary keeps out of every log" do
       assert Prima.Sanitizer.sensitive_key?("recovery_secret")
+      assert Prima.Sanitizer.sensitive_key?("recovery_code")
       assert Prima.Sanitizer.sensitive_key?("invitation_secret")
 
+      code =
+        Prima.RecoveryCode.encode("per_" <> String.duplicate("c", 64), :binary.copy(<<7>>, 32))
+
+      # Every field `person.enroll` and `person.recovery_code_add` take,
+      # and every answer's `code` (`person.enroll`, `person.recovery_code`).
       sanitized =
         Prima.Sanitizer.sanitize(%{
           "recovery_secret" => @seed,
-          "holder" => %{"recovery_secret" => @seed}
+          "recovery_code" => code,
+          "holder" => %{"recovery_secret" => @seed},
+          "answer" => %{"code" => code}
         })
 
       refute inspect(sanitized) =~ @seed
+      refute inspect(sanitized) =~ code
     end
   end
 
