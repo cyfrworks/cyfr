@@ -2761,7 +2761,7 @@ defmodule PrismWeb.ShellCanvasTest do
              )
     end
 
-    test "the visible canvas's frame dying falls back gone; the shipped canvas dying in turn changes nothing",
+    test "the visible canvas's frame dying falls back gone",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       seeded!(ctx)
       two_canvases!(ctx, user, athanor)
@@ -2772,14 +2772,53 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{reason: :gone} = fallback(view)
       assert row(home.id).state == "revoked"
-      assert %{id: shipped_id, reference: %{name: "canvas"}} = canvas(view)
-      %{id: notice_id} = assigns(view).fallbacks["home"]
+      assert %{reference: %{name: "canvas"}, state: :live} = canvas(view)
+      assert has_element?(view, "#system-layer-notice")
+    end
 
-      # A second death, the shipped canvas's own, and its deadline passing.
-      render_hook(view, "frame_gone", %{"frame" => shipped_id})
+    test "the shipped canvas dying in turn is torn down with its credential and renewal, its fallback, line and apps standing, and opens again only on trying again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "window")])
+      })
+
+      view = shell!(conn)
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
+      shipped = canvas(view)
+      assert shipped.reference.name == "canvas"
+      bearer = handshake!(view, shipped.id)["credential"]
+      canvas_verb!(view, shipped.id, :ready)
+      kept = assigns(view).fallbacks
+      dash = app_frame(view, "app-dash")
+      assert row(shipped.id).state == "active"
+      assert Map.has_key?(assigns(view).renewals, shipped.id)
+
+      render_hook(view, "frame_gone", %{"frame" => shipped.id})
+
+      assert assigns(view).fallbacks == kept
+      assert app_frame(view, "app-dash") == dash
+      assert has_element?(view, "#system-layer-notice")
+      assert row(shipped.id).state == "revoked"
+      refute Map.has_key?(assigns(view).renewals, shipped.id)
+      assert {:error, _} = verify(bearer)
+
+      # Nothing opens in its place again by itself: not on a switch away
+      # and back, nor when the deadlines pass.
+      assert canvas(view) == nil
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
       deadlines_pass!(view)
-      assert %{id: ^notice_id, fallback: %{reason: :gone}} = assigns(view).fallbacks["home"]
-      assert has_element?(view, ~s(#system-layer-notice[data-notice-id="#{notice_id}"]))
+      assert canvas(view) == nil
+      assert assigns(view).fallbacks == kept
+
+      # Trying again opens the person's canvas.
+      view |> notice("retry") |> render_click()
+      assert assigns(view).fallbacks == %{}
+      assert %{reference: %{name: "markets"}, state: :live} = canvas(view)
+      refute has_element?(view, "#system-layer-notice")
     end
 
     test "a hidden canvas's frame dying is torn down with no call, and showing it again opens it anew",

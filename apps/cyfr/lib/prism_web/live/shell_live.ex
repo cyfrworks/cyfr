@@ -158,7 +158,9 @@ defmodule PrismWeb.ShellLive do
   arranging. While the glass shows it, the system layer draws one line in
   the shelf's area offering to try again and, while the canvas keeps one,
   the last working version. A canvas fallen back stays so: its late
-  `ready`, or the shipped canvas failing in turn, changes nothing. The
+  `ready` changes nothing, and the shipped canvas dying in turn is torn
+  down with its credential and not opened again until the person tries
+  again, the line standing. The
   fallback ends only on the person's choice — the canvas opened again
   from the layout, the kept version once the system layer restored it —
   or when a published layout names another tincture for the canvas or
@@ -296,6 +298,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:trialled, %{})
       |> assign(:fallbacks, %{})
       |> assign(:noticed, nil)
+      |> assign(:spent, MapSet.new())
       |> assign(:credential_prompts, %{})
       |> assign(:grant_prompts, %{})
       |> assign(:grant_decisions, %{})
@@ -555,9 +558,10 @@ defmodule PrismWeb.ShellLive do
 
   # A canvas frame loaded a second time: its port is closed and it is
   # spent. A validation frame's death is the validation's outcome `died`;
-  # the visible canvas's falls it back (`gone`); a hidden canvas's is torn
-  # down, its credential revoked and its frame forgotten, so showing that
-  # canvas again opens it anew.
+  # the visible canvas's falls it back (`gone`); the shipped canvas's, in
+  # a fallback's place, is torn down and spent (`spend/2`); any other
+  # hidden canvas's is torn down, its credential revoked and its frame
+  # forgotten, so showing that canvas again opens it anew.
   def handle_event("frame_gone", %{"frame" => frame_id}, socket) when is_binary(frame_id) do
     %{context: ctx, frames: frames} = socket.assigns
 
@@ -566,9 +570,16 @@ defmodule PrismWeb.ShellLive do
         {:noreply, validation_ended(socket, canvas_id, :gone)}
 
       %{key: {:canvas, canvas_id} = key} ->
-        if canvas_id == Frames.visible_canvas(frames),
-          do: {:noreply, enter_fallback(socket, :gone)},
-          else: {:noreply, frames(socket, &Frames.discard(ctx, &1, key))}
+        cond do
+          Map.has_key?(socket.assigns.fallbacks, canvas_id) ->
+            {:noreply, socket |> spend(canvas_id) |> frames(&Frames.discard(ctx, &1, key))}
+
+          canvas_id == Frames.visible_canvas(frames) ->
+            {:noreply, enter_fallback(socket, :gone)}
+
+          true ->
+            {:noreply, frames(socket, &Frames.discard(ctx, &1, key))}
+        end
 
       nil ->
         {:noreply, socket}
@@ -1433,6 +1444,9 @@ defmodule PrismWeb.ShellLive do
     socket = withdraw_moved(socket, entry.id, deciding_for(socket, entry))
 
     cond do
+      MapSet.member?(socket.assigns.spent, entry.id) ->
+        assign(socket, :showing, :canvas)
+
       Map.has_key?(socket.assigns.fallbacks, entry.id) ->
         open_shipped(socket, entry)
 
@@ -1843,9 +1857,16 @@ defmodule PrismWeb.ShellLive do
   defp leave_fallback(socket, canvas_id) do
     socket
     |> update(:fallbacks, &Map.delete(&1, canvas_id))
+    |> update(:spent, &MapSet.delete(&1, canvas_id))
     |> frames(&Frames.discard(socket.assigns.context, &1, {:canvas, canvas_id}))
     |> show_canvas()
   end
+
+  # The shipped canvas in a fallback's place died in turn: its frame is
+  # torn down with its credential and renewal, the fallback and its line
+  # stand, and nothing opens in the canvas's place again until the person
+  # tries again, so a canvas that keeps dying never loops.
+  defp spend(socket, canvas_id), do: update(socket, :spent, &MapSet.put(&1, canvas_id))
 
   # The canvas fallen back whose notice is `notice_id`, if any.
   defp fallen_back(fallbacks, notice_id) do
@@ -2507,6 +2528,7 @@ defmodule PrismWeb.ShellLive do
       else
         socket
         |> update(:fallbacks, &Map.delete(&1, canvas_id))
+        |> update(:spent, &MapSet.delete(&1, canvas_id))
         |> frames(&Frames.discard(ctx, &1, {:canvas, canvas_id}))
       end
     end)
