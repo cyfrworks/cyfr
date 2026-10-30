@@ -36,7 +36,7 @@ defmodule Arca.Shares do
   at one audience or the other. `revoke/3` takes the share's row
   exclusive, so it serializes with a use's claim (`Arca.ShareUsage`),
   which reads it shared, and blocks every profile, in every athanor, whose
-  head binds it (`Arca.ConsentStorage.block_dependents/3`) in the same
+  head binds it (`Arca.ConsentStorage.block_dependents/4`) in the same
   transaction. A share has no delete: a revoked share stays, so a consent
   that bound it reads it no longer offered.
 
@@ -113,7 +113,10 @@ defmodule Arca.Shares do
   `opts[:verify]` is the caller's check, run once every lock is held and
   before the insert: `:ok`, or `{:error, reason}`, which rolls the
   creation back and is answered. A confirmation is spent there, so the
-  proof and the share commit together.
+  proof and the share commit together. The rows carry no standing: a
+  person and their own athanor read active after a leave that retires
+  them, and a lapsed company sign-in writes nothing, so `verify:` is also
+  where the caller establishes that the creator stands.
   """
   @spec create(Prima.Actor.t(), map(), keyword()) ::
           {:ok, share()}
@@ -204,28 +207,44 @@ defmodule Arca.Shares do
     end
   end
 
-  defp own_athanor(%Athanor{kind: "person", status: "active", owner_user_id: owner}, owner),
-    do: :ok
+  @doc false
+  # Whether `athanor`, a row read by the caller, is the active personal
+  # athanor of the person `user_id`: the one rule a share is made from and
+  # bound in (`Arca.ConsentStorage` binds by it too).
+  @spec own_athanor(Athanor.t() | nil, String.t()) :: :ok | {:error, :not_own_athanor}
+  def own_athanor(%Athanor{kind: "person", status: "active", owner_user_id: owner}, owner)
+      when is_binary(owner),
+      do: :ok
 
-  defp own_athanor(_athanor, _user_id), do: {:error, :not_own_athanor}
+  def own_athanor(_athanor, _user_id), do: {:error, :not_own_athanor}
 
   defp group_admits(%Share{audience: "everyone"}, _held, _user_id), do: :ok
 
   defp group_admits(%Share{audience: "group", group_id: group_id}, held, user_id) do
     case held[group_id] do
       %Athanor{kind: "group", status: "active"} ->
-        if seated?(group_id, user_id), do: :ok, else: {:error, :not_member}
+        if active_member?(group_id, user_id), do: :ok, else: {:error, :not_member}
 
       _other ->
         {:error, :not_member}
     end
   end
 
-  defp seated?(group_id, user_id) do
+  # Whether `user_id` is an active person seated, active, in the active
+  # group `group_id`: the one membership read a group share is made,
+  # moved and used by.
+  # arca:unscoped-ok a share's group is another athanor than its owner's
+  # or its reader's: one membership, read by the group and the person.
+  defp active_member?(group_id, user_id) do
     from(m in Membership,
+      join: g in Athanor,
+      on: g.id == m.athanor_id,
+      join: u in User,
+      on: u.id == m.user_id,
       where:
         m.athanor_id == ^group_id and m.user_id == ^user_id and m.scope == "athanor" and
-          m.status == "active"
+          m.status == "active" and g.kind == "group" and g.status == "active" and
+          u.status == "active"
     )
     |> Arca.Repo.exists?()
   end
@@ -355,11 +374,7 @@ defmodule Arca.Shares do
   defp group_open(%{audience: "everyone"}, _user_id), do: :ok
 
   defp group_open(%{audience: "group", group_id: group_id}, user_id) do
-    active_group? =
-      from(a in Athanor, where: a.id == ^group_id and a.kind == "group" and a.status == "active")
-      |> Arca.Repo.exists?()
-
-    if active_group? and seated?(group_id, user_id), do: :ok, else: {:error, :not_member}
+    if active_member?(group_id, user_id), do: :ok, else: {:error, :not_member}
   end
 
   # The write lands only on the row still active at `expected`: its
@@ -544,7 +559,13 @@ defmodule Arca.Shares do
       |> Arca.QueryHelpers.where_athanor(athanor_id)
       |> Arca.Repo.update_all(set: [status: "revoked", updated_at: now()])
 
-    with {:ok, blocked} <- Arca.ConsentStorage.block_dependents(nil, ids, blocked_status) do
+    with {:ok, blocked} <-
+           Arca.ConsentStorage.block_dependents(
+             Prima.Actor.in_athanor(athanor_id),
+             nil,
+             ids,
+             blocked_status
+           ) do
       {:ok, %{share_ids: ids, blocked: blocked}}
     end
   end
@@ -611,26 +632,11 @@ defmodule Arca.Shares do
   """
   @spec member?(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, boolean()} | {:error, :cross_tenant | term()}
-  # arca:unscoped-ok a share's group is another athanor than the reader's:
-  # one membership, read by the group and the person.
   def member?(%Prima.Actor{} = actor, group_id, user_id)
       when is_binary(group_id) and is_binary(user_id) and user_id != "" do
     if platform(actor) or actor.user_id == user_id do
       Arca.Repo.Errors.with_db_rescue("Arca.Shares.member?", fn ->
-        member =
-          from(m in Membership,
-            join: g in Athanor,
-            on: g.id == m.athanor_id,
-            join: u in User,
-            on: u.id == m.user_id,
-            where:
-              m.athanor_id == ^group_id and m.user_id == ^user_id and m.scope == "athanor" and
-                m.status == "active" and g.kind == "group" and g.status == "active" and
-                u.status == "active"
-          )
-          |> Arca.Repo.exists?()
-
-        {:ok, member}
+        {:ok, active_member?(group_id, user_id)}
       end)
     else
       {:error, :cross_tenant}
@@ -698,7 +704,7 @@ defmodule Arca.Shares do
   def head_profiles_referencing_share(actor, share_id)
       when platform(actor) and is_binary(share_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Shares.head_profiles_referencing_share", fn ->
-      {:ok, Arca.ConsentStorage.share_heads([share_id])}
+      Arca.ConsentStorage.share_heads(actor, [share_id])
     end)
   end
 

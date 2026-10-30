@@ -389,7 +389,8 @@ defmodule Arca.UnscopedQuerySeamTest do
   @share_crossings %{
     {"apps/arca/lib/arca/shares.ex", "offered_to"} =>
       "the shares whose audience holds one person, by their memberships",
-    {"apps/arca/lib/arca/shares.ex", "member?"} => "one membership of a group, read at use",
+    {"apps/arca/lib/arca/shares.ex", "active_member?"} =>
+      "one membership of a group, read when a group share is made, moved and used",
     {"apps/arca/lib/arca/shares.ex", "get_for_source"} =>
       "one share and its source entry, by the bare id a binding names",
     {"apps/arca/lib/arca/shares.ex", "administrator_shares"} =>
@@ -402,10 +403,10 @@ defmodule Arca.UnscopedQuerySeamTest do
       "a revision's own entries and its shares' sources, by `{athanor_id, id}` pair",
     {"apps/arca/lib/arca/consent_storage.ex", "lock_shares"} =>
       "the shares a revision binds, locked by id",
-    {"apps/arca/lib/arca/consent_storage.ex", "share_heads"} =>
+    {"apps/arca/lib/arca/consent_storage.ex", "binding_heads"} =>
       "the heads binding a share, in every athanor (`head_profiles_referencing_share/2`)",
     {"apps/arca/lib/arca/consent_storage.ex", "lock_unrevoked"} =>
-      "the dependents `block_dependents/3` locks, by `{athanor_id, id}` pair"
+      "the dependents `block_dependents/4` locks, by `{athanor_id, id}` pair"
   }
 
   defp tagged_functions(path) do

@@ -43,12 +43,14 @@ defmodule Arca.ConsentStorage do
   (`{:error, :not_found}`) or is not `active`
   (`{:error, {:share_unavailable, status}}`), when a share's source no
   longer holds the digest its binding was approved at, read again under
-  the locks (`{:error, {:binding_went_stale, share_id}}`), and when the
-  revision binding a share is not in a person's own athanor
+  the locks (`{:error, {:binding_went_stale, share_id}}`), and when a
+  revision binding a share is not in the active own athanor of the person
+  it is granted by (`granted_by`, when it names a person), or, granted by
+  no person as the bootstrap's is, not in a person's athanor
   (`{:error, :not_own_athanor}`). `Arca.InstanceEntries`' revoke and
   tombstone, `Arca.VaultStorage`'s binding move, revoke and delete, and a
   share's revoke (`Arca.Shares`) write their row and then lock the
-  profiles whose heads depend on it (`block_dependents/3`), so the two
+  profiles whose heads depend on it (`block_dependents/4`), so the two
   meet in one order: a change that lands first is seen here (a status
   refused, a moved digest refused by the re-read or by the caller's
   in-transaction re-read), and a revision that lands first is seen by the
@@ -61,7 +63,7 @@ defmodule Arca.ConsentStorage do
   and id; then shares by id; then the profiles, deduplicated and ordered
   by athanor and id before any is locked. Every writer that holds more
   than one of these rows in a transaction takes them in it: this revision,
-  `block_dependents/3`, `Arca.RecordSink`'s batch of last-used touches
+  `block_dependents/4`, `Arca.RecordSink`'s batch of last-used touches
   (`{athanor_id, id}` order) and
   `Arca.TenantTables.delete_all_for/1`, which runs only on an archived
   athanor, one no context can focus and no seed sync revises, so no
@@ -202,7 +204,7 @@ defmodule Arca.ConsentStorage do
     with {:ok, row} <- revision_row(attrs, athanor_id),
          {:ok, refs} <- ref_inputs(vault_refs, row.id, athanor_id) do
       Ecto.Multi.new()
-      |> lock_bindings(refs, athanor_id)
+      |> lock_bindings(refs, revision_actor(athanor_id, attrs))
       |> Ecto.Multi.run(:locked, fn _repo, _done ->
         {:ok, lock_profile!(athanor_id, row.profile_id)}
       end)
@@ -228,11 +230,13 @@ defmodule Arca.ConsentStorage do
 
     with {:ok, row} <- revision_row(consent_attrs, athanor_id),
          {:ok, refs} <- ref_inputs(vault_refs, row.id, athanor_id) do
+      actor = revision_actor(athanor_id, consent_attrs)
+
       # Through the schema's changeset, never a raw struct: the label rule
       # and the kind/status vocabulary are the changeset's, and this is the
       # one production mint of a profile. A new profile supersedes nothing.
       Ecto.Multi.new()
-      |> lock_bindings(refs, athanor_id)
+      |> lock_bindings(refs, actor)
       |> Ecto.Multi.insert(
         :profile,
         Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
@@ -359,12 +363,22 @@ defmodule Arca.ConsentStorage do
     end
   end
 
+  # Who a revision is written for: its athanor, and the person it is
+  # granted by when that names a person (`Prima.PersonId.person?/1`); the
+  # bootstrap's revision with no person names none.
+  defp revision_actor(athanor_id, attrs) do
+    granted_by = Map.get(attrs, :granted_by)
+    person = if Prima.PersonId.person?(granted_by), do: granted_by
+
+    %Prima.Actor{athanor_id: athanor_id, user_id: person, scope: :athanor}
+  end
+
   # The rows a revision's bindings reach, locked in the one order before
   # the profile: instance entries, then vault entries, then shares.
-  defp lock_bindings(multi, refs, athanor_id) do
+  defp lock_bindings(multi, refs, %Prima.Actor{athanor_id: athanor_id} = actor) do
     multi
     |> Ecto.Multi.run(:instances, fn _repo, _done -> lock_instance_entries(refs) end)
-    |> Ecto.Multi.run(:sources, fn _repo, _done -> share_sources(refs, athanor_id) end)
+    |> Ecto.Multi.run(:sources, fn _repo, _done -> share_sources(refs, actor) end)
     |> Ecto.Multi.run(:entries, fn _repo, %{sources: sources} ->
       lock_vault_entries(refs, athanor_id, sources)
     end)
@@ -379,7 +393,7 @@ defmodule Arca.ConsentStorage do
   # binds a share only in a person's own athanor, read from its row.
   # arca:unscoped-ok a binding names another athanor's share by its bare
   # id: the shares the revision names, read by id with the athanor each is in.
-  defp share_sources(refs, athanor_id) do
+  defp share_sources(refs, actor) do
     case refs |> Enum.map(& &1.share_id) |> Enum.reject(&is_nil/1) |> Enum.uniq() do
       [] ->
         {:ok, %{}}
@@ -393,18 +407,23 @@ defmodule Arca.ConsentStorage do
           |> Arca.Repo.all()
           |> Map.new()
 
-        cond do
-          not personal?(athanor_id) -> {:error, :not_own_athanor}
-          map_size(sources) != length(ids) -> {:error, :not_found}
-          true -> {:ok, sources}
+        with :ok <- binds_shares(actor) do
+          if map_size(sources) == length(ids), do: {:ok, sources}, else: {:error, :not_found}
         end
     end
   end
 
-  defp personal?(athanor_id) do
-    from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id and a.kind == "person")
-    |> Arca.Repo.exists?()
+  # With a person, the athanor is that person's own, by `Arca.Shares`' one
+  # rule; with none, the bootstrap's revision, it is a person's athanor.
+  defp binds_shares(%Prima.Actor{athanor_id: athanor_id, user_id: nil}) do
+    case Arca.Repo.get(Arca.Schemas.Athanor, athanor_id) do
+      %Arca.Schemas.Athanor{kind: "person"} -> :ok
+      _other -> {:error, :not_own_athanor}
+    end
   end
+
+  defp binds_shares(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}),
+    do: Arca.Shares.own_athanor(Arca.Repo.get(Arca.Schemas.Athanor, athanor_id), user_id)
 
   # Every vault entry the bindings reach, the athanor's own and each
   # share's source, held shared in `{athanor_id, id}` order to the end of
@@ -845,8 +864,8 @@ defmodule Arca.ConsentStorage do
       do: {:error, :cross_tenant}
 
   @doc """
-  Block every profile that depends on what a transaction is changing, in
-  that transaction: the profiles of `entry`'s athanor whose head binds the
+  Block, for `actor`, every profile that depends on what a transaction is
+  changing, in that transaction: the profiles of `entry`'s athanor whose head binds the
   entry (`{athanor_id, entry_id}`, or nil for none) and the profiles, in
   every athanor, whose head binds one of `share_ids`. The union is
   deduplicated and ordered by athanor and id before any is locked; the
@@ -858,30 +877,42 @@ defmodule Arca.ConsentStorage do
   reach `blocked_status` refuses, and the caller rolls its transaction
   back with it.
 
+  The entry and every share named are the actor's athanor's, or the
+  actor is the platform's; anything else is `{:error, :cross_tenant}`,
+  read with one scoped count before any lock and with nothing written.
+
   The one implementation the entry's binding move, revoke and delete
   (`Arca.VaultStorage`) and a share's revoke (`Arca.Shares`) call, each
   after writing its own row, so a revision that landed first is seen here
   and one that comes after waits for the row (the module doc's order).
   """
-  @spec block_dependents({String.t(), String.t()} | nil, [String.t()], String.t()) ::
-          {:ok, [{String.t(), String.t()}]} | {:error, term()}
-  def block_dependents(entry, share_ids, blocked_status)
+  @spec block_dependents(
+          Prima.Actor.t(),
+          {String.t(), String.t()} | nil,
+          [String.t()],
+          String.t()
+        ) :: {:ok, [{String.t(), String.t()}]} | {:error, :cross_tenant | term()}
+  def block_dependents(%Prima.Actor{} = actor, entry, share_ids, blocked_status)
       when is_list(share_ids) and is_binary(blocked_status) do
-    pairs = Enum.sort(Enum.uniq(entry_heads(entry) ++ share_heads(share_ids)))
-    unrevoked = Arca.StatusTransitions.statuses(:profiles) -- ["revoked"]
-    affected = lock_unrevoked(pairs)
+    with :ok <- owned_by(actor, entry, share_ids) do
+      pairs = Enum.sort(Enum.uniq(entry_heads(entry) ++ binding_heads(share_ids)))
+      unrevoked = Arca.StatusTransitions.statuses(:profiles) -- ["revoked"]
+      affected = lock_unrevoked(pairs)
 
-    Enum.reduce_while(affected, {:ok, affected}, fn {athanor_id, profile_id}, ok ->
-      case Arca.ProfileStorage.transition(
-             Prima.Actor.in_athanor(athanor_id),
-             profile_id,
-             unrevoked,
-             blocked_status
-           ) do
-        :ok -> {:cont, ok}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
+      # The one place the fan-out is authorized: each dependent is written
+      # under its own athanor, the caller's ownership checked above.
+      Enum.reduce_while(affected, {:ok, affected}, fn {athanor_id, profile_id}, ok ->
+        case Arca.ProfileStorage.transition(
+               Prima.Actor.in_athanor(athanor_id),
+               profile_id,
+               unrevoked,
+               blocked_status
+             ) do
+          :ok -> {:cont, ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    end
   end
 
   defp entry_heads(nil), do: []
@@ -893,16 +924,50 @@ defmodule Arca.ConsentStorage do
 
   @doc false
   # The `{athanor_id, profile_id}` pairs, in every athanor, whose head
-  # binds one of `share_ids`, ordered by athanor and id
-  # (`Arca.Shares.head_profiles_referencing_share/2`, `block_dependents/3`).
-  @spec share_heads([String.t()]) :: [{String.t(), String.t()}]
-  def share_heads([]), do: []
+  # binds one of `share_ids`, ordered by athanor and id, for the platform's
+  # actor or the shares' owner (`Arca.Shares.head_profiles_referencing_share/2`).
+  # arca:db-raise-ok a step under its caller's rescue; a raise is answered there.
+  @spec share_heads(Prima.Actor.t(), [String.t()]) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, :cross_tenant}
+  def share_heads(%Prima.Actor{} = actor, share_ids) when is_list(share_ids) do
+    with :ok <- owned_by(actor, nil, share_ids), do: {:ok, binding_heads(share_ids)}
+  end
+
+  # Whose dependents a caller may reach: the platform's actor any, and an
+  # athanor's actor those of its own entry and its own shares alone, read
+  # before any lock. A share the athanor does not hold, or an entry of
+  # another athanor, is `:cross_tenant`.
+  defp owned_by(%Prima.Actor{scope: :platform}, _entry, _share_ids), do: :ok
+
+  defp owned_by(%Prima.Actor{athanor_id: athanor_id}, entry, share_ids)
+       when is_binary(athanor_id) and athanor_id != "" do
+    ids = Enum.uniq(share_ids)
+
+    cond do
+      match?({other, _} when other != athanor_id, entry) ->
+        {:error, :cross_tenant}
+
+      ids == [] ->
+        :ok
+
+      true ->
+        held =
+          from(s in Arca.Schemas.Share, where: s.id in ^ids)
+          |> Arca.QueryHelpers.where_athanor(athanor_id)
+          |> Arca.Repo.aggregate(:count)
+
+        if held == length(ids), do: :ok, else: {:error, :cross_tenant}
+    end
+  end
+
+  defp owned_by(%Prima.Actor{}, _entry, _share_ids), do: {:error, :cross_tenant}
+
+  defp binding_heads([]), do: []
 
   # arca:unscoped-ok a share is bound in its recipients' athanors: the heads
   # binding it are found in every one, keyed by the share and answered with
   # the athanor each profile is in.
-  # arca:db-raise-ok a step inside the caller's transaction, or under its rescue; a raise rolls it back.
-  def share_heads(share_ids) do
+  defp binding_heads(share_ids) do
     from(r in ConsentVaultRef,
       join: c in Consent,
       on: c.id == r.consent_id and c.athanor_id == r.athanor_id,

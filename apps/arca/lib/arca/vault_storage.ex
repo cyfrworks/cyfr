@@ -735,7 +735,12 @@ defmodule Arca.VaultStorage do
          share_ids = active_shares(athanor_id, id),
          :ok <- attach_only_while_shared(id, changes, share_ids),
          {:ok, blocked} <-
-           Arca.ConsentStorage.block_dependents({athanor_id, id}, share_ids, blocked_status) do
+           Arca.ConsentStorage.block_dependents(
+             Prima.Actor.in_athanor(athanor_id),
+             {athanor_id, id},
+             share_ids,
+             blocked_status
+           ) do
       {:ok, for({^athanor_id, profile_id} <- blocked, do: profile_id)}
     end
   end
