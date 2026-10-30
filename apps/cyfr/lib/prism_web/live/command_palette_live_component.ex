@@ -283,7 +283,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     >
       <div
         :if={@open}
-        class="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[15vh] px-4"
+        class="fixed inset-0 z-[80] flex items-start justify-center bg-black/60 pt-[15vh] px-4"
       >
         <div
           class="w-full max-w-xl rounded-lg border border-gray-700 bg-gray-900 shadow-2xl"

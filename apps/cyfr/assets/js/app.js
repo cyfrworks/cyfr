@@ -10,6 +10,7 @@ import PageLoadingIndicator from "./hooks/page_loading_indicator"
 import OptimisticNav from "./hooks/optimistic_nav"
 import Thread from "./hooks/thread"
 import AquaChat from "./hooks/aqua_chat"
+import {AquaPanel, AquaPanelKeys} from "./aqua_panel"
 import MarkdownContent from "./hooks/markdown_content"
 import Canvas from "./canvas/index"
 import SystemLayer from "./system_layer/index"
@@ -35,6 +36,8 @@ Hooks.PageLoadingIndicator = PageLoadingIndicator
 Hooks.OptimisticNav = OptimisticNav
 Hooks.Thread = Thread
 Hooks.AquaChat = AquaChat
+Hooks.AquaPanel = AquaPanel
+Hooks.AquaPanelKeys = AquaPanelKeys
 Hooks.MarkdownContent = MarkdownContent
 Hooks.Canvas = Canvas
 Hooks.SystemLayer = SystemLayer
