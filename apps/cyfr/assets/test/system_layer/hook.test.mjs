@@ -741,3 +741,126 @@ describe("the page's frames while a modal prompt is open", () => {
     assert.ok(untouched(frames[1], {inert: "", style: "color: red"}))
   })
 })
+
+// ---------------------------------------------------------------------------
+// The newcomer pages' screen 2: the recovery code the page pushes once, and
+// Copy
+// ---------------------------------------------------------------------------
+
+describe("a newcomer page's recovery code", () => {
+  const code = "CYFR-0123ABCD-4567EFGH"
+  let location, navigator
+
+  beforeEach(() => {
+    location = Object.getOwnPropertyDescriptor(globalThis, "location")
+    navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator")
+    Object.defineProperty(globalThis, "location", {configurable: true, value: {hash: "#ab12"}})
+  })
+
+  afterEach(() => {
+    if (location) Object.defineProperty(globalThis, "location", location)
+    else delete globalThis.location
+    if (navigator) Object.defineProperty(globalThis, "navigator", navigator)
+    else delete globalThis.navigator
+  })
+
+  // The page's hooked element, holding screen 2's place for the code (the
+  // markup leaves it empty) and its Copy button.
+  function screen(mode, {withSlot = true} = {}) {
+    const shown = {textContent: ""}
+    const slot = {querySelector: (selector) => (selector === '[data-test="recovery-code"]' ? shown : null)}
+    const copy = {
+      textContent: "Copy",
+      closest: (selector) => {
+        if (selector === '[data-test="admission-copy"]') return copy
+        if (selector === "[data-recovery-code]") return slot
+        return null
+      }
+    }
+    const el = new EventTarget()
+    el.dataset = {webauthn: mode}
+    el.querySelector = (selector) => (withSlot && selector === '[data-test="recovery-code"]' ? shown : null)
+    const listeners = {}
+    const events = []
+    const newcomer = Object.assign(Object.create(SystemLayer), {
+      el,
+      pushEvent: (event, payload) => events.push({event, payload}),
+      handleEvent: (event, callback) => (listeners[event] = callback)
+    })
+    newcomer.mounted()
+    return {newcomer, el, shown, copy, listeners, events}
+  }
+
+  const click = (el, target) => {
+    let prevented = false
+    const event = new Event("click")
+    Object.defineProperty(event, "target", {value: target})
+    Object.defineProperty(event, "preventDefault", {value: () => (prevented = true)})
+    el.dispatchEvent(event)
+    return prevented
+  }
+
+  for (const mode of ["setup", "invite", "create"]) {
+    test(`on the ${mode} page, is drawn as the text of the screen's own place and held nowhere else`, () => {
+      const {newcomer, shown, listeners} = screen(mode)
+      assert.equal(typeof listeners.admission_code, "function")
+
+      listeners.admission_code({code})
+      assert.equal(shown.textContent, code)
+
+      for (const [key, value] of Object.entries(newcomer)) {
+        if (key === "el" || typeof value === "function") continue
+        assert.ok(!JSON.stringify(value ?? null).includes(code), `the hook keeps it under ${key}`)
+      }
+
+      // The element going takes the code with it.
+      newcomer.destroyed()
+      assert.equal(shown.textContent, "")
+    })
+  }
+
+  test("an empty code draws nothing, and a code with no place to go is dropped", () => {
+    const {shown, listeners} = screen("setup")
+    listeners.admission_code({code: ""})
+    listeners.admission_code({code: null})
+    assert.equal(shown.textContent, "")
+
+    const bare = screen("create", {withSlot: false})
+    assert.doesNotThrow(() => bare.listeners.admission_code({code}))
+  })
+
+  test("Copy writes the drawn code to the clipboard and says Copied., starting no ceremony", async () => {
+    const written = []
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {clipboard: {writeText: async (text) => written.push(text)}}
+    })
+
+    const {el, copy, listeners, events} = screen("invite")
+    listeners.admission_code({code})
+    assert.equal(click(el, copy), true)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.deepEqual(written, [code])
+    assert.equal(copy.textContent, "Copied.")
+    assert.deepEqual(
+      events.map((entry) => entry.event),
+      ["invite_token"],
+      "Copy sends the page nothing"
+    )
+  })
+
+  test("Copy with no code drawn writes nothing", async () => {
+    const written = []
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {clipboard: {writeText: async (text) => written.push(text)}}
+    })
+
+    const {el, copy} = screen("create")
+    click(el, copy)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(written, [])
+    assert.equal(copy.textContent, "Copy")
+  })
+})

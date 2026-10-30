@@ -159,30 +159,39 @@ describe("the secret of a new recovery code", () => {
 })
 
 describe("the material a recovery prompt holds", () => {
-  test("enrollment draws once and sends the same seed and request id again", () => {
+  test("another code draws once and sends the same secret and request id again", () => {
     const crypto = countingCrypto()
     const material = new Material(crypto)
 
-    const first = material.submission("recovery-1", "enrollment")
-    const again = material.submission("recovery-1", "enrollment")
+    const first = material.submission("recovery-1", "holder", held.code)
+    const again = material.submission("recovery-1", "holder", held.code)
     assert.deepEqual(again, first)
-    assert.equal(crypto.draws, 2, "one seed and one request id")
-    assert.match(first.recovery_secret, /^[A-Za-z0-9_-]{43}$/)
+    assert.equal(crypto.draws, 2, "one secret and one request id")
+    assert.match(first.holder.recovery_secret, /^[A-Za-z0-9_-]{43}$/)
     assert.match(first.request_id, /^req_/)
 
-    const other = material.submission("recovery-2", "enrollment")
-    assert.notEqual(other.recovery_secret, first.recovery_secret)
+    const other = material.submission("recovery-2", "holder", held.code)
+    assert.notEqual(other.holder.recovery_secret, first.holder.recovery_secret)
   })
 
   test("forgotten, nothing of it remains, and a new submission is a new request", () => {
     const material = new Material(countingCrypto())
-    const first = material.submission("recovery-1", "enrollment")
+    const first = material.submission("recovery-1", "holder", held.code)
     material.forget("recovery-1")
     assert.equal(material.holds("recovery-1"), false)
-    assert.notEqual(material.submission("recovery-1", "enrollment").request_id, first.request_id)
+    assert.notEqual(material.submission("recovery-1", "holder", held.code).request_id, first.request_id)
 
     material.forgetAll()
     assert.equal(material.held.size, 0)
+  })
+
+  test("a prompt kind with no material, enrollment among them, draws nothing and sends nothing", () => {
+    const crypto = countingCrypto()
+    const material = new Material(crypto)
+    assert.equal(material.submission("recovery-1", "enrollment"), null)
+    assert.equal(material.submission("recovery-1", "pairing"), null)
+    assert.equal(crypto.draws, 0)
+    assert.equal(material.holds("recovery-1"), false)
   })
 
   test("another code needs the recovery code that signs it, and keeps it with the drawn secret", () => {
@@ -540,7 +549,7 @@ describe("the layer's recovery prompts", () => {
   }
 
   // A layer whose prompt holds a recovery form and the code's place.
-  function layer(id, kind = "enrollment") {
+  function layer(id, kind = "holder") {
     const form = node("form")
     form.dataset = {recovery: kind, prompt: "recovery-9"}
     const signer = node("input")
@@ -581,21 +590,23 @@ describe("the layer's recovery prompts", () => {
     return prevented
   }
 
-  test("a submit draws the seed in the browser and sends it, never letting the form submit itself", () => {
+  test("a submit draws the secret in the browser and sends it, never letting the form submit itself", () => {
     const page = layer("system-layer")
+    page.signer.value = held.code
     assert.equal(submit(page), true)
 
     assert.equal(pushed.length, 1)
     const [{target, event, payload}] = pushed
     assert.deepEqual([target, event], ["system-layer", "recovery_submit"])
     assert.equal(payload.prompt_id, "recovery-9")
-    assert.match(payload.recovery_secret, /^[A-Za-z0-9_-]{43}$/)
+    assert.match(payload.holder.recovery_secret, /^[A-Za-z0-9_-]{43}$/)
     assert.match(payload.request_id, /^req_[0-9a-f]{32}$/)
   })
 
   test("once confirmed, the same material is sent again, by the layer the event names alone", () => {
     const page = layer("system-layer")
     layer("system-layer-panel")
+    page.signer.value = held.code
     submit(page)
 
     push("recovery:resubmit", {layer: "system-layer", prompt: "recovery-9"})
@@ -629,6 +640,7 @@ describe("the layer's recovery prompts", () => {
 
     const page = layer("system-layer")
     const panel = layer("system-layer-panel")
+    page.signer.value = held.code
     submit(page)
 
     push("recovery:code", {layer: "system-layer", prompt: "recovery-9", code: held.code})

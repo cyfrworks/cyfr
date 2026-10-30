@@ -17,7 +17,9 @@
  * same way and read by the server. The recovery code the server composes
  * arrives in a push to this layer alone and is drawn into the prompt's
  * own place as text, with a Copy button that writes it to the clipboard,
- * then emptied when the prompt ends.
+ * then emptied when the prompt ends. A new person's first secret and its
+ * request id are drawn the same way (`drawSeed`, `drawRequestId`), by the
+ * newcomer pages' hook when the person taps "Create a passkey".
  *
  * On the restore page, the installation token and the recovery code are
  * typed into a form whose inputs have no name, and posted straight to
@@ -87,16 +89,12 @@ export class Material {
   }
 
   /**
-   * The event payload for `kind` (`enrollment`, `holder` or `kit`) of the
+   * The event payload for `kind` (`holder` or `kit`) of the
    * prompt `promptId`, `typed` the recovery code that signs an added one;
    * or null when an added code has none to sign with.
    */
   submission(promptId, kind, typed = "") {
     switch (kind) {
-      case "enrollment": {
-        const held = this.hold(promptId, () => ({seed: drawSeed(this.crypto), requestId: drawRequestId(this.crypto)}))
-        return {prompt_id: promptId, recovery_secret: held.seed, request_id: held.requestId}
-      }
       case "holder": {
         const signer = (this.held.get(promptId)?.signer) || (typeof typed === "string" ? typed.trim() : "")
         if (!signer) return null
