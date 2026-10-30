@@ -17,6 +17,10 @@ defmodule Cyfr.RestoreOrderTest do
 
   alias Prima.Test.SourceTree
 
+  # The scan walks every test and support file of the tree, and runs beside
+  # its partition's sync tests, so it is held to more than ExUnit's minute.
+  @moduletag timeout: :timer.minutes(3)
+
   @mutations %{
     "Application" => [:put_env, :delete_env, :put_all_env],
     "System" => [:put_env, :delete_env],
@@ -27,8 +31,15 @@ defmodule Cyfr.RestoreOrderTest do
   @helper "apps/prima/test/support/env.ex"
   @rosters Path.join(__DIR__, "restore_order_roster/*.tsv")
 
-  test "every direct global mutation has its exact roster entry" do
-    violations = check(tree_sources(), roster())
+  # The tree's sources read and their mutation sites found once, for every
+  # case that walks the whole corpus.
+  setup_all do
+    sources = tree_sources()
+    {:ok, tree_sites: sites(sources)}
+  end
+
+  test "every direct global mutation has its exact roster entry", %{tree_sites: tree_sites} do
+    violations = check_sites(tree_sites, roster())
 
     assert violations == [],
            "direct global mutations must use Prima.Test.Env:\n" <>
@@ -53,12 +64,10 @@ defmodule Cyfr.RestoreOrderTest do
     end
   end
 
-  test "an empty roster refuses every file with a direct mutation" do
-    sources = tree_sources()
-    actual = sites(sources)
+  test "an empty roster refuses every file with a direct mutation", %{tree_sites: actual} do
     assert Map.has_key?(actual, "apps/cyfr/test/cyfr/runtime_config_wiring_test.exs")
     assert Map.has_key?(actual, "apps/arca/test/support/s3_test_env.ex")
-    violations = check(sources, %{})
+    violations = check_sites(actual, %{})
     assert Enum.map(violations, & &1.path) == Enum.sort(Map.keys(actual))
     assert Enum.all?(violations, &(&1.expected == 0 and &1.calls > 0))
   end
@@ -334,9 +343,11 @@ defmodule Cyfr.RestoreOrderTest do
     end)
   end
 
-  def check(sources, roster) do
-    actual = sites(sources)
+  def check(sources, roster), do: check_sites(sites(sources), roster)
 
+  # The files whose count of direct mutation sites (`sites/1`'s answer)
+  # differs from the roster's.
+  def check_sites(actual, roster) do
     (Map.keys(actual) ++ Map.keys(roster))
     |> Enum.uniq()
     |> Enum.sort()

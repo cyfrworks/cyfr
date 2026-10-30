@@ -4,6 +4,8 @@
 @import "../vendor/github-dark.css";
 /* The AQUA panel's placement, posture and edges. */
 @import "./aqua_panel.css";
+/* The canvas's window chrome and shelf. */
+@import "./canvas_chrome.css";
 
 /* =============================================================================
  * Design tokens.

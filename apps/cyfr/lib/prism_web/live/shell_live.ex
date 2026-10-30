@@ -2521,6 +2521,7 @@ defmodule PrismWeb.ShellLive do
         context={@context}
         frames={@frames}
         tinctures={@tinctures}
+        arrangement={@arrangement}
         safe_mode={not is_nil(@safe_mode)}
       />
 

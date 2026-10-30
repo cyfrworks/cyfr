@@ -1,0 +1,225 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 CYFR Works Inc.
+ *
+ * The canvas's chrome and shelf (PrismWeb.CanvasLive): the title bar, the
+ * controls and the edges the shell draws around each window and tile,
+ * outside the app's frame; the shield and snap preview the `Canvas` hook
+ * shows while a gesture runs (js/canvas/windows.js); and the shelf along
+ * the bottom. Stacking is CanvasLive's: tiles 20, windows from 30 (to
+ * 61), the shield 63, a full app 64, the shelf 65 and the shell's chips on
+ * it 66. Colours are the console's tokens (app.css). */
+
+/* Windows and tiles. */
+.canvas-window {
+  border-radius: 12px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-raised);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.35);
+}
+
+.canvas-tile {
+  border: 0 solid var(--color-border-default);
+  background: var(--color-surface-raised);
+}
+.canvas-tile[data-canvas-side="left"] { border-right-width: 1px; }
+.canvas-tile[data-canvas-side="right"] { border-left-width: 1px; }
+
+.canvas-active { border-color: color-mix(in srgb, var(--color-accent-hover) 60%, transparent); }
+.canvas-window.canvas-active {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 45%, transparent),
+    0 22px 56px rgb(0 0 0 / 0.55),
+    0 2px 8px rgb(0 0 0 / 0.35);
+}
+
+/* The title bar: 34 px, the app's icon and name, its controls. */
+.canvas-titlebar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--color-border-default);
+  background: color-mix(in srgb, var(--color-surface-overlay) 55%, var(--color-surface-raised));
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.canvas-tile .canvas-titlebar { cursor: default; }
+.canvas-active .canvas-titlebar { color: var(--color-text-primary); }
+
+.canvas-app-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-accent-primary) 25%, transparent);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.canvas-app-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 60%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+/* What the app set as its title, after its name, muted and truncated. */
+.canvas-app-title {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.canvas-controls { display: flex; align-items: center; gap: 2px; flex-shrink: 0; margin-left: auto; }
+
+.canvas-ghost {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.canvas-ghost svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.canvas-ghost:hover { background: var(--color-surface-overlay); color: var(--color-text-primary); }
+.canvas-ghost-close:hover { background: color-mix(in srgb, var(--color-status-error) 75%, transparent); color: var(--color-text-primary); }
+.canvas-ghost:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
+
+/* The app's own frame, or its refusal, under the title bar. */
+.canvas-app-body {
+  position: absolute;
+  inset: 34px 0 0 0;
+  width: 100%;
+  height: calc(100% - 34px);
+}
+
+/* A window's edges and corners: 8 px handles just inside its border. */
+.canvas-edge { position: absolute; z-index: 2; touch-action: none; }
+.canvas-edge[data-canvas-edge="n"] { top: 0; left: 12px; right: 12px; height: 4px; cursor: ns-resize; }
+.canvas-edge[data-canvas-edge="s"] { bottom: 0; left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
+.canvas-edge[data-canvas-edge="e"] { right: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
+.canvas-edge[data-canvas-edge="w"] { left: 0; top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
+.canvas-edge[data-canvas-edge="ne"] { top: 0; right: 0; width: 12px; height: 8px; cursor: nesw-resize; }
+.canvas-edge[data-canvas-edge="nw"] { top: 0; left: 0; width: 12px; height: 8px; cursor: nwse-resize; }
+.canvas-edge[data-canvas-edge="sw"] { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+.canvas-edge[data-canvas-edge="se"] {
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  /* The corner grip: two short diagonal strokes. */
+  background:
+    linear-gradient(135deg, transparent 55%, var(--color-text-muted) 55%, var(--color-text-muted) 62%, transparent 62%),
+    linear-gradient(135deg, transparent 75%, var(--color-text-muted) 75%, var(--color-text-muted) 82%, transparent 82%);
+  opacity: 0.7;
+}
+
+/* A tile's divider, on its inner edge. */
+.canvas-divider { position: absolute; z-index: 2; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
+.canvas-divider[data-canvas-edge="e"] { right: 0; }
+.canvas-divider[data-canvas-edge="w"] { left: 0; }
+.canvas-divider:hover,
+.canvas-divider:active { background: color-mix(in srgb, var(--color-accent-primary) 35%, transparent); }
+
+/* While a gesture runs: a shield over every frame, so no frame under the
+ * pointer takes it, carrying the gesture's cursor, and where a drop would
+ * snap. */
+.canvas-shield { position: fixed; inset: 0; z-index: 63; pointer-events: auto; touch-action: none; }
+.canvas-shield[hidden] { display: none; }
+.canvas-shield[data-gesture="drag"] { cursor: grabbing; }
+.canvas-shield[data-gesture="divider"] { cursor: col-resize; }
+.canvas-shield[data-gesture="resize-n"], .canvas-shield[data-gesture="resize-s"] { cursor: ns-resize; }
+.canvas-shield[data-gesture="resize-e"], .canvas-shield[data-gesture="resize-w"] { cursor: ew-resize; }
+.canvas-shield[data-gesture="resize-ne"], .canvas-shield[data-gesture="resize-sw"] { cursor: nesw-resize; }
+.canvas-shield[data-gesture="resize-nw"], .canvas-shield[data-gesture="resize-se"] { cursor: nwse-resize; }
+
+.canvas-snap-preview {
+  position: fixed;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-accent-hover) 60%, transparent);
+  background: color-mix(in srgb, var(--color-accent-primary) 18%, transparent);
+  pointer-events: none;
+}
+.canvas-snap-preview[hidden] { display: none; }
+
+/* The shelf: 52 px along the bottom, above every app, a full one
+ * included. Its left end is the shell's chips' room, its right end the AQUA
+ * button's. */
+.canvas-shelf {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 65;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 6rem 0 0;
+  border-top: 1px solid var(--color-border-default);
+  background: color-mix(in srgb, var(--color-surface-raised) 92%, transparent);
+  backdrop-filter: blur(12px);
+  touch-action: pan-y;
+}
+.canvas-shelf-chips { width: 11rem; flex-shrink: 0; }
+.canvas-shelf-aqua { width: 0; flex-shrink: 0; }
+
+#canvas-switcher { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.canvas-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--color-text-muted);
+  opacity: 0.6;
+  cursor: pointer;
+  transition: width 120ms ease;
+}
+.canvas-dot:hover { opacity: 1; }
+.canvas-dot[aria-pressed="true"] { width: 24px; background: var(--color-accent-hover); opacity: 1; }
+.canvas-dot:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 2px; }
+
+#canvas-shelf-apps { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.canvas-shelf-app {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 12rem;
+  height: 34px;
+  padding: 0 10px 0 6px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.canvas-shelf-app:hover { background: var(--color-surface-overlay); color: var(--color-text-primary); }
+.canvas-shelf-app[data-canvas-active="true"] {
+  border-color: color-mix(in srgb, var(--color-accent-hover) 45%, transparent);
+  background: color-mix(in srgb, var(--color-accent-primary) 16%, transparent);
+  color: var(--color-text-primary);
+}
+.canvas-shelf-app[data-canvas-minimised="true"] { opacity: 0.5; }
+.canvas-shelf-app:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
+
+/* The shell's own chips stand on the shelf's left end, centred in it and
+ * above it; they stay the shell's markup (PrismWeb.ShellLive). */
+#shell:has(#canvas-shelf) #shell-safe-mode,
+#shell:has(#canvas-shelf) #shell-devices { bottom: 13px; }

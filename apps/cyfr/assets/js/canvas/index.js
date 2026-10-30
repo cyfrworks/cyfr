@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-import {columnGeometry, coveredRects, parseColumns, postureFor, stylesheet, swipeDirection} from "./geometry.js"
+import {coveredRects, postureFor, swipeDirection} from "./geometry.js"
 import {
   CREDENTIAL_CLOSED_EVENT,
   DISCONNECTED,
@@ -13,21 +13,23 @@ import {
   credentialSignal,
   frameSignal,
   installedSignal,
-  safeModeChord,
-  switchChord
+  safeModeChord
 } from "./signals.js"
+import {WindowGestures} from "./windows.js"
 
-const EDGE_STRIP = "#canvas-edge-strip"
-const COVERING = ["column", "float", "full"]
+const SHELF = "#canvas-shelf"
+
+// What a canvas is told covers it: the windows over it. A tile narrows its
+// frame instead, and a full app's cover is the frozen state.
+const COVERING = ["window"]
 
 /**
  * Canvas hook — the client's half of `PrismWeb.CanvasLive`.
  *
  * It reports the posture (`posture`, `hand` under 768 CSS pixels wide and
  * `desk` otherwise) to the canvas on mount, whenever it changes and when
- * the socket comes back; lays each shown column app out from the list the
- * server rendered (`data-columns`) into a stylesheet it owns, inside an
- * element the server never patches; relays the shell's `frame_state`
+ * the socket comes back; turns the window chrome's gestures and the keys
+ * into the shell's arrangement events (`./windows.js`); relays the shell's `frame_state`
  * signals to each frame's bridge as a `cyfr:frame-state` event on the
  * frame's element, its `frame_credential` signals (a credential prompt a
  * frame asked for closed) as `cyfr:credential-closed`, its `frame_bearer`
@@ -37,34 +39,33 @@ const COVERING = ["column", "float", "full"]
  *
  * Each canvas frame (`data-frame-kind="canvas"`, a canvas or a validation
  * frame) is told, through its bridge (`cyfr:to-canvas`), the posture and
- * what the shown apps and floating frames cover of it, in its own pixels,
+ * the rectangles of the shown windows over it, in its own pixels,
  * whenever either changes; its bridge holds the latest until the frame's
  * handshake and posts it then.
  *
- * The safe mode chord, Ctrl+Alt+S, and the switch chords,
- * Ctrl+Alt+ArrowLeft and Ctrl+Alt+ArrowRight, are heard here, on the
- * shell's own page, and sent to the shell as `safe_mode` and
- * `switch_canvas` (`previous` or `next`); so is a horizontal swipe on the
- * edge strip, leftward `next` and rightward `previous`. A frame's keys and
- * pointer stay in the frame's document and never reach it.
+ * The keys are heard here, on the shell's own page, never in a frame: the
+ * safe mode chord, Ctrl+Alt+S, sent as `safe_mode`; and the window chords
+ * (`windowChord`): Ctrl+Alt with an arrow, M or W acting on the active
+ * app, with 1 to 8 showing that canvas, and with no active app the
+ * arrows switching canvases as `switch_canvas` (`previous` or `next`). A
+ * horizontal swipe on the shelf switches too, leftward `next` and
+ * rightward `previous`. A frame's keys and pointer stay in the frame's
+ * document and never reach it.
  *
- * The last columns read are kept for as long as the tab is open, so while
- * the socket is down the last layout stays drawn and follows the window,
- * marked disconnected, and every frame's bridge is told the socket is down
- * so no frame acts until it is back.
+ * While the socket is down the connection is marked, and every frame's
+ * bridge is told the socket is down so no frame acts until it is back.
  *
  * The hook sits on an empty element of its own inside the canvas layer,
- * which carries `data-posture` and `data-columns`. LiveView locks the
+ * which carries `data-posture`. LiveView locks the
  * element an event is pushed from until its reply, and a locked element
  * around the frames would bring back a frame the layer discarded meanwhile;
  * so every push goes from the hook's own element, and the layer, read as
  * that element's parent, is where the pointer is heard, its size measured,
- * its stylesheet scoped and its frames, hosts and edge strip found.
+ * its stylesheet scoped and its frames, hosts and shelf found.
  */
 const Canvas = {
   mounted() {
     this._layer = this.el.parentElement
-    this._columns = []
     this._posture = null
     this._connected = true
     this._style = null
@@ -80,10 +81,7 @@ const Canvas = {
         if (this._connected) this.pushEvent("safe_mode", {})
         return
       }
-      const direction = switchChord(event)
-      if (direction === null) return
-      event.preventDefault()
-      if (this._connected) this.pushEvent("switch_canvas", {direction})
+      this._windowKey(event)
     }
     globalThis.window?.addEventListener("keydown", this._onKeydown)
 
@@ -99,17 +97,18 @@ const Canvas = {
     this.handleEvent("frame_bearer", (payload) => this._bearer(payload))
     this.handleEvent("canvas_installed", (payload) => this._installed(payload))
 
-    this._read()
+    this._windowsMount()
+    this._watchFrames()
     this._layout()
   },
 
   updated() {
-    this._read()
     this._layout()
   },
 
   disconnected() {
     this._connected = false
+    this._windowsDisconnected()
     this._mark()
     this._broadcast(DISCONNECTED)
   },
@@ -124,6 +123,8 @@ const Canvas = {
   },
 
   destroyed() {
+    if (this._frameWatch) this._frameWatch.disconnect()
+    this._windowsDestroy()
     globalThis.window?.removeEventListener("resize", this._onResize)
     globalThis.window?.removeEventListener("keydown", this._onKeydown)
     this._layer.removeEventListener?.("pointerdown", this._onPointerDown)
@@ -131,10 +132,32 @@ const Canvas = {
     this._layer.removeEventListener?.("pointercancel", this._onPointerCancel)
   },
 
-  // The last column list that parses is the one drawn.
-  _read() {
-    const columns = parseColumns(this.el.dataset.columns)
-    if (columns !== null) this._columns = columns
+  // A frame opened, stood elsewhere, shown or hidden after the hook mounted
+  // changes the frames' container, not the hook's element, so the hook
+  // watches the container and tells the canvases again, at most once a
+  // frame: a canvas opened after the hook hears its posture and what
+  // covers it, and every canvas hears it again when a window settles.
+  _watchFrames() {
+    const Observer = globalThis.MutationObserver
+    const frames = this._layer.querySelector?.(`#${this._layer.id}-frames`)
+    if (typeof Observer !== "function" || !frames) return
+    this._frameWatch = new Observer(() => this._relayout())
+    this._frameWatch.observe(frames, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["style", "class", "data-canvas-shown", "data-canvas-place"]
+    })
+  },
+
+  _relayout() {
+    if (this._relayoutPending) return
+    this._relayoutPending = true
+    const later = globalThis.requestAnimationFrame || ((fn) => setTimeout(fn, 16))
+    later(() => {
+      this._relayoutPending = false
+      this._layout()
+    })
   },
 
   _layout() {
@@ -144,10 +167,6 @@ const Canvas = {
       this._posture = posture
       this.pushEventTo(this.el, "posture", {posture})
     }
-
-    const {width, height} = this._layer.getBoundingClientRect()
-    const style = this._stylesheet()
-    if (style) style.textContent = stylesheet(this._layer.id, columnGeometry(this._columns, width, height, posture))
 
     this._tellCanvases(posture)
   },
@@ -181,8 +200,9 @@ const Canvas = {
     frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
   },
 
-  // The stylesheet lives in the layer's `-geometry` element, which the
-  // server renders empty with `phx-update="ignore"`, so no patch touches it.
+  // The stylesheet that holds a wrapper where a gesture put it lives in the
+  // layer's `-geometry` element, which the server renders empty with
+  // `phx-update="ignore"`, so no patch touches it.
   _stylesheet() {
     if (this._style && this._style.isConnected) return this._style
     const host = this._layer.querySelector(`#${this._layer.id}-geometry`)
@@ -240,9 +260,12 @@ const Canvas = {
   },
 
   _swipeStart(event) {
-    const strip = event.target && typeof event.target.closest === "function" ? event.target.closest(EDGE_STRIP) : null
+    const strip = event.target && typeof event.target.closest === "function" ? event.target.closest(SHELF) : null
     if (!strip) return
     this._swipe = {pointer: event.pointerId, x: event.clientX, y: event.clientY}
+    // A press on one of the shelf's buttons keeps its click, which a
+    // capture by the shelf would take.
+    if (event.target.closest("button")) return
     if (typeof strip.setPointerCapture === "function") strip.setPointerCapture(event.pointerId)
   },
 
@@ -269,5 +292,7 @@ function boxOf(element) {
   const {x, y, width, height} = element.getBoundingClientRect()
   return [x, y, width, height].every(Number.isFinite) ? {x, y, width, height} : null
 }
+
+Object.assign(Canvas, WindowGestures)
 
 export default Canvas

@@ -8,7 +8,7 @@
 // shell's canvases as they are now built: each canvas is an ordinary HTML
 // page in a sandboxed iframe, written through `canvas.write` on the vanilla
 // template or shipped as a tincture page, driven through the shell's bridge,
-// the canvas validation, the switcher and the edge strip.
+// the canvas validation, the shelf's switcher and swipe, and the windows.
 //
 // For every browser the image ships, the fixture's person opens the shell
 // and the proof drives the steps the README names, each recorded by name
@@ -73,6 +73,10 @@ const STEPS = [
   ["written_canvas", ["chromium"]],
   ["feed_chart", ["chromium"]],
   ["app_over_canvas", ["chromium"]],
+  ["window_drag", ["chromium"]],
+  ["tile_narrows", ["chromium"]],
+  ["covered_windows", ["chromium"]],
+  ["frame_kept", ["chromium"]],
   ["hidden_canvas", ["chromium"]],
   ["validation_failures", ["chromium"]],
   ["crash_safe_mode", ["chromium"]],
@@ -89,7 +93,8 @@ const STEPS = [
 // which end in safe mode, and the socket cut and the scheduler's fire come
 // last.
 const ORDER = [
-  "two_canvases", "switch", "written_canvas", "feed_chart", "app_over_canvas", "hidden_canvas",
+  "two_canvases", "switch", "written_canvas", "feed_chart", "app_over_canvas",
+  "window_drag", "tile_narrows", "covered_windows", "frame_kept", "hidden_canvas",
   "activation", "rebound_control", "connection_allowlist", "policy",
   "validation_failures", "crash_safe_mode", "disconnect", "failed_fire",
 ];
@@ -288,10 +293,13 @@ async function feedState(feed) {
 // the ones it handed on, records each load of a frame's iframe (a
 // capture-phase load on the document, since a load's path stops short of
 // the window, seen before the bridge's own handler counts it) with the
-// frame and its place (`data-canvas-place`), and records nothing else.
+// frame and its place (`data-canvas-place`), and records, in a
+// capture-phase listener, what the canvas hook tells each canvas frame is
+// covered (the `cyfr:to-canvas` events on the frame's element whose verb
+// is `covered`): nothing else.
 const INSTRUMENT = `(() => {
   if (window.top !== window) return;
-  const marks = { clicks: [], receipts: [], loads: [], seen: 0, handed: 0 };
+  const marks = { clicks: [], receipts: [], loads: [], seen: 0, handed: 0, covered: [] };
   Object.defineProperty(window, "__canvasInstrument", { value: marks, configurable: true });
   const frameEl = (id) => {
     try { return document.querySelector('iframe[data-frame-id="' + (window.CSS ? CSS.escape(id) : id) + '"]'); }
@@ -307,6 +315,11 @@ const INSTRUMENT = `(() => {
     const target = event.target && event.target.closest
       ? event.target.closest("#canvas-switcher button[data-canvas]") : null;
     if (target) marks.clicks.push({ at: performance.now(), canvas: target.getAttribute("data-canvas") });
+  }, true);
+  window.addEventListener("cyfr:to-canvas", (event) => {
+    const detail = event.detail;
+    if (!detail || detail.verb !== "covered" || !event.target || !event.target.dataset) return;
+    marks.covered.push({ frame: event.target.dataset.frameId, rects: (detail.args && detail.args.rects) || [] });
   }, true);
   const proto = (typeof MessagePort === "function") && MessagePort.prototype;
   const desc = proto && Object.getOwnPropertyDescriptor(proto, "onmessage");
@@ -356,7 +369,7 @@ const INSTRUMENT = `(() => {
 const instrument = (page) =>
   page.evaluate(() => {
     const m = window.__canvasInstrument;
-    return m ? { clicks: [...m.clicks], receipts: [...m.receipts], loads: [...m.loads], seen: m.seen, handed: m.handed } : null;
+    return m ? { clicks: [...m.clicks], receipts: [...m.receipts], loads: [...m.loads], seen: m.seen, handed: m.handed, covered: [...m.covered] } : null;
   });
 
 // The instrument's receipts after index `from`, of `frame` and `verb`.
@@ -691,8 +704,8 @@ async function publish(page, document) {
 
 // two_canvases: the shipped canvas and a written one, each shown live, the
 // written one ending its validation on `ready`. switch: the switcher, the
-// chord and the edge swipe each move the glass, the canvas left is frozen,
-// and nothing wraps.
+// chords and a swipe on the shelf each move the glass, the canvas left is
+// frozen, and nothing wraps.
 async function stepTwoCanvases(page, name, viewport) {
   const ids = await switcherIds(page);
   const start = await showCanvas(page, "start");
@@ -728,23 +741,27 @@ async function stepTwoCanvases(page, name, viewport) {
       start_after_switch: startLeft && { state: startLeft.state, inert: startLeft.inert },
     });
 
-  // switch: by the chord, back to start (the frame it held, resumed).
+  // switch: by the chord, back to start (the frame it held, resumed). On
+  // the desk markets carries a window, the active app, which
+  // Ctrl+Alt+ArrowLeft would tile, so the chord there is Ctrl+Alt+1, the
+  // first canvas.
   const viaSwitcher = { from: "start", to: "markets", shown: markets.id !== start.id };
-  await page.keyboard.press("Control+Alt+ArrowLeft");
+  await page.keyboard.press("Control+Alt+1");
   const byChord = await lib.waitFor(async () => {
     const s = await shownCanvasFrame(page);
     return (await visibleCanvas(page)) === "start" && s && s.id === start.id && s.state === "live" ? s : null;
   }, { timeoutMs: 15_000, what: "the chord to show start" }).then(() => true).catch(() => false);
   const marketsLeft = await canvasFrame(page, markets.id);
 
-  // At the first canvas the chord leftward does nothing; rightward then
-  // shows markets, which a wrap to the last canvas would not.
+  // At the first canvas, which has no active app, the chord leftward does
+  // nothing; rightward then shows markets, which a wrap to the last canvas
+  // would not.
   await page.keyboard.press("Control+Alt+ArrowLeft");
   await page.keyboard.press("Control+Alt+ArrowRight");
   const noWrap = await lib.waitFor(async () => ((await visibleCanvas(page)) === "markets" ? true : null),
     { timeoutMs: 15_000, what: "the chord to show markets" }).then(() => true).catch(() => false);
 
-  // By the edge strip: rightward is the canvas before, leftward the next.
+  // By the shelf: rightward is the canvas before, leftward the next.
   const swipeBack = await swipe(page, viewport, "rightward");
   const bySwipeBack = await lib.waitFor(async () => ((await visibleCanvas(page)) === "start" ? true : null),
     { timeoutMs: 15_000, what: "the swipe to show start" }).then(() => true).catch(() => false);
@@ -760,17 +777,17 @@ async function stepTwoCanvases(page, name, viewport) {
       startFrozen && startFrozen.state === "frozen",
     {
       by_switcher: viaSwitcher,
-      by_chord: { keys: "Ctrl+Alt+ArrowLeft", shown: byChord, frame_resumed: byChord, left_frozen: marketsLeft && { state: marketsLeft.state, inert: marketsLeft.inert } },
+      by_chord: { keys: "Ctrl+Alt+1", shown: byChord, frame_resumed: byChord, left_frozen: marketsLeft && { state: marketsLeft.state, inert: marketsLeft.inert } },
       no_wrap: { at_first: "Ctrl+Alt+ArrowLeft then Ctrl+Alt+ArrowRight", shows: noWrap ? "markets" : await visibleCanvas(page) },
       by_swipe: { pointer: swipeBack.pointer, rightward: bySwipeBack, leftward: bySwipeOn, frame_resumed: !!(shownAfter && shownAfter.id === markets.id) },
       left_frozen_after_swipe: startFrozen && { state: startFrozen.state, inert: startFrozen.inert },
     });
 }
 
-// A horizontal swipe along the edge strip: a touch swipe in the hand, a
-// pointer drag on the desk.
+// A horizontal swipe along the shelf, from its empty right end: a touch
+// swipe in the hand, a pointer drag on the desk.
 async function swipe(page, viewport, direction) {
-  const box = await page.$eval("#canvas-edge-strip", (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const box = await page.$eval("#canvas-shelf", (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
   const y = box.y + box.h / 2;
   const right = box.x + box.w - 24;
   const left = right - 160;
@@ -889,6 +906,193 @@ async function stepAppOverCanvas(page, name) {
       switched_back: { full_frame: fullAgain.state },
       closed: { canvas_shown_again: startBack.state, same_frame: startBack.id === start.id },
     });
+}
+
+// ---- windows ---------------------------------------------------------------------
+
+// The layout as the layout tool reads it now: its revision, and markets's
+// desk apps.
+async function layoutRead() {
+  const answer = await ask({ op: "layout_read" });
+  if (!OK(answer)) throw new Error(`the layout could not be read: ${JSON.stringify(answer)}`);
+  const doc = answer.ok.document || {};
+  const markets = (doc.canvases || []).find((c) => c.id === "markets");
+  const desk = markets && markets.postures && markets.postures.desk;
+  return { revision: answer.ok.revision, apps: (desk && desk.apps) || [] };
+}
+
+// An element's box in the page, or null.
+const boxOn = (page, selector) =>
+  page.$eval(selector, (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }).catch(() => null);
+
+// What the hook last told canvas frame `frame` covers it.
+async function lastCovered(page, frame) {
+  const told = ((await instrument(page)) || { covered: [] }).covered.filter((c) => c.frame === frame);
+  return told.length ? told[told.length - 1].rects : null;
+}
+
+const near = (a, b, slack = 2) => Math.abs(a - b) <= slack;
+
+// window_drag, tile_narrows, covered_windows: markets carries canvas-full as
+// a window over its right half on the desk. Dragged by its title bar, the
+// window is written to the layout and read back through the layout tool at
+// a newer revision, at the geometry the shell draws; the canvas is told the
+// window's rectangle and nothing else. Its tile control tiles it: the
+// canvas's frame narrows by the tile's width, and the canvas is told
+// nothing covers it. In the hand every app is full and markets places
+// none: no chrome is drawn and nothing is told covering the canvas.
+async function stepWindows(page, name, viewport) {
+  const markets = await showCanvas(page, "markets");
+
+  if (viewport.posture === "hand") {
+    const grips = await page.$$eval("[data-canvas-grip]", (els) => els.length).catch(() => -1);
+    const placed = await page.$$eval('[data-canvas-shown="true"][data-canvas-place="window"], [data-canvas-shown="true"][data-canvas-place="tile"]', (els) => els.length).catch(() => -1);
+    const covered = await lib.waitFor(async () => lastCovered(page, markets.id), { timeoutMs: 15_000, what: "markets told what covers it" }).catch(() => null);
+    const hand = { posture: "hand", title_bars: grips, windows_and_tiles: placed, covered };
+    note("window_drag", name, grips === 0 && placed === 0, hand);
+    note("tile_narrows", name, grips === 0 && placed === 0, hand);
+    note("covered_windows", name, Array.isArray(covered) && covered.length === 0, hand);
+    return;
+  }
+
+  const wrapperSel = '[data-canvas-shown="true"][data-canvas-place="window"]';
+  await page.waitForSelector(wrapperSel, { timeout: 20_000 });
+  const frame = await page.$eval(wrapperSel, (e) => e.getAttribute("data-canvas-frame"));
+  const wrapper = `[data-canvas-frame="${frame}"]`;
+  const before = await layoutRead();
+
+  // Drag the window by its title bar, 200 pixels left and 40 down.
+  const title = await boxOn(page, `${wrapper} .canvas-app-name`);
+  if (!title) throw new Error("the window's title bar could not be measured");
+  const from = { x: title.x + 10, y: title.y + title.height / 2 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x - 100, from.y + 20, { steps: 6 });
+  const shieldMidDrag = await page.$eval(".canvas-shield", (e) => !e.hidden).catch(() => false);
+  await page.mouse.move(from.x - 200, from.y + 40, { steps: 6 });
+  await page.mouse.up();
+
+  const drawn = await lib.waitFor(async () => {
+    const g = await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-geometry")).catch(() => null);
+    return g && g !== "5000 0 5000 10000" ? g : null;
+  }, { timeoutMs: 15_000, what: "the window drawn where it was dropped" });
+  const read = await lib.waitFor(async () => {
+    const now = await layoutRead();
+    const app = now.apps.find((a) => a.tincture === "tincture:local.canvas-full");
+    const g = app && app.geometry;
+    return now.revision > before.revision && g && `${g.x} ${g.y} ${g.w} ${g.h}` === drawn ? { revision: now.revision, geometry: g, placement: app.placement } : null;
+  }, { timeoutMs: 20_000, what: "the dragged window read back through the layout tool" }).catch(() => null);
+
+  note("window_drag", name,
+    shieldMidDrag && read !== null && read.placement === "window" && read.geometry.x < 5000,
+    { shield_mid_drag: shieldMidDrag, before: { revision: before.revision, geometry: "5000 0 5000 10000" }, drawn, read_back: read });
+
+  // What covers the canvas: the window's rectangle, in the canvas frame's
+  // own pixels, and nothing else.
+  const canvasFrameSel = `iframe[data-frame-id="${markets.id}"]`;
+  const told = await lib.waitFor(async () => {
+    const rects = await lastCovered(page, markets.id);
+    const win = await boxOn(page, wrapper);
+    const canvasBox = await boxOn(page, canvasFrameSel);
+    if (!rects || !win || !canvasBox || rects.length !== 1) return null;
+    const [r] = rects;
+    const expect = {
+      x: Math.max(0, win.x - canvasBox.x), y: Math.max(0, win.y - canvasBox.y),
+      width: Math.min(win.x + win.width, canvasBox.x + canvasBox.width) - Math.max(win.x, canvasBox.x),
+      height: Math.min(win.y + win.height, canvasBox.y + canvasBox.height) - Math.max(win.y, canvasBox.y),
+    };
+    return near(r.x, expect.x) && near(r.y, expect.y) && near(r.width, expect.width) && near(r.height, expect.height) ? { rects, window: expect } : null;
+  }, { timeoutMs: 15_000, what: "the window reported as covering the canvas" }).catch(async () => ({ rects: await lastCovered(page, markets.id), window: null }));
+
+  // Tile it: the canvas's frame narrows by the tile's width, and nothing is
+  // reported covering it.
+  const area = await boxOn(page, "#canvas-frames");
+  await page.click(`${wrapper} [data-canvas-action="tile"]`);
+  const tiled = await lib.waitFor(async () => {
+    const place = await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null);
+    const tile = await boxOn(page, wrapper);
+    const canvasBox = await boxOn(page, canvasFrameSel);
+    return place === "tile" && tile && canvasBox && near(canvasBox.width, area.width - tile.width) ? { tile, canvas: canvasBox } : null;
+  }, { timeoutMs: 15_000, what: "the tile narrowing the canvas's frame" }).catch(() => null);
+  const coveredAfterTile = await lib.waitFor(async () => {
+    const rects = await lastCovered(page, markets.id);
+    return Array.isArray(rects) && rects.length === 0 ? rects : null;
+  }, { timeoutMs: 10_000, what: "nothing reported covering the canvas beside a tile" }).catch(async () => lastCovered(page, markets.id));
+
+  note("tile_narrows", name, tiled !== null,
+    { area_width: area && area.width, tile: tiled && tiled.tile, canvas_frame: tiled && tiled.canvas });
+  note("covered_windows", name,
+    told.window !== null && Array.isArray(coveredAfterTile) && coveredAfterTile.length === 0,
+    { window_over_canvas: told, beside_a_tile: coveredAfterTile });
+
+  // The shell's own write of the tile lands before the proof's layout
+  // replaces it, so no write of the shell's, retried over a newer revision,
+  // tiles it again afterwards.
+  await lib.waitFor(async () => {
+    const now = await layoutRead();
+    return now.apps.some((a) => a.tincture === "tincture:local.canvas-full" && a.placement === "tile") ? true : null;
+  }, { timeoutMs: 20_000, what: "the tile written to the layout" }).catch(() => null);
+  await publish(page, layout());
+}
+
+// frame_kept: an app's frame is never moved or loaded again as the app is
+// raised, tiled, made full and made a window again. markets's window is
+// marked in the page, raised from the shelf, tiled and made full with its
+// controls and made a window again with Ctrl+Alt+ArrowDown; after each, its
+// iframe is the element marked, under the same frame id, and has loaded no
+// more than before. In the hand every app is full and markets places none.
+async function stepFrameKept(page, name, viewport) {
+  await showCanvas(page, "markets");
+  if (viewport.posture === "hand") {
+    const placed = await page.$$eval('[data-canvas-shown="true"][data-canvas-place="window"]', (els) => els.length).catch(() => -1);
+    note("frame_kept", name, placed === 0, { posture: "hand", windows: placed });
+    return;
+  }
+
+  const wrapperSel = '[data-canvas-shown="true"][data-canvas-place="window"]';
+  await page.waitForSelector(wrapperSel, { timeout: 20_000 });
+  const frame = await page.$eval(wrapperSel, (e) => e.getAttribute("data-canvas-frame"));
+  const wrapper = `[data-canvas-frame="${frame}"]`;
+  const ref = "tincture:local.canvas-full";
+  const loadsOf = async () => ((await instrument(page)) || { loads: [] }).loads.filter((l) => l.frame === frame).length;
+  await lib.waitFor(async () => (await loadsOf()) >= 1 || null,
+    { timeoutMs: 20_000, what: "the window's frame loaded" });
+
+  const mark = `kept-${Date.now()}`;
+  await page.$eval(`iframe[data-frame-id="${frame}"]`, (el, value) => { el.__proofMark = value; }, mark);
+  const loads = await loadsOf();
+
+  // The iframe after a gesture: the wrapper standing as `place`, which the
+  // gesture asked for, and the element marked, under its frame id, with no
+  // new load. A placement that never happens fails the step.
+  const kept = async (gesture, place) => {
+    await lib.waitFor(async () => (await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null)) === place || null,
+      { timeoutMs: 15_000, what: `the app standing as ${place} after ${gesture}` }).catch(() => null);
+    await page.waitForTimeout(500);
+    const same = await page.$eval(`iframe[data-frame-id="${frame}"]`, (el, value) => el.__proofMark === value, mark).catch(() => false);
+    const now = await loadsOf();
+    const stands = await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null);
+    return { gesture, asked: place, place: stands, same_element: same, loads: now, held: stands === place && same && now === loads };
+  };
+
+  const seen = [];
+  await page.click(`#canvas-shelf-apps [data-canvas-shelf-app="${ref}"]`);
+  seen.push(await kept("raise", "window"));
+  await page.click(`${wrapper} [data-canvas-action="tile"]`);
+  seen.push(await kept("tile", "tile"));
+  await page.click(`${wrapper} [data-canvas-action="full"]`);
+  seen.push(await kept("full", "full"));
+  await page.keyboard.press("Control+Alt+ArrowDown");
+  seen.push(await kept("window", "window"));
+
+  note("frame_kept", name, seen.every((s) => s.held), { frame, loads_before: loads, after: seen });
+
+  // The shell's own writes land before the proof's layout replaces them.
+  await lib.waitFor(async () => {
+    const now = await layoutRead();
+    return now.apps.some((a) => a.tincture === ref && a.placement === "window") ? true : null;
+  }, { timeoutMs: 20_000, what: "the window written to the layout" }).catch(() => null);
+  await publish(page, layout());
 }
 
 // Switch to `id` while a full frame covers the visible canvas: the glass
@@ -1718,6 +1922,10 @@ const STEP_FNS = {
   written_canvas: (page, name) => stepWrittenCanvas(page, name),
   feed_chart: (page, name) => stepFeedChart(page, name),
   app_over_canvas: (page, name) => stepAppOverCanvas(page, name),
+  window_drag: (page, name, { viewport }) => stepWindows(page, name, viewport),
+  tile_narrows: async () => {},
+  covered_windows: async () => {},
+  frame_kept: (page, name, { viewport }) => stepFrameKept(page, name, viewport),
   hidden_canvas: (page, name, { proxy }) => stepHiddenCanvas(page, name, proxy),
   activation: (page, name) => stepActivation(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),

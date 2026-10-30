@@ -9,8 +9,8 @@ defmodule PrismWeb.CanvasLiveTest do
   geometry and each tile at its edge and share, stacked by their order;
   nothing for a minimised app or a tincture nobody installed. In the hand
   every app is full. A posture report that is neither `hand` nor `desk`
-  is ignored. The switcher and the edge strip are
-  drawn for more than one canvas. Opening a full frame over the canvas
+  is ignored. The shelf carries a dot per canvas
+  for more than one canvas. Opening a full frame over the canvas
   freezes the frames beneath it, and closing it lets them run again. The
   frames' wrappers are a stream, after only the layer's always-present
   elements, and a frame discarded leaves the others where they were: every
@@ -405,6 +405,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
     assert earlier == ["canvas-geometry", "canvas-status"]
     assert "layout-note" in later
+    assert "canvas-shelf" in later
     assert wrappers(view) == [wrapper(first), wrapper(last)]
   end
 
@@ -527,22 +528,21 @@ defmodule PrismWeb.CanvasLiveTest do
     assert_push_event(view, "frame_state", %{frame: ^column_id, state: "live"})
   end
 
-  test "the switcher and the edge strip are drawn for more than one canvas, and not in safe mode",
+  test "the shelf carries a dot per canvas when there is more than one, and is not drawn in safe mode",
        %{conn: conn, ctx: ctx, user: user} do
     installed!(ctx)
     layout!(ctx, user, canvases())
 
     {view, _html} = mount_athanor(conn, "/tinctures")
-    html = render(view)
 
     assert has_element?(
              view,
-             ~s(#canvas-switcher button[data-canvas="home"][aria-pressed="true"])
+             ~s(#canvas-shelf #canvas-switcher button[data-canvas="home"][aria-pressed="true"])
            )
 
     assert has_element?(
              view,
-             ~s(#canvas-switcher button[data-canvas="work"][aria-pressed="false"])
+             ~s(#canvas-shelf #canvas-switcher button[data-canvas="work"][aria-pressed="false"])
            )
 
     assert has_element?(
@@ -550,11 +550,15 @@ defmodule PrismWeb.CanvasLiveTest do
              ~s(#canvas-switcher button[phx-click="switch_canvas"][phx-value-canvas="work"])
            )
 
-    assert html =~ ~r/id="canvas-edge-strip"[^>]*class="[^"]*h-4/
+    # The edge strip is gone: the shelf takes its swipe. The apps stand
+    # above the shelf.
+    refute has_element?(view, "#canvas-edge-strip")
+    assert has_element?(view, ~s(#canvas-frames[class*="bottom-[52px]"]))
 
     render_click(view, "safe_mode", %{})
+    refute has_element?(view, "#canvas-shelf")
     refute has_element?(view, "#canvas-switcher")
-    refute has_element?(view, "#canvas-edge-strip")
+    assert has_element?(view, ~s(#canvas-frames[class*="bottom-0"]))
   end
 
   test "a canvas placed as an app is refused, and mints nothing", %{
