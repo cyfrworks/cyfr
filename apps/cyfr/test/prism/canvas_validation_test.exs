@@ -141,7 +141,7 @@ defmodule Prism.CanvasValidationTest do
       Compendium.Providers.Layout.handle("layout", ctx, %{
         "action" => "edit",
         "document" => %{
-          "version" => 2,
+          "version" => 3,
           "canvases" => [
             %{"id" => "home", "tincture" => "tincture:local.markets", "postures" => %{}}
           ]

@@ -145,7 +145,7 @@ defmodule Prism.FramesTest do
       }
 
       assert Frames.canvas?(canvas)
-      refute Frames.canvas?(card("d", %{"placement" => "float"}))
+      refute Frames.canvas?(card("d", %{"placement" => "sidebar"}))
       refute Frames.canvas?(%{manifest: nil})
     end
 
