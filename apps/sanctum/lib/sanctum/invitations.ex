@@ -16,7 +16,9 @@ defmodule Sanctum.Invitations do
   group's act, and the administrator's capability is over the instance,
   never a seat. A person's own athanor, a frozen roster and an archived
   athanor take none, and to a caller with no seat an athanor answers as a
-  missing one does. The code is 32 random bytes, given to the issuer once
+  missing one does. An invitation may offer its newcomer a name, which
+  their invitation page fills in; it reserves nothing, and the newcomer
+  may take another. The code is 32 random bytes, given to the issuer once
   as base64url without padding; only the lowercase hex SHA-256 of the
   bytes is stored. It expires seven days after it is issued.
 
@@ -65,28 +67,36 @@ defmodule Sanctum.Invitations do
           optional(:athanor_name) => String.t()
         }
 
-  @typedoc "What the invitation page shows: who invited, to which athanor, until when."
+  @typedoc """
+  What the invitation page shows: who invited, to which athanor, until
+  when, and the name it offers.
+  """
   @type shown :: %{
           required(:inviter) => String.t(),
           required(:expires_at) => DateTime.t(),
-          optional(:athanor) => String.t()
+          optional(:athanor) => String.t(),
+          optional(:name) => String.t()
         }
 
   @doc """
   Issue an invitation naming the group athanor `athanor_id`, or none
-  (`nil`). Answers the invitation and its code, which is given once and
-  never stored.
+  (`nil`), offering its newcomer `name`, or none (`nil`), a name by
+  `Sanctum.Newcomer.name/1`. Answers the invitation and its code, which is
+  given once and never stored.
   """
-  @spec create(Context.t(), String.t() | nil) ::
+  @spec create(Context.t(), String.t() | nil, String.t() | nil) ::
           {:ok, %{invitation: view(), code: String.t()}} | {:error, term()}
-  def create(%Context{user_id: user_id} = ctx, athanor_id) when is_binary(user_id) do
-    with {:ok, actor} <- issuable(ctx, athanor_id) do
+  def create(%Context{user_id: user_id} = ctx, athanor_id, name \\ nil)
+      when is_binary(user_id) do
+    with :ok <- offered(name),
+         {:ok, actor} <- issuable(ctx, athanor_id) do
       bytes = :crypto.strong_rand_bytes(@code_bytes)
 
       attrs = %{
         code_hash: Prima.Digest.sha256_hex(bytes),
         issued_by: user_id,
-        lifetime_ms: @lifetime_ms
+        lifetime_ms: @lifetime_ms,
+        name: name
       }
 
       case Arca.Invitations.insert(actor, attrs) do
@@ -138,15 +148,17 @@ defmodule Sanctum.Invitations do
   @doc """
   What the invitation page shows of the invitation `code` opens: who
   invited (their display name, else their handle, else "a member of this
-  CYFR", never an address), the athanor's name when it names one, and its
-  expiry; or `:invitation_invalid` under exactly the check redemption
-  makes (`redeemable/1`). Reads only.
+  CYFR", never an address), the athanor's name when it names one, its
+  expiry, and the name it offers when it offers one; or
+  `:invitation_invalid` under exactly the check redemption makes
+  (`redeemable/1`). Reads only.
   """
   @spec lookup(term()) :: {:ok, shown()} | {:error, :invitation_invalid | :unavailable}
   def lookup(code) do
     with {:ok, %{row: row, issuer: issuer, athanor: athanor}} <- standing(code) do
       shown = %{inviter: inviter(issuer), expires_at: row.expires_at}
-      {:ok, if(athanor, do: Map.put(shown, :athanor, athanor.name), else: shown)}
+      shown = if athanor, do: Map.put(shown, :athanor, athanor.name), else: shown
+      {:ok, if(is_binary(row.name), do: Map.put(shown, :name, row.name), else: shown)}
     end
   end
 
@@ -212,6 +224,9 @@ defmodule Sanctum.Invitations do
   end
 
   # ---- issuing ---------------------------------------------------------------
+
+  defp offered(nil), do: :ok
+  defp offered(name), do: Sanctum.Newcomer.name(name)
 
   # The actor the invitation is written under: the platform scope's for
   # one naming no athanor, the group's for one naming it.

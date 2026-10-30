@@ -302,9 +302,13 @@ defmodule PrismWeb.LoginLive do
   # The registration is the open admission's credential: the person, their
   # keys, their athanor and the passkey in one transaction, then the
   # passkey sign-in's ticket.
-  def handle_event("create_passkey", %{"credential" => credential}, socket)
+  def handle_event("create_passkey", %{"credential" => credential} = params, socket)
       when is_map(credential) do
-    {:noreply, created(socket, Sanctum.Newcomer.admit(:open, {:passkey, credential}))}
+    admitted =
+      with {:ok, identity} <- Sanctum.Newcomer.identity(params),
+           do: Sanctum.Newcomer.admit(:open, {:passkey, credential, identity})
+
+    {:noreply, created(socket, admitted)}
   end
 
   def handle_event("create_passkey", _params, socket), do: {:noreply, socket}

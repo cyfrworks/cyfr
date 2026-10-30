@@ -93,17 +93,17 @@ defmodule PrismWeb.InviteLive do
 
   def handle_event(
         "invite_passkey",
-        %{"credential" => credential},
+        %{"credential" => credential} = params,
         %{assigns: %{step: :invited, code: code}} = socket
       )
       when is_map(credential) do
-    case Sanctum.Newcomer.admit({:invitation, code}, {:passkey, credential}) do
-      {:ok, %{session_token: session_token}} ->
-        ticket = mint_ticket(session_token, socket.assigns.browser_binding)
-        {:noreply, redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")}
-
-      {:error, reason} ->
-        {:noreply, refused(socket, reason)}
+    with {:ok, identity} <- Sanctum.Newcomer.identity(params),
+         {:ok, %{session_token: session_token}} <-
+           Sanctum.Newcomer.admit({:invitation, code}, {:passkey, credential, identity}) do
+      ticket = mint_ticket(session_token, socket.assigns.browser_binding)
+      {:noreply, redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")}
+    else
+      {:error, reason} -> {:noreply, refused(socket, reason)}
     end
   end
 

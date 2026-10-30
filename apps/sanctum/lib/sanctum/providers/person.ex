@@ -3,9 +3,9 @@
 
 defmodule Sanctum.Providers.Person do
   @moduledoc """
-  The `person` tool: a person's identity at their own home — enrollment
-  and the recovery code, another recovery code added by one the person
-  holds, the live key's rotation, the doors they sign in through, a device
+  The `person` tool: a person's identity at their own home — the recovery
+  code their admission enrolled them with, another recovery code added by
+  one the person holds, the live key's rotation, the doors they sign in through, a device
   certificate for another home, and the sign-in carry that begins and
   completes here. The carry stores no saved-home list.
 
@@ -16,8 +16,8 @@ defmodule Sanctum.Providers.Person do
   `person.renew_certificate`, `auth: :anonymous` as `pairing.complete` is:
   a device at another home renews here holding no session of this home's,
   and the proof of its device key over this home's challenge is its only
-  credential (`Sanctum.RemoteCertification`). Enrolling, showing the
-  recovery code and adding one change recovery material; rotating changes
+  credential (`Sanctum.RemoteCertification`). Showing the recovery code
+  and adding one touch recovery material; rotating changes
   the live key; linking and unlinking change the sign-in methods;
   certifying a device pairs it: each is a sensitive change Sanctum decides
   where it is made (`Sanctum.Pairing`). `person.assert` is declared with
@@ -31,27 +31,20 @@ defmodule Sanctum.Providers.Person do
   What each action answers:
 
     * `person.status` (`Sanctum.Recovery.status/1`) — the person's identity
-      as their settings show it: `provenance`, `identifier`, the
-      `directory_url` this home pins (or nil), `enrollment`, `key_epoch`,
-      the `kits` and `rotation` still in progress, and the linked `doors`;
-      never a secret, a sealed value or a staged key.
-    * `person.enroll` (`Sanctum.Recovery.enroll/3`) — the attempt's
-      `attempt_id`, `request_id`, `phase` and `identifier`, and once the
-      directory accepted it the `code`, the recovery code a restore takes,
-      until the person says it is saved. A retry under the same
-      `request_id` resumes the attempt and registers the same genesis.
-    * `person.enroll_abandon` (`Sanctum.Recovery.abandon_enrollment/1`) —
-      the abandoned enrollment's `request_id` and `phase: "superseded"`:
-      an enrollment the directory has not accepted ends, and the person
-      may enroll again under a new recovery code. It asks no
-      confirmation: it discards an unfinished attempt and mints nothing.
+      as their settings show it: `provenance`, `identifier`, their recorded
+      `name`, the `directory_url` this home pins (or nil), `enrollment`,
+      `key_epoch`, the `kits` and `rotation` still in progress, and the
+      linked `doors`; never a secret, a sealed value or a staged key.
     * `person.recovery_code` (`Sanctum.Recovery.recovery_code/2`) — the
-      attempt's `attempt_id` and the same `code` again, under a fresh
-      confirmation, until `person.recovery_code_saved` erases its secret.
+      attempt's `attempt_id` and its recovery `code`, the one a restore
+      takes, under a fresh confirmation, until
+      `person.recovery_code_saved` erases its secret.
     * `person.recovery_code_saved` (`Sanctum.Recovery.recovery_code_saved/2`)
-      — `attempt_id` and `phase: "completed"`.
+      — `attempt_id` and `phase: "completed"`; an enrollment's only once
+      the person's name is recorded.
     * `person.recovery_code_add` (`Sanctum.Recovery.recovery_code_add/3`) —
-      as enroll, the `code` being the added one's, and the new
+      the added code's attempt (`attempt_id`, `request_id`, `phase`,
+      `identifier`), its `code` until it is saved, and the new
       `key_epoch`. A recovery code the person holds signs it.
     * `person.rotate` (`Sanctum.IdentityFreshness.rotate_live/3`) — the
       attempt's `request_id`, its `phase` and the new `key_epoch`.
@@ -95,7 +88,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own CYFR: read its status, enroll and show the recovery code, abandon an unfinished enrollment, add another recovery code, rotate the live key, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
+        "A person's identity at their own CYFR: read its status, show the recovery code and say it is saved, add another recovery code, rotate the live key, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
       title: "Person"
     )
   end
@@ -104,27 +97,6 @@ defmodule Sanctum.Providers.Person do
     [
       Operation.new("person", "status", "Read the person's identity", [],
         kind: :read,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
-        "enroll",
-        "Enroll the person's identity",
-        [
-          recovery_secret("enroll: the new recovery code's secret, drawn by the trusted form"),
-          request_id()
-        ],
-        kind: :write,
-        planes: [:external],
-        consent: :interactive
-      ),
-      Operation.new(
-        "person",
-        "enroll_abandon",
-        "Abandon an unfinished enrollment",
-        [],
-        kind: :write,
         planes: [:external],
         consent: :interactive
       ),
@@ -333,7 +305,7 @@ defmodule Sanctum.Providers.Person do
       Arg.new("request_id", :string,
         required: true,
         description:
-          "The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)"
+          "The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)"
       )
 
   defp attempt_id,
@@ -347,16 +319,6 @@ defmodule Sanctum.Providers.Person do
   def handle(%Context{} = ctx, %{"action" => "assert"} = args), do: Assertion.handle(ctx, args)
 
   def handle(%Context{} = ctx, %{"action" => "status"}), do: answer(Recovery.status(ctx))
-
-  def handle(%Context{} = ctx, %{"action" => "enroll"} = args),
-    do: answer(Recovery.enroll(ctx, args))
-
-  def handle(%Context{} = ctx, %{"action" => "enroll_abandon"}) do
-    case Recovery.abandon_enrollment(ctx) do
-      {:ok, abandoned} -> {:ok, abandoned}
-      {:error, reason} -> {:error, abandon_refusal(reason)}
-    end
-  end
 
   def handle(%Context{} = ctx, %{"action" => "recovery_code", "attempt_id" => id})
       when is_binary(id),
@@ -458,15 +420,6 @@ defmodule Sanctum.Providers.Person do
   defp answer({:ok, value}), do: {:ok, value}
   defp answer({:error, reason}), do: {:error, refusal(reason)}
 
-  defp refusal(:no_directory),
-    do:
-      refused(
-        :setup_required,
-        :no_directory,
-        "This CYFR names no identity directory; its operator sets CYFR_DIRECTORY_URL before " <>
-          "anyone enrolls."
-      )
-
   defp refusal(:not_a_code),
     do:
       refused(
@@ -483,23 +436,11 @@ defmodule Sanctum.Providers.Person do
         "That recovery code has a typo. Check it against the one you saved."
       )
 
-  defp refusal(:already_enrolled),
-    do: {:conflict, "Your identity is enrolled already; add another recovery code instead."}
-
   defp refusal(:not_enrolled),
     do: {:conflict, "This needs an enrolled identity; enroll first."}
 
   defp refusal(:not_found),
     do: {:conflict, "Your keys are held at another CYFR; do this there."}
-
-  defp refusal(:enrollment_refused),
-    do: {:conflict, "The directory refused this identity, so you have none yet; enroll again."}
-
-  defp refusal(:enrollment_abandoned),
-    do:
-      {:conflict,
-       "This enrollment was abandoned, so it gives you no identity; enroll again with a new " <>
-         "recovery code."}
 
   defp refusal(:holder_refused),
     do: {:conflict, "cyfr.run refused this recovery code, so none was added."}
@@ -616,18 +557,6 @@ defmodule Sanctum.Providers.Person do
 
   defp refused(class, reason, message),
     do: %Prima.Refusal{class: class, reason: reason, message: message}
-
-  # An abandonment's own refusals: the accepted enrollment stands, and
-  # with none in progress there is nothing to abandon.
-  defp abandon_refusal(:registered),
-    do:
-      {:conflict,
-       "Your identity is registered; show your recovery code with person.recovery_code."}
-
-  defp abandon_refusal(:not_found),
-    do: refused(:not_found, :not_found, "You have no unfinished enrollment to abandon.")
-
-  defp abandon_refusal(reason), do: refusal(reason)
 
   # A rotation's own refusals, in the refusal table's words. Nothing
   # rotated in any of them; the retryable ones resume under the same

@@ -18,6 +18,7 @@ defmodule Sanctum.AdmissionCapacityTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import Sanctum.Test.Newcomers, only: [identity: 0]
 
   alias Arca.Schemas.User
   alias Sanctum.Newcomer
@@ -40,6 +41,7 @@ defmodule Sanctum.AdmissionCapacityTest do
     end)
 
     Application.put_env(:sanctum, :setup_token, @token)
+    Sanctum.Test.Newcomers.directory!()
     Arca.Repo.delete_all(User)
     :ok
   end
@@ -49,12 +51,14 @@ defmodule Sanctum.AdmissionCapacityTest do
     Authenticator.registration(Authenticator.new("cap|#{System.unique_integer()}"), options)
   end
 
-  defp open, do: Newcomer.admit(:open, {:passkey, registration()})
+  defp open, do: Newcomer.admit(:open, {:passkey, registration(), identity()})
   defp people, do: Arca.Repo.aggregate(User, :count)
 
   # The administrator, and the door open to anyone.
   defp set_up! do
-    {:ok, %{person: admin}} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+    {:ok, %{person: admin}} =
+      Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
     {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
     admin
   end
@@ -101,7 +105,7 @@ defmodule Sanctum.AdmissionCapacityTest do
 
     capture_log(fn ->
       assert {:ok, %{person: admin}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
 
       assert {:ok, own} = Athanors.get_by_owner(admin.id)
       assert own.kind == "person"
@@ -162,7 +166,7 @@ defmodule Sanctum.AdmissionCapacityTest do
       log =
         capture_log(fn ->
           assert {:error, {:cap_unverifiable, :mint_per_hour}} =
-                   Newcomer.admit(:open, {:passkey, credential})
+                   Newcomer.admit(:open, {:passkey, credential, identity()})
         end)
 
       assert log =~ "mint_per_hour could not be read"
@@ -178,7 +182,7 @@ defmodule Sanctum.AdmissionCapacityTest do
       log =
         capture_log(fn ->
           assert {:error, {:cap_unverifiable, :mint_per_hour}} =
-                   Newcomer.admit(:open, {:passkey, credential})
+                   Newcomer.admit(:open, {:passkey, credential, identity()})
         end)
 
       assert log =~ "mint_per_hour could not be read"

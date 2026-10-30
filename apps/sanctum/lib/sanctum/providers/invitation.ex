@@ -7,7 +7,9 @@ defmodule Sanctum.Providers.Invitation do
   (`Sanctum.Invitations`) — create, revoke, list.
 
   `create` issues one naming a group athanor the caller holds a seat in,
-  or, for the platform administrator, one naming none, and answers its
+  or, for the platform administrator, one naming none, optionally
+  offering its newcomer a `name` their invitation page fills in, and
+  answers its
   code once with the link that opens it, `invitation_url`:
   `<this CYFR's address>/invite#<code>` (`Sanctum.Person.home/0`). The
   code travels in the fragment, so no server log records it; both keys
@@ -39,6 +41,10 @@ defmodule Sanctum.Providers.Invitation do
               description:
                 "The group athanor the newcomer is seated in, which you hold a seat in. " <>
                   "Left out, the invitation seats them in no group: the platform administrator's alone (create)"
+            ),
+            Arg.new("name", :string,
+              description:
+                "The name offered to the newcomer, filled in on their invitation page; they may choose another (create)"
             )
           ],
           kind: :write,
@@ -78,7 +84,7 @@ defmodule Sanctum.Providers.Invitation do
 
   def handle(%Context{} = ctx, %{"action" => "create"} = args) do
     with {:ok, %{invitation: invitation, code: code}} <-
-           Invitations.create(ctx, Map.get(args, "athanor_id")) do
+           Invitations.create(ctx, Map.get(args, "athanor_id"), Map.get(args, "name")) do
       {:ok,
        %{
          invitation: render(invitation),

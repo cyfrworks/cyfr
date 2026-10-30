@@ -3,10 +3,10 @@
 
 defmodule Sanctum.Providers.PersonTest do
   @moduledoc """
-  The `person` tool through the gate, as the wire reaches it: enrollment
-  and its recovery code, an unfinished enrollment abandoned, another
-  recovery code, a door's link and unlink, a device certificate for
-  another home, and the sign-in carry. Each sensitive
+  The `person` tool through the gate, as the wire reaches it: the recovery
+  code an admission enrolled the person with, another recovery code, a
+  door's link and unlink, a device certificate for another home, and the
+  sign-in carry. Each sensitive
   action meets its confirmation before it changes anything, each refusal
   reads as the refusal table's sentence, and no declared action answers
   that it is not built.
@@ -116,6 +116,12 @@ defmodule Sanctum.Providers.PersonTest do
     Map.put(person, :identifier, Identity.identifier(genesis))
   end
 
+  defp named!(person, name) do
+    {:ok, user} = Sanctum.Tenancy.Users.get(person.user.id)
+    {:ok, _named} = Sanctum.Tenancy.Users.set_namespace(user, name)
+    :ok
+  end
+
   defp request_id, do: "req_#{System.unique_integer([:positive])}"
   defp call(ctx, args), do: Sanctum.Gate.call_external("person", ctx, args)
   defp refusal({:error, reason}), do: Sanctum.Refusals.classify(reason)
@@ -127,9 +133,6 @@ defmodule Sanctum.Providers.PersonTest do
     {:ok, held} = Prima.DeviceCert.Challenge.decode(challenge)
     Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(held, private))
   end
-
-  defp enroll_args(seed, id),
-    do: %{"action" => "enroll", "recovery_secret" => Encoding.b64(seed), "request_id" => id}
 
   defp add_args(code, id) do
     %{
@@ -153,114 +156,39 @@ defmodule Sanctum.Providers.PersonTest do
     )
   end
 
-  describe "person.enroll" do
-    test "a session alone is asked for recovery_material and opens nothing" do
+  describe "the recovery code" do
+    test "is shown only under a fresh proof, saved only once the name is recorded, and then gone" do
       person = seated!()
-      seed = :crypto.strong_rand_bytes(32)
-
-      assert {:error, {:confirmation_required, %{operation: "person.enroll"}}} =
-               call(person.ctx, enroll_args(seed, request_id()))
-
-      assert attempts(person.user.id, "enrollment") == []
-      assert [%{action: "recovery_material", state: "pending"}] = confirmations(person.user.id)
-    end
-
-    test "a seed is required by its declaration" do
-      person = seated!()
-
-      assert %Prima.Refusal{class: :invalid_argument} =
-               refusal(call(person.ctx, %{"action" => "enroll", "request_id" => request_id()}))
-
-      assert attempts(person.user.id, "enrollment") == []
-    end
-
-    test "under its proof the attempt opens with the proof consumed, and a retry resumes it" do
-      person = seated!()
-      seed = :crypto.strong_rand_bytes(32)
-      id = request_id()
-
-      {answer, _log} =
-        with_log(fn -> TestContext.confirming(person.ctx, &call(&1, enroll_args(seed, id))) end)
-
-      assert %Prima.Refusal{class: :unavailable, message: message} = refusal(answer)
-      assert message =~ "retry shortly"
-      assert [%{phase: "submitted"} = attempt] = attempts(person.user.id, "enrollment")
-
-      # The enrollment's own record (the person's passkey registration was
-      # confirmed by one of its own).
-      assert [%{state: "consumed"}] =
-               for(c <- confirmations(person.user.id), c.action == "recovery_material", do: c)
-
-      # The retry needs no second proof and opens no second attempt.
-      {_answer, _log} = with_log(fn -> call(person.ctx, enroll_args(seed, id)) end)
-      assert [%{id: same}] = attempts(person.user.id, "enrollment")
-      assert same == attempt.id
-
-      assert [%{state: "consumed"}] =
-               for(c <- confirmations(person.user.id), c.action == "recovery_material", do: c)
-
-      # Once the directory's acceptance is recorded, the retry answers the
-      # recovery code.
+      identity = Sanctum.Test.Newcomers.identity()
+      :ok = Sanctum.Recovery.open_at_admission(person.user.id, identity, @unreachable)
+      [attempt] = attempts(person.user.id, "enrollment")
       as = %Prima.Actor{user_id: person.user.id}
+      {:ok, _} = Arca.IdentityAttempts.advance(as, attempt.id, "staged", "submitted")
       {:ok, _} = Arca.IdentityAttempts.advance(as, attempt.id, "submitted", "accepted")
-
-      assert {:ok,
-              %{phase: "accepted", code: code, identifier: identifier, attempt_id: attempt_id}} =
-               call(person.ctx, enroll_args(seed, id))
-
-      assert code == Prima.RecoveryCode.encode(identifier, seed)
-
-      # The code again needs a fresh proof each time; saying it is saved
-      # erases it.
-      code_args = %{"action" => "recovery_code", "attempt_id" => attempt_id}
+      code = Prima.RecoveryCode.encode(attempt.identifier, identity.recovery_secret)
+      code_args = %{"action" => "recovery_code", "attempt_id" => attempt.id}
+      saved_args = %{"action" => "recovery_code_saved", "attempt_id" => attempt.id}
 
       assert {:error, {:confirmation_required, %{operation: "person.recovery_code"}}} =
                call(person.ctx, code_args)
 
-      assert {:ok, %{attempt_id: ^attempt_id, code: ^code} = shown} =
+      assert {:ok, %{code: ^code} = shown} =
                TestContext.confirming(person.ctx, &call(&1, code_args))
 
-      assert map_size(shown) == 2
+      assert shown == %{attempt_id: attempt.id, code: code}
 
-      assert {:ok, %{phase: "completed"}} =
-               call(person.ctx, %{"action" => "recovery_code_saved", "attempt_id" => attempt_id})
+      assert %Prima.Refusal{class: :conflict, message: unnamed} =
+               refusal(call(person.ctx, saved_args))
+
+      assert unnamed == "Your name is not recorded yet, so your recovery code cannot be saved."
+
+      named!(person, identity.name)
+      assert {:ok, %{phase: "completed"}} = call(person.ctx, saved_args)
 
       assert %Prima.Refusal{class: :conflict, message: gone} =
                refusal(call(person.ctx, code_args))
 
       assert gone == "You said your recovery code is saved, so it is gone and cannot be shown."
-    end
-
-    test "with no directory pinned, enrollment says what the operator owes" do
-      person = seated!()
-      Application.delete_env(:sanctum, :directory_url)
-
-      assert %Prima.Refusal{class: :setup_required, message: message} =
-               refusal(call(person.ctx, enroll_args(:crypto.strong_rand_bytes(32), request_id())))
-
-      assert message =~ "CYFR_DIRECTORY_URL"
-    end
-
-    test "the preview it asks under says what enrolling commits to, at the pinned directory" do
-      person = seated!()
-
-      assert {:error, {:confirmation_required, _}} =
-               call(person.ctx, enroll_args(:crypto.strong_rand_bytes(32), request_id()))
-
-      [preview] =
-        Arca.Repo.all(
-          from(c in "pending_confirmations",
-            where: c.user_id == ^person.user.id,
-            select: c.preview
-          )
-        )
-
-      %{"details" => %{"directory" => directory, "effect" => effect}} = Jason.decode!(preview)
-      assert directory == @unreachable
-      assert effect =~ @unreachable
-      assert effect =~ "cannot be reached"
-      assert effect =~ "If every kit is lost, nothing can add one"
-      assert effect =~ "never your private data or the CYFR addresses your devices saved"
     end
   end
 
@@ -271,6 +199,7 @@ defmodule Sanctum.Providers.PersonTest do
       assert {:ok, status} = call(person.ctx, %{"action" => "status"})
       assert status.provenance == "local"
       assert status.identifier == nil
+      assert status.name == nil
       assert status.enrollment == "none"
       assert status.key_epoch == nil
       assert status.directory_url == @unreachable
@@ -291,7 +220,10 @@ defmodule Sanctum.Providers.PersonTest do
       refute inspect(status) =~ "sealed-kit-seed"
       refute Enum.any?(status.kits, &Map.has_key?(&1, :kit_seed_sealed))
 
-      # Saved, the code is no longer in progress.
+      # Named, then saved, the code is no longer in progress.
+      named!(enrolled, "enrolled-#{System.unique_integer([:positive])}")
+      assert {:ok, %{name: "enrolled-" <> _}} = call(enrolled.ctx, %{"action" => "status"})
+
       assert {:ok, %{phase: "completed"}} =
                call(enrolled.ctx, %{"action" => "recovery_code_saved", "attempt_id" => id})
 
@@ -305,60 +237,6 @@ defmodule Sanctum.Providers.PersonTest do
 
       assert {:ok, %{directory_url: nil, kits: [], identifier: nil}} =
                call(person.ctx, %{"action" => "status"})
-    end
-  end
-
-  describe "person.enroll_abandon" do
-    test "ends an enrollment the directory has not accepted, asking nothing, and names it" do
-      person = seated!()
-      seed = :crypto.strong_rand_bytes(32)
-      id = request_id()
-
-      # Begun under its proof, the directory's answer lost.
-      {_answer, _log} =
-        with_log(fn -> TestContext.confirming(person.ctx, &call(&1, enroll_args(seed, id))) end)
-
-      assert [%{phase: "submitted"}] = attempts(person.user.id, "enrollment")
-      asked = confirmations(person.user.id)
-
-      assert {:ok, %{request_id: ^id, phase: "superseded"}} =
-               call(person.ctx, %{"action" => "enroll_abandon"})
-
-      assert confirmations(person.user.id) == asked
-
-      assert [%{phase: "superseded", kit_seed_sealed: nil}] =
-               attempts(person.user.id, "enrollment")
-
-      assert {:ok, %{enrollment: "none", identifier: nil, kits: []}} =
-               call(person.ctx, %{"action" => "status"})
-
-      # A retry under the abandoned request id is told so.
-      assert %Prima.Refusal{class: :conflict, message: abandoned} =
-               refusal(call(person.ctx, enroll_args(seed, id)))
-
-      assert abandoned =~ "was abandoned"
-
-      # Nothing is left to abandon.
-      assert %Prima.Refusal{class: :not_found, message: nothing} =
-               refusal(call(person.ctx, %{"action" => "enroll_abandon"}))
-
-      assert nothing =~ "no unfinished enrollment"
-    end
-
-    test "an accepted enrollment is registered: refused, its recovery code still offered" do
-      person = enrolled!()
-
-      assert %Prima.Refusal{class: :conflict, message: message} =
-               refusal(call(person.ctx, %{"action" => "enroll_abandon"}))
-
-      assert message ==
-               "Your identity is registered; show your recovery code with person.recovery_code."
-
-      assert {:ok, %{enrollment: "enrolled", identifier: identifier, kits: [attempt]}} =
-               call(person.ctx, %{"action" => "status"})
-
-      assert identifier == person.identifier
-      assert %{kind: "enrollment", phase: "accepted", deliverable: true} = attempt
     end
   end
 

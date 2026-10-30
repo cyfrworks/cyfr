@@ -3,11 +3,23 @@
 
 defmodule Compendium.Providers.Registry do
   @moduledoc """
-  Registry tool handlers for the Compendium MCP provider: cyfr.run
-  handles, namespaces, push tokens, members, abuse reports, the
-  registry's policies and appeals.
+  Registry tool handlers for the Compendium MCP provider: a person's
+  registration at cyfr.run, namespaces, push tokens, members, abuse
+  reports, the registry's policies and appeals.
 
-  Every operation that speaks for the person at the registry (a handle
+  `register` finishes what a person's admission began
+  (`Sanctum.Newcomer`): with a `name`, the enrollment's wanted name is
+  replaced first (`Sanctum.Recovery.rename/2`); then the identity is
+  registered at the directory (`Sanctum.Recovery.advance/2`), the
+  registry's current policy accepted and the name claimed, and the name
+  recorded on the person's row. An enrollment whose code the person saved
+  answers at once, with nothing sent. Each step is a retry of the one
+  before it: the directory step resends the same bytes, and the registry
+  answers a repeated claim by the same identifier the same way, so a
+  repeat after success answers the same. A refusal after the directory
+  accepted leaves the attempt `accepted` and no name recorded.
+
+  Every operation that speaks for the person at the registry (a name
   claim, a token mint, a policy acceptance, an appeal, a publisher claim
   and its verification) is one request their live key signs
   (`Compendium.Registry.Client.signed/3`); no identity provider's token is
@@ -25,10 +37,10 @@ defmodule Compendium.Providers.Registry do
   @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove sync)
 
   # The signed operations the `signed_in` tier serves, before a person
-  # holds a handle: a key belongs to an athanor and is nobody's registry
+  # holds a name: a key belongs to an athanor and is nobody's registry
   # identity, so their handlers refuse one. The rest declare
   # `consent: :interactive`, which refuses a key at the gate.
-  @person_acts ~w(claim_personal legal_accept)
+  @person_acts ~w(register legal_accept)
 
   # Every action that sends a change to the registry — a POST that claims,
   # verifies, mints, adds, updates, accepts, reports or appeals — reaches
@@ -58,12 +70,12 @@ defmodule Compendium.Providers.Registry do
         ),
         Operation.new(
           "registry",
-          "claim_personal",
-          "Claim personal registry",
+          "register",
+          "Register your name and identity at cyfr.run",
           [
-            Arg.new("handle", :string,
-              required: true,
-              description: "The handle to claim at the registry, your personal namespace"
+            Arg.new("name", :string,
+              description:
+                "register: another name to take, in place of the one chosen at creation (after cyfr.run refused it as taken or reserved)"
             )
           ],
           auth: :signed_in,
@@ -390,7 +402,7 @@ defmodule Compendium.Providers.Registry do
         )
       ],
       description:
-        "cyfr.run registry operations, each a request your identity signs: claim your handle, sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+        "cyfr.run registry operations, each a request your identity signs: register your name and identity, sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
       title: "Registry"
     )
   end
@@ -414,19 +426,23 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  # A handle claim issues no credential: the registry binds the handle to
-  # the identifier the request is signed under and answers it, the same
-  # again for a repeat by the same identifier, so a claim whose answer was
-  # lost is recorded by the next one.
-  def handle(%Context{user_id: user_id} = ctx, %{"action" => "claim_personal", "handle" => handle})
+  # The registration (the module doc). A name claim issues no credential:
+  # the registry binds the name to the identifier the request is signed
+  # under and answers it, the same again for a repeat by the same
+  # identifier, so a claim whose answer was lost is recorded by the next.
+  def handle(%Context{user_id: user_id} = ctx, %{"action" => "register"} = args)
       when is_binary(user_id) do
-    with :ok <- valid_handle(handle),
-         {:ok, answer} <- Client.signed(user_id, "handle.claim", %{"handle" => handle}),
-         :ok <- claimed(answer, handle),
-         {:ok, _fresh} <- record_claim(ctx, answer) do
-      {:ok, answer}
+    with {:ok, _renamed} <- renamed(ctx, Map.get(args, "name")),
+         {:ok, attempt} <- Sanctum.Recovery.advance(ctx),
+         :ok <- registered(ctx, attempt) do
+      {:ok,
+       %{
+         "attempt_id" => attempt.attempt_id,
+         "identifier" => attempt.identifier,
+         "name" => attempt.name
+       }}
     else
-      {:error, reason} -> refuse(reason)
+      {:error, reason} -> refuse(registration_refusal(reason))
     end
   end
 
@@ -548,7 +564,7 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(_ctx, %{"action" => action}) when action in ~w(claim_personal legal_accept appeal),
+  def handle(_ctx, %{"action" => action}) when action in ~w(register legal_accept appeal),
     do: {:error, {:invalid_argument, "authentication required"}}
 
   # ============================================================================
@@ -564,11 +580,55 @@ defmodule Compendium.Providers.Registry do
 
   defp put_if_int(kw, _key, _), do: kw
 
-  defp valid_handle(handle) do
-    if Prima.ComponentRef.valid_personal_slug?(handle),
-      do: :ok,
-      else: {:error, {:invalid_argument, "That is not a handle the registry takes"}}
+  defp renamed(_ctx, nil), do: {:ok, nil}
+  defp renamed(ctx, name), do: Sanctum.Recovery.rename(ctx, name)
+
+  # An enrollment whose code was saved recorded its name before: nothing
+  # is sent. Otherwise the registry's current policy is accepted and the
+  # attempt's name claimed, then recorded.
+  defp registered(_ctx, %{phase: "completed"}), do: :ok
+
+  defp registered(%Context{user_id: user_id} = ctx, %{name: name}) when is_binary(name) do
+    with {:ok, version} <- policy_version(),
+         {:ok, _accepted} <-
+           Client.signed(user_id, "policy.accept", %{"policy_version" => version}),
+         {:ok, answer} <- Client.signed(user_id, "handle.claim", %{"handle" => name}),
+         :ok <- claimed(answer, name),
+         {:ok, _fresh} <- record_claim(ctx, answer),
+         do: :ok
   end
+
+  defp registered(_ctx, _unnamed),
+    do: {:error, {:invalid_argument, "Choose your name, then register it."}}
+
+  # The policy version the registry names now: a registry that does not
+  # answer it, or answers it unreadably, is one that did not answer.
+  defp policy_version do
+    case Client.get_legal_version() do
+      {:ok, %{"policy_version" => version}} when is_binary(version) and version != "" ->
+        {:ok, version}
+
+      {:ok, _unreadable} ->
+        {:error, :registry_unavailable}
+
+      {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} ->
+        {:error, :no_registry}
+
+      {:error, _unanswered} ->
+        {:error, :registry_unavailable}
+    end
+  end
+
+  # The registration's refusals, in the words a person reads: the
+  # registry's refusals of the name, and an answer that cannot be read as
+  # a registry that did not answer.
+  defp registration_refusal(:handle_taken), do: :name_taken
+
+  defp registration_refusal(reason) when reason in [:handle_reserved, :namespace_reserved],
+    do: :name_reserved
+
+  defp registration_refusal(:malformed_answer), do: :registry_unavailable
+  defp registration_refusal(reason), do: reason
 
   # The claim is the person's namespace from here on, so it lands on their
   # users row, and only while the caller still stands and the answer names
@@ -596,14 +656,14 @@ defmodule Compendium.Providers.Registry do
       {:error, :namespace_owned_by_another_identity} ->
         {:error,
          {:conflict,
-          "That handle is yours at cyfr.run, but another person on this server already " <>
-            "holds that namespace — ask the operator."}}
+          "cyfr.run gave you that name, but another person on this CYFR holds it. Ask " <>
+            "whoever runs this CYFR."}}
 
       {:error, reason} ->
         require Logger
 
         Logger.error(
-          "[Compendium.Providers.Registry] claim_personal: a handle claimed at cyfr.run for " <>
+          "[Compendium.Providers.Registry] register: a name claimed at cyfr.run for " <>
             "#{ctx.user_id} was not recorded locally: #{inspect(reason)}"
         )
 

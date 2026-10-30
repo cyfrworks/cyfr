@@ -435,18 +435,42 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert input["recovery_phase"] == "add"
     end
 
-    test "the code answered is stored redacted, in the MCP text block and the structured content",
+    test "session.setup's input is stored with the recovery secret redacted", %{ctx: ctx} do
+      decision = decision(ctx, tool: "session", action: "setup")
+      secret = seed()
+
+      :ok =
+        Decisions.open(ctx, decision, %{
+          input: %{
+            "action" => "setup",
+            "machine" => "laptop",
+            "name" => "mira",
+            "recovery_secret" => secret,
+            "request_id" => "req_setup"
+          }
+        })
+
+      stored = row(decision.call_id).input
+      refute stored =~ secret
+
+      input = decode_json(stored)
+      assert input["recovery_secret"] == "[REDACTED]"
+      assert input["name"] == "mira"
+      assert input["request_id"] == "req_setup"
+    end
+
+    test "the code session.setup answers is stored redacted, in the MCP text block and the structured content",
          %{ctx: ctx} do
       identifier = "per_" <> String.duplicate("d", 64)
       code = recovery_code(identifier)
 
-      # What `person.enroll` answers, as the MCP router encodes a result:
+      # What `session.setup` answers, as the MCP router encodes a result:
       # the JSON text of the structured value, and the value itself.
       answer = %{
-        attempt_id: "iat_x",
-        phase: "accepted",
-        identifier: identifier,
-        code: code
+        session_token: "cyfr_session_x",
+        user_id: "per_x",
+        readmitted: false,
+        recovery: %{attempt_id: "iat_x", identifier: identifier, name: "mira", code: code}
       }
 
       output =
@@ -458,11 +482,12 @@ defmodule Sanctum.Gate.RequestLogTest do
 
       refute output =~ code
       [%{"text" => text}] = decode_json(output)["content"]
-      inner = Jason.decode!(text)
+      inner = Jason.decode!(text)["recovery"]
       assert inner["code"] == "[REDACTED]"
       assert inner["identifier"] == identifier
+      assert inner["name"] == "mira"
 
-      structured = decode_json(output)["structuredContent"]
+      structured = decode_json(output)["structuredContent"]["recovery"]
       assert structured["code"] == "[REDACTED]"
       assert structured["identifier"] == identifier
     end

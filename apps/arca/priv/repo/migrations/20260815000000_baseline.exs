@@ -288,11 +288,12 @@ defmodule Arca.Repo.Migrations.Baseline do
     # An invitation to become a person here (`Arca.Invitations`): the hash
     # of its code (the lowercase hex SHA-256 of its 32 bytes, never the
     # code), the person who issued it and their `security_generation` when
-    # they did, the group athanor it seats its newcomer in or none, and its
-    # expiry. It ends once, redeemed by the person it made or revoked, each
-    # by a conditional write on an open row, and the two ends exclude each
-    # other. No default generation: an invitation is bound to the standing
-    # it was issued under, which a raise of it retires.
+    # they did, the group athanor it seats its newcomer in or none, the
+    # name the issuer offered the newcomer or none, and its expiry. It ends
+    # once, redeemed by the person it made or revoked, each by a conditional
+    # write on an open row, and the two ends exclude each other. No default
+    # generation: an invitation is bound to the standing it was issued
+    # under, which a raise of it retires.
     create table(:invitations, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :code_hash, :string, null: false
@@ -303,6 +304,7 @@ defmodule Arca.Repo.Migrations.Baseline do
         check: if(sqlite?, do: invitation_generation)
 
       add :athanor_id, :string
+      add :name, :text
       add :expires_at, :utc_datetime_usec, null: false
       add :redeemed_by, :string, check: if(sqlite?, do: Enum.at(invitation_ends, 0))
       add :redeemed_at, :utc_datetime_usec
@@ -650,7 +652,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     # writes so a killed attempt resumes from the phase it reached. The
     # submission is immutable: the genesis bytes, or the entry or recover
     # request bytes, and their digest. Staged keys and a pending kit seed
-    # are sealed; a restore names the installation token digest it claimed.
+    # are sealed; a restore names the installation token digest it claimed;
+    # an enrollment holds the name its person wants registered.
     create table(:identity_attempts, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 0))
@@ -672,6 +675,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :staged_operational_key_sealed, :binary
       add :kit_seed_sealed, :binary
       add :kit_acknowledged_at, :utc_datetime_usec
+      add :name, :text
       add :outcome, :text
       add :reproof_challenge_digest, :string
       add :reproof_expires_at, :utc_datetime_usec

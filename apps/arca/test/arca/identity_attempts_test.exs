@@ -8,9 +8,9 @@ defmodule Arca.IdentityAttemptsTest do
   phases only in order and only from the phase the row holds, one in
   progress per person and kind (and per installation token), with the
   confirmation an enrollment consumes committed or rolled back with its
-  attempt, an enrollment abandoned only before its acceptance, the kit's
-  acknowledgment erasing the seed for good, and a stale
-  member advancing nothing.
+  attempt, an enrollment abandoned only before its acceptance, its wanted
+  name replaced only until it ends, the kit's acknowledgment erasing the
+  seed for good, and a stale member advancing nothing.
   """
 
   # Installs the process-wide mode and takes the cell's slot; each case
@@ -325,6 +325,89 @@ defmodule Arca.IdentityAttemptsTest do
       assert {:ok, again} = IdentityAttempts.acknowledge_kit(as(person), accepted.id)
       assert is_nil(again.kit_seed_sealed)
       assert {:ok, %{kit_seed_sealed: nil}} = IdentityAttempts.get(as(person), accepted.id)
+    end
+
+    test "holds the wanted name, which an exact retry does not compare and a rename replaces until it ends" do
+      person = person!()
+      attrs = Map.put(enrollment(person.id), :name, "mira")
+      {:ok, attempt} = IdentityAttempts.open(as(person), attrs)
+      assert attempt.name == "mira"
+
+      assert {:ok, %{id: id, name: "mira"}} =
+               IdentityAttempts.open(as(person), %{attrs | name: "another"})
+
+      assert id == attempt.id
+
+      assert {:ok, %{name: "nova", revision: revision}} =
+               IdentityAttempts.rename(as(person), attempt.id, "nova")
+
+      assert revision == attempt.revision + 1
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted")
+      assert {:ok, %{name: "luna"}} = IdentityAttempts.rename(as(person), attempt.id, "luna")
+
+      stranger = %Prima.Actor{user_id: "usr_stranger"}
+      assert {:error, :cross_tenant} = IdentityAttempts.rename(stranger, attempt.id, "theft")
+
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), attempt.id, "late")
+      assert {:ok, %{name: "luna"}} = IdentityAttempts.get(as(person), attempt.id)
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), "iat_none", "nobody")
+    end
+
+    test "a refused or abandoned enrollment keeps its name" do
+      person = person!()
+
+      {:ok, refused} =
+        IdentityAttempts.open(as(person), Map.put(enrollment(person.id), :name, "a"))
+
+      {:ok, _} = IdentityAttempts.advance(as(person), refused.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), refused.id, "submitted", "refused")
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), refused.id, "b")
+
+      {:ok, abandoned} = IdentityAttempts.open(as(person), enrollment(person.id))
+      {:ok, _} = IdentityAttempts.advance(as(person), abandoned.id, "staged", "superseded")
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), abandoned.id, "c")
+
+      assert {:ok, %{name: "a"}} = IdentityAttempts.get(as(person), refused.id)
+      assert {:ok, %{name: nil}} = IdentityAttempts.get(as(person), abandoned.id)
+    end
+
+    test "the person's latest enrollment is read whatever its phase but superseded" do
+      person = person!()
+      assert {:error, :not_found} = IdentityAttempts.enrollment(as(person), person.id)
+
+      {:ok, first} = IdentityAttempts.open(as(person), enrollment(person.id))
+
+      assert {:ok, %{id: id, phase: "staged"}} =
+               IdentityAttempts.enrollment(as(person), person.id)
+
+      assert id == first.id
+
+      {:ok, _} = IdentityAttempts.advance(as(person), first.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), first.id, "submitted", "refused")
+
+      assert {:ok, %{id: ^id, phase: "refused"}} =
+               IdentityAttempts.enrollment(server(), person.id)
+
+      {:ok, second} = IdentityAttempts.open(as(person), enrollment(person.id, "second"))
+      assert {:ok, %{id: second_id}} = IdentityAttempts.enrollment(as(person), person.id)
+      assert second_id == second.id
+
+      # An abandoned one is passed over for the one before it.
+      {:ok, _} = IdentityAttempts.advance(as(person), second.id, "staged", "superseded")
+      assert {:ok, %{id: ^id}} = IdentityAttempts.enrollment(as(person), person.id)
+
+      accepted = enrolled!(person)
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), accepted.id)
+
+      assert {:ok, %{phase: "completed"} = latest} =
+               IdentityAttempts.enrollment(as(person), person.id)
+
+      assert latest.id == accepted.id
+
+      stranger = %Prima.Actor{user_id: "usr_stranger"}
+      assert {:error, :cross_tenant} = IdentityAttempts.enrollment(stranger, person.id)
     end
 
     test "a person reaches only their own attempts" do

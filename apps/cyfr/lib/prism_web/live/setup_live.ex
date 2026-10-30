@@ -120,17 +120,17 @@ defmodule PrismWeb.SetupLive do
 
   def handle_event(
         "setup_passkey",
-        %{"credential" => credential},
+        %{"credential" => credential} = params,
         %{assigns: %{step: :passkey, token: token}} = socket
       )
       when is_map(credential) do
-    case Sanctum.Newcomer.admit({:setup, token}, {:passkey, credential}) do
-      {:ok, %{session_token: session_token}} ->
-        ticket = mint_ticket(session_token, socket.assigns.browser_binding)
-        {:noreply, redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")}
-
-      {:error, reason} ->
-        {:noreply, refused(socket, reason)}
+    with {:ok, identity} <- Sanctum.Newcomer.identity(params),
+         {:ok, %{session_token: session_token}} <-
+           Sanctum.Newcomer.admit({:setup, token}, {:passkey, credential, identity}) do
+      ticket = mint_ticket(session_token, socket.assigns.browser_binding)
+      {:noreply, redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")}
+    else
+      {:error, reason} -> {:noreply, refused(socket, reason)}
     end
   end
 

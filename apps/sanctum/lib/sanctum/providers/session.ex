@@ -10,10 +10,15 @@ defmodule Sanctum.Providers.Session do
 
   `setup` is `auth: :anonymous`: the command line of a CYFR with no
   person yet (`cyfr login --setup`) presents the installation's setup
-  token, and the setup admission (`Sanctum.Newcomer`) makes the first
-  person, or signs them in again while they hold no sign-in method, with
-  a command-line session for its machine. Any other token, or a CYFR set
-  up already, is `:setup_closed`.
+  token with the new person's name, the recovery secret it drew and the
+  enrollment's request id, and the setup admission (`Sanctum.Newcomer`)
+  makes the first person, or signs them in again while they hold no
+  sign-in method, with a command-line session for its machine. It answers
+  the session's token, the person, whether they were admitted again, and
+  their enrollment as `recovery`: its `attempt_id`, `identifier`, `name`
+  and, until the person says it is saved, their recovery `code`. The
+  request log redacts the secret and the code (`Prima.Sanitizer`). Any
+  other token, or a CYFR set up already, is `:setup_closed`.
 
   `cli_begin`, `cli_poll` and `cli_cancel` are `auth: :anonymous`, as
   the device flow's actions are: the command line that calls them holds
@@ -123,6 +128,20 @@ defmodule Sanctum.Providers.Session do
               required: true,
               description:
                 "setup: the command line's host name, which its session is listed by in Prism"
+            ),
+            Arg.new("name", :string,
+              required: true,
+              description: "setup: the name the first person takes, theirs for life"
+            ),
+            Arg.new("recovery_secret", :string,
+              required: true,
+              description:
+                "setup: the new recovery code's secret, drawn by the command line (32 bytes, unpadded base64url)"
+            ),
+            Arg.new("request_id", :string,
+              required: true,
+              description:
+                "setup: the enrollment's request id, drawn by the command line (req_ and 32 hex digits)"
             )
           ],
           auth: :anonymous,
@@ -230,14 +249,26 @@ defmodule Sanctum.Providers.Session do
   end
 
   # The installation's first person, made or signed in again by the setup
-  # token (`Sanctum.Newcomer`): a command-line session for the machine.
+  # token (`Sanctum.Newcomer`): a command-line session for the machine, and
+  # the enrollment the admission opened or found standing.
   def handle(_ctx, %{"action" => "setup"} = args) do
-    case Sanctum.Newcomer.admit({:setup, args["setup_token"]}, {:command_line, args["machine"]}) do
-      {:ok, %{person: person, readmitted: readmitted, session_token: session_token}} ->
-        {:ok, %{session_token: session_token, user_id: person.id, readmitted: readmitted}}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, identity} <- Sanctum.Newcomer.identity(args),
+         {:ok, admitted} <-
+           Sanctum.Newcomer.admit(
+             {:setup, args["setup_token"]},
+             {:command_line, args["machine"], identity}
+           ) do
+      {:ok,
+       Map.merge(
+         %{
+           session_token: admitted.session_token,
+           user_id: admitted.person.id,
+           readmitted: admitted.readmitted
+         },
+         Map.take(admitted, [:recovery])
+       )}
+    else
+      {:error, reason} -> {:error, setup_refusal(reason)}
     end
   end
 
@@ -544,6 +575,19 @@ defmodule Sanctum.Providers.Session do
   # surface renders (`Prima.Refusal`), each with the sentence its person
   # reads; the vocabulary's own reasons (a confirmation signal, a rate
   # limit, a standing or tenancy refusal) pass as they are.
+  # A CYFR that pins no directory makes no local person, so it cannot make
+  # the first one's name.
+  defp setup_refusal(:no_directory),
+    do: %Prima.Refusal{
+      class: :setup_required,
+      reason: :no_directory,
+      message:
+        "This CYFR does not reach cyfr.run, so it cannot make your name. Ask whoever runs " <>
+          "this CYFR."
+    }
+
+  defp setup_refusal(reason), do: reason
+
   defp cli_refusal(:not_found),
     do:
       cli_refused(
