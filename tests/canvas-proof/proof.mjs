@@ -1062,15 +1062,17 @@ async function stepFrameKept(page, name, viewport) {
   await page.$eval(`iframe[data-frame-id="${frame}"]`, (el, value) => { el.__proofMark = value; }, mark);
   const loads = await loadsOf();
 
-  // The iframe after a gesture: the element marked, under its frame id, with
-  // no new load, once the wrapper stands as `place`.
+  // The iframe after a gesture: the wrapper standing as `place`, which the
+  // gesture asked for, and the element marked, under its frame id, with no
+  // new load. A placement that never happens fails the step.
   const kept = async (gesture, place) => {
     await lib.waitFor(async () => (await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null)) === place || null,
       { timeoutMs: 15_000, what: `the app standing as ${place} after ${gesture}` }).catch(() => null);
     await page.waitForTimeout(500);
     const same = await page.$eval(`iframe[data-frame-id="${frame}"]`, (el, value) => el.__proofMark === value, mark).catch(() => false);
     const now = await loadsOf();
-    return { gesture, place: await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null), same_element: same, loads: now, held: same && now === loads };
+    const stands = await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null);
+    return { gesture, asked: place, place: stands, same_element: same, loads: now, held: stands === place && same && now === loads };
   };
 
   const seen = [];
