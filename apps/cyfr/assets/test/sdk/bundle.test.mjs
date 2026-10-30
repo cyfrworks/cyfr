@@ -21,7 +21,7 @@ const BUNDLE = readFileSync(new URL("../../../priv/static/sdk/cyfr.js", import.m
 const [{frame: CANVAS, reply: OPEN}] = fixture.canvas.handshake.valid
 const [{stream_path: STREAM_PATH}] = fixture.canvas.paths.valid.filter(({frame}) => frame === CANVAS)
 const DECLARED = OPEN.canvas.streams[0]
-const BASE = "https://cyfr.test/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/local/canvas/0.2.0/dist/"
+const BASE = "https://cyfr.test/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/local/canvas/0.3.0/dist/"
 
 const ports = []
 afterEach(() => {

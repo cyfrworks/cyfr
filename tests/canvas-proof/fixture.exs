@@ -160,16 +160,18 @@ fn args ->
     "markets" => ~S"""
     // A written canvas on the vanilla template: it reads the feed `candles`
     // and draws its candles as its own SVG, and presses the feed's refresh
-    // action from a button the person clicks. `window.__canvas` offers the
-    // presses the activation step drives from a timer, so a press can leave
-    // with no person input, and the self-focus it records.
+    // action from a button the person clicks, and asks for a component's
+    // grant from another. `window.__canvas` offers the presses and the
+    // grant the activation and grant steps drive from a timer, so one can
+    // leave with no person input, and the self-focus it records.
     const root = document.getElementById("root")
     root.innerHTML =
       '<h1>markets</h1><p id="seen">no result yet</p>' +
       '<svg id="chart" width="320" height="140"></svg>' +
       '<p><button id="press" type="button">Refresh</button>' +
       '<button id="press3" type="button">Refresh three</button>' +
-      '<button id="later" type="button">Refresh later</button></p>'
+      '<button id="later" type="button">Refresh later</button>' +
+      '<button id="grant" type="button">Grant claude</button></p>'
     const chart = document.getElementById("chart")
     const seen = document.getElementById("seen")
     let binding = null
@@ -185,6 +187,8 @@ fn args ->
       press()
     })
     document.getElementById("later").addEventListener("click", () => setTimeout(() => press(), 8000))
+    const grant = () => cyfr.grant("catalyst:local.claude")
+    document.getElementById("grant").addEventListener("click", () => grant())
 
     function onEvent(event) {
       const data = event && event.data
@@ -225,6 +229,10 @@ fn args ->
       // behind: with no person input near it, the shell drops it.
       pressAfter: (ms) => {
         setTimeout(() => press(), ms)
+      },
+      // A grant asked from a timer, with no person input near it.
+      grantAfter: (ms) => {
+        setTimeout(() => grant(), ms)
       },
       // The canvas focuses itself and then presses from a timer: the
       // activation step records what each browser does with a press that

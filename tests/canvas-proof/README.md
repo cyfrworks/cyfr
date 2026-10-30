@@ -80,10 +80,11 @@ token, answers `answer-N.json`.
 
 ## The tinctures and the canvases
 
-- **The shipped canvas** `tincture:local.canvas` (0.2.0), the layout's
-  first canvas, placed under the id `start`: its React page draws a tile
-  for each installed tincture (`button.tile` with the name in `.name`),
-  the recent runs, the schedules and the last schedule runs, from the bus.
+- **The shipped canvas** `tincture:local.canvas` (0.3.0), the layout's
+  first canvas, placed under the id `start`: its React page draws the day
+  in one sentence, what needs attention grouped by cause, the recent runs,
+  a launcher for each installed tincture (`button.app` with the name in
+  `.label`) and the schedules, from the bus.
 - `canvas-full`: an ordinary tincture, opened full over a canvas from the
   shipped canvas's launcher tile, and on the desk `markets`' column app,
   the sibling frame the `activation` step clicks in. In the hand a column
@@ -102,7 +103,8 @@ token, answers `answer-N.json`.
   page says.
 - `markets`, `measure`, `written`: canvases written with `canvas.write` on
   the vanilla template. `markets` draws the feed `candles` and presses the
-  feed's refresh action from a button the person clicks; `measure` is one
+  feed's refresh action from a button the person clicks, and asks for the
+  grant of `catalyst:local.claude` from another; `measure` is one
   line the measurement opens; `written` is the canvas `written_canvas`
   writes.
 
@@ -115,8 +117,8 @@ result is refused.
 
 Each step is recorded by name with the browsers it runs on, its
 observation and its result. Chromium runs every step; Firefox and WebKit
-also run the browser-behaviour steps (`activation`, `rebound_control`,
-`connection_allowlist`, `policy`). A browser that cannot launch fails its
+also run the browser-behaviour steps (`activation`, `grant_control`,
+`rebound_control`, `connection_allowlist`, `policy`). A browser that cannot launch fails its
 steps and is recorded absent, never as a pass. Every wait is bounded. What
 reached the server is read from the harness's proxy, which every request
 of the browsers passes through; what the shell received is read from the
@@ -151,6 +153,7 @@ received is read once it has handled the verbs the click sent.
 | `validation_failures` | `canvas-broken` 1.0.0 is working; a later version that never becomes ready is recorded `not_ready` at its deadline, and one that dies before ready (the shell's receipt of its validation frame's `failed`) is recorded `died`; each later version reads a stream 1.0.0 does not, so once its validation fails the working version, 1.0.0, opens nothing (the canvas shows its `ungranted` refusal) and the shell's grant prompt asks for 1.0.0 itself; the person confirms it and 1.0.0 opens; neither falls the canvas back: no fallback line is drawn |
 | `crash_fallback` | a version that becomes ready is activated, then its live frame loads a second time after `ready()` (the page reloads itself, the frame's death, and posts no `failed`: none reaches the shell): the shipped canvas shows in its place, the window over it on the desk stays open as the same frame, and AQUA's control is as it was; one line in the shelf's area reads "Your canvas stopped. Showing the standard one." and offers Try again and Restore the last working one; the kept version reads no stream, so restoring it raises the grant prompt for the kept version, with nothing restored meanwhile; the person confirms it, the kept version is restored and opens, and the line goes |
 | `activation` | a person's click on the press button dispatches one `press`, inside the click, forwarded with the shell's activation active and the canvas its active element; several presses inside one click are each forwarded; a press the page sends with no input, and one held 8 s past the click, are each dropped (the frame's `data-dropped` moves, the shell receives nothing). Recorded per browser, no drop asserted: a press after a click elsewhere in the shell, and after a click in a sibling frame (on the desk; the hand has no sibling beside the canvas, which the record says), each with the canvas focusing itself by `window.focus()` and by an element's `focus()` and with neither |
+| `grant_control` | the markets canvas's grant control, clicked by the person, sends one `grant`, which the shell receives inside the click with its activation active and the canvas its active element, and forwards; the same request sent from a timer with no input near it is dropped (the frame's `data-dropped` moves). The shell's offer of the grant in the system layer is not checked yet: the shell handles the verb in a later change, and the record says so |
 | `rebound_control` | while the binding is live, a press names it; the feed is removed and bound again with other arguments and a new binding id; `feed.press` naming the old binding is refused `not_found`; the canvas's stale press still names the old binding; once a result of the new binding reaches the canvas, its press names the new binding and the shell forwards it. Each press is sent from the page's click handler inside a person's click on the press button, measured on the frame shown at that moment, and the record carries what the shell did with each: how many it received, forwarded and dropped, and whether it held activation and the frame as its active element. The probe and markets open their feed stream again whenever it closes, and the step switches markets away and back before it waits, so the new binding reaches it on a reopened stream's refresh. That is because an open feed stream was once seen to keep its old binding after a rebind (one debug run, not proven): an open finding on the follow-up list, which a unit check would settle (after a rebind, an open feed stream delivers the new binding's results or closes). The step does not show what an open stream does across a rebind, and its record says so |
 | `connection_allowlist` | under the canvas page's `connection-allowlist` header the SDK loads and runs, the page's own stylesheet loads and applies, and the feed stream opens and delivers, in all three browsers |
 | `policy` | ordinary requests and checks on a canvas open, none framed as an escape (below) |
@@ -159,9 +162,9 @@ received is read once it has handled the verbs the click sent.
 
 The steps run in this order in each browser: the first six on the shipped
 canvas, the probe and the written canvases, then `activation`,
-`rebound_control`, `connection_allowlist` and `policy`, then the steps on
-`canvas-broken` (whose validation fails or whose frame dies into the
-fallback), the socket cut and the scheduler's fire.
+`grant_control`, `rebound_control`, `connection_allowlist` and `policy`,
+then the steps on `canvas-broken` (whose validation fails or whose frame
+dies into the fallback), the socket cut and the scheduler's fire.
 
 ### `policy`, each check
 

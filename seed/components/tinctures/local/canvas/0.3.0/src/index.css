@@ -1,0 +1,404 @@
+/* The console's own tokens (apps/cyfr/assets/css/app.css), copied: a
+   canvas page loads nothing from the console. */
+:root {
+  --base: #0f0f1a;
+  --raised: #1a1a2e;
+  --overlay: #252540;
+  --accent: #6366f1;
+  --accent-2: #818cf8;
+  --t1: #e2e8f0;
+  --t2: #94a3b8;
+  --t3: #64748b;
+  --line: #2d2d4a;
+  --ok: #22c55e;
+  --bad: #ef4444;
+  --warn: #f59e0b;
+  --info: #3b82f6;
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--t1);
+  background:
+    radial-gradient(900px 600px at 15% 10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+    radial-gradient(700px 500px at 90% 95%, color-mix(in srgb, var(--info) 8%, transparent), transparent 60%),
+    var(--base);
+  background-attachment: fixed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+main {
+  padding: 28px 32px 40px;
+  display: grid;
+  gap: 22px;
+  max-width: 1280px;
+}
+
+main.stacked {
+  padding: 18px 14px 28px;
+}
+
+.today {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.today h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.today p {
+  margin: 0;
+  color: var(--t2);
+  font-size: 14px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.column {
+  display: grid;
+  gap: 22px;
+  align-content: start;
+  min-width: 0;
+}
+
+/* Depth, not borders: a raised surface on a soft shadow. */
+.card {
+  background: color-mix(in srgb, var(--raised) 78%, transparent);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 10px 30px rgba(0, 0, 0, 0.35);
+  padding: 4px 0 8px;
+  overflow: hidden;
+}
+
+.card h2 {
+  margin: 0;
+  padding: 12px 16px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.card h2 .count {
+  margin-left: 6px;
+  color: var(--t2);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.muted {
+  color: var(--t3);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.empty,
+.refusal,
+.more {
+  margin: 0;
+  padding: 8px 16px 10px;
+  color: var(--t3);
+}
+
+.refusal {
+  color: var(--warn);
+}
+
+/* Status dots: one colour per outcome, with a soft halo. */
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+  background: var(--t3);
+}
+
+.dot.ok {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 15%, transparent);
+}
+
+.dot.bad {
+  background: var(--bad);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 15%, transparent);
+}
+
+.dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 15%, transparent);
+}
+
+.dot.run {
+  background: var(--info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 15%, transparent);
+}
+
+/* Needs attention: each cause once. */
+.issue,
+.schedule {
+  display: flex;
+  gap: 12px;
+  padding: 10px 16px;
+}
+
+.issue + .issue,
+.schedule + .schedule {
+  box-shadow: 0 -1px 0 color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.body {
+  min-width: 0;
+  flex: 1;
+}
+
+.title {
+  font-weight: 500;
+}
+
+.why {
+  margin: 3px 0 0;
+  color: var(--t2);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chip {
+  font: inherit;
+  font-size: 12px;
+  color: var(--t2);
+  background: var(--overlay);
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.chip b {
+  font-weight: 500;
+  color: var(--t1);
+}
+
+/* The one accent: what the person can do here. */
+.chip.action {
+  cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-2) 40%, transparent) inset;
+}
+
+.chip.action:hover,
+.chip.action:focus-visible {
+  background: color-mix(in srgb, var(--accent) 36%, transparent);
+  outline: none;
+}
+
+/* Recent runs: the last ones as squares, newest first, then rows. */
+.strip {
+  display: flex;
+  gap: 3px;
+  padding: 2px 16px 4px;
+}
+
+.strip i {
+  flex: 1;
+  max-width: 28px;
+  height: 18px;
+  border-radius: 3px;
+  background: var(--t3);
+}
+
+.strip i.ok {
+  background: color-mix(in srgb, var(--ok) 80%, transparent);
+}
+
+.strip i.bad {
+  background: color-mix(in srgb, var(--bad) 75%, transparent);
+}
+
+.strip i.warn {
+  background: color-mix(in srgb, var(--warn) 85%, transparent);
+}
+
+.strip i.run {
+  background: color-mix(in srgb, var(--info) 80%, transparent);
+}
+
+.strip-ends {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 16px 6px;
+  font-size: 11px;
+  color: var(--t3);
+}
+
+.run {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 12px;
+  padding: 7px 16px;
+}
+
+.run .name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.run .name b {
+  font-weight: 500;
+}
+
+.reason {
+  color: var(--t2);
+}
+
+.reason.bad {
+  color: color-mix(in srgb, var(--bad) 75%, var(--t1));
+}
+
+.reason.warn {
+  color: var(--warn);
+}
+
+/* Apps: a launcher. */
+.apps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 6px 16px 10px;
+}
+
+.app {
+  width: 84px;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  font: inherit;
+  color: var(--t2);
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.app .icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  font-size: 28px;
+  background: var(--overlay);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.app .icon.monogram {
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, hsl(var(--hue) 70% 62%), hsl(var(--hue) 62% 44%));
+}
+
+.app .label {
+  font-size: 12px;
+  max-width: 84px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.app:hover .label,
+.app.open .label {
+  color: var(--t1);
+}
+
+.app.open .icon {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.app:focus-visible {
+  outline: none;
+}
+
+.app:focus-visible .icon {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+/* Schedules: each with its next and last run, then the week. */
+.week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin: 6px 16px 6px;
+  padding-top: 10px;
+  box-shadow: 0 -1px 0 color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.day {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--t3);
+  padding: 4px 0;
+  border-radius: 8px;
+}
+
+.day b {
+  color: var(--t2);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.day.today {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.day.today b {
+  color: var(--t1);
+}
+
+.fires {
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+.fires.none {
+  color: var(--t3);
+  font-weight: 400;
+}

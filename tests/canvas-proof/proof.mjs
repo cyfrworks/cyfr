@@ -81,6 +81,7 @@ const STEPS = [
   ["validation_failures", ["chromium"]],
   ["crash_fallback", ["chromium"]],
   ["activation", ALL],
+  ["grant_control", ALL],
   ["rebound_control", ALL],
   ["connection_allowlist", ALL],
   ["policy", ALL],
@@ -95,7 +96,7 @@ const STEPS = [
 const ORDER = [
   "two_canvases", "switch", "written_canvas", "feed_chart", "app_over_canvas",
   "window_drag", "tile_narrows", "covered_windows", "frame_kept", "hidden_canvas",
-  "activation", "rebound_control", "connection_allowlist", "policy",
+  "activation", "grant_control", "rebound_control", "connection_allowlist", "policy",
   "validation_failures", "crash_fallback", "disconnect", "failed_fire",
 ];
 
@@ -463,12 +464,12 @@ const posts = (frame) => frame.evaluate(() => [...(window.__posts || [])]);
 
 // ---- page readers ---------------------------------------------------------------
 
-// The shipped canvas's headings and its app launchers (`button.tile` with
-// the name in `.name`).
+// The shipped canvas's section headings (without the count each carries)
+// and its app launchers (`button.app` with the name in `.label`).
 const shippedDrawing = (frame) =>
   frame.evaluate(() => ({
-    headings: [...document.querySelectorAll("h2")].map((h) => h.textContent),
-    tiles: [...document.querySelectorAll(".tile .name")].map((n) => n.textContent),
+    headings: [...document.querySelectorAll("h2")].map((h) => (h.firstChild ? h.firstChild.textContent.trim() : "")),
+    tiles: [...document.querySelectorAll(".app .label")].map((n) => n.textContent),
   })).catch(() => null);
 
 // A written or broken canvas's single line of text.
@@ -750,7 +751,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.2.0" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.3.0" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -885,7 +886,7 @@ async function stepFeedChart(page, name) {
 async function stepAppOverCanvas(page, name) {
   const start = await showCanvas(page, "start");
   await until(start.frame, shippedDrawing, (d) => d.tiles.includes("canvas-full"), "the canvas-full launcher");
-  const tile = await centerOf(start.frame.locator('.tile', { has: start.frame.locator('.name', { hasText: "canvas-full" }) }).first());
+  const tile = await centerOf(start.frame.locator('.app', { has: start.frame.locator('.label', { hasText: "canvas-full" }) }).first());
   if (!tile) throw new Error("the canvas-full launcher could not be measured");
   const from = (await instrument(page)).receipts.length;
   await personClick(page, start.id, tile.x, tile.y);
@@ -1355,7 +1356,7 @@ async function marketsBound(page) {
   await shown.frame.evaluate(installRecorder);
   const box = async (sel) => shown.frame.locator(sel).boundingBox();
   const centers = {};
-  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"]]) {
+  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"], ["grant", "#grant"]]) {
     const b = await box(sel);
     centers[key] = b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null;
   }
@@ -1453,6 +1454,41 @@ async function stepActivation(page, name) {
       held_8s: { forwarded: held8.forwarded, dropped_delta: heldDropped1 - heldDropped0 },
       scripted_no_input: { forwarded: noInput.forwarded, dropped_delta: noInputDropped1 - noInputDropped0 },
       recorded_residuals: recorded,
+    });
+  await showCanvas(page, "start");
+}
+
+// grant_control: a canvas's request for a component's grant leaves it as
+// a press does: the grant control clicked by the person sends one `grant`,
+// which the shell receives inside the click with its activation and the
+// canvas its active element, and forwards; the same request sent from a
+// timer with no input near it is dropped (the frame's `data-dropped`
+// moves). The shell's offer of the grant, in the system layer, is checked
+// once the shell handles the verb.
+async function stepGrantControl(page, name) {
+  const { shown, centers } = await marketsBound(page);
+  if (!centers.grant) throw new Error("the markets grant control could not be measured");
+  const classify = (receipts) =>
+    ({ forwarded: receipts.filter((r) => r.dropped === false).length, dropped: receipts.filter((r) => r.dropped === true).length, total: receipts.length, receipts });
+
+  let mark = (await instrument(page)).receipts.length;
+  await personClick(page, shown.id, centers.grant.x, centers.grant.y);
+  const inside = classify(await handled(page, mark, shown.id, "grant", 1));
+
+  const dropped0 = Number((await canvasFrame(page, shown.id)).dropped);
+  mark = (await instrument(page)).receipts.length;
+  await shown.frame.evaluate(() => window.__canvas && window.__canvas.grantAfter(9000));
+  await sleep(9800);
+  const noInput = classify(receiptsOf(await instrument(page), mark, shown.id, "grant"));
+  const dropped1 = Number((await canvasFrame(page, shown.id)).dropped);
+
+  note("grant_control", name,
+    inside.forwarded === 1 && inside.total === 1 && inside.receipts[0].active === true && inside.receipts[0].activeElementIsFrame === true &&
+      noInput.total === 1 && noInput.forwarded === 0 && dropped1 > dropped0,
+    {
+      inside_click: { forwarded: inside.forwarded, total: inside.total, active: inside.receipts[0] && inside.receipts[0].active, active_element_is_frame: inside.receipts[0] && inside.receipts[0].activeElementIsFrame },
+      scripted_no_input: { received: noInput.total, forwarded: noInput.forwarded, dropped_delta: dropped1 - dropped0 },
+      offer: "not checked: the shell's handling of grant comes after S6",
     });
   await showCanvas(page, "start");
 }
@@ -1964,6 +2000,7 @@ const STEP_FNS = {
   frame_kept: (page, name, { viewport }) => stepFrameKept(page, name, viewport),
   hidden_canvas: (page, name, { proxy }) => stepHiddenCanvas(page, name, proxy),
   activation: (page, name) => stepActivation(page, name),
+  grant_control: (page, name) => stepGrantControl(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),
   connection_allowlist: (page, name) => stepConnectionAllowlist(page, name),
   policy: (page, name, { proxy, receiver, udp }) => stepPolicy(page, name, proxy, receiver, udp),
