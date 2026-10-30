@@ -5825,32 +5825,22 @@ defmodule PrismWeb.SystemLayerTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "Settings' enrollment prompt, dismissed, lets the enrollment go", %{conn: conn} do
-      prior = Application.fetch_env(:sanctum, :directory_url)
-
-      on_exit(fn ->
-        case prior do
-          {:ok, value} -> Application.put_env(:sanctum, :directory_url, value)
-          :error -> Application.delete_env(:sanctum, :directory_url)
-        end
-      end)
-
-      Application.put_env(:sanctum, :directory_url, "https://dir.example")
+    test "Settings' prompt for another recovery code, dismissed, lets it go", %{conn: conn} do
       {view, _html} = mount_athanor(conn, "/settings")
 
-      view |> element(~s([data-test="identity-enroll"])) |> render_click()
+      view |> element(~s([data-test="identity-add-code"])) |> render_click()
       render(view)
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
+      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="holder"]))
 
       view |> element(~s(#system-layer [data-test="prompt-dismiss"])) |> render_click()
 
       wait_until(
         fn -> not has_element?(view, ~s(#system-layer [data-test="recovery"])) end,
         2_000,
-        "the enrollment let go"
+        "the prompt let go"
       )
 
-      assert has_element?(view, ~s([data-test="identity-enroll"]))
+      assert has_element?(view, ~s([data-test="identity-add-code"]))
     end
 
     test "a webhook waits on its origin grant, granted with webhooks, before its own confirmation",
@@ -5980,13 +5970,6 @@ defmodule PrismWeb.SystemLayerTest do
           {%{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
            "Pair a phone or another browser with this CYFR"},
         confirmation: {confirmation, "A client of yours asked for a change"},
-        enrollment:
-          {%{
-             id: "k-enrollment",
-             kind: :enrollment,
-             action: :recovery_material,
-             subject: %{directory_url: "https://directory.example"}
-           }, "Enrolling gives you an identifier"},
         kit:
           {%{
              id: "k-kit",

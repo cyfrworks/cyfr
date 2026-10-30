@@ -1734,24 +1734,6 @@ defmodule Cyfr.Boundaries do
           "completes it, so a ticket cannot be replayed: server-local memory, never a row."
     },
     %{
-      from: "PrismWeb.SetupLive",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the setup page leaves the passkey sign-in's single-use ticket, bound to the " <>
-          "browser, for the callback that completes it, for a bounded time: server-local " <>
-          "memory, never a row."
-    },
-    %{
-      from: "PrismWeb.InviteLive",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the invitation page leaves the passkey sign-in's single-use ticket, bound to the " <>
-          "browser, for the callback that completes it, for a bounded time: server-local " <>
-          "memory, never a row."
-    },
-    %{
       from: "PrismWeb.LoginLive",
       into: "Arca.Cache",
       functions: [:put],
@@ -1759,6 +1741,15 @@ defmodule Cyfr.Boundaries do
         "the login page leaves a single-use ticket, bound to the browser, for the " <>
           "callback that completes the sign-in, for a bounded time: server-local memory, " <>
           "never a row."
+    },
+    %{
+      from: "PrismWeb.AdmissionCard",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the page that admitted a newcomer leaves the passkey sign-in's single-use ticket, " <>
+          "bound to the browser, for the callback that completes it, once the person says " <>
+          "their recovery code is saved, for a bounded time: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.ModelCatalog",
