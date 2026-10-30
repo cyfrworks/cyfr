@@ -259,7 +259,9 @@ defmodule PrismWeb.CanvasLive do
       <%!-- Every frame, in the order it was opened, as a stream: nothing
            before this container but the two elements above, which are
            always drawn. It fills the apps' area (the layer above the
-           shelf) and sets no z-index, so it adds no stacking context. The
+           shelf), clips a window hanging past the area's edge so the page
+           never scrolls for it (a full app is fixed, which it does not
+           clip), and sets no z-index, so it adds no stacking context. The
            sandbox and allow attributes are the rules' derivation, never
            written here. In each wrapper the iframe comes first and the
            chrome after it, so a placement that adds or drops the chrome
@@ -268,7 +270,7 @@ defmodule PrismWeb.CanvasLive do
         id={"#{@id}-frames"}
         phx-update="stream"
         class={[
-          "pointer-events-none absolute inset-x-0 top-0",
+          "pointer-events-none absolute inset-x-0 top-0 overflow-hidden",
           if(@shelf, do: "bottom-[52px]", else: "bottom-0")
         ]}
       >
