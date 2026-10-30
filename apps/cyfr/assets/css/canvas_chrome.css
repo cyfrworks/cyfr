@@ -68,14 +68,26 @@
 
 .canvas-app-name {
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 60%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-weight: 500;
 }
 
-.canvas-controls { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+/* What the app set as its title, after its name, muted and truncated. */
+.canvas-app-title {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.canvas-controls { display: flex; align-items: center; gap: 2px; flex-shrink: 0; margin-left: auto; }
 
 .canvas-ghost {
   display: grid;

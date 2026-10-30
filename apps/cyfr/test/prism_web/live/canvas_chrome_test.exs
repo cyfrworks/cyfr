@@ -256,6 +256,35 @@ defmodule PrismWeb.CanvasChromeTest do
     assert app_frame(view, "slot-dash") == nil
   end
 
+  test "a title bar shows the app's name first and the title it set after it; the shelf shows the name alone",
+       %{conn: conn, ctx: ctx, user: user} do
+    view = shell!(conn, ctx, user)
+    window = app_frame(view, "slot-dash")
+    title = "Your vault: the names of your stored credentials and where each may go"
+
+    render_hook(view, "frame_verb", %{
+      "frame" => window.id,
+      "message" => Prima.TinctureWire.shell_message(:title, window.id, %{"title" => title})
+    })
+
+    bar = ~s(#canvas-frame-#{window.id} [data-canvas-grip="#{window.id}"])
+    assert has_element?(view, "#{bar} .canvas-app-name", "slot-dash")
+    refute has_element?(view, "#{bar} .canvas-app-name", "Your vault")
+    assert has_element?(view, ~s(#{bar} .canvas-app-title[title="#{title}"]), title)
+
+    shelf = ~s(#canvas-shelf-apps [data-canvas-shelf-app="tincture:local.slot-dash"])
+    assert has_element?(view, shelf, "slot-dash")
+    refute has_element?(view, shelf, "Your vault")
+
+    # A title that only repeats the name is not shown twice.
+    render_hook(view, "frame_verb", %{
+      "frame" => window.id,
+      "message" => Prima.TinctureWire.shell_message(:title, window.id, %{"title" => "slot-dash"})
+    })
+
+    refute has_element?(view, "#{bar} .canvas-app-title")
+  end
+
   test "the shelf lists the canvas's apps, the active one marked and a minimised one dimmed, and a click raises or restores",
        %{conn: conn, ctx: ctx, user: user} do
     view = shell!(conn, ctx, user)

@@ -398,6 +398,7 @@ defmodule PrismWeb.CanvasLive do
     assigns =
       assign(assigns,
         name: app_name(assigns.card, assigns.frame),
+        subtitle: app_subtitle(assigns.card),
         icon: app_icon(assigns.card, assigns.frame),
         tile?: match?({:tile, _, _}, assigns.frame.placement)
       )
@@ -405,7 +406,8 @@ defmodule PrismWeb.CanvasLive do
     ~H"""
     <div class="canvas-titlebar" data-canvas-grip={@frame.id}>
       <span class="canvas-app-icon" aria-hidden="true">{@icon}</span>
-      <span class="canvas-app-name" title={@card && @card[:title]}>{@name}</span>
+      <span class="canvas-app-name">{@name}</span>
+      <span :if={@subtitle} class="canvas-app-title" title={@subtitle}>{@subtitle}</span>
       <div class="canvas-controls" role="toolbar" aria-label={"#{@name} controls"}>
         <button
           type="button"
@@ -604,6 +606,19 @@ defmodule PrismWeb.CanvasLive do
   defp app_name(%{} = card, _frame), do: card.name
   defp app_name(nil, %{reference: %{name: name}}), do: name
   defp app_name(nil, _frame), do: nil
+
+  # A title the app set (or its manifest's), shown after its name as
+  # secondary text; nothing when it only repeats the name. The shelf shows
+  # the name alone.
+  defp app_subtitle(%{title: title, name: name}) when is_binary(title) do
+    case String.trim(title) do
+      "" -> nil
+      ^name -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp app_subtitle(_card), do: nil
 
   # Its manifest's emoji, or the first letter of its name.
   defp app_icon(%{icon_emoji: icon}, _frame) when is_binary(icon) and icon != "", do: icon
