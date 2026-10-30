@@ -561,7 +561,7 @@ async function main(chromium) {
     ["a.memberships", cyfrRows("a", "memberships"), cyfrIo("a", "memberships")],
     ["a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
     ["a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
-    ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries"), registryIo("directory.identity_log_entries", "id")],
+    ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries", "identifier", id), registryIo("directory.identity_log_entries", "id")],
     ["registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
     ["registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
     ["registry.policy_acceptances[a]", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id")],
