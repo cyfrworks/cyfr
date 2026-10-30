@@ -504,6 +504,15 @@
         },
         %{
           verb: "GET",
+          path: "/a/:athanor/canvas",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":index",
+          auth: "browser_authenticated",
+          live_view: "PrismWeb.ShellLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
           path: "/a/:athanor/components",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
@@ -617,15 +626,6 @@
           plug_opts: ":index",
           auth: "browser_authenticated",
           live_view: "PrismWeb.SettingsLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/a/:athanor/tinctures",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.ShellLive",
           pipe_through: ["browser"]
         },
         %{

@@ -1578,6 +1578,15 @@ defmodule Cyfr.Boundaries do
           "the shell and the scan name one entry; it reads nothing."
     },
     %{
+      from: "PrismWeb.Surface",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the mode a browser session was last in, and its last Dashboard page, are kept " <>
+          "under a hash of its token; a read answers them or a miss, and drops an " <>
+          "expired entry as it finds it, which is the cache's own housekeeping."
+    },
+    %{
       from: "PrismWeb.ThreadPaneLive",
       into: "Arca.Execution",
       functions: [:get_tenant],
@@ -1777,6 +1786,15 @@ defmodule Cyfr.Boundaries do
         "the shell marks its tincture scan running per athanor for a bounded time, so " <>
           "two refreshes start one scan, and clears the mark when the scan ends: " <>
           "server-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.Surface",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the mode switch keeps the mode a browser session was last in, and its last " <>
+          "Dashboard page, under a hash of its token, for a bounded time: server-local " <>
+          "memory, never a row."
     }
   ]
 

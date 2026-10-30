@@ -248,7 +248,7 @@ defmodule PrismWeb.ShellFrameTest do
   end
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     Process.put(:view, view)
     view
   end

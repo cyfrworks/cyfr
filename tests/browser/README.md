@@ -279,7 +279,7 @@ WebAssembly; what a frame then may do is the table below.
 
 The fixture's person, signed in (`session.exs` signs the session's cookie as
 a sign-in's response does), opens `frame-probe` from the Prism shell at
-`/a/<athanor>/tinctures` on the site origin. The shell creates the frame as
+`/a/<athanor>/canvas` on the site origin. The shell creates the frame as
 it creates every frame: the probe declares no capability, so
 `sandbox="allow-scripts"`, at the probe's public address, whose document
 carries the policy the frame's rules derive
@@ -293,7 +293,7 @@ from inside it. Every browser reaches the server through the harness's proxy
 tincture route redirects) and forwards the rest as the stack's proxy
 forwards it. The document's origin is `null` in all three browsers.
 
-Each browser sees the shell at `/a/<segment>/tinctures` frame
+Each browser sees the shell at `/a/<segment>/canvas` frame
 `/t/<segment>/local/frame-probe`, `<segment>` the route segment of the
 fixture person's own athanor, as the release fixture answers it. The experiment asserts no outcome:
 it fails only when an attempt cannot be observed, and `frame-facts.json`,

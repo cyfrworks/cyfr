@@ -99,7 +99,7 @@ defmodule Aqua.Intents do
          :ok <- check_id_shape(publisher, "ui.tincture.focus", "publisher"),
          :ok <- check_id_shape(name, "ui.tincture.focus", "name") do
       path =
-        "/tinctures?publisher=#{URI.encode_www_form(publisher)}" <>
+        "/canvas?publisher=#{URI.encode_www_form(publisher)}" <>
           "&tincture_name=#{URI.encode_www_form(name)}"
 
       {:ok, %{kind: "navigate", to: path}}

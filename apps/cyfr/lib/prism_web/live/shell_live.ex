@@ -19,7 +19,17 @@ defmodule PrismWeb.ShellLive do
 
   @moduledoc """
   The Prism shell: the person's canvases, the tinctures opened over them,
-  the system layer and, when no canvas runs, the tincture picker.
+  the system layer and, when no canvas runs, the tincture picker. It is the
+  Canvas mode, at `/a/<athanor>/canvas`, filling the screen under the top
+  bar with no sidebar or drawer; every other page is the Dashboard, and the
+  top bar switches between them (`PrismWeb.TopbarLive`).
+
+  Switching modes is a page navigation, so the shell's frames end with the
+  page: `terminate/2` writes any gesture still waiting to be written, then
+  revokes every credential it minted, and an app open over a canvas starts
+  over when the person comes back. Nothing of the arrangement is lost: the
+  layout holds every app's placement, and the shell opens the apps from it
+  again on return.
 
   ## The canvases
 
@@ -253,8 +263,8 @@ defmodule PrismWeb.ShellLive do
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(:page_title, "Tinctures")
-      |> assign(:active_nav, "tinctures")
+      |> assign(:page_title, "Canvas")
+      |> assign(:active_nav, "canvas")
       |> assign(:frames, Frames.new())
       |> assign(:renewals, %{})
       |> assign(:covered, false)
@@ -2492,10 +2502,14 @@ defmodule PrismWeb.ShellLive do
   # socket closed, the person left or navigated away, the view redirected
   # — revoked ones included, since revoking is idempotent. A view that
   # dies without reaching here leaves each row to its deadline.
+  # Gestures still waiting to be written when the page ends are written
+  # first, once: a switch to the Dashboard made inside the write window
+  # loses nothing. A write refused then is let go with the page.
   @impl true
   def terminate(_reason, socket) do
     case socket.assigns do
       %{context: %Sanctum.Context{} = ctx, frames: %Frames{} = frames} ->
+        flush_layout(socket)
         Frames.revoke_all(ctx, frames)
         :ok
 
@@ -2503,6 +2517,25 @@ defmodule PrismWeb.ShellLive do
         :ok
     end
   end
+
+  defp flush_layout(
+         %{assigns: %{pending: [_ | _], document: document, layout_base: layout}} = socket
+       ) do
+    args = %{"document" => Prima.Layout.to_json(document), "revision" => layout.revision}
+
+    case PrismWeb.Ops.call_tool(socket, "layout/edit", args) do
+      {:ok, _written} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[PrismWeb.ShellLive] an arrangement waiting as the page ended was not saved: " <>
+            inspect(reason)
+        )
+    end
+  end
+
+  defp flush_layout(_socket), do: :ok
 
   # ============================================================================
   # Render

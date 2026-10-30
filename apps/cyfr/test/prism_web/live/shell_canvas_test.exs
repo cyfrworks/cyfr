@@ -277,7 +277,7 @@ defmodule PrismWeb.ShellCanvasTest do
   # ---- the shell ------------------------------------------------------------
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     Process.put(:view, view)
     # The canvas's read and the shell's placing are messages to the view;
     # they end in a canvas decided on, or in safe mode.
@@ -846,14 +846,17 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
 
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
+      # The Canvas mode draws no sidebar and no drawer.
+      refute has_element?(view, "#chrome-side")
+
+      for covered <- ~w(#chrome-top [data-canvas-place="canvas"]) do
         refute has_element?(view, "#{covered}[inert]"), covered
       end
 
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
 
       # The chrome and every canvas layer under the full frame.
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
+      for covered <- ~w(#chrome-top [data-canvas-place="canvas"]) do
         assert has_element?(view, "#{covered}[inert]"), covered
       end
 
@@ -873,7 +876,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       render_click(view, "close_active_tincture", %{})
 
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
+      for covered <- ~w(#chrome-top [data-canvas-place="canvas"]) do
         refute has_element?(view, "#{covered}[inert]"), covered
       end
     end
@@ -3662,6 +3665,35 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> assigns(view).layout_base.revision == 2 end)
       assert %{placement: {:tile, :right, 2500}} = app_frame(view, "app-dash")
       assert app_frame(view, "side-dash") == nil
+    end
+
+    test "a window survives a switch to the Dashboard and back, even inside the write window",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      assert %{placement: {:window, geometry}, id: first_id} = app_frame(view, "loose-dash")
+      assert assigns(view).pending != []
+
+      # The switch is the top bar's link; following it ends the shell's page.
+      assert {:error, {:live_redirect, %{to: dashboard}}} =
+               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
+
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert row(first_id).state == "revoked"
+      assert %{placement: :window, geometry: ^geometry} = stored_app(user, athanor, "loose-dash")
+
+      {:ok, dash, _html} = live(conn, dashboard)
+
+      assert {:error, {:live_redirect, %{to: back}}} =
+               dash |> find_live_child("topbar") |> element("#mode-canvas") |> render_click()
+
+      assert back =~ "/canvas"
+      again = shell!(conn)
+
+      assert %{placement: {:window, ^geometry}, state: :live, id: id} =
+               app_frame(again, "loose-dash")
+
+      assert id != first_id
     end
 
     test "in the hand every app shows full in stacking order, and a placement gesture is refused",

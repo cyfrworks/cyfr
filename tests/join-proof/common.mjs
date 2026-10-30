@@ -441,7 +441,7 @@ export async function setUpHome(chromium, proxy) {
   const glass = await glassContext.newPage();
   await authenticatorWith(glass, await credentialsFor(desk, new URL(A).host));
   const code = await shownCode(glass, A);
-  await open(desk, `${A}/a/${encodeURIComponent(segment)}/tinctures`);
+  await open(desk, `${A}/a/${encodeURIComponent(segment)}/canvas`);
   await desk.locator("#shell-devices").click();
   await desk.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
   await desk.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);

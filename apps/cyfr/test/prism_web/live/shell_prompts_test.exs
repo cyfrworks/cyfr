@@ -228,7 +228,7 @@ defmodule PrismWeb.ShellPromptsTest do
   end
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     Process.put(:view, view)
     # The canvas's read and the shell's placing are messages to the view.
     wait_until(fn -> render(view) && assigns(view).showing == :canvas end, 2_000, "the canvas")
