@@ -267,7 +267,7 @@ def forwarding_checks():
     check([s[1] for s in fake.seen] == ["/moved/somewhere"], "the redirect is not followed", fake.seen)
 
     fake.seen.clear()
-    for method in ["POST", "PUT", "PATCH", "DELETE"]:
+    for method in ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT", "PROPFIND"]:
         status, _, _ = forwarding.request(method, "/v1/tokens/mint", "{}")
         check(status == 405, "%s on a route the stand-in does not own answers 405" % method, status)
     check(fake.seen == [], "no other method reaches the upstream", fake.seen)

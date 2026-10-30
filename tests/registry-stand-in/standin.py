@@ -469,7 +469,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(502, REDIRECTED, "text/plain")
         self.send(response.status, body, response.getheader("Content-Type") or "application/octet-stream")
 
-    do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = dispatch
+    # Every method, TRACE and CONNECT and any other included, goes to the
+    # one router, which answers a method a route does not take 405; the
+    # base class would answer a method it has no handler for 501.
+    def __getattr__(self, name):
+        if name.startswith("do_"):
+            return self.dispatch
+        raise AttributeError(name)
 
 
 def main(argv):
