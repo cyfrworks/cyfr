@@ -1172,8 +1172,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           ] do
         with_env(%{"CYFR_DIRECTORY_URL" => bad}, fn ->
           message = refusal!()
-          assert message =~ "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL"
-          assert message =~ "at most 1024 bytes long"
+          assert message =~ "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be a directory URL"
+          assert message =~ "at most 1024 bytes long, over https, or over http on this machine"
           refute message =~ bad
         end)
       end

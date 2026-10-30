@@ -6,39 +6,43 @@
  * (`PrismWeb.SystemLayer.Recovery`) and the restore page
  * (`PrismWeb.RestoreLive`).
  *
- * In a recovery prompt, the seed of a new kit is drawn here, 32 bytes from
- * the browser's cryptographic random source, with the request id its
- * attempt goes under, and held in this page's memory for that one pending
- * request (`Material`): submitted to the layer under `recovery_secret`,
- * submitted again, the same, when the layer says its record was confirmed
- * or the person tries again, and forgotten once a kit answers or the
- * prompt ends. An added kit is signed by a kit the person holds: its
- * secret is typed into the prompt's form and held the same way. A kit's
- * three lines arrive in a push to this layer alone and are drawn into the
- * prompt's own place as text, then emptied when the prompt ends.
+ * In a recovery prompt, the secret of a new recovery code is drawn here,
+ * 32 bytes from the browser's cryptographic random source, with the
+ * request id its attempt goes under, and held in this page's memory for
+ * that one pending request (`Material`): submitted to the layer under
+ * `recovery_secret`, submitted again, the same, when the layer says its
+ * record was confirmed or the person tries again, and forgotten once a
+ * code answers or the prompt ends. An added code is signed by a recovery
+ * code the person holds: it is typed into the prompt's form, held the
+ * same way and read by the server. The recovery code the server composes
+ * arrives in a push to this layer alone and is drawn into the prompt's
+ * own place as text, with a Copy button that writes it to the clipboard,
+ * then emptied when the prompt ends.
  *
- * On the restore page, the installation token and the kit's three lines
- * are typed into a form whose inputs have no name, and posted straight to
+ * On the restore page, the installation token and the recovery code are
+ * typed into a form whose inputs have no name, and posted straight to
  * this origin's restore ingress (`POST /restore`): the token in the
- * `authorization` header, the kit in the JSON body. While the restore
+ * `authorization` header, the code in the JSON body. While the restore
  * stands at a phase it resumes from, the page asks again under the same
- * token after the time the answer names; it clears the token and the kit
+ * token after the time the answer names; it clears the token and the code
  * once the restore completes or the person clears the form.
  *
- * The restore page's second form (`KitStep`) serves a home restored from a
- * backup, whose methods the restore suspended: the person types their
- * identifier and the kit's recovery secret, the page asks the kit ingress
- * for a challenge (`POST /restore/kit/challenge`), signs a kit proof over
- * it with the seed in this page (`kitProof`, `cyfr/restore-kit/v1`,
+ * The restore page's second form (`KitStep`) serves a CYFR restored from
+ * a backup, whose methods the restore suspended: the person types their
+ * recovery code, the page reads it into its identifier and secret
+ * (`decodeRecoveryCode`, `recovery_code.js`) and asks nothing for a code
+ * that does not read. It asks the kit ingress for a challenge for that
+ * identifier (`POST /restore/kit/challenge`), signs a kit proof over it
+ * with the secret in this page (`kitProof`, `cyfr/restore-kit/v1`,
  * `tests/fixtures/restore_kit.json`) and trades the proof for a recovery
- * credential (`POST /restore/kit`). The seed leaves the form once the
- * proof is accepted; it is never sent. The credential, held in this page's
- * memory alone and sent only in the `authorization` header, lists each
- * class's suspended items and re-enables the one the person picks
- * (`POST /restore/kit/reenable`). Re-enabling a passkey or a paired device
- * ends the person's recovery, so the page forgets the credential and sends
- * them to sign in with it; clearing the form forgets the seed and the
- * credential too.
+ * credential (`POST /restore/kit`). The code leaves the form once the
+ * proof is accepted; neither it nor its secret is ever sent. The
+ * credential, held in this page's memory alone and sent only in the
+ * `authorization` header, lists each class's suspended items and
+ * re-enables the one the person picks (`POST /restore/kit/reenable`).
+ * Re-enabling a passkey or a paired device ends the person's recovery, so
+ * the page forgets the credential and sends them to sign in with it;
+ * clearing the form forgets the code and the credential too.
  *
  * None of this material is ever put in an address, in cookies, in local
  * or session storage, in IndexedDB, or in anything logged.
@@ -46,6 +50,7 @@
 
 import {b64url, fromB64url} from "./base64url.js"
 import {jcs} from "./device_key.js"
+import {decodeRecoveryCode} from "./recovery_code.js"
 
 export const SEED_BYTES = 32
 
@@ -55,7 +60,7 @@ export const RESTORE_RETRIES = 30
 // The longest wait between two asks, whatever an answer names.
 const MAX_RETRY_S = 60
 
-/** A new kit's seed: 32 bytes from the cryptographic random source, unpadded base64url. */
+/** A new recovery code's secret: 32 bytes from the cryptographic random source, unpadded base64url. */
 export function drawSeed(crypto = globalThis.crypto) {
   const bytes = new Uint8Array(SEED_BYTES)
   crypto.getRandomValues(bytes)
@@ -73,7 +78,7 @@ export function drawRequestId(crypto = globalThis.crypto) {
  * The material each open recovery prompt holds, by prompt id, in memory
  * alone. `submission` answers what the prompt's form submits: material it
  * already holds is reused, so a retry or the confirmed repeat is the same
- * request, and otherwise it is drawn (and, for an added kit, typed).
+ * request, and otherwise it is drawn (and, for an added code, typed).
  */
 export class Material {
   constructor(crypto = globalThis.crypto) {
@@ -83,8 +88,8 @@ export class Material {
 
   /**
    * The event payload for `kind` (`enrollment`, `holder` or `kit`) of the
-   * prompt `promptId`, `typed` the signing kit's secret an added kit
-   * needs; or null when an added kit has none to sign with.
+   * prompt `promptId`, `typed` the recovery code that signs an added one;
+   * or null when an added code has none to sign with.
    */
   submission(promptId, kind, typed = "") {
     switch (kind) {
@@ -98,8 +103,8 @@ export class Material {
         const held = this.hold(promptId, () => ({seed: drawSeed(this.crypto), requestId: drawRequestId(this.crypto), signer}))
         return {
           prompt_id: promptId,
-          recovery_secret: held.signer,
-          holder: {kind: "kit", recovery_secret: held.seed},
+          recovery_code: held.signer,
+          holder: {recovery_secret: held.seed},
           request_id: held.requestId
         }
       }
@@ -128,38 +133,46 @@ export class Material {
   }
 }
 
-/** A kit's three lines, as the prompt draws them: label, value and test name. */
-export function kitRows(kit) {
-  return [
-    ["Identifier", kit.identifier, "kit-identifier"],
-    ["Directory", kit.directory_url, "kit-directory"],
-    ["Recovery secret", kit.recovery_secret, "kit-secret"]
-  ]
-}
-
-/** Draw `kit` into `slot`, each value as text, and show it. */
-export function drawKit(doc, slot, kit) {
-  if (!slot || typeof slot.replaceChildren !== "function" || !kit) return
-  const rows = kitRows(kit).map(([label, value, test]) => {
-    const row = doc.createElement("div")
-    const name = doc.createElement("dt")
-    name.textContent = label
-    const text = doc.createElement("dd")
-    text.textContent = value
-    text.setAttribute("data-test", test)
-    text.setAttribute("class", "font-mono break-all")
-    row.append(name, text)
-    return row
-  })
-  const list = doc.createElement("dl")
-  list.setAttribute("class", "space-y-1 rounded-md border border-gray-600 p-3 text-sm")
-  list.append(...rows)
-  slot.replaceChildren(list)
+/**
+ * Draw the recovery `code` into `slot` as the text of one element, with
+ * the Copy button beside it, and show it. The code is held nowhere else.
+ */
+export function drawCode(doc, slot, code) {
+  if (!slot || typeof slot.replaceChildren !== "function" || typeof code !== "string" || !code) return
+  const text = doc.createElement("p")
+  text.setAttribute("data-test", "recovery-code")
+  text.setAttribute("class", "font-mono break-all")
+  text.textContent = code
+  const copy = doc.createElement("button")
+  copy.setAttribute("type", "button")
+  copy.setAttribute("data-recovery-copy", "")
+  copy.setAttribute("data-test", "recovery-copy")
+  copy.setAttribute("class", "rounded-md border border-gray-600 px-2 py-1 text-xs font-semibold hover:bg-gray-800")
+  copy.textContent = "Copy"
+  slot.replaceChildren(text, copy)
   slot.hidden = false
 }
 
-/** Empty `slot` of whatever kit it showed. */
-export function clearKit(slot) {
+/**
+ * Write the recovery code drawn beside the Copy `button` to `clipboard`,
+ * then say "Copied." on the button. Without a clipboard, or with no code
+ * drawn, it does nothing; a refused write leaves the button as it was.
+ */
+export async function copyCode(button, clipboard = globalThis.navigator?.clipboard) {
+  const slot = button && typeof button.closest === "function" ? button.closest("[data-recovery-code]") : null
+  const shown = slot && typeof slot.querySelector === "function" ? slot.querySelector('[data-test="recovery-code"]') : null
+  const code = shown ? shown.textContent : ""
+  if (!code || !clipboard || typeof clipboard.writeText !== "function") return
+  try {
+    await clipboard.writeText(code)
+  } catch (_error) {
+    return
+  }
+  button.textContent = "Copied."
+}
+
+/** Empty `slot` of whatever code it showed. */
+export function clearCode(slot) {
   if (!slot || typeof slot.replaceChildren !== "function") return
   slot.replaceChildren()
   slot.hidden = true
@@ -205,20 +218,26 @@ export function restoreRequest(path, token, body = {}) {
   }
 }
 
+const NOT_A_CODE = "That is not a recovery code. A recovery code starts with CYFR-."
+const TYPO = "That recovery code has a typo. Check it against the one you saved."
+const MISSING = "Type the installation token and your recovery code."
+
 const REFUSALS = {
-  restore_disabled: "This installation is not set up for a restore. Its operator sets CYFR_RESTORE_TOKEN first.",
-  invalid_token: "That installation token is not this installation's. Nothing was sent on.",
-  invalid_kit: "Those lines are not a kit. Check the identifier, the directory and the recovery secret.",
-  unknown_identity: "The kit's directory knows no such identity.",
-  not_a_holder: "That recovery secret is not one of this identity's kits now.",
-  token_claimed: "Another restore holds this installation, or this token's restore is another kit's.",
+  restore_disabled: "This CYFR is not set up for a restore. Its operator sets CYFR_RESTORE_TOKEN first.",
+  invalid_token: "That installation token is not this CYFR's. Nothing was sent on.",
+  not_a_code: NOT_A_CODE,
+  typo: TYPO,
+  no_directory: "This CYFR does not reach cyfr.run, so it cannot restore. Ask whoever runs this CYFR.",
+  unknown_identity: "cyfr.run knows no identity with that recovery code.",
+  not_a_holder: "That recovery code is not one of this identity's codes now.",
+  token_claimed: "Another restore holds this CYFR, or this token's restore is another code's.",
   token_spent: "This token was spent by an ended restore. The operator sets a new one to start again.",
-  not_empty: "This installation already holds a person: a restore runs only on an empty one.",
-  superseded: "A later recovery replaced the keys this restore introduced, so nothing was activated. Restore again from your kit, under a new token.",
-  refused: "The directory refused this recovery. Nothing was activated.",
+  not_empty: "This CYFR already holds a person: a restore runs only on an empty one.",
+  superseded: "A later recovery replaced the keys this restore introduced, so nothing was activated. Restore again with your recovery code, under a new token.",
+  refused: "cyfr.run refused this recovery. Nothing was activated.",
   not_restored: "No restore has completed under this token.",
   closed: "A first sign-in method exists already: sign in with it.",
-  challenge_refused: "The challenge expired or was used. Prove the kit again."
+  challenge_refused: "The challenge expired or was used. Check your recovery code again."
 }
 
 /**
@@ -229,14 +248,14 @@ const REFUSALS = {
 export function restoreOutcome(status, body) {
   const answer = body && typeof body === "object" ? body : {}
   if (status === 200 && answer.status === "completed") {
-    return {state: "completed", text: "Restored. Your identity is back on this installation; register a passkey on your CYFR's settings page to sign in again."}
+    return {state: "completed", text: "Restored. Your identity is back on this CYFR; register a passkey on your CYFR's settings page to sign in again."}
   }
   if (status === 503 && typeof answer.status === "string") {
     const seconds = Math.min(Math.max(Number(answer.retry_after) || 1, 1), MAX_RETRY_S)
     return {state: "retry", retryAfter: seconds, text: `The restore stands at ${answer.status}; it resumes in ${seconds} s.`}
   }
   if (answer.error === "restored") {
-    return {state: "restored", text: "This installation was restored already. If no passkey was registered in time, prove the kit again to sign in."}
+    return {state: "restored", text: "This CYFR was restored already. If no passkey was registered in time, check your recovery code again to sign in."}
   }
   if (status === 429) return {state: "retry", retryAfter: 60, text: "Too many tries from here; it asks again in a minute."}
   const text = REFUSALS[answer.error] || "The restore did not go through. Try again shortly."
@@ -245,9 +264,9 @@ export function restoreOutcome(status, body) {
 
 /**
  * The restore page's form (`data-restore="page"`), driven from its own
- * element, and the kit step (`KitStep`) its `data-restore-kit` section
- * holds. `fetch`, the timers, `crypto` and the document are the page's
- * own unless a caller hands others.
+ * element, and the recovery step (`KitStep`) its `data-restore-kit`
+ * section holds. `fetch`, the timers, `crypto` and the document are the
+ * page's own unless a caller hands others.
  */
 export class RestorePage {
   // The page's own `fetch` and timers are called as functions, never as
@@ -282,21 +301,17 @@ export class RestorePage {
     el.addEventListener("click", this.onClick)
   }
 
-  // The four values, read from the form at the moment of asking, or null
-  // when one is missing.
+  // The token and the recovery code, read from the form at the moment of
+  // asking, or null when one is missing. The server reads the code.
   read() {
     const token = fieldValue(this.form, "token")
-    const kit = {
-      identifier: fieldValue(this.form, "identifier"),
-      directory_url: fieldValue(this.form, "directory_url"),
-      recovery_secret: fieldValue(this.form, "recovery_secret")
-    }
-    return token && kit.identifier && kit.directory_url && kit.recovery_secret ? {token, kit} : null
+    const code = fieldValue(this.form, "recovery_code")
+    return token && code ? {token, code} : null
   }
 
   begin() {
     const values = this.read()
-    if (!values) return this.show("refused", "Type the installation token and all three lines of the kit.")
+    if (!values) return this.show("refused", MISSING)
     this.stopTimer()
     this.tries = 0
     this.pending = values
@@ -308,7 +323,7 @@ export class RestorePage {
   async ask() {
     const values = this.pending
     if (!values) return
-    const {url, init} = restoreRequest("/restore", values.token, values.kit)
+    const {url, init} = restoreRequest("/restore", values.token, {recovery_code: values.code})
     const outcome = await this.post(url, init)
     if (this.pending !== values) return
     this.settle(outcome)
@@ -316,7 +331,7 @@ export class RestorePage {
 
   async reproof() {
     const values = this.read()
-    if (!values) return this.show("refused", "Type the installation token and all three lines of the kit.")
+    if (!values) return this.show("refused", MISSING)
     this.stopTimer()
     this.tries = 0
     this.pending = values
@@ -324,7 +339,7 @@ export class RestorePage {
     const challenge = await this.post(asked.url, asked.init, true)
     if (this.pending !== values) return
     if (!challenge.body || typeof challenge.body.challenge !== "string") return this.settle(challenge)
-    const proof = restoreRequest("/restore/reproof", values.token, {...values.kit, challenge: challenge.body.challenge})
+    const proof = restoreRequest("/restore/reproof", values.token, {recovery_code: values.code, challenge: challenge.body.challenge})
     const outcome = await this.post(proof.url, proof.init)
     if (this.pending !== values) return
     this.settle(outcome)
@@ -343,7 +358,7 @@ export class RestorePage {
       }
       return raw ? {status: response.status, body, ...restoreOutcome(response.status, body)} : restoreOutcome(response.status, body)
     } catch (_error) {
-      return {state: "refused", text: "This installation could not be reached. Try again shortly."}
+      return {state: "refused", text: "This CYFR could not be reached. Try again shortly."}
     }
   }
 
@@ -371,7 +386,7 @@ export class RestorePage {
         if (this.reproofButton) this.reproofButton.hidden = false
         return this.show("restored", outcome.text)
       default:
-        // The form keeps what was typed, so a mistyped line can be mended;
+        // The form keeps what was typed, so a mistyped code can be mended;
         // nothing else holds it, and nothing asks again.
         this.pending = null
         return this.show("refused", outcome.text)
@@ -389,7 +404,7 @@ export class RestorePage {
     this.timer = null
   }
 
-  // The token and the kit leave this page: the held values, the form's
+  // The token and the code leave this page: the held values, the form's
   // inputs, and any ask still to come.
   clear(state, text) {
     this.stopTimer()
@@ -408,7 +423,7 @@ export class RestorePage {
 }
 
 // ---------------------------------------------------------------------------
-// The kit step: recovering on a home restored from a backup
+// The recovery step: recovering on a CYFR restored from a backup
 // ---------------------------------------------------------------------------
 
 /** The kit proof's protocol (`Prima.Identity.RestoreKit`). */
@@ -434,8 +449,6 @@ const KIT_CLASSES = {
   "pairing.reenable": "Paired devices",
   "passkey.reenable": "Passkeys"
 }
-
-const IDENTIFIER = /^per_[0-9a-f]{64}$/
 
 // PKCS #8 for an Ed25519 private key (RFC 8410), before its 32-byte seed.
 const PKCS8_ED25519_PREFIX = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20])
@@ -467,11 +480,11 @@ export function kitSignedBytes(fields) {
 
 /**
  * The signed kit proof for the home's challenge: the Ed25519 signature by
- * the kit's seed (32 bytes, unpadded base64url) over the JCS bytes of
- * `{protocol, restore_id, identifier, challenge}`. The seed becomes a
- * private key that cannot be exported, and the bytes it was imported from
- * are overwritten once it is. A seed or challenge that is not exactly 32
- * bytes rejects.
+ * `seed`, the recovery code's secret (32 bytes, unpadded base64url), over
+ * the JCS bytes of `{protocol, restore_id, identifier, challenge}`. The
+ * seed becomes a private key that cannot be exported, and the bytes it was
+ * imported from are overwritten once it is. A seed or challenge that is
+ * not exactly 32 bytes rejects.
  */
 export async function kitProof({seed, restoreId, identifier, challenge}, crypto = globalThis.crypto) {
   const seedBytes = exactBytes(seed, 32)
@@ -527,20 +540,22 @@ export function kitItemText(operation, item) {
   return named
 }
 
-const ENDED = "This recovery has ended: it lasts ten minutes and ends once a passkey or device is re-enabled. Recover again from your kit, or sign in with the method you re-enabled."
+const ENDED = "This recovery has ended: it lasts ten minutes and ends once a passkey or device is re-enabled. Recover again with your recovery code, or sign in with the method you re-enabled."
 
 const KIT_REFUSALS = {
-  not_recovering: "This CYFR holds no open recovery for that identifier: it was not restored from a backup with you enrolled, or your recovery has ended. Sign in with a method you re-enabled, or ask this CYFR's administrator.",
-  invalid_proof: "That recovery secret did not make a proof this CYFR reads. Check the kit's recovery secret.",
+  not_a_code: NOT_A_CODE,
+  typo: TYPO,
+  not_recovering: "This CYFR holds no open recovery for that recovery code: it was not restored from a backup that held your identity, or your recovery has ended. Sign in with a method you re-enabled, or ask this CYFR's administrator.",
+  invalid_proof: "That recovery code did not make a proof this CYFR reads. Check your recovery code.",
   challenge_refused: "The challenge expired or was used. Recover again.",
-  not_a_holder: "That recovery secret is not one of this identity's kits now.",
+  not_a_holder: "That recovery code is not one of this identity's codes now.",
   invalid_credential: ENDED,
   not_standing: ENDED,
   operation_not_permitted: "Your recovery covers re-enabling what the restore suspended, and nothing else.",
   not_found: "That item is no longer on this CYFR.",
   revoked: "That item was revoked, and a revoked item is never re-enabled.",
   not_suspended: "That item is active already.",
-  directory_unavailable: "Your identity's directory could not be reached. Try again shortly."
+  directory_unavailable: "cyfr.run could not be reached. Try again shortly."
 }
 
 /**
@@ -559,9 +574,9 @@ export function kitRefusal(status, body) {
 }
 
 /**
- * The kit step of the restore page (`data-restore-kit`): its form of two
- * unnamed inputs, the list of suspended items it draws, and the status it
- * says each answer in.
+ * The recovery step of the restore page (`data-restore-kit`): its form's
+ * one unnamed input, the list of suspended items it draws, and the status
+ * it says each answer in.
  */
 export class KitStep {
   constructor(el, {fetch = (url, init) => globalThis.fetch(url, init), crypto = globalThis.crypto, doc = el.ownerDocument || globalThis.document} = {}) {
@@ -571,6 +586,7 @@ export class KitStep {
     this.doc = doc
     this.credential = null
     this.run = null
+    this.reading = null
     this.items = {}
     this.form = el.querySelector("[data-restore-kit-form]")
     this.list = el.querySelector("[data-restore-kit-items]")
@@ -591,30 +607,38 @@ export class KitStep {
     el.addEventListener("click", this.onClick)
   }
 
-  // The identifier and the seed, read from the form at the moment of
-  // asking, or a sentence saying what is missing.
-  read() {
-    const identifier = fieldValue(this.form, "identifier")
-    const seed = fieldValue(this.form, "recovery_secret")
-    if (!identifier || !seed) return {refused: "Type your identifier and your kit's recovery secret."}
-    if (!IDENTIFIER.test(identifier)) return {refused: "That identifier is not one: it is per_ and 64 hexadecimal digits, the kit's first line."}
-    if (!exactBytes(seed, 32)) return {refused: "That recovery secret is not one: it is the kit's third line, 43 characters."}
-    return {identifier, seed}
+  // The identifier and the secret the recovery code spells, read from the
+  // form at the moment of asking, or a sentence saying why there are none.
+  async read() {
+    const code = fieldValue(this.form, "recovery_code")
+    if (!code) return {refused: "Type your recovery code."}
+    let read
+    try {
+      read = await decodeRecoveryCode(code, this.crypto)
+    } catch (_error) {
+      return {refused: "This browser cannot read your recovery code. Use a current browser."}
+    }
+    if (read.error) return {refused: KIT_REFUSALS[read.error] || NOT_A_CODE}
+    return {identifier: read.identifier, seed: read.secret}
   }
 
-  // Challenge, proof, credential, then the suspended items. A clear or a
-  // newer start while an answer is awaited drops that answer.
+  // The code read, then challenge, proof, credential and the suspended
+  // items. A clear or a newer start while the read or an answer is awaited
+  // drops it; a code that does not read leaves what the step holds.
   async begin() {
-    const values = this.read()
+    const reading = (this.reading = {})
+    const values = await this.read()
+    if (this.reading !== reading) return
+    this.reading = null
     if (values.refused) return this.show("refused", values.refused)
     const run = this.start()
-    this.show("working", "Proving your kit to this CYFR…")
+    this.show("working", "Proving your recovery code to this CYFR…")
 
     const challenge = await this.post(kitRequest("/restore/kit/challenge", {identifier: values.identifier}))
     if (this.run !== run) return
     if (challenge.status !== 200 || !challenge.body || typeof challenge.body.challenge !== "string") return this.refuse(challenge)
     if (typeof challenge.body.restore_id !== "string" || !exactBytes(challenge.body.challenge, KIT_CHALLENGE_BYTES)) {
-      return this.show("refused", "This CYFR's answer was not a kit challenge. Try again shortly.")
+      return this.show("refused", "This CYFR's answer was not a recovery challenge. Try again shortly.")
     }
 
     let proof
@@ -622,7 +646,7 @@ export class KitStep {
       proof = await kitProof({seed: values.seed, restoreId: challenge.body.restore_id, identifier: values.identifier, challenge: challenge.body.challenge}, this.crypto)
     } catch (_error) {
       if (this.run !== run) return
-      return this.show("refused", "This browser could not sign with the kit. Use a current browser.")
+      return this.show("refused", "This browser could not sign with your recovery code. Use a current browser.")
     }
     values.seed = null
     if (this.run !== run) return
@@ -631,7 +655,7 @@ export class KitStep {
     if (this.run !== run) return
     if (granted.status !== 200 || !granted.body || typeof granted.body.credential !== "string") return this.refuse(granted)
 
-    // The seed's work is done: it leaves the form, and only the credential
+    // The code's work is done: it leaves the form, and only the credential
     // is held from here.
     this.credential = granted.body.credential
     clearSecret(this.form)
@@ -689,7 +713,7 @@ export class KitStep {
   }
 
   // A refusal is said; one that ends the credential forgets it and the
-  // list. The form keeps what is still typed, so a mistyped line can be
+  // list. The form keeps what is still typed, so a mistyped code can be
   // mended.
   refuse({status, body}) {
     const {text, ended} = kitRefusal(status, body)
@@ -747,10 +771,11 @@ export class KitStep {
     this.status.textContent = text
   }
 
-  // The seed and the credential leave this page: the form's inputs, the
-  // held credential, the drawn list and any answer still awaited.
+  // The code and the credential leave this page: the form's input, the
+  // held credential, the drawn list and any read or answer still awaited.
   clear(state, text) {
     this.run = null
+    this.reading = null
     this.credential = null
     this.items = {}
     clearFields(this.form)
@@ -765,8 +790,8 @@ export class KitStep {
   }
 }
 
-// Empty the form's recovery secret alone.
+// Empty the form's recovery code alone.
 function clearSecret(form) {
-  const input = form && typeof form.querySelector === "function" ? form.querySelector('[data-field="recovery_secret"]') : null
+  const input = form && typeof form.querySelector === "function" ? form.querySelector('[data-field="recovery_code"]') : null
   if (input) input.value = ""
 }

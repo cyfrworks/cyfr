@@ -4,8 +4,9 @@
 defmodule Sanctum.Providers.PersonTest do
   @moduledoc """
   The `person` tool through the gate, as the wire reaches it: enrollment
-  and its kit, an unfinished enrollment abandoned, another printed kit, a door's link and unlink, a device
-  certificate for another home, and the sign-in carry. Each sensitive
+  and its recovery code, an unfinished enrollment abandoned, another
+  recovery code, a door's link and unlink, a device certificate for
+  another home, and the sign-in carry. Each sensitive
   action meets its confirmation before it changes anything, each refusal
   reads as the refusal table's sentence, and no declared action answers
   that it is not built.
@@ -130,6 +131,15 @@ defmodule Sanctum.Providers.PersonTest do
   defp enroll_args(seed, id),
     do: %{"action" => "enroll", "recovery_secret" => Encoding.b64(seed), "request_id" => id}
 
+  defp add_args(code, id) do
+    %{
+      "action" => "recovery_code_add",
+      "recovery_code" => code,
+      "holder" => %{"recovery_secret" => Encoding.b64(:crypto.strong_rand_bytes(32))},
+      "request_id" => id
+    }
+  end
+
   defp attempts(user_id, kind) do
     Arca.Repo.all(from(a in IdentityAttempt, where: a.user_id == ^user_id and a.kind == ^kind))
   end
@@ -189,32 +199,36 @@ defmodule Sanctum.Providers.PersonTest do
       assert [%{state: "consumed"}] =
                for(c <- confirmations(person.user.id), c.action == "recovery_material", do: c)
 
-      # Once the directory's acceptance is recorded, the retry answers the kit.
+      # Once the directory's acceptance is recorded, the retry answers the
+      # recovery code.
       as = %Prima.Actor{user_id: person.user.id}
       {:ok, _} = Arca.IdentityAttempts.advance(as, attempt.id, "submitted", "accepted")
 
-      assert {:ok, %{phase: "accepted", kit: kit, attempt_id: attempt_id}} =
+      assert {:ok,
+              %{phase: "accepted", code: code, identifier: identifier, attempt_id: attempt_id}} =
                call(person.ctx, enroll_args(seed, id))
 
-      assert kit.recovery_secret == Encoding.b64(seed)
-      assert kit.directory_url == @unreachable
+      assert code == Prima.RecoveryCode.encode(identifier, seed)
 
-      # The kit again needs a fresh proof each time; the acknowledgment
+      # The code again needs a fresh proof each time; saying it is saved
       # erases it.
-      kit_args = %{"action" => "kit", "attempt_id" => attempt_id}
+      code_args = %{"action" => "recovery_code", "attempt_id" => attempt_id}
 
-      assert {:error, {:confirmation_required, %{operation: "person.kit"}}} =
-               call(person.ctx, kit_args)
+      assert {:error, {:confirmation_required, %{operation: "person.recovery_code"}}} =
+               call(person.ctx, code_args)
 
-      assert {:ok, %{kit: ^kit}} = TestContext.confirming(person.ctx, &call(&1, kit_args))
+      assert {:ok, %{attempt_id: ^attempt_id, code: ^code} = shown} =
+               TestContext.confirming(person.ctx, &call(&1, code_args))
+
+      assert map_size(shown) == 2
 
       assert {:ok, %{phase: "completed"}} =
-               call(person.ctx, %{"action" => "kit_ack", "attempt_id" => attempt_id})
+               call(person.ctx, %{"action" => "recovery_code_saved", "attempt_id" => attempt_id})
 
       assert %Prima.Refusal{class: :conflict, message: gone} =
-               refusal(call(person.ctx, kit_args))
+               refusal(call(person.ctx, code_args))
 
-      assert gone =~ "seed is gone"
+      assert gone == "You said your recovery code is saved, so it is gone and cannot be shown."
     end
 
     test "with no directory pinned, enrollment says what the operator owes" do
@@ -277,9 +291,9 @@ defmodule Sanctum.Providers.PersonTest do
       refute inspect(status) =~ "sealed-kit-seed"
       refute Enum.any?(status.kits, &Map.has_key?(&1, :kit_seed_sealed))
 
-      # Acknowledged, the kit is no longer in progress.
+      # Saved, the code is no longer in progress.
       assert {:ok, %{phase: "completed"}} =
-               call(enrolled.ctx, %{"action" => "kit_ack", "attempt_id" => id})
+               call(enrolled.ctx, %{"action" => "recovery_code_saved", "attempt_id" => id})
 
       assert {:ok, %{kits: []}} = call(enrolled.ctx, %{"action" => "status"})
     end
@@ -331,19 +345,69 @@ defmodule Sanctum.Providers.PersonTest do
       assert nothing =~ "no unfinished enrollment"
     end
 
-    test "an accepted enrollment is registered: refused, its kit still offered" do
+    test "an accepted enrollment is registered: refused, its recovery code still offered" do
       person = enrolled!()
 
       assert %Prima.Refusal{class: :conflict, message: message} =
                refusal(call(person.ctx, %{"action" => "enroll_abandon"}))
 
-      assert message == "Your identity is registered; show its kit with person.kit."
+      assert message ==
+               "Your identity is registered; show your recovery code with person.recovery_code."
 
-      assert {:ok, %{enrollment: "enrolled", identifier: identifier, kits: [kit]}} =
+      assert {:ok, %{enrollment: "enrolled", identifier: identifier, kits: [attempt]}} =
                call(person.ctx, %{"action" => "status"})
 
       assert identifier == person.identifier
-      assert %{kind: "enrollment", phase: "accepted", deliverable: true} = kit
+      assert %{kind: "enrollment", phase: "accepted", deliverable: true} = attempt
+    end
+  end
+
+  describe "person.recovery_code_add" do
+    test "a signing code that does not read is refused in the person's words, asking and opening nothing" do
+      person = enrolled!()
+      asked = confirmations(person.user.id)
+      code = Prima.RecoveryCode.encode(person.identifier, :crypto.strong_rand_bytes(32))
+      {kept, last} = String.split_at(code, -1)
+      typo = kept <> if(last == "0", do: "1", else: "0")
+
+      assert %Prima.Refusal{class: :invalid_argument, reason: :typo, message: message} =
+               refusal(call(person.ctx, add_args(typo, request_id())))
+
+      assert message == "That recovery code has a typo. Check it against the one you saved."
+
+      for text <- ["per_" <> String.duplicate("0", 64), "CYFR-" <> String.duplicate("0", 8)] do
+        assert %Prima.Refusal{class: :invalid_argument, reason: :not_a_code, message: message} =
+                 refusal(call(person.ctx, add_args(text, request_id())))
+
+        assert message == "That is not a recovery code. A recovery code starts with CYFR-."
+      end
+
+      assert confirmations(person.user.id) == asked
+      assert attempts(person.user.id, "holder") == []
+    end
+
+    test "a code of another identity is no holder of this person's, asking nothing" do
+      person = enrolled!()
+      other = "per_" <> String.duplicate("ab", 32)
+      asked = confirmations(person.user.id)
+      code = Prima.RecoveryCode.encode(other, :crypto.strong_rand_bytes(32))
+
+      assert %Prima.Refusal{class: :forbidden, reason: :not_a_holder, message: message} =
+               refusal(call(person.ctx, add_args(code, request_id())))
+
+      assert message ==
+               "The recovery code that signs this is not one of your identity's codes now."
+
+      assert confirmations(person.user.id) == asked
+      assert attempts(person.user.id, "holder") == []
+    end
+
+    test "the code that signs is required by its declaration" do
+      person = enrolled!()
+      args = Map.delete(add_args("unused", request_id()), "recovery_code")
+
+      assert %Prima.Refusal{class: :invalid_argument} = refusal(call(person.ctx, args))
+      assert attempts(person.user.id, "holder") == []
     end
   end
 
@@ -568,6 +632,11 @@ defmodule Sanctum.Providers.PersonTest do
         with_log(fn -> Sanctum.Providers.Person.handle(person.ctx, %{"action" => action}) end)
 
       refute result == {:error, :not_built}, "person.#{action} answers :not_built"
+    end
+
+    for action <- ["recovery_code", "recovery_code_saved"] do
+      assert Sanctum.Providers.Person.handle(person.ctx, %{"action" => action}) ==
+               {:error, {:invalid_argument, "#{action} needs the code's attempt_id"}}
     end
   end
 end

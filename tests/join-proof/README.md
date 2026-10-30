@@ -15,7 +15,7 @@ environment, so its cookie, CORS and frame settings are production's:
 | the hub's directory | `dir2.test` | `CYFR_DIRECTORY_SERVE=writer`: a second, independently configured directory |
 | A | `a.test` | the person's home; enrolls at `dir.test`; `device_cert_seconds` short (40, `JOIN_PROOF_CERT_SECONDS`), so a phone renews there while the proof runs |
 | H | `h.test` | the hub; enrolls its own people at `dir2.test`; `CYFR_IDENTITY_FRESHNESS_SECONDS` short (20, `JOIN_PROOF_FRESHNESS`) |
-| A2 | `a2.test` | empty, with a `CYFR_RESTORE_TOKEN` of its own: where the person restores once A is lost |
+| A2 | `a2.test` | empty, with a `CYFR_RESTORE_TOKEN` of its own: where the person restores once A is lost, from `dir.test`, the directory it is configured with |
 
 The cells reach both directories through the identity proof's fronts
 (`tests/identity-proof/front.sh` and `cells.sh`, one front per
@@ -24,8 +24,8 @@ either name, and each enrolls at its own. No DNS, `/etc/hosts`, trust
 store or other configuration outside the scratch directory is read or
 changed. Everything the run starts, the cells' servers, the fronts and the
 Playwright container, and the scratch directory, with the run's
-authority key, every token, cookie and kit line, is removed when it ends,
-whether it succeeds or fails.
+authority key, every token, cookie and recovery code, is removed when it
+ends, whether it succeeds or fails.
 
 ## Browsers
 
@@ -54,11 +54,11 @@ are not covered.
 `proof.mjs` runs the sign-ins (`common.mjs`) and `steps.mjs` the rest;
 `run.sh` answers their asks for the homes' part (`ask-N.json`, answered
 `answer-N.json`), and an ask or answer that carried a cookie, a token, a
-kit line or a confirmation's secret is deleted once read.
+recovery code or a confirmation's secret is deleted once read.
 
 | Step | What holds |
 |---|---|
-| `home` | the person enrolls at A from the settings page with a passkey, adds a second printed kit (`person/enroll_holder`), and pairs a glass at A |
+| `home` | the person enrolls at A from the settings page with a passkey, adds a second recovery code (`person/recovery_code_add`), approved by the first, and pairs a glass at A |
 | `hub` | H, enrolling its own people at `dir2.test`, allows the person's identifier at its door and invites it to a group athanor and a pair athanor |
 | `sign_in` | a fresh profile with no saved homes opens H by its address and names A; A's `/carry` is reached through A's sign-in with the carry's fragment kept, the person begins there, both homes show the same code, A's confirmation names it, and H admits once, making them a member of both athanors; every cross-home request is `cross-site`; neither origin's storage holds a list of homes |
 | `resolution` | H read the person at `dir.test`, which their genesis names, and nothing of them at its own `dir2.test`; neither home's database has a table of visited homes |
@@ -78,7 +78,7 @@ kit line or a confirmation's secret is deleted once read.
 | `recertify` | H refuses the phone's certificate chained to the old key (`4408`), A refuses its renewal (the certification ended), and the phone, offering A's address, is certified there again under a fresh proof, naming A's new `key_epoch` |
 | `tabs` | a sign-in begun for H in one tab of A stays bound to H while other tabs work at H and A |
 | `lost_home` | with A stopped for good, the person's page at H and the phone paired there go on, bound to H |
-| `restore` | the person restores on A2 from the second kit's three lines and A2's installation token, and registers their first passkey there |
+| `restore` | the person restores on A2 with the second recovery code and A2's installation token, and registers their first passkey there |
 | `retired` | H retires every session bound to the old keys, the H passkey's session included, within its bound of reading the recovery; the old H passkey is revoked and signs nobody in; the confirmation waiting at H is voided; an assertion of the old home replayed at H admits nobody; the person signs in at H naming A2 |
 | `admin_again` | their next passkey at H waits again for a new authorization by H's operator |
 | `viewport` | at the handheld's 720×720 touch viewport in Chromium (`tests/browser/handheld.mjs`): a phone pairs at H under A2's certificate, reconnects, goes to A2 and back, and is revoked, the revocation's request shown on its glass first; the glass's screens, that request among them, the certify panel and the consent prompt read and confirmed in A2's system layer have every control 24×24 CSS px or more, text 12 px or more and nothing overflowing (WCAG 2.2 AA); a console page of A2 visited on the way is measured and recorded, not held |

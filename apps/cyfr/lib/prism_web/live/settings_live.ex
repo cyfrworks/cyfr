@@ -14,11 +14,11 @@ defmodule PrismWeb.SettingsLive do
 
     * **Identity** — the identity card (`PrismWeb.IdentityCard`): the
       person's identifier and the directory this CYFR pins, their handle,
-      the enrollment that claims it and its kit; beside it, for an
-      enrolled person, another printed kit and the live key's rotation
-      (`person.rotate`). Every kit renders only in the system layer's
-      recovery prompts (`PrismWeb.SystemLayer.Recovery`): this page never
-      holds a seed or a kit line.
+      the enrollment that claims it and its recovery code; beside it, for
+      an enrolled person, another recovery code and the live key's
+      rotation (`person.rotate`). Every recovery code renders only in the
+      system layer's recovery prompts (`PrismWeb.SystemLayer.Recovery`):
+      this page never holds a secret or a recovery code.
     * **Doors** — each linked door, unlinked through `person.unlink_door`;
       a GitHub or Google door linked through a device flow that answers a
       link ticket (`Sanctum.Auth.DeviceFlow`'s `poll_for_link/4`), and an
@@ -1718,13 +1718,13 @@ defmodule PrismWeb.SettingsLive do
 
   attr :status, :map, required: true
 
-  # Beside the identity card, for an enrolled person: another printed kit
+  # Beside the identity card, for an enrolled person: another recovery code
   # and the live key's rotation.
   defp enrolled_actions(assigns) do
     ~H"""
     <div class="space-y-2">
       <p class="text-sm text-gray-300">
-        A printed kit recovers your identity on a fresh installation. A printed kit is the one recovery holder here; no device holds one. Add another before you rely on one: if every kit is lost, nothing can add one.
+        Your recovery code brings your identity back on a new CYFR. Add a second before you rely on one: if every code is lost, nothing can add one.
       </p>
       <p :if={@status.rotation} class="text-sm" data-test="identity-rotation">
         A rotation of your live key stands at {@status.rotation.phase}.
@@ -1736,7 +1736,7 @@ defmodule PrismWeb.SettingsLive do
           phx-click="add_kit"
           data-test="identity-add-kit"
         >
-          Add another printed kit
+          Add another recovery code
         </.button>
         <.button variant="ghost" phx-click="rotate" data-test="identity-rotate">
           {if @status.rotation, do: "Finish the rotation", else: "Rotate the live key"}

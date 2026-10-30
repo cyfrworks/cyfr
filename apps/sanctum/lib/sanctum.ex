@@ -181,9 +181,10 @@ defmodule Sanctum do
 
   @doc """
   The directory this deployment enrolls its local people at
-  (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`, `https://cyfr.run`
-  when unset), or `nil` when it names none: local operation and local
-  pairing need none, and enrollment needs one. No operation takes a
+  (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`; unset, it is
+  `https://cyfr.run` in production and none in development), or `nil` when
+  it names none: local operation and local pairing need none, and
+  enrollment needs one. No operation takes a
   directory URL. `Sanctum.Supervisor` refuses the boot on a value
   `enrollment_directory?/1` refuses.
   """
@@ -223,37 +224,67 @@ defmodule Sanctum do
   """
   @spec registry_base_url(String.t()) :: String.t()
   def registry_base_url(host) when is_binary(host) do
-    if loopback?(host), do: "http://" <> host, else: "https://" <> host
+    if loopback_host?(host), do: "http://" <> host, else: "https://" <> host
   end
 
-  defp loopback?(host) do
+  @doc """
+  Whether `host` (a name or address with an optional port) is this
+  machine's loopback: `localhost`, an address in `127.0.0.0/8`, or `::1`.
+  A name that only begins like one, such as `127.0.0.1.example`, is not.
+  """
+  @spec loopback_host?(String.t()) :: boolean()
+  def loopback_host?(host) when is_binary(host) do
     case URI.parse("//" <> host) do
-      %URI{host: "localhost"} ->
-        true
+      %URI{host: name} when is_binary(name) -> loopback_name?(name)
+      _ -> false
+    end
+  end
 
-      %URI{host: name} when is_binary(name) ->
-        case :inet.parse_address(String.to_charlist(name)) do
-          {:ok, {127, _, _, _}} -> true
-          {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
-          _ -> false
-        end
+  # A host as a URI holds it: no port, an IPv6 address without brackets.
+  defp loopback_name?("localhost"), do: true
 
-      _ ->
-        false
+  defp loopback_name?(name) do
+    case :inet.parse_address(String.to_charlist(name)) do
+      {:ok, {127, _, _, _}} -> true
+      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+      _ -> false
     end
   end
 
   @doc """
   Whether `value` is a directory this deployment may pin for enrollment:
   a directory URL (`Prima.Identity.Encoding.directory_url?/1`) served over
-  `https`, no longer than a confirmation preview's text
+  `https`, or over `http` on a loopback host (`loopback_host?/1`), no
+  longer than a confirmation preview's text
   (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes), since an
   enrollment's preview names its directory.
+
+  Plain HTTP is allowed on loopback alone because TLS protects a network
+  path and loopback has none, and because a directory is trusted only for
+  ordering: its writes carry signatures and its reads are verified chains
+  (`Sanctum.Directory.Client`). The pinned egress still refuses the
+  address unless the operator lists it in `CYFR_PRIVATE_EGRESS_TARGETS`.
+  An identity whose genesis names a loopback directory cannot be resolved
+  by any other CYFR, which then fails closed.
   """
   @spec enrollment_directory?(term()) :: boolean()
   def enrollment_directory?(value) do
-    Prima.Identity.Encoding.directory_url?(value) and String.starts_with?(value, "https://") and
+    Prima.Identity.Encoding.directory_url?(value) and directory_transport?(value) and
       byte_size(value) <= Prima.Confirmation.Preview.max_text()
+  end
+
+  @doc """
+  Whether a directory URL is spoken to over a transport this deployment
+  accepts: `https`, or `http` on a loopback host (`enrollment_directory?/1`
+  says why).
+  """
+  @spec directory_transport?(String.t()) :: boolean()
+  def directory_transport?(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" -> true
+      %URI{scheme: "http", host: host} when is_binary(host) -> loopback_name?(host)
+      _other -> false
+    end
   end
 
   @doc """

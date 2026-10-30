@@ -14,7 +14,7 @@
 // again, the directory's front broken on purpose, a restore posted at a
 // phase, and what a home holds — is run.sh's, asked for through OUT_DIR
 // (`ask-N.json`, answered `answer-N.json`). An ask or an answer that
-// carries a kit line or an installation token is deleted once read.
+// carries a recovery code or an installation token is deleted once read.
 //
 // Usage: node proof.mjs HOMES_FILE SEGMENT_A COOKIE_A OUT_DIR
 
@@ -22,8 +22,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import {
-  ask as askRunSh, instrumentDevice, launchBrowser, readHomes, redact as redactKnown, saveKit, signedIn, sleep, startProxy,
-  virtualAuthenticator, waitFor,
+  ask as askRunSh, instrumentDevice, launchBrowser, readCode, readHomes, redact as redactKnown, saveCode, signedIn, sleep,
+  startProxy, virtualAuthenticator, waitFor,
 } from "../browser/lib.mjs";
 
 const [homesFile, segmentA, cookieA, outDir] = process.argv.slice(2);
@@ -42,8 +42,8 @@ const settingsOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/
 const shellOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/tinctures`;
 const rows = [];
 const record = {};
-// Every kit line and token the proof handled, so no page, address or
-// record is shown to hold one.
+// Every recovery code, its secret and every token the proof handled, so
+// no page, address or record is shown to hold one.
 const secrets = [];
 
 function row(step, held, what, detail) {
@@ -146,16 +146,6 @@ async function confirmHere(page) {
 const flashed = (page, text, timeout = 30_000) =>
   page.waitForFunction((t) => document.body.innerText.includes(t), text, { timeout });
 
-// The kit the layer drew, read from the prompt as the person reads it.
-async function readKit(page) {
-  const kit = `${layer} [data-test="recovery-kit"]:not([hidden])`;
-  await page.waitForSelector(`${kit} [data-test="kit-secret"]`, { timeout: 60_000 });
-  const line = (test) => page.locator(`${kit} [data-test="${test}"]`).textContent();
-  const lines = { identifier: await line("kit-identifier"), directory_url: await line("kit-directory"), recovery_secret: await line("kit-secret") };
-  secrets.push(lines.recovery_secret);
-  return lines;
-}
-
 // Where a secret the proof handled might have gone in the page's own
 // browser: its storage, its address, and every request the proxy saw.
 async function leaks(page, proxy, mark) {
@@ -229,39 +219,41 @@ async function enroll(desk, proxy) {
   const statements = await desk.locator(`${layer} [data-test="recovery-statements"]`).innerText();
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
   await confirmHere(desk);
-  const kit = await readKit(desk);
-  const shownBeforeSave = (await desk.content()).includes(kit.recovery_secret);
-  await saveKit(desk);
+  const code = await readCode(desk, secrets);
+  const shownBeforeSave = (await desk.content()).includes(code.code);
+  await saveCode(desk);
   await desk.waitForSelector('[data-test="identity"][data-enrollment="enrolled"]', { timeout: 30_000 });
   const leaked = await leaks(desk, proxy, mark);
-  const afterSave = (await desk.content()).includes(kit.recovery_secret);
+  const afterSave = (await desk.content()).includes(code.code);
+  const head = await ask({ op: "a_head" });
+  // The enrollment prompt's statements are matched as the page words them.
   record.enroll = {
-    directory: directory.trim(), identifier: kit.identifier, kit_directory: kit.directory_url,
+    directory: directory.trim(), identifier: code.identifier, a_identifier: head.identifier,
     statements: ["cannot be reached", "If every kit is lost", "never your private data"].map((s) => statements.includes(s)),
     drawn_in_the_prompt: shownBeforeSave, kept_after_saving: afterSave, leaked,
   };
   return [row("enroll",
-    kit.directory_url === directory.trim() && kit.identifier.startsWith("per_") &&
+    directory.trim() === "https://dir.test" && code.identifier === head.identifier &&
       record.enroll.statements.every(Boolean) && shownBeforeSave && !afterSave && leaked === 0,
-    "enrolled from the settings page: the form says what it commits to, the confirmed seed prints its kit in the system layer, and saving it erases it",
-    record.enroll), kit];
+    "enrolled from the settings page at the pinned directory: the form says what it commits to, the confirmed secret is shown in the system layer as a recovery code naming A's identity, and saying it is saved erases it",
+    record.enroll), code];
 }
 
-async function secondKit(desk, proxy, first) {
+async function secondCode(desk, proxy, first) {
   const mark = proxy.seen.length;
   await open(desk, settingsOf(A, segmentA));
   await desk.locator('[data-test="identity-add-kit"]').click();
   await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="holder"]`, { timeout: 30_000 });
-  await desk.locator(`${layer} [data-test="recovery-signer"]`).fill(first.recovery_secret);
+  await desk.locator(`${layer} [data-test="recovery-signer"]`).fill(first.code);
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
   await confirmHere(desk);
-  const kit = await readKit(desk);
-  await saveKit(desk);
+  const code = await readCode(desk, secrets);
+  await saveCode(desk);
   const leaked = await leaks(desk, proxy, mark);
-  record.second_kit = { same_identifier: kit.identifier === first.identifier, distinct: kit.recovery_secret !== first.recovery_secret, leaked };
-  return [row("second_kit", record.second_kit.same_identifier && record.second_kit.distinct && leaked === 0,
-    "another printed kit, signed by the first one typed into the prompt and drawn in the browser",
-    record.second_kit), kit];
+  record.second_code = { same_identifier: code.identifier === first.identifier, distinct: code.secret !== first.secret, leaked };
+  return [row("second_code", record.second_code.same_identifier && record.second_code.distinct && leaked === 0,
+    "another recovery code, approved by the first one typed into the prompt, its secret drawn in the browser",
+    record.second_code), code];
 }
 
 async function rotate(desk, phone, paired) {
@@ -313,29 +305,27 @@ async function cache() {
     record.cache);
 }
 
-// The restore page of `base`, filled with `token` and `kit`, and its
-// answer once it settles.
-async function restoreThere(page, base, token, kit) {
+// The restore page of `base`, filled with `token` and the recovery code
+// `code` (`readCode`), and its answer once it settles.
+async function restoreThere(page, base, token, code) {
   await page.goto(`${base}/restore`);
   await connected(page);
   await page.locator('[data-test="restore-token"]').fill(token);
-  await page.locator('[data-test="restore-identifier"]').fill(kit.identifier);
-  await page.locator('[data-test="restore-directory"]').fill(kit.directory_url);
-  await page.locator('[data-test="restore-secret"]').fill(kit.recovery_secret);
+  await page.locator('[data-test="restore-code"]').fill(code.code);
   await page.locator('[data-test="restore-submit"]').click();
   await page.waitForSelector('[data-test="restore-status"]:not([data-state="idle"]):not([data-state="retry"])', { timeout: 180_000 });
   return page.locator('[data-test="restore-status"]').getAttribute("data-state");
 }
 
-async function restoredHome(page, proxy, base, cell, token, kit, step) {
+async function restoredHome(page, proxy, base, cell, token, code, step) {
   const mark = proxy.seen.length;
-  const state = await restoreThere(page, base, token, kit);
+  const state = await restoreThere(page, base, token, code);
   const fields = await page.$$eval("[data-field]", (inputs) => inputs.map((input) => input.value));
   const leaked = await leaks(page, proxy, mark);
   const posted = proxy.seen.slice(mark).filter((r) => r.method === "POST" && r.url === `${base}/restore`);
   record[step] = { state, emptied: fields.every((value) => value === ""), leaked, posts: posted.length };
   const held = row(step, state === "completed" && record[step].emptied && leaked === 0,
-    `the person restores on ${cell} from the kit's three lines and its own installation token; the form forgets both`,
+    `the person restores on ${cell} with the recovery code and its own installation token; the form forgets both`,
     record[step]);
   return held;
 }
@@ -400,9 +390,9 @@ async function main(browser, proxy) {
   const [paired, device] = await pairLocally(desk, phone);
   if (!paired) return;
   const hand = await handheldPairs(browser, desk);
-  const [enrolled, kit1] = await enroll(desk, proxy);
+  const [enrolled, code1] = await enroll(desk, proxy);
   if (!enrolled) return;
-  const [added, kit2] = await secondKit(desk, proxy, kit1);
+  const [added, code2] = await secondCode(desk, proxy, code1);
   if (!added) return;
   const handBefore = await storedDevice(hand.page);
   if (!(await rotate(desk, phone, device))) return;
@@ -412,22 +402,27 @@ async function main(browser, proxy) {
   // A thief takes a copy of A as it stands.
   record.preserved = await ask({ op: "preserve_a" });
 
-  // C, configured for one restore: its setup is refused before any kit.
+  // C, configured for one restore: its setup is refused before any
+  // recovery code.
   const reserved = await ask({ op: "c_setup" });
   record.reserved = reserved;
   if (!row("reserved", reserved.refused === "restore_reserved",
-    "C, an empty installation configured for restore, refuses its setup before any kit is presented", reserved)) return;
+    "C, an empty installation configured for restore, refuses its setup before any recovery code is presented", reserved)) return;
 
-  // C's token and kit 2, handed to run.sh, which posts with them as the
-  // browser does; neither stays in an ask or an answer.
+  // C's token and the second recovery code, handed to run.sh, which posts
+  // with them as the browser does; neither stays in an ask or an answer.
   const tokenC = (await ask({ op: "token", cell: "c" }, { secret: true })).token;
   secrets.push(tokenC);
-  const claims = await ask({ op: "c_claims", kit: kit2 }, { secret: true });
+  const claims = await ask({ op: "c_claims", code: code2 }, { secret: true });
   record.claims = claims;
-  if (!row("claims", claims.other_token === 401 && claims.unknown_kit === 422 && claims.wrong_seed === 422 && claims.attempts === 0,
-    "C's own token alone opens it: another cell's token, an unknown identity and a seed that is no kit of it are refused, and nothing is claimed", claims)) return;
+  if (!row("claims",
+    claims.other_token === 401 &&
+      claims.unknown_identity?.status === 422 && claims.unknown_identity?.error === "unknown_identity" &&
+      claims.wrong_secret?.status === 422 && claims.wrong_secret?.error === "not_a_holder" &&
+      claims.typo?.status === 422 && claims.typo?.error === "typo" && claims.attempts === 0,
+    "C's own token alone opens it: another cell's token is refused, and so are a recovery code of an identity the directory never saw, one whose secret holds no recovery key of the identity and the person's own code with one symbol changed, each for its reason, and nothing is claimed", claims)) return;
 
-  const phases = await ask({ op: "c_phases", kit: kit2 }, { secret: true, timeoutMs: 900_000 });
+  const phases = await ask({ op: "c_phases", code: code2 }, { secret: true, timeoutMs: 900_000 });
   record.phases = phases;
   if (!row("phases",
     phases.submitted.status === 503 && phases.submitted.phase === "submitted" &&
@@ -443,7 +438,7 @@ async function main(browser, proxy) {
   const cContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const cPage = await cContext.newPage();
   const cAuthenticator = await virtualAuthenticator(cPage);
-  if (!(await restoredHome(cPage, proxy, C, "C", tokenC, kit2, "restore"))) return;
+  if (!(await restoredHome(cPage, proxy, C, "C", tokenC, code2, "restore"))) return;
 
   const observed = await ask({ op: "b_observes", cell: "c" }, { timeoutMs: 300_000 });
   record.b_observes = observed;
@@ -467,9 +462,7 @@ async function main(browser, proxy) {
     await cPage.goto(`${C}/restore`);
     await connected(cPage);
     await cPage.locator('[data-test="restore-token"]').fill(tokenC);
-    await cPage.locator('[data-test="restore-identifier"]').fill(kit2.identifier);
-    await cPage.locator('[data-test="restore-directory"]').fill(kit2.directory_url);
-    await cPage.locator('[data-test="restore-secret"]').fill(kit2.recovery_secret);
+    await cPage.locator('[data-test="restore-code"]').fill(code2.code);
     await cPage.locator('[data-test="restore-submit"]').click();
     await cPage.waitForSelector('[data-test="restore-status"][data-state="restored"]', { timeout: 60_000 });
     await cPage.locator('[data-test="restore-reproof"]').click();
@@ -478,7 +471,7 @@ async function main(browser, proxy) {
   })();
   record.window = { refused_after_window: lapsed === 0, reproof };
   if (!row("window", lapsed === 0 && reproof === "completed",
-    "past the restore session's window, kept in use, no first passkey registers; the kit proven again under a new challenge opens a new window",
+    "past the restore session's window, kept in use, no first passkey registers; the recovery code proven again under a new challenge opens a new window",
     record.window)) return;
   if (!(await firstPasskey(cPage, cAuthenticator, C, segmentC, "first_passkey"))) return;
 
@@ -508,14 +501,14 @@ async function main(browser, proxy) {
   await ask({ op: "a_down" });
   const tokenC2 = (await ask({ op: "token", cell: "c2" }, { secret: true })).token;
   secrets.push(tokenC2);
-  const accepted = await ask({ op: "c2_accepted", kit: kit1 }, { secret: true, timeoutMs: 600_000 });
+  const accepted = await ask({ op: "c2_accepted", code: code1 }, { secret: true, timeoutMs: 600_000 });
   record.c2_accepted = accepted;
   const tokenC3 = (await ask({ op: "token", cell: "c3" }, { secret: true })).token;
   secrets.push(tokenC3);
   const c3Context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const c3Page = await c3Context.newPage();
   const front = await ask({ op: "front_mark" });
-  if (!(await restoredHome(c3Page, proxy, C3, "C3, with A gone", tokenC3, kit2, "without_a"))) return;
+  if (!(await restoredHome(c3Page, proxy, C3, "C3, with A gone", tokenC3, code2, "without_a"))) return;
   const seen = await ask({ op: "front_since", mark: front.mark, cell: "a" });
   record.without_a = { ...record.without_a, directory_paths_only: seen.directory_only, a_answers: seen.a_answers };
   if (!row("without_a_reach", seen.directory_only && seen.a_answers === false,
@@ -572,7 +565,7 @@ try {
 }
 
 const STEPS = [
-  "passkey", "pair", "enroll", "second_kit", "rotate", "cache", "reserved", "claims", "phases", "replay", "thief",
+  "passkey", "pair", "enroll", "second_code", "rotate", "cache", "reserved", "claims", "phases", "replay", "thief",
   "restore", "b_observes", "window", "first_passkey", "door", "pair_again", "viewport", "without_a", "without_a_reach",
   "superseded", "b_observes_again", "directory_down",
 ];

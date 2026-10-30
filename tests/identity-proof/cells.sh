@@ -17,7 +17,8 @@
 #     names, not only its own;
 #   * every front's address in CYFR_PRIVATE_EGRESS_TARGETS, as an operator
 #     lists a private directory, since each is a loopback address;
-#   * CYFR_DIRECTORY_URL, the one directory this deployment enrolls at;
+#   * CYFR_DIRECTORY_URL, the one directory this deployment enrolls at
+#     and restores an identity from;
 #
 # and, once its server answers, the run's authority as the node's trusted
 # store (`:public_key.cacerts_load/1` over `bin/cyfr rpc`), as an operator
@@ -38,8 +39,9 @@ identity_inetrc() {
 
 # Cell `$1` reaches every declared directory, by name through the run's
 # inetrc and at an address listed as a private egress target, and
-# enrolls its people at the directory `$2` (its hostname). `$3...` are
-# further NAME=value lines for its deployment file.
+# enrolls its people, and restores an identity, at the directory `$2`
+# (its hostname). `$3...` are further NAME=value lines for its
+# deployment file.
 identity_reaches_directory() {
   local cell="$1" directory="$2" line targets="locus-backends" host
   shift 2
@@ -107,8 +109,9 @@ identity_fixture() {
 # POST a restore request to cell `$1` as the browser does through the
 # front, on its proxy listener with the front's headers: path `$2`, the
 # file `$3` holding the installation token, sent in the authorization
-# header, and the JSON body file `$4`. Writes the answer's body to `$5`
-# and prints its status. The token and the kit are read from their files,
+# header, and the file `$4` holding the JSON body, a restore's
+# `{"recovery_code": code}`. Writes the answer's body to `$5` and prints
+# its status. The token and the recovery code are read from their files,
 # never put on a command line.
 identity_restore_post() {
   local cell="$1" path="$2" token_file="$3" body="$4" out="$5" host port headers

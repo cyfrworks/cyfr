@@ -17,8 +17,8 @@
 // The homes' part of a step — a fixture's answer, a cell stopped, the
 // directory broken on purpose — is run.sh's, asked for through OUT_DIR
 // (`ask-N.json`, answered `answer-N.json`); an ask or answer that carries
-// a kit line, a token, a cookie or a confirmation's secret is deleted
-// once read.
+// a recovery code, a token, a cookie or a confirmation's secret is
+// deleted once read.
 //
 // This module holds what every step shares: the homes, the record, the
 // asks of run.sh, the browsers' helpers and the steps up to the
@@ -27,9 +27,9 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ask as askRunSh, instrumentDevice, readHomes, redact as redactKnown, saveKit, sleep, waitFor,
+  ask as askRunSh, instrumentDevice, readCode, readHomes, redact as redactKnown, saveCode, sleep, waitFor,
 } from "../browser/lib.mjs";
-export { instrumentDevice, saveKit, sleep, waitFor };
+export { instrumentDevice, sleep, waitFor };
 
 export const [homesFile, outDir] = process.argv.slice(2);
 if (!homesFile || !outDir) {
@@ -410,7 +410,7 @@ export async function setUpHome(chromium, proxy) {
   await authenticatorWith(desk);
   const settings = `${A}/a/${encodeURIComponent(segment)}/settings`;
 
-  // The first passkey at A, then enrollment and a second kit.
+  // The first passkey at A, then enrollment and a second recovery code.
   await open(desk, settings);
   await desk.locator('[data-test="passkey-register"]').click();
   await flashed(desk, "Passkey registered.");
@@ -420,18 +420,18 @@ export async function setUpHome(chromium, proxy) {
   await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="enrollment"]`, { timeout: 30_000 });
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
   await confirmHere(desk);
-  const kit1 = await readKit(desk);
-  await saveKit(desk);
+  const code1 = await readCode(desk, secrets);
+  await saveCode(desk);
   await desk.waitForSelector('[data-test="identity"][data-enrollment="enrolled"]', { timeout: 30_000 });
 
   await open(desk, settings);
   await desk.locator('[data-test="identity-add-kit"]').click();
   await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="holder"]`, { timeout: 30_000 });
-  await desk.locator(`${layer} [data-test="recovery-signer"]`).fill(kit1.recovery_secret);
+  await desk.locator(`${layer} [data-test="recovery-signer"]`).fill(code1.code);
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
   await confirmHere(desk);
-  const kit2 = await readKit(desk);
-  await saveKit(desk);
+  const code2 = await readCode(desk, secrets);
+  await saveCode(desk);
 
   // A glass paired at A, which confirms what Firefox and WebKit ask for:
   // it makes its key first on A's /pair page and shows its code, which the
@@ -455,17 +455,17 @@ export async function setUpHome(chromium, proxy) {
 
   const head = await ask({ op: "a_head" });
   record.home = {
-    identifier: kit1.identifier, same_identifier: kit2.identifier === kit1.identifier,
-    distinct_kits: kit2.recovery_secret !== kit1.recovery_secret, enrollment: head.enrollment,
+    identifier: code1.identifier, same_identifier: code2.identifier === code1.identifier,
+    distinct_codes: code2.secret !== code1.secret, enrollment: head.enrollment,
     a_credentials: (await credentialsFor(desk, new URL(A).host)).length,
     glass: (await storedDevice(glass)).device?.certificate?.subject?.kind,
   };
   const held = row("home", "chromium",
-    head.enrollment === "enrolled" && record.home.same_identifier && record.home.distinct_kits &&
+    head.enrollment === "enrolled" && record.home.same_identifier && record.home.distinct_codes &&
       record.home.a_credentials === 1 && record.home.glass === "local",
-    "the person enrolls at A with a passkey, adds a second printed kit (person/enroll_holder), and pairs a glass there",
+    "the person enrolls at A with a passkey, adds a second recovery code (person/recovery_code_add), and pairs a glass there",
     record.home);
-  return { held, desk, deskContext, segment, settings, glass, kit1, kit2, identifier: kit1.identifier };
+  return { held, desk, deskContext, segment, settings, glass, code1, code2, identifier: code1.identifier };
 }
 
 // The code a new device's /pair page at `base` shows: the digest of the
@@ -475,15 +475,6 @@ export async function shownCode(page, base) {
   const shown = page.locator('[data-test="pair-key-code"]');
   await shown.waitFor({ timeout: 30_000 });
   return (await shown.textContent()).trim();
-}
-
-export async function readKit(page) {
-  const kit = `${layer} [data-test="recovery-kit"]:not([hidden])`;
-  await page.waitForSelector(`${kit} [data-test="kit-secret"]`, { timeout: 60_000 });
-  const line = (test) => page.locator(`${kit} [data-test="${test}"]`).textContent();
-  const lines = { identifier: await line("kit-identifier"), directory_url: await line("kit-directory"), recovery_secret: await line("kit-secret") };
-  secrets.push(lines.recovery_secret);
-  return lines;
 }
 
 export async function setUpHub(identifier) {

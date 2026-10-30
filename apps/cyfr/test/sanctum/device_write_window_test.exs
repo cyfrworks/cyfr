@@ -13,9 +13,9 @@ defmodule Sanctum.DeviceWriteWindowTest do
   certificate in that transaction (`Sanctum.Issuance.device_hold/1`); the
   revocation commits between the confirmation and the write. A change
   whose confirmation is consumed in its write's own transaction (a
-  certification for another home, an enrollment, another kit, a live-key
-  rotation, a remote sign-in assertion, a passkey) is held there by the
-  consumption (`Sanctum.Consent.Authz.consume/2`); the revocation lands
+  certification for another home, an enrollment, another recovery code, a
+  live-key rotation, a remote sign-in assertion, a passkey) is held there
+  by the consumption (`Sanctum.Consent.Authz.consume/2`); the revocation lands
   inside that transaction, right after the device's standing was read
   there. A device never reaches a door's link or unlink, which are a
   session's. Each change still completes while the device stands.
@@ -308,7 +308,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
   defp identity(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
   defp attempt(request_id), do: Arca.Repo.get_by(IdentityAttempt, request_id: request_id)
   defp request_id, do: "req_#{System.unique_integer([:positive])}"
-  defp kit_seed, do: :crypto.strong_rand_bytes(32)
+  defp recovery_secret, do: :crypto.strong_rand_bytes(32)
 
   defp webhook?(ctx, name) do
     Arca.Repo.exists?(
@@ -672,15 +672,14 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # ---------------------------------------------------------------------------
 
   # The person enrolled at the scripted directory under their session, as
-  # they enroll from Prism; answers the kit's seed.
+  # they enroll from Prism; answers their recovery code.
   defp enrolled!(session_ctx, opts) do
-    seed = kit_seed()
-    args = %{"recovery_secret" => Encoding.b64(seed), "request_id" => request_id()}
+    args = %{"recovery_secret" => Encoding.b64(recovery_secret()), "request_id" => request_id()}
 
-    {:ok, %{phase: "accepted"}} =
+    {:ok, %{phase: "accepted", code: code}} =
       Sanctum.TestContext.confirming(session_ctx, &Recovery.enroll(&1, args, opts))
 
-    seed
+    code
   end
 
   defp certify_args do
@@ -699,7 +698,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
   defp holder_args(signer, added, id) do
     %{
-      "recovery_secret" => Encoding.b64(signer),
+      "recovery_code" => signer,
       "holder" => %{"recovery_secret" => Encoding.b64(added)},
       "request_id" => id
     }
@@ -785,7 +784,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
          %{session_ctx: session_ctx, user: user, opts: opts} do
       {client_id, ctx} = paired!(session_ctx)
       id = request_id()
-      args = %{"recovery_secret" => Encoding.b64(kit_seed()), "request_id" => id}
+      args = %{"recovery_secret" => Encoding.b64(recovery_secret()), "request_id" => id}
 
       assert {:error, :not_standing} =
                revoked_at_its_write(session_ctx, client_id, ctx, &Recovery.enroll(&1, args, opts))
@@ -797,7 +796,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
     test "the person enrolls while the device stands",
          %{session_ctx: session_ctx, user: user, opts: opts} do
       {_client_id, ctx} = paired!(session_ctx)
-      args = %{"recovery_secret" => Encoding.b64(kit_seed()), "request_id" => request_id()}
+      args = %{"recovery_secret" => Encoding.b64(recovery_secret()), "request_id" => request_id()}
 
       assert {:ok, %{phase: "accepted"}} =
                Sanctum.TestContext.confirming(ctx, &Recovery.enroll(&1, args, opts))
@@ -805,34 +804,34 @@ defmodule Sanctum.DeviceWriteWindowTest do
       assert %{enrollment: "enrolled"} = identity(user.id)
     end
 
-    test "another kit is refused by a revocation at its write: no attempt is opened, the head stays",
+    test "another recovery code is refused by a revocation at its write: no attempt is opened, the head stays",
          %{session_ctx: session_ctx, user: user, opts: opts} do
-      seed = enrolled!(session_ctx, opts)
+      code = enrolled!(session_ctx, opts)
       {client_id, ctx} = paired!(session_ctx)
       head = identity(user.id).head_hash
       id = request_id()
-      args = holder_args(seed, kit_seed(), id)
+      args = holder_args(code, recovery_secret(), id)
 
       assert {:error, :not_standing} =
                revoked_at_its_write(
                  session_ctx,
                  client_id,
                  ctx,
-                 &Recovery.enroll_holder(&1, args, opts)
+                 &Recovery.recovery_code_add(&1, args, opts)
                )
 
       assert attempt(id) == nil
       assert identity(user.id).head_hash == head
     end
 
-    test "another kit is added while the device stands",
+    test "another recovery code is added while the device stands",
          %{session_ctx: session_ctx, user: user, opts: opts} do
-      seed = enrolled!(session_ctx, opts)
+      code = enrolled!(session_ctx, opts)
       {_client_id, ctx} = paired!(session_ctx)
-      args = holder_args(seed, kit_seed(), request_id())
+      args = holder_args(code, recovery_secret(), request_id())
 
       assert {:ok, %{phase: "accepted", key_epoch: epoch}} =
-               Sanctum.TestContext.confirming(ctx, &Recovery.enroll_holder(&1, args, opts))
+               Sanctum.TestContext.confirming(ctx, &Recovery.recovery_code_add(&1, args, opts))
 
       assert identity(user.id).head_hash == epoch
     end

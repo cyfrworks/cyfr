@@ -4,17 +4,19 @@
 defmodule Emissary.Web.RestoreController do
   @moduledoc """
   The restore ingress (`Sanctum.Recovery`): an identity brought back onto
-  an empty, installation-authorized node from its printed kit. Restore is
-  an ingress, not an operation, because no person exists yet to admit
-  one, exactly as a first sign-in is.
+  an empty, installation-authorized node from the person's recovery code.
+  Restore is an ingress, not an operation, because no person exists yet
+  to admit one, exactly as a first sign-in is.
 
   Every route takes the installation capability, the deployment's
   `CYFR_RESTORE_TOKEN`, as `authorization: Bearer <token>` and nowhere
   else: never a URL, a query or a body field. Sanctum checks it first, so
   a request without it causes no row, no staged key and no outbound call.
-  The kit is the JSON body's `identifier`, `directory_url` and
-  `recovery_secret`, which the request log redacts; the body is at most
-  16 KiB (`CyfrWeb.Plugs.RawBodyReader`).
+  The recovery code is the JSON body's one `recovery_code` field
+  (`Prima.RecoveryCode`), which the request log redacts; the body is at
+  most 16 KiB (`CyfrWeb.Plugs.RawBodyReader`). The identity is read at the
+  directory this installation pins (`Sanctum.directory_url/0`), never one
+  the request names.
 
     * `POST /restore` — restore, or resume this token's restore. Success
       answers `200 {"status": "completed", "identifier": …}` and sets the
@@ -23,22 +25,25 @@ defmodule Emissary.Web.RestoreController do
     * `POST /restore/challenge` — a first-method reproof challenge for this
       token's completed restore: `200 {"challenge": …, "expires_at": …}`,
       alive five minutes.
-    * `POST /restore/reproof` — the kit and `challenge` again, for a new
+    * `POST /restore/reproof` — `recovery_code` and `challenge`, for a new
       `restore` session once the first one's window has closed with no
       method installed: answered as `POST /restore` is.
 
-  Every refusal on these routes, the kit's included, is also the
-  request's refused decision, recorded once with no person or athanor and
-  the code as its reason: restore and the kit decide for themselves, not
-  through the gate. Refusals are this route's own JSON, `{"error": code}`:
+  Every refusal on these routes, the `/restore/kit` ones included, is also
+  the request's refused decision, recorded once with no person or athanor
+  and the error code as its reason: these routes decide for themselves,
+  not through the gate. Refusals are this route's own JSON, `{"error":
+  code}`:
 
     * `404 restore_disabled` — this node configures no restore token;
+    * `404 no_directory` — this node pins no directory to restore from;
     * `401 invalid_token` — the capability is absent or not this node's;
-    * `422 invalid_kit` — the kit is malformed; `422 unknown_identity` —
-      its directory serves no such identity; `422 not_a_holder` — its seed
-      is not one of the identity's recovery kits now;
+    * `422 not_a_code` — the body holds no recovery code; `422 typo` — the
+      code's check does not match; `422 unknown_identity` — the pinned
+      directory serves no identity of the code's; `422 not_a_holder` — the
+      code's secret is not one of the identity's recovery holders now;
     * `409 token_claimed` (another restore holds this node, or this
-      token's restore is another kit's), `409 token_spent`,
+      token's restore is another identity's), `409 token_spent`,
       `409 not_empty` (the node holds a person), `409 superseded` (a later
       recovery replaced the keys this restore introduced), `409 refused`
       (the directory refused the recovery), `409 restored` (a plain retry
@@ -49,21 +54,21 @@ defmodule Emissary.Web.RestoreController do
       at `phase` and resumes under the same token, with a `retry-after`
       header.
 
-  ## After a declared restore: the kit
+  ## After a declared restore: the proof of a recovery code
 
   A home restored from a backup (`ARCHITECTURE.md` §6.9) retired every
   session and suspended every passkey and device, so a person with no
-  door left recovers with their printed kit, sessionless, and without the
-  installation token. The kit's seed stays in the browser: it signs the
-  home's challenge (`Prima.Identity.RestoreKit`), and the signature is
+  door left recovers with their recovery code, sessionless, and without
+  the installation token. The code stays in the browser: its secret signs
+  the home's challenge (`Prima.Identity.RestoreKit`), and the signature is
   verified against the recovery keys of the person's identity read fresh
   from their directory (`Sanctum.Recovery.kit_proof/2`).
 
     * `POST /restore/kit/challenge` — `{"identifier": per_…}`: `200
       {"challenge", "restore_id", "expires_at"}`, alive five minutes.
-    * `POST /restore/kit` — `{"proof": {…}}`, the signed kit proof:
-      `200 {"credential", "expires_at"}`, the kit credential, alive ten
-      minutes and while the person's row of the restore stays open.
+    * `POST /restore/kit` — `{"proof": {…}}`, the signed proof:
+      `200 {"credential", "expires_at"}`, the restore credential, alive
+      ten minutes and while the person's row of the restore stays open.
     * `POST /restore/kit/reenable` — the credential as
       `authorization: Bearer <credential>`, and `{"operation", …}` naming
       one of the four re-enable operations: with no item named, `200
@@ -86,11 +91,9 @@ defmodule Emissary.Web.RestoreController do
 
   alias CyfrWeb.Plugs.CallIdentity
 
-  @kit_fields ["identifier", "directory_url", "recovery_secret"]
-
   @doc "`POST /restore`."
   def restore(conn, params) do
-    answer(conn, Sanctum.Recovery.restore(Map.take(params, @kit_fields), capability(conn)))
+    answer(conn, Sanctum.Recovery.restore(Map.take(params, ["recovery_code"]), capability(conn)))
   end
 
   @doc "`POST /restore/challenge`."
@@ -110,7 +113,10 @@ defmodule Emissary.Web.RestoreController do
   def reproof(conn, params) do
     answer(
       conn,
-      Sanctum.Recovery.reproof(Map.take(params, ["challenge" | @kit_fields]), capability(conn))
+      Sanctum.Recovery.reproof(
+        Map.take(params, ["recovery_code", "challenge"]),
+        capability(conn)
+      )
     )
   end
 
@@ -244,16 +250,17 @@ defmodule Emissary.Web.RestoreController do
     |> json(%{status: phase, retry_after: seconds})
   end
 
-  # Restore is an entry path and the kit its own ingress, so every refusal
-  # here is the request's refused decision, recorded once under its call id
-  # (`CyfrWeb.Plugs.CallIdentity.refused/3`), with no person or athanor,
-  # the class its status means, and its code as the reason.
+  # Restore is an entry path and `/restore/kit` its own ingress, so every
+  # refusal here is the request's refused decision, recorded once under its
+  # call id (`CyfrWeb.Plugs.CallIdentity.refused/3`), with no person or
+  # athanor, the class its status means, and its error code as the reason.
   defp recorded(conn, status, code), do: CallIdentity.refused(conn, status, code)
 
   defp status(:restore_disabled), do: {404, "restore_disabled"}
+  defp status(:no_directory), do: {404, "no_directory"}
   defp status(:invalid_token), do: {401, "invalid_token"}
 
-  defp status(reason) when reason in [:invalid_kit, :unknown_identity, :not_a_holder],
+  defp status(reason) when reason in [:not_a_code, :typo, :unknown_identity, :not_a_holder],
     do: {422, Atom.to_string(reason)}
 
   defp status(reason)

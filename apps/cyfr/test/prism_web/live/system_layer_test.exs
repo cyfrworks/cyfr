@@ -5993,10 +5993,10 @@ defmodule PrismWeb.SystemLayerTest do
              kind: :kit,
              action: :recovery_material,
              subject: %{attempt_id: "att_k"}
-           }, "Show this kit again"},
+           }, "Show your recovery code again"},
         holder:
           {%{id: "k-holder", kind: :holder, action: :recovery_material, subject: %{}},
-           "Another kit is signed by a kit you hold now"}
+           "A recovery code you hold approves the new one"}
       }
     end
 

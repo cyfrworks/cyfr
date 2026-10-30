@@ -23,13 +23,20 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   and published listener, `CYFR_HOST_API_BIND` and `CYFR_HOST_API_PORT`
   from the runtime's callback address, `CYFR_LOCUS_BACKENDS_URL` and
   `CYFR_LOCUS_BUILDS_URL` from each island guard's fixed address and
-  port, and `CYFR_PRIVATE_EGRESS_TARGETS`, the backends guard's address.
-  A value `.env` or the environment sets for one of them, a
-  `CYFR_HOST_API_URL` other than the callback address, or a
+  port, and `CYFR_PRIVATE_EGRESS_TARGETS`, the backends guard's address
+  and the stand-in's. A value `.env` or the environment sets for one of
+  them, a `CYFR_HOST_API_URL` other than the callback address, or a
   `CYFR_BIND_ADDRESS` other than Prism's, is refused by name: each would
   serve Prism, or send runs, calls or builds, somewhere the stack is not.
 
-      mix cyfr.locus.dev_stack settings DECLARATIONS
+  STAND_IN is the slot's cyfr.run stand-in (`tests/registry-stand-in/`),
+  `127.79.<slot>.1:<port>`. Whatever `.env` says, the server's registry
+  is that address (`CYFR_REGISTRY_URL`), its directory the same address
+  over HTTP (`CYFR_DIRECTORY_URL`), and its OCI registry stays cyfr.run's
+  (`CYFR_OCI_REGISTRY_URL=registry.cyfr.run`), so a person the stack makes
+  exists only at the stand-in and components still pull from cyfr.run.
+
+      mix cyfr.locus.dev_stack settings DECLARATIONS STAND_IN
 
   first writes into `.env`, made mode 0600 before it is written, each
   setting a mix boot needs that neither `.env` nor the environment sets:
@@ -48,10 +55,19 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   `LOCUS_RUNTIME_KEY`, the runtime's id's key derived from the root
   (`Prima.WorkerAuth.worker_key/2`), and the backends and builds keys.
 
-      mix cyfr.locus.dev_stack endpoint DECLARATIONS
+      mix cyfr.locus.dev_stack endpoint DECLARATIONS STAND_IN
 
   writes nothing and prints `CYFR_PORT=<port>`, Prism's port, where
   `scripts/dev-stack.sh check` reaches the server, after the same refusals.
+
+      mix cyfr.locus.dev_stack database
+
+  writes nothing and prints `DEV_STACK_DATABASE_NEW=1` when the dev
+  database the checkout configures does not exist yet (under SQLite, its
+  file, `data/cyfr.db` unless `CYFR_DATABASE_PATH` names another; under
+  PostgreSQL, the database `CYFR_DATABASE_URL` names), else
+  `DEV_STACK_DATABASE_NEW=0`: the script clears the stand-in's state with a
+  new database, and binds the loop to the stand-in's slot otherwise.
 
   Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
   never a release.
@@ -100,8 +116,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  defp answer(["settings", declarations]) do
-    with {:ok, stack} <- declared(declarations),
+  defp answer(["settings", declarations, stand_in]) do
+    with {:ok, stack} <- declared(declarations, stand_in),
          env = environment(),
          :ok <- agree(stack, env),
          {:ok, lines} <- provision(env),
@@ -114,29 +130,39 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
       for {@setup, token} <- lines,
           do: info("setup http://localhost:#{stack.prism_port}/setup##{token}")
 
-      for {name, value} <- stack.server, do: info("server #{name}=#{value}")
+      for {name, value} <- stack.server ++ stack.stand_in, do: info("server #{name}=#{value}")
       info("server #{@builds_key}=#{builds_key}")
       for {name, value} <- keys, do: info("compose #{name}=#{value}")
       :ok
     end
   end
 
-  defp answer(["endpoint", declarations]) do
-    with {:ok, stack} <- declared(declarations),
+  defp answer(["endpoint", declarations, stand_in]) do
+    with {:ok, stack} <- declared(declarations, stand_in),
          :ok <- agree(stack, environment()) do
       info("CYFR_PORT=" <> stack.prism_port)
     end
   end
 
+  defp answer(["database"]) do
+    with {:ok, new?} <- new_database(environment()) do
+      info("DEV_STACK_DATABASE_NEW=" <> if(new?, do: "1", else: "0"))
+    end
+  end
+
   defp answer(_args) do
-    {:error, "usage: mix cyfr.locus.dev_stack settings DECLARATIONS | endpoint DECLARATIONS"}
+    {:error,
+     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS STAND_IN | " <>
+       "endpoint DECLARATIONS STAND_IN | database"}
   end
 
   defp info(line), do: Mix.shell().info(line)
 
-  # The stack docker-compose.dev.yml declares, as compose resolved it.
-  defp declared(path) do
-    with {:ok, json} <- resolution(path),
+  # The stack docker-compose.dev.yml declares, as compose resolved it, and
+  # the slot's stand-in.
+  defp declared(path, stand_in) do
+    with {:ok, stand_in} <- stand_in(stand_in),
+         {:ok, json} <- resolution(path),
          {:ok, prism_port} <- prism(json["x-prism"]),
          {:ok, proxy_port} <- proxy(json["x-prism-proxy"]),
          {:ok, runtime} <- runtime(get_in(json, ["services", "locus-runtime"])),
@@ -155,10 +181,29 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
            {"CYFR_HOST_API_BIND", runtime.host_api_bind},
            {"CYFR_HOST_API_PORT", runtime.host_api_port},
            {"CYFR_LOCUS_BACKENDS_URL", "http://#{backends.address}:#{backends.port}"},
-           {"CYFR_PRIVATE_EGRESS_TARGETS", backends.address},
+           {"CYFR_PRIVATE_EGRESS_TARGETS", "#{backends.address},#{stand_in.address}"},
            {"CYFR_LOCUS_BUILDS_URL", "http://#{builds.address}:#{builds.port}"}
+         ],
+         stand_in: [
+           {"CYFR_REGISTRY_URL", "#{stand_in.address}:#{stand_in.port}"},
+           {"CYFR_DIRECTORY_URL", "http://#{stand_in.address}:#{stand_in.port}"},
+           {"CYFR_OCI_REGISTRY_URL", "registry.cyfr.run"}
          ]
        }}
+    end
+  end
+
+  # The slot's stand-in: an address of 127.79.0.0/16, which is this
+  # machine's loopback, and a port. The private egress list takes
+  # addresses alone, so naming 127.0.0.1 would open every local port to the
+  # server's own outbound calls; the stand-in's address opens its own.
+  defp stand_in(text) do
+    with [address, port] <- String.split(text, ":"),
+         {:ok, {127, 79, _, _}} <- :inet.parse_ipv4strict_address(String.to_charlist(address)),
+         true <- port?(port) do
+      {:ok, %{address: address, port: port}}
+    else
+      _ -> {:error, "#{text} is not the stand-in's address: 127.79.<slot>.1:<port>."}
     end
   end
 
@@ -229,6 +274,35 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     case Integer.parse(text) do
       {port, ""} -> port in 1..65_535
       _ -> false
+    end
+  end
+
+  # Whether the dev database the checkout configures is yet to be made, read
+  # as a boot of this build resolves it (`config/runtime.exs`) and asked of
+  # Arca, which alone names the adapter.
+  defp new_database(env) do
+    getenv = fn name -> set(env, name) end
+
+    options =
+      case Arca.adapter_facts().adapter do
+        :sqlite ->
+          with {:ok, %{database_path: path}} <- Cyfr.RuntimeConfig.resolve_paths(getenv),
+               do: {:ok, [database: path]}
+
+        :postgres ->
+          Cyfr.RuntimeConfig.resolve_postgres(getenv)
+      end
+
+    with {:ok, options} <- options do
+      case Arca.database_exists(options) do
+        {:ok, exists?} ->
+          {:ok, not exists?}
+
+        {:error, reason} ->
+          {:error,
+           "The database server CYFR_DATABASE_URL names could not say whether its database " <>
+             "exists (#{Prima.LoggerContext.shape(reason)}). Start it, or fix CYFR_DATABASE_URL."}
+      end
     end
   end
 
