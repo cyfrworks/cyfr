@@ -23,11 +23,11 @@ defmodule PrismWeb.CanvasChromeTest do
     ctx = %{Sanctum.TestContext.local() | athanor_id: athanor.id}
 
     base = Path.join(System.tmp_dir!(), "canvas_chrome_#{System.unique_integer([:positive])}")
-    original_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, base)
+    # The restore is registered before the change, so a test killed at its
+    # timeout leaves the setting as it found it.
+    Prima.Test.Env.put_app_env(:arca, :base_path, base)
 
     on_exit(fn ->
-      Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
       reload_registry()
     end)
