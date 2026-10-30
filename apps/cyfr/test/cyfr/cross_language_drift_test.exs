@@ -522,6 +522,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/release-boot/boot.sh", ~w(boot)}
     ],
     "recovery_code.json" => [
+      {"apps/cyfr/assets/test/system_layer/recovery.test.mjs", ~w(refused valid)},
       {"apps/cyfr/assets/test/system_layer/recovery_code.test.mjs", ~w(refused spellings valid)},
       {"apps/prima/test/prima/recovery_code_test.exs", ~w(protocol refused spellings valid)}
     ],
