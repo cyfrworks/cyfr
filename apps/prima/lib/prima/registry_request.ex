@@ -20,10 +20,6 @@ defmodule Prima.RegistryRequest do
       (`Prima.ComponentRef.valid_personal_slug?/1`).
     * `tokens.mint` — `label`, the device label: 1 to 64 printable ASCII
       characters.
-    * `address.set` — `address`, a home's origin
-      (`Prima.Identity.Encoding.home?/1`) to publish; a body without it
-      withdraws the published address. JCS has no null (`Prima.JCS`), so
-      absence is the one spelling of "none", and a null is refused.
     * `policy.accept` — `policy_version`, the version the registry
       publishes: text of at most 128 bytes.
     * `appeal.file` — `action_type` (`takedown` or `ban`), `action_ref`
@@ -80,7 +76,6 @@ defmodule Prima.RegistryRequest do
   @bodies %{
     "handle.claim" => {~w(handle), []},
     "tokens.mint" => {~w(label), []},
-    "address.set" => {[], ~w(address)},
     "policy.accept" => {~w(policy_version), []},
     "appeal.file" => {~w(action_type action_ref argument), []},
     "publisher.claim" => {~w(slug), []},
@@ -110,7 +105,6 @@ defmodule Prima.RegistryRequest do
     has_other_handle: {"ALREADY_CLAIMED", 409},
     handle_invalid: {"INVALID_USERNAME", 400},
     handle_reserved: {"RESERVED", 400},
-    no_handle: {"NO_HANDLE", 409},
     namespace_reserved: {"NAMESPACE_RESERVED", 403},
     claim_not_pending: {"CLAIM_NOT_PENDING", 409},
     dns_unverified: {"DNS_UNVERIFIED", 400},
@@ -143,7 +137,6 @@ defmodule Prima.RegistryRequest do
           | :has_other_handle
           | :handle_invalid
           | :handle_reserved
-          | :no_handle
           | :namespace_reserved
           | :claim_not_pending
           | :dns_unverified
@@ -266,10 +259,7 @@ defmodule Prima.RegistryRequest do
          do: {:ok, request}
   end
 
-  @doc """
-  The JSON map of a request; `sig` is absent while unsigned. `address.set`
-  without an address has no `address` key.
-  """
+  @doc "The JSON map of a request; `sig` is absent while unsigned."
   @spec encode(t()) :: map()
   def encode(%__MODULE__{} = request) do
     Encoding.compact(%{
@@ -389,7 +379,6 @@ defmodule Prima.RegistryRequest do
 
   defp valid?("handle", value), do: ComponentRef.valid_personal_slug?(value)
   defp valid?("label", value), do: is_binary(value) and Regex.match?(@label, value)
-  defp valid?("address", value), do: Encoding.home?(value)
   defp valid?("policy_version", value), do: Encoding.text?(value, 128)
   defp valid?("action_type", value), do: value in ["takedown", "ban"]
   defp valid?("action_ref", value), do: Encoding.text?(value, 256)

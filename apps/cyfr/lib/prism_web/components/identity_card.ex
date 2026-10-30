@@ -19,7 +19,7 @@ defmodule PrismWeb.IdentityCard do
   | the same, with no prompt here holding its seed | "Abandon and start again", then enroll under a new seed |
   | accepted, kit not acknowledged | show the kit again, under a fresh confirmation |
   | kit acknowledged, a handle wanted | "Claim @name" |
-  | claimed | the handle, and whether the registry publishes this CYFR's address with it |
+  | claimed | the handle |
 
   A handle is checked live against the registry's answer for it
   (`Sanctum.Handle.resolve/1`): taken, free, or not answered now. Only a
@@ -47,8 +47,7 @@ defmodule PrismWeb.IdentityCard do
   `identity-enroll` (enrollment with no handle),
   `identity-abandon`, `identity-kit` (with `data-attempt` and
   `data-phase`), `identity-kit-show`, `identity-claim`, `identity-claim-error`,
-  `identity-claimed`, `identity-publish` (with `data-published`) and
-  `identity-error`.
+  `identity-claimed` and `identity-error`.
   """
 
   use PrismWeb, :live_component
@@ -59,7 +58,7 @@ defmodule PrismWeb.IdentityCard do
   alias Sanctum.Tenancy.Users
 
   @prompt_prefix "identity-recovery-"
-  @events ~w(check choose enroll abandon show_kit claim publish)
+  @events ~w(check choose enroll abandon show_kit claim)
 
   @doc "The card's component id."
   @spec id() :: String.t()
@@ -84,7 +83,6 @@ defmodule PrismWeb.IdentityCard do
        claim_on_ack: false,
        claim_error: nil,
        choose_another: false,
-       published: :unread,
        error: nil,
        loaded: false,
        enrolled: []
@@ -138,7 +136,6 @@ defmodule PrismWeb.IdentityCard do
       |> assign(:wanted, Users.prefs(user)["handle_wanted"])
       |> assign(:handle, user[:namespace])
       |> assign(:legal_path, legal_path(ctx.user_id))
-      |> read_publication()
     else
       {:error, reason} -> assign(socket, status: nil, error: Ops.error_message(reason))
     end
@@ -152,34 +149,9 @@ defmodule PrismWeb.IdentityCard do
     end
   end
 
-  # Whether the registry publishes this CYFR's address with the handle:
-  # its live answer for the handle (`Sanctum.Handle.resolve/1`).
-  defp read_publication(%{assigns: %{handle: handle}} = socket) when is_binary(handle) do
-    tag = CyfrWeb.ContextGuard.capture(socket)
-    start_async(socket, :publication, fn -> {tag, handle, Sanctum.Handle.resolve(handle)} end)
-  end
-
-  defp read_publication(socket), do: assign(socket, :published, :unread)
-
   @impl true
   # A registry answer is taken only for the focus it was asked under and the
-  # handle still shown.
-  def handle_async(
-        :publication,
-        {:ok, {tag, handle, answer}},
-        %{assigns: %{handle: handle}} = socket
-      ) do
-    CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
-      published =
-        case answer do
-          {:ok, %{address: address}} -> is_binary(address)
-          {:error, _unanswered} -> :unknown
-        end
-
-      {:noreply, assign(socket, :published, published)}
-    end)
-  end
-
+  # handle still typed.
   def handle_async(
         :check,
         {:ok, {tag, handle, answer}},
@@ -258,16 +230,6 @@ defmodule PrismWeb.IdentityCard do
     do: {:noreply, show(socket, &Recovery.kit(&1, attempt_id))}
 
   defp act("claim", _params, socket), do: {:noreply, claim(socket)}
-
-  defp act("publish", %{"published" => published}, socket)
-       when published in ["true", "false"] do
-    case Ops.call_tool(socket.assigns.context, "registry/publish_address", %{
-           "published" => published == "true"
-         }) do
-      {:ok, _answer} -> {:noreply, read_publication(assign(socket, :error, nil))}
-      {:error, reason} -> {:noreply, assign(socket, :error, Ops.error_message(reason))}
-    end
-  end
 
   defp act(_event, _params, socket), do: {:noreply, socket}
 
@@ -607,30 +569,6 @@ defmodule PrismWeb.IdentityCard do
         <div :if={@state == :claimed} class="space-y-2" data-test="identity-claimed">
           <p class="text-sm text-gray-300">
             Your handle is <span class="font-mono text-white">@{@handle}</span>.
-          </p>
-          <div
-            :if={@published in [true, false]}
-            class="flex items-center justify-between gap-2 text-sm"
-            data-test="identity-publish"
-            data-published={to_string(@published)}
-          >
-            <span :if={@published}>
-              The registry publishes this CYFR's address with your handle.
-            </span>
-            <span :if={not @published}>
-              The registry does not publish this CYFR's address with your handle.
-            </span>
-            <.button
-              variant="ghost"
-              phx-click="publish"
-              phx-value-published={to_string(not @published)}
-              phx-target={@myself}
-            >
-              {if @published, do: "Withdraw it", else: "Publish it"}
-            </.button>
-          </div>
-          <p :if={@published == :unknown} class="text-sm text-gray-400">
-            The registry does not answer now, so whether it publishes this CYFR's address is not known.
           </p>
         </div>
 

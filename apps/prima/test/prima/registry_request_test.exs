@@ -93,7 +93,7 @@ defmodule Prima.RegistryRequestTest do
     assert RegistryRequest.max_ahead_ms() == 360_000
 
     assert RegistryRequest.operations() ==
-             ~w(address.set appeal.file handle.claim policy.accept publisher.claim publisher.verify tokens.mint)
+             ~w(appeal.file handle.claim policy.accept publisher.claim publisher.verify tokens.mint)
   end
 
   test "every public key derives from its seed" do
@@ -285,16 +285,6 @@ defmodule Prima.RegistryRequestTest do
 
     assert RegistryRequest.sign(appeal, private(v, "alice_live_1")) ==
              {:error, :request_malformed}
-  end
-
-  test "an address withdrawn is a body without one, and a null address is refused" do
-    v = vectors()
-    map = v["requests"]["address_withdraw"]["request"]
-    assert map["body"] == %{}
-
-    assert {:ok, request} = new(map)
-    assert RegistryRequest.sign(request, private(v, "alice_live_1")) == {:ok, Encoding.jcs!(map)}
-    assert new(Map.put(map, "body", %{"address" => nil})) == {:error, :request_malformed}
   end
 
   test "each handle and publisher spelling is held to the slug grammar on both sides" do

@@ -252,7 +252,6 @@ const (
 	RegistryMembersList             = "members_list"
 	RegistryMembersRemove           = "members_remove"
 	RegistryMembersUpdate           = "members_update"
-	RegistryPublishAddress          = "publish_address"
 	RegistryReport                  = "report"
 	RegistrySync                    = "sync"
 	RegistryTokensIssue             = "tokens_issue"
@@ -360,7 +359,7 @@ var Actions = map[string][]string{
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "publish_address", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -4512,21 +4511,6 @@ func (args RegistryMembersUpdateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryMembersUpdate, fields: fields(args)})
-}
-
-// RegistryPublishAddressArgs carries arguments for registry.publish_address.
-type RegistryPublishAddressArgs struct {
-	// Whether the registry publishes this CYFR's address with your handle (true) or withdraws it (false)
-	Published bool `json:"published"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryPublishAddressArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryPublishAddressArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryPublishAddress, fields: fields(args)})
 }
 
 // RegistryReportArgs carries arguments for registry.report.

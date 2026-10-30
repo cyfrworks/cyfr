@@ -2,34 +2,15 @@
   "answers": [
     {
       "bytes": "{\"address\":\"https://alice.example\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
       "handle": "alice",
-      "name": "an answer with a published address",
-      "registry": "cyfr.run",
-      "result": {
-        "address": "https://alice.example",
-        "directory": "https://cyfr.run",
-        "handle": "alice",
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "registry": "cyfr.run"
-      }
-    },
-    {
-      "bytes": "{\"address\":\"http://alice.example:4000\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
-      "handle": "alice",
-      "name": "an answer with an address on a port",
-      "registry": "cyfr.run",
-      "result": {
-        "address": "http://alice.example:4000",
-        "directory": "https://cyfr.run",
-        "handle": "alice",
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "registry": "cyfr.run"
-      }
+      "name": "an answer carrying an address",
+      "registry": "cyfr.run"
     },
     {
       "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
       "handle": "alice",
-      "name": "an answer with no published address",
+      "name": "an answer",
       "registry": "cyfr.run",
       "result": {
         "directory": "https://cyfr.run",
@@ -49,41 +30,6 @@
         "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
         "registry": "cyfr.run"
       }
-    },
-    {
-      "bytes": "{\"address\":null,\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
-      "error": "malformed_answer",
-      "handle": "alice",
-      "name": "an address of null",
-      "registry": "cyfr.run"
-    },
-    {
-      "bytes": "{\"address\":\"https://alice.example/home\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
-      "error": "malformed_answer",
-      "handle": "alice",
-      "name": "an address with a path",
-      "registry": "cyfr.run"
-    },
-    {
-      "bytes": "{\"address\":\"https://alice.example?x=1\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
-      "error": "malformed_answer",
-      "handle": "alice",
-      "name": "an address with a query",
-      "registry": "cyfr.run"
-    },
-    {
-      "bytes": "{\"address\":\"https://bob@alice.example\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
-      "error": "malformed_answer",
-      "handle": "alice",
-      "name": "an address with a user part",
-      "registry": "cyfr.run"
-    },
-    {
-      "bytes": "{\"address\":\"https://alice.example:443\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
-      "error": "malformed_answer",
-      "handle": "alice",
-      "name": "an address naming the default port",
-      "registry": "cyfr.run"
     },
     {
       "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"bob\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
@@ -284,11 +230,6 @@
       "status": 400
     },
     {
-      "code": "NO_HANDLE",
-      "refusal": "no_handle",
-      "status": 409
-    },
-    {
       "code": "NAMESPACE_RESERVED",
       "refusal": "namespace_reserved",
       "status": 403
@@ -324,7 +265,7 @@
       "status": 404
     }
   ],
-  "comment": "The vectors pinning Prima.RegistryRequest (cyfr-registry-request/v1) and Prima.HandleAnswer (cyfr-handle/v1), read by CYFR and by the registry at cyfr.run. Every side derives each public key from its seed; walks the identity entries to each head, reproducing its identifier, directory, key_epoch, recovery_epoch and live key; re-signs every request whose signer is named and reproduces its sig byte for byte, and its bytes as the JCS form of the request; verifies each verify case's bytes (the named request's JCS bytes, padded with trailing spaces to pad_with_spaces_to when present) as the registry named (its host and the directory every identity it accepts names) at now_ms (Unix milliseconds) under the named head, reaching the result or the refusal; does the same with each refusal's input (request, sent as its JSON, or raw, sent as those exact bytes; a request whose signer is null was altered after signing or is not signed at all); holds each handle and publisher spelling under slugs to the grammar of a handle.claim or publisher.claim body; and parses each answer's bytes for the handle and registry asked, reaching its result, which encodes back to those bytes, or its refusal. Refusals are checked in the order: size, JSON, exact keys and their types; protocol; registry; operation and body; expiry; the head's identifier; the head's directory; key_epoch; signature. A request expires at expires_at and may expire at most 360000 ms after the clock. JCS has no null: an address.set body without address withdraws the address, and an answer without address has none published; a null anywhere is refused. Under codes, every refusal of the protocol and of the handle answer: CYFR's name, the code the registry writes in its error envelope {\"errors\":[{\"code\",\"message\"}]} and the HTTP status; every refusal named under verify, refusals, envelopes and answers is one of them. Each envelope's bytes read back to the refusal named, or are refused as malformed_answer; an answer's bytes that are an envelope read back to its refusal. An envelope's first error carries a string message, and a null anywhere in an envelope is refused. A request is at most 16384 bytes as sent; one whose escaped content passes that bound is refused by its signer as by the registry.",
+  "comment": "The vectors pinning Prima.RegistryRequest (cyfr-registry-request/v1) and Prima.HandleAnswer (cyfr-handle/v1), read by CYFR and by the registry at cyfr.run. Every side derives each public key from its seed; walks the identity entries to each head, reproducing its identifier, directory, key_epoch, recovery_epoch and live key; re-signs every request whose signer is named and reproduces its sig byte for byte, and its bytes as the JCS form of the request; verifies each verify case's bytes (the named request's JCS bytes, padded with trailing spaces to pad_with_spaces_to when present) as the registry named (its host and the directory every identity it accepts names) at now_ms (Unix milliseconds) under the named head, reaching the result or the refusal; does the same with each refusal's input (request, sent as its JSON, or raw, sent as those exact bytes; a request whose signer is null was altered after signing or is not signed at all); holds each handle and publisher spelling under slugs to the grammar of a handle.claim or publisher.claim body; and parses each answer's bytes for the handle and registry asked, reaching its result, which encodes back to those bytes, or its refusal. Refusals are checked in the order: size, JSON, exact keys and their types; protocol; registry; operation and body; expiry; the head's identifier; the head's directory; key_epoch; signature. A request expires at expires_at and may expire at most 360000 ms after the clock. JCS has no null, and a null anywhere is refused. Under codes, every refusal of the protocol and of the handle answer: CYFR's name, the code the registry writes in its error envelope {\"errors\":[{\"code\",\"message\"}]} and the HTTP status; every refusal named under verify, refusals, envelopes and answers is one of them. Each envelope's bytes read back to the refusal named, or are refused as malformed_answer; an answer's bytes that are an envelope read back to its refusal. An envelope's first error carries a string message, and a null anywhere in an envelope is refused. A request is at most 16384 bytes as sent; one whose escaped content passes that bound is refused by its signer as by the registry.",
   "envelopes": [
     {
       "bytes": "{\"errors\":[{\"code\":\"REQUEST_MALFORMED\",\"message\":\"refused\"}]}\n",
@@ -435,11 +376,6 @@
       "bytes": "{\"errors\":[{\"code\":\"RESERVED\",\"message\":\"refused\"}]}\n",
       "name": "the handle_reserved envelope",
       "refusal": "handle_reserved"
-    },
-    {
-      "bytes": "{\"errors\":[{\"code\":\"NO_HANDLE\",\"message\":\"refused\"}]}\n",
-      "name": "the no_handle envelope",
-      "refusal": "no_handle"
     },
     {
       "bytes": "{\"errors\":[{\"code\":\"NAMESPACE_RESERVED\",\"message\":\"refused\"}]}\n",
@@ -1110,30 +1046,6 @@
       "signer": "alice_live_1"
     },
     {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address of null",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": null
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "tco4phA-WVU97EKMmkI7AB-bnmrm5xxZuAX1ALFSzoDHUh86IFaZ-TJgAFgM6gkgrfidIaIglHwujG0MvhVVDg"
-      },
-      "signer": null
-    },
-    {
       "error": "wrong_protocol",
       "head": "genesis",
       "name": "another protocol",
@@ -1561,31 +1473,6 @@
         "protocol": "cyfr-registry-request/v1",
         "registry": "cyfr.run",
         "sig": "k95KRCywznt_wf6rWKiEhef02z45b0Ao1AiudCap26D8vqs0klk7uqEPigN3D1eABDPS__jGNgtS16KtJsqyAw"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "address.set with an extra key in its body",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://alice.example",
-          "extra": "x"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "91aLsHBzL5dGCCpGIqA6ztP4JrjWIrEyQmX5hs1nK9Volofkb2RSaATNzGHGlG1teEl6f8f0rIZ1Y7Br2oftCQ"
       },
       "signer": "alice_live_1"
     },
@@ -2102,222 +1989,6 @@
     {
       "error": "request_malformed",
       "head": "genesis",
-      "name": "an address with a path",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://alice.example/home"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "Y83Dz-87PfwS3BjJK0iu5CpANhGNtYxlWx2xyoOqeO_PVlop4SzYClk6696_GNvhrDTWJj2V59YBuwNMZZsgDw"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address with a trailing slash",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://alice.example/"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "GWtBncFUk7ZJ6uSiyk4RuSoLMLA0zg7NkwmlA6QqN-XVTpjoBl60r8UyBa4y2snDAd9eowJ667YlLdpI8tFODQ"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address with a query",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://alice.example?x=1"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "EiijQz51on3EpscyawL1zzFEYm9V_8SFozm6d2OTKmXCVSLxCWEXHCfJgdpMSpkTBfXeHLMiLo7pyPFYVx0OAg"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address with a user part",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://bob@alice.example"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "P7fN4moBLHQh7qKU6lbzqIkxl3ZIrG9ENWKomrUyIxYTp1qsn3p1TagSWZ5OX-LiOd4P4Bp_YW2J75itEtEbAQ"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address with a fragment",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://alice.example#top"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "n9EJNidmtvjuaTSepmqwY2p55ke6xJQWVoDg0T6DUsm3l3rBhb5UfnWM5sAcdMsV03SXbvrrY3fEEox8nVM-DA"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address with a capital",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://Alice.example"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "JF7_m0AU2vD8QX_2QJIntACSKcPE8-5u-lEAa7aSaPcJTGw2eJi5HgDGY-SEmy58Xl1_nbzxPXJ42Nx_lcEJDQ"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address naming the default port",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "https://alice.example:443"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "XJfG1Y0rT1c21qFPEeLFhFMBx15MsC8vvmpX9ePj9nMosRj4t9NWcwdg1VEdmJXgJwvFgA-njp5su1xI1j1qCg"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an address of another scheme",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": "ftp://alice.example"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "RmhJAV7PLGcTiG2HB06_wbcO9mrFQ1BXH4TAtCyC7JxRWHNhElvy7GLSt0nJDDpI_JqsOfjJd65bhPUuNBwrAw"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
-      "name": "an empty address",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": {
-        "body": {
-          "address": ""
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "tGAayHB20tVt7otdg-gGVcWTZ5HKhmvVahx6D6LIJuCZH-Bg811EwHFC8LuN0wPeFQuXHlJTgzH8LgUafSdvBQ"
-      },
-      "signer": "alice_live_1"
-    },
-    {
-      "error": "request_malformed",
-      "head": "genesis",
       "name": "an empty policy version",
       "now_ms": 1790000001000,
       "registry": {
@@ -2617,36 +2288,6 @@
     }
   ],
   "requests": {
-    "address_set": {
-      "request": {
-        "body": {
-          "address": "https://alice.example"
-        },
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "-WZMC25Afxwqqi_SFzusMw",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "2XQRGtAaRr5_lPk2b4Z6h4zFa59Sk0VrUV33nWEFGm1p0rKGZaOUXKqPXFL9Ufz0gu4iq-56zwzmr3fPNdY0BA"
-      },
-      "signer": "alice_live_1"
-    },
-    "address_withdraw": {
-      "request": {
-        "body": {},
-        "expires_at": 1790000120000,
-        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
-        "nonce": "h2XDJeqRAPibYvByIoIXag",
-        "operation": "address.set",
-        "protocol": "cyfr-registry-request/v1",
-        "registry": "cyfr.run",
-        "sig": "tco4phA-WVU97EKMmkI7AB-bnmrm5xxZuAX1ALFSzoDHUh86IFaZ-TJgAFgM6gkgrfidIaIglHwujG0MvhVVDg"
-      },
-      "signer": "alice_live_1"
-    },
     "after_recovery": {
       "request": {
         "body": {
@@ -2966,28 +2607,6 @@
         "host": "cyfr.run"
       },
       "request": "tokens_mint",
-      "result": "ok"
-    },
-    {
-      "head": "genesis",
-      "name": "an address published",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": "address_set",
-      "result": "ok"
-    },
-    {
-      "head": "genesis",
-      "name": "an address withdrawn",
-      "now_ms": 1790000001000,
-      "registry": {
-        "directory": "https://cyfr.run",
-        "host": "cyfr.run"
-      },
-      "request": "address_withdraw",
       "result": "ok"
     },
     {

@@ -864,12 +864,8 @@ defmodule PrismWeb.AuthControllerTest do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
       fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
 
-      # A sign-in begun from a handle, whose request the challenge answers.
-      request = %{
-        "identifier" => identity.identifier,
-        "home" => "https://a.example",
-        "expires_at" => in_a_minute()
-      }
+      # The sign-in's request, which the challenge answers.
+      request = %{"home" => "https://a.example", "expires_at" => in_a_minute()}
 
       signed_in = callback(conn, held, fragment, request)
 
@@ -892,28 +888,14 @@ defmodule PrismWeb.AuthControllerTest do
       assert get_session(again, :sanctum_session_token) == token
     end
 
-    test "the callback admits only under a challenge that answers the request this browser's session holds: under none, another CYFR's or a handle's of another identity it refuses, writing nothing",
-         %{held: held, identity: identity, directory: directory} do
+    test "the callback admits only under a challenge that answers the request this browser's session holds: under none or another CYFR's it refuses, writing nothing",
+         %{held: held, identity: identity} do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
       fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
-      other = DirectoryServer.identity!(directory.dir, directory.url)
 
       for {why, request} <- [
             {"no request", nil},
-            {"another CYFR's address",
-             %{"home" => "https://b.example", "expires_at" => in_a_minute()}},
-            {"another CYFR's handle of this identity",
-             %{
-               "identifier" => identity.identifier,
-               "home" => "https://b.example",
-               "expires_at" => in_a_minute()
-             }},
-            {"a handle of another identity at this CYFR",
-             %{
-               "identifier" => other.identifier,
-               "home" => "https://a.example",
-               "expires_at" => in_a_minute()
-             }}
+            {"another CYFR's", %{"home" => "https://b.example", "expires_at" => in_a_minute()}}
           ] do
         refused = callback(build_conn(), held, fragment, request)
         assert html_response(refused, 401) =~ "Sign-in failed", why
@@ -932,7 +914,6 @@ defmodule PrismWeb.AuthControllerTest do
       # The same assertion under a request the challenge answers admits.
       admitted =
         callback(build_conn(), held, fragment, %{
-          "identifier" => identity.identifier,
           "home" => "https://a.example",
           "expires_at" => in_a_minute()
         })
@@ -1061,9 +1042,8 @@ defmodule PrismWeb.AuthControllerTest do
       :ok
     end
 
-    # The ticket the sign-in page mints for an attempt: an address's names
-    # the CYFR's origin and its /carry, a resolved handle's the identifier
-    # too.
+    # The ticket the sign-in page mints for an attempt: the CYFR's origin
+    # and its /carry, beside `attempt`.
     defp start_ticket(attempt \\ %{}) do
       ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       {:ok, to} = Sanctum.Auth.CyfrDoor.signing_home("https://alice.example")
@@ -1088,14 +1068,11 @@ defmodule PrismWeb.AuthControllerTest do
       |> get("/auth/cyfr/start" <> query)
     end
 
-    test "keeps the attempt's request in this browser's session for the carry's lifetime, an address's naming no identifier and a handle's its identifier, and answers 303 to the CYFR's /carry" do
+    test "keeps the attempt's request in this browser's session for the carry's lifetime, its home alone whatever else the ticket holds, and answers 303 to the CYFR's /carry" do
       lifetime = Sanctum.Auth.CyfrDoor.carry_lifetime_ms()
+      kept = %{"home" => "https://alice.example"}
 
-      for {attempt, kept} <- [
-            {%{}, %{"home" => "https://alice.example"}},
-            {%{identifier: @identifier},
-             %{"identifier" => @identifier, "home" => "https://alice.example"}}
-          ] do
+      for attempt <- [%{}, %{identifier: @identifier}] do
         {ticket, to} = start_ticket(attempt)
         before = System.os_time(:millisecond)
 
@@ -1122,7 +1099,6 @@ defmodule PrismWeb.AuthControllerTest do
 
     test "replaces the attempt the session held whole: its challenge goes, and the new request takes its request's place" do
       earlier = %{
-        "identifier" => @identifier,
         "home" => "https://alice.example",
         "expires_at" => System.os_time(:millisecond) + 60_000
       }

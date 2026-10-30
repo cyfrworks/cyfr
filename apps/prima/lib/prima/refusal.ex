@@ -435,9 +435,6 @@ defmodule Prima.Refusal do
   defp row(:handle_invalid), do: {:invalid_argument, "The registry does not accept that handle."}
   defp row(:handle_reserved), do: {:invalid_argument, "That handle is reserved; pick another."}
 
-  defp row(:no_handle),
-    do: {:setup_required, "Claim a handle at the registry first: run `cyfr registry claim`."}
-
   defp row(:namespace_reserved),
     do: {:forbidden, "That namespace is reserved at the registry."}
 
@@ -910,22 +907,6 @@ defmodule Prima.Refusal do
 
   # A handle the registry answers no one for, a reserved one included.
   defp row(:handle_not_found), do: {:not_found, "No one holds that handle at the registry."}
-
-  # A handle whose owner publishes no address: their CYFR is reached by
-  # the address they give.
-  defp row(:address_not_published),
-    do:
-      {:not_found,
-       "That handle has no published address. Enter the address of the CYFR that holds " <>
-         "those keys instead."}
-
-  # A CYFR sign-in begun from a handle, answered by a carry of another
-  # identity: the address the handle published serves someone else.
-  defp row(:wrong_identity),
-    do:
-      {:forbidden,
-       "That sign-in came from someone other than the handle you named, so nobody was " <>
-         "signed in."}
 
   # A person at a CYFR that requires a company sign-in, whose sign-in with
   # it is missing, past its days, or given under another company

@@ -135,7 +135,6 @@ defmodule Compendium.Registry.Client do
   @routes %{
     "handle.claim" => "/v1/namespaces/personal/claim",
     "tokens.mint" => "/v1/tokens/mint",
-    "address.set" => "/v1/handles/address",
     "policy.accept" => "/v1/legal/accept",
     "appeal.file" => "/v1/appeals",
     "publisher.claim" => "/v1/namespaces/publisher/claim",

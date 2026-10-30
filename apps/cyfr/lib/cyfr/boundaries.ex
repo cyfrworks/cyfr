@@ -619,8 +619,7 @@ defmodule Cyfr.Boundaries do
           "who invited and to which athanor, or that the code admits no one " <>
           "(`lookup/1`), before any ceremony, which grants nothing: the admission " <>
           "decides again in its transaction. `Sanctum.Handle` is the identity card's " <>
-          "live check of a handle against the registry's answer, and the sign-in page's " <>
-          "reading of the identifier and published address a handle names (`resolve/1`), " <>
+          "live check of a handle against the registry's answer (`resolve/1`), " <>
           "navigation that grants nothing. " <>
           "`Sanctum.CompanyLogin` is the company page's: whether the browser's session is " <>
           "refused for the company sign-in alone (`held/1`), the sign-in it begins for that " <>
@@ -2051,7 +2050,7 @@ defmodule Cyfr.Boundaries do
       restore_challenge: 1
     ],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
-    "Sanctum.Person" => [home: 0, sign_registry_request: 3],
+    "Sanctum.Person" => [sign_registry_request: 3],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,
       delete_push_token: 4,

@@ -6,9 +6,8 @@ defmodule Sanctum.Handle do
   A handle at the registry, resolved to the identifier it names
   (`Prima.HandleAnswer`, `cyfr-handle/v1`).
 
-  The answer is navigation, never authority: it names an identifier, the
-  directory that orders it and the address its owner published, if any,
-  and carries no keys. Whoever relies on the identifier reads its keys
+  The answer is navigation, never authority: it names an identifier and
+  the directory that orders it, and carries no keys and no address. Whoever relies on the identifier reads its keys
   fresh from that directory (`Sanctum.IdentityFreshness`), so a handle
   the registry later reassigns moves no access.
 
