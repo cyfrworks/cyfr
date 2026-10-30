@@ -16,6 +16,9 @@ defmodule PrismWeb.ShellLive do
   @write_retry_ms 5_000
   @write_retries 5
   @conflict_replays 3
+  # The writes a page's end makes of the gestures still waiting
+  # (`flush_layout/1`): the first, and one more after a newer revision.
+  @flush_writes 2
 
   @moduledoc """
   The Prism shell: the person's canvases, the tinctures opened over them,
@@ -25,9 +28,10 @@ defmodule PrismWeb.ShellLive do
   top bar switches between them (`PrismWeb.TopbarLive`).
 
   Switching modes is a page navigation, so the shell's frames end with the
-  page: `terminate/2` writes any gesture still waiting to be written, then
-  revokes every credential it minted, and an app open over a canvas starts
-  over when the person comes back. Nothing of the arrangement is lost: the
+  page: `terminate/2` writes any gesture still waiting to be written (once
+  more on the newer layout when another screen published one meanwhile),
+  then revokes every credential it minted, and an app open over a canvas
+  starts over when the person comes back. Nothing of the arrangement is lost: the
   layout holds every app's placement, and the shell opens the apps from it
   again on return.
 
@@ -2503,8 +2507,8 @@ defmodule PrismWeb.ShellLive do
   # — revoked ones included, since revoking is idempotent. A view that
   # dies without reaching here leaves each row to its deadline.
   # Gestures still waiting to be written when the page ends are written
-  # first, once: a switch to the Dashboard made inside the write window
-  # loses nothing. A write refused then is let go with the page.
+  # first (`flush_layout/1`): a switch to the Dashboard made inside the
+  # write window loses nothing.
   @impl true
   def terminate(_reason, socket) do
     case socket.assigns do
@@ -2518,24 +2522,55 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
+  # The page's last write, made at most twice so the page still ends
+  # promptly: one refused for a newer revision reads the layout again and
+  # makes the waiting gestures that still apply on it, as a save does
+  # (`replay/2`), before the second. A second refusal, or one of any other
+  # kind, lets the gestures go with the page, as an exhausted retry does,
+  # and says so in the log.
   defp flush_layout(
          %{assigns: %{pending: [_ | _], document: document, layout_base: layout}} = socket
-       ) do
-    args = %{"document" => Prima.Layout.to_json(document), "revision" => layout.revision}
+       ),
+       do: flush_layout(socket, document, layout.revision, 1)
+
+  defp flush_layout(_socket), do: :ok
+
+  defp flush_layout(socket, document, revision, attempt) do
+    args = %{"document" => Prima.Layout.to_json(document), "revision" => revision}
 
     case PrismWeb.Ops.call_tool(socket, "layout/edit", args) do
       {:ok, _written} ->
         :ok
 
       {:error, reason} ->
-        Logger.warning(
-          "[PrismWeb.ShellLive] an arrangement waiting as the page ended was not saved: " <>
-            inspect(reason)
-        )
+        if conflict?(reason) and attempt < @flush_writes,
+          do: flush_again(socket, attempt),
+          else: flush_let_go(reason)
     end
   end
 
-  defp flush_layout(_socket), do: :ok
+  defp flush_again(
+         %{assigns: %{context: ctx, posture: posture, pending: pending}} = socket,
+         attempt
+       ) do
+    case Compendium.layout(ctx, posture) do
+      {:ok, read} ->
+        case remade(read.document, pending) do
+          {_document, []} -> :ok
+          {document, _kept} -> flush_layout(socket, document, read.revision, attempt + 1)
+        end
+
+      {:error, reason} ->
+        flush_let_go(reason)
+    end
+  end
+
+  defp flush_let_go(reason) do
+    Logger.warning(
+      "[PrismWeb.ShellLive] an arrangement waiting as the page ended was not saved and is " <>
+        "let go: " <> inspect(reason)
+    )
+  end
 
   # ============================================================================
   # Render

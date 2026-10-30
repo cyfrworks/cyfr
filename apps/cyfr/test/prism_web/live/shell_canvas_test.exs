@@ -3667,6 +3667,43 @@ defmodule PrismWeb.ShellCanvasTest do
       assert app_frame(view, "side-dash") == nil
     end
 
+    test "a window opened just before a switch is saved though another screen published meanwhile",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      assert %{placement: {:window, geometry}} = app_frame(view, "loose-dash")
+      Process.cancel_timer(assigns(view).write_timer)
+      assert assigns(view).pending != []
+      revision = assigns(view).layout_base.revision
+
+      # Another screen publishes before the save: the view still holds the
+      # revision it read.
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" =>
+            posture([
+              app("tincture:local.app-dash", "window", 0),
+              app("tincture:local.side-dash", "tile", 1)
+            ])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      assert stored(user, athanor).revision == revision + 1
+      assert assigns(view).layout_base.revision == revision
+
+      assert {:error, {:live_redirect, %{to: _dashboard}}} =
+               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
+
+      GenServer.stop(view.pid, {:shutdown, :closed})
+
+      # Written once more on the newer layout, the other screen's apps kept.
+      assert %{revision: written} = stored(user, athanor)
+      assert written == revision + 2
+      assert %{placement: :window, geometry: ^geometry} = stored_app(user, athanor, "loose-dash")
+      assert %{placement: :tile} = stored_app(user, athanor, "side-dash")
+    end
+
     test "a window survives a switch to the Dashboard and back, even inside the write window",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
