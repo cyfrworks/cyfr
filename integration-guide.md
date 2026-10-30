@@ -1504,6 +1504,6 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (`cyfr build compile` builds it and registers it)
 - Built tinctures run `npm ci && npm run build` via Locus, installing exactly what `package-lock.json` pins — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
-- Open it in the console at `/a/<athanor>/tinctures`, or at `/t/<athanor>/<publisher>/<name>` once it is public
+- Open it in the console at `/a/<athanor>/canvas`, or at `/t/<athanor>/<publisher>/<name>` once it is public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

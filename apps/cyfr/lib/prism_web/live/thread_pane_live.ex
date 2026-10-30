@@ -1424,16 +1424,10 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp served?(_intent), do: true
 
-  # A navigate to a page the current mode's nav does not show is dropped —
+  # A navigate to a page the current mode does not show is dropped —
   # `PrismWeb.Nav` is the one owner of what a mode surfaces, and an
   # the assistant's intent gets no wider view than the person's own chrome.
-  defp mode_permits?(%{kind: "navigate", to: to}, mode) do
-    base = to |> String.split("?", parts: 2) |> hd()
-
-    Enum.any?(PrismWeb.Nav.items(mode), fn %{path: path} ->
-      base == path or String.starts_with?(base, path <> "/")
-    end)
-  end
+  defp mode_permits?(%{kind: "navigate", to: to}, mode), do: PrismWeb.Nav.shown?(to, mode)
 
   defp mode_permits?(_intent, _mode), do: true
 

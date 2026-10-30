@@ -1,18 +1,27 @@
 <div class="flex h-screen flex-col overflow-hidden bg-gray-950">
   <% mode = Prism.Labels.mode(assigns[:ui_mode]) %>
+  <%!-- The person's mode: Canvas on the shell's page, the Dashboard on every
+        other. The Canvas mode fills everything under the top bar. --%>
+  <% canvas? = assigns[:active_nav] == "canvas" %>
   <!-- The chrome: brand, the athanor switcher, the drawer, the person — and in dev the live indicators.
        A page whose own layer covers the chrome (`covered`, the shell under a full frame) takes it out
        of reach, so no key reaches a control nobody can see. -->
   <div id="chrome-top" class="contents" inert={assigns[:covered]}>
     {live_render(@socket, PrismWeb.TopbarLive,
       id: "topbar",
-      session: %{"athanor_id" => assigns[:athanor] && @athanor.id, "ui_mode" => mode}
+      session: %{
+        "athanor_id" => assigns[:athanor] && @athanor.id,
+        "ui_mode" => mode,
+        "surface" => if(canvas?, do: "canvas", else: "dashboard"),
+        "page" => assigns[:active_nav]
+      }
     )}
   </div>
 
-  <!-- Body row: sidebar (dev, wide screens) + drawer (both modes) + main content -->
+  <!-- Body row: in the Dashboard, sidebar (dev, wide screens) + drawer (both UI modes);
+       then the main content -->
   <div class="flex flex-1 overflow-hidden">
-    <div id="chrome-side" class="contents" inert={assigns[:covered]}>
+    <div :if={not canvas?} id="chrome-side" class="contents" inert={assigns[:covered]}>
       <.sidebar
         :if={Prism.Labels.dev?(mode)}
         mode={mode}
@@ -53,7 +62,7 @@
       <!-- Page content -->
       <main class={[
         "relative flex-1 flex flex-col min-h-0 overflow-y-auto",
-        if(assigns[:active_nav] in ["tinctures", "chat"], do: "p-0", else: "p-4 lg:p-8")
+        if(canvas? or assigns[:active_nav] == "chat", do: "p-0", else: "p-4 lg:p-8")
       ]}>
         <div
           id="page-loading"
@@ -62,8 +71,21 @@
         >
           <div class="flex items-center gap-3 text-sm text-gray-300">
             <svg class="h-5 w-5 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              >
+              </circle>
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              >
+              </path>
             </svg>
             <span>Loading…</span>
           </div>

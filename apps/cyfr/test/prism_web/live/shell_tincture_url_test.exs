@@ -154,7 +154,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     athanor: athanor,
     release_digest: release_digest
   } do
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     picker = render(view)
     html = render_click(view, "select_tincture", %{"tincture" => @window_id})
 
@@ -181,7 +181,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     segment: segment
   } do
     public_profile!(ctx)
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     picker = render(view)
     html = render_click(view, "select_tincture", %{"tincture" => @window_id})
 
@@ -195,7 +195,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
   end
 
   test "an open the store or the control plane cannot serve renders unavailable", %{conn: conn} do
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     Arca.ControlPlane.record(:lost)
     send(view.pid, :tinctures_refreshed)
     html = render_click(view, "select_tincture", %{"tincture" => @window_id})
@@ -225,7 +225,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     # Within the bound the view acts on the context it validated, so what
     # refuses here is the mint's own reread of the session row.
     bound!(60_000)
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
 
     # The session row behind the mounted view is gone; nothing has told the
     # view yet, and the mint rereads the row.
@@ -244,7 +244,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     user: user
   } do
     bound!(0)
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
 
     {:ok, _} = Arca.SessionStorage.delete_by_user(user.user_id)
 

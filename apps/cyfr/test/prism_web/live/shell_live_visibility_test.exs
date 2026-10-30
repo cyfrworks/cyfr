@@ -93,7 +93,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   end
 
   test "a tincture with no public profile reads private, with its toggle", %{conn: conn} do
-    {_view, html} = mount_athanor(conn, "/tinctures")
+    {_view, html} = mount_athanor(conn, "/canvas")
 
     assert visibility(html) == "private"
     assert html =~ "Make Public"
@@ -103,7 +103,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   test "an active public profile reads public", %{conn: conn, ctx: ctx} do
     public_profile!(ctx)
 
-    {_view, html} = mount_athanor(conn, "/tinctures")
+    {_view, html} = mount_athanor(conn, "/canvas")
 
     assert visibility(html) == "public"
     assert html =~ "Make Private"
@@ -112,7 +112,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
   @tag :capture_log
   test "a profile store that cannot answer reads unavailable, never private", %{conn: conn} do
-    {view, html} = mount_athanor(conn, "/tinctures")
+    {view, html} = mount_athanor(conn, "/canvas")
     assert visibility(html) == "private"
 
     Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
@@ -138,7 +138,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
         set: [kind: "sideways"]
       )
 
-    {_view, html} = mount_athanor(conn, "/tinctures")
+    {_view, html} = mount_athanor(conn, "/canvas")
 
     assert visibility(html) == "unavailable"
     assert toggle_disabled?(html)
@@ -160,7 +160,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     home = "https://cyfr.tail1a2b3c.ts.net"
     Application.put_env(:sanctum, :public_url, home)
 
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
 
     assert_push_event(view, "clipboard", %{text: url})
