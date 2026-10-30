@@ -31,12 +31,13 @@ handoff	janitor-test	scoped	900	scripts/janitor.sh,scripts/image.sh,scripts/lib/
 handoff	release-boot-test	exclusive	900	tests/release-boot/**,tests/release-boot-test.sh	bash tests/release-boot-test.sh && bash tests/release-boot/access-test.sh
 handoff	release-boot-names-test	scoped	600	tests/release-boot/**	bash tests/release-boot/names-test.sh
 handoff	imagesuite-test	scoped	600	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
+handoff	registry-stand-in-test	scoped	600	tests/registry-stand-in/**	python3 -I tests/registry-stand-in/standin_test.py
 handoff	runtime-image-checks	scoped	600	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check
 handoff	backends-image-check	scoped	600	tests/locus-backends-image/**	python3 -I tests/locus-backends-image/harness.py --self-check
 handoff	compose-proof-tests	scoped	900	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
 handoff	setup-proof-test	scoped	600	tests/setup-proof/**	bash tests/setup-proof/cleanup-test.sh
 handoff	tailnet-guard-tests	scoped	600	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
-handoff	dev-stack-test	scoped	182	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
+handoff	dev-stack-test	scoped	284	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
 handoff	prebuilt-binaries-test	scoped	600	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
 handoff	ci-guards-test	scoped	600	scripts/ci/**,tests/ci-guards-test.sh	bash tests/ci-guards-test.sh
 handoff	containerd-store-test	scoped	600	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh

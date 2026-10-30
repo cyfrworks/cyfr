@@ -22,7 +22,12 @@ defmodule Sanctum.Directory.Client do
 
   ## Transport
 
-  HTTPS only (`:insecure_directory` otherwise, before any request), over
+  HTTPS, or plain HTTP to a loopback host (`localhost`, `127.0.0.0/8` or
+  `::1`, `Sanctum.loopback_host?/1`), and nothing else
+  (`:insecure_directory`, before any request): TLS protects a network
+  path, loopback has none, and a directory is trusted only for ordering,
+  since its writes carry signatures and its reads are verified chains
+  (`Sanctum.enrollment_directory?/1`). Every request goes over
   `Sanctum.Egress.pinned_request/5` under `private_policy: :operator`: a
   loopback or private address is refused unless the operator lists it in
   `CYFR_PRIVATE_EGRESS_TARGETS`, a metadata address always, and a redirect
@@ -317,15 +322,19 @@ defmodule Sanctum.Directory.Client do
   end
 
   # A genesis's directory URL is already a validated spelling
-  # (`Prima.Identity.Encoding.directory_url?/1`); only HTTPS is spoken.
+  # (`Prima.Identity.Encoding.directory_url?/1`); HTTPS is spoken, or
+  # plain HTTP to a loopback host (`Sanctum.directory_transport?/1`).
   defp target(directory) do
-    case URI.parse(directory) do
-      %URI{scheme: "https", host: host, port: port} when is_binary(host) ->
-        origin = if port == 443, do: "https://" <> host, else: "https://#{host}:#{port}"
-        {:ok, directory <> @path, origin}
+    with true <- Sanctum.directory_transport?(directory),
+         %URI{scheme: scheme, host: host, port: port} <- URI.parse(directory) do
+      origin =
+        if port == URI.default_port(scheme),
+          do: "#{scheme}://#{host}",
+          else: "#{scheme}://#{host}:#{port}"
 
-      %URI{} ->
-        {:error, :insecure_directory}
+      {:ok, directory <> @path, origin}
+    else
+      _insecure -> {:error, :insecure_directory}
     end
   end
 

@@ -31,7 +31,9 @@
 #             prebuilt binary fetch against the deps' own downloads
 #             (tests/fetch-prebuilt-binaries-test.sh) and the
 #             two Python self-checks (worker_auth.py and the backends
-#             harness.py; none needs a database or an image), dialyzer,
+#             harness.py) and the cyfr.run stand-in's
+#             (tests/registry-stand-in/standin_test.py), none of which
+#             needs a database or an image, dialyzer,
 #             the Boundary plants, then the full SQLite suite in N
 #             partitions
 #   postgres  PostgreSQL test compile and forced dev compile (warnings as
@@ -300,7 +302,7 @@ deadline_for() {
   # A step of a CI job (run_job) takes the job's own timeout.
   if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|registry_stand_in|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -320,7 +322,7 @@ deadline_for() {
 PG_SERVER=postgres://cyfr:cyfr@localhost:5432
 
 # The steps of a leg, for the deadline of a leg that waits on it.
-STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide devstack js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
+STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide devstack js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check registry_stand_in dialyzer boundary_plants sqlite_suite'
 steps_of() {
   case "$1" in
     static) echo "$STATIC_STEPS" ;;
@@ -412,6 +414,9 @@ leg_static() {
   # The image suites' own protocol code against the vectors, with no image.
   step static worker_auth_check python3 -I tests/locus-runtime-image/worker_auth.py --self-check || return
   step static backends_check python3 -I tests/locus-backends-image/harness.py --self-check || return
+  # The cyfr.run stand-in the dev loop and the proofs run, against the
+  # registry and directory vectors and a local fake upstream.
+  step static registry_stand_in python3 -I tests/registry-stand-in/standin_test.py || return
   step static dialyzer mix dialyzer || return
   # The Boundary plants: each writes a forbidden edge into a copy of the tree
   # and force-compiles it, so they run once here and never in the partitions.
