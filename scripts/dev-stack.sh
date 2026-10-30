@@ -24,15 +24,29 @@
 # (scripts/lib/run-names.sh), whatever the caller's COMPOSE_* say. Its
 # ports and subnets are its slot's: slot K, from 0 to 19, puts Prism on
 # 4000 + 10K and its proxy on 4001 + 10K, the runtime on 127.0.0.1:4700 +
-# 10K, the host API on 4701 + 10K at the runtime network's gateway, and
-# the runtime, backends and builds networks on 172.16.(100 + 3K), (101 +
-# 3K) and (102 + 3K).0/24. A loop takes the slot data/dev-stack.slot
-# remembers while it is free, else the first free one from 0, so a lone
-# loop keeps localhost:4000, and it remembers the slot it takes. A slot is
-# free when no other loop holds its claim (a lock under XDG_RUNTIME_DIR,
-# else TMPDIR, held for the loop's life), nothing listens on its ports and
-# no Docker network overlaps its subnets; when none is, the loop refuses
+# 10K, the host API on 4701 + 10K at the runtime network's gateway, the
+# cyfr.run stand-in on 127.79.K.1:4702 + 10K, and the runtime, backends
+# and builds networks on 172.16.(100 + 3K), (101 + 3K) and (102 +
+# 3K).0/24. A loop takes the slot data/dev-stack.slot remembers while it
+# is free, else the first free one from 0, so a lone loop keeps
+# localhost:4000, and it remembers the slot it takes. A slot is free when
+# no other loop holds its claim (a lock under XDG_RUNTIME_DIR, else
+# TMPDIR, held for the loop's life), nothing listens on its ports and no
+# Docker network overlaps its subnets; when none is, the loop refuses
 # naming each slot's holder.
+#
+# The stand-in (tests/registry-stand-in/standin.py) answers for cyfr.run's
+# registry and directory, so a person the loop makes exists there alone;
+# it forwards the GETs it does not own, component search and metadata, to
+# https://cyfr.run. The server's registry and directory are the stand-in
+# whatever .env says (`mix cyfr.locus.dev_stack`). The loop starts it
+# before the server and stops it on every exit path. Its state is
+# data/dev-stack/cyfr-run.json, which records the address it serves: every
+# genesis a dev database's people signed names that address, so a
+# database is bound to the slot its state file names. A new database (the
+# task says which) clears the state; a database that is not new takes its
+# slot when it is free and refuses otherwise, and without a state file it
+# refuses, naming the reset either way.
 #
 # One run of a worktree's loop holds the project's lock (beside the
 # claims) for its whole life, before anything of its checkout is written
@@ -75,6 +89,9 @@ case "$GRACE" in '' | *[!0-9]*) echo "dev-stack: DEV_STACK_GRACE is $GRACE, not 
 
 SLOTS=20
 REMEMBERED=data/dev-stack.slot
+STAND_IN_STATE=data/dev-stack/cyfr-run.json
+STAND_IN_LOG=data/dev-stack/cyfr-run.log
+RESET="reset by deleting the dev database and $STAND_IN_STATE"
 LOCK=""
 LOCK_FD=""
 CLAIM_FD=""
@@ -84,6 +101,8 @@ IMAGE=""
 SLOT_ENV=()
 SERVER=""
 SERVER_ENDED=""
+STAND_IN=""
+BOUND=""
 STARTED=""
 
 die() {
@@ -98,8 +117,11 @@ slot_env() {
     "DEV_STACK_PRISM_PORT=$((4000 + 10 * k))" "DEV_STACK_PROXY_PORT=$((4001 + 10 * k))" \
     "DEV_STACK_RUNTIME_PORT=$((4700 + 10 * k))" "DEV_STACK_HOST_API_PORT=$((4701 + 10 * k))" \
     "DEV_STACK_RUNTIME_NET=172.16.$((100 + 3 * k))" "DEV_STACK_BACKENDS_NET=172.16.$((101 + 3 * k))" \
-    "DEV_STACK_BUILDS_NET=172.16.$((102 + 3 * k))"
+    "DEV_STACK_BUILDS_NET=172.16.$((102 + 3 * k))" \
+    "DEV_STACK_STAND_IN_ADDRESS=127.79.$k.1" "DEV_STACK_STAND_IN_PORT=$((4702 + 10 * k))"
 }
+# slot_value NAME: the slot in use's NAME.
+slot_value() { printf '%s\n' "${SLOT_ENV[@]}" | sed -n "s/^$1=//p"; }
 slot_ok() { case "${1:-}" in [0-9] | 1[0-9]) return 0 ;; *) return 1 ;; esac; }
 use_slot() {
   mapfile -t SLOT_ENV < <(slot_env "$1")
@@ -141,12 +163,22 @@ lock() {
     LOCK_FD=""
     die "another run of this worktree's dev stack (pid ${holder:-unknown}, checkout ${checkout:-unknown}) holds $LOCK; stop it, or wait for it to end."
   fi
-  # This run's pid and checkout, beside the server a killed run recorded,
-  # which `down` and a start still read; the file stays the one the lock
-  # is on.
+  # This run's pid and checkout, beside the server and the stand-in a
+  # killed run recorded, which `down` and a start still read; the file
+  # stays the one the lock is on.
   local recorded
-  recorded="$(sed -n '/^server /p' "$LOCK")"
+  recorded="$(sed -n '/^\(server\|stand-in\) /p' "$LOCK")"
   printf 'pid %s\ncheckout %s\n%s' "$$" "$ROOT" "${recorded:+$recorded$'\n'}" >"$LOCK"
+}
+
+# record: this run's lock record, its server and stand-in with their start
+# times, so a run killed outright leaves what `down` stops.
+record() {
+  {
+    printf 'pid %s\ncheckout %s\n' "$$" "$ROOT"
+    [ -z "$STAND_IN" ] || printf 'stand-in %s %s\n' "$STAND_IN" "$(started "$STAND_IN")"
+    [ -z "$SERVER" ] || [ -n "$SERVER_ENDED" ] || printf 'server %s %s\n' "$SERVER" "$(started "$SERVER")"
+  } >"$LOCK"
 }
 
 # The subnets of every Docker network on the host but this project's, one
@@ -225,11 +257,12 @@ claim() {
     return 1
   fi
   printf 'pid %s\nstarted %s\ncheckout %s\n' "$$" "$(started "$$")" "$ROOT" >"$file"
-  for port in $((4000 + 10 * k)) $((4001 + 10 * k)) $((4700 + 10 * k)) $((4701 + 10 * k)); do
-    if who="$(held "$port")"; then
+  for listener in 127.0.0.1:$((4000 + 10 * k)) 127.0.0.1:$((4001 + 10 * k)) 127.0.0.1:$((4700 + 10 * k)) \
+    127.0.0.1:$((4701 + 10 * k)) "127.79.$k.1:$((4702 + 10 * k))"; do
+    if who="$(held "${listener%:*}" "${listener##*:}")"; then
       : >"$file"
       exec {fd}>&-
-      WHY="127.0.0.1:$port, held by $who"
+      WHY="$listener, held by $who"
       return 1
     fi
   done
@@ -243,13 +276,21 @@ claim() {
   CLAIM_FD="$fd" CLAIM_FILE="$file"
 }
 
-# take_slot: the slot this worktree remembers while it is free, else the
-# first free one, remembered for the next run; or a refusal naming every
-# slot's holder.
+# take_slot: the slot the database is bound to (BOUND) when it is free, or
+# a refusal naming it and the reset; else the slot this worktree remembers
+# while it is free, else the first free one, remembered for the next run;
+# or a refusal naming every slot's holder.
 take_slot() {
   local first k nets taken=()
   first="$(remembered)"
   nets="$(networks)"
+  if [ -n "$BOUND" ]; then
+    claim "$BOUND" "$nets" ||
+      die "This database's people were made at slot $BOUND, which is taken ($WHY). Stop what holds slot $BOUND, or $RESET."
+    use_slot "$BOUND"
+    mkdir -p "$(dirname "$REMEMBERED")" && printf '%s\n' "$BOUND" >"$REMEMBERED"
+    return 0
+  fi
   for k in "$first" $(seq 0 $((SLOTS - 1))); do
     [ "$k" != "$first" ] || [ "${#taken[@]}" = 0 ] || continue
     if claim "$k" "$nets"; then
@@ -264,18 +305,19 @@ take_slot() {
   die "every slot is taken: $(printf '%s; ' "${taken[@]}" | sed 's/; $//')."
 }
 
-# orphan: the process group of the server a killed run recorded, when its
-# leader is still the process the run started; nothing otherwise.
+# orphan KIND: the process group of the server, or the stand-in (KIND
+# `server` or `stand-in`), a killed run recorded, when its leader is still
+# the process the run started; nothing otherwise.
 orphan() {
   local pgid started
-  read -r pgid started < <(sed -n 's/^server //p' "$LOCK" 2>/dev/null) || return 0
+  read -r pgid started < <(sed -n "s/^$1 //p" "$LOCK" 2>/dev/null) || return 0
   [ -n "${pgid:-}" ] && [ -n "${started:-}" ] || return 0
   [ "$(started "$pgid")" = "$started" ] && echo "$pgid"
   return 0
 }
 
-# server_record: the server line the lock's record holds, if any.
-server_record() { sed -n '/^server /p' "$LOCK" 2>/dev/null || true; }
+# kept KIND: the lock record's KIND line, if any.
+kept() { sed -n "/^$1 /p" "$LOCK" 2>/dev/null || true; }
 
 # gone GROUP: no process is left in GROUP, waited for up to 5 s.
 gone() {
@@ -313,21 +355,26 @@ finish() {
     stop "$SERVER"
     wait "$SERVER" 2>/dev/null || true
   fi
+  # The stand-in after the server that calls it.
+  if [ -n "$STAND_IN" ]; then
+    stop "$STAND_IN"
+    wait "$STAND_IN" 2>/dev/null || true
+  fi
   if [ -n "$STARTED" ]; then
     echo "dev-stack: removing the containers." >&2
     compose down --remove-orphans >/dev/null 2>&1 ||
       echo "dev-stack: the containers could not be removed; \`scripts/dev-stack.sh down\` removes them." >&2
   fi
-  # A server's record goes only once its group is gone: this run's own
-  # server's, which it stopped above; a killed run's stays for `down`.
+  # A server's or stand-in's record goes only once its group is gone: this
+  # run's own, which it stopped above; a killed run's stays for `down`.
   if [ -n "$LOCK_FD" ]; then
-    if [ -n "$SERVER" ] && gone "$SERVER"; then
-      : >"$LOCK"
-    else
-      local record
-      record="$(server_record)"
-      printf '%s' "${record:+$record$'\n'}" >"$LOCK"
-    fi
+    local left="" kind pid
+    for kind in server stand-in; do
+      case "$kind" in server) pid="$SERVER" ;; *) pid="$STAND_IN" ;; esac
+      if [ -n "$pid" ] && gone "$pid"; then continue; fi
+      [ -z "$(kept "$kind")" ] || left="$left$(kept "$kind")"$'\n'
+    done
+    printf '%s' "$left" >"$LOCK"
   fi
   # The claim's record emptied while the claim is still held: the exit lets
   # the claim go.
@@ -380,22 +427,70 @@ refusal() {
   printf '%s' "${said:-$(printf '%s\n' "$1" | grep -v '^compose ' | tail -n 3)}"
 }
 
-# held PORT: who listens on 127.0.0.1:PORT, by any address that covers
-# it; fails, printing nothing, when the port is free.
+# held ADDRESS PORT: who listens on ADDRESS:PORT, by any address that
+# covers it; fails, printing nothing, when the port is free.
 held() {
   python3 -I -c '
 import socket, sys
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    s.bind(("127.0.0.1", int(sys.argv[1])))
+    s.bind((sys.argv[1], int(sys.argv[2])))
 except OSError:
     sys.exit(0)
-sys.exit(1)' "$1" || return 1
+sys.exit(1)' "$1" "$2" || return 1
   local who
-  who="$(ss -Hltnp "sport = :$1" 2>/dev/null | sed -n 's/.*users:(("\([^"]*\)",pid=\([0-9]*\).*/\1 (pid \2)/p' | head -n 1)"
-  [ -n "$who" ] || who="$(docker ps --filter "publish=$1" --format 'the container {{.Names}}' 2>/dev/null | head -n 1)"
+  who="$(ss -Hltnp "sport = :$2" 2>/dev/null | sed -n 's/.*users:(("\([^"]*\)",pid=\([0-9]*\).*/\1 (pid \2)/p' | head -n 1)"
+  [ -n "$who" ] || who="$(docker ps --filter "publish=$2" --format 'the container {{.Names}}' 2>/dev/null | head -n 1)"
   echo "${who:-a process this user cannot see}"
+}
+
+# bind_database: whether the dev database is new, from the task. A new one
+# clears the stand-in's state; one that is not binds the loop (BOUND) to
+# the slot the state file's address names, or refuses with the reset.
+bind_database() {
+  local out new address
+  out="$(task database 2>&1)" || die "$(refusal "$out")"
+  new="$(value DEV_STACK_DATABASE_NEW "$out")"
+  case "$new" in
+    1)
+      rm -f "$STAND_IN_STATE"
+      return 0
+      ;;
+    0) ;;
+    *) die "mix cyfr.locus.dev_stack did not say whether the dev database is new." ;;
+  esac
+  [ -f "$STAND_IN_STATE" ] ||
+    die "This database's people were made beside a stand-in whose state is gone ($STAND_IN_STATE). Reset by deleting the dev database and $STAND_IN_STATE."
+  address="$(python3 -I -c 'import json, sys
+print(json.load(open(sys.argv[1])).get("directory", ""))' "$STAND_IN_STATE" 2>/dev/null)" || address=""
+  BOUND="$(printf '%s' "$address" | sed -n 's|^http://127\.79\.\([0-9]*\)\.1:[0-9]*$|\1|p')"
+  slot_ok "$BOUND" && [ "$address" = "http://127.79.$BOUND.1:$((4702 + 10 * BOUND))" ] ||
+    die "$STAND_IN_STATE names $address, the address of no slot. Reset by deleting the dev database and $STAND_IN_STATE."
+}
+
+# start_stand_in: the slot's stand-in, in a process group of its own, up
+# before the server it answers; its log in $STAND_IN_LOG.
+start_stand_in() {
+  local address port n=0
+  address="$(slot_value DEV_STACK_STAND_IN_ADDRESS)" port="$(slot_value DEV_STACK_STAND_IN_PORT)"
+  mkdir -p "$(dirname "$STAND_IN_STATE")"
+  (exec {LOCK_FD}>&- {CLAIM_FD}>&- &&
+    exec python3 -I -c 'import os, sys; os.setpgid(0, 0); os.execvp(sys.argv[1], sys.argv[1:])' \
+      python3 -I "$ROOT/tests/registry-stand-in/standin.py" --address "$address" --port "$port" \
+      --state "$STAND_IN_STATE" --ready-file "$PRIVATE/stand-in.ready" --upstream https://cyfr.run \
+      </dev/null >"$STAND_IN_LOG" 2>&1) &
+  STAND_IN=$!
+  record
+  until [ -s "$PRIVATE/stand-in.ready" ]; do
+    if ! kill -0 "$STAND_IN" 2>/dev/null || [ "$n" -ge 100 ]; then
+      tail -n 5 "$STAND_IN_LOG" >&2 || true
+      die "the cyfr.run stand-in did not start on $address:$port; its log ends above."
+    fi
+    sleep 0.1
+    n=$((n + 1))
+  done
+  echo "dev-stack: the cyfr.run stand-in answers at http://$address:$port."
 }
 
 run() {
@@ -404,9 +499,12 @@ run() {
   lock
   private
   local left
-  left="$(orphan)"
+  left="$(orphan server)"
   [ -z "$left" ] ||
     die "the server a killed run of this worktree left still runs (process group $left); \`scripts/dev-stack.sh down\` stops it."
+  left="$(orphan stand-in)"
+  [ -z "$left" ] ||
+    die "the cyfr.run stand-in a killed run of this worktree left still runs (process group $left); \`scripts/dev-stack.sh down\` stops it."
   # The image's tag names it in the declarations; the image itself is
   # built, when the host lacks it, once the settings are agreed.
   image --tag-only
@@ -416,12 +514,13 @@ run() {
   # its own slot.
   use_slot "$(remembered)"
   compose down --remove-orphans >/dev/null 2>&1 || true
+  echo "dev-stack: reading the settings; mix compiles the checkout first when it has changed."
+  bind_database
   take_slot
   declarations
 
-  echo "dev-stack: reading the settings; mix compiles the checkout first when it has changed."
   local out status line wrote="" setup="" server=() keys=() port=""
-  out="$(task settings "$PRIVATE/stack.json" 2>&1)" &&
+  out="$(task settings "$PRIVATE/stack.json" "$(slot_value DEV_STACK_STAND_IN_ADDRESS):$(slot_value DEV_STACK_STAND_IN_PORT)" 2>&1)" &&
     status=0 || status=$?
   [ "$status" = 0 ] || die "$(refusal "$out")"
   while IFS= read -r line; do
@@ -441,6 +540,7 @@ run() {
   # This tree's image, with this run as its use; built only when the host
   # lacks it, so an unchanged tree starts without a build.
   image --for "$$"
+  start_stand_in
   STARTED=1
   if ! (export "${keys[@]}" && compose up --detach --no-build --wait locus-runtime locus-backends locus-builds); then
     compose logs --tail 30 >&2 || true
@@ -459,7 +559,7 @@ run() {
   (exec {LOCK_FD}>&- {CLAIM_FD}>&- && export "${server[@]}" &&
     exec python3 -I -c 'import os, sys; os.setpgid(0, 0); os.execvp(sys.argv[1], sys.argv[1:])' mix phx.server </dev/null) &
   SERVER=$!
-  printf 'pid %s\ncheckout %s\nserver %s %s\n' "$$" "$ROOT" "$SERVER" "$(ps -o lstart= -p "$SERVER")" >"$LOCK"
+  record
   wait "$SERVER" && status=0 || status=$?
   SERVER_ENDED=1
   echo "dev-stack: CYFR exited with status $status." >&2
@@ -538,7 +638,8 @@ check() {
   use_slot "$(cat "$REMEMBERED")"
   image --tag-only
   declarations
-  out="$(task endpoint "$PRIVATE/stack.json" 2>&1)" || die "$(refusal "$out")"
+  out="$(task endpoint "$PRIVATE/stack.json" "$(slot_value DEV_STACK_STAND_IN_ADDRESS):$(slot_value DEV_STACK_STAND_IN_PORT)" 2>&1)" ||
+    die "$(refusal "$out")"
   port="$(value CYFR_PORT "$out")"
   [ -n "$port" ] || die "mix cyfr.locus.dev_stack printed no port."
   MCP="http://127.0.0.1:$port/mcp"
@@ -562,16 +663,19 @@ check() {
 
 down() {
   lock
-  # The server first, whatever fails after: its record goes only once its
-  # group is gone.
-  local left
-  left="$(orphan)"
-  if [ -n "$left" ]; then
-    echo "dev-stack: stopping the server a killed run left (process group $left)."
+  # The server first, then the stand-in it called, whatever fails after:
+  # each record goes only once its group is gone.
+  local left kind rest
+  for kind in server stand-in; do
+    left="$(orphan "$kind")"
+    [ -n "$left" ] || continue
+    echo "dev-stack: stopping the $kind a killed run left (process group $left)."
     stop "$left"
-    gone "$left" || die "the server a killed run left (process group $left) outlived KILL; its record stays for the next \`scripts/dev-stack.sh down\`."
-    printf 'pid %s\ncheckout %s\n' "$$" "$ROOT" >"$LOCK"
-  fi
+    gone "$left" || die "the $kind a killed run left (process group $left) outlived KILL; its record stays for the next \`scripts/dev-stack.sh down\`."
+    # The stand-in's record stays until its own turn.
+    rest="$([ "$kind" = stand-in ] || kept stand-in)"
+    printf 'pid %s\ncheckout %s\n%s' "$$" "$ROOT" "${rest:+$rest$'\n'}" >"$LOCK"
+  done
   use_slot "$(remembered)"
   image --tag-only
   env_file

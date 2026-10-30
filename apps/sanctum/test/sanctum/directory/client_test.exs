@@ -295,6 +295,55 @@ defmodule Sanctum.Directory.ClientTest do
 
   # ---- the transport -----------------------------------------------------------
 
+  describe "the loopback rule" do
+    @loopback ~w(http://127.0.0.1 http://127.79.0.1:4702 http://localhost:4000)
+    @refused ~w(http://10.0.0.5 http://dir.example http://127.0.0.1.example)
+
+    test "a directory over plain HTTP is one to pin only on this machine's loopback" do
+      for url <- @loopback, do: assert(Sanctum.enrollment_directory?(url), url)
+      for url <- @refused, do: refute(Sanctum.enrollment_directory?(url), url)
+      assert Sanctum.enrollment_directory?("https://dir.example")
+    end
+
+    test "plain HTTP to any other host is insecure_directory, before any lookup or request",
+         ctx do
+      for url <- @refused do
+        alice = person(url)
+
+        assert {:error, :insecure_directory} =
+                 Client.resolve(alice.identifier, genesis(alice), opts(ctx)),
+               url
+
+        assert {:error, :insecure_directory} =
+                 Client.register(alice.identifier, genesis(alice), opts(ctx)),
+               url
+      end
+
+      refute_received {:resolved, _}
+      assert requests() == []
+    end
+
+    # Accepted over HTTP, the address still meets the pinned egress, which
+    # refuses a loopback address the operator did not list: the rule opens
+    # the scheme alone.
+    test "plain HTTP to loopback passes the transport check and meets the egress guard", ctx do
+      for url <- @loopback do
+        alice = person(url)
+
+        log =
+          capture_log(fn ->
+            assert {:error, :egress_refused} =
+                     Client.resolve(alice.identifier, genesis(alice),
+                       cacerts: ctx.tls[:client_config][:cacerts]
+                     ),
+                   url
+          end)
+
+        assert log =~ "private IP 127.", url
+      end
+    end
+  end
+
   describe "the transport" do
     test "a loopback address the operator did not list is refused before connecting", ctx do
       dir = directory(ctx, "loopback.test", fn _ -> flunk("no connection is made") end)

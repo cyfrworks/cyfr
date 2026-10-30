@@ -441,7 +441,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "directory_wire.json" => [
       {"apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs",
        ~w(directory entries keys scenarios)},
-      {"tests/handle-proof/models-test.mjs", ~w(entries)}
+      {"tests/handle-proof/models-test.mjs", ~w(entries)},
+      {"tests/registry-stand-in/standin_test.py", ~w(directory entries scenarios)}
     ],
     # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
     # beside internal/identity/testdata/SOURCE, which names this file's
@@ -531,7 +532,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/handle_answer_test.exs", ~w(answers identity slugs)},
       {"apps/prima/test/prima/registry_request_test.exs",
        ~w(answers codes envelopes identity keys refusals requests slugs verify)},
-      {"apps/sanctum/test/sanctum/handle_test.exs", ~w(answers)}
+      {"apps/sanctum/test/sanctum/handle_test.exs", ~w(answers)},
+      {"tests/registry-stand-in/standin_test.py", ~w(answers requests)}
     ],
     "release_manifest.json" => [
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},

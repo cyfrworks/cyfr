@@ -9,7 +9,10 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   sets, and answers the server's settings and the services' keys (the
   runtime's checked against `tests/fixtures/worker_auth.json`), or
   Prism's port; a setting that disagrees with the declarations is
-  refused by name, and nothing is written when anything is refused.
+  refused by name, and nothing is written when anything is refused. The
+  server's registry and directory are the slot's cyfr.run stand-in
+  whatever `.env` says. It also says whether the dev database the
+  checkout configures is yet to be made.
 
   The working directory, the shell and the variables are node-wide, so
   this module runs alone and restores them.
@@ -29,8 +32,11 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
              CYFR_LOCUS_BACKENDS_URL CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_BUILDS_URL)
   @provisioned ~w(CYFR_GITHUB_CLIENT_ID CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT
                   CYFR_LOCUS_BACKENDS_KEY CYFR_LOCUS_BUILDS_KEY)
+  @stand_in_names ~w(CYFR_REGISTRY_URL CYFR_DIRECTORY_URL CYFR_OCI_REGISTRY_URL)
+  @database_names ~w(CYFR_DATA_PATH CYFR_DATABASE_PATH CYFR_DATABASE_URL)
   @names ["RELEASE_ROOT", "CYFR_HOST_API_URL", "CYFR_BIND_ADDRESS", "CYFR_ACCESS"] ++
-           @server ++ @provisioned
+           @server ++ @provisioned ++ @stand_in_names ++ @database_names
+  @stand_in "127.79.3.1:4732"
 
   @client_id "Ov23example"
   @setup_token String.duplicate("5e", 32)
@@ -117,8 +123,11 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       "server CYFR_HOST_API_BIND=172.16.250.1",
       "server CYFR_HOST_API_PORT=4566",
       "server CYFR_LOCUS_BACKENDS_URL=http://172.16.251.2:4101",
-      "server CYFR_PRIVATE_EGRESS_TARGETS=172.16.251.2",
-      "server CYFR_LOCUS_BUILDS_URL=http://172.16.252.2:4100"
+      "server CYFR_PRIVATE_EGRESS_TARGETS=172.16.251.2,127.79.3.1",
+      "server CYFR_LOCUS_BUILDS_URL=http://172.16.252.2:4100",
+      "server CYFR_REGISTRY_URL=127.79.3.1:4732",
+      "server CYFR_DIRECTORY_URL=http://127.79.3.1:4732",
+      "server CYFR_OCI_REGISTRY_URL=registry.cyfr.run"
     ]
   end
 
@@ -146,7 +155,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       ]
   end
 
-  defp settings!, do: DevStack.run(["settings", "stack.json"])
+  defp settings!, do: DevStack.run(["settings", "stack.json", @stand_in])
 
   defp answers do
     receive do
@@ -346,7 +355,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       CYFR_HOST_API_BIND=172.16.250.1
       CYFR_HOST_API_URL=http://172.16.250.1:4566/
       CYFR_LOCUS_BACKENDS_URL=http://172.16.251.2:4101/
-      CYFR_PRIVATE_EGRESS_TARGETS= 172.16.251.2 ,
+      CYFR_PRIVATE_EGRESS_TARGETS= 172.16.251.2 , 127.79.3.1
       CYFR_BIND_ADDRESS=127.0.0.1
       """)
 
@@ -369,6 +378,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
             {"CYFR_HOST_API_URL", "http://cyfr:4566"},
             {"CYFR_LOCUS_BACKENDS_URL", "http://locus-backends:4101"},
             {"CYFR_PRIVATE_EGRESS_TARGETS", "172.16.251.2,127.0.0.1"},
+            {"CYFR_PRIVATE_EGRESS_TARGETS", "172.16.251.2"},
             {"CYFR_LOCUS_BUILDS_URL", "http://locus-builds:4100"},
             {"CYFR_BIND_ADDRESS", "::1"}
           ] do
@@ -378,6 +388,35 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
         System.put_env(name, value)
         refused("#{name} is #{value}, and the dev stack needs ")
         System.delete_env(name)
+      end
+    end
+
+    test "names the slot's stand-in as the registry and the directory, whatever .env says" do
+      File.write!(".env", """
+      #{complete()}CYFR_REGISTRY_URL=cyfr.run
+      CYFR_DIRECTORY_URL=https://cyfr.run
+      CYFR_OCI_REGISTRY_URL=registry.elsewhere.example
+      """)
+
+      Prima.Test.Env.with_system_env("CYFR_REGISTRY_URL", "cyfr.run", fn ->
+        settings!()
+        assert answers() == answered()
+      end)
+    end
+
+    test "refuses a stand-in that is not on this machine's 127.79.0.0/16" do
+      File.write!(".env", complete())
+
+      for stand_in <- [
+            "127.0.0.1:4702",
+            "127.79.0.1",
+            "10.79.0.1:4702",
+            "127.79.0.1:0",
+            "cyfr.run:443"
+          ] do
+        refused("#{stand_in} is not the stand-in's address", fn ->
+          DevStack.run(["settings", "stack.json", stand_in])
+        end)
       end
     end
 
@@ -420,15 +459,65 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
   describe "endpoint" do
     test "answers Prism's declared port and writes nothing" do
-      DevStack.run(["endpoint", "stack.json"])
+      DevStack.run(["endpoint", "stack.json", @stand_in])
       assert answers() == ["CYFR_PORT=4555"]
       refute File.exists?(".env")
 
       File.write!(".env", "CYFR_PORT=4000\n")
 
       refused("CYFR_PORT is 4000, and the dev stack needs 4555", fn ->
-        DevStack.run(["endpoint", "stack.json"])
+        DevStack.run(["endpoint", "stack.json", @stand_in])
       end)
+    end
+  end
+
+  describe "database" do
+    # The answer of one `database` run, which writes nothing.
+    defp database_new do
+      before = listing()
+      DevStack.run(["database"])
+      assert listing() == before, "the database check wrote a file"
+      answers()
+    end
+
+    defp listing, do: "**" |> Path.wildcard(match_dot: true) |> Map.new(&{&1, File.read(&1)})
+
+    test "a dev database not made yet is new, and one that exists is not" do
+      case Arca.adapter_facts().adapter do
+        :sqlite ->
+          assert database_new() == ["DEV_STACK_DATABASE_NEW=1"]
+          File.mkdir_p!("data")
+          File.write!("data/cyfr.db", "")
+          assert database_new() == ["DEV_STACK_DATABASE_NEW=0"]
+
+          # Another file the checkout names is the one asked about.
+          File.write!(".env", "CYFR_DATABASE_PATH=elsewhere.db\n")
+          assert database_new() == ["DEV_STACK_DATABASE_NEW=1"]
+          File.write!("elsewhere.db", "")
+          assert database_new() == ["DEV_STACK_DATABASE_NEW=0"]
+
+        :postgres ->
+          # The partition's own database, which exists, from the fields Ecto
+          # parsed its URL into.
+          c = Arca.Repo.config()
+
+          url =
+            "postgres://#{c[:username]}:#{c[:password]}@#{c[:hostname]}:#{c[:port] || 5432}/" <>
+              c[:database]
+
+          File.write!(".env", "CYFR_DATABASE_URL=#{url}\n")
+          assert database_new() == ["DEV_STACK_DATABASE_NEW=0"]
+
+          absent =
+            String.replace(
+              url,
+              ~r{/[^/]+$},
+              "/cyfr_dev_stack_absent_#{System.unique_integer([:positive])}"
+            )
+
+          File.write!(".env", "CYFR_DATABASE_URL=#{absent}\n")
+          assert database_new() == ["DEV_STACK_DATABASE_NEW=1"]
+      end
     end
   end
 
@@ -440,7 +529,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     File.write!(Path.join(dir, "release/.env"), complete())
 
     for release_root <- [Path.join(dir, "release"), ""],
-        args <- [["settings", "stack.json"], ["endpoint", "stack.json"], []] do
+        args <- [
+          ["settings", "stack.json", @stand_in],
+          ["endpoint", "stack.json", @stand_in],
+          ["database"],
+          []
+        ] do
       System.put_env("RELEASE_ROOT", release_root)
       error = assert_raise Mix.Error, fn -> DevStack.run(args) end
 
@@ -458,8 +552,11 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     for args <- [
           [],
           ["settings"],
+          ["settings", "stack.json"],
           ["settings", "stack.json", "a", "b"],
           ["endpoint"],
+          ["endpoint", "stack.json"],
+          ["database", "data/cyfr.db"],
           ["names", "stack.json"],
           ["key"]
         ] do

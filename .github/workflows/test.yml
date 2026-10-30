@@ -360,6 +360,10 @@ jobs:
         run: python3 -I tests/locus-runtime-image/worker_auth.py --self-check
       - name: The backends suite's signing reproduces its vectors
         run: python3 -I tests/locus-backends-image/harness.py --self-check
+      # The cyfr.run stand-in the dev loop and the proofs run, against the
+      # registry and directory vectors and a local fake upstream.
+      - name: The cyfr.run stand-in answers as the vectors say
+        run: python3 -I tests/registry-stand-in/standin_test.py
       # The tag pipeline publishes nothing unless every check passed: its
       # graph read from release.yml, then mutants of it, each refused.
       # It reads YAML through PyYAML, which -I finds only among the system
