@@ -98,8 +98,8 @@ defmodule PrismWeb.SettingsLiveTest do
     bob = "per_" <> Prima.Digest.sha256_hex("handle-deny-#{n}")
 
     registry(nil, %{
-      "alice" => {:held, alice, nil},
-      "bob" => {:held, bob, nil},
+      "alice" => {:held, alice},
+      "bob" => {:held, bob},
       "down" => :close
     })
 
@@ -1767,8 +1767,8 @@ defmodule PrismWeb.SettingsLiveTest do
       %{method: "GET", path: "/v1/handles/" <> handle} ->
         case Map.get(handles, handle, :free) do
           :free -> RegistryStub.refusal(:handle_not_found)
-          :taken -> {200, handle_answer(handle, "per_" <> String.duplicate("a", 64), nil)}
-          {:held, identifier, address} -> {200, handle_answer(handle, identifier, address)}
+          :taken -> {200, handle_answer(handle, "per_" <> String.duplicate("a", 64))}
+          {:held, identifier} -> {200, handle_answer(handle, identifier)}
           :close -> :close
         end
 
@@ -1789,16 +1789,14 @@ defmodule PrismWeb.SettingsLiveTest do
     view |> element("button[phx-click=#{button}]") |> render_click()
   end
 
-  defp handle_answer(handle, identifier, address) do
-    %{
+  defp handle_answer(handle, identifier) do
+    RegistryStub.answer(%{
       "protocol" => Prima.HandleAnswer.protocol(),
       "registry" => RegistryStub.host(),
       "handle" => handle,
       "identifier" => identifier,
       "directory" => RegistryStub.directory()
-    }
-    |> then(&if(address, do: Map.put(&1, "address", address), else: &1))
-    |> RegistryStub.answer()
+    })
   end
 
   defp type_handle(view, handle) do
@@ -2060,7 +2058,7 @@ defmodule PrismWeb.SettingsLiveTest do
       want!(person, "alicia")
       {:ok, answering} = Agent.start_link(fn -> false end)
 
-      registry(state, %{"alicia" => {:held, state.identifier, nil}}, fn %{signed: signed} ->
+      registry(state, %{"alicia" => {:held, state.identifier}}, fn %{signed: signed} ->
         case signed.operation do
           "policy.accept" ->
             {200, RegistryStub.answer(%{"accepted" => true})}
@@ -2086,10 +2084,6 @@ defmodule PrismWeb.SettingsLiveTest do
       view |> element(~s([data-test="identity-claim"])) |> render_click()
       assert has_element?(view, ~s([data-test="identity-claimed"]), "@alicia")
       assert wanted(person) == nil
-
-      wait_until(fn ->
-        has_element?(view, ~s([data-test="identity-publish"][data-published="false"]))
-      end)
     end
 
     test "a claim sent before the enrollment's kit is acknowledged claims nothing, and sends the registry nothing",
@@ -2166,18 +2160,19 @@ defmodule PrismWeb.SettingsLiveTest do
       assert has_element?(view, ~s([data-test="identity-identifier"]), state.identifier)
     end
 
-    test "a claimed handle shows whether the registry publishes this CYFR's address with it",
+    test "a claimed handle is shown alone: the card asks the registry nothing and offers no address",
          %{conn: conn} do
       person = test_user()
       state = acknowledged!(person)
-      registry(state, %{"alicia" => {:held, state.identifier, "https://alicia.example"}})
+      registry(state, %{"alicia" => {:held, state.identifier}})
 
       {view, _html} = conn |> signed_in(person, "alicia") |> mount_athanor("/settings")
-      assert has_element?(view, ~s([data-test="identity-claimed"]), "@alicia")
+      claimed = view |> element(~s([data-test="identity-claimed"])) |> render()
+      assert claimed =~ "@alicia"
+      refute claimed =~ ~r/address|[Pp]ublish|Withdraw/
 
-      wait_until(fn ->
-        has_element?(view, ~s([data-test="identity-publish"][data-published="true"]))
-      end)
+      _rendered = render(view)
+      refute_received {:registry_request, %{path: "/v1/handles/" <> _handle}}
     end
 
     test "a person whose keys another CYFR holds is told to change them there, and offered nothing",

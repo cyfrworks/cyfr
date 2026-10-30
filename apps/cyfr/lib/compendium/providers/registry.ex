@@ -8,10 +8,10 @@ defmodule Compendium.Providers.Registry do
   registry's policies and appeals.
 
   Every operation that speaks for the person at the registry (a handle
-  claim, a token mint, a published address, a policy acceptance, an
-  appeal, a publisher claim and its verification) is one request their
-  live key signs (`Compendium.Registry.Client.signed/3`); no identity
-  provider's token is ever sent. The token-minting ones (`sync`,
+  claim, a token mint, a policy acceptance, an appeal, a publisher claim
+  and its verification) is one request their live key signs
+  (`Compendium.Registry.Client.signed/3`); no identity provider's token is
+  ever sent. The token-minting ones (`sync`,
   `verify_publisher`) are confirmed fresh first
   (`Sanctum.RegistryCredentials.confirm_issuance/4`) and store every
   token they are answered. Namespace administration (tokens, members)
@@ -22,7 +22,7 @@ defmodule Compendium.Providers.Registry do
   alias Compendium.Providers.Shared
   alias Compendium.Registry.{Client, CredentialStore}
 
-  @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove sync publish_address)
+  @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove sync)
 
   # The signed operations the `signed_in` tier serves, before a person
   # holds a handle: a key belongs to an athanor and is nobody's registry
@@ -31,14 +31,14 @@ defmodule Compendium.Providers.Registry do
   @person_acts ~w(claim_personal legal_accept)
 
   # Every action that sends a change to the registry — a POST that claims,
-  # verifies, mints, adds, updates, accepts, reports, appeals or publishes
-  # — reaches outside the home and is `external`; a DELETE there
-  # (`tokens_revoke`, `members_remove`) is `destructive`. None takes a
-  # standing answer (`standing: false`): an assistant's proposal of one is
-  # approved one card at a time, and an allow stored before is read as no
-  # allow (`Sanctum.ToolGrants`). The reads stay `read`. Every action
-  # declares `sources: [:outside]`: whatever it answers, an error body
-  # included, the registry wrote.
+  # verifies, mints, adds, updates, accepts, reports or appeals — reaches
+  # outside the home and is `external`; a DELETE there (`tokens_revoke`,
+  # `members_remove`) is `destructive`. None takes a standing answer
+  # (`standing: false`): an assistant's proposal of one is approved one
+  # card at a time, and an allow stored before is read as no allow
+  # (`Sanctum.ToolGrants`). The reads stay `read`. Every action declares
+  # `sources: [:outside]`: whatever it answers, an error body included,
+  # the registry wrote.
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
@@ -387,27 +387,10 @@ defmodule Compendium.Providers.Registry do
           standing: false,
           consent: :interactive,
           planes: [:external, :in_chain]
-        ),
-        Operation.new(
-          "registry",
-          "publish_address",
-          "Publish address registry",
-          [
-            Arg.new("published", :boolean,
-              required: true,
-              description:
-                "Whether the registry publishes this CYFR's address with your handle (true) or withdraws it (false)"
-            )
-          ],
-          kind: :external,
-          sources: [:outside],
-          standing: false,
-          consent: :interactive,
-          planes: [:external]
         )
       ],
       description:
-        "cyfr.run registry operations, each a request your identity signs: claim your handle, sync your push tokens, claim and verify a publisher namespace by DNS, publish or withdraw your address, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+        "cyfr.run registry operations, each a request your identity signs: claim your handle, sync your push tokens, claim and verify a publisher namespace by DNS, accept the registry's policies and file appeals; and manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
       title: "Registry"
     )
   end
@@ -754,21 +737,6 @@ defmodule Compendium.Providers.Registry do
          memberships: for({slug, _token, role} <- memberships, do: %{slug: slug, role: role})
        }}
     else
-      {:error, reason} -> refuse(reason)
-    end
-  end
-
-  # The address `Sanctum.Person.home/0` gives, never a typed one; an empty
-  # body withdraws it.
-  defp handle_gated(%Context{user_id: user_id}, %{
-         "action" => "publish_address",
-         "published" => published
-       })
-       when is_binary(user_id) and is_boolean(published) do
-    body = if published, do: %{"address" => Sanctum.Person.home()}, else: %{}
-
-    case Client.signed(user_id, "address.set", body) do
-      {:ok, answer} -> {:ok, answer}
       {:error, reason} -> refuse(reason)
     end
   end

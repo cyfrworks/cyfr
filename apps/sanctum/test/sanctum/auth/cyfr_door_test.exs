@@ -9,9 +9,8 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
   A carry is verified under the head read fresh from the directory the
   person's genesis names, before which a carry for another home, a
-  genesis that does not hash to its identifier, a carry of another
-  identity than the handle the sign-in began from named, and a sign-in
-  whose request the browser lost make no request; the
+  genesis that does not hash to its identifier, and a sign-in whose
+  request the browser lost make no request; the
   challenge is held in the browser's cookie and the browser goes back to
   the carry's signed return URL; the assertion is verified under the
   current live key, for this home, this challenge and this carry, and the
@@ -224,37 +223,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert installation_window() == nil
     end
 
-    test "a sign-in begun from a handle is answered by the identity it named: another identity is refused before any directory read",
-         context do
-      named = identity!(context)
-      other = identity!(context)
-      allow!(other)
-      %{fragment: fragment} = carry(other, context.home)
-      watch_sources!()
-
-      # The handle's published address served someone else.
-      assert {:error, :wrong_identity} =
-               CyfrDoor.challenge(fragment, {:identifier, named.identifier})
-
-      # Nothing read a directory or counted against the installation's
-      # bound, and nothing here was asked of the store.
-      assert drain() == []
-      refute_received :connected
-      assert sources() == []
-      assert installation_window() == nil
-
-      # No challenge was held, so no assertion can be admitted under one,
-      # and no person or session was made.
-      refute person_of(other.identifier)
-      refute person_of(named.identifier)
-
-      # The identity the handle named is answered as an address's is.
-      %{fragment: own} = carry(named, context.home)
-      assert {:ok, held} = CyfrDoor.challenge(own, {:identifier, named.identifier})
-      assert held["identifier"] == named.identifier
-    end
-
-    test "a sign-in whose handle request the browser lost is refused before anything else",
+    test "a sign-in whose request the browser lost is refused before anything else",
          context do
       identity = identity!(context)
       %{fragment: fragment} = carry(identity, context.home)
@@ -269,7 +238,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert installation_window() == nil
     end
 
-    test "an address requests no identifier: a carry of any identity proceeds", context do
+    test "a sign-in names no identity: a carry of any identity proceeds", context do
       for identity <- [identity!(context), identity!(context)] do
         %{fragment: fragment} = carry(identity, context.home)
         assert {:ok, held} = CyfrDoor.challenge(fragment, :none)

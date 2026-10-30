@@ -863,17 +863,6 @@ defmodule Sanctum.PersonTest do
       refute second.nonce == request.nonce
     end
 
-    test "withdraws an address with an empty body, never a null", %{user: user} do
-      state = RegistryStub.enroll!(user.id)
-      assert {:ok, bytes} = Person.sign_registry_request(user.id, "address.set", %{})
-      refute bytes =~ "null"
-
-      assert {:ok, %RegistryRequest{body: body}} =
-               RegistryRequest.verify(bytes, state, registry(state), System.os_time(:millisecond))
-
-      assert body == %{}
-    end
-
     test "a person without an identifier is not enrolled, a pending enrollment included",
          %{user: user} do
       assert {:error, :not_enrolled} =
@@ -921,9 +910,6 @@ defmodule Sanctum.PersonTest do
 
       assert {:error, {:invalid_argument, _}} =
                Person.sign_registry_request(user.id, "handle.claim", %{"handle" => "Not A Slug"})
-
-      assert {:error, {:invalid_argument, _}} =
-               Person.sign_registry_request(user.id, "address.set", %{"address" => nil})
 
       # An argument at its 4,000-byte bound signs.
       argument = String.duplicate("a", 4000)

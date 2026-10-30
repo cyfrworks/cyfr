@@ -76,7 +76,6 @@ defmodule Compendium.Registry.ClientTest do
       for {operation, body} <- [
             {"handle.claim", %{"handle" => "alice"}},
             {"tokens.mint", %{"label" => "laptop"}},
-            {"address.set", %{}},
             {"policy.accept", %{"policy_version" => "2026-09"}},
             {"appeal.file",
              %{"action_type" => "ban", "action_ref" => "x", "argument" => "it was not me"}},

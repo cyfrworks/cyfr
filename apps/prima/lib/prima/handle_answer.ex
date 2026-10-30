@@ -4,11 +4,10 @@
 defmodule Prima.HandleAnswer do
   @moduledoc """
   The registry's answer for one handle, `cyfr-handle/v1`: the registry's
-  host, the handle asked for, its owner's identifier, the directory the
-  owner's genesis names, and the address the owner published, absent when
-  none is (JCS has no null, `Prima.JCS`). It carries no keys: the
-  directory is the one owner of a person's keys, and a reader reads them
-  there. `tests/fixtures/registry_wire.json` holds its vectors, which the
+  host, the handle asked for, its owner's identifier and the directory the
+  owner's genesis names, five keys in all, each required. It carries no
+  keys and no address: the directory is the one owner of a person's keys,
+  and a reader reads them there. `tests/fixtures/registry_wire.json` holds its vectors, which the
   registry's encoder reads too.
 
   A refusal (`HANDLE_NOT_FOUND` for a handle no one holds, a reserved one
@@ -16,8 +15,8 @@ defmodule Prima.HandleAnswer do
   `Prima.RegistryRequest.refusal/1` reads.
 
   The grammars are the ones each value has everywhere: the handle
-  `Prima.ComponentRef.valid_personal_slug?/1`, the identifier, directory
-  and address `Prima.Identity.Encoding`'s.
+  `Prima.ComponentRef.valid_personal_slug?/1`, the identifier and
+  directory `Prima.Identity.Encoding`'s.
   """
 
   alias Prima.{ComponentRef, RegistryRequest}
@@ -25,18 +24,16 @@ defmodule Prima.HandleAnswer do
 
   @protocol "cyfr-handle/v1"
   @required ~w(protocol registry handle identifier directory)
-  @optional ~w(address)
 
   @type t :: %__MODULE__{
           registry: String.t(),
           handle: String.t(),
           identifier: String.t(),
-          directory: String.t(),
-          address: String.t() | nil
+          directory: String.t()
         }
 
   @enforce_keys [:registry, :handle, :identifier, :directory]
-  defstruct [:registry, :handle, :identifier, :directory, address: nil]
+  defstruct [:registry, :handle, :identifier, :directory]
 
   @doc "The protocol string an answer carries."
   @spec protocol() :: String.t()
@@ -46,8 +43,9 @@ defmodule Prima.HandleAnswer do
   Read an answer, its JSON bytes or their decoded map, for the `handle`
   asked of the registry `registry` (its host). A registry error envelope
   answers its refusal (`Prima.RegistryRequest.refusal/1`). An answer for
-  another handle or registry, of another protocol, with other keys, or
-  with a value outside its grammar is `:malformed_answer`.
+  another handle or registry, of another protocol, with any other key
+  (`address` among them), or with a value outside its grammar is
+  `:malformed_answer`.
   """
   @spec parse(binary() | map(), String.t(), String.t()) ::
           {:ok, t()} | {:error, RegistryRequest.refusal() | :malformed_answer}
@@ -63,21 +61,19 @@ defmodule Prima.HandleAnswer do
   end
 
   def parse(answer, handle, registry) when is_map(answer) and not is_struct(answer) do
-    with :ok <- Encoding.fields(answer, @required, @optional),
+    with :ok <- Encoding.fields(answer, @required, []),
          {:ok, @protocol} <- Encoding.check(answer, "protocol", &(&1 == @protocol)),
          {:ok, ^registry} <- Encoding.check(answer, "registry", &(&1 == registry)),
          {:ok, ^handle} <- Encoding.check(answer, "handle", &(&1 == handle)),
          true <- Encoding.host?(registry) and ComponentRef.valid_personal_slug?(handle),
          {:ok, identifier} <- Encoding.check(answer, "identifier", &Encoding.identifier?/1),
-         {:ok, directory} <- Encoding.check(answer, "directory", &Encoding.directory_url?/1),
-         {:ok, address} <- Encoding.optional(answer, "address", &Encoding.home?/1) do
+         {:ok, directory} <- Encoding.check(answer, "directory", &Encoding.directory_url?/1) do
       {:ok,
        %__MODULE__{
          registry: registry,
          handle: handle,
          identifier: identifier,
-         directory: directory,
-         address: address
+         directory: directory
        }}
     else
       _ -> {:error, :malformed_answer}
@@ -94,10 +90,8 @@ defmodule Prima.HandleAnswer do
       "registry" => answer.registry,
       "handle" => answer.handle,
       "identifier" => answer.identifier,
-      "directory" => answer.directory,
-      "address" => answer.address
+      "directory" => answer.directory
     }
-    |> Encoding.compact()
     |> Encoding.jcs!()
   end
 end
