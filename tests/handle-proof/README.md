@@ -624,9 +624,6 @@ row per field of each row of each step's objects:
 | ban:registry.request_nonces[a][a nonce read at sync 3] | identifier | exact | as read at sync |
 | ban:registry.request_nonces[a][a nonce read at sync 3] | nonce | exact | as read at sync |
 | ban:registry.request_nonces[a][a nonce read at sync 3] | expires_at | exact | as read at sync |
-| ban:registry.request_nonces[a][a nonce read at sync 4] | identifier | exact | as read at sync |
-| ban:registry.request_nonces[a][a nonce read at sync 4] | nonce | exact | as read at sync |
-| ban:registry.request_nonces[a][a nonce read at sync 4] | expires_at | exact | as read at sync |
 | held:a.passkeys[row] | activated_at | exact | as read at setup |
 | held:a.passkeys[row] | admin_confirmation_id | exact | as read at setup |
 | held:a.passkeys[row] | credential_id | exact | as read at setup |
@@ -766,9 +763,6 @@ row per field of each row of each step's objects:
 | held:registry.request_nonces[a][a nonce read at sync 3] | identifier | exact | as read at ban |
 | held:registry.request_nonces[a][a nonce read at sync 3] | nonce | exact | as read at ban |
 | held:registry.request_nonces[a][a nonce read at sync 3] | expires_at | exact | as read at ban |
-| held:registry.request_nonces[a][a nonce read at sync 4] | identifier | exact | as read at ban |
-| held:registry.request_nonces[a][a nonce read at sync 4] | nonce | exact | as read at ban |
-| held:registry.request_nonces[a][a nonce read at sync 4] | expires_at | exact | as read at ban |
 | held:registry.push_tokens[proof][row] | id | exact | as read at ban |
 | held:registry.push_tokens[proof][row] | token_hash | exact | as read at ban |
 | held:registry.push_tokens[proof][row] | namespace_slug | exact | as read at ban |
