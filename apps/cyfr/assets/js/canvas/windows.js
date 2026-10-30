@@ -8,14 +8,18 @@
 // `frame_tile`, `frame_full`, `frame_minimise`, `frame_close`,
 // `frame_raise`, `switch_canvas`).
 //
-// A press on a window's title bar (`data-canvas-grip`) raises it unless it
-// is the active one; travelling DRAG_MIN_PX makes it a drag, a double
-// click makes the window full. A press on an edge (`data-canvas-edge`)
+// A press on an app's title bar (`data-canvas-grip`) released without
+// travelling raises it unless it is the active one; travelling DRAG_MIN_PX
+// makes a window's press a drag, which sends its move alone; a double
+// click makes the window full. Nothing is sent before the pointer settles,
+// so a cancelled press changes nothing. A press on an edge (`data-canvas-edge`)
 // resizes a window, or moves a tile's divider. While a gesture runs, a
 // shield covers every frame, so no frame under the pointer takes it, and
 // a stylesheet of the hook's own holds the wrapper where the gesture puts
 // it, over the style the server rendered, until the shell answers the
-// settled event. A drop with the pointer at the left or right edge of the
+// settled event. Each held element belongs to the gesture that last held
+// it, and an answer releases only what its own gesture still holds, so a
+// late answer to one gesture never moves what a newer one holds. A drop with the pointer at the left or right edge of the
 // apps' area tiles the window there, at the top makes it full; the shield
 // shows where it would go. A release anywhere settles the gesture; a
 // cancel, a lost capture, the window losing focus, the page hidden and the
@@ -49,6 +53,8 @@ const DEFAULT_SHARE = 5000
 export const WindowGestures = {
   _windowsMount() {
     this._gesture = null
+    this._gestures = 0
+    // Element id → {gesture, box}: what holds it, and where.
     this._held = new Map()
     this._onWindowDown = (event) => this._windowDown(event)
     this._onWindowMove = (event) => this._windowMove(event)
@@ -148,22 +154,25 @@ export const WindowGestures = {
 
     const place = wrapper.dataset.canvasPlace
     const frame = wrapper.dataset.canvasFrame
-    if (grip && wrapper.dataset.canvasActive !== "true" && this._connected) {
-      this.pushEvent("frame_raise", {frame})
-    }
 
     let kind = null
     if (edge && place === "window") kind = "resize"
     else if (edge && place === "tile") kind = "divider"
     else if (grip && place === "window") kind = "drag"
+    // A tile's title bar does not drag: a press on it can only raise.
+    else if (grip && place === "tile") kind = "press"
     if (!kind) return
 
     event.preventDefault?.()
     const area = this._area()
     if (!area) return
     this._gesture = {
+      token: ++this._gestures,
       kind,
       frame,
+      // A press on an inactive app's title bar raises it once it settles
+      // as a click.
+      raise: Boolean(grip) && wrapper.dataset.canvasActive !== "true",
       wrapper,
       edge: edge ? edge.dataset.canvasEdge : null,
       side: wrapper.dataset.canvasSide,
@@ -174,12 +183,12 @@ export const WindowGestures = {
       y: event.clientY,
       id: event.pointerId,
       capture: target,
-      moved: kind !== "drag"
+      // Nothing moves, and nothing is sent, until the pointer travels.
+      moved: false
     }
     target.setPointerCapture?.(event.pointerId)
     // A release outside the layer, or outside the window, still settles it.
     globalThis.window?.addEventListener("pointerup", this._onWindowUp)
-    if (this._gesture.moved) this._shield(kind)
   },
 
   _windowMove(event) {
@@ -187,23 +196,29 @@ export const WindowGestures = {
     if (!g || event.pointerId !== g.id) return
     const dx = event.clientX - g.x
     const dy = event.clientY - g.y
+    if (g.kind === "press") return
     if (!g.moved) {
       if (Math.abs(dx) < DRAG_MIN_PX && Math.abs(dy) < DRAG_MIN_PX) return
       g.moved = true
       this._shield(g.kind)
     }
-    this._hold(this._shaped(g, event))
+    this._hold(g, this._shaped(g, event))
   },
 
   _windowUp(event) {
     const g = this._end(event.pointerId)
-    if (!g || !g.moved) return
+    if (!g) return
+    // A press that settled where it began is a click: it raises the app.
+    if (!g.moved) {
+      if (g.raise && this._connected) this.pushEvent("frame_raise", {frame: g.frame})
+      return
+    }
     const shaped = this._shaped(g, event)
-    this._hold(shaped)
+    this._hold(g, shaped)
 
     const settle = (name, payload) => {
-      if (!this._connected) return this._release(shaped.held)
-      this.pushEvent(name, payload, () => this._release(shaped.held))
+      if (!this._connected) return this._release(g)
+      this.pushEvent(name, payload, () => this._release(g))
     }
 
     if (g.kind === "drag" && shaped.snap === "full") return settle("frame_full", {frame: g.frame})
@@ -220,7 +235,7 @@ export const WindowGestures = {
   // pointer's.
   _windowCancel(event = null) {
     const g = this._end(event ? event.pointerId : null)
-    if (g) this._release(this._shaped(g, null).held)
+    if (g) this._release(g)
   },
 
   _windowDouble(event) {
@@ -289,20 +304,23 @@ export const WindowGestures = {
     return {box, snap, held: [{id: wrapperId, box: {left: box.x, top: box.y, width: box.width, height: box.height}}]}
   },
 
-  // Hold `entries` over the server's style until released.
-  _hold({held}) {
-    for (const {id, box} of held) this._held.set(id, box)
+  // Hold what gesture `g` shaped over the server's style, as `g`'s, until
+  // released.
+  _hold(g, {held}) {
+    for (const {id, box} of held) this._held.set(id, {gesture: g.token, box})
     this._writeHeld()
   },
 
-  _release(held) {
-    for (const {id} of held) this._held.delete(id)
+  // Release what gesture `g` still holds; what a newer gesture took over
+  // stays held.
+  _release(g) {
+    for (const [id, {gesture}] of this._held) if (gesture === g.token) this._held.delete(id)
     this._writeHeld()
   },
 
   _writeHeld() {
     const style = this._stylesheet()
-    if (style) style.textContent = overrides(Array.from(this._held, ([id, box]) => ({id, box})))
+    if (style) style.textContent = overrides(Array.from(this._held, ([id, {box}]) => ({id, box})))
   },
 
   // The apps' area: the frames container's box in the page.

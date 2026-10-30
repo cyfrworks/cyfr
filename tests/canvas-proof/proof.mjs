@@ -76,6 +76,7 @@ const STEPS = [
   ["window_drag", ["chromium"]],
   ["tile_narrows", ["chromium"]],
   ["covered_windows", ["chromium"]],
+  ["frame_kept", ["chromium"]],
   ["hidden_canvas", ["chromium"]],
   ["validation_failures", ["chromium"]],
   ["crash_safe_mode", ["chromium"]],
@@ -93,7 +94,7 @@ const STEPS = [
 // last.
 const ORDER = [
   "two_canvases", "switch", "written_canvas", "feed_chart", "app_over_canvas",
-  "window_drag", "tile_narrows", "covered_windows", "hidden_canvas",
+  "window_drag", "tile_narrows", "covered_windows", "frame_kept", "hidden_canvas",
   "activation", "rebound_control", "connection_allowlist", "policy",
   "validation_failures", "crash_safe_mode", "disconnect", "failed_fire",
 ];
@@ -1034,6 +1035,64 @@ async function stepWindows(page, name, viewport) {
   await publish(page, layout());
 }
 
+// frame_kept: an app's frame is never moved or loaded again as the app is
+// raised, tiled, made full and made a window again. markets's window is
+// marked in the page, raised from the shelf, tiled and made full with its
+// controls and made a window again with Ctrl+Alt+ArrowDown; after each, its
+// iframe is the element marked, under the same frame id, and has loaded no
+// more than before. In the hand every app is full and markets places none.
+async function stepFrameKept(page, name, viewport) {
+  await showCanvas(page, "markets");
+  if (viewport.posture === "hand") {
+    const placed = await page.$$eval('[data-canvas-shown="true"][data-canvas-place="window"]', (els) => els.length).catch(() => -1);
+    note("frame_kept", name, placed === 0, { posture: "hand", windows: placed });
+    return;
+  }
+
+  const wrapperSel = '[data-canvas-shown="true"][data-canvas-place="window"]';
+  await page.waitForSelector(wrapperSel, { timeout: 20_000 });
+  const frame = await page.$eval(wrapperSel, (e) => e.getAttribute("data-canvas-frame"));
+  const wrapper = `[data-canvas-frame="${frame}"]`;
+  const ref = "tincture:local.canvas-full";
+  const loadsOf = async () => ((await instrument(page)) || { loads: [] }).loads.filter((l) => l.frame === frame).length;
+  await lib.waitFor(async () => (await loadsOf()) >= 1 || null,
+    { timeoutMs: 20_000, what: "the window's frame loaded" });
+
+  const mark = `kept-${Date.now()}`;
+  await page.$eval(`iframe[data-frame-id="${frame}"]`, (el, value) => { el.__proofMark = value; }, mark);
+  const loads = await loadsOf();
+
+  // The iframe after a gesture: the element marked, under its frame id, with
+  // no new load, once the wrapper stands as `place`.
+  const kept = async (gesture, place) => {
+    await lib.waitFor(async () => (await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null)) === place || null,
+      { timeoutMs: 15_000, what: `the app standing as ${place} after ${gesture}` }).catch(() => null);
+    await page.waitForTimeout(500);
+    const same = await page.$eval(`iframe[data-frame-id="${frame}"]`, (el, value) => el.__proofMark === value, mark).catch(() => false);
+    const now = await loadsOf();
+    return { gesture, place: await page.$eval(wrapper, (e) => e.getAttribute("data-canvas-place")).catch(() => null), same_element: same, loads: now, held: same && now === loads };
+  };
+
+  const seen = [];
+  await page.click(`#canvas-shelf-apps [data-canvas-shelf-app="${ref}"]`);
+  seen.push(await kept("raise", "window"));
+  await page.click(`${wrapper} [data-canvas-action="tile"]`);
+  seen.push(await kept("tile", "tile"));
+  await page.click(`${wrapper} [data-canvas-action="full"]`);
+  seen.push(await kept("full", "full"));
+  await page.keyboard.press("Control+Alt+ArrowDown");
+  seen.push(await kept("window", "window"));
+
+  note("frame_kept", name, seen.every((s) => s.held), { frame, loads_before: loads, after: seen });
+
+  // The shell's own writes land before the proof's layout replaces them.
+  await lib.waitFor(async () => {
+    const now = await layoutRead();
+    return now.apps.some((a) => a.tincture === ref && a.placement === "window") ? true : null;
+  }, { timeoutMs: 20_000, what: "the window written to the layout" }).catch(() => null);
+  await publish(page, layout());
+}
+
 // Switch to `id` while a full frame covers the visible canvas: the glass
 // moves, and the switcher stays reachable.
 async function showCanvasAway(page, id) {
@@ -1864,6 +1923,7 @@ const STEP_FNS = {
   window_drag: (page, name, { viewport }) => stepWindows(page, name, viewport),
   tile_narrows: async () => {},
   covered_windows: async () => {},
+  frame_kept: (page, name, { viewport }) => stepFrameKept(page, name, viewport),
   hidden_canvas: (page, name, { proxy }) => stepHiddenCanvas(page, name, proxy),
   activation: (page, name) => stepActivation(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),
