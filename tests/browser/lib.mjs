@@ -848,13 +848,6 @@ export async function saveCode(page) {
   await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
 }
 
-// Acknowledge the recovery kit the system layer shows, and wait for the
-// layer to close.
-export async function saveKit(page) {
-  await page.locator('#system-layer-dialog [data-test="recovery-ack"]').click();
-  await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
-}
-
 // ---------------------------------------------------------------------------
 // A proof's asks of its run.sh, and what it may write
 // ---------------------------------------------------------------------------
