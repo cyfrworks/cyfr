@@ -229,13 +229,26 @@ defmodule PrismWeb.ShellCanvasTest do
   defp entry(id, tincture, postures \\ %{}),
     do: %{"id" => id, "tincture" => tincture, "postures" => postures}
 
-  defp posture(apps, floating \\ []), do: %{"apps" => apps, "floating" => floating}
+  defp posture(apps), do: %{"apps" => apps}
 
-  defp app(tincture, mode, order \\ 0),
-    do: %{"tincture" => tincture, "mode" => mode, "order" => order}
+  defp app(tincture, placement, order \\ 0, minimised \\ false) do
+    %{
+      "tincture" => tincture,
+      "placement" => placement,
+      "order" => order,
+      "minimised" => minimised
+    }
+    |> Map.merge(
+      case placement do
+        "window" -> %{"geometry" => %{"x" => 1000, "y" => 1000, "w" => 3000, "h" => 5000}}
+        "tile" -> %{"side" => "right", "share" => 2500}
+        "full" -> %{}
+      end
+    )
+  end
 
-  # Publish the person's layout, version 2, as the layout tool does, from
-  # another session of theirs.
+  # Publish the person's layout as the layout tool does, from another
+  # session of theirs.
   defp layout!(user, athanor, canvases) do
     ctx = person(user, athanor)
 
@@ -244,7 +257,7 @@ defmodule PrismWeb.ShellCanvasTest do
     {:ok, _} =
       Compendium.Providers.Layout.handle("layout", ctx, %{
         "action" => "edit",
-        "document" => %{"version" => 2, "canvases" => canvases},
+        "document" => %{"version" => 3, "canvases" => canvases},
         "revision" => revision
       })
   end
@@ -670,10 +683,44 @@ defmodule PrismWeb.ShellCanvasTest do
       # It is told what it may open: the listed tinctures that are not canvases.
       home_id = home.id
       assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
-      assert installed == [%{ref: "tincture:local.app-dash", name: "app-dash"}]
+
+      assert installed == [
+               %{ref: "tincture:local.app-dash", name: "app-dash", icon: nil, open: false}
+             ]
 
       render_hook(view, "frame_handshake", %{"frame" => home.id})
       assert_reply(view, %{error: "no_credential"})
+    end
+
+    test "installed carries each tincture's emoji, or none, and whether it is open over the visible canvas",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      tincture!(ctx, "app-dash", %{"icon" => "🧭"})
+      tincture!(ctx, "plain-dash", %{"icon" => String.duplicate("🧭", 17)})
+      tincture!(ctx, "word-dash", %{"icon" => "palette"})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" => posture([app("tincture:local.app-dash", "window")])
+        })
+      ])
+
+      view = shell!(conn)
+      assert %{state: :live, id: home_id} = canvas(view)
+
+      assert %{visible: true} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+
+      _reply = handshake!(view, home_id)
+
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+
+      assert installed == [
+               %{ref: "tincture:local.app-dash", name: "app-dash", icon: "🧭", open: true},
+               %{ref: "tincture:local.plain-dash", name: "plain-dash", icon: nil, open: false},
+               %{ref: "tincture:local.word-dash", name: "word-dash", icon: nil, open: false}
+             ]
     end
 
     test "a layout with no canvas draws the picker", %{
@@ -697,13 +744,14 @@ defmodule PrismWeb.ShellCanvasTest do
     test "a canvas nobody installed is not shown: the picker is drawn and its apps still open",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       tincture!(ctx, "app-dash")
-      tincture!(ctx, "clock", %{"frame" => %{"placement" => "float"}})
+      tincture!(ctx, "clock")
 
       layout!(user, athanor, [
         entry("home", "tincture:local.no-canvas", %{
           "desk" =>
-            posture([app("tincture:local.app-dash", "column")], [
-              %{"tincture" => "tincture:local.clock", "position" => %{"x" => 6000, "y" => 6000}}
+            posture([
+              app("tincture:local.app-dash", "window"),
+              app("tincture:local.clock", "tile", 1)
             ])
         })
       ])
@@ -717,8 +765,8 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{state: :live, visible: true, placement: {:column, 0}} =
                Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
 
-      assert %{state: :live, placement: {:floating, %{x: 6000, y: 6000}}} =
-               Frames.get(frames(view), {:floating, "home", "tincture:local.clock"})
+      assert %{state: :live, visible: true, placement: {:column, 1}} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.clock"})
     end
 
     test "a new person sees the shipped canvas", %{conn: conn, ctx: ctx} do
@@ -1340,7 +1388,7 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "app-dash")
 
       two_canvases!(ctx, user, athanor, %{
-        "desk" => posture([app("tincture:local.app-dash", "column")])
+        "desk" => posture([app("tincture:local.app-dash", "window")])
       })
 
       view = shell!(conn)
@@ -2231,14 +2279,14 @@ defmodule PrismWeb.ShellCanvasTest do
       tincture!(ctx, "full-dash")
       tincture!(ctx, "column-dash")
       tincture!(ctx, "loose-dash")
-      tincture!(ctx, "clock", %{"frame" => %{"placement" => "float"}})
+      tincture!(ctx, "clock")
 
       two_canvases!(ctx, user, athanor, %{
         "desk" =>
-          posture(
-            [app("tincture:local.full-dash", "full", 0)],
-            [%{"tincture" => "tincture:local.clock", "position" => %{"x" => 100, "y" => 200}}]
-          ),
+          posture([
+            app("tincture:local.full-dash", "full", 0),
+            app("tincture:local.clock", "window", 0, true)
+          ]),
         "hand" => posture([])
       })
 
@@ -2250,6 +2298,9 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       id = canvas(view).id
 
+      # A minimised app is placed but not opened with the canvas.
+      assert Frames.get(frames(view), {:app, "home", "tincture:local.clock"}) == nil
+
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.full-dash"})
 
       assert %{placement: :full, visible: true, state: :live} =
@@ -2260,17 +2311,17 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.loose-dash"})
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.column-dash"})
 
-      assert %{placement: {:column, 0}, visible: true} =
+      assert %{placement: {:column, 1}, visible: true} =
                Frames.get(frames(view), {:app, "home", "tincture:local.loose-dash"})
 
-      assert %{placement: {:column, 1}, visible: true} =
+      assert %{placement: {:column, 2}, visible: true} =
                Frames.get(frames(view), {:app, "home", "tincture:local.column-dash"})
 
-      # The floating entry was placed with the canvas; asked for, it stays put.
+      # The minimised window, asked for, opens as a column at its own order.
       canvas_verb!(view, id, :open, %{"ref" => "tincture:local.clock"})
 
-      assert %{placement: {:floating, %{x: 100, y: 200}}} =
-               Frames.get(frames(view), {:floating, "home", "tincture:local.clock"})
+      assert %{placement: {:column, 0}, visible: true} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.clock"})
 
       # Nothing was written to the layout.
       assert {:ok, %{revision: 1}} = Compendium.layout(person_of(view), "desk")

@@ -18,6 +18,19 @@ defmodule Prism.FramesTest do
 
   alias Prism.Frames
 
+  # One app of a layout's arrangement (`Prima.Layout.app/0`).
+  defp layout_app(tincture, placement, order, minimised \\ false) do
+    %{
+      tincture: tincture,
+      placement: placement,
+      order: order,
+      geometry: if(placement == :window, do: %{x: 0, y: 0, w: 3000, h: 5000}),
+      side: if(placement == :tile, do: :right),
+      share: if(placement == :tile, do: 2500),
+      minimised: minimised
+    }
+  end
+
   defp card(name, frame \\ %{}) do
     %{
       id: "iframe_#{name}",
@@ -85,59 +98,43 @@ defmodule Prism.FramesTest do
   end
 
   describe "placement" do
-    test "a column app of an installed tincture is placed over its canvas; a full app is not" do
-      cards = [card("notes"), card("clock")]
+    test "a window and a tile of an installed tincture are placed as columns at their order; a full or minimised app is not" do
+      cards = Enum.map(~w(notes clock sheet radio), &card/1)
 
       canvas = %{
         id: "home",
         tincture: "tincture:local.canvas",
         apps: [
-          %{tincture: "tincture:local.notes", mode: :column, order: 3},
-          %{tincture: "tincture:local.clock", mode: :full, order: 1}
-        ],
-        floating: []
+          layout_app("tincture:local.clock", :full, 1),
+          layout_app("tincture:local.radio", :window, 2, true),
+          layout_app("tincture:local.notes", :window, 3),
+          layout_app("tincture:local.sheet", :tile, 5)
+        ]
       }
 
-      assert [{{:app, "home", "tincture:local.notes"}, {:column, 3}, %{id: "iframe_notes"}}] =
-               Frames.placements(canvas, cards)
+      assert [
+               {{:app, "home", "tincture:local.notes"}, {:column, 3}, %{id: "iframe_notes"}},
+               {{:app, "home", "tincture:local.sheet"}, {:column, 5}, %{id: "iframe_sheet"}}
+             ] = Frames.placements(canvas, cards)
     end
 
     test "an entry naming a tincture nobody installed places nothing" do
       canvas = %{
         id: "home",
         tincture: "tincture:local.canvas",
-        apps: [%{tincture: "tincture:acme.gone", mode: :column, order: 0}],
-        floating: [%{tincture: "tincture:acme.ghost", position: %{x: 0, y: 0}}]
+        apps: [layout_app("tincture:acme.gone", :window, 0)]
       }
 
       assert Frames.placements(canvas, [card("notes")]) == []
     end
 
-    test "only a tincture that declares float floats, where the layout puts it" do
-      cards = [card("clock", %{"placement" => "float"}), card("notes")]
-
-      canvas = %{
-        id: "work",
-        tincture: "tincture:local.canvas",
-        apps: [],
-        floating: [
-          %{tincture: "tincture:local.notes", position: %{x: 0, y: 0}},
-          %{tincture: "tincture:local.clock", position: %{x: 2500, y: 5000}}
-        ]
-      }
-
-      assert [
-               {{:floating, "work", "tincture:local.clock"}, {:floating, %{x: 2500, y: 5000}},
-                %{id: "iframe_clock"}}
-             ] = Frames.placements(canvas, cards)
+    test "the shell shows a window or a tile as a column, and a full app full" do
+      assert Frames.layout_mode(layout_app("tincture:local.a", :window, 0)) == :column
+      assert Frames.layout_mode(layout_app("tincture:local.a", :tile, 0)) == :column
+      assert Frames.layout_mode(layout_app("tincture:local.a", :full, 0)) == :full
     end
 
-    test "floats? and canvas? read the declaration, and a declaration off the rules is neither" do
-      assert Frames.floats?(card("a", %{"placement" => "float"}))
-      refute Frames.floats?(card("b"))
-      refute Frames.floats?(card("c", %{"placement" => "float", "capabilities" => ["camera"]}))
-      refute Frames.floats?(%{manifest: nil})
-
+    test "canvas? reads the declaration, and a declaration off the rules is no canvas" do
       canvas = %{
         manifest: %{
           "tincture" => %{

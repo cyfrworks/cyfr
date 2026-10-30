@@ -467,7 +467,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)}
     ],
     "layout.json" => [
-      {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid)}
+      {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid unsupported)}
     ],
     "locus_backends.json" => [
       {"apps/cyfr/test/emissary/external/backend_definition_test.exs",

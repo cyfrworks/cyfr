@@ -122,9 +122,9 @@ defmodule Emissary.Web.PulledTinctureTest do
     rctx: rctx,
     ctx: ctx
   } do
-    # The archive's own manifest is a floating page; the config blob makes
+    # The archive's own manifest is an app's page; the config blob makes
     # it a canvas that reaches an origin, which the frame's rules refuse.
-    float = manifest("pulled-swap", %{"entry" => "index.html"})
+    app = manifest("pulled-swap", %{"entry" => "index.html"})
 
     canvas =
       manifest("pulled-swap", %{
@@ -138,7 +138,7 @@ defmodule Emissary.Web.PulledTinctureTest do
         ctx,
         "pulled-swap",
         archive([
-          {"cyfr-manifest.json", float},
+          {"cyfr-manifest.json", app},
           {"index.html", @page},
           {"app.js", "export default () => {}"}
         ]),

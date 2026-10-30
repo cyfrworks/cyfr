@@ -863,6 +863,32 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       refute wider_digest == before_digest
     end
 
+    # A size hint is presentation, not reach: a frameless version followed
+    # by one whose frame block holds only `size` keeps the shape its grant
+    # binds, as does a framed version that adds a hint.
+    test "a version that only adds a size hint keeps the shape, frameless before or not",
+         %{ctx: ctx} do
+      hint = %{"preferred" => %{"w" => 400, "h" => 640}, "aspect" => %{"w" => 5, "h" => 8}}
+
+      ref = tincture!(ctx, "shape-sized", "1.0.0", %{})
+      {:ok, frameless} = ShapeDerivation.live_digest(ctx, ref)
+
+      tincture!(ctx, "shape-sized", "1.1.0", %{"frame" => %{"size" => hint}})
+      Arca.Cache.delete_match(:_)
+      {:ok, sized} = ShapeDerivation.live_digest(ctx, ref)
+      assert sized == frameless
+
+      {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
+      refute Map.has_key?(input, :tincture_digest)
+
+      framed = tincture!(ctx, "shape-sized-framed", "1.0.0", @frame)
+      {:ok, before_digest} = ShapeDerivation.live_digest(ctx, framed)
+
+      tincture!(ctx, "shape-sized-framed", "1.1.0", put_in(@frame, ["frame", "size"], hint))
+      Arca.Cache.delete_match(:_)
+      assert {:ok, ^before_digest} = ShapeDerivation.live_digest(ctx, framed)
+    end
+
     test "the shape digest refuses a tincture digest that is not one" do
       assert {:error, {:invalid_shape, :tincture_digest, _}} =
                Sanctum.Consent.ShapeDigest.compute(%{

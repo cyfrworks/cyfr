@@ -13,9 +13,8 @@ defmodule PrismWeb.CanvasLive do
   inert), the `column` apps beside it, the floating tinctures above them,
   and the active `full` frame above those, with its capsule. The
   assistant's panel (`PrismWeb.AquaPanelLive`), which the app layout draws
-  over the page, sits above the column apps and the floating tinctures. A
-  floating entry naming a tincture nobody installed draws a placeholder
-  and opens nothing. In safe mode (`safe_mode`) nothing of the layout is
+  over the page, sits above the column apps and the floating tinctures.
+  In safe mode (`safe_mode`) nothing of the layout is
   drawn. While a full frame is shown every other layer is `inert`, so no
   key reaches a control it covers; the full frame and its capsule stay
   reachable.
@@ -63,8 +62,8 @@ defmodule PrismWeb.CanvasLive do
   stands and a new one appended, so frames keep the order they were opened
   in, and deletes the wrapper of each frame no longer held. In the layer
   the container follows only the geometry and status elements, which are
-  always drawn; the hook's element, the layout note, the placeholders, the
-  edge strip and the switcher follow it. The shell draws nothing whose
+  always drawn; the hook's element, the layout note, the edge strip and
+  the switcher follow it. The shell draws nothing whose
   presence varies before the layer.
 
   No element around the frames, up to the page's root, carries a hook or
@@ -181,7 +180,6 @@ defmodule PrismWeb.CanvasLive do
       assign(assigns,
         canvases: canvases(arrangement),
         visible: visible,
-        floating: floating(arrangement, visible),
         columns: columns(Frames.list(assigns.frames)),
         # Under a shown full frame every other layer is covered, and taken
         # out of reach so no key lands on a control nobody can see.
@@ -266,20 +264,6 @@ defmodule PrismWeb.CanvasLive do
         Your layout can't be read right now.
       </p>
 
-      <%!-- Floating tinctures nobody installed, over the visible canvas. --%>
-      <%= for {entry, index} <- Enum.with_index(@floating),
-              is_nil(Frames.resolve(entry.tincture, @tinctures)) do %>
-        <div
-          id={"#{@id}-float-#{index}"}
-          data-canvas-placeholder={entry.tincture}
-          inert={@covering != nil}
-          class="pointer-events-auto absolute z-30 flex items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-raised/80 p-3 text-center text-xs text-text-muted"
-          style={float_style(entry.position)}
-        >
-          Not installed: {entry.tincture}
-        </div>
-      <% end %>
-
       <%!-- The edge strip and the switcher are Prism's: no canvas draws or
            reaches them. --%>
       <div
@@ -357,15 +341,6 @@ defmodule PrismWeb.CanvasLive do
 
   defp canvases(arrangement) when is_list(arrangement), do: arrangement
   defp canvases(nil), do: []
-
-  defp floating(arrangement, visible) when is_list(arrangement) do
-    case Enum.find(arrangement, &(&1.id == visible)) do
-      %{floating: floating} -> floating
-      nil -> []
-    end
-  end
-
-  defp floating(nil, _visible), do: []
 
   # The key of the shown full frame, which covers every other layer, or nil.
   defp covering(frames) do

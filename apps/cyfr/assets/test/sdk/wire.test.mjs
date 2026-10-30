@@ -11,6 +11,7 @@ import {
   STAGES,
   TO_FRAME_VERBS,
   VERBS,
+  CANVAS_VERBS,
   VERSION,
   bearer,
   dataPath,
@@ -40,6 +41,8 @@ describe("the wire agrees with the fixture", () => {
     assert.equal(BEARER_HEADER, fixture.bearer_header)
     assert.deepEqual({...ROUTES}, fixture.routes)
     assert.deepEqual([...VERBS].sort(), [...new Set(fixture.shell.map((vector) => vector.verb))].sort())
+    assert.deepEqual([...CANVAS_VERBS], fixture.canvas.verbs)
+    assert.ok(CANVAS_VERBS.every((verb) => VERBS.includes(verb)))
   })
 
   test("every request body is the one the SDK builds, under the fixture's bearer", () => {

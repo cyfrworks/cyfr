@@ -115,6 +115,16 @@ Every library is bundled; nothing is imported from a remote URL.
 | `cyfr.credential(name)` | the shell's port, `credential` |
 <!-- /tincture:sdk -->
 
+A canvas's own calls, and what `installed` tells it of each tincture:
+
+<!-- tincture:canvas -->
+| Call | Carried by |
+|---|---|
+| `cyfr.press(binding, action)` | the shell's port, `press` |
+| `cyfr.grant(ref)` | the shell's port, `grant` |
+| `cyfr.on("installed", handler)` | the shell's port, `installed`: each tincture's `icon`, `name`, `open`, `ref` |
+<!-- /tincture:canvas -->
+
 - `cyfr.invoke(ref, operation, args)` runs a component declared in `dependencies.static` with the input `{"operation": operation, "params": args}` and resolves with `{status, output, execution_id, duration_ms}`.
 - `cyfr.action(name, args)` runs a system action the declaration's `actions` lists.
 - `cyfr.stream(name, subject, onEvent)` opens a declared stream and resolves with a handle (`close()`, `closed`); `onEvent` gets `{id, event, data}`.
@@ -141,8 +151,9 @@ outside it is refused.
 <!-- tincture:declaration -->
 | Block | Keys |
 |---|---|
-| `frame` | `background`, `capabilities`, `placement` |
-| `frame.placement` | one of `float`, `canvas` |
+| `frame` | `background`, `capabilities`, `placement`, `size` |
+| `frame.placement` | one of `canvas` |
+| `frame.size` | `aspect`, `min`, `preferred`, `tile`: `min` and `preferred` each `w` and `h`, 100 to 4000 CSS pixels; `aspect` `w` and `h`, whole numbers 1 to 100; `tile` one of `left`, `right` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |
 <!-- /tincture:declaration -->

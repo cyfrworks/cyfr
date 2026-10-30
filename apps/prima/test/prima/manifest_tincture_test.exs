@@ -6,7 +6,9 @@ defmodule Prima.ManifestTinctureTest do
   The frame, streams and actions blocks: their shapes, read into
   `Prima.Manifest.Tincture`, refused at every manifest write when wrong,
   and their digest — the same for two declarations that mean the same
-  thing, and moved by a declaration that asks for more.
+  thing, and moved by a declaration that asks for more; and the frame's
+  size hint, held to its bounds, left out of the digest and declaring
+  nothing on its own.
   """
 
   use ExUnit.Case, async: true
@@ -14,9 +16,17 @@ defmodule Prima.ManifestTinctureTest do
   alias Prima.Manifest
   alias Prima.Manifest.Tincture
   alias Prima.Manifest.Tincture.Frame
+  alias Prima.Manifest.Tincture.Size
+
+  @size %{
+    "min" => %{"w" => 320, "h" => 480},
+    "preferred" => %{"w" => 400, "h" => 640},
+    "aspect" => %{"w" => 9, "h" => 16},
+    "tile" => "right"
+  }
 
   @declared %{
-    "frame" => %{"capabilities" => ["pointer_lock", "fullscreen"], "placement" => "float"},
+    "frame" => %{"capabilities" => ["pointer_lock", "fullscreen"]},
     "actions" => ["execution.list", "records.get"],
     "streams" => [%{"name" => "executions.deltas", "subject" => "*"}]
   }
@@ -38,8 +48,9 @@ defmodule Prima.ManifestTinctureTest do
 
     assert decl.frame == %Frame{
              capabilities: ["pointer_lock", "fullscreen"],
-             placement: "float",
-             background: false
+             placement: nil,
+             background: false,
+             size: nil
            }
 
     assert decl.actions == ["execution.list", "records.get"]
@@ -131,6 +142,72 @@ defmodule Prima.ManifestTinctureTest do
     assert {:ok, Tincture.digest(decl)} == Prima.JCS.hash(canonical)
   end
 
+  describe "the size hint" do
+    test "reads into the struct, every part optional" do
+      sized = put_in(@declared, ["frame", "size"], @size)
+      assert {:ok, %Tincture{frame: %Frame{size: size}}} = Tincture.from_manifest(manifest(sized))
+
+      assert size == %Size{
+               min: %{w: 320, h: 480},
+               preferred: %{w: 400, h: 640},
+               aspect: %{w: 9, h: 16},
+               tile: "right"
+             }
+
+      assert Manifest.validate(manifest(sized), fn _ -> true end) == :ok
+
+      for {part, expected} <- [
+            {%{}, %Size{}},
+            {%{"tile" => "left"}, %Size{tile: "left"}},
+            {%{"preferred" => %{"w" => 100, "h" => 4000}}, %Size{preferred: %{w: 100, h: 4000}}},
+            {%{"aspect" => %{"w" => 1, "h" => 100}}, %Size{aspect: %{w: 1, h: 100}}}
+          ] do
+        assert {:ok, %Tincture{frame: %Frame{size: ^expected}}} =
+                 Tincture.from_manifest(manifest(%{"frame" => %{"size" => part}})),
+               inspect(part)
+      end
+    end
+
+    test "is refused at every manifest write outside its bounds or its shape, with a sentence" do
+      size = fn part -> %{"frame" => %{"size" => part}} end
+
+      assert refused(size.(%{"min" => %{"w" => 99, "h" => 480}})) =~ "100 to 4000"
+      assert refused(size.(%{"preferred" => %{"w" => 400, "h" => 4001}})) =~ "100 to 4000"
+      assert refused(size.(%{"aspect" => %{"w" => 0, "h" => 16}})) =~ "1 to 100"
+      assert refused(size.(%{"aspect" => %{"w" => 9, "h" => 101}})) =~ "1 to 100"
+      assert refused(size.(%{"tile" => "top"})) =~ "left or right"
+
+      assert refused(
+               size.(%{
+                 "min" => %{"w" => 400, "h" => 640},
+                 "preferred" => %{"w" => 400, "h" => 639}
+               })
+             ) =~
+               "at least its min"
+
+      refused(size.("400x640"))
+      refused(size.(%{"max" => %{"w" => 800, "h" => 600}}))
+      refused(size.(%{"min" => %{"w" => 400}}))
+      refused(size.(%{"min" => %{"w" => 400, "h" => 640, "d" => 1}}))
+      refused(size.(%{"min" => %{"w" => 400.5, "h" => 640}}))
+      refused(size.(%{"min" => %{"w" => "400", "h" => 640}}))
+    end
+
+    test "is left out of the digest, and a frame block holding only it declares nothing" do
+      {:ok, plain} = Tincture.from_manifest(manifest(@declared))
+      {:ok, sized} = Tincture.from_manifest(manifest(put_in(@declared, ["frame", "size"], @size)))
+
+      assert Tincture.digest(sized) == Tincture.digest(plain)
+      refute Map.has_key?(Tincture.canonical(sized)["frame"], "size")
+
+      refute Tincture.declared?(manifest(%{"frame" => %{"size" => @size}}))
+      refute Tincture.declared?(manifest(%{"entry" => "index.html", "frame" => %{"size" => %{}}}))
+      assert Tincture.declared?(manifest(%{"frame" => %{"size" => @size, "background" => false}}))
+      assert Tincture.declared?(manifest(%{"frame" => %{}}))
+      assert Tincture.declared?(manifest(%{"frame" => %{"size" => @size}, "actions" => []}))
+    end
+  end
+
   describe "the blocks" do
     test "a canvas declares its frame, streams and actions as any tincture does" do
       canvas = %{
@@ -147,15 +224,22 @@ defmodule Prima.ManifestTinctureTest do
     end
 
     # Every declaration writes exactly its frame, streams and actions: this
-    # digest is the JCS of that canonical form, with no other block.
+    # digest is the JCS of that canonical form, with no other block. The
+    # declaration is one stored before the publish check retired `float`,
+    # which still reads, so a grant bound to its digest still holds, and
+    # holds with a size hint added.
     test "the canonical form is a declaration's frame, streams and actions" do
-      {:ok, decl} = Tincture.from_manifest(manifest(@declared))
+      stored = put_in(@declared, ["frame", "placement"], "float")
+      {:ok, decl} = Tincture.from_manifest(manifest(stored))
 
       assert Map.keys(Tincture.canonical(decl)) |> Enum.sort() ==
                ~w(actions frame streams)
 
       assert Tincture.digest(decl) ==
                "sha256:49de96ba563cdb7b366b82d5ba9e5af36ea08f835332b543300f155389067c59"
+
+      {:ok, sized} = Tincture.from_manifest(manifest(put_in(stored, ["frame", "size"], @size)))
+      assert Tincture.digest(sized) == Tincture.digest(decl)
     end
   end
 

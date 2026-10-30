@@ -154,16 +154,21 @@ defmodule PrismWeb.ShellPromptsTest do
       )
   end
 
-  # The person's layout, version 2: every tincture a full app over the
-  # canvas `@placed` names, in both postures.
+  # The person's layout: every tincture a full app over the canvas
+  # `@placed` names, in both postures.
   defp layout!(user, athanor) do
     canvases =
       for {id, name} <- Enum.sort(@canvases) do
         apps =
           for {tincture, ^id} <- Enum.sort(@placed),
-              do: %{"tincture" => "tincture:local.#{tincture}", "mode" => "full", "order" => 0}
+              do: %{
+                "tincture" => "tincture:local.#{tincture}",
+                "placement" => "full",
+                "order" => 0,
+                "minimised" => false
+              }
 
-        posture = %{"apps" => apps, "floating" => []}
+        posture = %{"apps" => apps}
 
         %{
           "id" => id,
@@ -175,7 +180,7 @@ defmodule PrismWeb.ShellPromptsTest do
     {:ok, _} =
       Compendium.Providers.Layout.handle("layout", person(user, athanor), %{
         "action" => "edit",
-        "document" => %{"version" => 2, "canvases" => canvases},
+        "document" => %{"version" => 3, "canvases" => canvases},
         "revision" => 0
       })
   end

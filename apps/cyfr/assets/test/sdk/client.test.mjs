@@ -5,8 +5,10 @@ import assert from "node:assert/strict"
 import {afterEach, describe, test} from "node:test"
 
 import {CyfrError, createClient} from "../../js/sdk/client.js"
-import {CREDENTIAL, HANDSHAKE, credentialClosed, toFrameMessage} from "../../js/sdk/wire.js"
+import {CANVAS_VERBS, CREDENTIAL, HANDSHAKE, credentialClosed, toFrameMessage} from "../../js/sdk/wire.js"
 import {credentialOf, eventually, fixture, frameWindow, nextMessage, stubServer} from "./support.mjs"
+
+const GRANT = fixture.shell.find((vector) => vector.verb === "grant").message.args.ref
 
 const FRAME = "frm_01a09fee2e4f"
 const CREDENTIAL_VALUE = credentialOf(fixture.requests[0].headers.authorization)
@@ -272,13 +274,13 @@ describe("the shell replaces the credential over the port", () => {
 })
 
 describe("shell verbs go over the port", () => {
-  // A canvas's own verbs, `press` and `failed`, are its page's alone (below).
+  // A canvas's own verbs, `press`, `failed` and `grant`, are its page's alone (below).
   test("each verb is the wire's message for this frame", async () => {
     const {api, handshake} = await frameClient()
     const shell = handshake()
     await eventually(() => api.frame === FRAME)
 
-    for (const {verb, message} of fixture.shell.filter(({verb}) => verb !== "press" && verb !== "failed")) {
+    for (const {verb, message} of fixture.shell.filter(({verb}) => !CANVAS_VERBS.includes(verb))) {
       const received = nextMessage(shell)
       if (verb === "open") api.open(message.args.ref)
       else if (verb === "title") api.title(message.args.title)
@@ -288,7 +290,7 @@ describe("shell verbs go over the port", () => {
     }
   })
 
-  test("a page that is no canvas sends no press and no failure", async () => {
+  test("a page that is no canvas sends no press, no failure and no grant", async () => {
     const {api, handshake, onPageError} = await frameClient()
     const shell = handshake()
     const received = []
@@ -297,6 +299,7 @@ describe("shell verbs go over the port", () => {
 
     onPageError({message: "the page's own bug"})
     api.press(press.binding, press.action)
+    api.grant(GRANT)
     // The positive control: a verb after them arrives, alone.
     api.ready()
 
@@ -756,6 +759,21 @@ describe("a canvas asks the shell", () => {
     assert.deepEqual(heard, [
       {v: 1, verb: "press", frame: CANVAS, args: PRESS},
       {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup"}},
+      {v: 1, verb: "ready", frame: CANVAS, args: {}}
+    ])
+  })
+
+  test("grant is the wire's grant for this frame", async () => {
+    const {api, open, heard} = await canvasClient()
+    open()
+    await eventually(() => api.frame === CANVAS)
+
+    api.grant(GRANT)
+    api.ready()
+
+    await eventually(() => heard.length === 2)
+    assert.deepEqual(heard, [
+      {v: 1, verb: "grant", frame: CANVAS, args: {ref: GRANT}},
       {v: 1, verb: "ready", frame: CANVAS, args: {}}
     ])
   })

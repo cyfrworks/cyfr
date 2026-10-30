@@ -9,8 +9,9 @@ defmodule Prima.Manifest.Tincture do
 
     * `frame` — `capabilities` (names; which names exist, and what each
       opens, are `Compendium.Tincture.Rules`'), `placement` (a name, or
-      absent for the shell's default) and `background` (a boolean,
-      default false).
+      absent for the shell's default), `background` (a boolean, default
+      false) and `size`, the size hint the shell opens a window at
+      (`Size`), every part of it optional.
     * `streams` — the streams the tincture may open, each a provider
       stream `name` and a `subject`: a literal, `"*"` for any subject the
       provider's grammar admits (`Prima.Provider.Stream`), or absent for a
@@ -29,17 +30,42 @@ defmodule Prima.Manifest.Tincture do
   (`Prima.JCS`): sets sorted and deduplicated, absent fields omitted. The
   consent shape carries it as `tincture_digest`
   (`Sanctum.Consent.ShapeDerivation`), and a stream grant binds to it, so
-  a version that declares more asks again.
+  a version that declares more asks again. `frame.size` is a presentation
+  hint, not reach: the digest leaves it out, and a frame block that holds
+  only `size` declares nothing (`declared?/1`), so a version that only
+  adds or changes a hint asks nothing again.
   """
 
+  defmodule Size do
+    @moduledoc """
+    The frame's size hint, each part optional: `min` and `preferred`, a
+    width `w` and a height `h` in CSS pixels; `aspect`, the width-to-height
+    ratio as two whole numbers; and `tile`, `left` or `right`, for a
+    tincture that would rather open tiled at that edge than as a window.
+    The shell reads it as a hint and fits it to the screen.
+    """
+    @type extent :: %{w: pos_integer(), h: pos_integer()}
+    @type t :: %__MODULE__{
+            min: extent() | nil,
+            preferred: extent() | nil,
+            aspect: extent() | nil,
+            tile: String.t() | nil
+          }
+    defstruct min: nil, preferred: nil, aspect: nil, tile: nil
+  end
+
   defmodule Frame do
-    @moduledoc "The frame block: its capabilities, placement and whether it runs in the background."
+    @moduledoc """
+    The frame block: its capabilities, placement, whether it runs in the
+    background and its size hint.
+    """
     @type t :: %__MODULE__{
             capabilities: [String.t()],
             placement: String.t() | nil,
-            background: boolean()
+            background: boolean(),
+            size: Prima.Manifest.Tincture.Size.t() | nil
           }
-    defstruct capabilities: [], placement: nil, background: false
+    defstruct capabilities: [], placement: nil, background: false, size: nil
   end
 
   defmodule Stream do
@@ -63,7 +89,12 @@ defmodule Prima.Manifest.Tincture do
   @type error :: {:invalid_tincture, String.t()}
 
   @blocks ~w(frame streams actions)
-  @frame_keys ~w(capabilities placement background)
+  @frame_keys ~w(capabilities placement background size)
+  @size_keys ~w(min preferred aspect tile)
+  @extent_keys ~w(w h)
+  @size_pixels 100..4000
+  @aspect_parts 1..100
+  @tiles ~w(left right)
   @stream_keys ~w(name subject)
 
   # Bounds on what one manifest may declare, so a declaration a digest,
@@ -84,6 +115,22 @@ defmodule Prima.Manifest.Tincture do
   @doc "The subject a declared stream names for any subject its provider's grammar admits."
   @spec any_subject() :: String.t()
   def any_subject, do: "*"
+
+  @doc "The keys of `frame.size`."
+  @spec size_keys() :: [String.t()]
+  def size_keys, do: @size_keys
+
+  @doc "The CSS pixels each side of `frame.size.min` and `frame.size.preferred` takes."
+  @spec size_pixels() :: Range.t()
+  def size_pixels, do: @size_pixels
+
+  @doc "The whole numbers each part of `frame.size.aspect` takes."
+  @spec aspect_parts() :: Range.t()
+  def aspect_parts, do: @aspect_parts
+
+  @doc "The edges `frame.size.tile` names."
+  @spec tiles() :: [String.t()]
+  def tiles, do: @tiles
 
   @doc "Whether `name` is a stream name: two or more dotted lowercase identifiers."
   @spec stream_name?(term()) :: boolean()
@@ -118,13 +165,17 @@ defmodule Prima.Manifest.Tincture do
 
   @doc """
   Whether the manifest's `tincture` object declares any of the blocks. A
-  tincture that declares none has no digest in its consent shape.
+  tincture that declares none has no digest in its consent shape. A frame
+  block holding only its size hint declares nothing.
   """
   @spec declared?(term()) :: boolean()
   def declared?(%{"tincture" => %{} = tincture}),
-    do: Enum.any?(@blocks, &Map.has_key?(tincture, &1))
+    do: Enum.any?(@blocks, &declares?(tincture, &1))
 
   def declared?(_manifest), do: false
+
+  defp declares?(%{"frame" => %{} = frame}, "frame"), do: Map.keys(frame) != ["size"]
+  defp declares?(tincture, block), do: Map.has_key?(tincture, block)
 
   @doc """
   The blocks of a decoded manifest, held to their shapes. A manifest with
@@ -149,7 +200,8 @@ defmodule Prima.Manifest.Tincture do
 
   @doc """
   The canonical JSON-shaped map `digest/1` hashes: string keys, sets
-  sorted and deduplicated, absent optional fields omitted.
+  sorted and deduplicated, absent optional fields omitted, and the frame's
+  size hint left out.
   """
   @spec canonical(t()) :: map()
   def canonical(%__MODULE__{} = declaration) do
@@ -205,11 +257,75 @@ defmodule Prima.Manifest.Tincture do
         refuse("tincture.frame.background must be true or false")
 
       true ->
-        {:ok, %Frame{capabilities: capabilities, placement: placement, background: background}}
+        with {:ok, size} <- size(Map.get(frame, "size")) do
+          {:ok,
+           %Frame{
+             capabilities: capabilities,
+             placement: placement,
+             background: background,
+             size: size
+           }}
+        end
     end
   end
 
   defp frame(_other), do: refuse("tincture.frame must be an object")
+
+  # ---- frame.size ------------------------------------------------------------
+
+  defp size(nil), do: {:ok, nil}
+
+  defp size(%{} = size) do
+    first..last//_ = @size_pixels
+    low..high//_ = @aspect_parts
+
+    with :ok <- no_extra_keys(size, @size_keys, "tincture.frame.size"),
+         {:ok, min} <- extent(size, "min", @size_pixels, "#{first} to #{last} CSS pixels"),
+         {:ok, preferred} <-
+           extent(size, "preferred", @size_pixels, "#{first} to #{last} CSS pixels"),
+         {:ok, aspect} <- extent(size, "aspect", @aspect_parts, "whole numbers #{low} to #{high}"),
+         {:ok, tile} <- tile(Map.get(size, "tile")),
+         :ok <- at_least(preferred, min) do
+      {:ok, %Size{min: min, preferred: preferred, aspect: aspect, tile: tile}}
+    end
+  end
+
+  defp size(_other), do: refuse("tincture.frame.size must be an object")
+
+  defp extent(size, key, range, sentence) do
+    case Map.get(size, key) do
+      nil ->
+        {:ok, nil}
+
+      %{"w" => w, "h" => h} = extent
+      when map_size(extent) == 2 and is_integer(w) and is_integer(h) ->
+        if w in range and h in range,
+          do: {:ok, %{w: w, h: h}},
+          else: refuse("tincture.frame.size.#{key}'s w and h are #{sentence}")
+
+      _other ->
+        refuse(
+          "tincture.frame.size.#{key} is an object of exactly #{Enum.join(@extent_keys, " and ")}, " <>
+            "each #{sentence}"
+        )
+    end
+  end
+
+  defp tile(nil), do: {:ok, nil}
+  defp tile(tile) when tile in @tiles, do: {:ok, tile}
+  defp tile(_tile), do: refuse("tincture.frame.size.tile is #{Enum.join(@tiles, " or ")}")
+
+  defp at_least(%{w: w, h: h}, %{w: min_w, h: min_h}) when w < min_w or h < min_h,
+    do: refuse("tincture.frame.size.preferred is at least its min on each side")
+
+  defp at_least(_preferred, _min), do: :ok
+
+  defp no_extra_keys(map, known, where) do
+    case extra_keys(map, known) do
+      [] -> :ok
+      extra -> refuse("#{where} declares unknown key(s): #{Enum.join(extra, ", ")}")
+    end
+  end
 
   # ---- actions ---------------------------------------------------------------
 

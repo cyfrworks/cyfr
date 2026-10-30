@@ -778,26 +778,23 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
   # A listed tincture opens where the canvas's arrangement puts it for the
-  # posture: an app's mode, or a floating entry's position for a tincture
-  # that floats. Otherwise it opens full in the hand, or as the next column
-  # on the desk. Nothing is written to the layout.
+  # posture (`Frames.layout_mode/1`). Otherwise it opens full in the hand,
+  # or as the next column on the desk. Nothing is written to the layout.
   defp open_from_canvas(socket, canvas_id, ref) do
     with %{} = card <- listed(socket, ref),
          %{} = entry <- visible_entry(socket.assigns) do
       ctx = socket.assigns.context
       placed = Frames.ref_of(card)
       app = Enum.find(entry.apps, &(&1.tincture == placed))
-      floating = Enum.find(entry.floating, &(&1.tincture == placed))
 
       cond do
         app ->
+          mode = Frames.layout_mode(app)
+
           frames(
             socket,
-            &Frames.open_app(ctx, &1, canvas_id, card, app.mode, app.order, app.mode == :column)
+            &Frames.open_app(ctx, &1, canvas_id, card, mode, app.order, mode == :column)
           )
-
-        floating && Frames.floats?(card) ->
-          frames(socket, &Frames.open_floating(ctx, &1, canvas_id, card, floating.position, true))
 
         socket.assigns.posture == "hand" ->
           frames(socket, &Frames.open_app(ctx, &1, canvas_id, card, :full, 0))
@@ -818,7 +815,7 @@ defmodule PrismWeb.ShellLive do
           id == entry.id,
           do: order
 
-    placed = for %{mode: :column, order: order} <- entry.apps, do: order
+    placed = for app <- entry.apps, Frames.layout_mode(app) == :column, do: app.order
 
     case held ++ placed do
       [] -> 0
@@ -965,17 +962,38 @@ defmodule PrismWeb.ShellLive do
   end
 
   # What `installed` carries: every listed tincture that is not a canvas,
-  # as a versionless reference and its name, sorted by name, within the
-  # bounds the canvas's reader holds it to (`Prima.TinctureWire`).
+  # as a versionless reference, its name, its emoji (none for one the wire
+  # does not carry) and whether a frame of it is held on the visible
+  # canvas, sorted by name, within the bounds the canvas's reader holds it
+  # to (`Prima.TinctureWire`).
   defp installed(socket) do
     max_name = Prima.TinctureWire.max_installed_name()
+    max_icon = Prima.TinctureWire.max_installed_icon()
+    frames = socket.assigns.frames
+    canvas = Frames.visible_canvas(frames)
+
+    open = for %{key: {:app, ^canvas, ref}} <- Frames.list(frames), into: MapSet.new(), do: ref
 
     socket.assigns.tinctures
-    |> Enum.map(&%{ref: Frames.ref_of(&1), name: &1.name})
-    |> Enum.filter(&(String.length(&1.name) in 1..max_name))
+    |> Enum.map(fn card ->
+      ref = Frames.ref_of(card)
+      icon = card.icon_emoji
+
+      %{
+        ref: ref,
+        name: card.name,
+        icon: if(is_binary(icon) and code_points(icon) <= max_icon, do: icon),
+        open: MapSet.member?(open, ref)
+      }
+    end)
+    |> Enum.filter(&(code_points(&1.name) in 1..max_name))
     |> Enum.sort_by(& &1.name)
     |> Enum.take(Prima.TinctureWire.max_installed())
   end
+
+  # The wire bounds names and icons in code points, as the canvas's reader
+  # counts them, not in graphemes.
+  defp code_points(text), do: text |> String.codepoints() |> length()
 
   # `installed`, to each frame named.
   defp push_installed(socket, frame_ids) do

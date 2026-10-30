@@ -92,7 +92,7 @@ browser_layout() {
 # A layout with no canvas: the shell runs no canvas and draws its picker,
 # which the frame experiments launch their tinctures from.
 browser_picker_layout() {
-  browser_layout "$1" "$2" '{"version":2,"canvases":[]}'
+  browser_layout "$1" "$2" '{"version":3,"canvases":[]}'
 }
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ defmodule Prism.Frames do
       canvas `canvas_id`, `full` (the whole screen while it is shown) or as a
       `column` beside the canvas (`open_app/7`);
     * `{:floating, canvas_id, ref}` — the tincture `ref` floating over canvas
-      `canvas_id` where the layout puts it (`open_floating/6`);
+      `canvas_id`, which no layout places any longer, so none is opened;
     * `{:full, tincture_id}` — a tincture launched from the picker
       (`launch/3`).
 
@@ -380,14 +380,6 @@ defmodule Prism.Frames do
   end
 
   @doc """
-  Whether the card's declaration lets it float: its frame declares the
-  placement `float`. A declaration that does not hold to the rules lets
-  nothing float.
-  """
-  @spec floats?(card()) :: boolean()
-  def floats?(card), do: placement_of(card) == "float"
-
-  @doc """
   Whether the card is a canvas: its frame declares the placement
   `canvas`. A declaration that does not hold to the rules is no canvas.
   """
@@ -423,25 +415,27 @@ defmodule Prism.Frames do
   @doc """
   The frames the layout places over the canvas `arranged` (one canvas of
   `Compendium.layout/2`'s arrangement), each with its key, its placement
-  and the card it opens: every `column` app whose tincture is installed,
-  in order, and every floating entry whose tincture is installed and
-  declares `float`. A `full` app opens only when it is asked for.
+  and the card it opens: every app the layout shows as a column
+  (`layout_mode/1`) whose tincture is installed, in order. A `full` app
+  opens only when it is asked for.
   """
   @spec placements(Prima.Layout.arranged(), [card()]) :: [{key(), placement(), card()}]
-  def placements(%{id: canvas_id, apps: apps, floating: floating}, cards) do
-    columns =
-      for %{tincture: ref, mode: :column, order: order} <- apps,
-          card = resolve(ref, cards),
-          do: {{:app, canvas_id, ref}, {:column, order}, card}
-
-    floated =
-      for %{tincture: ref, position: position} <- floating,
-          card = resolve(ref, cards),
-          floats?(card),
-          do: {{:floating, canvas_id, ref}, {:floating, position}, card}
-
-    columns ++ floated
+  def placements(%{id: canvas_id, apps: apps}, cards) do
+    for %{tincture: ref, order: order, minimised: false} = app <- apps,
+        layout_mode(app) == :column,
+        card = resolve(ref, cards),
+        do: {{:app, canvas_id, ref}, {:column, order}, card}
   end
+
+  @doc """
+  How this shell shows a layout app: a `window` or a `tile` as a column
+  at its order, a `full` app full.
+  """
+  # A stopgap until S2 of the desktop plan draws windows and tiles: layout
+  # version 3's placements on today's column and full rendering.
+  @spec layout_mode(Prima.Layout.app()) :: :full | :column
+  def layout_mode(%{placement: :full}), do: :full
+  def layout_mode(%{placement: placement}) when placement in [:window, :tile], do: :column
 
   # ============================================================================
   # Pure: attribution and the handshake
@@ -699,7 +693,7 @@ defmodule Prism.Frames do
           t(),
           String.t(),
           card(),
-          Prima.Layout.mode(),
+          :full | :column,
           non_neg_integer(),
           boolean()
         ) :: t()
@@ -717,25 +711,6 @@ defmodule Prism.Frames do
     placement = if mode == :full, do: :full, else: {:column, order}
     t = open(ctx, t, key, card, placement, arranged)
     settle(ctx, if(mode == :full, do: activate(t, key), else: t))
-  end
-
-  @doc """
-  Open `card` floating over canvas `canvas_id` at `position`, unless one is
-  held under its key; one held moves there. `arranged` as `open_app/7`'s.
-  Visibility is settled.
-  """
-  @spec open_floating(Context.t(), t(), String.t(), card(), position(), boolean()) :: t()
-  def open_floating(
-        %Context{} = ctx,
-        %__MODULE__{} = t,
-        canvas_id,
-        card,
-        position,
-        arranged \\ false
-      ) do
-    key = {:floating, canvas_id, ref_of(card)}
-    placement = {:floating, position}
-    settle(ctx, open(ctx, place(t, key, placement), key, card, placement, arranged))
   end
 
   @doc """
