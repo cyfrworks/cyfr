@@ -400,6 +400,36 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert input["request_id"] == "req_kit"
     end
 
+    # A person's recovery code (`Prima.RecoveryCode`), the one line that
+    # restores them, as the operations that take one will carry it.
+    test "a call whose arguments carry a recovery code is stored with it redacted", %{ctx: ctx} do
+      decision = decision(ctx, tool: "person", action: "recovery_code_add")
+
+      code =
+        Prima.RecoveryCode.encode(
+          "per_" <> String.duplicate("5", 64),
+          :crypto.strong_rand_bytes(32)
+        )
+
+      :ok =
+        Decisions.open(ctx, decision, %{
+          input: %{
+            "action" => "recovery_code_add",
+            "recovery_code" => code,
+            "holder" => %{"recoveryCode" => code},
+            "recovery_phase" => "add"
+          }
+        })
+
+      stored = row(decision.call_id).input
+      refute stored =~ code
+
+      input = decode_json(stored)
+      assert input["recovery_code"] == "[REDACTED]"
+      assert input["holder"] == %{"recoveryCode" => "[REDACTED]"}
+      assert input["recovery_phase"] == "add"
+    end
+
     test "the kit answered is stored redacted, in the MCP text block and the structured content",
          %{ctx: ctx} do
       secret = seed()
