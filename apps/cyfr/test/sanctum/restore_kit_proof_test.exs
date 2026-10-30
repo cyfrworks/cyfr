@@ -3,19 +3,20 @@
 
 defmodule Sanctum.RestoreKitProofTest do
   @moduledoc """
-  The kit ingress on a home restored from a backup, through the endpoint
-  (`POST /restore/kit/challenge`, `POST /restore/kit`,
+  The backup-restore ingress on a home restored from a backup, through the
+  endpoint (`POST /restore/kit/challenge`, `POST /restore/kit`,
   `POST /restore/kit/reenable`): a recovering person with every restored
-  method suspended and no door proves their printed kit over this home's
-  challenge, against the recovery keys of their identity read fresh from
-  its directory (`Sanctum.Test.DirectoryServer`), and re-enables what they
-  choose under the credential it answers, which admits the four re-enable
+  method suspended and no door proves their recovery code over this
+  home's challenge, signing with its secret, against the recovery keys of
+  their identity read fresh from its directory
+  (`Sanctum.Test.DirectoryServer`), and re-enables what they choose under
+  the restore credential it answers, which admits the four re-enable
   operations and nothing else.
 
   Two people recover independently: one's re-enable closes their own
-  recovery and leaves the other's open. A proof by a kit that is not one
-  of the identity's now, a replayed challenge and a person whose recovery
-  has closed are refused. The kit proof's vectors (`tests/fixtures/
+  recovery and leaves the other's open. A proof by a secret that is not
+  one of the identity's now, a replayed challenge and a person whose
+  recovery has closed are refused. The proof's vectors (`tests/fixtures/
   restore_kit.json`) verify here as the browser signs them. A group with a
   member still recovering admits no new member.
   """
@@ -53,7 +54,7 @@ defmodule Sanctum.RestoreKitProofTest do
   # ---- fixtures ----------------------------------------------------------------
 
   # A person signed in at this home, their keys here, enrolled at the
-  # scripted directory under a kit whose seed the test holds, with a
+  # scripted directory under a recovery secret the test holds, with a
   # passkey, a paired device and an API key.
   defp enrolled!(directory) do
     n = System.unique_integer([:positive])
@@ -228,7 +229,7 @@ defmodule Sanctum.RestoreKitProofTest do
     proof |> Identity.sign(private) |> RestoreKit.encode()
   end
 
-  # The kit proven over a fresh challenge: the credential it answers.
+  # The secret proven over a fresh challenge: the credential it answers.
   defp credential!(person) do
     proof = signed(person, challenge(person), person.recovery_private)
 
@@ -243,9 +244,9 @@ defmodule Sanctum.RestoreKitProofTest do
   defp restore_open(user_id),
     do: Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user_id)
 
-  # ---- the kit ------------------------------------------------------------------
+  # ---- the proof ----------------------------------------------------------------
 
-  test "with every restored method suspended and no door, the kit re-enables what the person chooses",
+  test "with every restored method suspended and no door, the recovery code re-enables what the person chooses",
        %{directory: directory} do
     person = enrolled!(directory)
     restore_id = restored!()
@@ -266,7 +267,7 @@ defmodule Sanctum.RestoreKitProofTest do
     assert %{"items" => [%{"id" => passkey_id}]} =
              json_response(reenable(credential, %{"operation" => "passkey.reenable"}), 200)
 
-    # A key re-enabled under the kit leaves the recovery open.
+    # A key re-enabled under the restore credential leaves the recovery open.
     assert %{"reenabled" => _} =
              json_response(
                reenable(credential, %{"operation" => "key.reenable", "key_id" => person.key}),
@@ -336,13 +337,13 @@ defmodule Sanctum.RestoreKitProofTest do
     assert {:ok, nil} = restore_open(bob.user.id)
   end
 
-  test "a kit that is not one of the identity's now, a replayed challenge and a closed recovery are refused",
+  test "a secret that is not one of the identity's now, a replayed challenge and a closed recovery are refused",
        %{directory: directory} do
     person = enrolled!(directory)
     other = enrolled!(directory)
     restored!()
 
-    # Another kit's signature: not a recovery key of the head read fresh.
+    # Another secret's signature: not a recovery key of the head read fresh.
     {_other, other_private} = :crypto.generate_key(:eddsa, :ed25519)
     forged = signed(person, challenge(person), other_private)
 
@@ -390,7 +391,7 @@ defmodule Sanctum.RestoreKitProofTest do
              json_response(post_json("/restore/kit", %{"proof" => %{"not" => "a proof"}}), 422)
   end
 
-  test "the kit credential admits the four re-enables and nothing else; no restored method approves itself",
+  test "the restore credential admits the four re-enables and nothing else; no restored method approves itself",
        %{directory: directory} do
     person = enrolled!(directory)
     restored!()
@@ -553,7 +554,7 @@ defmodule Sanctum.RestoreKitProofTest do
 
   # ---- a second restore, a denial, a lost slot, the log ------------------------------
 
-  test "a second declared restore leaves the first restore's kit credential re-enabling nothing",
+  test "a second declared restore leaves the first restore's credential re-enabling nothing",
        %{directory: directory} do
     person = enrolled!(directory)
     first = restored!()
@@ -592,7 +593,7 @@ defmodule Sanctum.RestoreKitProofTest do
     assert is_binary(credential!(person))
   end
 
-  test "a kit re-enable reads its person's standing again: a denial after admission writes nothing",
+  test "a re-enable under the restore credential reads its person's standing again: a denial after admission writes nothing",
        %{directory: directory} do
     person = enrolled!(directory)
     name = "kit-denied-" <> Prima.UUID7.generate_id("wh")
@@ -632,7 +633,7 @@ defmodule Sanctum.RestoreKitProofTest do
     assert Arca.Repo.get(Schemas.Webhook, webhook.id).suspended
   end
 
-  test "a member whose slot was taken over mints no kit credential", %{directory: directory} do
+  test "a member whose slot was taken over mints no restore credential", %{directory: directory} do
     person = enrolled!(directory)
     restored!()
     proof = signed(person, challenge(person), person.recovery_private)
@@ -671,7 +672,7 @@ defmodule Sanctum.RestoreKitProofTest do
     refute Map.has_key?(Jason.decode!(conn.resp_body), "credential")
   end
 
-  test "the kit credential is redacted by its shape wherever it appears", %{
+  test "the restore credential is redacted by its shape wherever it appears", %{
     directory: directory
   } do
     person = enrolled!(directory)
@@ -685,7 +686,7 @@ defmodule Sanctum.RestoreKitProofTest do
 
   # ---- the vectors -------------------------------------------------------------------
 
-  test "the kit proof's vectors verify here as the browser signs them" do
+  test "the proof's vectors verify here as the browser signs them" do
     vectors = @fixture |> Path.expand(__DIR__) |> File.read!() |> Jason.decode!()
     valid = vectors["valid"]
 
