@@ -9,7 +9,7 @@
 # installations, c.test, c2.test and c3.test, each configured for one
 # restore under its own token — with the directory reached by the cells
 # through a front of this proof's own (front.sh, cells.sh). proof.mjs
-# drives Chromium through enrollment, two printed kits, a rotation, the
+# drives Chromium through enrollment, two recovery codes, a rotation, the
 # restores and what each home sees; this script answers its asks for the
 # homes' part (`ask-N.json`, answered `answer-N.json`): cells stopped,
 # copied, killed and started again, the directory broken on purpose,
@@ -26,7 +26,7 @@
 # Everything it starts is removed when it ends, whether it succeeds or
 # fails: the cells' servers, the directory's front container, the
 # Playwright container, and the scratch directory with the run's authority
-# key, every token and every kit line.
+# key, every token and every recovery code.
 set -euo pipefail
 
 ADAPTER=sqlite
@@ -50,11 +50,12 @@ SECRETS="$WORK/secrets"
 mkdir -p -m 700 "$SECRETS"
 
 # The scratch directory holds the run's authority key, the tokens and the
-# kits, so it goes even when a stop fails; the asks and answers that held
-# a kit or a token go from PROOF_OUT too. `server_stop` ends in `fail`, an
-# `exit`, when a listener outlives its stop, so it runs in a subshell: the
-# exit ends that subshell, never this trap before the removals below, and
-# the stop's failure still fails the run.
+# recovery codes, so it goes even when a stop fails; the asks and answers
+# that held a recovery code or a token go from PROOF_OUT too.
+# `server_stop` ends in `fail`, an `exit`, when a listener outlives its
+# stop, so it runs in a subshell: the exit ends that subshell, never this
+# trap before the removals below, and the stop's failure still fails the
+# run.
 cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
@@ -124,10 +125,12 @@ IDENTIFIER=""
 MOVED_AT=0
 B_VERIFIED_AT=0
 
-# The kit an ask carries, written where only this run reads it.
-kit_file() {
+# The recovery code an ask carries (proof.mjs, lib.mjs `readCode`), as
+# the restore ingress takes it, `{"recovery_code": code}`, written where
+# only this run reads it.
+code_file() {
   local ask="$1" name="$2"
-  (umask 077 && python3 -c "import json, sys; k = json.load(open(sys.argv[1]))['kit']; json.dump({'identifier': k['identifier'], 'directory_url': k['directory_url'], 'recovery_secret': k['recovery_secret']}, open(sys.argv[2], 'w'))" "$ask" "$SECRETS/$name")
+  (umask 077 && python3 -c "import json, sys; json.dump({'recovery_code': json.load(open(sys.argv[1]))['code']['code']}, open(sys.argv[2], 'w'))" "$ask" "$SECRETS/$name")
   printf '%s' "$SECRETS/$name"
 }
 
@@ -158,12 +161,12 @@ b_resolve() {
   B_VERIFIED_AT="$(now)"
 }
 
-# Restore posted to cell `$1` with its own token and the kit file `$2`;
-# prints `{status, phase, error}` of the answer.
+# Restore posted to cell `$1` with its own token and the recovery code's
+# file `$2` (`code_file`); prints `{status, phase, error}` of the answer.
 post_restore() {
-  local cell="$1" kit="$2" name status
+  local cell="$1" code="$2" name status
   name="$(basename "$cell")"
-  status="$(identity_restore_post "$cell" /restore "$SECRETS/token-$name" "$kit" "$WORK/answer.json")"
+  status="$(identity_restore_post "$cell" /restore "$SECRETS/token-$name" "$code" "$WORK/answer.json")"
   python3 - "$status" "$WORK/answer.json" <<'PY'
 import json, sys
 status = int(sys.argv[1])
@@ -176,10 +179,10 @@ PY
 }
 
 # Each step the proof asks for (harness.sh `answer_asks`, which removes
-# each ask, one that carried a kit or a cookie among them, before its
-# answer appears).
+# each ask, one that carried a recovery code or a cookie among them,
+# before its answer appears).
 answer_ask() {
-  local ask="$1" op kit started observed target
+  local ask="$1" op code started observed target
   op="$(asked "$ask" op)"
   case "$op" in
     a_head)
@@ -208,32 +211,43 @@ answer_ask() {
       ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$SECRETS/token-$(asked "$ask" cell)")"
       ;;
     c_claims)
-      kit="$(kit_file "$ask" kit-2.json)"
-      # Another cell's token, an identity the directory never saw, and a
-      # seed that is no kit of this identity.
-      other="$(identity_restore_post "$C" /restore "$SECRETS/token-c2" "$kit" "$WORK/answer.json")"
-      python3 - "$kit" "$SECRETS/unknown.json" "$SECRETS/wrong-seed.json" <<'PY'
-import base64, json, os, sys
-kit = json.load(open(sys.argv[1]))
-seed = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
-unknown = dict(kit, identifier="per_" + os.urandom(32).hex())
-json.dump(unknown, open(sys.argv[2], "w"))
-json.dump(dict(kit, recovery_secret=seed), open(sys.argv[3], "w"))
+      code="$(code_file "$ask" code-2.json)"
+      # Another cell's token; a recovery code of an identity the directory
+      # never saw; and a code of this identity whose secret holds no
+      # recovery key of it. Each code is composed here as
+      # Prima.RecoveryCode composes one, the one place outside Prima that
+      # does; proof.mjs holds each refusal to its reason, so a code
+      # composed wrongly is refused as not_a_code or typo and fails the
+      # step.
+      other="$(identity_restore_post "$C" /restore "$SECRETS/token-c2" "$code" "$WORK/answer.json")"
+      python3 - "$ask" "$SECRETS/unknown.json" "$SECRETS/wrong-secret.json" <<'PY'
+import hashlib, json, os, sys
+ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+def recovery_code(identifier, secret):
+    digest = bytes.fromhex(identifier[4:])
+    check = hashlib.sha256(b"cyfr-recovery-code/v1" + b"\0" + digest + secret).digest()[:6]
+    n = int.from_bytes(digest + secret + check, "big")
+    symbols = "".join(ALPHABET[(n >> (5 * (111 - i))) & 31] for i in range(112))
+    return "CYFR-" + "-".join(symbols[i:i + 8] for i in range(0, 112, 8))
+identifier = json.load(open(sys.argv[1]))["code"]["identifier"]
+json.dump({"recovery_code": recovery_code("per_" + os.urandom(32).hex(), os.urandom(32))}, open(sys.argv[2], "w"))
+json.dump({"recovery_code": recovery_code(identifier, os.urandom(32))}, open(sys.argv[3], "w"))
 PY
-      unknown="$(identity_restore_post "$C" /restore "$SECRETS/token-c" "$SECRETS/unknown.json" "$WORK/answer.json")"
-      wrong="$(identity_restore_post "$C" /restore "$SECRETS/token-c" "$SECRETS/wrong-seed.json" "$WORK/answer.json")"
+      unknown="$(post_restore "$C" "$SECRETS/unknown.json")"
+      wrong="$(post_restore "$C" "$SECRETS/wrong-secret.json")"
       attempts="$(identity_fixture "$C" restores | python3 -c "import json, sys; print(len(json.load(sys.stdin)['restores']))")"
-      ANSWER="$(json "{'other_token': $other, 'unknown_kit': $unknown, 'wrong_seed': $wrong, 'attempts': $attempts}")"
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'other_token': int(sys.argv[1]), 'unknown_identity': json.loads(sys.argv[2]), 'wrong_secret': json.loads(sys.argv[3]), 'attempts': int(sys.argv[4])}))" \
+        "$other" "$unknown" "$wrong" "$attempts")"
       ;;
     c_phases)
-      kit="$(kit_file "$ask" kit-2.json)"
+      code="$(code_file "$ask" code-2.json)"
       log_before="$(identity_fixture "$DIR" log "$IDENTIFIER")"
       # submitted: the directory's reply lost, a thief rotating at the same
       # moment on the copy of A.
       identity_front_fault dir.test drop-recover
       identity_fixture "$THIEF" thief_rotate "$USER_A" >"$WORK/thief-1.json" &
       thief_pid=$!
-      submitted="$(post_restore "$C" "$kit")"
+      submitted="$(post_restore "$C" "$code")"
       wait "$thief_pid" || true
       MOVED_AT="$(now)"
       submitted_phase="$(last_restore "$C" phase)"
@@ -246,7 +260,7 @@ PY
       thief_2="$(identity_fixture "$THIEF" thief_rotate "$USER_A")"
       # accepted: the recovery answered, the head it must read again unread.
       identity_front_fault dir.test block-reads-after-recover
-      accepted="$(post_restore "$C" "$kit")"
+      accepted="$(post_restore "$C" "$code")"
       identity_front_fault dir.test none
       accepted_phase="$(last_restore "$C" phase)"
       accepted_entry="$(last_restore "$C" entry_hash)"
@@ -277,8 +291,8 @@ print(json.dumps({
     "submitted": at(submitted, submitted_phase),
     "accepted": at(accepted, accepted_phase, entry_hash=accepted_entry),
     "replay": replay,
-    # The recoveries this restore added to the log: the added kit's entry
-    # before it is a recovery too.
+    # The recoveries this restore added to the log: the added recovery
+    # code's entry before it is a recovery too.
     "recoveries": log.get("kinds", []).count("recover") - before.count("recover"),
     "log": log.get("kinds"),
     "thief": {
@@ -327,9 +341,9 @@ PY
       ANSWER="$(json '{"down": True}')"
       ;;
     c2_accepted)
-      kit="$(kit_file "$ask" kit-1.json)"
+      code="$(code_file "$ask" code-1.json)"
       identity_front_fault dir.test block-reads-after-recover
-      accepted="$(post_restore "$C2" "$kit")"
+      accepted="$(post_restore "$C2" "$code")"
       identity_front_fault dir.test none
       phase="$(last_restore "$C2" phase)"
       server_stop "$C2"
@@ -352,7 +366,7 @@ print(json.dumps({'directory_only': bool(seen) and all(r['path'].startswith('/di
       ;;
     c2_resume)
       identity_start "$C2"
-      resumed="$(post_restore "$C2" "$SECRETS/kit-1.json")"
+      resumed="$(post_restore "$C2" "$SECRETS/code-1.json")"
       restores="$(identity_fixture "$C2" restores)"
       people="$(identity_fixture "$C2" people)"
       ANSWER="$(python3 - "$resumed" "$restores" "$people" <<'PY'
