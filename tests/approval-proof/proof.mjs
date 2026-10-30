@@ -412,6 +412,7 @@ const FIELDS = {
     scope: exact,
     vault_entry_id: minted(VAULT_PAGE),
     instance_entry_id: exact,
+    share_id: exact,
     via_label: exact,
     binding_digest: derived(REQUESTED),
     lifetime_kind: exact,
@@ -874,7 +875,7 @@ async function main() {
     // implies, with its lifetime.
     const bindingRow = (consentId, key, spec, kind = "standing", expires = null, consumed = null) => ({
       consent_id: consentId, athanor_id: person.athanor_id, binding_key: key, scope: "athanor",
-      vault_entry_id: ids[spec.name], instance_entry_id: null, via_label: null,
+      vault_entry_id: ids[spec.name], instance_entry_id: null, share_id: null, via_label: null,
       binding_digest: implied[spec.name].binding_digest, lifetime_kind: kind, expires_at: expires,
       consumed_by_root: consumed,
     });

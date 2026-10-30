@@ -51,6 +51,8 @@ defmodule Arca.SchemaVocabularyTest do
        Arca.StatusTransitions.statuses(:credentials)},
       {"instance_entries", "instance_entries_status_known", "status",
        Arca.StatusTransitions.statuses(:credentials)},
+      {"shares", "shares_status_known", "status", Arca.StatusTransitions.statuses(:shares)},
+      {"shares", "shares_audience_known", "audience", Arca.Schemas.Share.audiences()},
       # `Arca.PairingInvitations` writes the kind of the confirmer it reads
       # from the consumed confirmation: a passkey or a paired device.
       {"pairing_invitations", "pairing_invitations_confirmer_kind_known", "confirmer_kind",
@@ -189,6 +191,18 @@ defmodule Arca.SchemaVocabularyTest do
         refused!("vault_entries", vault_entry(ctx, status), "vault_entries_status_known")
         refused!("instance_entries", instance_entry(ctx, status), "instance_entries_status_known")
       end
+    end
+  end
+
+  describe "a share" do
+    test "lands every status and audience of its vocabulary and refuses any other", ctx do
+      for status <- ~w(active revoked) do
+        assert {1, _} = insert!("shares", share(ctx, status, "everyone"))
+      end
+
+      refused!("shares", share(ctx, "bogus", "everyone"), "shares_status_known")
+      refused!("shares", share(ctx, "needs_reauth", "everyone"), "shares_status_known")
+      refused!("shares", share(ctx, "active", "listed"), "shares_audience_known")
     end
   end
 
@@ -699,6 +713,23 @@ defmodule Arca.SchemaVocabularyTest do
       },
       ending
     )
+  end
+
+  # Each share names an entry of its own, so the natural key never decides.
+  defp share(%{athanor: athanor} = ctx, status, audience) do
+    entry = vault_entry(ctx, "active")
+    {1, _} = insert!("vault_entries", entry)
+
+    %{
+      id: id("shr"),
+      athanor_id: athanor,
+      vault_entry_id: entry.id,
+      audience: audience,
+      status: status,
+      created_by: "user_vocab",
+      inserted_at: now(),
+      updated_at: now()
+    }
   end
 
   defp instance_entry(_ctx, status) do
