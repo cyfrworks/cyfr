@@ -345,7 +345,7 @@ defmodule PrismWeb.CanvasLiveTest do
     assert tiled =~ ~s(data-canvas-place="tile")
     assert tiled =~ ~s(data-canvas-side="right")
     assert tiled =~ ~s(data-canvas-share="2500")
-    assert tiled =~ "left: 75.00%; width: 25.00%; z-index: 31;"
+    assert tiled =~ "left: 75.00%; width: 25.00%; z-index: 20;"
     assert wrapper_tag(html, canvas.id) =~ "left: 0.00%; right: 25.00%;"
 
     # A minimised app, full or not, is not opened with the canvas, and the

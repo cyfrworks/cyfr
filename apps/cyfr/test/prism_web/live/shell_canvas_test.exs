@@ -3527,6 +3527,94 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{revision: 2} = stored(user, athanor)
     end
 
+    test "a publication from elsewhere tells each held canvas its open apps again",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      home_id = canvas(view).id
+      _ = handshake!(view, home_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: initial})
+      assert %{open: false} = Enum.find(initial, &(&1.name == "loose-dash"))
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" =>
+            posture([
+              app("tincture:local.app-dash", "window", 0),
+              app("tincture:local.side-dash", "tile", 1),
+              app("tincture:local.loose-dash", "window", 2)
+            ])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      settle!(view, fn ->
+        assigns(view).layout_base.revision == 2 and app_frame(view, "loose-dash") != nil
+      end)
+
+      assert app_frame(view, "loose-dash").visible
+      assert canvas(view).id == home_id
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: later})
+      assert %{open: true} = Enum.find(later, &(&1.name == "loose-dash"))
+    end
+
+    test "a change of posture tells the canvas its open apps again",
+         %{conn: conn, user: user, athanor: athanor} do
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" => posture([app("tincture:local.app-dash", "window", 0)]),
+          "hand" => posture([])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      home_id = canvas(view).id
+      _ = handshake!(view, home_id)
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: initial})
+      assert %{open: true} = Enum.find(initial, &(&1.name == "app-dash"))
+
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+
+      settle!(view, fn ->
+        assigns(view).posture == "hand" and app_frame(view, "app-dash") == nil
+      end)
+
+      assert canvas(view).id == home_id
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: later})
+      assert %{open: false} = Enum.find(later, &(&1.name == "app-dash"))
+    end
+
+    test "the topmost of many windows stays under the canvas's switcher",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      apps =
+        for n <- 1..27 do
+          name = "many-#{n}"
+          tincture!(ctx, name)
+
+          app("tincture:local.#{name}", "window", n)
+          |> Map.put("geometry", %{"x" => 0, "y" => 0, "w" => 10_000, "h" => 10_000})
+        end
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{"desk" => posture(apps)}),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :ready)
+      top = app_frame(view, "many-27")
+      assert top.visible
+      assert Enum.count(opened(view), &match?(%{key: {:app, "home", _}}, &1)) == 27
+
+      html = render(view)
+      [tag] = Regex.run(~r/<div[^>]*data-canvas-frame="#{top.id}"[^>]*>/, html)
+      assert tag =~ "left: 0.00%; top: 0.00%; width: 100.00%; height: 100.00%;"
+      [_, app_z] = Regex.run(~r/z-index: ([0-9]+)/, tag)
+      [switcher] = Regex.run(~r/<nav[^>]*id="canvas-switcher"[^>]*>/, html)
+      [_, switcher_z] = Regex.run(~r/z-\[([0-9]+)\]/, switcher)
+      assert String.to_integer(app_z) < String.to_integer(switcher_z)
+    end
+
     test "a write the store cannot answer is tried five more times, then let go: the saved arrangement is back and later publications are followed",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)

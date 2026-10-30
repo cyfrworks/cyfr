@@ -285,16 +285,24 @@ async function feedState(feed) {
 // user activation, whether the canvas's iframe is the document's active
 // element, and whether the bridge dropped that message (its frame's
 // data-dropped moved as the handler ran). It counts the messages it saw and
-// the ones it handed on, and records nothing else.
+// the ones it handed on, records each load of a frame's iframe (a
+// capture-phase load on the document, since a load's path stops short of
+// the window, seen before the bridge's own handler counts it) with the
+// frame and its place (`data-canvas-place`), and records nothing else.
 const INSTRUMENT = `(() => {
   if (window.top !== window) return;
-  const marks = { clicks: [], receipts: [], seen: 0, handed: 0 };
+  const marks = { clicks: [], receipts: [], loads: [], seen: 0, handed: 0 };
   Object.defineProperty(window, "__canvasInstrument", { value: marks, configurable: true });
   const frameEl = (id) => {
     try { return document.querySelector('iframe[data-frame-id="' + (window.CSS ? CSS.escape(id) : id) + '"]'); }
     catch (_error) { return null; }
   };
   const droppedOf = (el) => (el ? Number(el.dataset.dropped || "0") : null);
+  document.addEventListener("load", (event) => {
+    const el = event.target;
+    if (el && el.tagName === "IFRAME" && el.dataset && el.dataset.frameId)
+      marks.loads.push({ at: performance.now(), frame: el.dataset.frameId, place: (el.closest("[data-canvas-place]") || { dataset: {} }).dataset.canvasPlace || null });
+  }, true);
   window.addEventListener("click", (event) => {
     const target = event.target && event.target.closest
       ? event.target.closest("#canvas-switcher button[data-canvas]") : null;
@@ -348,7 +356,7 @@ const INSTRUMENT = `(() => {
 const instrument = (page) =>
   page.evaluate(() => {
     const m = window.__canvasInstrument;
-    return m ? { clicks: [...m.clicks], receipts: [...m.receipts], seen: m.seen, handed: m.handed } : null;
+    return m ? { clicks: [...m.clicks], receipts: [...m.receipts], loads: [...m.loads], seen: m.seen, handed: m.handed } : null;
   });
 
 // The instrument's receipts after index `from`, of `frame` and `verb`.
@@ -1017,18 +1025,30 @@ async function stepValidationFailures(page, name) {
 }
 
 // crash_safe_mode: a version that becomes ready is validated and activated,
-// then crashes live after ready(): the SDK reports failed at stage runtime,
-// safe mode is `crashed`, offering retry, the kept version and the shipped
-// canvas, and the kept version is restored and opens.
+// then its live frame dies after ready(): the page reloads itself, a second
+// load of its frame (desktop.md section 6: a live canvas is crashed when its
+// frame dies, not when its page throws), and safe mode is `crashed`,
+// offering retry, the kept version and the shipped canvas, and the kept
+// version is restored and opens.
 async function stepCrashSafeMode(page, name) {
   const written = await ask({ op: "write", canvas: "canvas-broken", kind: "broken-crash", streams: [{ name: "feed.results", subject: "broken-crash" }] });
   if (!OK(written)) throw new Error(`canvas.write refused canvas-broken: ${JSON.stringify(written)}`);
   const before = await versions("canvas-broken");
   await publish(page, layout([{ id: "crash", tincture: "tincture:local.canvas-broken" }], { without: ["broken"] }));
-  const from = (await instrument(page)).receipts.length;
+  const start = await instrument(page);
+  const from = start.receipts.length;
+  const loadsFrom = start.loads.length;
   await page.click('#canvas-switcher button[data-canvas="crash"]');
   const safe = await safeModePrompt(page, 40_000);
   const marks = await instrument(page);
+  // The loads of each frame since the switch, by place: the validation
+  // frame loads once; the live canvas frame, which reloaded itself, twice.
+  const loadsOf = (place) => {
+    const by = {};
+    for (const l of marks.loads.slice(loadsFrom).filter((l) => l.place === place)) by[l.frame] = (by[l.frame] || 0) + 1;
+    return Object.values(by);
+  };
+  const reloaded = loadsOf("canvas").filter((n) => n >= 2).length;
   const activated = await versions("canvas-broken");
   const kept = safe.offers.find((o) => o.offer === "kept");
   // The kept version reads no stream, the crashed one's grant names one: its
@@ -1046,14 +1066,14 @@ async function stepCrashSafeMode(page, name) {
 
   note("crash_safe_mode", name,
     activated.working === written.ok.version && activated.kept === before.working &&
-      receiptsOf(marks, from, null, "ready").length >= 1 && receiptsOf(marks, from, null, "failed").length >= 1 &&
+      receiptsOf(marks, from, null, "ready").length >= 1 && reloaded === 1 &&
       safe.kind === "safe_mode" && !!kept && safe.offers.some((o) => o.offer === "retry") && safe.offers.some((o) => o.offer === "shipped") &&
       regrant.asked_for && regrant.meanwhile.working === written.ok.version && regrant.meanwhile.kept === before.working &&
       regrant.place.frame === null &&
       restored.working === before.working && restored.kept === written.ok.version && text === `broken ${before.working}`,
     {
       activated: { version: written.ok.version, working: activated.working, kept: activated.kept, validation_readies: receiptsOf(marks, from, null, "ready").length },
-      crashed: { live_failed_verbs: receiptsOf(marks, from, null, "failed").length, stage: "runtime", safe_mode: safe.description, offers: safe.offers.map((o) => o.offer), kept_offer: kept && kept.label },
+      crashed: { canvas_frame_loads: loadsOf("canvas"), validation_frame_loads: loadsOf("validation"), canvas_frames_loaded_twice: reloaded, failed_verbs: receiptsOf(marks, from, null, "failed").length, safe_mode: safe.description, offers: safe.offers.map((o) => o.offer), kept_offer: kept && kept.label },
       regrant: { title: regrant.title, asked_for: regrant.asked_for, place: regrant.place, working: regrant.meanwhile.working, kept: regrant.meanwhile.kept },
       restored: { working: restored.working, kept: restored.kept, opened: text },
     });

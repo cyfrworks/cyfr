@@ -265,6 +265,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:pending, [])
       |> assign(:write_timer, nil)
       |> assign(:write_retries, 0)
+      |> assign(:told, %{})
       |> assign(:showing, :pending)
       |> assign(:canvas_ready, MapSet.new())
       |> assign(:canvas_died, MapSet.new())
@@ -1073,8 +1074,12 @@ defmodule PrismWeb.ShellLive do
     Enum.reduce(frame_ids, socket, fn frame_id, socket ->
       case Enum.find(frames, &(&1.id == frame_id)) do
         %{key: key} ->
-          tinctures = installed(socket, Frames.canvas_of(key))
-          push_event(socket, "canvas_installed", %{frame: frame_id, tinctures: tinctures})
+          canvas = Frames.canvas_of(key)
+          tinctures = installed(socket, canvas)
+
+          socket
+          |> push_event("canvas_installed", %{frame: frame_id, tinctures: tinctures})
+          |> update(:told, &Map.put(&1, canvas, tinctures))
 
         nil ->
           socket
@@ -1227,7 +1232,7 @@ defmodule PrismWeb.ShellLive do
 
     socket
     |> assign(:arrangement, arrangement)
-    |> place()
+    |> arrange()
     |> then(&push_installed(&1, canvas_frame_ids(&1.assigns.frames)))
   end
 
@@ -1345,12 +1350,16 @@ defmodule PrismWeb.ShellLive do
 
   defp visible_entry(_assigns), do: nil
 
+  # The arrangement placed, and then each canvas told what is open over it
+  # if that changed (`tell_changed/1`).
+  defp place(socket), do: socket |> arrange() |> tell_changed()
+
   # Hold the frames the arrangement places over the visible canvas, and
   # the canvas itself.
-  defp place(%{assigns: %{safe_mode: %{}}} = socket), do: socket
-  defp place(%{assigns: %{arrangement: nil}} = socket), do: socket
+  defp arrange(%{assigns: %{safe_mode: %{}}} = socket), do: socket
+  defp arrange(%{assigns: %{arrangement: nil}} = socket), do: socket
 
-  defp place(socket) do
+  defp arrange(socket) do
     %{context: ctx, arrangement: arrangement} = socket.assigns
 
     socket
@@ -2085,17 +2094,22 @@ defmodule PrismWeb.ShellLive do
   # The listing read again for a decision. A read that changes what
   # `installed` carries is pushed to every held canvas frame, as
   # `follow_listing/1` pushes it; nothing is placed.
-  defp reread_listing(socket) do
-    before = told(socket)
-    socket = read_listing(socket)
+  defp reread_listing(socket), do: socket |> read_listing() |> tell_changed()
 
-    if told(socket) == before,
+  # Every held canvas frame is told what it may open, when that changed
+  # for a held canvas since it was last told (`push_installed/2` keeps what
+  # each canvas was told). A canvas not told yet is told at its handshake.
+  defp tell_changed(socket) do
+    told = socket.assigns.told
+    now = Map.take(to_tell(socket), Map.keys(told))
+
+    if now == Map.take(told, Map.keys(now)),
       do: socket,
       else: push_installed(socket, canvas_frame_ids(socket.assigns.frames))
   end
 
   # What `installed` tells each held canvas frame, by canvas.
-  defp told(socket) do
+  defp to_tell(socket) do
     for %{key: key} <- Frames.list(socket.assigns.frames),
         Frames.canvas_key?(key),
         canvas = Frames.canvas_of(key),
@@ -2156,14 +2170,14 @@ defmodule PrismWeb.ShellLive do
 
   # A frame whose tincture the registry no longer lists is discarded with
   # its credential, the layout's entries are placed again against the new
-  # listing, and every canvas frame is sent what it may open.
+  # listing, and every canvas frame is sent what it may open when that
+  # changed.
   defp follow_listing(socket) do
     %{context: ctx} = socket.assigns
 
     socket
     |> frames(&Frames.prune(ctx, &1, cards(socket)))
     |> place()
-    |> then(&push_installed(&1, canvas_frame_ids(&1.assigns.frames)))
   end
 
   # Public is an active public profile. A store that could not answer, or
@@ -2524,7 +2538,7 @@ defmodule PrismWeb.ShellLive do
         disabled={not is_nil(@safe_mode)}
         aria-keyshortcuts="Control+Alt+S"
         title="Safe mode (Ctrl+Alt+S)"
-        class="absolute bottom-2 left-2 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
+        class="absolute bottom-2 left-2 z-[67] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
       >
         Safe mode
       </button>
@@ -2535,7 +2549,7 @@ defmodule PrismWeb.ShellLive do
         phx-click="devices"
         data-test="shell-devices"
         title="Pair or revoke a device"
-        class="absolute bottom-2 left-24 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+        class="absolute bottom-2 left-24 z-[67] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
       >
         Devices
       </button>

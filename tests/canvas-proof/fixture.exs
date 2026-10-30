@@ -89,10 +89,12 @@
 #                 `not_ready` at its deadline;
 #   broken-die    throws from a timer before ready: validation records
 #                 `died` (the SDK reports `failed` at stage `load`);
-#   broken-crash  becomes ready, then throws from a timer: shown live it
-#                 reports `failed` at stage `runtime`, which is safe mode
-#                 `crashed`. Its throw fires well after a validation frame
-#                 is torn down, so validation activates it first.
+#   broken-crash  becomes ready, then reloads its own frame from a timer:
+#                 shown live its frame loads a second time, which the bridge
+#                 reports as `frame_gone`, the frame's death, and the shell
+#                 takes as safe mode `crashed`. Its reload comes well after a
+#                 validation frame is torn down, so validation activates it
+#                 first.
 #
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
@@ -273,15 +275,16 @@ fn args ->
     }, 0)
     """,
     "broken-crash" => """
-    // Becomes ready, then throws from a timer: shown live the SDK reports
-    // `failed` at stage `runtime`, which is safe mode `crashed`. The delay
-    // is well past a validation frame's teardown, so validation activates
-    // this version before any throw, and only the live frame crashes.
+    // Becomes ready, then reloads its own frame from a timer: shown live
+    // the frame loads a second time, its death, which is safe mode
+    // `crashed`; a page that only throws after ready is not. The delay is
+    // well past a validation frame's teardown, so validation activates
+    // this version before any reload, and only the live frame dies.
     #{version_from_url}
     document.getElementById("root").textContent = "broken " + version + " (crash)"
     cyfr.ready()
     setTimeout(() => {
-      throw new Error("canvas-broken crashes after ready")
+      location.reload()
     }, 2500)
     """
   }

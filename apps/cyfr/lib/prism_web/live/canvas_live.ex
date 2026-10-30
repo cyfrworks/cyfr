@@ -13,10 +13,16 @@ defmodule PrismWeb.CanvasLive do
   inert) and narrowed by the tiles beside it, its tiles at their edge and
   share, its windows at their geometry, and the active `full` frame above
   those, with its capsule. Geometry and shares are hundredths of a percent
-  of the layer. The windows and tiles shown stack by their rank in the
-  stacking order, as each wrapper's `z-index` from 30 up, under a full app
-  at 50, which shows alone; raising an app restyles its wrapper and never
-  moves it. Each app's wrapper carries what it stands as for the hook:
+  of the layer. Raising an app restyles its wrapper's `z-index` and never
+  moves it.
+
+  The stacking order, for the canvas and the windows over it alike: the
+  canvas 0; tiles 20; windows 30 plus their rank among the windows shown
+  (0 for the lowest; at most 61, with 32 apps); a full app 64, which shows
+  alone; the canvas's own controls 65 to 69 (the edge strip 65, the
+  switcher 66, the shell's chips 67, the layout note 68, the connection
+  notice 69); the AQUA panel 70; the command palette 80; the system layer
+  above them all. Each app's wrapper carries what it stands as for the hook:
   `data-canvas-place` (`window`, `tile` or `full`), `data-canvas-stack`,
   `data-canvas-minimised`, and `data-canvas-geometry` (`x y w h`) or
   `data-canvas-side` and `data-canvas-share`. The assistant's panel
@@ -84,6 +90,7 @@ defmodule PrismWeb.CanvasLive do
   @postures Prima.Layout.postures()
   @max_fraction 10_000
   @app_z 30
+  @tile_z 20
 
   @impl true
   def mount(socket) do
@@ -199,7 +206,7 @@ defmodule PrismWeb.CanvasLive do
         <div
           data-canvas-connection="connected"
           hidden
-          class="absolute left-1/2 top-3 z-[60] -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/90"
+          class="absolute left-1/2 top-3 z-[69] -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/90"
         >
           Disconnected. Reconnecting…
         </div>
@@ -268,7 +275,7 @@ defmodule PrismWeb.CanvasLive do
         :if={@layout_unavailable}
         data-canvas-layout="unavailable"
         inert={@covering != nil}
-        class="absolute bottom-3 left-3 z-20 text-xs text-text-muted"
+        class="absolute bottom-3 left-3 z-[68] text-xs text-text-muted"
       >
         Your layout can't be read right now.
       </p>
@@ -279,7 +286,7 @@ defmodule PrismWeb.CanvasLive do
         :if={length(@canvases) > 1}
         id="canvas-edge-strip"
         aria-hidden="true"
-        class="pointer-events-auto absolute inset-x-0 bottom-0 z-[51] h-4 touch-none"
+        class="pointer-events-auto absolute inset-x-0 bottom-0 z-[65] h-4 touch-none"
       >
       </div>
 
@@ -287,7 +294,7 @@ defmodule PrismWeb.CanvasLive do
         :if={length(@canvases) > 1}
         id="canvas-switcher"
         aria-label="Canvases"
-        class="pointer-events-auto absolute bottom-2 left-1/2 z-[55] flex -translate-x-1/2 items-center gap-1 rounded-full bg-black/60 px-2 py-1"
+        class="pointer-events-auto absolute bottom-2 left-1/2 z-[66] flex -translate-x-1/2 items-center gap-1 rounded-full bg-black/60 px-2 py-1"
       >
         <button
           :for={canvas <- @canvases}
@@ -394,7 +401,7 @@ defmodule PrismWeb.CanvasLive do
 
   defp frame_class(%{placement: :full, visible: visible}) do
     [
-      "pointer-events-auto fixed inset-0 z-50 flex flex-col bg-surface-base",
+      "pointer-events-auto fixed inset-0 z-[64] flex flex-col bg-surface-base",
       if(not visible, do: "hidden")
     ]
   end
@@ -416,11 +423,10 @@ defmodule PrismWeb.CanvasLive do
   # Where each frame stands, as CSS, by frame id: a window at its geometry
   # and a tile at its edge and share, and the visible canvas narrowed by the
   # tiles shown beside it. Tiles on one edge sit side by side in their
-  # stacking order, left to right. The windows and tiles shown are stacked
-  # by their rank in that order, `z-index` 30 for the lowest and one more
-  # for each above it, whatever the layout's orders are, so raising an app
-  # changes its style and never its place in the document; a full app is at
-  # 50, and shown it is alone.
+  # stacking order, left to right. Tiles stand at `z-index` 20; the windows
+  # shown stack by their rank in that order, 30 for the lowest and one more
+  # for each above it, whatever the layout's orders are (the moduledoc's
+  # stacking order).
   defp boxes(frames) do
     list = Frames.list(frames)
     canvas = Frames.visible_canvas(frames)
@@ -452,7 +458,6 @@ defmodule PrismWeb.CanvasLive do
   end
 
   defp stacked?(%{key: {:app, _, _}, visible: true, placement: {:window, _}}), do: true
-  defp stacked?(%{key: {:app, _, _}, visible: true, placement: {:tile, _, _}}), do: true
   defp stacked?(_frame), do: false
 
   defp share(%{placement: {:tile, _, share}}), do: share
@@ -475,10 +480,10 @@ defmodule PrismWeb.CanvasLive do
       "left: #{percent(x)}; top: #{percent(y)}; width: #{percent(w)}; height: #{percent(h)}; " <>
         "z-index: #{z};"
 
-  defp box(%{id: id, placement: {:tile, side, share}}, tiles, _canvas, _l, _r, z) do
+  defp box(%{id: id, placement: {:tile, side, share}}, tiles, _canvas, _l, _r, _z) do
     {at, width} = List.keyfind(tiles, id, 0, {id, {fallback(side, share), share}}) |> elem(1)
 
-    "top: 0; bottom: 0; left: #{percent(at)}; width: #{percent(width)}; z-index: #{z};"
+    "top: 0; bottom: 0; left: #{percent(at)}; width: #{percent(width)}; z-index: #{@tile_z};"
   end
 
   defp box(_frame, _tiles, _canvas, _l, _r, _z), do: nil
