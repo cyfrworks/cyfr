@@ -44,11 +44,25 @@ defmodule Arca.VaultStorage do
   the invalidation of every profile that depended on it.
   `commit_payload/3` is a material write with the status flip and the
   binding move that belong to it, which is the shape of an operator
-  rotation and of an OAuth grant commit alike. `put/3` inserts an entry
+  rotation and of an OAuth grant commit alike. A rotation that moves no
+  binding leaves the entry's shares and every consent as they are.
+  `put/3` inserts an entry
   and, when the athanor names no default for its provider yet, makes it
   that provider's default (`Arca.VaultDefaults`) in the same transaction;
   `tombstone/2` erases the material and removes any default naming the
   entry in one.
+
+  ## Shares
+
+  An entry offered through shares (`Arca.Shares`) carries them with it.
+  A binding move blocks every profile, in every athanor, whose head binds
+  the entry or one of its active shares, and leaves the shares as they
+  are. A move to disclosure is refused `{:error, {:shared, entry_id}}`
+  under the entry's lock while an active share names it, since a shared
+  entry is used attach-only. A revoke (`set_status/3` to `revoked`) and a
+  tombstone revoke every share of the entry and block their dependents in
+  the same transaction. Each takes the entry's row before the shares and
+  the shares before the profiles (`Arca.ConsentStorage`'s order).
 
   ## Where the material may go
 
@@ -338,7 +352,7 @@ defmodule Arca.VaultStorage do
           :ok
           | {:error, :not_found | {:entry_unavailable, String.t()} | {:invalid_status, term()}}
           | refusal()
-  def set_status(%Prima.Actor{athanor_id: athanor_id}, id, status)
+  def set_status(%Prima.Actor{athanor_id: athanor_id} = actor, id, status)
       when resolved(athanor_id) and is_binary(id) and is_binary(status) do
     case Arca.StatusTransitions.from(:credentials, status) do
       {:ok, from} ->
@@ -347,10 +361,12 @@ defmodule Arca.VaultStorage do
             from(v in VaultEntry, where: v.id == ^id and v.status in ^from)
             |> Arca.QueryHelpers.where_athanor(athanor_id)
 
-          case Arca.Repo.update_all(query, set: [status: status, updated_at: now()]) do
-            {1, _} -> :ok
-            {0, _} -> refused_status(athanor_id, id)
-          end
+          transact(fn ->
+            case Arca.Repo.update_all(query, set: [status: status, updated_at: now()]) do
+              {1, _} -> ended(actor, id, status)
+              {0, _} -> refused_status(athanor_id, id)
+            end
+          end)
         end)
 
       :error ->
@@ -364,7 +380,8 @@ defmodule Arca.VaultStorage do
 
   @doc """
   Tombstone an entry: status flip and material erasure in one update,
-  with every default naming the entry removed in the same transaction.
+  with every default naming the entry removed and every share of it
+  revoked in the same transaction.
   The partial unique index ignores tombstoned rows, so the name is
   immediately reusable.
   """
@@ -374,8 +391,9 @@ defmodule Arca.VaultStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.tombstone", fn ->
       transact(fn ->
         with :ok <-
-               write(athanor_id, id, status: "tombstoned", sealed_payload: nil, updated_at: now()) do
-          Arca.VaultDefaults.drop_entry!(actor, id)
+               write(athanor_id, id, status: "tombstoned", sealed_payload: nil, updated_at: now()),
+             :ok <- Arca.VaultDefaults.drop_entry!(actor, id) do
+          ended(actor, id, "tombstoned")
         end
       end)
     end)
@@ -396,13 +414,15 @@ defmodule Arca.VaultStorage do
   destination's canonical text `{:error, {:invalid_destination, reason}}`,
   each before anything is written. The write lands only while the row's
   `binding_digest` still reads `from_digest`, and every profile whose
-  head consent references the entry takes `blocked_status` with it, so no
-  consent is ever left covering a binding it did not approve. A profile
-  already revoked is not blocked: it stays revoked.
+  head consent references the entry, or one of its active shares, in any
+  athanor, takes `blocked_status` with it, so no consent is ever left
+  covering a binding it did not approve. A profile already revoked is not
+  blocked: it stays revoked. A move to disclosure (`attach_only: false`)
+  of an entry an active share names is `{:error, {:shared, id}}`.
 
   `{:error, :binding_moved}` when another change landed first or the entry
   is gone; the caller re-reads and recomputes. The answer on success is
-  the profiles blocked.
+  the profiles of the actor's athanor it blocked.
 
   `verify:` (optional) is the caller's check, run as the transaction's
   first step, before the compare-and-set: it answers `:ok`, or
@@ -703,58 +723,49 @@ defmodule Arca.VaultStorage do
   # The compare-and-set and the invalidation it implies. Callers reach it
   # through `move_binding/5` or `commit_payload/3`, both of which are
   # already inside a transaction — the two writes are never separable.
+  # The entry is held by the compare-and-set's write from here on, so a
+  # share created against it waits and reads the moved row, and the shares
+  # read next are the ones the move carries.
   defp rebind(athanor_id, id, %{
          from_digest: from_digest,
          changes: changes,
          blocked_status: blocked_status
        }) do
     with :ok <- cas_binding(athanor_id, id, from_digest, changes),
-         {:ok, heads} <-
-           Arca.ConsentStorage.head_profiles_referencing(
-             Prima.Actor.in_athanor(athanor_id),
-             id
-           ),
-         affected = unrevoked(athanor_id, heads),
-         :ok <- block_profiles(athanor_id, affected, blocked_status) do
-      {:ok, affected}
+         share_ids = active_shares(athanor_id, id),
+         :ok <- attach_only_while_shared(id, changes, share_ids),
+         {:ok, blocked} <-
+           Arca.ConsentStorage.block_dependents({athanor_id, id}, share_ids, blocked_status) do
+      {:ok, for({^athanor_id, profile_id} <- blocked, do: profile_id)}
     end
   end
 
-  # The profiles not revoked, read under a lock, so a revoke that commits
-  # before the block is seen and one that starts after it waits. A revoked
-  # profile stays revoked and nothing runs through it; a status write
-  # would revive it beside the live profile of its identity.
-  defp unrevoked(_athanor_id, []), do: []
-
-  defp unrevoked(athanor_id, profile_ids) do
-    from(p in Arca.Schemas.Profile,
-      where: p.id in ^profile_ids and p.status != "revoked",
-      select: p.id
+  # The entry's active shares, held shared after the entry and before the
+  # profiles: a share's revoke, which takes the row exclusive, is waited
+  # for or waits.
+  defp active_shares(athanor_id, id) do
+    from(s in Arca.Schemas.Share,
+      where: s.vault_entry_id == ^id and s.status == "active",
+      order_by: s.id,
+      select: s.id
     )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
-    |> Arca.QueryHelpers.for_update()
+    |> Arca.QueryHelpers.for_share()
     |> Arca.Repo.all()
-    |> Enum.sort()
   end
 
-  # Each profile moves from the unrevoked statuses its locked read found
-  # it in; a block that may not reach `blocked_status` from them refuses,
-  # and the refusal rolls the enclosing write back with it.
-  defp block_profiles(athanor_id, profile_ids, blocked_status) do
-    unrevoked = Arca.StatusTransitions.statuses(:profiles) -- ["revoked"]
+  defp attach_only_while_shared(id, %{attach_only: false}, [_ | _]), do: {:error, {:shared, id}}
+  defp attach_only_while_shared(_id, _changes, _share_ids), do: :ok
 
-    Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
-      case Arca.ProfileStorage.transition(
-             Prima.Actor.in_athanor(athanor_id),
-             profile_id,
-             unrevoked,
-             blocked_status
-           ) do
-        :ok -> {:cont, :ok}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
+  # A revoke or a tombstone that landed: every share of the entry is
+  # revoked and their dependents blocked, under the entry's row it holds.
+  defp ended(actor, id, status) when status in ["revoked", "tombstoned"] do
+    with {:ok, _revoked} <-
+           Arca.Shares.revoke_by_entry(actor, id, Arca.StatusTransitions.blocked_profile_status()),
+         do: :ok
   end
+
+  defp ended(_actor, _id, _status), do: :ok
 
   defp cas_binding(athanor_id, id, from_digest, changes) do
     set =

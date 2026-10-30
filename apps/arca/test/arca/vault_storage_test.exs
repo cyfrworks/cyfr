@@ -879,4 +879,127 @@ defmodule Arca.VaultStorageTest do
       assert row.payload_rev == 0
     end
   end
+
+  describe "an entry's shares" do
+    setup do
+      terry = Arca.Test.Shares.owner!()
+      entry = Arca.Test.Shares.entry!(terry.actor)
+      share = Arca.Test.Shares.share!(terry.actor, entry.id)
+      alice = Arca.Test.Shares.owner!()
+
+      {:ok,
+       terry: terry,
+       entry: entry,
+       share: share,
+       alice: alice,
+       alices: Arca.Test.Shares.bound!(alice.athanor.id, share.id)}
+    end
+
+    test "a rebind blocks the dependents of its shares in every athanor, in one transaction, " <>
+           "and leaves the shares as they are",
+         %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
+      own = dependent_profile!(terry.actor, entry.id)
+
+      assert {:ok, affected} =
+               VaultStorage.move_binding(
+                 terry.actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{
+                   destination: Arca.Test.Shares.destination(),
+                   binding_digest: "sha256:d1"
+                 },
+                 @blocked
+               )
+
+      # The owner hears of their own profiles alone.
+      assert affected == [own.id]
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == @blocked
+      assert Arca.Test.Shares.profile_status(terry.athanor.id, own.id) == @blocked
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
+      assert status_of(terry.actor, entry.id).binding_digest == "sha256:d1"
+    end
+
+    test "a dependent that cannot be blocked rolls the rebind back in every athanor",
+         %{terry: terry, entry: entry, alice: alice, alices: alices} do
+      assert {:error, _} =
+               VaultStorage.move_binding(
+                 terry.actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{
+                   binding_digest: "sha256:d1"
+                 },
+                 "active"
+               )
+
+      assert status_of(terry.actor, entry.id).binding_digest == "sha256:d0"
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == "active"
+    end
+
+    test "a rebind to disclosure is refused while an active share names the entry",
+         %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
+      assert {:error, {:shared, id}} =
+               VaultStorage.move_binding(
+                 terry.actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{
+                   attach_only: false,
+                   binding_digest: "sha256:d1"
+                 },
+                 @blocked
+               )
+
+      assert id == entry.id
+      assert status_of(terry.actor, entry.id).attach_only == true
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == "active"
+
+      {:ok, _} = Arca.Shares.revoke(terry.actor, share.id, @blocked)
+
+      assert {:ok, _} =
+               VaultStorage.move_binding(
+                 terry.actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{
+                   attach_only: false,
+                   binding_digest: "sha256:d1"
+                 },
+                 @blocked
+               )
+    end
+
+    test "a revoke and a delete revoke every share of the entry and block their dependents",
+         %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
+      other = Arca.Test.Shares.entry!(terry.actor)
+      kept = Arca.Test.Shares.share!(terry.actor, other.id)
+
+      assert :ok = VaultStorage.set_status(terry.actor, entry.id, "revoked")
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == @blocked
+      assert Arca.Test.Shares.share_status(terry.actor, kept.id) == "active"
+
+      assert :ok = VaultStorage.tombstone(terry.actor, other.id)
+      assert Arca.Test.Shares.share_status(terry.actor, kept.id) == "revoked"
+    end
+
+    test "needs_reauth leaves the shares, and a rotation leaves shares and consents as they are",
+         %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
+      :ok = VaultStorage.set_status(terry.actor, entry.id, "needs_reauth")
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
+
+      assert {:ok, %{payload_rev: 1, affected: []}} =
+               VaultStorage.commit_payload(terry.actor, entry.id, %{
+                 expected_rev: 0,
+                 sealed_payload: "rotated",
+                 status: "active",
+                 rebind: nil
+               })
+
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == "active"
+      assert status_of(terry.actor, entry.id).binding_digest == "sha256:d0"
+    end
+  end
 end
