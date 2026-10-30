@@ -6,16 +6,18 @@
  * (`PrismWeb.SystemLayer.Recovery`) and the restore page
  * (`PrismWeb.RestoreLive`).
  *
- * In a recovery prompt, the seed of a new kit is drawn here, 32 bytes from
- * the browser's cryptographic random source, with the request id its
- * attempt goes under, and held in this page's memory for that one pending
- * request (`Material`): submitted to the layer under `recovery_secret`,
- * submitted again, the same, when the layer says its record was confirmed
- * or the person tries again, and forgotten once a kit answers or the
- * prompt ends. An added kit is signed by a kit the person holds: its
- * secret is typed into the prompt's form and held the same way. A kit's
- * three lines arrive in a push to this layer alone and are drawn into the
- * prompt's own place as text, then emptied when the prompt ends.
+ * In a recovery prompt, the secret of a new recovery code is drawn here,
+ * 32 bytes from the browser's cryptographic random source, with the
+ * request id its attempt goes under, and held in this page's memory for
+ * that one pending request (`Material`): submitted to the layer under
+ * `recovery_secret`, submitted again, the same, when the layer says its
+ * record was confirmed or the person tries again, and forgotten once a
+ * code answers or the prompt ends. An added code is signed by a recovery
+ * code the person holds: it is typed into the prompt's form, held the
+ * same way and read by the server. The recovery code the server composes
+ * arrives in a push to this layer alone and is drawn into the prompt's
+ * own place as text, with a Copy button that writes it to the clipboard,
+ * then emptied when the prompt ends.
  *
  * On the restore page, the installation token and the recovery code are
  * typed into a form whose inputs have no name, and posted straight to
@@ -58,7 +60,7 @@ export const RESTORE_RETRIES = 30
 // The longest wait between two asks, whatever an answer names.
 const MAX_RETRY_S = 60
 
-/** A new kit's seed: 32 bytes from the cryptographic random source, unpadded base64url. */
+/** A new recovery code's secret: 32 bytes from the cryptographic random source, unpadded base64url. */
 export function drawSeed(crypto = globalThis.crypto) {
   const bytes = new Uint8Array(SEED_BYTES)
   crypto.getRandomValues(bytes)
@@ -76,7 +78,7 @@ export function drawRequestId(crypto = globalThis.crypto) {
  * The material each open recovery prompt holds, by prompt id, in memory
  * alone. `submission` answers what the prompt's form submits: material it
  * already holds is reused, so a retry or the confirmed repeat is the same
- * request, and otherwise it is drawn (and, for an added kit, typed).
+ * request, and otherwise it is drawn (and, for an added code, typed).
  */
 export class Material {
   constructor(crypto = globalThis.crypto) {
@@ -86,8 +88,8 @@ export class Material {
 
   /**
    * The event payload for `kind` (`enrollment`, `holder` or `kit`) of the
-   * prompt `promptId`, `typed` the signing kit's secret an added kit
-   * needs; or null when an added kit has none to sign with.
+   * prompt `promptId`, `typed` the recovery code that signs an added one;
+   * or null when an added code has none to sign with.
    */
   submission(promptId, kind, typed = "") {
     switch (kind) {
@@ -101,8 +103,8 @@ export class Material {
         const held = this.hold(promptId, () => ({seed: drawSeed(this.crypto), requestId: drawRequestId(this.crypto), signer}))
         return {
           prompt_id: promptId,
-          recovery_secret: held.signer,
-          holder: {kind: "kit", recovery_secret: held.seed},
+          recovery_code: held.signer,
+          holder: {recovery_secret: held.seed},
           request_id: held.requestId
         }
       }
@@ -131,38 +133,46 @@ export class Material {
   }
 }
 
-/** A kit's three lines, as the prompt draws them: label, value and test name. */
-export function kitRows(kit) {
-  return [
-    ["Identifier", kit.identifier, "kit-identifier"],
-    ["Directory", kit.directory_url, "kit-directory"],
-    ["Recovery secret", kit.recovery_secret, "kit-secret"]
-  ]
-}
-
-/** Draw `kit` into `slot`, each value as text, and show it. */
-export function drawKit(doc, slot, kit) {
-  if (!slot || typeof slot.replaceChildren !== "function" || !kit) return
-  const rows = kitRows(kit).map(([label, value, test]) => {
-    const row = doc.createElement("div")
-    const name = doc.createElement("dt")
-    name.textContent = label
-    const text = doc.createElement("dd")
-    text.textContent = value
-    text.setAttribute("data-test", test)
-    text.setAttribute("class", "font-mono break-all")
-    row.append(name, text)
-    return row
-  })
-  const list = doc.createElement("dl")
-  list.setAttribute("class", "space-y-1 rounded-md border border-gray-600 p-3 text-sm")
-  list.append(...rows)
-  slot.replaceChildren(list)
+/**
+ * Draw the recovery `code` into `slot` as the text of one element, with
+ * the Copy button beside it, and show it. The code is held nowhere else.
+ */
+export function drawCode(doc, slot, code) {
+  if (!slot || typeof slot.replaceChildren !== "function" || typeof code !== "string" || !code) return
+  const text = doc.createElement("p")
+  text.setAttribute("data-test", "recovery-code")
+  text.setAttribute("class", "font-mono break-all")
+  text.textContent = code
+  const copy = doc.createElement("button")
+  copy.setAttribute("type", "button")
+  copy.setAttribute("data-recovery-copy", "")
+  copy.setAttribute("data-test", "recovery-copy")
+  copy.setAttribute("class", "rounded-md border border-gray-600 px-2 py-1 text-xs font-semibold hover:bg-gray-800")
+  copy.textContent = "Copy"
+  slot.replaceChildren(text, copy)
   slot.hidden = false
 }
 
-/** Empty `slot` of whatever kit it showed. */
-export function clearKit(slot) {
+/**
+ * Write the recovery code drawn beside the Copy `button` to `clipboard`,
+ * then say "Copied." on the button. Without a clipboard, or with no code
+ * drawn, it does nothing; a refused write leaves the button as it was.
+ */
+export async function copyCode(button, clipboard = globalThis.navigator?.clipboard) {
+  const slot = button && typeof button.closest === "function" ? button.closest("[data-recovery-code]") : null
+  const shown = slot && typeof slot.querySelector === "function" ? slot.querySelector('[data-test="recovery-code"]') : null
+  const code = shown ? shown.textContent : ""
+  if (!code || !clipboard || typeof clipboard.writeText !== "function") return
+  try {
+    await clipboard.writeText(code)
+  } catch (_error) {
+    return
+  }
+  button.textContent = "Copied."
+}
+
+/** Empty `slot` of whatever code it showed. */
+export function clearCode(slot) {
   if (!slot || typeof slot.replaceChildren !== "function") return
   slot.replaceChildren()
   slot.hidden = true

@@ -8,8 +8,9 @@ import {afterEach, beforeEach, describe, test} from "node:test"
 import {jcs} from "../../js/system_layer/device_key.js"
 import SystemLayer from "../../js/system_layer/index.js"
 import {
-  clearKit,
-  drawKit,
+  clearCode,
+  copyCode,
+  drawCode,
   drawRequestId,
   drawSeed,
   endsRecovery,
@@ -21,7 +22,6 @@ import {
   kitProof,
   kitRefusal,
   kitRequest,
-  kitRows,
   kitSignedBytes,
   KitStep,
   Material,
@@ -55,11 +55,16 @@ function countingCrypto() {
   return source
 }
 
-// The few element members the code under test touches.
+// The few element members the code under test touches. `closest` and
+// `querySelector` read one attribute selector, `[name]` or `[name="value"]`.
 function node(tag = "div", attrs = {}) {
+  const adopt = (nodes) => {
+    for (const child of nodes) child.parent = element
+  }
   const element = {
     tag,
     attrs: {...attrs},
+    parent: null,
     children: [],
     hidden: Boolean(attrs.hidden),
     textContent: "",
@@ -72,11 +77,18 @@ function node(tag = "div", attrs = {}) {
     getAttribute: (name) => element.attrs[name],
     hasAttribute: (name) => name in element.attrs,
     append(...nodes) {
+      adopt(nodes)
       element.children.push(...nodes)
     },
     replaceChildren(...nodes) {
+      adopt(nodes)
       element.children = nodes
     },
+    closest(selector) {
+      for (let at = element; at; at = at.parent) if (matches(at, selector)) return at
+      return null
+    },
+    querySelector: (selector) => walk(element).slice(1).find((child) => matches(child, selector)) ?? null,
     addEventListener(event, listener) {
       element.listeners[event] = listener
     },
@@ -85,6 +97,12 @@ function node(tag = "div", attrs = {}) {
     }
   }
   return element
+}
+
+function matches(element, selector) {
+  const [, name, value] = selector.match(/^\[([\w-]+)(?:="([^"]*)")?\]$/) || []
+  if (!name) throw new Error(`the fake document reads no selector ${selector}`)
+  return name in element.attrs && (value === undefined || element.attrs[name] === value)
 }
 
 const fakeDoc = {createElement: (tag) => node(tag)}
@@ -126,7 +144,7 @@ afterEach(() => {
   }
 })
 
-describe("the seed of a new kit", () => {
+describe("the secret of a new recovery code", () => {
   test("is 32 bytes from the cryptographic source, as unpadded base64url", () => {
     const crypto = countingCrypto()
     const seed = drawSeed(crypto)
@@ -167,38 +185,95 @@ describe("the material a recovery prompt holds", () => {
     assert.equal(material.held.size, 0)
   })
 
-  test("another kit needs the signing kit's secret, and keeps it with the drawn one", () => {
+  test("another code needs the recovery code that signs it, and keeps it with the drawn secret", () => {
     const material = new Material(countingCrypto())
     assert.equal(material.submission("recovery-3", "holder", "   "), null)
     assert.equal(material.holds("recovery-3"), false)
 
-    const sent = material.submission("recovery-3", "holder", " signer-line ")
-    assert.equal(sent.recovery_secret, "signer-line")
-    assert.equal(sent.holder.kind, "kit")
-    assert.notEqual(sent.holder.recovery_secret, "signer-line")
+    const sent = material.submission("recovery-3", "holder", ` ${held.code} `)
+    assert.deepEqual(sent, {
+      prompt_id: "recovery-3",
+      recovery_code: held.code,
+      holder: {recovery_secret: sent.holder.recovery_secret},
+      request_id: sent.request_id
+    })
+    assert.match(sent.holder.recovery_secret, /^[A-Za-z0-9_-]{43}$/)
+    assert.notEqual(sent.holder.recovery_secret, held.secret)
+    assert.match(sent.request_id, /^req_[0-9a-f]{32}$/)
 
     // The confirmed repeat sends the same request, whatever the form holds now.
     assert.deepEqual(material.submission("recovery-3", "holder", ""), sent)
   })
 
-  test("a kit again sends nothing but its prompt", () => {
+  test("showing a code again sends nothing but its prompt", () => {
     assert.deepEqual(new Material(countingCrypto()).submission("recovery-4", "kit"), {prompt_id: "recovery-4"})
   })
 })
 
-describe("a kit's lines", () => {
-  const kit = {identifier: "per_abc", directory_url: "https://dir.test", recovery_secret: "c2VlZA"}
+describe("a recovery code", () => {
+  const codeSlot = () => {
+    const slot = node("div", {"data-recovery-code": "recovery-9"})
+    slot.hidden = true
+    return slot
+  }
 
-  test("are drawn as text into the prompt's own place, and emptied with it", () => {
-    const slot = node("div", {hidden: true})
-    drawKit(fakeDoc, slot, kit)
+  test("is drawn as the text of one element with a Copy button into the prompt's own place, and emptied with it", () => {
+    const slot = codeSlot()
+    drawCode(fakeDoc, slot, held.code)
     assert.equal(slot.hidden, false)
-    assert.deepEqual(texts(slot), ["Identifier", "per_abc", "Directory", "https://dir.test", "Recovery secret", "c2VlZA"])
-    assert.deepEqual(kitRows(kit).map(([, , name]) => name), ["kit-identifier", "kit-directory", "kit-secret"])
+    const [shown, copy] = slot.children
+    assert.equal(slot.children.length, 2)
+    assert.deepEqual([shown.tag, shown.attrs, shown.textContent, shown.children], ["p", {"data-test": "recovery-code", class: "font-mono break-all"}, held.code, []])
+    assert.deepEqual(
+      [copy.tag, copy.attrs.type, copy.attrs["data-recovery-copy"], copy.attrs["data-test"], copy.textContent],
+      ["button", "button", "", "recovery-copy", "Copy"]
+    )
+    assert.deepEqual(texts(slot), [held.code, "Copy"])
 
-    clearKit(slot)
+    clearCode(slot)
     assert.equal(slot.hidden, true)
     assert.deepEqual(texts(slot), [])
+  })
+
+  test("that is absent draws nothing", () => {
+    for (const code of [undefined, null, "", {code: held.code}]) {
+      const slot = codeSlot()
+      drawCode(fakeDoc, slot, code)
+      assert.equal(slot.hidden, true)
+      assert.deepEqual(slot.children, [])
+    }
+  })
+
+  test("is written to the clipboard by its Copy button, which then says so", async () => {
+    const slot = codeSlot()
+    drawCode(fakeDoc, slot, held.code)
+    const copy = slot.children[1]
+    const written = []
+    await copyCode(copy, {writeText: async (text) => written.push(text)})
+    assert.deepEqual(written, [held.code])
+    assert.equal(copy.textContent, "Copied.")
+  })
+
+  test("without a clipboard, or with the write refused, the Copy button stays as it was", async () => {
+    for (const clipboard of [undefined, null, {}, {writeText: async () => Promise.reject(new Error("denied"))}, {writeText: () => {
+      throw new Error("denied")
+    }}]) {
+      const slot = codeSlot()
+      drawCode(fakeDoc, slot, held.code)
+      const copy = slot.children[1]
+      await copyCode(copy, clipboard)
+      assert.equal(copy.textContent, "Copy")
+    }
+  })
+
+  test("emptied, leaves its Copy button nothing to write", async () => {
+    const slot = codeSlot()
+    drawCode(fakeDoc, slot, held.code)
+    const copy = slot.children[1]
+    clearCode(slot)
+    const written = []
+    await copyCode(copy, {writeText: async (text) => written.push(text)})
+    assert.deepEqual(written, [])
   })
 })
 
@@ -464,14 +539,14 @@ describe("the layer's recovery prompts", () => {
     for (const listener of listeners) if (listener.event === event) listener.callback(payload)
   }
 
-  // A layer whose prompt holds an enrollment form and the kit's place.
+  // A layer whose prompt holds a recovery form and the code's place.
   function layer(id, kind = "enrollment") {
     const form = node("form")
     form.dataset = {recovery: kind, prompt: "recovery-9"}
     const signer = node("input")
-    form.querySelector = () => signer
+    form.querySelector = (selector) => (selector === '[data-field="recovery_code"]' ? signer : null)
     form.querySelectorAll = () => [signer]
-    const slot = node("div", {hidden: true})
+    const slot = node("div", {"data-recovery-code": "recovery-9"})
     slot.hidden = true
     const dialog = node("dialog")
     Object.assign(dialog, {open: false, showModal() {}, close() {}, matches: () => false, querySelectorAll: () => []})
@@ -480,11 +555,11 @@ describe("the layer's recovery prompts", () => {
     el.dataset = {open: "false", mode: "modal"}
     el.querySelector = (selector) => {
       if (selector === "dialog") return dialog
-      if (selector.startsWith("form[data-recovery]")) return form
-      if (selector.startsWith("[data-recovery-kit")) return slot
+      if (selector === 'form[data-recovery][data-prompt="recovery-9"]') return form
+      if (selector === '[data-recovery-code="recovery-9"]') return slot
       return null
     }
-    el.querySelectorAll = (selector) => (selector === "[data-recovery-kit]" ? [slot] : selector === "form[data-recovery]" ? [form] : [])
+    el.querySelectorAll = (selector) => (selector === "[data-recovery-code]" ? [slot] : selector === "form[data-recovery]" ? [form] : [])
     const hook = Object.assign(Object.create(SystemLayer), {
       el,
       framesSee: () => Promise.resolve(),
@@ -531,28 +606,49 @@ describe("the layer's recovery prompts", () => {
     assert.deepEqual(sent[1].payload, sent[0].payload)
   })
 
-  test("another kit sends the typed signing secret beside a drawn one", () => {
+  test("another code sends the typed recovery code that signs it beside a drawn secret", () => {
     const page = layer("system-layer", "holder")
-    page.signer.value = " the-signing-line "
+    page.signer.value = ` ${held.code} `
     submit(page)
-    const [{payload}] = pushed
-    assert.equal(payload.recovery_secret, "the-signing-line")
-    assert.equal(payload.holder.kind, "kit")
+    const [{event, payload}] = pushed
+    assert.equal(event, "recovery_submit")
+    assert.deepEqual(payload, {
+      prompt_id: "recovery-9",
+      recovery_code: held.code,
+      holder: {recovery_secret: payload.holder.recovery_secret},
+      request_id: payload.request_id
+    })
     assert.match(payload.holder.recovery_secret, /^[A-Za-z0-9_-]{43}$/)
   })
 
-  test("a kit's lines are drawn for the layer that asked, and forgotten with the prompt", () => {
+  test("a code is drawn for the layer that asked, copied by its button, and forgotten with the prompt", async (t) => {
+    const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator")
+    t.after(() => (navigator ? Object.defineProperty(globalThis, "navigator", navigator) : delete globalThis.navigator))
+    const written = []
+    Object.defineProperty(globalThis, "navigator", {configurable: true, value: {clipboard: {writeText: async (text) => written.push(text)}}})
+
     const page = layer("system-layer")
     const panel = layer("system-layer-panel")
     submit(page)
-    const kit = {identifier: "per_abc", directory_url: "https://dir.test", recovery_secret: pushed[0].payload.recovery_secret}
 
-    push("recovery:kit", {layer: "system-layer", prompt: "recovery-9", kit})
+    push("recovery:code", {layer: "system-layer", prompt: "recovery-9", code: held.code})
     assert.equal(page.slot.hidden, false)
-    assert.ok(texts(page.slot).includes(kit.recovery_secret))
+    assert.deepEqual(texts(page.slot), [held.code, "Copy"])
+    assert.equal(page.slot.children[0].attrs["data-test"], "recovery-code")
     assert.equal(panel.slot.hidden, true, "another layer draws nothing")
     assert.equal(page.form.hidden, true)
-    assert.equal(page.hook.material.holds("recovery-9"), false, "the drawn seed is let go once answered")
+    assert.equal(page.hook.material.holds("recovery-9"), false, "the drawn secret is let go once answered")
+
+    const copy = page.slot.children[1]
+    let prevented = false
+    await page.el.listeners.click({target: copy, preventDefault: () => (prevented = true)})
+    assert.equal(prevented, true)
+    assert.deepEqual(written, [held.code])
+    assert.equal(copy.textContent, "Copied.")
+
+    // A click anywhere else in the layer writes nothing.
+    await page.el.listeners.click({target: page.slot.children[0], preventDefault: () => assert.fail("not the Copy button")})
+    assert.equal(written.length, 1)
 
     push("recovery:clear", {layer: "system-layer", prompt: "recovery-9"})
     assert.equal(page.slot.hidden, true)
@@ -562,15 +658,17 @@ describe("the layer's recovery prompts", () => {
 
   test("a reconnect, or the layer going, forgets the material: the next submit is a new request", () => {
     const page = layer("system-layer", "holder")
-    page.signer.value = "the-signing-line"
+    page.signer.value = held.code
     submit(page)
     const first = pushed[0].payload
+    push("recovery:code", {layer: "system-layer", prompt: "recovery-9", code: held.code})
 
     page.hook.reconnected()
-    assert.equal(page.signer.value, "", "the typed secret is emptied")
+    assert.equal(page.signer.value, "", "the typed code is emptied")
+    assert.deepEqual(texts(page.slot), [], "the drawn code is emptied")
     assert.equal(page.hook.material.held.size, 0)
 
-    page.signer.value = "the-signing-line"
+    page.signer.value = held.code
     submit(page)
     assert.notEqual(pushed[1].payload.request_id, first.request_id)
 
