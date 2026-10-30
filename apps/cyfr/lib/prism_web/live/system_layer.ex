@@ -2746,9 +2746,9 @@ defmodule PrismWeb.SystemLayer do
   attr :error, :string, default: nil
   attr :myself, :any, required: true
 
-  # The fallback's one line, in the shelf's area above the canvas's own
-  # controls: the sentence, then each offer as a control. It covers no
-  # frame beyond its own line.
+  # The fallback's one line, in the shelf's area, just above the canvas's
+  # shelf (52 pixels, `PrismWeb.CanvasLive`): the sentence, then each offer
+  # as a control. It covers no frame beyond its own line.
   defp notice(assigns) do
     assigns = assign(assigns, :offers, Fallback.offers(assigns.notice.fallback))
 
@@ -2758,7 +2758,7 @@ defmodule PrismWeb.SystemLayer do
       role="status"
       data-test="fallback-notice"
       data-notice-id={@notice.id}
-      class="pointer-events-auto fixed inset-x-0 bottom-12 z-[90] mx-auto flex w-fit max-w-[calc(100%-1rem)] flex-wrap items-center justify-center gap-x-1.5 gap-y-1 rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg"
+      class="pointer-events-auto fixed inset-x-0 bottom-[60px] z-[90] mx-auto flex w-fit max-w-[calc(100%-1rem)] flex-wrap items-center justify-center gap-x-1.5 gap-y-1 rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg"
     >
       <span>Your canvas stopped. Showing the standard one.</span>
       <%= for {offered, index} <- Enum.with_index(@offers) do %>
