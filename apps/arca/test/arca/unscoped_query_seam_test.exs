@@ -382,6 +382,57 @@ defmodule Arca.UnscopedQuerySeamTest do
            """
   end
 
+  # The queries that cross athanors to reach a share, each by its one key
+  # (`Arca.Shares`' moduledoc). Every one carries its tag; in the two
+  # share modules no other function does, so a new crossing is named here
+  # with its reason before it lands.
+  @share_crossings %{
+    {"apps/arca/lib/arca/shares.ex", "offered_to"} =>
+      "the shares whose audience holds one person, by their memberships",
+    {"apps/arca/lib/arca/shares.ex", "member?"} => "one membership of a group, read at use",
+    {"apps/arca/lib/arca/shares.ex", "get_for_source"} =>
+      "one share and its source entry, by the bare id a binding names",
+    {"apps/arca/lib/arca/shares.ex", "administrator_shares"} =>
+      "the administrator's shares to everyone, a newcomer's candidates",
+    {"apps/arca/lib/arca/shares.ex", "revoke_all"} => "the declared restore revokes every share",
+    {"apps/arca/lib/arca/share_usage.ex", "sweep"} => "use rows swept by age in every athanor",
+    {"apps/arca/lib/arca/consent_storage.ex", "share_sources"} =>
+      "the shares a revision binds, by id",
+    {"apps/arca/lib/arca/consent_storage.ex", "lock_vault_entries"} =>
+      "a revision's own entries and its shares' sources, by `{athanor_id, id}` pair",
+    {"apps/arca/lib/arca/consent_storage.ex", "lock_shares"} =>
+      "the shares a revision binds, locked by id",
+    {"apps/arca/lib/arca/consent_storage.ex", "share_heads"} =>
+      "the heads binding a share, in every athanor (`head_profiles_referencing_share/2`)",
+    {"apps/arca/lib/arca/consent_storage.ex", "lock_unrevoked"} =>
+      "the dependents `block_dependents/3` locks, by `{athanor_id, id}` pair"
+  }
+
+  defp tagged_functions(path) do
+    for {_line, body} <- functions(String.split(Prima.Test.SourceTree.read(path), "\n")),
+        body =~ @tag_marker,
+        [_, name] <- [Regex.run(~r/^\s*defp?\s+([a-z_]+[?!]?)/m, body)],
+        into: MapSet.new(),
+        do: name
+  end
+
+  test "every crossing to a share is rostered with its reason and carries its tag" do
+    by_file = Enum.group_by(Map.keys(@share_crossings), &elem(&1, 0), &elem(&1, 1))
+
+    for {file, names} <- by_file do
+      tagged = tagged_functions(Path.join(@root, file))
+
+      for name <- names do
+        assert name in tagged, "#{file}: #{name} crosses athanors with no arca:unscoped-ok"
+      end
+
+      if file in ~w(apps/arca/lib/arca/shares.ex apps/arca/lib/arca/share_usage.ex) do
+        assert MapSet.equal?(tagged, MapSet.new(names)),
+               "#{file} tags #{inspect(MapSet.to_list(tagged))}; the roster names #{inspect(names)}"
+      end
+    end
+  end
+
   # List schemas without athanor_id explicitly. Identity and platform rows
   # are globally addressed; webhook_deliveries are scoped through their
   # tenant-owned webhook and cascade when it is deleted.
