@@ -205,7 +205,7 @@ defmodule Compendium.ConsentSetupPlan do
   defp live(_ctx, _profile_id, _consent, _ref, {false, _detail} = unsatisfied), do: unsatisfied
 
   defp live(ctx, profile_id, consent, ref, satisfied) do
-    case Sanctum.Consent.binding_live(ctx, profile_id, consent.id, ref.binding_key) do
+    case Sanctum.Consent.binding_live(ctx, profile_id, consent, ref) do
       :ok -> satisfied
       {:error, :grant_expired} -> {false, "its grant has expired — grant it again"}
       {:error, _unanswered} -> {false, "its grant cannot be read right now — try again"}

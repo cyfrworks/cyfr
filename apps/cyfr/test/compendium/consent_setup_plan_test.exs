@@ -670,6 +670,60 @@ defmodule Compendium.ConsentSetupPlanTest do
       {:ok, ctx: ctx, entry: entry}
     end
 
+    test "a lender whose until has passed makes the borrower's grant not ready, as its attach refuses it",
+         %{ctx: ctx, entry: entry} do
+      ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      walk!(ctx, %{
+        ref: @dep,
+        bindings: [
+          %{
+            need: "api_key",
+            entry_id: entry.id,
+            lifetime: %{kind: "until", until: DateTime.to_iso8601(ahead)}
+          }
+        ]
+      })
+
+      ref = "reagent:local.plan-borrower"
+      walk!(ctx, %{ref: ref, selections: [%{dep: @dep, label: "default"}]})
+
+      {:ok, [borrower]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, borrower.id)
+      [binding] = head.vault_refs
+      {:selection, _, {:ok, resource}} = Sanctum.Consent.row_binding(ctx, head, binding)
+      use = %{profile_id: borrower.id, consent_id: head.id}
+
+      # Live on both sides: the run's attach and the plan agree.
+      assert :ok = Sanctum.Attach.lifetime(ctx, resource, use)
+      assert :ok = Sanctum.Consent.binding_live(ctx, borrower.id, head, binding)
+      assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
+
+      lender_id = resource.lender.consent_id
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+            where: r.athanor_id == ^ctx.athanor_id and r.consent_id == ^lender_id
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
+        )
+
+      # The lender's row has passed: the attach refuses, and so does the
+      # plan's read of the same binding.
+      assert {:error, :grant_expired} = Sanctum.Attach.lifetime(ctx, resource, use)
+
+      assert {:error, :grant_expired} =
+               Sanctum.Consent.binding_live(ctx, borrower.id, head, binding)
+
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+      assert [%{satisfied: false, detail: "its grant has expired — grant it again"}] =
+               plan.consent.needs
+
+      refute plan.ready
+    end
+
     test "pinned by the walk, reads ready from the lender's entry, and not ready once it moves",
          %{ctx: ctx, entry: entry} do
       ref = "reagent:local.plan-borrower"

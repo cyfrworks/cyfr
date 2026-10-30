@@ -224,21 +224,28 @@ defmodule Sanctum.Consent do
   defdelegate tincture_grant(ctx, reference), to: Sanctum.Consent.TinctureGrant, as: :fetch
 
   @doc """
-  Whether the binding at `binding_key` of profile `profile_id`'s head
-  revision `consent_id` is live now, as a run's attach reads its lifetime
-  (`Sanctum.Attach.lifetime/3`), without using it: an `until` binding past
-  its time, or a `once` binding a run has used, is `:grant_expired`. For a
-  reader that asks whether a grant still stands, never for an attach.
+  Whether vault row `ref` of profile `profile_id`'s head revision `consent`
+  (from `head_consent/2`) is live now, as a run's attach reads its
+  lifetime (`Sanctum.Attach.lifetime/3`), without using it. The row is
+  resolved as a run resolves it (`row_binding/3`), so a borrowed key is
+  read with its lender's profile, head and row as well as the borrower's:
+  an `until` binding past its time, or a `once` binding a run has used, on
+  either side, is `:grant_expired`, and a selection that resolves to no
+  lender is too. For a reader that asks whether a grant still stands,
+  never for an attach.
   """
-  @spec binding_live(Sanctum.Context.t(), String.t(), String.t(), String.t()) ::
+  @spec binding_live(Sanctum.Context.t(), String.t(), map(), map()) ::
           :ok | {:error, :grant_expired | :unavailable}
-  def binding_live(%Sanctum.Context{} = ctx, profile_id, consent_id, binding_key)
-      when is_binary(profile_id) and is_binary(consent_id) and is_binary(binding_key),
-      do:
-        Sanctum.Attach.live(ctx, %{binding_key: binding_key}, %{
-          profile_id: profile_id,
-          consent_id: consent_id
-        })
+  def binding_live(%Sanctum.Context{} = ctx, profile_id, consent, %{binding_key: key} = ref)
+      when is_binary(profile_id) and is_map(consent) and is_binary(key) do
+    use = %{profile_id: profile_id, consent_id: consent.id}
+
+    case row_binding(ctx, consent, ref) do
+      {:selection, _label, {:ok, %{} = resource}} -> Sanctum.Attach.live(ctx, resource, use)
+      {:selection, _label, {:error, _unresolved}} -> {:error, :grant_expired}
+      _own_row -> Sanctum.Attach.live(ctx, %{binding_key: key}, use)
+    end
+  end
 
   @doc """
   What one vault row of the head revision `consent` (from
