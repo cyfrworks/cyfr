@@ -1,0 +1,91 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 CYFR Works Inc.
+ *
+ * The AQUA panel (PrismWeb.AquaPanelLive): an overlay over the page that
+ * takes no room from it. The `AquaPanel` hook (js/aqua_panel/) writes its
+ * rectangle as four custom properties on the panel's style; the values
+ * below are where it stands before the hook has drawn it. Docked, it is
+ * sized from its left edge alone; in the hand it is a sheet from the
+ * bottom, with a handle and no edges or dock control. The hand starts
+ * under 768 CSS pixels, the width js/canvas/geometry.js names. */
+
+.aqua-panel {
+  --aqua-w: min(380px, calc(100vw - 2rem));
+  --aqua-h: min(520px, calc(100vh - 11rem));
+  --aqua-x: calc(100vw - 1rem - var(--aqua-w));
+  --aqua-y: calc(100vh - 8rem - var(--aqua-h));
+  position: fixed;
+  left: var(--aqua-x);
+  top: var(--aqua-y);
+  width: var(--aqua-w);
+  height: var(--aqua-h);
+  border-radius: 0.75rem;
+}
+
+.aqua-panel[data-docked="true"] {
+  border-radius: 0;
+  border-width: 0 0 0 1px;
+}
+
+/* The panel's resize edges: strips and corners straddling its border, so
+ * the rounded corners clip none of them, above its content. */
+.aqua-panel-edge {
+  position: absolute;
+  z-index: 1;
+  touch-action: none;
+}
+.aqua-panel-edge[data-aqua-edge="n"] { top: -4px; left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+.aqua-panel-edge[data-aqua-edge="s"] { bottom: -4px; left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+.aqua-panel-edge[data-aqua-edge="e"] { right: -4px; top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+.aqua-panel-edge[data-aqua-edge="w"] { left: -4px; top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+.aqua-panel-edge[data-aqua-edge="ne"] { top: -4px; right: -4px; width: 14px; height: 14px; cursor: nesw-resize; }
+.aqua-panel-edge[data-aqua-edge="sw"] { bottom: -4px; left: -4px; width: 14px; height: 14px; cursor: nesw-resize; }
+.aqua-panel-edge[data-aqua-edge="nw"] { top: -4px; left: -4px; width: 14px; height: 14px; cursor: nwse-resize; }
+.aqua-panel-edge[data-aqua-edge="se"] { bottom: -4px; right: -4px; width: 14px; height: 14px; cursor: nwse-resize; }
+
+.aqua-panel[data-docked="true"] .aqua-panel-edge:not([data-aqua-edge="w"]) { display: none; }
+.aqua-panel[data-docked="true"] .aqua-panel-edge[data-aqua-edge="w"] { top: 0; bottom: 0; }
+
+.aqua-panel [data-aqua-grip] { cursor: grab; }
+.aqua-panel[data-docked="true"] [data-aqua-grip] { cursor: auto; }
+.aqua-panel[data-aqua-moving] { user-select: none; }
+
+/* The gesture's shield: fixed to the viewport (the panel is no containing
+ * block for it), above the panel's content, carrying the gesture's
+ * cursor. */
+.aqua-panel-shield { display: none; position: fixed; inset: 0; z-index: 2; touch-action: none; }
+.aqua-panel[data-aqua-moving] .aqua-panel-shield { display: block; }
+.aqua-panel[data-aqua-moving="drag"] .aqua-panel-shield { cursor: grabbing; }
+.aqua-panel[data-aqua-moving="pull"] .aqua-panel-shield { cursor: row-resize; }
+.aqua-panel[data-aqua-moving="resize-n"] .aqua-panel-shield,
+.aqua-panel[data-aqua-moving="resize-s"] .aqua-panel-shield { cursor: ns-resize; }
+.aqua-panel[data-aqua-moving="resize-e"] .aqua-panel-shield,
+.aqua-panel[data-aqua-moving="resize-w"] .aqua-panel-shield { cursor: ew-resize; }
+.aqua-panel[data-aqua-moving="resize-ne"] .aqua-panel-shield,
+.aqua-panel[data-aqua-moving="resize-sw"] .aqua-panel-shield { cursor: nesw-resize; }
+.aqua-panel[data-aqua-moving="resize-nw"] .aqua-panel-shield,
+.aqua-panel[data-aqua-moving="resize-se"] .aqua-panel-shield { cursor: nwse-resize; }
+
+.aqua-panel-handle { display: none; }
+
+@media (width < 768px) {
+  .aqua-panel,
+  .aqua-panel[data-docked="true"] {
+    --aqua-w: 100vw;
+    --aqua-h: calc((100dvh - 3rem) * 0.75);
+    --aqua-x: 0px;
+    --aqua-y: calc(100dvh - var(--aqua-h));
+    border-radius: 1rem 1rem 0 0;
+    border-width: 1px 0 0 0;
+  }
+  .aqua-panel-edge,
+  .aqua-panel-dock { display: none; }
+  .aqua-panel [data-aqua-grip] { cursor: auto; }
+  .aqua-panel-handle {
+    display: flex;
+    justify-content: center;
+    padding: 0.5rem 0 0.25rem;
+    touch-action: none;
+    cursor: row-resize;
+  }
+}

@@ -6,8 +6,10 @@ defmodule PrismWeb.AquaPanelLiveTest do
   # page, and nothing bleeds — the panel's send lands in You with the room
   # read into the turn, and an answer pastes back onto the room, attributed.
   # The panel itself: what the assistant points at stays in the panel, a
-  # halt reaches only its own turn, Escape closes it, and it keeps its
-  # thread from one page to the next. Driven against the real loop and a
+  # halt reaches only its own turn, Escape and Ctrl+J close it, and it
+  # keeps its thread, its place, its size and its docking from one page to
+  # the next (the pointer and the hand's sheet are the hook's, tested in
+  # assets/test/aqua_panel/). Driven against the real loop and a
   # scripted model.
   use PrismWeb.ConnCase, async: false
 
@@ -458,7 +460,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the sheet is a dialog over a page that stays live, Escape closes it, and its button names it only while open",
+  test "the sheet is a dialog over a page that stays live, its close button closes it, and its button names it only while open",
        %{conn: conn, room: room} do
     {:ok, view, _} = live(conn, athanor_path("/members", room))
     settled_render(view)
@@ -477,12 +479,14 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert has_element?(panel, ~s(#system-layer-panel[data-open="false"]))
     refute has_element?(panel, "#aqua-panel-sheet[phx-click-away]")
     # Escape is the sheet's own, not the window's: a dialog on the page
-    # underneath keeps its Escape.
+    # underneath keeps its Escape. The sheet's hook hears it from inside,
+    # the thread's own view included, and sends `close`
+    # (assets/test/aqua_panel/hook.test.mjs).
     refute has_element?(panel, "#aqua-panel-sheet[phx-window-keydown]")
-    assert has_element?(panel, "#aqua-panel-sheet[phx-keydown]")
+    assert has_element?(panel, ~s(#aqua-panel-sheet[phx-hook="AquaPanel"]))
     assert has_element?(panel, ~s(#aqua-panel-button[aria-controls="aqua-panel-sheet"]))
 
-    panel |> element("#aqua-panel-sheet") |> render_keydown(%{"key" => "Escape"})
+    panel |> element("#aqua-panel-close") |> render_click()
     refute has_element?(panel, "#aqua-panel-sheet")
     refute has_element?(panel, "#aqua-panel-button[aria-controls]")
     assert has_element?(panel, ~s(#aqua-panel-button[aria-expanded="false"]))
@@ -514,6 +518,121 @@ defmodule PrismWeb.AquaPanelLiveTest do
     settled_render(view)
     panel = child!(view, "aqua-panel")
     refute has_element?(panel, "#aqua-panel-sheet")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # The panel's own attribute, from its rendered markup.
+  defp sheet_attr(panel, name) do
+    panel
+    |> element("#aqua-panel-sheet")
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.attribute(name)
+    |> List.first()
+  end
+
+  test "the panel is an overlay its hook places, and Ctrl+J's toggle opens and closes it",
+       %{conn: conn, room: room} do
+    {:ok, view, _} = live(conn, athanor_path("/members", room))
+    settled_render(view)
+    panel = child!(view, "aqua-panel")
+    # The keys are heard on the root, which is drawn open or closed.
+    assert has_element?(panel, ~s(#aqua-panel-root[phx-hook="AquaPanelKeys"]))
+    assert has_element?(panel, ~s(#aqua-panel-button[aria-keyshortcuts="Control+J"]))
+
+    render_hook(panel, "toggle", %{})
+    assert has_element?(panel, ~s(#aqua-panel-sheet.aqua-panel[phx-hook="AquaPanel"]))
+    # Nothing kept: the hook opens it above its button, at its default size.
+    assert sheet_attr(panel, "data-docked") == "false"
+    for side <- ~w(data-x data-y data-w data-h), do: assert(sheet_attr(panel, side) == nil)
+    # Its edges, the hand's handle and the header's controls.
+    for edge <- ~w(n s e w ne nw se sw),
+        do: assert(has_element?(panel, ~s(#aqua-panel-sheet [data-aqua-edge="#{edge}"])))
+
+    assert has_element?(
+             panel,
+             ~s(#aqua-panel-sheet button[data-aqua-handle][aria-label="Change height"])
+           )
+
+    assert has_element?(panel, "#aqua-panel-sheet header[data-aqua-grip] #aqua-panel-threads")
+
+    assert has_element?(
+             panel,
+             ~s(#aqua-panel-dock[aria-pressed="false"][aria-label="Pin to the right edge"])
+           )
+
+    assert has_element?(panel, ~s(#aqua-panel-close[aria-label="Close"]))
+
+    render_hook(panel, "toggle", %{})
+    refute has_element?(panel, "#aqua-panel-sheet")
+    assert has_element?(panel, ~s(#aqua-panel-button[aria-expanded="false"]))
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "where the panel stands, its size and whether it is docked follow the session from page to page",
+       %{conn: conn, room: room, thread: thread} do
+    {:ok, view, _} = live(conn, athanor_path("/members", room))
+    settled_render(view)
+    {panel, _html} = open_panel(view)
+
+    render_hook(panel, "place", %{"x" => 120, "y" => 90, "w" => 420, "h" => 480})
+    panel |> element("#aqua-panel-dock") |> render_click()
+    assert sheet_attr(panel, "data-docked") == "true"
+
+    assert has_element?(
+             panel,
+             ~s(#aqua-panel-dock[aria-pressed="true"][aria-label="Float over the page"])
+           )
+
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+    settled_render(view)
+    panel = child!(view, "aqua-panel")
+    assert has_element?(panel, "#aqua-panel-sheet")
+
+    assert {sheet_attr(panel, "data-x"), sheet_attr(panel, "data-y"), sheet_attr(panel, "data-w"),
+            sheet_attr(panel, "data-h"), sheet_attr(panel, "data-docked")} ==
+             {"120", "90", "420", "480", "true"}
+
+    # Floated again and closed, the placement waits for the next open.
+    panel |> element("#aqua-panel-dock") |> render_click()
+    panel |> element("#aqua-panel-close") |> render_click()
+
+    {:ok, view, _} = live(conn, athanor_path("/members", room))
+    settled_render(view)
+    panel = child!(view, "aqua-panel")
+    refute has_element?(panel, "#aqua-panel-sheet")
+    {panel, _html} = open_panel(view)
+    assert sheet_attr(panel, "data-docked") == "false"
+    assert sheet_attr(panel, "data-w") == "420"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a placement under the minimum, off any screen or not in whole pixels is refused, and the kept one stands",
+       %{conn: conn, room: room} do
+    {:ok, view, _} = live(conn, athanor_path("/members", room))
+    settled_render(view)
+    {panel, _html} = open_panel(view)
+    render_hook(panel, "place", %{"x" => 10, "y" => 60, "w" => 300, "h" => 360})
+
+    for refused <- [
+          %{"x" => 10, "y" => 60, "w" => 299, "h" => 400},
+          %{"x" => 10, "y" => 60, "w" => 400, "h" => 359},
+          %{"x" => -1, "y" => 60, "w" => 400, "h" => 400},
+          %{"x" => 10, "y" => 100_001, "w" => 400, "h" => 400},
+          %{"x" => 10, "y" => 60, "w" => 400.5, "h" => 400},
+          %{"x" => "10", "y" => "60", "w" => "400", "h" => "400"},
+          %{"x" => 10, "y" => 60, "w" => 400}
+        ] do
+      render_hook(panel, "place", refused)
+
+      assert {sheet_attr(panel, "data-x"), sheet_attr(panel, "data-w"),
+              sheet_attr(panel, "data-h")} ==
+               {"10", "300", "360"},
+             inspect(refused)
+    end
 
     Cyfr.Test.Sandbox.end_views()
   end
