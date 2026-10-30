@@ -21,10 +21,11 @@ defmodule Arca.SecurityTransitions do
   listed audience (`Arca.InstanceEntries`), withdraws every file offer
   they sent or that an athanor it archives holds, and declines every
   other offer addressed to them (`Arca.FileOffers`), whose snapshots are
-  released once it commits. An archive revokes the athanor's keys, frame
-  credentials, paired clients, device certificates and pending pairing
-  invitations with it, and withdraws the file offers it holds open, so
-  the purge that erases an archived athanor meets no open offer.
+  released once it commits, and revokes every share of every athanor it
+  archives (`Arca.Shares`). An archive revokes the athanor's keys, frame
+  credentials, paired clients, device certificates, pending pairing
+  invitations and shares with it, and withdraws the file offers it holds
+  open, so the purge that erases an archived athanor meets no open offer.
   Leaving one athanor (`leave_athanor/3`) removes the
   person's membership of it and their follows there, deletes their
   sessions bound to it, and revokes the frame credentials, paired clients,
@@ -35,8 +36,9 @@ defmodule Arca.SecurityTransitions do
   cached identity head (`Arca.DirectoryHeads`) goes, and with it every
   session, passkey, frame credential, paired client, device certificate
   and pending pairing invitation of theirs, so nothing they hold here is
-  left to ask about a head this home no longer caches. Their person row,
-  identity row and API keys stand. Every transition that revokes a client
+  left to ask about a head this home no longer caches, and every share of
+  their own athanor is revoked. Their person row, identity row and API
+  keys stand. Every transition that revokes a client
   or a credential voids the pending confirmations it confirmed
   (`Arca.PendingConfirmations`), and a denial and a leave void the
   person's own open confirmations where they no longer stand. Each
@@ -56,7 +58,7 @@ defmodule Arca.SecurityTransitions do
   standing, retires every session, suspends every key, webhook, paired
   client and passkey, revokes every open invitation to become a person
   here (`Arca.Invitations`), blocks every profile and stored credential,
-  drops every standing allow, once binding and pending confirmation,
+  revokes every share, drops every standing allow, once binding and pending confirmation,
   settles every open run terminal, and opens one `restore_people` row for
   each person who held a passkey or device it suspended: a person who
   signs in only through a door has nothing to re-enable, and every
@@ -80,7 +82,8 @@ defmodule Arca.SecurityTransitions do
   then device certificates, pairing invitations, admission invitations
   (`Arca.Invitations`), passkeys and pending confirmations, then instance
   entry audiences, then file offers by offer and file name
-  (`Arca.FileOffers`).
+  (`Arca.FileOffers`), then shares by id and the profiles that depend on
+  them, by athanor and id (`Arca.Shares`, `Arca.ConsentStorage`).
   A writer of a membership row naming a person takes the person's lock
   first (`Arca.Members`), so a seat or a claim racing a leave or a denial
   waits for it, or it for them; a file offer is written under its two
@@ -146,7 +149,8 @@ defmodule Arca.SecurityTransitions do
   the memberships removed, invitations withdrawn and seats restored, the
   members of each archived athanor, the person's generation, and the
   identifier whose cached head a leave dropped (`dropped_head_identifier`,
-  nil when it retired no one). Refusals:
+  nil when it retired no one), and the shares it revoked
+  (`revoked_share_ids`). Refusals:
   `:not_found`, `:not_member` (a leave from an athanor the person does not
   sit in), `:dangling_personal_athanor` (a person's own-athanor pointer
   names no row), `:conflict`, `:postcondition_failed`, `:cross_tenant`,
@@ -192,6 +196,7 @@ defmodule Arca.SecurityTransitions do
     RestorePerson,
     ServerMeta,
     Session,
+    Share,
     StorageWriteIntent,
     ThreadSubscription,
     ToolGrant,
@@ -245,7 +250,8 @@ defmodule Arca.SecurityTransitions do
           required(:unfollowed) => non_neg_integer(),
           required(:dropped_head_identifier) => String.t() | nil,
           required(:instance_audiences_left) => non_neg_integer(),
-          required(:ended_offer_ids) => [String.t()]
+          required(:ended_offer_ids) => [String.t()],
+          required(:revoked_share_ids) => [String.t()]
         }
 
   @doc """
@@ -440,7 +446,8 @@ defmodule Arca.SecurityTransitions do
           audiences_left = Arca.InstanceEntries.remove_person!(user_id)
           ended_offers = Arca.FileOffers.end_for_person!(user_id, retire)
 
-          with :ok <- deny_holds(user_id, retire) do
+          with {:ok, share_ids} <- revoke_shares(retire),
+               :ok <- deny_holds(user_id, retire) do
             %{
               empty_change()
               | transitioned: moved?,
@@ -470,7 +477,8 @@ defmodule Arca.SecurityTransitions do
                 unfollowed: unfollowed,
                 instance_audiences_left: audiences_left,
                 ended_offer_ids:
-                  ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort()
+                  ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort(),
+                revoked_share_ids: share_ids
             }
             |> Map.put(:ended_offers, ended_offers)
           end
@@ -478,6 +486,25 @@ defmodule Arca.SecurityTransitions do
       end
 
     committed_change(result)
+  end
+
+  # Every share of the athanors `athanor_ids` revoked and their dependents
+  # blocked, last in the transition, after every row the standing order
+  # takes before the shares.
+  defp revoke_shares(athanor_ids) do
+    Enum.reduce_while(athanor_ids, {:ok, []}, fn athanor_id, {:ok, acc} ->
+      case Arca.Shares.revoke_by_athanor(
+             Prima.Actor.in_athanor(athanor_id),
+             StatusTransitions.blocked_profile_status()
+           ) do
+        {:ok, %{share_ids: ids}} -> {:cont, {:ok, acc ++ ids}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, ids} -> {:ok, Enum.sort(ids)}
+      error -> error
+    end
   end
 
   # The athanors a denial touches: the person's own and every one a row of
@@ -690,6 +717,7 @@ defmodule Arca.SecurityTransitions do
       ),
       from(a in Athanor, where: a.id in ^athanor_ids and a.status != "archived"),
       from(m in InstanceEntryMember, where: m.user_id == ^user_id),
+      from(s in Share, where: s.athanor_id in ^athanor_ids and s.status == "active"),
       from(o in FileOffer,
         where:
           o.status == "offered" and
@@ -838,7 +866,8 @@ defmodule Arca.SecurityTransitions do
           invitation_ids = revoke_athanor_invitations(athanor_id)
           ended_offers = Arca.FileOffers.end_for_athanor!(Prima.Actor.in_athanor(athanor_id))
 
-          with :ok <- archive_holds(athanor_id) do
+          with {:ok, share_ids} <- revoke_shares([athanor_id]),
+               :ok <- archive_holds(athanor_id) do
             %{
               empty_change()
               | transitioned: archived != %{},
@@ -853,7 +882,8 @@ defmodule Arca.SecurityTransitions do
                 voided_confirmation_ids: dependents.confirmation_ids,
                 member_user_ids: %{athanor_id => members},
                 ended_offer_ids:
-                  ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort()
+                  ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort(),
+                revoked_share_ids: share_ids
             }
             |> Map.put(:ended_offers, ended_offers)
           end
@@ -972,7 +1002,8 @@ defmodule Arca.SecurityTransitions do
       from(p in PairedClient, where: p.athanor_id == ^athanor_id and p.standing != "revoked"),
       from(c in DeviceCertificate, where: c.athanor_id == ^athanor_id and c.state != "revoked"),
       from(i in PairingInvitation, where: i.athanor_id == ^athanor_id and i.state == "pending"),
-      from(o in FileOffer, where: o.athanor_id == ^athanor_id and o.status == "offered")
+      from(o in FileOffer, where: o.athanor_id == ^athanor_id and o.status == "offered"),
+      from(s in Share, where: s.athanor_id == ^athanor_id and s.status == "active")
     ]
 
     if Enum.any?(survivors, &Arca.Repo.exists?/1),
@@ -1015,8 +1046,10 @@ defmodule Arca.SecurityTransitions do
         dependents = PairedClients.retire_dependents!(paired_ids)
         by_passkeys = PendingConfirmations.void_confirmed_by!(:passkey, passkey_ids)
         own = void_confirmations(held(PendingConfirmation, user_id, reach))
+        owned = owned_athanors(user_id, retiring)
 
-        with :ok <- leave_holds(user_id, athanor_id, reach, retiring) do
+        with {:ok, share_ids} <- revoke_shares(owned),
+             :ok <- leave_holds(user_id, athanor_id, reach, retiring, owned) do
           %{
             empty_change()
             | transitioned: true,
@@ -1032,12 +1065,26 @@ defmodule Arca.SecurityTransitions do
               removed_membership_ids: Enum.map(removed, & &1.id),
               removed_memberships: removed,
               unfollowed: unfollowed,
-              dropped_head_identifier: retiring
+              dropped_head_identifier: retiring,
+              revoked_share_ids: share_ids
           }
         end
       end
 
     committed_change(result)
+  end
+
+  # The own athanors of a person this leave retires, whose shares end with
+  # their standing here; none when the leave retires no one.
+  defp owned_athanors(_user_id, nil), do: []
+
+  defp owned_athanors(user_id, _identifier) do
+    from(a in Athanor,
+      where: a.owner_user_id == ^user_id and a.kind == "person",
+      order_by: a.id,
+      select: a.id
+    )
+    |> Arca.Repo.all()
   end
 
   # The leaving person's row, locked, or nil: a membership names its person
@@ -1108,7 +1155,7 @@ defmodule Arca.SecurityTransitions do
   defp revoke_held_passkeys(_user_id, {:athanor, _athanor_id}), do: []
 
   # arca:unscoped-ok the postconditions of one person's leave, read across what it retired.
-  defp leave_holds(user_id, athanor_id, reach, retiring) do
+  defp leave_holds(user_id, athanor_id, reach, retiring, owned) do
     survivors =
       [
         from(m in Membership,
@@ -1122,7 +1169,9 @@ defmodule Arca.SecurityTransitions do
         from(c in held(PendingConfirmation, user_id, reach),
           where: c.state in ^@open_confirmation
         )
-      ] ++ retired_survivors(user_id, retiring)
+      ] ++
+        retired_survivors(user_id, retiring) ++
+        [from(s in Share, where: s.athanor_id in ^owned and s.status == "active")]
 
     if Enum.any?(survivors, &Arca.Repo.exists?/1),
       do: {:error, :postcondition_failed},
@@ -1177,8 +1226,10 @@ defmodule Arca.SecurityTransitions do
   invitation and every open admission invitation
   (`Arca.Invitations.revoke_all!/0`); deletes every pending confirmation
   (`Arca.PendingConfirmations.delete_all!/0`); moves every active profile
-  to `needs_consent` and every active vault and instance entry to
-  `needs_reauth` (`Arca.StatusTransitions.restored/1`); deletes every
+  to `needs_consent`, every active vault and instance entry to
+  `needs_reauth` and every active share to `revoked`
+  (`Arca.StatusTransitions.restored/1`), answering the shares in
+  `revoked_share_ids`; deletes every
   standing allow (`tool_grants` rows of effect `allow`; denies stay);
   drops every unconsumed once binding by consuming it under the restore
   (`consumed_by_root` `restore:<restore id>`); expires every pending
@@ -1624,6 +1675,10 @@ defmodule Arca.SecurityTransitions do
         updated_at: now
       )
 
+    # Restored authority never re-enables itself: every share ends, and
+    # its owner shares the entry again once they have rotated it.
+    {:ok, share_ids} = Arca.Shares.revoke_all(Prima.Actor.system())
+
     runs = settle_runs(now)
 
     people = Enum.map(holders, &%{restore_id: restore_id, user_id: &1, open: true})
@@ -1654,7 +1709,8 @@ defmodule Arca.SecurityTransitions do
       dropped_once_bindings: bindings,
       expired_approval_ids: approval_ids,
       needs_reauth_vault_entry_ids: vault_ids,
-      needs_reauth_instance_entry_ids: instance_ids
+      needs_reauth_instance_entry_ids: instance_ids,
+      revoked_share_ids: share_ids
     })
   end
 
@@ -1779,6 +1835,7 @@ defmodule Arca.SecurityTransitions do
   defp restore_holds(restore_id, holders) do
     {profile_from, _} = StatusTransitions.restored(:profiles)
     {entry_from, _} = StatusTransitions.restored(:credentials)
+    {share_from, _} = StatusTransitions.restored(:shares)
 
     survivors = [
       Session,
@@ -1796,6 +1853,7 @@ defmodule Arca.SecurityTransitions do
       from(a in Approval, where: a.status == "pending"),
       from(v in VaultEntry, where: v.status == ^entry_from),
       from(i in InstanceEntry, where: i.status == ^entry_from),
+      from(s in Share, where: s.status == ^share_from),
       from(e in Execution, where: e.status in ^Prima.ExecutionState.open_statuses()),
       from(a in ExecutionAttempt,
         where: a.state in ^Prima.ExecutionState.open_attempt_states()
@@ -2176,6 +2234,7 @@ defmodule Arca.SecurityTransitions do
       unfollowed: 0,
       dropped_head_identifier: nil,
       instance_audiences_left: 0,
+      revoked_share_ids: [],
       ended_offer_ids: []
     }
   end

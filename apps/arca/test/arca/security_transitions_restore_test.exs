@@ -281,6 +281,23 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     id
   end
 
+  defp share!(athanor_id, vault_id, status \\ "active") do
+    id = Prima.UUID7.generate_id("shr")
+
+    insert!(Schemas.Share, %{
+      id: id,
+      athanor_id: athanor_id,
+      vault_entry_id: vault_id,
+      audience: "everyone",
+      status: status,
+      created_by: "usr_owner",
+      inserted_at: now(),
+      updated_at: now()
+    })
+
+    id
+  end
+
   defp instance!(status) do
     id = Prima.UUID7.generate_id("ine")
 
@@ -567,6 +584,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       blocked_instance: instance!("needs_reauth"),
       revoked_instance: instance!("revoked"),
       tombstoned_instance: instance!("tombstoned"),
+      share: share!(own.id, vault),
+      revoked_share: share!(own.id, vault, "revoked"),
       open_turn: open_turn,
       paused_turn: turn!(group.id, thread!(group.id, bob.id), "paused"),
       done_turn: turn!(own.id, thread, "completed"),
@@ -728,6 +747,12 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.InstanceEntry, fixture.blocked_instance).status == "needs_reauth"
       assert get(Schemas.InstanceEntry, fixture.revoked_instance).status == "revoked"
       assert get(Schemas.InstanceEntry, fixture.tombstoned_instance).status == "tombstoned"
+
+      # Every active share is revoked, and nothing comes back on its own;
+      # a revoked one stays the row it was.
+      assert get(Schemas.Share, fixture.share).status == "revoked"
+      assert get(Schemas.Share, fixture.revoked_share).status == "revoked"
+      assert change.revoked_share_ids == [fixture.share]
 
       # Open runs end terminal; a finished one is untouched.
       assert get(Schemas.Execution, fixture.open_execution).status == "failed"
@@ -898,6 +923,21 @@ defmodule Arca.SecurityTransitionsRestoreTest do
         assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
         assert get(Schemas.Passkey, fixture.passkey).state == "active"
         assert rows(fixture.alice.id) == []
+        assert marker()
+      after
+        clear_failure!(trigger)
+      end
+    end
+
+    test "a share a statement leaves active fails the postcondition and rolls back" do
+      fixture = home!()
+      marked!()
+      trigger = skip_on!("shares", "UPDATE")
+
+      try do
+        assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
+        assert get(Schemas.Share, fixture.share).status == "active"
+        assert get(Schemas.VaultEntry, fixture.vault).status == "active"
         assert marker()
       after
         clear_failure!(trigger)

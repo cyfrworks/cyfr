@@ -1789,6 +1789,109 @@ defmodule Arca.SecurityTransitionsTest do
       assert athanor(group.id).security_generation == 1
     end
   end
+
+  describe "shares" do
+    # The owner's shares end with their standing: a denial, a leave that
+    # retires them and an archive of their own athanor revoke every share
+    # and block the profiles that bind one, in their own transaction.
+    defp shared!(owner) do
+      entry = Arca.Test.Shares.entry!(owner.actor)
+      share = Arca.Test.Shares.share!(owner.actor, entry.id)
+      alice = Arca.Test.Shares.owner!()
+      {share, alice, Arca.Test.Shares.bound!(alice.athanor.id, share.id)}
+    end
+
+    defp share_status(owner, share),
+      do: Arca.Test.Shares.share_status(owner.actor, share.id)
+
+    test "a denial revokes every share of the person's own athanor and blocks its dependents" do
+      terry = Arca.Test.Shares.owner!()
+      {share, alice, profile} = shared!(terry)
+
+      assert {:ok, change} =
+               SecurityTransitions.deny_user(server(), terry.user.id, verify: admit())
+
+      assert change.revoked_share_ids == [share.id]
+      assert share_status(terry, share) == "revoked"
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "needs_consent"
+
+      # A repeated denial finds nothing more to revoke and still holds.
+      assert {:ok, again} =
+               SecurityTransitions.deny_user(server(), terry.user.id, verify: admit())
+
+      assert again.revoked_share_ids == []
+    end
+
+    test "an archive of the owner's athanor revokes its shares; a reopen revokes none back" do
+      terry = Arca.Test.Shares.owner!()
+      {share, alice, profile} = shared!(terry)
+
+      assert {:ok, archived} =
+               SecurityTransitions.archive_athanor(server(), terry.athanor.id, verify: admit())
+
+      assert archived.revoked_share_ids == [share.id]
+      assert share_status(terry, share) == "revoked"
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "needs_consent"
+
+      assert {:ok, _} =
+               SecurityTransitions.unarchive_athanor(server(), terry.athanor.id, verify: admit())
+
+      assert share_status(terry, share) == "revoked"
+    end
+
+    test "a leave that retires a remote person revokes the shares of their own athanor; " <>
+           "an ordinary leave revokes none" do
+      terry = Arca.Test.Shares.owner!()
+      {share, _alice, _profile} = shared!(terry)
+      traders = group!()
+      seat!(traders.id, terry.user.id)
+      peer = person!()
+      seat!(traders.id, peer.id)
+
+      assert {:ok, left} =
+               SecurityTransitions.leave_athanor(
+                 Prima.Actor.in_athanor(traders.id),
+                 terry.user.id,
+                 verify: admit()
+               )
+
+      assert left.revoked_share_ids == []
+      assert share_status(terry, share) == "active"
+
+      # Their own athanor is their last seat here: a remote person leaving
+      # it is retired, and their shares with them.
+      remote!(terry.user.id)
+
+      assert {:ok, retired} =
+               SecurityTransitions.leave_athanor(
+                 Prima.Actor.in_athanor(terry.athanor.id),
+                 terry.user.id,
+                 verify: admit()
+               )
+
+      assert retired.dropped_head_identifier
+      assert retired.revoked_share_ids == [share.id]
+      assert share_status(terry, share) == "revoked"
+    end
+
+    test "a share created after a denial is refused, and a denial's failure keeps its shares" do
+      terry = Arca.Test.Shares.owner!()
+      {share, _alice, _profile} = shared!(terry)
+
+      assert {:error, :refused} =
+               SecurityTransitions.deny_user(server(), terry.user.id,
+                 verify: fn _ -> {:error, :refused} end
+               )
+
+      assert share_status(terry, share) == "active"
+
+      {:ok, _} = SecurityTransitions.deny_user(server(), terry.user.id, verify: admit())
+      entry = Arca.Test.Shares.entry!(terry.actor)
+
+      assert {:error, :not_own_athanor} =
+               Arca.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
+    end
+  end
 end
 
 defmodule Arca.SecurityTransitionsLockTest do
