@@ -633,6 +633,7 @@ defmodule Sanctum.ProvisioningTest do
                  scope: "instance",
                  vault_entry_id: nil,
                  instance_entry_id: entry.id,
+                 share_id: nil,
                  via_label: nil,
                  binding_digest: entry.binding_digest,
                  lifetime_kind: "standing",

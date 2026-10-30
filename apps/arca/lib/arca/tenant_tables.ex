@@ -18,7 +18,8 @@ defmodule Arca.TenantTables do
   the backend enforces `ON DELETE CASCADE` (SQLite only does with
   `PRAGMA foreign_keys=ON`). `consent_vault_refs` and `vault_defaults`
   before `consents` and `vault_entries`; `consents` before `profiles` (its
-  `profile_id` is a composite FK); `messages` before `threads`;
+  `profile_id` is a composite FK); `share_usage` before `shares` and
+  `shares` before `vault_entries`; `messages` before `threads`;
   `webhook_deliveries` before `webhooks`.
 
   A file offer is the sender's athanor's row (`file_offers`), so an offer
@@ -64,6 +65,8 @@ defmodule Arca.TenantTables do
     "vault_defaults",
     "consents",
     "profiles",
+    "share_usage",
+    "shares",
     "vault_entries",
     "consent_proofs",
     "tool_grants",

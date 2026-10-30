@@ -6,10 +6,11 @@ defmodule Arca.StatusTransitions do
   Which statuses a row may move to by a status write, and from which,
   one table per domain: the stored credentials' (`:credentials`), which
   `Arca.VaultStorage.set_status/3` and `Arca.InstanceEntries.set_status/3`
-  hold their conditional writes to, and the profiles' (`:profiles`), which
-  `Arca.ProfileStorage.transition/4` holds its write to. The domains share
-  the word `active` and nothing else: each table answers only for its own
-  rows.
+  hold their conditional writes to, the profiles' (`:profiles`), which
+  `Arca.ProfileStorage.transition/4` holds its write to, and the shares'
+  (`:shares`), which `Arca.Shares` holds its revocations to. The domains
+  share the words `active` and `revoked` and nothing else: each table
+  answers only for its own rows.
 
   A credential is `revoked` from `active`, `needs_reauth` or `revoked`,
   and `needs_reauth` or `active` from `active` or `needs_reauth`. Nothing
@@ -25,11 +26,16 @@ defmodule Arca.StatusTransitions do
   so again, so a retry finishes what an earlier attempt left; an `active`
   one may not, since `active` comes only by re-consent.
 
+  A share is `revoked` from `active` or `revoked`, and nothing moves one
+  to `active`: a share is born active and never made so again, so a
+  revoked entry is shared again by a new share.
+
   A declared restore (`Arca.SecurityTransitions.restore/1`) moves each
   domain's `active` rows once, by the move `restored/1` names and the
   table admits: a credential to `needs_reauth`, until it is rotated at its
-  destination, and a profile to `needs_consent`, until it is re-consented.
-  A row in any other status keeps it.
+  destination, a profile to `needs_consent`, until it is re-consented,
+  and a share to `revoked`, until its owner shares the entry again. A row
+  in any other status keeps it.
   """
 
   @credentials %{
@@ -44,18 +50,24 @@ defmodule Arca.StatusTransitions do
     "active" => ~w(needs_consent)
   }
 
+  @shares %{
+    "revoked" => ~w(active revoked)
+  }
+
   @restored %{
     credentials: {"active", "needs_reauth"},
-    profiles: {"active", "needs_consent"}
+    profiles: {"active", "needs_consent"},
+    shares: {"active", "revoked"}
   }
 
   @statuses %{
     credentials: ~w(active needs_reauth revoked tombstoned),
-    profiles: ~w(active needs_consent revoked)
+    profiles: ~w(active needs_consent revoked),
+    shares: ~w(active revoked)
   }
 
   @typedoc "Whose rows a table answers for."
-  @type domain :: :credentials | :profiles
+  @type domain :: :credentials | :profiles | :shares
 
   @doc "Every status a row of `domain` can hold."
   @spec statuses(domain()) :: [String.t()]
@@ -68,6 +80,15 @@ defmodule Arca.StatusTransitions do
   @spec from(domain(), term()) :: {:ok, [String.t()]} | :error
   def from(:credentials, status), do: Map.fetch(@credentials, status)
   def from(:profiles, status), do: Map.fetch(@profiles, status)
+  def from(:shares, status), do: Map.fetch(@shares, status)
+
+  @doc """
+  The status a profile is blocked at when what its head binds ends: a
+  share revoked, or the entry a share names revoked or deleted. Only a
+  revision that re-consents it moves it back.
+  """
+  @spec blocked_profile_status() :: String.t()
+  def blocked_profile_status, do: "needs_consent"
 
   @doc """
   The move a declared restore makes on `domain`'s rows, `{from, to}`: the

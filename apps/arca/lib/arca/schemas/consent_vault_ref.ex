@@ -9,8 +9,9 @@ defmodule Arca.Schemas.ConsentVaultRef do
   `binding_key` is `<source node reference>|<edge key>|<slot>`; the row
   names exactly one of the athanor's own entry (`scope` `athanor`,
   `vault_entry_id`), an instance entry (`scope` `instance`,
-  `instance_entry_id`), each with the binding digest it was approved at,
-  or a selection (`scope` `athanor`, `via_label`), the label of the
+  `instance_entry_id`), a share of another athanor's entry (`scope`
+  `share`, `share_id`, a bare id: the share is its owner's row), each with
+  the binding digest it was approved at, or a selection (`scope` `athanor`, `via_label`), the label of the
   profile of the same athanor it borrows from, with the digest it pinned
   when it pinned one. A selection's `athanor` scope says only that it is
   resolved within the borrowing consent's own athanor; it says nothing
@@ -29,7 +30,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
   @primary_key false
   @type t :: %__MODULE__{}
 
-  @scopes ~w(athanor instance)
+  @scopes ~w(athanor instance share)
   @lifetimes ~w(standing until once)
 
   schema "consent_vault_refs" do
@@ -39,6 +40,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
     field :scope, :string
     field :vault_entry_id, :string
     field :instance_entry_id, :string
+    field :share_id, :string
     field :via_label, :string
     field :binding_digest, :string
     field :lifetime_kind, :string, default: "standing"
@@ -49,8 +51,8 @@ defmodule Arca.Schemas.ConsentVaultRef do
   @doc """
   A new row held to the binding rules: a key, a consent and an athanor;
   exactly one of `vault_entry_id` (scope `athanor`), `instance_entry_id`
-  (scope `instance`) and `via_label` (scope `athanor`); a digest for an
-  entry; a lifetime in the vocabulary, with `expires_at` exactly when it
+  (scope `instance`), `share_id` (scope `share`) and `via_label` (scope
+  `athanor`); a digest for an entry or a share; a lifetime in the vocabulary, with `expires_at` exactly when it
   is `until`.
   """
   @spec changeset(map()) :: Ecto.Changeset.t()
@@ -63,6 +65,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
       :scope,
       :vault_entry_id,
       :instance_entry_id,
+      :share_id,
       :via_label,
       :binding_digest,
       :lifetime_kind,
@@ -78,7 +81,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
 
   defp validate_names_one(changeset) do
     named =
-      for field <- [:vault_entry_id, :instance_entry_id, :via_label],
+      for field <- [:vault_entry_id, :instance_entry_id, :share_id, :via_label],
           present?(get_field(changeset, field)),
           do: field
 
@@ -92,6 +95,9 @@ defmodule Arca.Schemas.ConsentVaultRef do
       {[:instance_entry_id], "instance"} when digest? ->
         changeset
 
+      {[:share_id], "share"} when digest? ->
+        changeset
+
       {[:via_label], "athanor"} ->
         changeset
 
@@ -102,7 +108,8 @@ defmodule Arca.Schemas.ConsentVaultRef do
         add_error(
           changeset,
           :binding,
-          "names exactly one of an entry, an instance entry and a selection, the one its scope says"
+          "names exactly one of an entry, an instance entry, a share and a selection, " <>
+            "the one its scope says"
         )
     end
   end
