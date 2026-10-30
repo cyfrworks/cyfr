@@ -8,7 +8,6 @@ import {HAND_BELOW_PX as CANVAS_HAND} from "../../js/canvas/geometry.js"
 import {
   GAP,
   HAND_BELOW_PX,
-  MAX,
   MIN,
   SIZE,
   area,
@@ -151,21 +150,25 @@ describe("a resize", () => {
   })
 })
 
-describe("on a screen larger than the panel may grow", () => {
-  const WALL = area(9000, 6000, 48)
+describe("a kept placement on another screen", () => {
+  // 1440 by 900 under a 48 pixel top bar.
+  const LAPTOP = area(1440, 900, 48)
 
-  test("no side passes 4000, the most the server keeps", () => {
-    assert.deepEqual(MAX, {w: 4000, h: 4000})
-    assert.deepEqual(clamp({x: 0, y: 48, w: 8000, h: 5000}, WALL), {x: 0, y: 48, w: 4000, h: 4000})
-    assert.deepEqual(resized({x: 100, y: 100, w: 3900, h: 3900}, "se", 500, 500, WALL), {x: 100, y: 100, w: 4000, h: 4000})
-    assert.deepEqual(resized({x: 600, y: 600, w: 3900, h: 3900}, "nw", -500, -500, WALL), {x: 500, y: 500, w: 4000, h: 4000})
-    assert.equal(docked({x: 0, y: 0, w: 8000, h: 500}, WALL).w, 4000)
-    assert.equal(dockResized({x: 0, y: 0, w: 3900, h: 500}, -500, WALL).w, 4000)
+  test("keeps its size where it fits, moved into view", () => {
+    assert.deepEqual(opened({x: 1200, y: 700, w: 420, h: 480}, null, LAPTOP), {x: 1020, y: 420, w: 420, h: 480})
   })
 
-  test("a kept side longer than 4000 is no placement", () => {
-    assert.equal(parseKept({x: "0", y: "60", w: "4001", h: "500"}), null)
-    assert.deepEqual(parseKept({x: "0", y: "60", w: "4000", h: "4000"}), {x: 0, y: 60, w: 4000, h: 4000})
+  test("never grows: a small one stays small", () => {
+    assert.deepEqual(opened({x: 2000, y: 1500, w: 300, h: 360}, null, LAPTOP), {x: 1140, y: 540, w: 300, h: 360})
+  })
+
+  test("larger than the screen, made on a larger one, is capped at the screen and no larger", () => {
+    assert.deepEqual(opened({x: 12000, y: 12000, w: 4000, h: 4000}, null, LAPTOP), {x: 0, y: 48, w: 1440, h: 852})
+    assert.deepEqual(opened({x: 12000, y: 100, w: 4000, h: 500}, null, LAPTOP), {x: 0, y: 100, w: 1440, h: 500})
+  })
+
+  test("a kept side of any size the server keeps is a placement", () => {
+    assert.deepEqual(parseKept({x: "12000", y: "12000", w: "4000", h: "4000"}), {x: 12000, y: 12000, w: 4000, h: 4000})
   })
 })
 

@@ -154,23 +154,25 @@ defmodule PrismWeb.AquaPanelLive do
     socket
   end
 
-  # A placement the hook reports, in whole CSS pixels. The server does not
-  # know the viewport, so it bounds what any screen gives: sides from the
-  # panel's minimum to @max_side (the hook's own bounds, in
-  # `assets/js/aqua_panel/geometry.js`), and the whole rectangle inside
-  # @max_extent from the origin. Anything else is refused and the kept
-  # placement stands; the hook brings a kept placement inside the current
-  # viewport when the panel opens.
+  # A placement the hook reports, in whole CSS pixels, with the viewport it
+  # was made in (`vw`, `vh`, a screen's size from @min_viewport to
+  # @max_viewport): it must lie inside that viewport and be no smaller than
+  # the panel's minimum (the hook's own, in
+  # `assets/js/aqua_panel/geometry.js`). Anything else is refused and the
+  # kept placement stands. A client that misstates its viewport misplaces
+  # only its own panel, which carries no authority; the hook fits a kept
+  # placement to the current viewport when the panel opens.
   @min_w 300
   @min_h 360
-  @max_side 4000
-  @max_extent 16_000
+  @min_viewport 320
+  @max_viewport 16_000
 
-  defp placement(%{"x" => x, "y" => y, "w" => w, "h" => h})
+  defp placement(%{"x" => x, "y" => y, "w" => w, "h" => h, "vw" => vw, "vh" => vh})
        when is_integer(x) and is_integer(y) and is_integer(w) and is_integer(h) and
-              x >= 0 and y >= 0 and w in @min_w..@max_side and h in @min_h..@max_side and
-              x + w <= @max_extent and y + h <= @max_extent,
-       do: {:ok, %{x: x, y: y, w: w, h: h}}
+              is_integer(vw) and is_integer(vh) and vw in @min_viewport..@max_viewport and
+              vh in @min_viewport..@max_viewport and x >= 0 and y >= 0 and w >= @min_w and
+              h >= @min_h and x + w <= vw and y + h <= vh,
+       do: {:ok, %{x: x, y: y, w: w, h: h, vw: vw, vh: vh}}
 
   defp placement(_params), do: :error
 

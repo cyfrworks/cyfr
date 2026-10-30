@@ -14,7 +14,8 @@
 // attribute to the hook. On the desk the header drags it and the edges
 // (`data-aqua-edge`) resize it, under pointer capture and behind a shield
 // over the whole viewport (`data-aqua-moving` shows it), so no frame under
-// the pointer takes the gesture; each settled gesture is sent as `place`.
+// the pointer takes the gesture; each settled gesture is sent as `place`,
+// with the viewport it was made in (`vw`, `vh`).
 // A gesture that does not settle (cancelled, its capture lost, the window
 // losing focus or hidden, the socket gone) ends there: the shield goes and
 // the panel stands where the last settled gesture left it. A release
@@ -258,7 +259,8 @@ export const AquaPanel = {
 
     this.rect = this.reshaped(g, dx, dy)
     this.draw()
-    if (!same(this.rect, g.from)) this.pushEvent("place", this.rect)
+    // With the viewport it was made in, which the server holds it inside.
+    if (!same(this.rect, g.from)) this.pushEvent("place", {...this.rect, ...viewport()})
   },
 
   // A gesture that does not settle: the panel goes back to where the last
@@ -335,6 +337,10 @@ function focusButton() {
 function buttonBox() {
   const button = typeof document !== "undefined" && document.getElementById(BUTTON)
   return button ? button.getBoundingClientRect() : null
+}
+
+function viewport() {
+  return {vw: Math.round(window.innerWidth), vh: Math.round(window.innerHeight)}
 }
 
 function same(a, b) {

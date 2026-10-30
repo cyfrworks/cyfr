@@ -620,7 +620,15 @@ defmodule PrismWeb.AquaPanelLiveTest do
     settled_render(view)
     {panel, _html} = open_panel(view)
 
-    render_hook(panel, "place", %{"x" => 120, "y" => 90, "w" => 420, "h" => 480})
+    render_hook(panel, "place", %{
+      "x" => 120,
+      "y" => 90,
+      "w" => 420,
+      "h" => 480,
+      "vw" => 1440,
+      "vh" => 900
+    })
+
     panel |> element("#aqua-panel-dock") |> render_click()
     assert sheet_attr(panel, "data-docked") == "true"
 
@@ -653,29 +661,33 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a placement under the minimum, over the maximum, off any screen or not in whole pixels is refused, and the kept one stands",
+  test "a placement outside the viewport it was made in, under the minimum or not in whole pixels is refused, and the kept one stands",
        %{conn: conn, room: room} do
     {:ok, view, _} = live(conn, athanor_path("/members", room))
     settled_render(view)
     {panel, _html} = open_panel(view)
-    render_hook(panel, "place", %{"x" => 10, "y" => 60, "w" => 300, "h" => 360})
+    screen = %{"vw" => 1440, "vh" => 900}
+
+    render_hook(
+      panel,
+      "place",
+      Map.merge(%{"x" => 10, "y" => 60, "w" => 300, "h" => 360}, screen)
+    )
 
     for refused <- [
+          # Under the minimum, or left of or above the viewport.
           %{"x" => 10, "y" => 60, "w" => 299, "h" => 400},
           %{"x" => 10, "y" => 60, "w" => 400, "h" => 359},
           %{"x" => -1, "y" => 60, "w" => 400, "h" => 400},
-          # Sides over 4000, and a rectangle reaching past 16000 from the
-          # origin, whatever its sides.
-          %{"x" => 10, "y" => 60, "w" => 4001, "h" => 400},
-          %{"x" => 10, "y" => 60, "w" => 400, "h" => 4001},
-          %{"x" => 100_000, "y" => 0, "w" => 100_000, "h" => 100_000},
-          %{"x" => 15_701, "y" => 60, "w" => 300, "h" => 400},
-          %{"x" => 10, "y" => 15_641, "w" => 400, "h" => 360},
+          # Past the viewport's right or bottom edge: Sol's rectangle, and
+          # one a pixel over each edge.
+          %{"x" => 12_000, "y" => 12_000, "w" => 4000, "h" => 4000},
+          %{"x" => 1041, "y" => 60, "w" => 400, "h" => 400},
+          %{"x" => 10, "y" => 501, "w" => 400, "h" => 400},
           %{"x" => 10, "y" => 60, "w" => 400.5, "h" => 400},
-          %{"x" => "10", "y" => "60", "w" => "400", "h" => "400"},
-          %{"x" => 10, "y" => 60, "w" => 400}
+          %{"x" => "10", "y" => "60", "w" => "400", "h" => "400"}
         ] do
-      render_hook(panel, "place", refused)
+      render_hook(panel, "place", Map.merge(refused, screen))
 
       assert {sheet_attr(panel, "data-x"), sheet_attr(panel, "data-w"),
               sheet_attr(panel, "data-h")} ==
@@ -683,9 +695,39 @@ defmodule PrismWeb.AquaPanelLiveTest do
              inspect(refused)
     end
 
-    # The largest a screen gives is kept: both sides at 4000, reaching to
-    # 16000 exactly.
-    render_hook(panel, "place", %{"x" => 12_000, "y" => 12_000, "w" => 4000, "h" => 4000})
+    # A placement with no viewport, or a viewport no screen has, is refused
+    # however small it is.
+    for viewport <- [
+          %{},
+          %{"vw" => 1440},
+          %{"vw" => 319, "vh" => 900},
+          %{"vw" => 1440, "vh" => 16_001},
+          %{"vw" => "1440", "vh" => "900"}
+        ] do
+      render_hook(
+        panel,
+        "place",
+        Map.merge(%{"x" => 20, "y" => 60, "w" => 400, "h" => 400}, viewport)
+      )
+
+      assert sheet_attr(panel, "data-x") == "10", inspect(viewport)
+    end
+
+    # The viewport is the bound: a placement filling it exactly is kept,
+    # and so is one made on a very large screen.
+    render_hook(
+      panel,
+      "place",
+      Map.merge(%{"x" => 1040, "y" => 500, "w" => 400, "h" => 400}, screen)
+    )
+
+    assert {sheet_attr(panel, "data-x"), sheet_attr(panel, "data-y")} == {"1040", "500"}
+
+    render_hook(
+      panel,
+      "place",
+      %{"x" => 12_000, "y" => 12_000, "w" => 4000, "h" => 4000, "vw" => 16_000, "vh" => 16_000}
+    )
 
     assert {sheet_attr(panel, "data-x"), sheet_attr(panel, "data-w"), sheet_attr(panel, "data-h")} ==
              {"12000", "4000", "4000"}

@@ -97,7 +97,7 @@ describe("on the desk", () => {
     p.fire("pointerup", {clientX: 300, clientY: 160})
     assert.equal(p.captured(), null)
     assert.equal(p.el.dataset.aquaMoving, undefined)
-    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 200, y: 140, w: 400, h: 500}}])
+    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 200, y: 140, w: 400, h: 500, vw: 1280, vh: 800}}])
   })
 
   test("a press on a header control is not a drag", () => {
@@ -113,7 +113,7 @@ describe("on the desk", () => {
     assert.equal(p.el.dataset.aquaMoving, "resize-se")
     p.fire("pointermove", {clientX: 300, clientY: 300})
     p.fire("pointerup", {clientX: 300, clientY: 300})
-    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 100, y: 100, w: 300, h: 360}}])
+    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 100, y: 100, w: 300, h: 360, vw: 1280, vh: 800}}])
   })
 
   test("a cancelled gesture puts the panel back and sends nothing", () => {
@@ -131,7 +131,7 @@ describe("on the desk", () => {
     assert.deepEqual(p.pushed, [], "no drag and no other edge while docked")
     gesture(p, edge("w"), [880, 300], [780, 300])
     assert.deepEqual(p.drawn(), {x: 780, y: 0, w: 500, h: 800})
-    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 100, y: 100, w: 500, h: 500}}])
+    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 100, y: 100, w: 500, h: 500, vw: 1280, vh: 800}}])
   })
 
   test("undocked by the server, it floats where it was kept", () => {
@@ -248,7 +248,7 @@ describe("an interrupted gesture", () => {
     p.fire("pointerdown", {target: GRIP, pointerId: 2, clientX: 150, clientY: 120})
     p.fire("pointermove", {pointerId: 2, clientX: 200, clientY: 170})
     p.fire("pointerup", {pointerId: 2, clientX: 200, clientY: 170})
-    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 150, y: 150, w: 400, h: 500}}])
+    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 150, y: 150, w: 400, h: 500, vw: 1280, vh: 800}}])
   }
 
   for (const [name, interrupt] of [
@@ -294,7 +294,7 @@ describe("an interrupted gesture", () => {
     const p = dragging()
     windowListeners.pointerup({pointerId: 1, clientX: 300, clientY: 160})
     assert.equal(p.el.dataset.aquaMoving, undefined)
-    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 200, y: 140, w: 400, h: 500}}])
+    assert.deepEqual(p.pushed, [{event: "place", payload: {x: 200, y: 140, w: 400, h: 500, vw: 1280, vh: 800}}])
     assert.equal(windowListeners.pointerup, undefined, "the release listener goes with the gesture")
   })
 
