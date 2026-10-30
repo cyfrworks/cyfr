@@ -14,14 +14,14 @@ defmodule Arca.ShareUsage do
   date, read inside the claim's transaction and never taken from the
   caller, so every member of a cell counts the same day.
 
-  `claim/4` is one locking transaction (`Arca.Repo.locking_transaction/2`)
+  `claim/3` is one locking transaction (`Arca.Repo.locking_transaction/2`)
   under the owner's actor: the share's row is read shared
   (`Arca.QueryHelpers.for_share/1`), so a revoke, which takes it
   exclusive, and a claim serialize and a claim after the revoke refuses;
   both day rows are made present and read under a lock in a fixed order
   (the share's total first, then the person's); and both are raised by
-  one. Each cap is the share's own: `nil` is no limit and is never
-  checked, `0` admits no use and `N` admits at most `N` that day, and the
+  one. Each cap is the share's own, read from that locked row: `nil` is
+  no limit and is never checked, `0` admits no use and `N` admits at most `N` that day, and the
   claim is refused `{:error, {:connection_cap, reset_at}}` only under a
   set cap that is reached. Two claims racing for the last request of a
   day admit one. `reset_at` is the next UTC midnight after the claimed
@@ -39,80 +39,62 @@ defmodule Arca.ShareUsage do
   @total ""
   @kept_days 35
 
-  @typedoc "The caps a claim is held to, each `nil` for no limit or an integer (`0` admits none)."
-  @type caps :: %{person_daily: non_neg_integer() | nil, total_daily: non_neg_integer() | nil}
-
   defguardp resolved(athanor_id) when is_binary(athanor_id) and athanor_id != ""
   defguardp platform(actor) when is_struct(actor, Prima.Actor) and actor.scope == :platform
 
   @doc """
   Count one use of the share `share_id` of the actor's athanor by
-  `user_id` today, held to `caps`, the caps the caller resolved the
-  share at.
+  `user_id` today, held to the caps the share's row holds when the claim
+  reads it under its lock.
 
   Answers the day and both counts after the claim. Refused, with nothing
   counted: `{:error, {:connection_cap, reset_at}}` when a set cap is
   reached; `{:error, {:share_unavailable, status}}` for a share no longer
-  active; `{:error, :caps_moved}` when the share's caps are no longer
-  `caps`, so a claim is never held to caps the share has left; and
-  `{:error, :not_found}` for a share the athanor does not hold. A cap
-  that is neither `nil` nor an integer from 0 to
-  `Arca.Schemas.Share.max_cap/0` is refused `{:error, {:invalid, _}}`
-  before any query.
+  active; and `{:error, :not_found}` for a share the athanor does not
+  hold. The caps were held to their rule where they were set
+  (`Arca.Schemas.Share.changeset/1`, `Arca.Shares.set_caps/4`).
   """
-  @spec claim(Prima.Actor.t(), String.t(), String.t(), caps()) ::
+  @spec claim(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, %{day: Date.t(), person: pos_integer(), total: pos_integer()}}
           | {:error,
              {:connection_cap, DateTime.t()}
              | {:share_unavailable, String.t()}
-             | :caps_moved
              | :not_found
              | :no_athanor
-             | {:invalid, map()}
              | term()}
-  def claim(
-        %Prima.Actor{athanor_id: athanor_id},
-        share_id,
-        user_id,
-        %{person_daily: person_cap, total_daily: total_cap} = caps
-      )
+  def claim(%Prima.Actor{athanor_id: athanor_id}, share_id, user_id)
       when resolved(athanor_id) and is_binary(share_id) and is_binary(user_id) and user_id != "" do
-    if Share.cap?(person_cap) and Share.cap?(total_cap) do
-      Arca.Repo.Errors.with_db_rescue("Arca.ShareUsage.claim", fn ->
-        Arca.Repo.locking_transaction(fn ->
-          with :ok <- claimable(athanor_id, share_id, caps) do
-            day = DateTime.to_date(Arca.ServerMetaStorage.now!())
-            now = now()
+    Arca.Repo.Errors.with_db_rescue("Arca.ShareUsage.claim", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with {:ok, {person_cap, total_cap}} <- claimable(athanor_id, share_id) do
+          day = DateTime.to_date(Arca.ServerMetaStorage.now!())
+          now = now()
 
-            ensure_rows!(athanor_id, share_id, user_id, day, now)
+          ensure_rows!(athanor_id, share_id, user_id, day, now)
 
-            total = locked_count!(athanor_id, share_id, @total, day)
-            person = locked_count!(athanor_id, share_id, user_id, day)
+          total = locked_count!(athanor_id, share_id, @total, day)
+          person = locked_count!(athanor_id, share_id, user_id, day)
 
-            if reached?(total, total_cap) or reached?(person, person_cap) do
-              {:error, {:connection_cap, reset_at(day)}}
-            else
-              raise!(athanor_id, share_id, @total, day, total, now)
-              raise!(athanor_id, share_id, user_id, day, person, now)
-              {:ok, %{day: day, person: person + 1, total: total + 1}}
-            end
+          if reached?(total, total_cap) or reached?(person, person_cap) do
+            {:error, {:connection_cap, reset_at(day)}}
+          else
+            raise!(athanor_id, share_id, @total, day, total, now)
+            raise!(athanor_id, share_id, user_id, day, person, now)
+            {:ok, %{day: day, person: person + 1, total: total + 1}}
           end
-          |> Arca.Repo.committed()
-        end)
+        end
+        |> Arca.Repo.committed()
       end)
-    else
-      {:error, {:invalid, %{caps: ["are absent or integers from 0 to #{Share.max_cap()}"]}}}
-    end
+    end)
   end
 
-  def claim(%Prima.Actor{}, share_id, user_id, %{person_daily: _, total_daily: _})
-      when is_binary(share_id) and is_binary(user_id),
-      do: {:error, :no_athanor}
+  def claim(%Prima.Actor{}, share_id, user_id) when is_binary(share_id) and is_binary(user_id),
+    do: {:error, :no_athanor}
 
-  # The share's row, read shared: a revoke holds it exclusive and is waited
-  # for, and a share revoked or recapped since the caller read it admits
-  # nothing.
-  defp claimable(athanor_id, share_id, caps) do
+  # The share's row, read shared, and its caps: a revoke holds it
+  # exclusive and is waited for, a share revoked since admits nothing, and
+  # caps set since are the ones the claim is held to.
+  defp claimable(athanor_id, share_id) do
     from(s in Share,
       where: s.id == ^share_id,
       select: {s.status, s.person_daily, s.total_daily}
@@ -121,16 +103,9 @@ defmodule Arca.ShareUsage do
     |> Arca.QueryHelpers.for_share()
     |> Arca.Repo.one()
     |> case do
-      nil ->
-        {:error, :not_found}
-
-      {"active", person_daily, total_daily} ->
-        if {person_daily, total_daily} == {caps.person_daily, caps.total_daily},
-          do: :ok,
-          else: {:error, :caps_moved}
-
-      {status, _person_daily, _total_daily} ->
-        {:error, {:share_unavailable, status}}
+      nil -> {:error, :not_found}
+      {"active", person_daily, total_daily} -> {:ok, {person_daily, total_daily}}
+      {status, _person_daily, _total_daily} -> {:error, {:share_unavailable, status}}
     end
   end
 

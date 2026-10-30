@@ -638,8 +638,7 @@ defmodule Arca.SharesConcurrencyTest do
     share =
       unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
 
-    caps = %{person_daily: nil, total_daily: nil}
-    held = holding(fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice", caps) end)
+    held = holding(fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice") end)
 
     revoke =
       waiting(
@@ -661,12 +660,11 @@ defmodule Arca.SharesConcurrencyTest do
     share =
       unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
 
-    caps = %{person_daily: nil, total_daily: nil}
     held = holding(fn -> Arca.Shares.revoke(terry.actor, share.id, "needs_consent") end)
 
     claim =
       waiting(
-        fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice", caps) end,
+        fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice") end,
         ["shares", "FOR SHARE"]
       )
 

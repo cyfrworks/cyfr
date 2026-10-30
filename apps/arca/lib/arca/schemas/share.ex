@@ -52,7 +52,7 @@ defmodule Arca.Schemas.Share do
   @doc """
   A new row: its athanor, entry and creator; an audience in the
   vocabulary with `group_id` exactly when it is `group`; each cap absent
-  or within `max_cap/0`. The status is the column's `active`.
+  or an integer within `max_cap/0`, as given. The status is the column's `active`.
   """
   @spec changeset(map()) :: Ecto.Changeset.t()
   def changeset(attrs) when is_map(attrs) do
@@ -69,7 +69,7 @@ defmodule Arca.Schemas.Share do
     ])
     |> validate_required([:id, :athanor_id, :vault_entry_id, :audience, :created_by])
     |> validate_audience()
-    |> validate_caps()
+    |> validate_caps(attrs)
   end
 
   @doc """
@@ -95,9 +95,11 @@ defmodule Arca.Schemas.Share do
       else: add_error(changeset, :audience, "is everyone with no group, or group with one")
   end
 
-  defp validate_caps(changeset) do
+  # Held to the value as given, not as cast: a cap is an integer, and a
+  # text or a float that would cast to one is refused.
+  defp validate_caps(changeset, attrs) do
     Enum.reduce([:person_daily, :total_daily], changeset, fn field, acc ->
-      if cap?(get_field(acc, field)),
+      if cap?(Map.get(attrs, field, Map.get(attrs, Atom.to_string(field)))),
         do: acc,
         else: add_error(acc, field, "is absent or an integer from 0 to #{@max_cap}")
     end)
