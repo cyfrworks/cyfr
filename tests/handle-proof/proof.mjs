@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, saveKit, startProxy, waitFor,
+  ask as askRunSh, launchBrowser, readCode, readHomes, redact as redactKnown, saveCode, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
   HANDLE, LONG_AGO, OCI, PER, bytesFrom, check, classification, coseTerm, objectModels, otherId, sha256hex,
@@ -31,7 +31,6 @@ const { homes } = readHomes(homesFile);
 const originOf = (name) => homes.find((home) => home.name === name).origin;
 const A = originOf("a");
 const B = originOf("b");
-const DIRECTORY = "https://registry.test";
 const layer = "#system-layer-dialog";
 
 const secrets = [];
@@ -237,15 +236,6 @@ async function confirmHere(page) {
   return preview;
 }
 
-async function readKit(page) {
-  const kit = `${layer} [data-test="recovery-kit"]:not([hidden])`;
-  await page.waitForSelector(`${kit} [data-test="kit-secret"]`, { timeout: 60_000 });
-  const line = (test) => page.locator(`${kit} [data-test="${test}"]`).textContent();
-  const lines = { identifier: await line("kit-identifier"), directory_url: await line("kit-directory"), recovery_secret: await line("kit-secret") };
-  secrets.push(lines.recovery_secret);
-  return lines;
-}
-
 const flash = (page) => page.locator("#flash-info, #flash-error, [role=alert]").allInnerTexts();
 
 async function dumpPages() {
@@ -328,8 +318,8 @@ async function main(chromium) {
   S.ttlHours = Number((await ask({ op: "setting", cell: "b", key: "session_ttl_hours" })).value);
   S.clients = await ask({ op: "user_agents" });
 
-  // 1. Setup at A: a passkey, @proof, enrollment at registry.test, the kit
-  // acknowledged, and only then the claim at the registry.
+  // 1. Setup at A: a passkey, @proof, enrollment at registry.test, the
+  // recovery code saved, and only then the claim at the registry.
   const deskContext = await freshContext(chromium);
   const desk = await deskContext.newPage();
   await authenticatorWith(desk);
@@ -347,13 +337,15 @@ async function main(chromium) {
   await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="enrollment"]`, { timeout: 60_000 });
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
   const enrollPreview = await confirmHere(desk);
-  const kit = await readKit(desk);
-  windowed("enroll", from, "the enrollment, to the kit shown");
-  const id = kit.identifier;
+  const recovery = await readCode(desk, secrets);
+  windowed("enroll", from, "the enrollment, to the recovery code shown");
+  const id = recovery.identifier;
   S.identifier = id;
-  record.setup = { identifier: id, kit_directory: kit.directory_url, enroll_preview: enrollPreview };
-  if (!row("setup", PER.test(id) && kit.directory_url === DIRECTORY,
-    "A is set up through /setup with a passkey; @proof chosen, the enrollment at registry.test confirmed with it, the kit shown", record.setup)) return;
+  // The directory the enrollment is at is the attempt's and the identity's
+  // `directory_url`, which their models hold.
+  record.setup = { identifier: id, enroll_preview: enrollPreview };
+  if (!row("setup", PER.test(id),
+    "A is set up through /setup with a passkey; @proof chosen, the enrollment at registry.test confirmed with it, the recovery code shown", record.setup)) return;
 
   // Before the acknowledgement: the directory holds the genesis, the
   // attempt is accepted, and the registry holds nothing of the person.
@@ -364,23 +356,23 @@ async function main(chromium) {
       S.genesis.a = entry && sha256hex(entry) === id.slice(4) ? entry.toString("base64") : "";
     },
   });
-  await claim("setup:pre:a.identity_attempts", "A's enrollment attempt, accepted, its kit not yet acknowledged", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
-  await claim("setup:pre:registry.namespaces[proof]", "the registry holds no @proof before the kit's acknowledgement", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
+  await claim("setup:pre:a.identity_attempts", "A's enrollment attempt, accepted, its recovery code not yet saved", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
+  await claim("setup:pre:registry.namespaces[proof]", "the registry holds no @proof before the recovery code is saved", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
   await claim("setup:pre:registry.policy_acceptances[a]", "nor an acceptance by A's identifier", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
   await claim("setup:pre:registry.request_nonces[a]", "nor a request A's identifier signed", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
 
   from = clock();
-  await saveKit(desk);
+  await saveCode(desk);
   await desk.waitForSelector('[data-test="identity-claimed"]', { timeout: 120_000 });
-  windowed("ack", from, "the kit's acknowledgement, to @proof claimed");
+  windowed("ack", from, "saving the recovery code, to @proof claimed");
   const claimedText = await desk.locator('[data-test="identity-claimed"]').innerText();
-  row("setup", claimedText.includes(`@${HANDLE}`), "once the kit is acknowledged, the card claims @proof", { claimed: claimedText });
+  row("setup", claimedText.includes(`@${HANDLE}`), "once the recovery code is saved, the card claims @proof", { claimed: claimedText });
 
-  await claim("setup:a.identity_attempts", "the attempt after the acknowledgement: the transition from the attempt read before it", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
+  await claim("setup:a.identity_attempts", "the attempt after the recovery code is saved: the transition from the attempt read before it", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
   await claim("setup:a.athanors", "A's one athanor, its person's", cyfrRows("a", "athanors"), cyfrIo("a", "athanors"));
   await claim("setup:a.memberships", "A's seats: the person's in their athanor, and the first person's platform grant", cyfrRows("a", "memberships"), cyfrIo("a", "memberships"));
   await claim("setup:a.users", "A's one person, admitted by setup, holding @proof", cyfrRows("a", "users"), cyfrIo("a", "users"));
-  await claim("setup:a.person_identities", "A's identity: the kit's identifier, enrolled at registry.test, keys that open to the genesis's", cyfrRows("a", "person_identities"), {
+  await claim("setup:a.person_identities", "A's identity: the identifier the recovery code names, enrolled at registry.test, keys that open to the genesis's", cyfrRows("a", "person_identities"), {
     ...cyfrIo("a", "person_identities"),
     prepare: async ([identity]) => {
       await opens("a", "identity", identity, "live_key_sealed", "live");
