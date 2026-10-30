@@ -69,6 +69,7 @@ import { ask as askRunSh, redact as redactKnown } from "../browser/lib.mjs";
 const ALL = ["chromium", "firefox", "webkit"];
 const STEPS = [
   ["two_canvases", ["chromium"]],
+  ["attention_moves", ["chromium"]],
   ["switch", ["chromium"]],
   ["written_canvas", ["chromium"]],
   ["feed_chart", ["chromium"]],
@@ -94,7 +95,7 @@ const STEPS = [
 // one of which ends in the fallback, and the socket cut and the scheduler's
 // fire come last.
 const ORDER = [
-  "two_canvases", "switch", "written_canvas", "feed_chart", "app_over_canvas",
+  "two_canvases", "attention_moves", "switch", "written_canvas", "feed_chart", "app_over_canvas",
   "window_drag", "tile_narrows", "covered_windows", "frame_kept", "hidden_canvas",
   "activation", "grant_control", "rebound_control", "connection_allowlist", "policy",
   "validation_failures", "crash_fallback", "disconnect", "failed_fire",
@@ -927,6 +928,65 @@ async function stepAppOverCanvas(page, name) {
       switched_back: { full_frame: fullAgain.state },
       closed: { canvas_shown_again: startBack.state, same_frame: startBack.id === start.id },
     });
+}
+
+// attention_moves: the shipped canvas moves "Needs attention" out from
+// under a window and nothing else. Its runs stream is answered with three
+// failures a grant fixes and one long unrelated failure, so the card holds
+// both kinds; a window is reported covering the card. On the desk the card
+// moves to the other column and Recent runs, Apps and Schedules stand
+// exactly where they stood; in the hand every section stands in one
+// column. The stream is answered as usual again afterwards.
+const STREAM_ROUTE = "**/_f/v1/o/*/stream";
+
+function attentionFailures(route) {
+  let body = null;
+  try { body = route.request().postDataJSON(); } catch (_error) { body = null; }
+  if (!body || body.stream !== "runs.changes") return route.continue();
+  const grant = "This account is not granted to the component; grant it first.";
+  const events = [
+    ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "internal", message: grant } })),
+    { kind: "failed", execution_id: "attention_long", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", message: "The model provider answered with an error the runner could not read, so this run stopped before it finished; the provider may be down, or the reply may have been too large to hold at once." } },
+  ];
+  return route.fulfill({
+    status: 200,
+    contentType: "text/event-stream",
+    body: events.map((data, i) => `id: ${i + 1}\nevent: message\ndata: ${JSON.stringify(data)}\n\n`).join(""),
+  });
+}
+
+const sections = (frame) =>
+  frame.evaluate(() => Object.fromEntries([...document.querySelectorAll("section.card")].map((el) => {
+    const b = el.getBoundingClientRect();
+    return [el.querySelector("h2").firstChild.textContent.trim(), { x: b.x, y: b.y, width: b.width, height: b.height }];
+  }))).catch(() => null);
+
+async function stepAttentionMoves(page, name, viewport) {
+  const ctx = page.context();
+  await ctx.route(STREAM_ROUTE, attentionFailures);
+  try {
+    await openShell(page);
+    held.clear();
+    const start = await showCanvas(page, "start");
+    const before = await until(start.frame, sections, (s) => s["Needs attention"] && s["Recent runs"] && s.Apps && s.Schedules, "the shipped canvas's sections with Needs attention");
+    const others = ["Recent runs", "Apps", "Schedules"];
+
+    if (viewport.posture === "hand") {
+      const x = before["Needs attention"].x;
+      note("attention_moves", name, others.every((n) => near(before[n].x, x)), { posture: "hand", sections: before });
+      return;
+    }
+
+    const card = before["Needs attention"];
+    await page.$eval(`iframe[data-frame-id="${start.id}"]`, (el, rect) => el.dispatchEvent(new CustomEvent("cyfr:to-canvas", { detail: { verb: "covered", args: { rects: [rect] } } })), card);
+    const after = await until(start.frame, sections, (s) => s["Needs attention"] && s["Needs attention"].x > card.x + 10, "Needs attention moved out from under the window").catch(() => null);
+    const stayed = after !== null && others.every((n) => after[n] && after[n].x === before[n].x && after[n].y === before[n].y);
+    note("attention_moves", name, stayed, { covered: card, before, after });
+  } finally {
+    await ctx.unroute(STREAM_ROUTE, attentionFailures).catch(() => null);
+    await openShell(page);
+    held.clear();
+  }
 }
 
 // ---- windows ---------------------------------------------------------------------
@@ -1990,6 +2050,7 @@ async function runBrowser(name, viewport, proxy, receiver, udp, { only, measurin
 
 const STEP_FNS = {
   two_canvases: (page, name, { viewport }) => stepTwoCanvases(page, name, viewport),
+  attention_moves: (page, name, { viewport }) => stepAttentionMoves(page, name, viewport),
   switch: async () => {},
   written_canvas: (page, name) => stepWrittenCanvas(page, name),
   feed_chart: (page, name) => stepFeedChart(page, name),

@@ -178,14 +178,18 @@ export function refused(state: State, stream: string, error: unknown): State {
 
 // The classes of a refusal a grant can fix: the person's grant is missing,
 // or it lapsed. A run's stored error is its sentence alone, which reads
-// back as `internal`, so CYFR's own sentences for those two refusals
-// ("...; grant it first.", "...; grant it again.") count too. Every other
-// cause is stated, and nothing is offered.
+// back as `internal`, so a message that is exactly one of CYFR's own
+// sentences for those two refusals counts too (Prima.Refusal's
+// `connection_not_granted` and `grant_expired`, which a drift test holds
+// these to). Every other cause is stated, and nothing is offered.
 export const GRANTABLE = ["consent_required", "setup_required"];
-const ASKS_FOR_GRANT = /\bgrant it (first|again)\b/i;
+export const GRANT_SENTENCES = [
+  "This account is not granted to the component; grant it first.",
+  "The grant for this account has expired; grant it again.",
+];
 
 export function grantable(cls: string, message: string): boolean {
-  return GRANTABLE.includes(cls) || ASKS_FOR_GRANT.test(message);
+  return GRANTABLE.includes(cls) || GRANT_SENTENCES.includes(message);
 }
 
 export interface Component {
@@ -241,7 +245,7 @@ export function causes(state: State): Cause[] {
 // A few words for a failure, from its class: what a row says in place of
 // the sentence, which its cause states once.
 export function shortReason(cls: string, message: string): string {
-  if (ASKS_FOR_GRANT.test(message)) return "Not granted";
+  if (GRANT_SENTENCES.includes(message)) return "Not granted";
   if (/capacity|no runner/i.test(message)) return "No runner free";
   switch (cls) {
     case "consent_required":
@@ -375,100 +379,37 @@ export function scheduleRows(state: State, now: Date): ScheduleRow[] {
 export interface Day {
   label: string;
   day: number;
-  fires: number;
   today: boolean;
+  // The schedules whose next run falls on this day, by name.
+  next: string[];
 }
 
-// The next seven days from `now`'s, each with how many times the live
-// schedules fire on it: from each schedule's cron expression, read in UTC
-// as the server reads it, or from its next fire alone when the expression
-// is not one this canvas reads.
+// The next seven days from `now`'s, each with the live schedules whose
+// next run (the stream's `next_run_at`, as the server plans it) falls on
+// it. The canvas reads no cron expression: what fires after the next run
+// is the server's to say.
 export function week(state: State, now: Date): Day[] {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const end = new Date(start.getTime() + 7 * DAY_MS);
-  const counts = new Array(7).fill(0);
-  for (const { schedule } of state.schedules.values()) {
-    if (schedule.status === "paused") continue;
-    const cron = typeof schedule.cron_expression === "string" ? schedule.cron_expression : "";
-    const fires = cronFires(cron, now, end, 1000);
-    const times =
-      fires ?? (typeof schedule.next_run_at === "string" ? [Date.parse(schedule.next_run_at)] : []);
-    for (const t of times) {
-      if (Number.isNaN(t) || t < now.getTime() || t >= end.getTime()) continue;
-      const at = new Date(t);
-      const index = Math.round(
-        (new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime() - start.getTime()) / DAY_MS
-      );
-      if (index >= 0 && index < 7) counts[index] += 1;
-    }
-  }
-  return counts.map((fires, i) => {
+  const days: Day[] = Array.from({ length: 7 }, (_, i) => {
     const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
     return {
       label: day.toLocaleDateString(undefined, { weekday: "short" }),
       day: day.getDate(),
-      fires,
       today: i === 0,
+      next: [],
     };
   });
-}
-
-// The times, in milliseconds, at which a five-field cron expression
-// (minute, hour, day of month, month, day of week; numbers, `*`, lists,
-// ranges and steps; read in UTC) fires from `from` (exclusive) to `to`
-// (exclusive), at most `limit` of them; null for an expression it does
-// not read.
-export function cronFires(expression: string, from: Date, to: Date, limit: number): number[] | null {
-  const fields = expression.trim().split(/\s+/);
-  if (fields.length !== 5) return null;
-  const minutes = cronField(fields[0], 0, 59);
-  const hours = cronField(fields[1], 0, 23);
-  const days = cronField(fields[2], 1, 31);
-  const months = cronField(fields[3], 1, 12);
-  const weekdays = cronField(fields[4], 0, 7);
-  if (!minutes || !hours || !days || !months || !weekdays) return null;
-  if (weekdays.has(7)) weekdays.add(0);
-  const anyDay = fields[2] === "*";
-  const anyWeekday = fields[4] === "*";
-  const fires: number[] = [];
-  let t = Math.floor(from.getTime() / MINUTE_MS) * MINUTE_MS + MINUTE_MS;
-  while (t < to.getTime() && fires.length < limit) {
+  for (const schedule of byNextFire(state)) {
+    if (schedule.status === "paused" || typeof schedule.next_run_at !== "string") continue;
+    const t = Date.parse(schedule.next_run_at);
+    if (Number.isNaN(t)) continue;
     const at = new Date(t);
-    if (!months.has(at.getUTCMonth() + 1)) {
-      t = Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1);
-      continue;
-    }
-    const dayMatch = days.has(at.getUTCDate());
-    const weekdayMatch = weekdays.has(at.getUTCDay());
-    // Both day fields restricted: either one matching fires, as cron reads it.
-    const onDay = anyDay && anyWeekday ? true : anyDay ? weekdayMatch : anyWeekday ? dayMatch : dayMatch || weekdayMatch;
-    if (!onDay) {
-      t = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate() + 1);
-      continue;
-    }
-    if (!hours.has(at.getUTCHours())) {
-      t = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate(), at.getUTCHours() + 1);
-      continue;
-    }
-    if (minutes.has(at.getUTCMinutes())) fires.push(t);
-    t += MINUTE_MS;
+    const index = Math.round(
+      (new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime() - start.getTime()) / DAY_MS
+    );
+    if (index >= 0 && index < 7) days[index].next.push(text(schedule.name) || text(schedule.reference));
   }
-  return fires;
-}
-
-// One cron field's values from `low` to `high`, or null for one it does not read.
-function cronField(field: string, low: number, high: number): Set<number> | null {
-  const values = new Set<number>();
-  for (const part of field.split(",")) {
-    const match = /^(\*|(\d+)(?:-(\d+))?)(?:\/(\d+))?$/.exec(part);
-    if (!match) return null;
-    const step = match[4] ? Number(match[4]) : 1;
-    const from = match[1] === "*" ? low : Number(match[2]);
-    const to = match[1] === "*" ? high : match[3] !== undefined ? Number(match[3]) : match[4] ? high : from;
-    if (step < 1 || from < low || to > high || from > to) return null;
-    for (let v = from; v <= to; v += step) values.add(v);
-  }
-  return values;
+  return days;
 }
 
 // When `value` (a time) is from `now`, in words: "in 5 minutes", "3 hours
@@ -556,7 +497,6 @@ function byCount(a: Component, b: Component): number {
   return b.count - a.count || a.name.localeCompare(b.name);
 }
 
-const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
 // A schedule with no next fire sorts last.

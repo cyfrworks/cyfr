@@ -67,10 +67,18 @@ main.stacked {
 }
 
 .columns {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  /* Equal, so "Needs attention" stands as tall in either column. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 22px;
   align-items: start;
+}
+
+/* "Needs attention" stands over the slot each column keeps for it. */
+.attention {
+  position: absolute;
+  top: 0;
 }
 
 .column {
@@ -396,6 +404,10 @@ main.stacked {
 .fires {
   color: var(--accent-2);
   font-weight: 600;
+}
+
+.fires i {
+  font-style: normal;
 }
 
 .fires.none {

@@ -28,8 +28,8 @@ import {
   componentName,
   componentRef,
   covered,
-  cronFires,
   fold,
+  grantable,
   grantComponent,
   installed,
   monogram,
@@ -548,6 +548,33 @@ describe("what needs attention", () => {
   })
 })
 
+describe("the grant a failure offers", () => {
+  const FIRST = "This account is not granted to the component; grant it first."
+
+  test("a message that is CYFR's own sentence offers a grant, whatever its class", () => {
+    assert.equal(grantable("internal", FIRST), true)
+    assert.equal(grantable("internal", "The grant for this account has expired; grant it again."), true)
+  })
+
+  test("an internal error quoting the words, or one sentence of CYFR's with more around it, offers no grant and promises no fix", () => {
+    for (const message of [
+      'The reply did not contain the required words "grant it first".',
+      `${FIRST} (while reading the model)`,
+      FIRST.toLowerCase()
+    ]) {
+      const state = fold(
+        EMPTY,
+        "runs.changes",
+        {kind: "failed", execution_id: "r", reference: "catalyst:local.claude:1.4.1", error: {class: "internal", message}},
+        1
+      )
+      assert.equal(causes(state)[0].grantable, false, message)
+      assert.notEqual(causes(state)[0].short, "Not granted", message)
+      assert.doesNotMatch(today(state, new Date()).sentence, /grant.*fix/, message)
+    }
+  })
+})
+
 describe("recent runs", () => {
   const folded = (...items) => items.reduce((state, item) => fold(state, "runs.changes", item, 1), EMPTY)
 
@@ -599,40 +626,24 @@ describe("schedules", () => {
     assert.equal(second.last, "never")
   })
 
-  test("the week ahead counts each live schedule's fires per day from its cron, or its next fire", () => {
+  test("the week ahead shows each live schedule's next run on its day, by name, and reads no cron", () => {
     const state = held(
       schedule("daily", {cron_expression: "0 7 * * *", next_run_at: "2026-10-31T07:00:00Z"}),
       schedule("odd", {cron_expression: "not cron", next_run_at: "2026-11-01T12:00:00Z"}),
-      schedule("paused", {status: "paused", cron_expression: "* * * * *"})
+      schedule("every-minute", {cron_expression: "* * * * *", next_run_at: "2026-10-30T09:01:00Z"}),
+      schedule("later", {cron_expression: "0 0 1 1 *", next_run_at: "2027-01-01T00:00:00Z"}),
+      schedule("unplanned", {cron_expression: "0 7 * * *"}),
+      schedule("paused", {status: "paused", cron_expression: "* * * * *", next_run_at: "2026-10-30T09:01:00Z"})
     )
     const days = week(state, now)
     assert.equal(days.length, 7)
     assert.equal(days[0].today, true)
-    // Seven o'clock UTC has passed today: the daily one fires on each of
-    // the next six days, and the odd one once, from its next fire.
-    const total = days.reduce((sum, d) => sum + d.fires, 0)
-    assert.equal(total, 7)
-  })
-
-  test("a cron expression reads as cron does, in UTC; one it does not read is null", () => {
-    const from = new Date("2026-10-30T00:00:00Z")
-    const to = new Date("2026-11-06T00:00:00Z")
+    // The next run alone, on its day: a schedule that fires every minute
+    // shows once, today; the daily one on the day of its next run only.
     assert.deepEqual(
-      cronFires("30 8 * * 1-5", from, to, 100).map((t) => new Date(t).toISOString()),
-      [
-        "2026-10-30T08:30:00.000Z",
-        "2026-11-02T08:30:00.000Z",
-        "2026-11-03T08:30:00.000Z",
-        "2026-11-04T08:30:00.000Z",
-        "2026-11-05T08:30:00.000Z"
-      ]
+      days.map((d) => d.next),
+      [["Schedule every-minute"], ["Schedule daily"], ["Schedule odd"], [], [], [], []]
     )
-    assert.equal(cronFires("*/15 * * * *", from, new Date("2026-10-30T01:00:00Z"), 100).length, 3)
-    assert.equal(cronFires("0 0 1,15 * 0", from, to, 100).length, 1, "a Sunday, as either day field matching fires")
-    assert.equal(cronFires("0 12 * * *", from, to, 2).length, 2, "at most the limit")
-    for (const bad of ["", "* * * *", "61 * * * *", "0 7 * * MON", "a b c d e", "5-1 * * * *"]) {
-      assert.equal(cronFires(bad, from, to, 10), null, bad)
-    }
   })
 
   test("relative times read in words, and no time reads as the given word", () => {

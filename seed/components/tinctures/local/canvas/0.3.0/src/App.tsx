@@ -66,19 +66,30 @@ export default function App() {
   );
 }
 
-// The desk's two columns. "Needs attention" stands at the top of the
-// first; when a window covers it there, it moves to the top of the first
-// column where nothing covers it, and every other section stays where it
-// is.
+// The desk's two columns, of equal width, so "Needs attention" stands as
+// tall in either. Each column keeps a slot at its top as tall as the card,
+// and the card stands over the slot of one of them: the first while no
+// window covers it there, otherwise the first column it stands uncovered
+// in. Its move changes no other section's place, since both slots are
+// always kept.
 function Desk({ state, attention, now }: { state: State; attention: ReactNode; now: Date }) {
+  const area = useRef<HTMLDivElement>(null);
   const columns = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
   const block = useRef<HTMLDivElement>(null);
   const [slot, setSlot] = useState(0);
+  const [height, setHeight] = useState(0);
+  const [places, setPlaces] = useState<{ x: number; width: number }[]>([]);
 
+  // Measured after every render: the card's height, the columns' places in
+  // the desk, and the column the card stands in for what covers the page.
   useLayoutEffect(() => {
-    const boxes = columns.map((ref) => ref.current?.getBoundingClientRect());
+    const base = area.current?.getBoundingClientRect();
     const own = block.current?.getBoundingClientRect();
-    if (!boxes[0] || !boxes[1] || !own) return;
+    const boxes = columns.map((ref) => ref.current?.getBoundingClientRect());
+    if (!base || !own || !boxes[0] || !boxes[1]) return;
+    if (own.height !== height) setHeight(own.height);
+    const measured = boxes.map((box) => ({ x: box!.x - base.x, width: box!.width }));
+    if (JSON.stringify(measured) !== JSON.stringify(places)) setPlaces(measured);
     const next = attentionColumn(
       boxes.map((box) => ({ x: box!.x, width: box!.width })),
       state.covered,
@@ -86,22 +97,28 @@ function Desk({ state, attention, now }: { state: State; attention: ReactNode; n
       own.height
     );
     if (next !== slot) setSlot(next);
-    // The covered rects and the page's own content decide; the slot it
-    // stands in now is where it was measured.
-  }, [state.covered, state.runs, state.apps, state.schedules]);
+  });
 
-  const placed = <div ref={block}>{attention}</div>;
+  const place = places[slot];
+  const reserved = height > 0 && <div className="attention-slot" style={{ height }} aria-hidden="true" />;
 
   return (
-    <div className="columns">
+    <div className="columns" ref={area}>
       <div className="column" ref={columns[0]}>
-        {slot === 0 && placed}
+        {reserved}
         <Runs state={state} />
       </div>
       <div className="column" ref={columns[1]}>
-        {slot === 1 && placed}
+        {reserved}
         <Apps state={state} />
         <Schedules state={state} now={now} />
+      </div>
+      <div
+        className="attention"
+        ref={block}
+        style={place ? { left: place.x, width: place.width } : { left: 0, width: "50%" }}
+      >
+        {attention}
       </div>
     </div>
   );
@@ -255,12 +272,25 @@ function Schedules({ state, now }: { state: State; now: Date }) {
           </div>
         ))
       )}
-      <div className="week" aria-label="Runs planned this week">
+      <div className="week" aria-label="Next runs this week">
         {days.map((day) => (
-          <div key={day.label + day.day} className={day.today ? "day today" : "day"}>
+          <div
+            key={day.label + day.day}
+            className={day.today ? "day today" : "day"}
+          >
             <span>{day.label}</span>
             <b>{day.day}</b>
-            <span className={day.fires > 0 ? "fires" : "fires none"}>{day.fires > 0 ? day.fires : "·"}</span>
+            {day.next.length > 0 ? (
+              <span className="fires">
+                {day.next.map((name, i) => (
+                  <i key={i} title={`Next run: ${name}`}>
+                    ●
+                  </i>
+                ))}
+              </span>
+            ) : (
+              <span className="fires none">·</span>
+            )}
           </div>
         ))}
       </div>
