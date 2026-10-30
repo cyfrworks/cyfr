@@ -605,7 +605,7 @@ async function tabs(state) {
 }
 
 async function restore(chromium, state) {
-  const { home, identifier, kit2 } = state;
+  const { home, identifier, code2 } = state;
   // Before A is lost: a session at H by the H passkey, and a change at H
   // waiting for its confirmation.
   const passkeyContext = await freshContext(chromium);
@@ -637,7 +637,7 @@ async function restore(chromium, state) {
     "with A lost, the person's work at H, a page there and the phone paired there, goes on bound to H",
     record.lost_home)) return false;
 
-  // The person restores on A2 from the second kit's three lines.
+  // The person restores on A2 with the second recovery code.
   const { token } = await ask({ op: "token_a2" }, { secret: true });
   secrets.push(token);
   const context = await freshContext(chromium);
@@ -646,9 +646,7 @@ async function restore(chromium, state) {
   await page.goto(`${A2}/restore`);
   await connected(page);
   await page.locator('[data-test="restore-token"]').fill(token);
-  await page.locator('[data-test="restore-identifier"]').fill(kit2.identifier);
-  await page.locator('[data-test="restore-directory"]').fill(kit2.directory_url);
-  await page.locator('[data-test="restore-secret"]').fill(kit2.recovery_secret);
+  await page.locator('[data-test="restore-code"]').fill(code2.code);
   await page.locator('[data-test="restore-submit"]').click();
   await page.waitForSelector('[data-test="restore-status"]:not([data-state="idle"]):not([data-state="retry"])', { timeout: 180_000 });
   const restored = await page.locator('[data-test="restore-status"]').getAttribute("data-state");
@@ -664,7 +662,7 @@ async function restore(chromium, state) {
   state.a2 = { page, context, segment };
   record.restore = { a_down: down.down, restored, identifier_kept: head.identifier === identifier };
   return row("restore", "chromium", down.down && restored === "completed" && head.identifier === identifier,
-    "A lost, the person restores on an installation-authorized fresh node, A2, from the second kit's three lines",
+    "A lost, the person restores on an installation-authorized fresh node, A2, with the second recovery code",
     record.restore);
 }
 
@@ -821,7 +819,7 @@ async function directoryDown(state) {
 // ---------------------------------------------------------------------------
 
 export async function rest(chromium, proxy, { home, hub, hubPage, hubContext }) {
-  const state = { home, hub, hubPage, hubContext, proxy, identifier: home.identifier, kit2: home.kit2 };
+  const state = { home, hub, hubPage, hubContext, proxy, identifier: home.identifier, code2: home.code2 };
   const steps = [
     () => crafted(chromium, state),
     () => copiedSession(chromium, state),
