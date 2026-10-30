@@ -144,7 +144,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     settled_render(view)
 
     {panel, html} = open_panel(view)
-    assert html =~ "AQUA · You"
+    assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
     assert html =~ "Reading #{room.name} · #{thread.title}"
 
     pane = child!(panel, "aqua-panel-pane")
@@ -248,7 +248,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, view, _} = live(conn, athanor_path("/members", room))
     settled_render(view)
     {panel, html} = open_panel(view)
-    assert html =~ "AQUA · You"
+    assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
     refute html =~ "Reading "
 
     pane = child!(panel, "aqua-panel-pane")

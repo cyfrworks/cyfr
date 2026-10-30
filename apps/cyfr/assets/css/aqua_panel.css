@@ -19,13 +19,67 @@
   top: var(--aqua-y);
   width: var(--aqua-w);
   height: var(--aqua-h);
-  border-radius: 0.75rem;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-accent-hover) 35%, transparent);
+  box-shadow:
+    0 30px 80px rgb(0 0 0 / 0.65),
+    0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 20%, transparent);
+}
+
+/* The raised, translucent surface. It is drawn by a layer of its own
+ * because a backdrop filter on the panel would make the panel the
+ * containing block of the gesture's shield, which must cover the whole
+ * viewport. */
+.aqua-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-surface-raised) 92%, transparent);
+  backdrop-filter: blur(16px);
 }
 
 .aqua-panel[data-docked="true"] {
   border-radius: 0;
   border-width: 0 0 0 1px;
+  box-shadow: 0 0 60px rgb(0 0 0 / 0.5);
 }
+
+.aqua-panel-orb {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 30% 30%, var(--color-accent-hover), var(--color-accent-primary) 70%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--color-accent-hover) 60%, transparent);
+}
+
+/* The header's dock and close controls. */
+.aqua-panel-ghost {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+}
+.aqua-panel-ghost:hover { background: var(--color-surface-overlay); color: var(--color-text-primary); }
+.aqua-panel-ghost:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
+
+/* The thread's messages and the message box scroll on a thin bar with no
+ * track and no buttons, the thumb shown only under the pointer;
+ * the console's own `*` rule would give the platform's bar. */
+.aqua-panel :is(#aqua-panel-pane-thread, #aqua-panel-pane-textarea) { scrollbar-width: auto; scrollbar-color: auto; }
+.aqua-panel :is(#aqua-panel-pane-thread, #aqua-panel-pane-textarea)::-webkit-scrollbar { width: 6px; }
+.aqua-panel :is(#aqua-panel-pane-thread, #aqua-panel-pane-textarea)::-webkit-scrollbar-button { display: none; }
+.aqua-panel :is(#aqua-panel-pane-thread, #aqua-panel-pane-textarea)::-webkit-scrollbar-track { background: transparent; }
+.aqua-panel :is(#aqua-panel-pane-thread, #aqua-panel-pane-textarea)::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-muted) 45%, transparent);
+  border-radius: 3px;
+}
+.aqua-panel :is(#aqua-panel-pane-thread, #aqua-panel-pane-textarea):not(:hover)::-webkit-scrollbar-thumb { background: transparent; }
 
 /* The panel's resize edges: strips and corners straddling its border, so
  * the rounded corners clip none of them, above its content. */
@@ -75,7 +129,7 @@
     --aqua-h: calc((100dvh - 3rem) * 0.75);
     --aqua-x: 0px;
     --aqua-y: calc(100dvh - var(--aqua-h));
-    border-radius: 1rem 1rem 0 0;
+    border-radius: 20px 20px 0 0;
     border-width: 1px 0 0 0;
   }
   .aqua-panel-edge,

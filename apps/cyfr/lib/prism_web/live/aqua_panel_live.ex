@@ -15,9 +15,13 @@ defmodule PrismWeb.AquaPanelLive do
   can be pasted onto the room, attributed to the person. The pane does
   both; the panel names the room and holds the list.
 
-  The panel is an overlay: it takes no room from the page, stands above
-  every frame and tile and below the system layer, whose prompts the
-  browser draws in its top layer. On the desk it moves and resizes
+  The panel is an overlay: it takes no room from the page. From the
+  bottom, the page draws: the canvas's frames (the canvas z-0, column
+  apps z-20, floating apps z-30, a full app z-50), the canvas's own chrome
+  (the edge strip z-51, the chips and switcher z-55, its notice z-60),
+  this panel and its button (z-70), the command palette (z-80), and the
+  system layer's prompts, which the browser draws in its top layer above
+  every z-index. On the desk it moves and resizes
   (`AquaPanel`, `assets/js/aqua_panel/`, which reports each settled
   gesture as `place`) and docks to the right edge as a full-height
   sidebar (`dock`); in the hand it is a sheet from the bottom. Ctrl+J
@@ -284,9 +288,7 @@ defmodule PrismWeb.AquaPanelLive do
     <div id="aqua-panel-root" phx-hook="AquaPanelKeys">
       <%!-- Above the composer's Send on the chat page, which sits in the
             corner the button would otherwise cover. The button and the
-            panel stand above every layer the canvas draws (its full frame
-            is z-50, its chrome up to z-60); the system layer's prompts are
-            in the browser's top layer, above both. --%>
+            panel stand where the moduledoc's order puts them. --%>
       <button
         id="aqua-panel-button"
         type="button"
@@ -323,7 +325,7 @@ defmodule PrismWeb.AquaPanelLive do
         data-y={@place && @place.y}
         data-w={@place && @place.w}
         data-h={@place && @place.h}
-        class="aqua-panel z-[70] flex flex-col border border-gray-800 bg-gray-950 shadow-2xl focus:outline-none"
+        class="aqua-panel z-[70] flex flex-col text-text-primary focus:outline-none"
       >
         <%!-- While a gesture runs it covers the whole viewport, so the
               pointer never passes over a frame, which would take it. --%>
@@ -341,30 +343,40 @@ defmodule PrismWeb.AquaPanelLive do
           data-aqua-handle
           aria-label="Change height"
         >
-          <span class="block h-1 w-10 rounded-full bg-gray-600"></span>
+          <span class="block h-1 w-10 rounded-full bg-text-muted"></span>
         </button>
         <header
-          class="flex items-center gap-2 border-b border-gray-800 px-3 py-2"
+          class="flex h-[42px] shrink-0 items-center gap-2 border-b border-border-default pl-3 pr-2"
           data-aqua-grip
         >
-          <span class="shrink-0 text-sm font-medium text-gray-200">AQUA · You</span>
-          <select
-            id="aqua-panel-threads"
-            name="id"
-            phx-change="select"
-            title="Your threads"
-            aria-label="Your threads"
-            class="min-w-0 flex-1 truncate rounded border border-gray-800 bg-gray-900 px-2 py-1 text-xs text-gray-300"
-          >
-            <option value="" selected={is_nil(@thread)}>New thread</option>
-            <option
-              :for={thread <- @threads}
-              value={thread.id}
-              selected={@thread && thread.id == @thread.id}
+          <span class="aqua-panel-orb" aria-hidden="true"></span>
+          <span class="shrink-0 text-sm font-semibold">AQUA</span>
+          <span class="relative ml-1 min-w-0 max-w-[13rem]">
+            <select
+              id="aqua-panel-threads"
+              name="id"
+              phx-change="select"
+              title="Your threads"
+              aria-label="Your threads"
+              class="w-full min-w-0 cursor-pointer appearance-none truncate rounded-[7px] border border-border-default bg-transparent py-[3px] pl-2 pr-6 text-xs text-text-secondary hover:text-text-primary focus:border-border-focus focus:outline-none"
             >
-              {thread.title}
-            </option>
-          </select>
+              <option value="" selected={is_nil(@thread)}>New thread</option>
+              <option
+                :for={thread <- @threads}
+                value={thread.id}
+                selected={@thread && thread.id == @thread.id}
+              >
+                {thread.title}
+              </option>
+            </select>
+            <span
+              class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-text-muted"
+              aria-hidden="true"
+            >
+              ▾
+            </span>
+          </span>
+          <span class="flex-1"></span>
           <button
             id="aqua-panel-dock"
             type="button"
@@ -372,10 +384,10 @@ defmodule PrismWeb.AquaPanelLive do
             aria-pressed={to_string(@docked)}
             aria-label={if @docked, do: "Float over the page", else: "Pin to the right edge"}
             title={if @docked, do: "Float over the page", else: "Pin to the right edge"}
-            class="aqua-panel-dock rounded px-2 py-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+            class="aqua-panel-dock aqua-panel-ghost"
           >
             <svg
-              class="h-4 w-4"
+              class="h-3.5 w-3.5"
               viewBox="0 0 16 16"
               fill="none"
               stroke="currentColor"
@@ -392,7 +404,7 @@ defmodule PrismWeb.AquaPanelLive do
             phx-click={close_and_return()}
             aria-label="Close"
             title="Close (Esc)"
-            class="rounded px-2 py-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+            class="aqua-panel-ghost text-sm"
           >
             ×
           </button>
@@ -402,7 +414,7 @@ defmodule PrismWeb.AquaPanelLive do
           :if={@room}
           id="aqua-panel-room"
           title="What your AQUA reads with each message you send here"
-          class="truncate border-b border-gray-800 px-3 py-1 text-[11px] text-gray-500"
+          class="shrink-0 truncate border-b border-border-default px-3 py-1 text-[11px] text-text-muted"
         >
           Reading {PrismWeb.RoomFeed.label(@room)}
         </p>
