@@ -25,7 +25,11 @@ store or other configuration outside the scratch directory is read or
 changed. Everything the run starts, the cells' servers, the fronts and the
 Playwright container, and the scratch directory, with the run's
 authority key, every token, cookie and recovery code, is removed when it
-ends, whether it succeeds or fails.
+ends, whether it succeeds or fails. A failed proof first prints the last
+lines of every cell's log (`JOIN_PROOF_LOG_TAIL`, 4000 by default), each
+redacted of the cell's own secrets and the run's, so a run whose scratch
+directory is gone still names what its cells did; H and A2 log at debug
+(`CYFR_LOG_LEVEL`) for that.
 
 ## Browsers
 

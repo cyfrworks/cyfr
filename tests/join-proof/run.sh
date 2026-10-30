@@ -20,7 +20,9 @@
 # RELEASE_BOOT_SKIP_BUILD=1 reuses a release a previous run built;
 # JOIN_PROOF_FRESHNESS (20) is H's identity_freshness_seconds,
 # JOIN_PROOF_CERT_SECONDS (40) A's and A2's device_cert_seconds, and
-# JOIN_PROOF_BROWSERS (chromium firefox webkit) the browsers run.
+# JOIN_PROOF_BROWSERS (chromium firefox webkit) the browsers run. A failed
+# proof prints the redacted tail of every cell's log, JOIN_PROOF_LOG_TAIL
+# (4000) lines each; H and A2 log at debug.
 #
 # Everything it starts is removed when it ends, whether it succeeds or
 # fails: the cells' servers, the directories' front containers, the
@@ -100,8 +102,12 @@ identity_directory dir2.test 127.77.0.2
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
 identity_env "$DIR2" CYFR_DIRECTORY_SERVE writer
 identity_reaches_directory "$A" dir.test
-identity_reaches_directory "$H" dir2.test "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH"
-identity_reaches_directory "$A2" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-a2")"
+# The hub and the restored home log at debug (the `log_level` setting), so a
+# failed run's tails (`cell_tails`) carry their LiveView side too.
+identity_reaches_directory "$H" dir2.test "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH" \
+  "CYFR_LOG_LEVEL=debug"
+identity_reaches_directory "$A2" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-a2")" \
+  "CYFR_LOG_LEVEL=debug"
 
 step "starting the directories, their fronts, and the homes"
 server_start "$DIR"
@@ -268,6 +274,25 @@ PY
   esac
 }
 
+# The last JOIN_PROOF_LOG_TAIL (4000: at debug, most of a hub's lines are
+# its queries, and the tail must reach back past a step's own timeout)
+# lines of every cell's log, each
+# redacted by `redact_log` with the run's own secrets added to the known
+# ones, printed when the proof fails: a run on a host that keeps no scratch
+# directory then names what its cells did. A log that cannot be redacted
+# is not printed.
+cell_tails() {
+  local cell file
+  for file in "$SECRETS"/*; do
+    [ -f "$file" ] && LOG_SECRETS+=("$(cat "$file")")
+  done
+  for cell in "$DIR" "$DIR2" "$A" "$H" "$A2"; do
+    echo "----- the last ${JOIN_PROOF_LOG_TAIL:-4000} lines of cell $(basename "$cell")'s log -----" >&2
+    tail -n "${JOIN_PROOF_LOG_TAIL:-4000}" "$cell/boot.log" 2>/dev/null | redact_log "$cell" >&2 ||
+      echo "(the log could not be redacted, so it is not printed)" >&2
+  done
+}
+
 step "the join proof in $JOIN_PROOF_BROWSERS, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
@@ -276,6 +301,7 @@ json "{'browsers': '$JOIN_PROOF_BROWSERS'.split(), 'fresh': $FRESH, 'cert_second
 playwright_run join-proof proof.mjs /authority/homes.json /out &
 PROOF_PID=$!
 proof_await answer_ask
+[ "$PROOF_STATUS" = 0 ] || cell_tails
 
 echo "the record: $OUT/join-proof.json and $OUT/join-proof.md"
 exit "$PROOF_STATUS"
