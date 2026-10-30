@@ -2746,11 +2746,21 @@ defmodule PrismWeb.SystemLayer do
   attr :error, :string, default: nil
   attr :myself, :any, required: true
 
-  # The fallback's one line, in the shelf's area, just above the canvas's
-  # shelf (52 pixels, `PrismWeb.CanvasLive`): the sentence, then each offer
-  # as a control. It covers no frame beyond its own line.
+  # The fallback's one line, in the shelf's strip at the shell's chips'
+  # level (z-index 67): it starts after the Devices chip on the shelf's left
+  # end and stops short of the AQUA button's room on its right, and it never
+  # reaches above the shelf into the apps' area, so a full app keeps all of
+  # it. The shelf's stylesheet (`canvas_chrome.css`) centres it in the
+  # strip as it does the chips, sets its width, and widens the chips' room
+  # to hold it while it stands. One line: the sentence, or a refusal in its
+  # place, gives way first, then the offers, each keeping its whole label
+  # as its title.
   defp notice(assigns) do
-    assigns = assign(assigns, :offers, Fallback.offers(assigns.notice.fallback))
+    assigns =
+      assign(assigns,
+        offers: Fallback.offers(assigns.notice.fallback),
+        sentence: "Your canvas stopped. Showing the standard one."
+      )
 
     ~H"""
     <div
@@ -2758,26 +2768,36 @@ defmodule PrismWeb.SystemLayer do
       role="status"
       data-test="fallback-notice"
       data-notice-id={@notice.id}
-      class="pointer-events-auto fixed inset-x-0 bottom-[60px] z-[90] mx-auto flex w-fit max-w-[calc(100%-1rem)] flex-wrap items-center justify-center gap-x-1.5 gap-y-1 rounded-full bg-black/80 px-4 py-2 text-sm text-white shadow-lg"
+      class="pointer-events-none absolute bottom-2 left-[4.75rem] z-[67] flex h-[26px] items-center whitespace-nowrap"
     >
-      <span>Your canvas stopped. Showing the standard one.</span>
-      <%= for {offered, index} <- Enum.with_index(@offers) do %>
-        <span :if={index > 0} aria-hidden="true">·</span>
-        <button
-          type="button"
-          phx-click="notice_choose"
-          phx-target={@myself}
-          phx-value-id={@notice.id}
-          phx-value-offer={offered.offer}
-          data-offer={offered.offer}
-          class="font-medium text-blue-300 underline underline-offset-2 hover:text-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+      <div class="pointer-events-auto flex h-full min-w-0 max-w-full items-center gap-x-1.5 overflow-hidden rounded-md bg-black/70 px-2 text-xs text-white/90">
+        <span :if={is_nil(@error)} title={@sentence} class="min-w-0 shrink-[100] truncate">
+          {@sentence}
+        </span>
+        <span
+          :if={@error}
+          role="alert"
+          title={@error}
+          class="min-w-0 shrink-[100] truncate text-red-300"
         >
-          {offer_label(offered)}
-        </button>
-      <% end %>
-      <span :if={@error} role="alert" class="basis-full text-center text-xs text-red-300">
-        {@error}
-      </span>
+          {@error}
+        </span>
+        <%= for {offered, index} <- Enum.with_index(@offers) do %>
+          <span :if={index > 0} aria-hidden="true" class="shrink-0">·</span>
+          <button
+            type="button"
+            phx-click="notice_choose"
+            phx-target={@myself}
+            phx-value-id={@notice.id}
+            phx-value-offer={offered.offer}
+            data-offer={offered.offer}
+            title={offer_label(offered)}
+            class="min-w-0 truncate font-medium text-blue-300 underline underline-offset-2 hover:text-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+          >
+            {offer_label(offered)}
+          </button>
+        <% end %>
+      </div>
     </div>
     """
   end

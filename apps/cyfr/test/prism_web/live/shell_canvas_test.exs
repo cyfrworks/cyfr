@@ -3063,6 +3063,57 @@ defmodule PrismWeb.ShellCanvasTest do
       assert notice_text(view) == line
     end
 
+    test "the line stands in the shelf's strip at the chips' level, so a full app keeps the whole area above the shelf",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+      settle!(view, fn -> assigns(view).posture == "hand" end)
+      render_hook(view, "app_open", %{"ref" => "tincture:local.app-dash"})
+      assert_reply(view, %{ok: true})
+      assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
+
+      html = render(view)
+      [notice] = Regex.run(~r/<div[^>]*id="system-layer-notice"[^>]*>/, html)
+      [devices] = Regex.run(~r/<button[^>]*id="shell-devices"[^>]*>/, html)
+
+      classes = fn tag ->
+        tag |> then(&Regex.run(~r/class="([^"]*)"/, &1)) |> List.last() |> String.split()
+      end
+
+      # Placed as the Devices chip is, after it on the shelf's left end, at
+      # its z-index, and one line no taller than a chip.
+      for class <- ~w(absolute bottom-2 z-[67] h-[26px] whitespace-nowrap) do
+        assert class in classes.(notice), class
+      end
+
+      assert "z-[67]" in classes.(devices)
+      refute "fixed" in classes.(notice)
+
+      # The apps stand above the shelf, and the shelf's stylesheet centres
+      # the line in its 52 pixels with the chips: 13 + 26 is within 52.
+      assert has_element?(view, ~s(#canvas-frames[class*="bottom-[52px]"]))
+      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
+
+      assert css =~
+               ~r/#shell:has\(#canvas-shelf\) #shell-devices,\s*#shell:has\(#canvas-shelf\) #system-layer-notice \{ bottom: 13px; \}/
+
+      # Its width is the room the chips' spacer widens by while it stands,
+      # so nothing of the shelf is under it.
+      [_, width] = Regex.run(~r/#system-layer-notice \{ width: ([^;]+); \}/, css)
+
+      assert css =~
+               "#shell:has(#system-layer-notice) .canvas-shelf-chips { width: calc(4.75rem + #{width}); }"
+
+      assert "left-[4.75rem]" in classes.(notice)
+
+      [_, full_z] = Regex.run(~r/data-canvas-place="full"[^>]*class="[^"]*z-\[([0-9]+)\]/, html)
+      assert String.to_integer(full_z) < 67
+    end
+
     test "no safe mode is left to ask for: no chip, and the Devices chip stays",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)

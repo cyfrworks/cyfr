@@ -22,8 +22,8 @@ defmodule PrismWeb.CanvasLive do
   (0); tiles (20); the windows shown, 30 plus each one's rank in the
   stacking order, whatever the layout's orders are (at most 32 apps, so up
   to 61); a full app (64); the canvas's own controls, 65 to 69 (the shelf
-  65, the shell's own chips on it 67, the layout note 68, the connection
-  notice 69); the AQUA panel with its menu (70, `PrismWeb.AquaPanelLive`);
+  65, the shell's own chips on it and the fallback's line after them 67,
+  the layout note 68, the connection notice 69); the AQUA panel with its menu (70, `PrismWeb.AquaPanelLive`);
   the command palette (80); and the system layer's prompts, which the
   browser draws in its top layer above every z-index. Raising an app
   restyles its wrapper and never moves it. A window or tile raised above a

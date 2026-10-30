@@ -220,6 +220,11 @@
 .canvas-shelf-app:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
 
 /* The shell's own chips stand on the shelf's left end, centred in it and
- * above it; they stay the shell's markup (PrismWeb.ShellLive). */
-#shell:has(#canvas-shelf) #shell-safe-mode,
-#shell:has(#canvas-shelf) #shell-devices { bottom: 13px; }
+ * above it; they stay the shell's markup (PrismWeb.ShellLive). So does the
+ * fallback's line after them (PrismWeb.SystemLayer), and while it stands
+ * the chips' room widens to hold it, so the dots and the open apps stand to
+ * its right rather than under it. */
+#shell:has(#canvas-shelf) #shell-devices,
+#shell:has(#canvas-shelf) #system-layer-notice { bottom: 13px; }
+#system-layer-notice { width: min(30rem, 100vw - 10.75rem); }
+#shell:has(#system-layer-notice) .canvas-shelf-chips { width: calc(4.75rem + min(30rem, 100vw - 10.75rem)); }
