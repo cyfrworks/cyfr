@@ -2462,6 +2462,135 @@ defmodule PrismWeb.ShellCanvasTest do
       {:ok, catalyst: catalyst!(ctx)}
     end
 
+    test "a grant whose account binding has passed its until is offered again from the canvas, to renew it",
+         %{conn: conn, ctx: ctx} do
+      catalyst = catalyst!(ctx, @needs_account)
+      view = shell!(conn)
+      person = person_of(view)
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(person, %{
+          name: "expiring-canvas-key",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "test-value"},
+          destination: %{"hosts" => ["api.example.com"]}
+        })
+
+      ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      decisions = %{
+        ref: catalyst,
+        bindings: [
+          %{
+            need: "api_key",
+            entry_id: entry.id,
+            lifetime: %{kind: "until", until: DateTime.to_iso8601(ahead)}
+          }
+        ]
+      }
+
+      {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: catalyst})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
+
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(person, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      {:ok, [profile]} = Sanctum.Consent.profiles(person, catalyst)
+      {:ok, head} = Sanctum.Consent.head_consent(person, profile.id)
+      [binding] = head.vault_refs
+      resource = %{binding_key: binding.binding_key}
+      use = %{profile_id: profile.id, consent_id: head.id}
+      assert :ok = Sanctum.Attach.lifetime(person, resource, use)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where:
+              r.athanor_id == ^person.athanor_id and r.consent_id == ^head.id and
+                r.vault_entry_id == ^entry.id
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
+        )
+
+      # Its attach refuses it, and its setup plan says it is not ready.
+      assert {:error, :grant_expired} = Sanctum.Attach.lifetime(person, resource, use)
+
+      assert {:ok, %{consent: %{ready: false}}} =
+               Compendium.Component.setup_plan(person, catalyst)
+
+      canvas_verb!(view, canvas(view).id, :grant, %{"ref" => catalyst})
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert dropped(view) == 0
+    end
+
+    test "confirmed, the grant is made and no frame opens, even after a switch of canvas",
+         %{conn: conn, catalyst: catalyst} do
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :grant, %{"ref" => catalyst})
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      before = Enum.map(opened(view), & &1.id)
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      settle!(view, fn -> assigns(view).grant_prompts == %{} end)
+
+      assert Enum.map(opened(view), & &1.id) == before
+
+      assert {:ok, %{consent: %{ready: true}}} =
+               Compendium.Component.setup_plan(person_of(view), catalyst)
+
+      assert dropped(view) == 0
+    end
+
+    test "a validation frame's grant is dropped", %{conn: conn, ctx: ctx, catalyst: catalyst} do
+      canvas!(ctx, "markets", "1.0.1")
+      view = shell!(conn)
+      assert trial = validation(view)
+
+      canvas_verb!(view, trial.id, :grant, %{"ref" => catalyst})
+
+      assert assigns(view).grant_prompts == %{}
+      assert dropped(view) == 1
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    end
+
+    test "a canvas frozen under a full app cannot ask for a grant",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor, catalyst: catalyst} do
+      view = hidden_canvas!(conn, ctx, user, athanor, :full_frame)
+      assert %{state: :frozen} = home = canvas(view)
+
+      canvas_verb!(view, home.id, :grant, %{"ref" => catalyst})
+
+      assert assigns(view).grant_prompts == %{}
+      assert dropped(view) == 1
+    end
+
+    test "an offer open for an app the canvas opened is the one offer: the canvas's grant for it is dropped",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "grant-app")
+      owner_head!(ctx, "grant-app", :needs_consent)
+      view = shell!(conn)
+      home = canvas(view).id
+
+      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.grant-app"})
+      assert map_size(assigns(view).grant_prompts) == 1
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      canvas_verb!(view, home, :grant, %{"ref" => "tincture:local.grant-app"})
+      assert map_size(assigns(view).grant_prompts) == 1
+      assert dropped(view) == 1
+
+      # Dismissed, no second offer stands behind it.
+      dismiss!(view)
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    end
+
     test "for an installed catalyst with no frame, the system layer offers the grant, and its outcome opens no frame",
          %{conn: conn, catalyst: catalyst} do
       view = shell!(conn)

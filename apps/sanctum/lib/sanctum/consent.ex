@@ -224,6 +224,23 @@ defmodule Sanctum.Consent do
   defdelegate tincture_grant(ctx, reference), to: Sanctum.Consent.TinctureGrant, as: :fetch
 
   @doc """
+  Whether the binding at `binding_key` of profile `profile_id`'s head
+  revision `consent_id` is live now, as a run's attach reads its lifetime
+  (`Sanctum.Attach.lifetime/3`), without using it: an `until` binding past
+  its time, or a `once` binding a run has used, is `:grant_expired`. For a
+  reader that asks whether a grant still stands, never for an attach.
+  """
+  @spec binding_live(Sanctum.Context.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, :grant_expired | :unavailable}
+  def binding_live(%Sanctum.Context{} = ctx, profile_id, consent_id, binding_key)
+      when is_binary(profile_id) and is_binary(consent_id) and is_binary(binding_key),
+      do:
+        Sanctum.Attach.live(ctx, %{binding_key: binding_key}, %{
+          profile_id: profile_id,
+          consent_id: consent_id
+        })
+
+  @doc """
   What one vault row of the head revision `consent` (from
   `head_consent/2`) binds now, read by its tag: the athanor's own entry,
   a selection of another profile's key resolved as a run resolves it

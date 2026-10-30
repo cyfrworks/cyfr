@@ -346,6 +346,78 @@ defmodule Compendium.ConsentSetupPlanTest do
     assert plan.ready
   end
 
+  # A grant of `name`'s key with `lifetime`, and its one binding row.
+  defp lifetime_grant!(ctx, name, lifetime) do
+    publish!(ctx, name)
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "#{name}-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"},
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
+      })
+
+    _committed =
+      grant!(ctx, "reagent:local.#{name}", [
+        %{need: "@ingress", entry_id: entry.id, lifetime: lifetime}
+      ])
+
+    {:ok, [profile]} = Sanctum.Consent.profiles(ctx, "reagent:local.#{name}")
+    {:ok, head} = Sanctum.Consent.head_consent(ctx, profile.id)
+
+    row =
+      Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+        where: r.athanor_id == ^ctx.athanor_id and r.consent_id == ^head.id
+      )
+
+    {"reagent:local.#{name}", row}
+  end
+
+  test "a binding whose until has passed makes the plan not ready, as its attach refuses it", %{
+    ctx: ctx
+  } do
+    ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+    {ref, row} =
+      lifetime_grant!(ctx, "plan-until", %{kind: "until", until: DateTime.to_iso8601(ahead)})
+
+    assert {:ok, %{ready: true, consent: %{needs: [%{satisfied: true}]}}} =
+             Compendium.Component.setup_plan(ctx, ref)
+
+    {1, _} = Arca.Repo.update_all(row, set: [expires_at: DateTime.add(DateTime.utc_now(), -60)])
+
+    assert {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert [%{satisfied: false, detail: "its grant has expired — grant it again"}] =
+             plan.consent.needs
+
+    refute plan.consent.ready
+    refute plan.ready
+  end
+
+  test "a once binding is ready until a run uses it, and reading the plan uses nothing", %{
+    ctx: ctx
+  } do
+    {ref, row} = lifetime_grant!(ctx, "plan-once", %{kind: "once"})
+
+    for _read <- 1..2 do
+      assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
+    end
+
+    assert [%{consumed_by_root: nil}] = Arca.Repo.all(row)
+
+    {1, _} = Arca.Repo.update_all(row, set: [consumed_by_root: "exec_used"])
+
+    assert {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert [%{satisfied: false, detail: "its grant has expired — grant it again"}] =
+             plan.consent.needs
+
+    refute plan.ready
+  end
+
   test "a rebound connection makes the plan not-ready with an actionable detail",
        %{ctx: ctx} do
     publish!(ctx, "plan-rebound")

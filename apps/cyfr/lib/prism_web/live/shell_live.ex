@@ -918,7 +918,7 @@ defmodule PrismWeb.ShellLive do
     ctx = socket.assigns.context
 
     with {:ok, component} <- installed_component(ctx, ref),
-         false <- offering?(socket.assigns.grant_prompts, component),
+         false <- offering?(socket.assigns, component),
          false <- granted_and_complete?(socket, component),
          {:ok, offered} <- grant_prompt(socket, {:component, component}, nil, component) do
       offered
@@ -938,8 +938,22 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp offering?(prompts, component),
-    do: Enum.any?(prompts, &match?({_id, {{:component, ^component}, _}}, &1))
+  # Whether a grant offer for `component` is open, whatever raised it: a
+  # canvas's request names the component; an app opened or a canvas shown
+  # whose grant waits names its card, whose reference is the component's.
+  defp offering?(%{grant_prompts: prompts, tinctures: cards}, component) do
+    Enum.any?(prompts, fn
+      {_id, {{:component, offered}, _none}} -> offered == component
+      {_id, {_key, tincture_id}} -> offered_ref(cards, tincture_id) == component
+    end)
+  end
+
+  defp offered_ref(cards, tincture_id) do
+    case Enum.find(cards, &(&1.id == tincture_id)) do
+      %{} = card -> Frames.ref_of(card)
+      nil -> nil
+    end
+  end
 
   # Granted and complete: the component's setup plan holds the person's
   # grant and reads it ready, every need it binds still live. No grant, a
