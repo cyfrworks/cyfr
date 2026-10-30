@@ -47,7 +47,9 @@ const TOLD = Object.freeze(["posture", "covered", "installed", "state"])
  * shell verb for this frame (`Prima.TinctureWire`); anything else — another
  * frame's id, an unknown verb, a verb carrying data — is dropped and
  * counted in `data-dropped`, and what is not dropped reaches the view as
- * `frame_verb`.
+ * `frame_verb`. The count is the hook's: a patch of the frame's element
+ * takes the view's attributes, which carry none, so it is written again
+ * after every patch.
  *
  * A canvas's frame (`data-frame-kind="canvas"`, a canvas or a validation
  * frame) is answered a canvas block beside its credential
@@ -256,6 +258,10 @@ const IframeBridge = {
   _drop() {
     this.dropped += 1
     this.el.dataset.dropped = String(this.dropped)
+  },
+
+  updated() {
+    if (this.dropped > 0) this.el.dataset.dropped = String(this.dropped)
   },
 
   _closePort() {

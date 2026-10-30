@@ -88,15 +88,52 @@ export function safeModeChord(event) {
 
 // The canvas switch a keydown asks for: `previous` for Ctrl+Alt+ArrowLeft,
 // `next` for Ctrl+Alt+ArrowRight, null for anything else. Heard on the
-// shell's page alone, as the safe mode chord is.
+// shell's page alone, as the safe mode chord is; with a window active,
+// the same arrows tile it instead (`windowChord`).
 export function switchChord(event) {
-  if (event === null || typeof event !== "object") return null
-  if (event.ctrlKey !== true || event.altKey !== true || event.metaKey === true || event.shiftKey === true) {
-    return null
-  }
+  if (!chord(event)) return null
   if (event.key === "ArrowLeft") return "previous"
   if (event.key === "ArrowRight") return "next"
   return null
+}
+
+// What a keydown asks of the windows, heard on the shell's page alone (a
+// frame's keys stay in the frame): with Ctrl+Alt held, ArrowLeft and
+// ArrowRight tile the active window at that side (`{act: "tile", side}`),
+// ArrowUp makes it full (`{act: "full"}`), ArrowDown makes it a window
+// (`{act: "window"}`), M minimises it and W closes it (`{act:
+// "minimise"}`, `{act: "close"}`), and 1 to 8 show that canvas (`{act:
+// "canvas", index}`, from 0). Null for anything else. The keys are read
+// by `code`, so a layout or Alt's own characters do not change them.
+export function windowChord(event) {
+  if (!chord(event)) return null
+  switch (event.key) {
+    case "ArrowLeft":
+      return {act: "tile", side: "left"}
+    case "ArrowRight":
+      return {act: "tile", side: "right"}
+    case "ArrowUp":
+      return {act: "full"}
+    case "ArrowDown":
+      return {act: "window"}
+  }
+  if (event.code === "KeyM") return {act: "minimise"}
+  if (event.code === "KeyW") return {act: "close"}
+  const digit = /^Digit([1-8])$/.exec(typeof event.code === "string" ? event.code : "")
+  if (digit) return {act: "canvas", index: Number(digit[1]) - 1}
+  return null
+}
+
+// Ctrl and Alt held, and neither Meta nor Shift.
+function chord(event) {
+  return (
+    event !== null &&
+    typeof event === "object" &&
+    event.ctrlKey === true &&
+    event.altKey === true &&
+    event.metaKey !== true &&
+    event.shiftKey !== true
+  )
 }
 
 // What the canvas hook tells a canvas frame's bridge to post over its port,

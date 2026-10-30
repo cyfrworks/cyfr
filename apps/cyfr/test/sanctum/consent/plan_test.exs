@@ -2717,7 +2717,7 @@ defmodule Sanctum.Consent.PlanTest do
 
   describe "a tincture's declarations" do
     @declaration %{
-      "frame" => %{"capabilities" => ["pointer_lock"], "placement" => "float"},
+      "frame" => %{"capabilities" => ["pointer_lock"]},
       "streams" => [%{"name" => "executions.deltas", "subject" => "run_1"}],
       "actions" => ["execution.list"]
     }
@@ -2728,11 +2728,7 @@ defmodule Sanctum.Consent.PlanTest do
       grouped = by_kind(decode!(plan.rows))
 
       assert grouped[{:frame, ref}] == [
-               %{
-                 "capabilities" => ["pointer_lock"],
-                 "placement" => "float",
-                 "background" => false
-               }
+               %{"capabilities" => ["pointer_lock"], "background" => false}
              ]
 
       assert grouped[{:streams, ref}] == [%{"name" => "executions.deltas", "subject" => "run_1"}]
@@ -2765,11 +2761,7 @@ defmodule Sanctum.Consent.PlanTest do
                  "kind" => "frame",
                  "node" => ref,
                  "narrowed" => false,
-                 "values" => %{
-                   "capabilities" => ["pointer_lock"],
-                   "placement" => "float",
-                   "background" => true
-                 }
+                 "values" => %{"capabilities" => ["pointer_lock"], "background" => true}
                },
                %{
                  "kind" => "streams",

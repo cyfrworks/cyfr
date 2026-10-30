@@ -248,16 +248,16 @@ for written in "markets $READS_CANDLES" "measure []"; do
   server_fixture "$CELL" grant "$TOKEN" "$canvas" "$(field "$answer" ok version)" >/dev/null
 done
 
-# The person's layout, version 2, published through the console at the
-# revision this script last published; the console's answer is left in
-# LAYOUT_ANSWER. It runs in this shell, never a command substitution's, so
-# the revision it counts is the one the next publication reads. The proof
+# The person's layout, version 3, published through the console at the
+# revision the layout holds now, read just before: the shell writes the
+# layout too, once a canvas opens an app, so no count kept here could
+# know it. The console's answer is left in LAYOUT_ANSWER. The proof
 # chooses each layout.
-LAYOUT_REVISION=0
 LAYOUT_ANSWER=""
 publish_layout() {
-  LAYOUT_ANSWER="$(console layout/edit "{\"document\":$1,\"revision\":$LAYOUT_REVISION}")"
-  if printf '%s' "$LAYOUT_ANSWER" | grep -q '"ok"'; then LAYOUT_REVISION=$((LAYOUT_REVISION + 1)); fi
+  local revision
+  revision="$(field "$(console layout/get '{}')" ok revision)"
+  LAYOUT_ANSWER="$(console layout/edit "{\"document\":$1,\"revision\":${revision:-0}}")"
 }
 
 binding_of() { python3 -c 'import json, sys; print(json.load(sys.stdin)["ok"]["binding"])'; }
@@ -292,6 +292,9 @@ answer_ask() {
     layout)
       publish_layout "$(asked "$ask" document)"
       ANSWER="$LAYOUT_ANSWER"
+      ;;
+    layout_read)
+      ANSWER="$(console layout/get '{}')"
       ;;
     accept)
       ANSWER="$(accept_fixed "$(asked "$ask" feed)" "$(asked "$ask" data)")"

@@ -38,7 +38,7 @@ A tincture is private unless it has an active public consent profile. Publish on
 
 The shell — **Apps** in the console's drawer (**Tinctures** in `dev` mode), at `/a/<athanor>/tinctures` — shows the person's canvases and the tinctures opened over them. A **canvas** is a tincture whose `frame.placement` is `canvas`: the person's own page, written in HTML, CSS and JavaScript like any tincture, that shows what it reads.
 
-The person's **layout** (`layout.get`, `layout.edit`) is a version-2 document: their canvases in order, at most eight, each with an `id`, the canvas tincture it runs (each canvas its own) and, per posture — `hand` under 768 CSS pixels wide, `desk` otherwise — the tinctures placed over it. A person has one layout in each athanor. A posture a canvas does not name places nothing. The layout names tinctures, modes and places and nothing else, so editing it can only arrange, and no canvas edits it. A person who never arranged one has the shipped layout: one canvas, `home`, running the shipped `tincture:local.canvas`, which shows their apps, their recent runs, their schedules and the last schedule runs. A layout is published only through the `layout` tool's `edit`. The CLI, the API and a device paired with the person call it for the person, and so does the assistant, whose shipped policy asks the person first. No tincture declares `layout.edit`, and no component but an agent that names it exactly is granted it. Every shell the person has open reads the layout again when an edit is announced, or on its next posture change or reconnect when the announcement does not go out; no shell, canvas or safe mode writes it.
+The person's **layout** (`layout.get`, `layout.edit`) is a version-3 document: their canvases in order, at most eight, each with an `id`, the canvas tincture it runs (each canvas its own) and, per posture — `hand` under 768 CSS pixels wide, `desk` otherwise — the tinctures placed over it. A person has one layout in each athanor. A posture a canvas does not name places nothing. The layout names tinctures, modes and places and nothing else, so editing it can only arrange, and no canvas edits it. A person who never arranged one has the shipped layout: one canvas, `home`, running the shipped `tincture:local.canvas`, which shows their apps, their recent runs, their schedules and the last schedule runs. A layout is published only through the `layout` tool's `edit`. The CLI, the API and a device paired with the person call it for the person, and so does the assistant, whose shipped policy asks the person first. No tincture declares `layout.edit`, and no component but an agent that names it exactly is granted it. Every shell the person has open reads the layout again when an edit is announced, or on its next posture change or reconnect when the announcement does not go out; no shell, canvas or safe mode writes it.
 
 The canvas the browser shows is the **visible canvas**, the layout's first when the shell opens. With more than one canvas, the person moves between them with the switcher the shell draws, with `Ctrl+Alt+ArrowLeft` and `Ctrl+Alt+ArrowRight`, or with a horizontal swipe on the 16-pixel strip the shell keeps along the bottom edge; nothing wraps at either end. Switching is the shell's alone: no canvas has a verb for it, so a broken canvas cannot hold the screen. Only the visible canvas reads and acts — a switch freezes the canvas it leaves, whatever it declares, with its apps and floating tinctures unless they hold the background grant — and a tincture belongs to the canvas it was opened on. A layout with no canvas, a canvas whose tincture is not installed, or a layout the shell cannot read runs no canvas, and the shell draws its picker instead; launching a tincture from the picker opens it full, above everything.
 
@@ -91,10 +91,18 @@ Nothing on those paths redirects.
 On a canvas's page the SDK carries these calls:
 
 - **`cyfr.stream(name, subject, onEvent)`** opens a stream the version declares, as on any tincture, on the canvas's own data path, `POST /_f/v1/o/<frame id>/stream`; a name and subject the version does not declare is refused.
-- **`cyfr.on(event, handler)`** calls `handler` with each value the shell sends of `installed` (the installed tinctures that are not canvases, as `[{ref, name}]`), `posture` (`hand` or `desk`), `covered` (the rectangles of the canvas the tinctures open over it cover) or `state` (`live` or `frozen`).
+- **`cyfr.on(event, handler)`** calls `handler` with each value the shell sends of `installed` (the installed tinctures that are not canvases, as `[{ref, name, icon, open}]`), `posture` (`hand` or `desk`), `covered` (the rectangles of the canvas the tinctures open over it cover) or `state` (`live` or `frozen`).
 - **`cyfr.open(ref)`** opens an installed tincture where the layout places it ([Sizes and placements](#sizes-and-placements)); one `installed` does not list is dropped.
 - **`cyfr.press(binding, action)`** presses an action of a feed the canvas declares, `binding` the binding id of that feed's latest result.
 - **`cyfr.ready()`** tells the shell the canvas has drawn.
+
+<!-- tincture:canvas -->
+| Call | Carried by |
+|---|---|
+| `cyfr.press(binding, action)` | the shell's port, `press` |
+| `cyfr.grant(ref)` | the shell's port, `grant` |
+| `cyfr.on("installed", handler)` | the shell's port, `installed`: each tincture's `icon`, `name`, `open`, `ref` |
+<!-- /tincture:canvas -->
 
 The shell drops a canvas's `close`, `title` and `credential`, and the shared routes refuse its credential, so `cyfr.invoke` and `cyfr.action` reject: a canvas writes nothing and invokes no component.
 
@@ -254,8 +262,9 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 <!-- tincture:declaration -->
 | Block | Keys |
 |---|---|
-| `frame` | `background`, `capabilities`, `placement` |
-| `frame.placement` | one of `float`, `canvas` |
+| `frame` | `background`, `capabilities`, `placement`, `size` |
+| `frame.placement` | one of `canvas` |
+| `frame.size` | `aspect`, `min`, `preferred`, `tile`: `min` and `preferred` each `w` and `h`, 100 to 4000 CSS pixels; `aspect` `w` and `h`, whole numbers 1 to 100; `tile` one of `left`, `right` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |
 <!-- /tincture:declaration -->

@@ -1457,8 +1457,8 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Cache",
       functions: [:get],
       reason:
-        "the panel's open state and thread are kept per browser session under a hash " <>
-          "of its token; a read answers them or a miss, and drops an expired entry as " <>
+        "the panel's open state, thread and placement are kept per browser session " <>
+          "under a hash of its token; a read answers them or a miss, and drops an expired entry as " <>
           "it finds it, which is the cache's own housekeeping."
     },
     %{
@@ -1722,8 +1722,8 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Cache",
       functions: [:put],
       reason:
-        "the panel keeps its open state and thread per browser session, under a hash " <>
-          "of its token, for a bounded time: server-local memory, never a row."
+        "the panel keeps its open state, thread and placement per browser session, under " <>
+          "a hash of its token, for a bounded time: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.AuthController",

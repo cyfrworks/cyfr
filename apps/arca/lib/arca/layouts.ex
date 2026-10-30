@@ -47,8 +47,11 @@ defmodule Arca.Layouts do
   revision and digest.
 
   `{:error, :not_found}` where none was ever published (read it as
-  revision 0); `:corrupt` where the stored bytes no longer read as a
-  layout or no longer hold the digest their reference records;
+  revision 0); `{:unsupported_version, revision}` where the stored bytes
+  hold their digest and name a version this code does not read
+  (`Prima.Layout.decode/1`), so a writer may publish over that revision;
+  `:corrupt` where the stored bytes no longer read as a layout or no
+  longer hold the digest their reference records;
   `:no_person` for an id that names nobody; `:no_athanor` for an actor
   naming none; `:database_error` or `{:storage, reason}` when the store
   cannot answer.
@@ -57,6 +60,7 @@ defmodule Arca.Layouts do
           {:ok, stored()}
           | {:error,
              :not_found
+             | {:unsupported_version, pos_integer()}
              | :corrupt
              | :no_person
              | :no_athanor
@@ -116,7 +120,9 @@ defmodule Arca.Layouts do
   # ---- internals -------------------------------------------------------------
 
   # The bytes the reference names, held to the digest it records: bytes
-  # that changed under their reference are not this layout.
+  # that changed under their reference are not this layout. Bytes that
+  # hold it but name another version are a document this code does not
+  # read, not a damaged one.
   defp read(actor, blob_key, revision, digest) do
     case Arca.get(actor, String.split(blob_key, "/")) do
       {:ok, bytes} when is_binary(bytes) ->
@@ -124,6 +130,7 @@ defmodule Arca.Layouts do
              {:ok, document} <- Prima.Layout.decode(bytes) do
           {:ok, %{document: document, revision: revision, digest: digest}}
         else
+          {:error, :unsupported_version} -> {:error, {:unsupported_version, revision}}
           _ -> {:error, :corrupt}
         end
 

@@ -4,53 +4,93 @@
 defmodule PrismWeb.CanvasLive do
   @moduledoc """
   The canvas layer: the person's layout read for the posture their client
-  reports, and every frame the shell holds (`Prism.Frames`) drawn where its
-  placement puts it.
+  reports, every frame the shell holds (`Prism.Frames`) drawn where its
+  placement puts it, the chrome the shell draws around each app, and the
+  shelf.
 
-  It reads the layout through `Compendium.layout/2` and draws, from the
-  bottom: the visible canvas's frame filling the layer (a hidden canvas's
-  frame is held invisible and frozen, and a validation frame is hidden and
-  inert), the `column` apps beside it, the floating tinctures above them,
-  and the active `full` frame above those, with its capsule. The
-  assistant's panel (`PrismWeb.AquaPanelLive`), which the app layout draws
-  over the page, sits above the column apps and the floating tinctures. A
-  floating entry naming a tincture nobody installed draws a placeholder
-  and opens nothing. In safe mode (`safe_mode`) nothing of the layout is
-  drawn. While a full frame is shown every other layer is `inert`, so no
-  key reaches a control it covers; the full frame and its capsule stay
-  reachable.
+  It reads the layout through `Compendium.layout/2` and draws the visible
+  canvas's frame filling the apps' area (the layer above the shelf;
+  a hidden canvas's frame is held invisible and frozen, and a validation
+  frame is hidden and inert), narrowed by the tiles beside it; its tiles
+  at their edge and share; its windows at their geometry; and the active
+  `full` frame over everything, with its capsule. Geometry and shares are
+  hundredths of a percent of the apps' area. In safe mode nothing of the
+  layout is drawn. While a full frame is shown every other layer is
+  `inert`, so no key reaches a control it covers; the full frame and its
+  capsule stay reachable.
 
-  With more than one canvas it draws the switcher (`#canvas-switcher`), one
-  button per canvas carrying `data-canvas`, which asks the shell to show it
-  (`switch_canvas` with `canvas`), and the edge strip (`#canvas-edge-strip`),
-  16 pixels along the bottom edge above every frame, on which the `Canvas`
-  hook reads a horizontal swipe. Neither is drawn in safe mode.
+  The page stacks by z-index alone, from the bottom: the canvas's frame
+  (0); tiles (20); the windows shown, 30 plus each one's rank in the
+  stacking order, whatever the layout's orders are (at most 32 apps, so up
+  to 61); a full app (64); the canvas's own controls, 65 to 69 (the shelf
+  65, the shell's own chips on it 67, the layout note 68, the connection
+  notice 69); the AQUA panel with its menu (70, `PrismWeb.AquaPanelLive`);
+  the command palette (80); and the system layer's prompts, which the
+  browser draws in its top layer above every z-index. Raising an app
+  restyles its wrapper and never moves it. A window or tile raised above a
+  full app hides it (`Prism.Frames`); the full app keeps its placement
+  until it is raised again.
+
+  Each app's wrapper carries what it stands as for the hook:
+  `data-canvas-place` (`window`, `tile` or `full`), `data-canvas-stack`,
+  `data-canvas-minimised`, `data-canvas-geometry` (`x y w h`) or
+  `data-canvas-side` and `data-canvas-share`, `data-canvas-active` (the
+  app the keys and the ring act on: the shown full app, or else the
+  topmost shown window or tile), and what the app takes when it changes
+  placement, from one rule here: a window's `data-canvas-tile-share` (the
+  share it takes as a tile) and a tile's or full app's `data-canvas-window`
+  (the geometry it takes as a window).
+
+  A window or a tile wears the shell's chrome, drawn outside its iframe so
+  no app draws or presses it: a title bar (`data-canvas-grip`, the app's
+  icon and name, and four controls: minimise, tile or window, full and
+  close, which push `frame_minimise`, `frame_tile` or `frame_move`,
+  `frame_full` and `frame_close` to the shell), and the edges a window is
+  resized from or the divider a tile is (`data-canvas-edge`). The hook
+  turns a drag, a resize, a drop on a screen edge and the keys into the
+  shell's arrangement events (`PrismWeb.ShellLive`), one per settled
+  gesture.
+
+  The shelf (`#canvas-shelf`, 52 pixels along the bottom, drawn with the
+  visible canvas and never in safe mode, and like the canvas's other
+  controls above a full app and within reach) holds, from the left: room for
+  the shell's own chips, which `PrismWeb.ShellLive` draws; with more than
+  one canvas, a dot per canvas (`#canvas-switcher`, each a button carrying
+  `data-canvas` that asks the shell to show it, `switch_canvas` with
+  `canvas`, the current one pressed); the visible canvas's open apps
+  (`data-canvas-shelf-app`, the active one marked, a minimised one dimmed;
+  a click raises it, `frame_raise`, or restores it, `app_restore`); and
+  room at the right end for the AQUA button the app layout draws. The hook
+  reads a horizontal swipe on the shelf as a canvas switch. The shelf
+  lists the apps the shell holds and the ones the shell's arrangement
+  holds minimised.
 
   The posture is the client's: the `Canvas` hook (`assets/js/canvas/`)
   reports `hand` or `desk` as the event `posture`, and any other value is
   ignored. Before the first report the canvas draws `desk`. Each
-  arrangement read is sent to the shell as
-  `{PrismWeb.CanvasLive, :arrangement, posture, arrangement}`, and the shell
-  opens and discards frames for it (`Prism.Frames.arrange/4`); a read that
-  fails is sent as `{PrismWeb.CanvasLive, :layout_unavailable}`. The canvas
+  layout read is sent to the shell whole, as
+  `{PrismWeb.CanvasLive, :layout, posture, read}` (`Compendium.layout/2`'s
+  answer), and the shell opens, stands and discards frames for it
+  (`Prism.Frames.arrange/5`); a read that fails is sent as
+  `{PrismWeb.CanvasLive, :layout_unavailable}`. The canvas
   itself opens no frame and holds no credential. An update with
   `reload: true` reads the layout again.
 
   Assigns: `context`, `frames` (the shell's `Prism.Frames`), `tinctures`
-  (the shell's tincture cards) and `safe_mode`.
+  (the shell's tincture cards), `arrangement` (the shell's arrangement for
+  the posture, `nil` before its first read, when this layer's own read
+  stands in) and `safe_mode`.
 
   The hook sits on an empty element of its own, `#<id>-hook`, after the
-  frames, which carries `data-posture` and `data-columns`; it reads the
-  layer as that element's parent, and its pushes go from that element. It
-  lays the shown columns out from the list rendered in
-  `data-columns` (each frame's id and order), relays the shell's
-  `frame_state`, `frame_credential` and `canvas_installed` pushes to each
-  frame's bridge, sends each canvas frame its posture and what the shown
-  apps and floating frames cover of it, and keeps the last columns drawn
-  while the socket is down. A column takes its geometry by
-  `data-canvas-column`. A canvas or validation frame carries
-  `data-frame-kind="canvas"`, so its bridge hands it the canvas's
-  handshake and forwards its messages as a canvas's.
+  frames, which carries `data-posture`; it reads the layer as that
+  element's parent, and its pushes go from that element. It relays the
+  shell's `frame_state`, `frame_credential` and `canvas_installed` pushes
+  to each frame's bridge and sends each canvas frame its posture and the
+  rectangles of the windows over it (a tile narrows the canvas's frame
+  instead of covering it, and a full app's cover is the frozen state). A
+  canvas or validation frame carries `data-frame-kind="canvas"`, so its
+  bridge hands it the canvas's handshake and forwards its messages as a
+  canvas's.
 
   An iframe is never moved in the document, since a moved frame reloads:
   no patch removes or re-inserts a held frame's iframe or any element
@@ -58,27 +98,35 @@ defmodule PrismWeb.CanvasLive do
   patch moves an element when an earlier sibling is removed or one whose
   presence varies appears or disappears before it, so the frames' wrappers
   are a stream: the only children of one `phx-update="stream"` container,
-  where a patch updates a child in place and never re-adds it. Every
+  where a patch updates a child in place and never re-adds it, and in each
+  wrapper the iframe comes first, with the chrome or the capsule after it,
+  so a placement that adds or drops them never moves the iframe. Every
   update streams each held frame, a wrapper already drawn patched where it
   stands and a new one appended, so frames keep the order they were opened
   in, and deletes the wrapper of each frame no longer held. In the layer
   the container follows only the geometry and status elements, which are
-  always drawn; the hook's element, the layout note, the placeholders, the
-  edge strip and the switcher follow it. The shell draws nothing whose
-  presence varies before the layer.
+  always drawn; the hook's element, the layout note and the shelf follow
+  it. The shell draws nothing whose presence varies before the layer.
 
   No element around the frames, up to the page's root, carries a hook or
   an event binding. The page locks the element an event is pushed from
   until its reply and patches a copy of it meanwhile; a wrapper deleted
   then is removed from the document but kept in the copy, which the reply
-  puts back, and the discarded frame would load again.
+  puts back, and the discarded frame would load again. The chrome's
+  controls are inside a wrapper, never around one.
   """
 
   use PrismWeb, :live_component
 
+  alias Phoenix.LiveView.JS
   alias Prism.Frames
 
   @postures Prima.Layout.postures()
+  @max_fraction 10_000
+  # Tiles stand at 20 beside the canvas (0), the windows shown from 30 by
+  # their rank.
+  @tile_z 20
+  @window_z 30
 
   @impl true
   def mount(socket) do
@@ -87,6 +135,7 @@ defmodule PrismWeb.CanvasLive do
        posture: "desk",
        loaded: nil,
        arrangement: nil,
+       read: nil,
        layout_unavailable: false,
        frames: Frames.new(),
        streamed: nil,
@@ -157,9 +206,9 @@ defmodule PrismWeb.CanvasLive do
     %{context: ctx, posture: posture} = socket.assigns
 
     case Compendium.layout(ctx, posture) do
-      {:ok, %{arrangement: arrangement}} ->
-        send(self(), {__MODULE__, :arrangement, posture, arrangement})
-        assign(socket, arrangement: arrangement, loaded: posture, layout_unavailable: false)
+      {:ok, %{arrangement: arrangement} = read} ->
+        send(self(), {__MODULE__, :layout, posture, read})
+        assign(socket, read: arrangement, loaded: posture, layout_unavailable: false)
 
       {:error, _refusal} ->
         send(self(), {__MODULE__, :layout_unavailable})
@@ -174,15 +223,21 @@ defmodule PrismWeb.CanvasLive do
   @impl true
   def render(assigns) do
     # In safe mode nothing of the layout is drawn.
-    arrangement = if assigns.safe_mode, do: nil, else: assigns.arrangement
+    # The shell's arrangement, current with every gesture; before its first
+    # read, this layer's own.
+    arrangement = if assigns.safe_mode, do: nil, else: assigns.arrangement || assigns.read
     visible = Frames.visible_canvas(assigns.frames)
+    active = active_app(assigns.frames, visible)
 
     assigns =
       assign(assigns,
         canvases: canvases(arrangement),
         visible: visible,
-        floating: floating(arrangement, visible),
-        columns: columns(Frames.list(assigns.frames)),
+        active: active,
+        boxes: boxes(assigns.frames),
+        cards: Map.new(assigns.tinctures, &{&1.id, &1}),
+        shelf: shelf?(assigns.safe_mode, visible),
+        shelf_apps: shelf_apps(assigns, arrangement, visible, active),
         # Under a shown full frame every other layer is covered, and taken
         # out of reach so no key lands on a control nobody can see.
         covering: covering(assigns.frames)
@@ -195,7 +250,7 @@ defmodule PrismWeb.CanvasLive do
         <div
           data-canvas-connection="connected"
           hidden
-          class="absolute left-1/2 top-3 z-[60] -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/90"
+          class="absolute left-1/2 top-3 z-[69] -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs text-white/90"
         >
           Disconnected. Reconnecting…
         </div>
@@ -203,21 +258,39 @@ defmodule PrismWeb.CanvasLive do
 
       <%!-- Every frame, in the order it was opened, as a stream: nothing
            before this container but the two elements above, which are
-           always drawn. It fills the layer as the layer does and sets no
-           z-index, so it adds no geometry and no stacking context. The
+           always drawn. It fills the apps' area (the layer above the
+           shelf), clips a window hanging past the area's edge so the page
+           never scrolls for it (a full app is fixed, which it does not
+           clip), and sets no z-index, so it adds no stacking context. The
            sandbox and allow attributes are the rules' derivation, never
-           written here. --%>
-      <div id={"#{@id}-frames"} phx-update="stream" class="pointer-events-none absolute inset-0">
+           written here. In each wrapper the iframe comes first and the
+           chrome after it, so a placement that adds or drops the chrome
+           never moves the iframe. --%>
+      <div
+        id={"#{@id}-frames"}
+        phx-update="stream"
+        class={[
+          "pointer-events-none absolute inset-x-0 top-0 overflow-hidden",
+          if(@shelf, do: "bottom-[52px]", else: "bottom-0")
+        ]}
+      >
         <div
           :for={{wrapper_id, frame} <- @streams.frames}
           id={wrapper_id}
           data-canvas-frame={frame.id}
           data-canvas-place={place(frame)}
-          data-canvas-column={column_of(frame)}
+          data-canvas-stack={app_attribute(frame, :stack)}
+          data-canvas-minimised={app_attribute(frame, :minimised)}
+          data-canvas-geometry={geometry_attribute(frame.placement)}
+          data-canvas-side={side_attribute(frame.placement)}
+          data-canvas-share={share_attribute(frame.placement)}
+          data-canvas-tile-share={tile_share_attribute(frame.placement)}
+          data-canvas-window={window_attribute(frame.placement)}
+          data-canvas-active={app_frame?(frame) && to_string(frame.id == @active)}
           data-canvas-shown={to_string(frame.visible)}
           inert={inert?(frame, @covering)}
-          class={frame_class(frame)}
-          style={frame_style(frame.placement)}
+          class={frame_class(frame, frame.id == @active)}
+          style={Map.get(@boxes, frame.id)}
         >
           <iframe
             :if={frame.state != :refused}
@@ -225,7 +298,7 @@ defmodule PrismWeb.CanvasLive do
             src={frame.src}
             sandbox={frame.sandbox}
             allow={if frame.allow not in [nil, ""], do: frame.allow}
-            class="h-full w-full border-0"
+            class={iframe_class(frame)}
             phx-hook="IframeBridge"
             data-frame-id={frame.id}
             data-frame-state={frame.state}
@@ -236,10 +309,14 @@ defmodule PrismWeb.CanvasLive do
             :if={frame.state == :refused}
             id={"tincture_state_#{frame.id}"}
             data-tincture-state={frame.refusal}
-            class="flex h-full w-full items-center justify-center p-4 text-center text-sm text-text-muted"
+            class={[
+              "flex items-center justify-center p-4 text-center text-sm text-text-muted",
+              if(chrome?(frame), do: "canvas-app-body", else: "h-full w-full")
+            ]}
           >
             {refusal_sentence(frame.refusal)}
           </div>
+          <.chrome :if={chrome?(frame)} frame={frame} card={Map.get(@cards, frame.tincture_id)} />
           <.iframe_capsule :if={frame.placement == :full} />
         </div>
       </div>
@@ -253,7 +330,6 @@ defmodule PrismWeb.CanvasLive do
         phx-hook="Canvas"
         phx-target={@myself}
         data-posture={@posture}
-        data-columns={Jason.encode!(@columns)}
       >
       </div>
 
@@ -261,59 +337,137 @@ defmodule PrismWeb.CanvasLive do
         :if={@layout_unavailable}
         data-canvas-layout="unavailable"
         inert={@covering != nil}
-        class="absolute bottom-3 left-3 z-20 text-xs text-text-muted"
+        class="absolute bottom-16 left-3 z-[68] text-xs text-text-muted"
       >
         Your layout can't be read right now.
       </p>
 
-      <%!-- Floating tinctures nobody installed, over the visible canvas. --%>
-      <%= for {entry, index} <- Enum.with_index(@floating),
-              is_nil(Frames.resolve(entry.tincture, @tinctures)) do %>
-        <div
-          id={"#{@id}-float-#{index}"}
-          data-canvas-placeholder={entry.tincture}
-          inert={@covering != nil}
-          class="pointer-events-auto absolute z-30 flex items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-raised/80 p-3 text-center text-xs text-text-muted"
-          style={float_style(entry.position)}
-        >
-          Not installed: {entry.tincture}
-        </div>
-      <% end %>
-
-      <%!-- The edge strip and the switcher are Prism's: no canvas draws or
-           reaches them. --%>
-      <div
-        :if={length(@canvases) > 1}
-        id="canvas-edge-strip"
-        aria-hidden="true"
-        class="pointer-events-auto absolute inset-x-0 bottom-0 z-[51] h-4 touch-none"
-      >
-      </div>
-
+      <%!-- The shelf is Prism's: no canvas draws or reaches it. Its left
+           end leaves room for the shell's own chips, its right end for the
+           AQUA button, which the app layout draws. --%>
       <nav
-        :if={length(@canvases) > 1}
-        id="canvas-switcher"
-        aria-label="Canvases"
-        class="pointer-events-auto absolute bottom-2 left-1/2 z-[55] flex -translate-x-1/2 items-center gap-1 rounded-full bg-black/60 px-2 py-1"
+        :if={@shelf}
+        id="canvas-shelf"
+        aria-label="Canvases and open apps"
+        class="canvas-shelf pointer-events-auto"
       >
-        <button
-          :for={canvas <- @canvases}
-          type="button"
-          phx-click="switch_canvas"
-          phx-value-canvas={canvas.id}
-          data-canvas={canvas.id}
-          aria-pressed={to_string(canvas.id == @visible)}
-          class={[
-            "min-h-6 rounded-full px-2 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
-            if(canvas.id == @visible,
-              do: "bg-white/20 text-white",
-              else: "text-white/70 hover:text-white"
-            )
-          ]}
-        >
-          {canvas.id}
-        </button>
+        <div class="canvas-shelf-chips" aria-hidden="true"></div>
+        <div :if={length(@canvases) > 1} id="canvas-switcher" role="group" aria-label="Canvases">
+          <button
+            :for={{canvas, index} <- Enum.with_index(@canvases, 1)}
+            type="button"
+            phx-click="switch_canvas"
+            phx-value-canvas={canvas.id}
+            data-canvas={canvas.id}
+            aria-pressed={to_string(canvas.id == @visible)}
+            aria-label={canvas.id}
+            title={if index <= 8, do: "#{canvas.id} (Ctrl+Alt+#{index})", else: canvas.id}
+            class="canvas-dot"
+          ></button>
+        </div>
+        <div id="canvas-shelf-apps" role="group" aria-label="Open apps">
+          <button
+            :for={app <- @shelf_apps}
+            type="button"
+            phx-click={app.push}
+            data-canvas-shelf-app={app.ref}
+            data-canvas-active={to_string(app.active)}
+            data-canvas-minimised={to_string(app.minimised)}
+            aria-pressed={to_string(app.active)}
+            title={app.title}
+            class="canvas-shelf-app"
+          >
+            <span class="canvas-app-icon" aria-hidden="true">{app.icon}</span>
+            <span class="truncate">{app.name}</span>
+          </button>
+        </div>
+        <div class="canvas-shelf-aqua" aria-hidden="true"></div>
       </nav>
+    </div>
+    """
+  end
+
+  attr :frame, :map, required: true
+  attr :card, :map, default: nil
+
+  # The chrome the shell draws around an app's frame, outside it, so no app
+  # draws or presses it: the title bar (drag it to move the window; the
+  # hook reads `data-canvas-grip`), its four controls, and the edges a
+  # window is resized from or the divider a tile is.
+  defp chrome(assigns) do
+    assigns =
+      assign(assigns,
+        name: app_name(assigns.card, assigns.frame),
+        subtitle: app_subtitle(assigns.card),
+        icon: app_icon(assigns.card, assigns.frame),
+        tile?: match?({:tile, _, _}, assigns.frame.placement)
+      )
+
+    ~H"""
+    <div class="canvas-titlebar" data-canvas-grip={@frame.id}>
+      <span class="canvas-app-icon" aria-hidden="true">{@icon}</span>
+      <span class="canvas-app-name">{@name}</span>
+      <span :if={@subtitle} class="canvas-app-title" title={@subtitle}>{@subtitle}</span>
+      <div class="canvas-controls" role="toolbar" aria-label={"#{@name} controls"}>
+        <button
+          type="button"
+          class="canvas-ghost"
+          data-canvas-action="minimise"
+          phx-click={JS.push("frame_minimise", value: %{frame: @frame.id})}
+          aria-label="Minimise"
+          title="Minimise (Ctrl+Alt+M)"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11h8" /></svg>
+        </button>
+        <button
+          type="button"
+          class="canvas-ghost"
+          data-canvas-action={if @tile?, do: "window", else: "tile"}
+          phx-click={toggle_push(@frame)}
+          aria-label={if @tile?, do: "Make a window", else: "Tile at the side"}
+          title={
+            if @tile?,
+              do: "Make a window (Ctrl+Alt+Down)",
+              else: "Tile at the side (Ctrl+Alt+Left or Right)"
+          }
+        >
+          <svg :if={not @tile?} viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="2.5" y="3.5" width="11" height="9" rx="1" /><path d="M8 3.5v9" />
+          </svg>
+          <svg :if={@tile?} viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="3.5" y="4.5" width="9" height="7" rx="1" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="canvas-ghost"
+          data-canvas-action="full"
+          phx-click={JS.push("frame_full", value: %{frame: @frame.id})}
+          aria-label="Full screen"
+          title="Full screen (Ctrl+Alt+Up)"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="canvas-ghost canvas-ghost-close"
+          data-canvas-action="close"
+          phx-click={JS.push("frame_close", value: %{frame: @frame.id})}
+          aria-label="Close"
+          title="Close (Ctrl+Alt+W)"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></svg>
+        </button>
+      </div>
+    </div>
+    <div
+      :for={edge <- edges(@frame.placement)}
+      class={if @tile?, do: "canvas-divider", else: "canvas-edge"}
+      data-canvas-edge={edge}
+      aria-hidden="true"
+    >
     </div>
     """
   end
@@ -358,15 +512,6 @@ defmodule PrismWeb.CanvasLive do
   defp canvases(arrangement) when is_list(arrangement), do: arrangement
   defp canvases(nil), do: []
 
-  defp floating(arrangement, visible) when is_list(arrangement) do
-    case Enum.find(arrangement, &(&1.id == visible)) do
-      %{floating: floating} -> floating
-      nil -> []
-    end
-  end
-
-  defp floating(nil, _visible), do: []
-
   # The key of the shown full frame, which covers every other layer, or nil.
   defp covering(frames) do
     case Frames.active(frames) do
@@ -380,69 +525,269 @@ defmodule PrismWeb.CanvasLive do
   defp inert?(%{key: {:validation, _}}, _covering), do: true
   defp inert?(%{key: key}, covering), do: covering not in [nil, key]
 
-  # What the hook lays out: each shown column's frame id and order, in order.
-  defp columns(list) do
-    list
-    |> Enum.flat_map(fn
-      %{id: id, visible: true, placement: {:column, order}} -> [%{frame: id, order: order}]
-      _other -> []
-    end)
-    |> Enum.sort_by(&{&1.order, &1.frame})
-  end
-
-  defp column_of(%{id: id, placement: {:column, _order}}), do: id
-  defp column_of(_frame), do: nil
-
   defp place(%{key: {:canvas, _}}), do: "canvas"
   defp place(%{key: {:validation, _}}), do: "validation"
-  defp place(%{placement: {:column, _}}), do: "column"
-  defp place(%{placement: {:floating, _}}), do: "float"
+  defp place(%{placement: {:window, _}}), do: "window"
+  defp place(%{placement: {:tile, _, _}}), do: "tile"
   defp place(%{placement: :full}), do: "full"
 
-  defp frame_class(%{key: {:validation, _}}), do: "hidden"
+  defp app_attribute(%{key: {:app, _, _}} = frame, field), do: to_string(Map.fetch!(frame, field))
+  defp app_attribute(_frame, _field), do: nil
 
-  # A canvas fills the layer under every app and floating frame.
-  defp frame_class(%{key: {:canvas, _}, visible: visible}) do
+  defp app_frame?(%{key: {:app, _, _}}), do: true
+  defp app_frame?(_frame), do: false
+
+  # A window or a tile carries the shell's chrome; a full app its capsule.
+  defp chrome?(%{key: {:app, _, _}, placement: {:window, _}}), do: true
+  defp chrome?(%{key: {:app, _, _}, placement: {:tile, _, _}}), do: true
+  defp chrome?(_frame), do: false
+
+  # The app the keys and the ring act on, by frame id: the topmost shown
+  # app of the visible canvas, full or not.
+  defp active_app(frames, canvas) do
+    frames
+    |> Frames.list()
+    |> Enum.filter(&match?(%{key: {:app, ^canvas, _}, visible: true}, &1))
+    |> Enum.max_by(&{&1.stack, &1.id}, fn -> nil end)
+    |> then(&(&1 && &1.id))
+  end
+
+  # The shelf stands with the visible canvas, and not in safe mode.
+  defp shelf?(safe_mode, visible), do: not safe_mode and not is_nil(visible)
+
+  # The visible canvas's apps on the shelf, in the order they were opened:
+  # each held app (a click raises it, or restores it when minimised), then
+  # each app the layout read holds minimised and no frame does (a click
+  # restores it).
+  defp shelf_apps(_assigns, _arrangement, nil, _active), do: []
+
+  defp shelf_apps(assigns, arrangement, canvas, active) do
+    cards = Map.new(assigns.tinctures, &{Frames.ref_of(&1), &1})
+
+    held =
+      for %{key: {:app, ^canvas, ref}} = frame <- Frames.list(assigns.frames) do
+        push =
+          if frame.minimised,
+            do: JS.push("app_restore", value: %{ref: ref}),
+            else: JS.push("frame_raise", value: %{frame: frame.id})
+
+        shelf_entry(Map.get(cards, ref), ref, push, frame.id == active, frame.minimised)
+      end
+
+    held_refs = MapSet.new(held, & &1.ref)
+
+    waiting =
+      for %{id: ^canvas, apps: apps} <- canvases(arrangement),
+          %{tincture: ref, minimised: true} <- apps,
+          not MapSet.member?(held_refs, ref),
+          card = Map.get(cards, ref),
+          card != nil,
+          do: shelf_entry(card, ref, JS.push("app_restore", value: %{ref: ref}), false, true)
+
+    held ++ waiting
+  end
+
+  defp shelf_entry(card, ref, push, active, minimised) do
+    name = app_name(card, nil) || ref
+
+    %{
+      ref: ref,
+      name: name,
+      icon: app_icon(card, nil),
+      push: push,
+      active: active,
+      minimised: minimised,
+      title: if(minimised, do: "#{name}, minimised: restore it", else: name)
+    }
+  end
+
+  # What a person reads an app as: its name, as the canvas's launcher
+  # names it.
+  defp app_name(%{} = card, _frame), do: card.name
+  defp app_name(nil, %{reference: %{name: name}}), do: name
+  defp app_name(nil, _frame), do: nil
+
+  # A title the app set (or its manifest's), shown after its name as
+  # secondary text; nothing when it only repeats the name. The shelf shows
+  # the name alone.
+  defp app_subtitle(%{title: title, name: name}) when is_binary(title) do
+    case String.trim(title) do
+      "" -> nil
+      ^name -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp app_subtitle(_card), do: nil
+
+  # Its manifest's emoji, or the first letter of its name.
+  defp app_icon(%{icon_emoji: icon}, _frame) when is_binary(icon) and icon != "", do: icon
+
+  defp app_icon(card, frame) do
+    case app_name(card, frame) do
+      name when is_binary(name) and name != "" -> name |> String.first() |> String.upcase()
+      _none -> "·"
+    end
+  end
+
+  # The tile or window control: a window becomes a tile at the side its
+  # middle is on, a tile a window where it stood.
+  defp toggle_push(%{id: id, placement: {:window, %{x: x, w: w}} = placement}) do
+    side = if x + div(w, 2) < div(@max_fraction, 2), do: "left", else: "right"
+    JS.push("frame_tile", value: %{frame: id, side: side, share: tile_share(placement)})
+  end
+
+  defp toggle_push(%{id: id, placement: placement}),
+    do: JS.push("frame_move", value: %{frame: id, geometry: window_geometry(placement)})
+
+  # The share a window takes as a tile: its own width, within reason.
+  defp tile_share({:window, %{w: w}}), do: w |> max(2000) |> min(7000)
+
+  # The geometry a tile or a full app takes as a window: a tile's where it
+  # stood, a full app's in the middle.
+  defp window_geometry({:tile, side, share}) do
+    w = share |> max(3000) |> min(7000)
+    x = if side == :left, do: 200, else: @max_fraction - w - 200
+    %{x: x, y: 800, w: w, h: 7000}
+  end
+
+  defp window_geometry(_full), do: %{x: 1500, y: 1000, w: 7000, h: 7500}
+
+  defp tile_share_attribute({:window, _} = placement),
+    do: Integer.to_string(tile_share(placement))
+
+  defp tile_share_attribute(_placement), do: nil
+
+  defp window_attribute({:window, _}), do: nil
+
+  defp window_attribute(placement) when placement == :full or is_tuple(placement) do
+    %{x: x, y: y, w: w, h: h} = window_geometry(placement)
+    "#{x} #{y} #{w} #{h}"
+  end
+
+  defp window_attribute(_placement), do: nil
+
+  defp edges({:tile, :left, _share}), do: ["e"]
+  defp edges({:tile, :right, _share}), do: ["w"]
+  defp edges(_window), do: ~w(n s e w ne nw se sw)
+
+  defp geometry_attribute({:window, %{x: x, y: y, w: w, h: h}}), do: "#{x} #{y} #{w} #{h}"
+  defp geometry_attribute(_placement), do: nil
+
+  defp side_attribute({:tile, side, _share}), do: Atom.to_string(side)
+  defp side_attribute(_placement), do: nil
+
+  defp share_attribute({:tile, _side, share}), do: Integer.to_string(share)
+  defp share_attribute(_placement), do: nil
+
+  defp frame_class(%{key: {:validation, _}}, _active), do: "hidden"
+
+  # A canvas fills the layer under every app, narrowed by its tiles.
+  defp frame_class(%{key: {:canvas, _}, visible: visible}, _active) do
     [
       "pointer-events-auto absolute inset-0 z-0 overflow-hidden bg-surface-base",
       if(not visible, do: "invisible")
     ]
   end
 
-  defp frame_class(%{placement: :full, visible: visible}) do
+  defp frame_class(%{placement: :full, visible: visible}, _active) do
     [
-      "pointer-events-auto fixed inset-0 z-50 flex flex-col bg-surface-base",
+      "pointer-events-auto fixed inset-0 z-[64] flex flex-col bg-surface-base",
       if(not visible, do: "hidden")
     ]
   end
 
-  defp frame_class(%{placement: {:column, _}, visible: visible}) do
+  defp frame_class(%{placement: {:tile, _, _}, visible: visible}, active) do
     [
-      "pointer-events-auto absolute z-20 overflow-hidden rounded-xl bg-surface-raised ring-1 ring-white/10",
+      "canvas-tile pointer-events-auto absolute overflow-hidden",
+      active && "canvas-active",
       if(not visible, do: "invisible")
     ]
   end
 
-  defp frame_class(%{placement: {:floating, _}, visible: visible}) do
+  defp frame_class(%{placement: {:window, _}, visible: visible}, active) do
     [
-      "pointer-events-auto absolute z-30 overflow-hidden rounded-xl bg-surface-raised shadow-2xl ring-1 ring-white/10",
+      "canvas-window pointer-events-auto absolute overflow-hidden",
+      active && "canvas-active",
       if(not visible, do: "invisible")
     ]
   end
 
-  defp frame_style({:floating, position}), do: float_style(position)
-  defp frame_style(_placement), do: nil
+  # Under the chrome's title bar, or filling the wrapper.
+  defp iframe_class(frame),
+    do: if(chrome?(frame), do: "canvas-app-body border-0", else: "h-full w-full border-0")
 
-  # A floating layer sits at its layout position, in hundredths of a
-  # percent of the canvas, and is kept inside the canvas.
-  @float_width "min(22rem, 100%)"
-  @float_height "min(15rem, 100%)"
+  # Where each frame stands, as CSS, by frame id: a window at its geometry
+  # and a tile at its edge and share, and the visible canvas narrowed by the
+  # tiles shown beside it. Tiles on one edge sit side by side in their
+  # stacking order, left to right, at `z-index` 20. The windows shown are
+  # stacked by their rank in that order, 30 for the lowest and one more for
+  # each above it, whatever the layout's orders are, so raising an app
+  # changes its style and never its place in the document.
+  defp boxes(frames) do
+    list = Frames.list(frames)
+    canvas = Frames.visible_canvas(frames)
 
-  defp float_style(%{x: x, y: y}) do
-    "left: min(#{percent(x)}, calc(100% - #{@float_width})); " <>
-      "top: min(#{percent(y)}, calc(100% - #{@float_height})); " <>
-      "width: #{@float_width}; height: #{@float_height};"
+    ranks =
+      list
+      |> Enum.filter(&stacked?/1)
+      |> Enum.sort_by(&{&1.stack, &1.id})
+      |> Enum.with_index()
+      |> Map.new(fn {frame, rank} -> {frame.id, rank} end)
+
+    tiles =
+      for %{key: {:app, ^canvas, _}, visible: true, placement: {:tile, _, _}} = frame <- list,
+          do: frame
+
+    {left, right} =
+      Enum.split_with(Enum.sort_by(tiles, & &1.stack), &match?({:tile, :left, _}, &1.placement))
+
+    left_total = left |> Enum.map(&share/1) |> Enum.sum() |> min(@max_fraction)
+    right_total = right |> Enum.map(&share/1) |> Enum.sum() |> min(@max_fraction - left_total)
+
+    tile_boxes =
+      edge(left, 0) ++ edge(right, @max_fraction - right_total)
+
+    Map.new(list, fn frame ->
+      z = @window_z + Map.get(ranks, frame.id, 0)
+      {frame.id, box(frame, tile_boxes, canvas, left_total, right_total, z)}
+    end)
   end
+
+  defp stacked?(%{key: {:app, _, _}, visible: true, placement: {:window, _}}), do: true
+  defp stacked?(_frame), do: false
+
+  defp share(%{placement: {:tile, _, share}}), do: share
+
+  defp edge(tiles, from) do
+    {boxes, _end} =
+      Enum.map_reduce(tiles, from, fn frame, at ->
+        width = min(share(frame), @max_fraction - at)
+        {{frame.id, {at, width}}, at + width}
+      end)
+
+    boxes
+  end
+
+  defp box(%{key: {:canvas, id}}, _tiles, id, left, right, _z),
+    do: "left: #{percent(left)}; right: #{percent(right)};"
+
+  defp box(%{placement: {:window, %{x: x, y: y, w: w, h: h}}}, _tiles, _canvas, _l, _r, z),
+    do:
+      "left: #{percent(x)}; top: #{percent(y)}; width: #{percent(w)}; height: #{percent(h)}; " <>
+        "z-index: #{z};"
+
+  defp box(%{id: id, placement: {:tile, side, share}}, tiles, _canvas, _l, _r, _z) do
+    {at, width} = List.keyfind(tiles, id, 0, {id, {fallback(side, share), share}}) |> elem(1)
+
+    "top: 0; bottom: 0; left: #{percent(at)}; width: #{percent(width)}; z-index: #{@tile_z};"
+  end
+
+  defp box(_frame, _tiles, _canvas, _l, _r, _z), do: nil
+
+  # A tile not shown keeps its own edge, at its own share.
+  defp fallback(:left, _share), do: 0
+  defp fallback(:right, share), do: @max_fraction - share
 
   defp percent(hundredths), do: :erlang.float_to_binary(hundredths / 100, decimals: 2) <> "%"
 

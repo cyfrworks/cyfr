@@ -187,15 +187,15 @@ defmodule Compendium.TinctureTest do
       {:ok, ctx: Sanctum.TestContext.local()}
     end
 
-    # A floating tincture's version laid in the athanor's tree, declaring
-    # `streams`; answers the unit the registry registers.
-    defp floating!(ctx, name, streams) do
+    # An app's version laid in the athanor's tree, declaring `streams`;
+    # answers the unit the registry registers.
+    defp app!(ctx, name, streams) do
       manifest = %{
         "name" => name,
         "type" => "tincture",
         "version" => "1.0.0",
         "publisher" => "local",
-        "tincture" => %{"frame" => %{"placement" => "float"}, "streams" => streams}
+        "tincture" => %{"frame" => %{"capabilities" => ["pointer_lock"]}, "streams" => streams}
       }
 
       Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
@@ -206,18 +206,18 @@ defmodule Compendium.TinctureTest do
       ComponentPath.version_dir("tincture", "local", name, "1.0.0")
     end
 
-    test "refuses a floating tincture declaring feed.results, and registers nothing", %{
+    test "refuses an app declaring feed.results, and registers nothing", %{
       ctx: ctx
     } do
-      unit = floating!(ctx, "float-feeds", [%{"name" => "feed.results", "subject" => "btc"}])
+      unit = app!(ctx, "app-feeds", [%{"name" => "feed.results", "subject" => "btc"}])
 
       assert {:error, reason} = Registry.register_from_arca(ctx, unit)
       assert inspect(reason) =~ "feed.results, which declares a shape"
-      assert {:error, :not_found} = Registry.get(ctx, "float-feeds", "1.0.0", "local", "tincture")
+      assert {:error, :not_found} = Registry.get(ctx, "app-feeds", "1.0.0", "local", "tincture")
 
       # The same tincture opening a stream that declares no shape registers.
-      unit = floating!(ctx, "float-servers", [%{"name" => "mcp_servers.changes"}])
-      assert {:ok, %{name: "float-servers"}} = Registry.register_from_arca(ctx, unit)
+      unit = app!(ctx, "app-servers", [%{"name" => "mcp_servers.changes"}])
+      assert {:ok, %{name: "app-servers"}} = Registry.register_from_arca(ctx, unit)
     end
   end
 

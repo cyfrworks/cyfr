@@ -2396,7 +2396,7 @@ func (args KeyRotateArgs) MarshalJSON() ([]byte, error) {
 
 // LayoutEditArgs carries arguments for layout.edit.
 type LayoutEditArgs struct {
-	// edit: the whole layout document — {version: 2, canvases: [{id, tincture, postures: {hand|desk: {apps: [{tincture, mode: full|column, order}], floating: [{tincture, position: {x, y}}]}}}]}
+	// edit: the whole layout document — {version: 3, canvases: [{id, tincture, postures: {hand|desk: {apps: [{tincture, placement: window|tile|full, order, minimised, and for a window geometry: {x, y, w, h}, for a tile side: left|right and share}]}}}]}, positions and sizes in hundredths of a percent of the viewport
 	Document any `json:"document"`
 	// edit: the revision get answered; a layout published since refuses the edit
 	Revision int `json:"revision"`

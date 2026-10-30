@@ -1812,7 +1812,7 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
 
   @tincture_list_files ["tincture-guide.md", "seed/aqua/roles/artisan.md"]
-  @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk)
+  @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk canvas)
 
   # The SDK's call for each request kind, and the arguments of each shell
   # verb: the JavaScript names of what the wire names.
@@ -1821,7 +1821,13 @@ defmodule Cyfr.DocsDriftTest do
     action: {"action", "name, args"},
     stream_open: {"stream", "name, subject, onEvent"}
   }
-  @sdk_verb_args %{open: "ref", title: "title", credential: "name"}
+  @sdk_verb_args %{
+    open: "ref",
+    title: "title",
+    credential: "name",
+    press: "binding, action",
+    grant: "ref"
+  }
 
   defp tincture_list("served-types") do
     rows =
@@ -1855,11 +1861,18 @@ defmodule Cyfr.DocsDriftTest do
     keys = fn struct -> struct |> Map.from_struct() |> Map.keys() |> Enum.sort() end
     list = fn names -> Enum.map_join(names, ", ", &"`#{&1}`") end
 
+    pixels_from..pixels_to//_ = Prima.Manifest.Tincture.size_pixels()
+    parts_from..parts_to//_ = Prima.Manifest.Tincture.aspect_parts()
+
     [
       "| Block | Keys |",
       "|---|---|",
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
       "| `frame.placement` | one of #{list.(Compendium.Tincture.Rules.placements())} |",
+      "| `frame.size` | #{list.(Enum.sort(Prima.Manifest.Tincture.size_keys()))}: `min` and " <>
+        "`preferred` each `w` and `h`, #{pixels_from} to #{pixels_to} CSS pixels; `aspect` " <>
+        "`w` and `h`, whole numbers #{parts_from} to #{parts_to}; `tile` one of " <>
+        "#{list.(Prima.Manifest.Tincture.tiles())} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
       "| `actions[]` | an operation name, `tool.action` |"
     ]
@@ -1887,6 +1900,23 @@ defmodule Cyfr.DocsDriftTest do
             "| `cyfr.#{verb}(#{Map.get(@sdk_verb_args, verb, "")})` | the shell's port, `#{verb}` |"
 
     ["| Call | Carried by |", "|---|---|" | requests ++ verbs]
+  end
+
+  # A canvas's own calls, and what `installed` carries of each tincture;
+  # `failed` is the SDK's own report, never a call.
+  defp tincture_list("canvas") do
+    calls =
+      for verb <- Prima.TinctureWire.canvas_verbs() -- [:failed],
+          do:
+            "| `cyfr.#{verb}(#{Map.fetch!(@sdk_verb_args, verb)})` | the shell's port, `#{verb}` |"
+
+    fields = Enum.map_join(Prima.TinctureWire.installed_keys(), ", ", &"`#{&1}`")
+
+    installed =
+      "| `cyfr.on(\"installed\", handler)` | the shell's port, `installed`: each tincture's " <>
+        "#{fields} |"
+
+    ["| Call | Carried by |", "|---|---|" | calls ++ [installed]]
   end
 
   defp code_or_none(""), do: "—"
@@ -1977,7 +2007,7 @@ defmodule Cyfr.DocsDriftTest do
 
     manifest = %{
       "type" => "tincture",
-      "tincture" => %{"frame" => %{"placement" => "float"}, "actions" => ["layout.edit"]}
+      "tincture" => %{"frame" => %{}, "actions" => ["layout.edit"]}
     }
 
     assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),
@@ -2006,7 +2036,7 @@ defmodule Cyfr.DocsDriftTest do
     for tool <- ["schedule.create", "schedule.update"] do
       manifest = %{
         "type" => "tincture",
-        "tincture" => %{"frame" => %{"placement" => "float"}, "actions" => [tool]}
+        "tincture" => %{"frame" => %{}, "actions" => [tool]}
       }
 
       assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),

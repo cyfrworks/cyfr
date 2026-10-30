@@ -21,7 +21,7 @@ pointer once it is fullscreen; another locks the pointer and, inside the
 same gesture, asks the shell for a credential prompt through the frame's
 own `credential` verb. It asks again for fullscreen and for the pointer
 whenever it loses either. While it holds both, the server opens a system
-layer prompt over it: a grant prompt, by publishing a layout that floats a
+layer prompt over it: a grant prompt, by publishing a layout that opens a
 tincture whose consent waits to be given again
 (`tinctures/ungranted-probe/`, its owner profile written `needs_consent` by
 `ungranted.exs`), and a confirmation prompt, by another session of the

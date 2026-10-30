@@ -32,7 +32,7 @@
 // takes both from a click and asks for them again whenever it loses them,
 // holds the screen while a grant prompt and then a confirmation prompt
 // open over it. The server's part of each — publishing a layout that
-// floats a tincture waiting for its grant, and another session of the
+// opens a tincture waiting for its grant, and another session of the
 // person asking for a sensitive change — is run.sh's, asked for through
 // OUT_DIR (`ask-N.json`, answered `answer-N.json`).
 //
@@ -665,7 +665,7 @@ async function prompts(browser, browserName, base, segment, cookie, outDir) {
     }
     record.attempts[RETAKEN.name] = await pointerRetaken(page, frame, browserName);
   } finally {
-    // The layout floats no waiting tincture for the next browser.
+    // The layout opens no waiting tincture for the next browser.
     await ask(outDir, { op: "reset" });
     await context.close();
   }

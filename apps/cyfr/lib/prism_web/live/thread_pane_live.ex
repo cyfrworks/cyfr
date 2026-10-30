@@ -38,7 +38,14 @@ defmodule PrismWeb.ThreadPaneLive do
   the pane sits beside a room: it hears what the host page shows
   (`PrismWeb.RoomFeed`), reads that room into each send as the turn's
   context (`Aqua.RoomExcerpt` — under the person's own membership, never
-  kept), and offers to paste a line onto it (`thread.aloud`).
+  kept), and offers to paste a line onto it (`thread.aloud`). The panel's
+  own header names AQUA and the thread, so there the pane draws no name
+  or thread label of its own, and its model override, soul or role and
+  token counts sit in a menu (`<dom>-menu`, which the panel's header
+  opens). Its status line appears only while it has something to say
+  (still being prepared, no assistant, messages queued, standing answers,
+  a turn being asked), and its message box and Send take the panel's
+  look.
   """
 
   use PrismWeb, :live_view
@@ -1444,7 +1451,16 @@ defmodule PrismWeb.ThreadPaneLive do
       tabindex="-1"
       class="flex flex-1 min-w-0 flex-col focus:outline-none"
     >
-      <header class="flex items-center justify-between gap-2 border-b border-gray-800 px-4 py-2">
+      <header
+        :if={not @panel? or panel_status?(assigns)}
+        class={[
+          "flex items-center justify-between gap-2",
+          if(@panel?,
+            do: "border-b border-border-default px-3 py-1",
+            else: "border-b border-gray-800 px-4 py-2"
+          )
+        ]}
+      >
         <div class="flex items-center gap-2 min-w-0">
           <%!-- The phone drawer is the host's: this only asks for it. --%>
           <button
@@ -1456,7 +1472,7 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             Chats
           </button>
-          <span class="text-sm font-medium text-gray-200 shrink-0">AQUA</span>
+          <span :if={not @panel?} class="text-sm font-medium text-gray-200 shrink-0">AQUA</span>
           <%!-- Which furnace this chat is: a key bound here is bound here.
                 The panel's header already says You. --%>
           <span :if={not @panel?} class="text-xs text-gray-500 shrink-0 truncate max-w-[10rem]">
@@ -1470,7 +1486,7 @@ defmodule PrismWeb.ThreadPaneLive do
             DM
           </span>
           <span
-            :if={@roster != []}
+            :if={@roster != [] and not @panel?}
             class="text-xs text-gray-400 max-w-[14rem] truncate"
             title="The soul or role this thread is on"
           >
@@ -1496,23 +1512,13 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             +{MapSet.size(@grants)} this chat
           </span>
-          <select
-            :if={@models_loaded and @models_by_provider != %{}}
-            phx-change="select_model"
-            name="model"
+          <.model_override
+            :if={not @panel? and @models_loaded and @models_by_provider != %{}}
+            assistant={@assistant}
+            models_by_provider={@models_by_provider}
+            model_override={@model_override}
             class="min-h-6 bg-transparent text-xs text-gray-600 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate font-mono"
-            title="Override model"
-            aria-label="Override model"
-          >
-            <option value="" selected={is_nil(@model_override)}>
-              {(@assistant && @assistant["model"]) || "default"}
-            </option>
-            <%= for {provider, models} <- @models_by_provider, models != [] do %>
-              <optgroup label={provider}>
-                <option :for={m <- models} value={m} selected={@model_override == m}>{m}</option>
-              </optgroup>
-            <% end %>
-          </select>
+          />
         </div>
         <div class="flex items-center gap-1">
           <span
@@ -1531,6 +1537,53 @@ defmodule PrismWeb.ThreadPaneLive do
           </.link>
         </div>
       </header>
+
+      <%!-- In the panel, what the chat page's header shows lives here: the
+            model override, the soul or role and the thread's usage. The
+            panel's hook shows and hides it from the panel's header, so its
+            `hidden` is the browser's to keep. --%>
+      <div
+        :if={@panel?}
+        id={@dom <> "-menu"}
+        hidden
+        phx-mounted={JS.ignore_attributes(["hidden"])}
+        role="group"
+        aria-label="This thread"
+        class="aqua-panel-menu"
+      >
+        <div class="aqua-panel-menu-row">
+          <span>Model</span>
+          <%= cond do %>
+            <% @models_loaded and @models_by_provider != %{} -> %>
+              <.model_override
+                assistant={@assistant}
+                models_by_provider={@models_by_provider}
+                model_override={@model_override}
+                class="min-w-0 max-w-[10rem] cursor-pointer truncate rounded-[7px] border border-border-default bg-surface-base px-1.5 py-0.5 font-mono text-xs text-text-primary focus:border-border-focus focus:outline-none"
+              />
+            <% @models_loaded -> %>
+              <span class="truncate font-mono">
+                {(@assistant && @assistant["model"]) || "default"}
+              </span>
+            <% true -> %>
+              <span>Reading the models…</span>
+          <% end %>
+        </div>
+        <div class="aqua-panel-menu-row" title="The soul or role this thread is on">
+          <span>Soul or role</span>
+          <span class="truncate">
+            {if @roster == [],
+              do: "No assistant here",
+              else: assistant_label(current_assistant(@assistant, @roster))}
+          </span>
+        </div>
+        <div class="aqua-panel-menu-row">
+          <span>Tokens</span>
+          <span class="font-mono">
+            {@token_usage.input} in · {@token_usage.output} out
+          </span>
+        </div>
+      </div>
 
       <%!-- The pane's own flash: a nested view's shows nowhere else. --%>
       <div
@@ -1859,7 +1912,10 @@ defmodule PrismWeb.ThreadPaneLive do
         id={@dom <> "-composer"}
         phx-submit="submit"
         phx-change="validate_upload"
-        class="border-t border-gray-800 p-3 space-y-2"
+        class={[
+          "space-y-2 border-t",
+          if(@panel?, do: "border-border-default px-3 pt-2.5 pb-3", else: "border-gray-800 p-3")
+        ]}
       >
         <div :if={@uploads.attachments.entries != []} class="flex flex-wrap gap-1">
           <div
@@ -1884,7 +1940,15 @@ defmodule PrismWeb.ThreadPaneLive do
 
         <div class="flex gap-2 items-end">
           <label
-            class="self-end rounded-md border border-gray-700 bg-gray-800 px-2 py-2 text-sm text-gray-400 hover:bg-gray-700 cursor-pointer"
+            class={[
+              "self-end cursor-pointer",
+              if(@panel?,
+                do:
+                  "grid h-9 w-8 place-items-center rounded-[10px] text-sm text-text-muted hover:text-text-secondary",
+                else:
+                  "rounded-md border border-gray-700 bg-gray-800 px-2 py-2 text-sm text-gray-400 hover:bg-gray-700"
+              )
+            ]}
             title="Attach files"
           >
             📎 <.live_file_input upload={@uploads.attachments} class="hidden" />
@@ -1901,13 +1965,27 @@ defmodule PrismWeb.ThreadPaneLive do
                 assistant_handle(current_assistant(@assistant, @roster), @athanor)
               )
             }
-            class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none max-h-40 overflow-y-auto"
+            class={[
+              "flex-1 resize-none text-sm focus:outline-none max-h-40 overflow-y-auto",
+              if(@panel?,
+                do:
+                  "min-h-9 rounded-[10px] border border-border-default bg-surface-base px-2.5 py-2 text-text-primary placeholder-text-muted focus:border-border-focus focus:ring-0",
+                else:
+                  "rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-white placeholder-gray-500 focus:border-blue-500"
+              )
+            ]}
             disabled={@roster == []}
           >{@input}</textarea>
           <button
             type="submit"
             disabled={@roster == [] or (@input == "" and @uploads.attachments.entries == [])}
-            class="self-end rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            class={[
+              "self-end text-sm text-white disabled:opacity-40 disabled:cursor-not-allowed",
+              if(@panel?,
+                do: "h-9 rounded-[10px] bg-accent-primary px-3.5 font-semibold hover:bg-accent-hover",
+                else: "rounded-md bg-blue-600 px-4 py-2 font-medium hover:bg-blue-500"
+              )
+            ]}
           >
             Send
           </button>
@@ -1923,7 +2001,10 @@ defmodule PrismWeb.ThreadPaneLive do
         </div>
       </form>
 
-      <div class="border-t border-gray-800 px-3 py-1.5 text-xs text-gray-500 flex items-center justify-between gap-3">
+      <div
+        :if={not @panel?}
+        class="border-t border-gray-800 px-3 py-1.5 text-xs text-gray-500 flex items-center justify-between gap-3"
+      >
         <span class="truncate">
           {if @thread, do: @thread.title, else: "New thread"}
         </span>
@@ -1933,6 +2014,41 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
     </section>
     """
+  end
+
+  attr :assistant, :any, required: true
+  attr :models_by_provider, :map, required: true
+  attr :model_override, :any, required: true
+  attr :class, :string, required: true
+
+  # The thread's model for the next sends: the assistant's own, or one the
+  # catalogue offers.
+  defp model_override(assigns) do
+    ~H"""
+    <select
+      phx-change="select_model"
+      name="model"
+      class={@class}
+      title="Override model"
+      aria-label="Override model"
+    >
+      <option value="" selected={is_nil(@model_override)}>
+        {(@assistant && @assistant["model"]) || "default"}
+      </option>
+      <%= for {provider, models} <- @models_by_provider, models != [] do %>
+        <optgroup label={provider}>
+          <option :for={m <- models} value={m} selected={@model_override == m}>{m}</option>
+        </optgroup>
+      <% end %>
+    </select>
+    """
+  end
+
+  # In the panel the status line is drawn only while it says something.
+  defp panel_status?(assigns) do
+    assigns.preparing? or assigns.roster == [] or assigns.queued > 0 or
+      MapSet.size(assigns.grants) > 0 or (assigns.running and assigns.turn_user != nil) or
+      (assigns.athanor != nil and assigns.athanor.roster == "frozen")
   end
 
   attr :id, :string, required: true

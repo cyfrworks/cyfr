@@ -85,8 +85,9 @@ working, which is kept, and which validation last failed.
   open that got no answer (the server unreachable or erring) rejects
   with `code` `unavailable` and may open if tried again later; any other
   rejection is final, its `message` the sentence to show.
-- `cyfr.on(event, handler)` hears `installed` (`[{ref, name}]`, the
-  person's installed apps), `posture` (`hand` or `desk`), `covered` (the
+- `cyfr.on(event, handler)` hears `installed` (`[{ref, name, icon,
+  open}]`, the person's installed apps, each with its emoji or null and
+  whether it is open over the canvas), `posture` (`hand` or `desk`), `covered` (the
   rectangles the apps over the canvas cover) and `state` (`live` or
   `frozen`). The latest value, when one came, is handed over first.
 - `cyfr.open(ref)` opens an installed app, and `cyfr.press(binding,

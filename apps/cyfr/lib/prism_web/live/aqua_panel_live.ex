@@ -15,9 +15,25 @@ defmodule PrismWeb.AquaPanelLive do
   can be pasted onto the room, attributed to the person. The pane does
   both; the panel names the room and holds the list.
 
+  The panel is an overlay: it takes no room from the page. From the
+  bottom, the page draws: the canvas's frames (the canvas z-0, column
+  apps z-20, floating apps z-30, a full app z-50), the canvas's own chrome
+  (the edge strip z-51, the chips and switcher z-55, its notice z-60),
+  this panel and its button (z-70, the thread's menu inside the panel),
+  the command palette (z-80), and the system layer's prompts, which the
+  browser draws in its top layer above every z-index. The thread's menu
+  closes when the palette opens and goes with the panel when it closes.
+  On the desk it moves and resizes
+  (`AquaPanel`, `assets/js/aqua_panel/`, which reports each settled
+  gesture as `place`) and docks to the right edge as a full-height
+  sidebar (`dock`); in the hand it is a sheet from the bottom. Ctrl+J
+  (`toggle`, from the `AquaPanelKeys` hook) opens and closes it, Escape
+  from inside closes it, and a click elsewhere leaves it open.
+
   Nested in the app layout, so it rides every authenticated page — and
-  remounts on every navigation. Whether it is open and which thread it
-  shows are kept per browser session (`Arca.Cache`, under a hash of the
+  remounts on every navigation. Whether it is open, which thread it
+  shows, where it stands, its size and whether it is docked are kept per
+  browser session (`Arca.Cache`, under a hash of the
   session token, the way `Prism.Tray` keeps its counts), so the panel a
   person opened on one page is the panel they find on the next. Nothing
   here reads the page's focus: the panel establishes the session itself
@@ -64,6 +80,8 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:athanor, nil)
       |> assign(:kept, nil)
       |> assign(:open, false)
+      |> assign(:place, nil)
+      |> assign(:docked, false)
       |> assign(:threads, [])
       |> assign(:thread, nil)
       |> assign(:pane, nil)
@@ -99,22 +117,64 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   # ============================================================================
-  # What the session keeps: open or not, and which thread
+  # What the session keeps: open or not, which thread, where it stands and
+  # whether it is docked
   # ============================================================================
 
   defp restore(%{assigns: %{phase: :ready, kept: key}} = socket) do
     case Arca.Cache.get(key) do
-      {:ok, %{open: true, thread_id: id}} -> open_on(socket, id)
-      _ -> socket
+      {:ok, %{open: open, thread_id: id} = kept} ->
+        socket =
+          socket
+          |> assign(:place, kept[:place])
+          |> assign(:docked, kept[:docked] == true)
+
+        if open, do: open_on(socket, id), else: assign(socket, :thread, kept_thread(id))
+
+      _ ->
+        socket
     end
   end
 
   defp restore(socket), do: socket
 
-  defp remember(%{assigns: %{kept: key, open: open, thread: thread}} = socket) do
-    Arca.Cache.put(key, %{open: open, thread_id: thread && thread.id}, @kept_ttl_ms)
+  # Closed, the panel lists no threads; the kept id waits for the next open.
+  defp kept_thread(nil), do: nil
+  defp kept_thread(id), do: %{id: id}
+
+  defp remember(%{assigns: %{kept: key} = assigns} = socket) do
+    kept = %{
+      open: assigns.open,
+      thread_id: assigns.thread && assigns.thread.id,
+      place: assigns.place,
+      docked: assigns.docked
+    }
+
+    Arca.Cache.put(key, kept, @kept_ttl_ms)
     socket
   end
+
+  # A placement the hook reports, in whole CSS pixels, with the viewport it
+  # was made in (`vw`, `vh`, a screen's size from @min_viewport to
+  # @max_viewport): it must lie inside that viewport and be no smaller than
+  # the panel's minimum (the hook's own, in
+  # `assets/js/aqua_panel/geometry.js`). Anything else is refused and the
+  # kept placement stands. A client that misstates its viewport misplaces
+  # only its own panel, which carries no authority; the hook fits a kept
+  # placement to the current viewport when the panel opens.
+  @min_w 300
+  @min_h 360
+  @min_viewport 320
+  @max_viewport 16_000
+
+  defp placement(%{"x" => x, "y" => y, "w" => w, "h" => h, "vw" => vw, "vh" => vh})
+       when is_integer(x) and is_integer(y) and is_integer(w) and is_integer(h) and
+              is_integer(vw) and is_integer(vh) and vw in @min_viewport..@max_viewport and
+              vh in @min_viewport..@max_viewport and x >= 0 and y >= 0 and w >= @min_w and
+              h >= @min_h and x + w <= vw and y + h <= vh,
+       do: {:ok, %{x: x, y: y, w: w, h: h, vw: vw, vh: vh}}
+
+  defp placement(_params), do: :error
 
   # The list is read when the panel opens, not on every page: closed, the
   # panel costs the page nothing. `nil` is the blank thread; an id the list
@@ -153,6 +213,22 @@ defmodule PrismWeb.AquaPanelLive do
 
   def handle_event("close", _params, socket) do
     {:noreply, socket |> assign(:open, false) |> assign(:pane, nil) |> remember()}
+  end
+
+  def handle_event("toggle", params, %{assigns: %{open: true}} = socket),
+    do: handle_event("close", params, socket)
+
+  def handle_event("toggle", params, socket), do: handle_event("open", params, socket)
+
+  def handle_event("dock", _params, socket) do
+    {:noreply, socket |> assign(:docked, not socket.assigns.docked) |> remember()}
+  end
+
+  def handle_event("place", params, socket) do
+    case placement(params) do
+      {:ok, place} -> {:noreply, socket |> assign(:place, place) |> remember()}
+      :error -> {:noreply, socket}
+    end
   end
 
   def handle_event("select", %{"id" => id}, socket) do
@@ -217,62 +293,145 @@ defmodule PrismWeb.AquaPanelLive do
 
   def render(assigns) do
     ~H"""
-    <div id="aqua-panel-root">
+    <div id="aqua-panel-root" phx-hook="AquaPanelKeys">
       <%!-- Above the composer's Send on the chat page, which sits in the
-            corner the button would otherwise cover. --%>
+            corner the button would otherwise cover. The button and the
+            panel stand where the moduledoc's order puts them. --%>
       <button
         id="aqua-panel-button"
         type="button"
         phx-click={if @open, do: "close", else: "open"}
         aria-expanded={to_string(@open)}
         aria-controls={@open && "aqua-panel-sheet"}
-        title="Your own AQUA — on your own athanor, wherever you are"
-        class="fixed bottom-20 right-4 z-40 rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-indigo-500"
+        aria-keyshortcuts="Control+J"
+        title="Your own AQUA, on your own athanor wherever you are (Ctrl+J)"
+        class="fixed bottom-20 right-4 z-[70] rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-indigo-500"
       >
         AQUA
       </button>
 
-      <%!-- Escape (from inside the sheet) and the × hand focus back to the
-            button. The composer's hook takes focus when the sheet opens. Not
-            modal, and NOT closed by a click elsewhere: the page under it stays
-            live on purpose — it is the room being read and pasted into, and a
-            click on the room to scroll or select a line must not take the
-            panel away — so nothing traps focus here and nothing listens for
-            a click outside. --%>
+      <%!-- Escape from inside the sheet (the hook's: the thread's own view
+            keeps its keys from this view's bindings) and the × hand focus
+            back to the button. The composer's hook takes focus when the
+            sheet opens. Not modal, and NOT closed by a click elsewhere: the
+            page under it stays live on purpose — it is the room being read
+            and pasted into, and a click on the room to scroll or select a
+            line must not take the panel away — so nothing traps focus here
+            and nothing listens for a click outside. Its style is the hook's:
+            it draws the placement there, and the server's patches leave
+            it. --%>
       <aside
         :if={@open}
         id="aqua-panel-sheet"
         role="dialog"
         aria-label="Your AQUA"
         tabindex="-1"
-        phx-keydown={close_and_return()}
-        phx-key="Escape"
-        class="fixed top-12 bottom-0 right-0 z-40 flex w-[28rem] max-w-full flex-col border-l border-gray-800 bg-gray-950 shadow-2xl focus:outline-none"
+        phx-hook="AquaPanel"
+        phx-mounted={JS.ignore_attributes(["style", "data-aqua-moving"])}
+        data-docked={to_string(@docked)}
+        data-x={@place && @place.x}
+        data-y={@place && @place.y}
+        data-w={@place && @place.w}
+        data-h={@place && @place.h}
+        class="aqua-panel z-[70] flex flex-col text-text-primary focus:outline-none"
       >
-        <header class="flex items-center gap-2 border-b border-gray-800 px-3 py-2">
-          <span class="shrink-0 text-sm font-medium text-gray-200">AQUA · You</span>
-          <select
-            id="aqua-panel-threads"
-            name="id"
-            phx-change="select"
-            title="Your threads"
-            aria-label="Your threads"
-            class="min-w-0 flex-1 truncate rounded border border-gray-800 bg-gray-900 px-2 py-1 text-xs text-gray-300"
-          >
-            <option value="" selected={is_nil(@thread)}>New thread</option>
-            <option
-              :for={thread <- @threads}
-              value={thread.id}
-              selected={@thread && thread.id == @thread.id}
+        <%!-- While a gesture runs it covers the whole viewport, so the
+              pointer never passes over a frame, which would take it. --%>
+        <div class="aqua-panel-shield" aria-hidden="true"></div>
+        <div
+          :for={edge <- ~w(n s e w ne nw se sw)}
+          class="aqua-panel-edge"
+          data-aqua-edge={edge}
+          aria-hidden="true"
+        >
+        </div>
+        <button
+          type="button"
+          class="aqua-panel-handle w-full"
+          data-aqua-handle
+          aria-label="Change height"
+        >
+          <span class="block h-1 w-10 rounded-full bg-text-muted"></span>
+        </button>
+        <header
+          class="flex h-[42px] shrink-0 items-center gap-2 border-b border-border-default pl-3 pr-2"
+          data-aqua-grip
+        >
+          <span class="aqua-panel-orb" aria-hidden="true"></span>
+          <span class="shrink-0 text-sm font-semibold">AQUA</span>
+          <span class="relative ml-1 min-w-0 max-w-[13rem]">
+            <select
+              id="aqua-panel-threads"
+              name="id"
+              phx-change="select"
+              title="Your threads"
+              aria-label="Your threads"
+              class="w-full min-w-0 cursor-pointer appearance-none truncate rounded-[7px] border border-border-default bg-transparent py-[3px] pl-2 pr-6 text-xs text-text-secondary hover:text-text-primary focus:border-border-focus focus:outline-none"
             >
-              {thread.title}
-            </option>
-          </select>
+              <option value="" selected={is_nil(@thread)}>New thread</option>
+              <option
+                :for={thread <- @threads}
+                value={thread.id}
+                selected={@thread && thread.id == @thread.id}
+              >
+                {thread.title}
+              </option>
+            </select>
+            <span
+              class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-text-muted"
+              aria-hidden="true"
+            >
+              ▾
+            </span>
+          </span>
+          <span class="flex-1"></span>
+          <%!-- The thread's model, soul or role and usage: the pane's menu,
+                which the panel's hook opens and closes. --%>
           <button
+            id="aqua-panel-more"
+            type="button"
+            data-aqua-menu-toggle
+            aria-controls="aqua-panel-pane-menu"
+            aria-expanded="false"
+            phx-mounted={JS.ignore_attributes(["aria-expanded"])}
+            aria-label="This thread's model and usage"
+            title="This thread's model and usage"
+            class="aqua-panel-ghost"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="3" cy="8" r="1.4" />
+              <circle cx="8" cy="8" r="1.4" />
+              <circle cx="13" cy="8" r="1.4" />
+            </svg>
+          </button>
+          <button
+            id="aqua-panel-dock"
+            type="button"
+            phx-click="dock"
+            aria-pressed={to_string(@docked)}
+            aria-label={if @docked, do: "Float over the page", else: "Pin to the right edge"}
+            title={if @docked, do: "Float over the page", else: "Pin to the right edge"}
+            class="aqua-panel-dock aqua-panel-ghost"
+          >
+            <svg
+              class="h-3.5 w-3.5"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+              <path :if={not @docked} d="M10 2.5v11" />
+              <rect :if={@docked} x="4.5" y="5.5" width="7" height="5" rx="1" />
+            </svg>
+          </button>
+          <button
+            id="aqua-panel-close"
             type="button"
             phx-click={close_and_return()}
             aria-label="Close"
-            class="rounded px-2 py-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+            title="Close (Esc)"
+            class="aqua-panel-ghost text-sm"
           >
             ×
           </button>
@@ -282,13 +441,14 @@ defmodule PrismWeb.AquaPanelLive do
           :if={@room}
           id="aqua-panel-room"
           title="What your AQUA reads with each message you send here"
-          class="truncate border-b border-gray-800 px-3 py-1 text-[11px] text-gray-500"
+          class="shrink-0 truncate border-b border-border-default px-3 py-1 text-[11px] text-text-muted"
         >
           Reading {PrismWeb.RoomFeed.label(@room)}
         </p>
 
         {live_render(@socket, PrismWeb.ThreadPaneLive,
           id: "aqua-panel-pane",
+          container: {:div, class: "flex min-h-0 flex-1 flex-col"},
           session: %{
             "athanor_id" => @athanor.id,
             "thread_id" => @thread && @thread.id,

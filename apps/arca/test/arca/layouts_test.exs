@@ -6,8 +6,10 @@ defmodule Arca.LayoutsTest do
   The per-person layout documents: published fenced over the revision the
   writer read, read back as the document with its revision and digest,
   one per person in the actor's athanor; a publication over a newer
-  revision is refused, a member that lost its slot publishes nothing, and
-  bytes that no longer hold their digest read as corrupt.
+  revision is refused, a member that lost its slot publishes nothing,
+  bytes that no longer hold their digest read as corrupt, and bytes that
+  hold it but name a version this code does not read are told apart, at
+  their revision, so the next publication replaces them.
   """
 
   # Takes a slot through `Arca.ControlPlane`, which writes the process-wide
@@ -50,7 +52,7 @@ defmodule Arca.LayoutsTest do
   defp layout(canvas \\ "tincture:local.canvas") do
     {:ok, layout} =
       Prima.Layout.validate(%{
-        "version" => 2,
+        "version" => 3,
         "canvases" => [
           %{
             "id" => "home",
@@ -58,9 +60,13 @@ defmodule Arca.LayoutsTest do
             "postures" => %{
               "hand" => %{
                 "apps" => [
-                  %{"tincture" => "tincture:acme.uninstalled", "mode" => "column", "order" => 0}
-                ],
-                "floating" => []
+                  %{
+                    "tincture" => "tincture:acme.uninstalled",
+                    "placement" => "full",
+                    "order" => 0,
+                    "minimised" => false
+                  }
+                ]
               }
             }
           }
@@ -68,6 +74,22 @@ defmodule Arca.LayoutsTest do
       })
 
     layout
+  end
+
+  # Bytes published as the layout's over `revision_read`, as an earlier
+  # CYFR, whose documents this one does not read, published its own.
+  defp publish_bytes!(actor, user, bytes, revision_read) do
+    {:ok, staged} = Arca.Storage.stage(actor, "layouts", bytes)
+    {:ok, slot} = ControlPlane.member_slot()
+
+    change = %Arca.FencedPublication.Change{
+      resource: {:document, actor.athanor_id, Layouts.key(user)},
+      staged: staged,
+      digest: Prima.Digest.sha256(bytes)
+    }
+
+    {:ok, revision} = Arca.FencedPublication.publish(change, revision_read, slot)
+    revision
   end
 
   # A claimant runs, and this member holds its slot.
@@ -163,6 +185,40 @@ defmodule Arca.LayoutsTest do
         set: [digest: "sha256:" <> String.duplicate("0", 64)]
       )
 
+    assert {:error, :corrupt} = Layouts.get(actor, user)
+  end
+
+  test "a document of a version this code does not read is told apart at its revision, and the next publication replaces it",
+       %{actor: actor, user: user} do
+    for revision <- 0..5, do: {:ok, _} = Layouts.publish(actor, user, layout(), revision)
+
+    version_2 =
+      ~s({"canvases":[{"id":"home","postures":{"desk":{"apps":[{"mode":"column","order":0,) <>
+        ~s("tincture":"tincture:local.vault"}],"floating":[]}},"tincture":"tincture:local.canvas"}],) <>
+        ~s("version":2})
+
+    assert publish_bytes!(actor, user, version_2, 6) == 7
+    assert {:error, {:unsupported_version, 7}} = Layouts.get(actor, user)
+
+    assert {:error, :stale} = Layouts.publish(actor, user, layout(), 6)
+    assert {:ok, 8} = Layouts.publish(actor, user, layout(), 7)
+
+    expected = layout()
+    digest = Prima.Layout.digest(expected)
+    assert {:ok, %{document: ^expected, revision: 8, digest: ^digest}} = Layouts.get(actor, user)
+  end
+
+  test "bytes that hold their digest but are not a layout of this version read as corrupt", %{
+    actor: actor,
+    user: user
+  } do
+    assert publish_bytes!(actor, user, ~s({"canvases":[],"version":3,"desks":[]}), 0) == 1
+    assert {:error, :corrupt} = Layouts.get(actor, user)
+
+    assert publish_bytes!(actor, user, ~s({"canvases":[]}), 1) == 2
+    assert {:error, :corrupt} = Layouts.get(actor, user)
+
+    assert publish_bytes!(actor, user, "not json", 2) == 3
     assert {:error, :corrupt} = Layouts.get(actor, user)
   end
 

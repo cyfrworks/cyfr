@@ -511,13 +511,13 @@ defmodule Sanctum.Gate.StreamsTest do
       assert [%{admission: "admitted"}, %{admission: "admitted"}] = decisions(ctx)
     end
 
-    test "is refused for a frame whose version is a floating tincture, one decision each", %{
+    test "is refused for a frame whose version is an app, one decision each", %{
       ctx: ctx
     } do
       # Installed straight in the registry, so the rules never ran on it.
-      floating =
-        tincture_row!(ctx, "float-feeds", %{
-          "frame" => %{"placement" => "float"},
+      app =
+        tincture_row!(ctx, "app-feeds", %{
+          "frame" => %{"capabilities" => ["pointer_lock"]},
           "entry" => "index.html",
           "streams" => [
             %{"name" => "feed.results", "subject" => "btc"},
@@ -526,8 +526,8 @@ defmodule Sanctum.Gate.StreamsTest do
         })
 
       # Its placement reads, and is not a canvas.
-      {:ok, row} = Components.get_component(ctx, floating, "1.0.0", "local", "tincture")
-      assert Components.tincture_placement(ctx, row) == {:ok, "float"}
+      {:ok, row} = Components.get_component(ctx, app, "1.0.0", "local", "tincture")
+      assert Components.tincture_placement(ctx, row) == {:ok, nil}
 
       for {name, subject} <- [{"feed.results", "btc"}, {"runs.changes", nil}] do
         assert {:error,
@@ -536,8 +536,8 @@ defmodule Sanctum.Gate.StreamsTest do
                   reason: :canvas_stream,
                   stage: :admission,
                   message: message
-                }} = Sanctum.Gate.open_stream(framed(ctx, floating), name, subject),
-               "a floating tincture's frame opened #{name}"
+                }} = Sanctum.Gate.open_stream(framed(ctx, app), name, subject),
+               "an app's frame opened #{name}"
 
         assert message ==
                  "The stream #{name} declares a shape, and a frame opens it only when " <>

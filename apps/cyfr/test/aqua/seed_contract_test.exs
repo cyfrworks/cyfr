@@ -312,7 +312,7 @@ defmodule Aqua.SeedContractTest do
     assert is_binary(version)
     assert entry["tincture"] == Prima.ComponentRef.to_string(%{parsed | version: nil})
 
-    layout = &Prima.Layout.validate(%{"version" => 2, "canvases" => [&1]})
+    layout = &Prima.Layout.validate(%{"version" => 3, "canvases" => [&1]})
     assert {:ok, _} = layout.(entry)
     assert {:error, _} = layout.(%{entry | "tincture" => pinned})
   end

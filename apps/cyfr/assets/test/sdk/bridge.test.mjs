@@ -142,6 +142,20 @@ describe("what the port carries", () => {
     assert.equal(events.length, 1)
     port.close()
   })
+
+  test("the count outlives a patch of the frame's element, which takes the view's attributes", async () => {
+    const {hook, el, port} = await connected()
+
+    port.postMessage({v: 1, verb: "invoke", frame: FRAME, args: {}})
+    await eventually(() => hook.dropped === 1)
+
+    // The view's render carries no data-dropped: a patch of the element
+    // removes it, and then the hook is told the element was updated.
+    delete el.dataset.dropped
+    hook.updated()
+    assert.equal(el.dataset.dropped, "1")
+    port.close()
+  })
 })
 
 describe("a rotated credential", () => {

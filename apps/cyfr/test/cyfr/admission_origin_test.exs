@@ -526,6 +526,8 @@ defmodule Cyfr.AdmissionOriginTest do
   end
 
   describe "a hidden frame" do
+    @window %{x: 0, y: 0, w: 3000, h: 5000}
+
     test "the shell suspends a hidden frame only when it holds no background grant" do
       # An app of the visible canvas, and two apps of a hidden one.
       idle = {:app, "work", "tincture:local.idle"}
@@ -533,12 +535,12 @@ defmodule Cyfr.AdmissionOriginTest do
       frames =
         %{Prism.Frames.new() | canvas: "home"}
         |> Prism.Frames.put(
-          shell_frame({:app, "home", "tincture:local.shown"}, {:column, 0}, false)
+          shell_frame({:app, "home", "tincture:local.shown"}, {:window, @window}, false)
         )
         |> Prism.Frames.put(
-          shell_frame({:app, "work", "tincture:local.kept"}, {:column, 0}, true)
+          shell_frame({:app, "work", "tincture:local.kept"}, {:window, @window}, true)
         )
-        |> Prism.Frames.put(shell_frame(idle, {:column, 1}, false))
+        |> Prism.Frames.put(shell_frame(idle, {:tile, :right, 2500}, false))
         |> Prism.Frames.visibility()
 
       assert Prism.Frames.plan(frames) == [{:freeze, idle}]
@@ -1026,10 +1028,11 @@ defmodule Cyfr.AdmissionOriginTest do
       credential_id: nil,
       bearer: nil,
       placement: placement,
+      stack: 0,
+      minimised: false,
       visible: true,
       background: background,
       actions: [],
-      arranged: true,
       boot: nil
     }
   end

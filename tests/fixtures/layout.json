@@ -1,7 +1,7 @@
 {
-  "about": "Vectors for Prima.Layout (apps/prima/test/prima/layout_test.exs). `valid` is a document in canonical order whose canonical JSON (RFC 8785) is `canonical` and whose digest is `digest`; it names a tincture nobody installed, which stays valid. Every `invalid` document is refused for the reason `why` gives.",
+  "about": "Vectors for Prima.Layout (apps/prima/test/prima/layout_test.exs). `valid` is a document in canonical order whose canonical JSON (RFC 8785) is `canonical` and whose digest is `digest`; it names a tincture nobody installed, which stays valid. Every `invalid` document is refused for the reason `why` gives. Every `unsupported` document names a version this code does not read: `validate` refuses it, and its stored bytes decode as `unsupported_version`, which the layout tool answers with the shipped default at the stored revision.",
   "valid": {
-    "version": 2,
+    "version": 3,
     "canvases": [
       {
         "id": "home",
@@ -10,28 +10,38 @@
           "desk": {
             "apps": [
               {
-                "tincture": "tincture:local.flappy-bird",
-                "mode": "full",
-                "order": 0
-              },
-              {
-                "tincture": "tincture:local.vault",
-                "mode": "column",
-                "order": 1
+                "tincture": "tincture:local.weather-look",
+                "placement": "tile",
+                "order": 0,
+                "side": "right",
+                "share": 2500,
+                "minimised": false
               },
               {
                 "tincture": "tincture:example.com.not-installed",
-                "mode": "column",
-                "order": 2
-              }
-            ],
-            "floating": [
+                "placement": "tile",
+                "order": 1,
+                "side": "left",
+                "share": 2000,
+                "minimised": true
+              },
               {
-                "tincture": "tincture:local.timer",
-                "position": {
-                  "x": 9000,
-                  "y": 500
-                }
+                "tincture": "tincture:local.flappy-bird",
+                "placement": "window",
+                "order": 2,
+                "geometry": {
+                  "x": 4700,
+                  "y": 4400,
+                  "w": 2300,
+                  "h": 5000
+                },
+                "minimised": false
+              },
+              {
+                "tincture": "tincture:local.vault",
+                "placement": "full",
+                "order": 3,
+                "minimised": true
               }
             ]
           },
@@ -39,11 +49,11 @@
             "apps": [
               {
                 "tincture": "tincture:local.vault",
-                "mode": "full",
-                "order": 0
+                "placement": "full",
+                "order": 0,
+                "minimised": false
               }
-            ],
-            "floating": []
+            ]
           }
         }
       },
@@ -54,16 +64,20 @@
       }
     ]
   },
-  "canonical": "{\"canvases\":[{\"id\":\"home\",\"postures\":{\"desk\":{\"apps\":[{\"mode\":\"full\",\"order\":0,\"tincture\":\"tincture:local.flappy-bird\"},{\"mode\":\"column\",\"order\":1,\"tincture\":\"tincture:local.vault\"},{\"mode\":\"column\",\"order\":2,\"tincture\":\"tincture:example.com.not-installed\"}],\"floating\":[{\"position\":{\"x\":9000,\"y\":500},\"tincture\":\"tincture:local.timer\"}]},\"hand\":{\"apps\":[{\"mode\":\"full\",\"order\":0,\"tincture\":\"tincture:local.vault\"}],\"floating\":[]}},\"tincture\":\"tincture:local.canvas\"},{\"id\":\"markets\",\"postures\":{},\"tincture\":\"tincture:local.markets\"}],\"version\":2}",
-  "digest": "sha256:450137bd2900e84fd981a0c620f5d33c2b1cd10280f6d5e0244390e9a4a9f770",
+  "canonical": "{\"canvases\":[{\"id\":\"home\",\"postures\":{\"desk\":{\"apps\":[{\"minimised\":false,\"order\":0,\"placement\":\"tile\",\"share\":2500,\"side\":\"right\",\"tincture\":\"tincture:local.weather-look\"},{\"minimised\":true,\"order\":1,\"placement\":\"tile\",\"share\":2000,\"side\":\"left\",\"tincture\":\"tincture:example.com.not-installed\"},{\"geometry\":{\"h\":5000,\"w\":2300,\"x\":4700,\"y\":4400},\"minimised\":false,\"order\":2,\"placement\":\"window\",\"tincture\":\"tincture:local.flappy-bird\"},{\"minimised\":true,\"order\":3,\"placement\":\"full\",\"tincture\":\"tincture:local.vault\"}]},\"hand\":{\"apps\":[{\"minimised\":false,\"order\":0,\"placement\":\"full\",\"tincture\":\"tincture:local.vault\"}]}},\"tincture\":\"tincture:local.canvas\"},{\"id\":\"markets\",\"postures\":{},\"tincture\":\"tincture:local.markets\"}],\"version\":3}",
+  "digest": "sha256:09fb41a49e798f0ad0545de442a1436b7e9d1d77403e5f9f06b8031452bacc6a",
   "invalid": [
     {
       "why": "an app names an operation: a layout can only arrange",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "column", "order": 0, "action": "vault.list"}], "floating": []}}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false, "action": "vault.list"}]}}}]}
     },
     {
       "why": "a posture names a stream: a layout can only arrange",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [], "floating": [], "stream": "vault.status"}}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [], "stream": "vault.status"}}}]}
+    },
+    {
+      "why": "a version-2 document, which this code does not read",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "column", "order": 0}], "floating": []}}}]}
     },
     {
       "why": "a version-1 document, which no reader reads",
@@ -71,63 +85,137 @@
     },
     {
       "why": "nine canvases, one more than a layout holds",
-      "document": {"version": 2, "canvases": [{"id": "c1", "tincture": "tincture:local.canvas-1", "postures": {}}, {"id": "c2", "tincture": "tincture:local.canvas-2", "postures": {}}, {"id": "c3", "tincture": "tincture:local.canvas-3", "postures": {}}, {"id": "c4", "tincture": "tincture:local.canvas-4", "postures": {}}, {"id": "c5", "tincture": "tincture:local.canvas-5", "postures": {}}, {"id": "c6", "tincture": "tincture:local.canvas-6", "postures": {}}, {"id": "c7", "tincture": "tincture:local.canvas-7", "postures": {}}, {"id": "c8", "tincture": "tincture:local.canvas-8", "postures": {}}, {"id": "c9", "tincture": "tincture:local.canvas-9", "postures": {}}]}
+      "document": {"version": 3, "canvases": [{"id": "c1", "tincture": "tincture:local.canvas-1", "postures": {}}, {"id": "c2", "tincture": "tincture:local.canvas-2", "postures": {}}, {"id": "c3", "tincture": "tincture:local.canvas-3", "postures": {}}, {"id": "c4", "tincture": "tincture:local.canvas-4", "postures": {}}, {"id": "c5", "tincture": "tincture:local.canvas-5", "postures": {}}, {"id": "c6", "tincture": "tincture:local.canvas-6", "postures": {}}, {"id": "c7", "tincture": "tincture:local.canvas-7", "postures": {}}, {"id": "c8", "tincture": "tincture:local.canvas-8", "postures": {}}, {"id": "c9", "tincture": "tincture:local.canvas-9", "postures": {}}]}
     },
     {
       "why": "two canvases on one tincture",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}}, {"id": "work", "tincture": "tincture:local.canvas", "postures": {}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}}, {"id": "work", "tincture": "tincture:local.canvas", "postures": {}}]}
     },
     {
       "why": "one canvas id used twice",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}}, {"id": "home", "tincture": "tincture:local.markets", "postures": {}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}}, {"id": "home", "tincture": "tincture:local.markets", "postures": {}}]}
     },
     {
       "why": "33 apps in one posture, one more than a canvas places",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.app-0", "mode": "column", "order": 0}, {"tincture": "tincture:local.app-1", "mode": "column", "order": 1}, {"tincture": "tincture:local.app-2", "mode": "column", "order": 2}, {"tincture": "tincture:local.app-3", "mode": "column", "order": 3}, {"tincture": "tincture:local.app-4", "mode": "column", "order": 4}, {"tincture": "tincture:local.app-5", "mode": "column", "order": 5}, {"tincture": "tincture:local.app-6", "mode": "column", "order": 6}, {"tincture": "tincture:local.app-7", "mode": "column", "order": 7}, {"tincture": "tincture:local.app-8", "mode": "column", "order": 8}, {"tincture": "tincture:local.app-9", "mode": "column", "order": 9}, {"tincture": "tincture:local.app-10", "mode": "column", "order": 10}, {"tincture": "tincture:local.app-11", "mode": "column", "order": 11}, {"tincture": "tincture:local.app-12", "mode": "column", "order": 12}, {"tincture": "tincture:local.app-13", "mode": "column", "order": 13}, {"tincture": "tincture:local.app-14", "mode": "column", "order": 14}, {"tincture": "tincture:local.app-15", "mode": "column", "order": 15}, {"tincture": "tincture:local.app-16", "mode": "column", "order": 16}, {"tincture": "tincture:local.app-17", "mode": "column", "order": 17}, {"tincture": "tincture:local.app-18", "mode": "column", "order": 18}, {"tincture": "tincture:local.app-19", "mode": "column", "order": 19}, {"tincture": "tincture:local.app-20", "mode": "column", "order": 20}, {"tincture": "tincture:local.app-21", "mode": "column", "order": 21}, {"tincture": "tincture:local.app-22", "mode": "column", "order": 22}, {"tincture": "tincture:local.app-23", "mode": "column", "order": 23}, {"tincture": "tincture:local.app-24", "mode": "column", "order": 24}, {"tincture": "tincture:local.app-25", "mode": "column", "order": 25}, {"tincture": "tincture:local.app-26", "mode": "column", "order": 26}, {"tincture": "tincture:local.app-27", "mode": "column", "order": 27}, {"tincture": "tincture:local.app-28", "mode": "column", "order": 28}, {"tincture": "tincture:local.app-29", "mode": "column", "order": 29}, {"tincture": "tincture:local.app-30", "mode": "column", "order": 30}, {"tincture": "tincture:local.app-31", "mode": "column", "order": 31}, {"tincture": "tincture:local.app-32", "mode": "column", "order": 32}], "floating": []}}}]}
-    },
-    {
-      "why": "a floating position outside the viewport",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [], "floating": [{"tincture": "tincture:local.timer", "position": {"x": 10001, "y": 0}}]}}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.app-0", "placement": "window", "order": 0, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-1", "placement": "window", "order": 1, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-2", "placement": "window", "order": 2, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-3", "placement": "window", "order": 3, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-4", "placement": "window", "order": 4, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-5", "placement": "window", "order": 5, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-6", "placement": "window", "order": 6, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-7", "placement": "window", "order": 7, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-8", "placement": "window", "order": 8, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-9", "placement": "window", "order": 9, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-10", "placement": "window", "order": 10, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-11", "placement": "window", "order": 11, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-12", "placement": "window", "order": 12, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-13", "placement": "window", "order": 13, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-14", "placement": "window", "order": 14, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-15", "placement": "window", "order": 15, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-16", "placement": "window", "order": 16, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-17", "placement": "window", "order": 17, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-18", "placement": "window", "order": 18, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-19", "placement": "window", "order": 19, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-20", "placement": "window", "order": 20, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-21", "placement": "window", "order": 21, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-22", "placement": "window", "order": 22, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-23", "placement": "window", "order": 23, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-24", "placement": "window", "order": 24, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-25", "placement": "window", "order": 25, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-26", "placement": "window", "order": 26, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-27", "placement": "window", "order": 27, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-28", "placement": "window", "order": 28, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-29", "placement": "window", "order": 29, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-30", "placement": "window", "order": 30, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-31", "placement": "window", "order": 31, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.app-32", "placement": "window", "order": 32, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}]}}}]}
     },
     {
       "why": "an unknown key on a canvas",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}, "title": "Home"}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}, "title": "Home"}]}
     },
     {
       "why": "a posture that is neither hand nor desk",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"wall": {"apps": [], "floating": []}}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"wall": {"apps": []}}}]}
     },
     {
       "why": "a canvas named at a version",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas:0.1.0", "postures": {}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas:0.1.0", "postures": {}}]}
     },
     {
       "why": "a component that is not a tincture",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "catalyst:local.claude", "mode": "column", "order": 0}], "floating": []}}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "catalyst:local.claude", "placement": "window", "order": 0, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}]}}}]}
     },
     {
-      "why": "an app mode that is not full or column",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "icon", "order": 0}], "floating": []}}}]}
+      "why": "a placement that is none of window, tile and full",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "column", "order": 0, "minimised": false}]}}}]}
     },
     {
-      "why": "one tincture placed twice in a posture, as an app and floating",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.timer", "mode": "column", "order": 0}], "floating": [{"tincture": "tincture:local.timer", "position": {"x": 0, "y": 0}}]}}}]}
+      "why": "one tincture placed twice in a posture, as a window and a tile",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.timer", "placement": "window", "order": 0, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}, {"tincture": "tincture:local.timer", "placement": "tile", "order": 1, "side": "right", "share": 2500, "minimised": false}]}}}]}
     },
     {
       "why": "a canvas without its postures",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas"}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas"}]}
     },
     {
-      "why": "a posture without its floating entries",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": []}}}]}
+      "why": "a posture without its apps",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {}}}]}
+    },
+    {
+      "why": "a posture carrying version 2's floating list",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [], "floating": []}}}]}
     },
     {
       "why": "a canvas id outside its grammar",
-      "document": {"version": 2, "canvases": [{"id": "Home Page", "tincture": "tincture:local.canvas", "postures": {}}]}
+      "document": {"version": 3, "canvases": [{"id": "Home Page", "tincture": "tincture:local.canvas", "postures": {}}]}
     },
     {
       "why": "an order past 1,000,000",
-      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "column", "order": 1000001}], "floating": []}}}]}
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 1000001, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false}]}}}]}
+    },
+    {
+      "why": "an app without its minimised flag",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}}]}}}]}
+    },
+    {
+      "why": "a minimised flag that is not a boolean",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": "yes"}]}}}]}
+    },
+    {
+      "why": "a window without its geometry",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a window past the viewport's edge",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 10001, "y": 0, "w": 3000, "h": 5000}, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a window of no width",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 0, "y": 0, "w": 0, "h": 5000}, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a negative window position",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": -1, "y": 0, "w": 3000, "h": 5000}, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a geometry with another key",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 0, "y": 0, "w": 3000, "h": 5000, "z": 1}, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a geometry lacking its height",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 0, "y": 0, "w": 3000}, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a window carrying a tile's side",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "window", "order": 0, "geometry": {"x": 1000, "y": 1000, "w": 3000, "h": 5000}, "minimised": false, "side": "left"}]}}}]}
+    },
+    {
+      "why": "a tile without a side",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "tile", "order": 0, "share": 2500, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a tile docked at the top",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "tile", "order": 0, "side": "top", "share": 2500, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a tile without its share",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "tile", "order": 0, "side": "right", "minimised": false}]}}}]}
+    },
+    {
+      "why": "a tile with no share of the width",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "tile", "order": 0, "side": "right", "share": 0, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a tile wider than the viewport",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "tile", "order": 0, "side": "right", "share": 10001, "minimised": false}]}}}]}
+    },
+    {
+      "why": "a tile carrying a window's geometry",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "tile", "order": 0, "side": "right", "share": 2500, "minimised": false, "geometry": {"x": 0, "y": 0, "w": 3000, "h": 5000}}]}}}]}
+    },
+    {
+      "why": "a full app carrying a geometry",
+      "document": {"version": 3, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "placement": "full", "order": 0, "minimised": false, "geometry": {"x": 0, "y": 0, "w": 3000, "h": 5000}}]}}}]}
+    }
+  ],
+  "unsupported": [
+    {
+      "why": "a version-2 document an earlier CYFR stored",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "column", "order": 0}], "floating": []}}}]}
+    },
+    {
+      "why": "a version-4 document a later CYFR stored",
+      "document": {"version": 4, "canvases": [], "desks": []}
     }
   ]
 }
