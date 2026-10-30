@@ -77,13 +77,18 @@ defmodule Arca.Shares do
           updated_at: DateTime.t() | nil
         }
 
-  @typedoc "A share's source entry, as a reader binds it: no material and no name."
+  @typedoc """
+  A share's source entry, as a reader binds it: no material and no name,
+  and every column its binding digest is derived from.
+  """
   @type source :: %{
           id: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
           field_names: String.t(),
           destination: String.t(),
+          oauth_endpoints: String.t() | nil,
+          oauth_scopes: String.t() | nil,
           binding_digest: String.t() | nil,
           attach_only: boolean(),
           status: String.t()
@@ -97,6 +102,17 @@ defmodule Arca.Shares do
 
   @typedoc "What a revocation revoked and the profiles it blocked."
   @type revoked :: %{share_ids: [String.t()], blocked: [{String.t(), String.t()}]}
+
+  @doc """
+  Whether `audience`, `%{audience: _, group_id: _}`, is one a share may
+  name (`Arca.Schemas.Share.audience_valid?/1`).
+  """
+  @spec audience_valid?(term()) :: boolean()
+  defdelegate audience_valid?(audience), to: Share
+
+  @doc "Whether `cap` is a cap a share may hold (`Arca.Schemas.Share.cap?/1`)."
+  @spec cap?(term()) :: boolean()
+  defdelegate cap?(cap), to: Share
 
   defguardp resolved(athanor_id) when is_binary(athanor_id) and athanor_id != ""
   defguardp platform(actor) when is_struct(actor, Prima.Actor) and actor.scope == :platform
@@ -268,7 +284,7 @@ defmodule Arca.Shares do
 
   defp eligible(%VaultEntry{} = entry) do
     cond do
-      entry.kind not in Prima.CredentialKinds.instance() -> {:error, :kind_not_shareable}
+      entry.kind not in Prima.CredentialKinds.shareable() -> {:error, :kind_not_shareable}
       not complete_destination?(entry.destination) -> {:error, :destination_incomplete}
       true -> :ok
     end
@@ -774,6 +790,8 @@ defmodule Arca.Shares do
       provider_hint: v.provider_hint,
       field_names: v.field_names,
       destination: v.destination,
+      oauth_endpoints: v.oauth_endpoints,
+      oauth_scopes: v.oauth_scopes,
       binding_digest: v.binding_digest,
       attach_only: v.attach_only,
       status: v.status

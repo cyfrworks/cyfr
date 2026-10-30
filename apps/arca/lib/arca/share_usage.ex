@@ -27,8 +27,9 @@ defmodule Arca.ShareUsage do
   day admit one. `reset_at` is the next UTC midnight after the claimed
   day.
 
-  `usage/3` is the owner's read; `sweep/1` deletes the rows of days older
-  than thirty-five, in every athanor.
+  `usage/3` is the owner's read and `used_today/3` one person's count of
+  today; `sweep/1` deletes the rows of days older than thirty-five, in
+  every athanor.
   """
 
   import Ecto.Query
@@ -147,6 +148,34 @@ defmodule Arca.ShareUsage do
 
   def usage(%Prima.Actor{}, share_id, days)
       when is_binary(share_id) and is_integer(days) and days > 0,
+      do: {:error, :no_athanor}
+
+  @doc """
+  How many times `user_id` used the share `share_id` of the actor's
+  athanor today, on the database's date as a claim counts it: `0` when
+  they have not.
+  """
+  @spec used_today(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :no_athanor | term()}
+  def used_today(%Prima.Actor{athanor_id: athanor_id}, share_id, user_id)
+      when resolved(athanor_id) and is_binary(share_id) and is_binary(user_id) and user_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.ShareUsage.used_today", fn ->
+      day = DateTime.to_date(Arca.ServerMetaStorage.now!())
+
+      count =
+        from(u in Usage,
+          where: u.share_id == ^share_id and u.user_id == ^user_id and u.day == ^day,
+          select: u.count
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.one()
+
+      {:ok, count || 0}
+    end)
+  end
+
+  def used_today(%Prima.Actor{}, share_id, user_id)
+      when is_binary(share_id) and is_binary(user_id),
       do: {:error, :no_athanor}
 
   @doc """
