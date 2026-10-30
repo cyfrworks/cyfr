@@ -142,7 +142,10 @@ docker run -d --name "$PG" -p "127.0.0.1:$PG_PORT:5432" -v "$PG_VOLUME:/var/lib/
   -e POSTGRES_USER=cyfrrun -e POSTGRES_DB=cyfrrun -e "POSTGRES_PASSWORD=$(cat "$SECRETS/pg")" \
   postgres:16-alpine >/dev/null || fail "the registry's database did not start"
 closes=$((SECONDS + 60))
-until docker exec "$PG" pg_isready -U cyfrrun -d cyfrrun >/dev/null 2>&1; do
+# Ready over TCP, never the socket: the image's first start runs its init
+# scripts on a server that listens on the socket alone, then restarts it,
+# so a socket answer can come from the server about to stop.
+until docker exec "$PG" pg_isready -h 127.0.0.1 -p 5432 -U cyfrrun -d cyfrrun >/dev/null 2>&1; do
   [ "$SECONDS" -lt "$closes" ] || fail "the registry's database did not answer within 60 s"
   sleep 1
 done
