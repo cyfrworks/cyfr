@@ -218,10 +218,10 @@ const (
 	PersonCloseRecovery             = "close_recovery"
 	PersonEnroll                    = "enroll"
 	PersonEnrollAbandon             = "enroll_abandon"
-	PersonEnrollHolder              = "enroll_holder"
-	PersonKit                       = "kit"
-	PersonKitAck                    = "kit_ack"
 	PersonLinkDoor                  = "link_door"
+	PersonRecoveryCode              = "recovery_code"
+	PersonRecoveryCodeAdd           = "recovery_code_add"
+	PersonRecoveryCodeSaved         = "recovery_code_saved"
 	PersonRenewCertificate          = "renew_certificate"
 	PersonRotate                    = "rotate"
 	PersonStatus                    = "status"
@@ -355,7 +355,7 @@ var Actions = map[string][]string{
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
-	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "renew_certificate", "rotate", "status", "unlink_door"},
+	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "enroll", "enroll_abandon", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "rotate", "status", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -3354,9 +3354,9 @@ func (args PersonCloseRecoveryArgs) MarshalJSON() ([]byte, error) {
 
 // PersonEnrollArgs carries arguments for person.enroll.
 type PersonEnrollArgs struct {
-	// enroll: the new kit's recovery seed, drawn by the trusted form (32 bytes, unpadded base64url)
+	// enroll: the new recovery code's secret, drawn by the trusted form (32 bytes, unpadded base64url)
 	RecoverySecret string `json:"recovery_secret"`
-	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)
 	RequestId string `json:"request_id"`
 }
 
@@ -3382,71 +3382,6 @@ func (args PersonEnrollAbandonArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PersonEnrollAbandon, fields: fields(args)})
 }
 
-// PersonEnrollHolderArgs carries arguments for person.enroll_holder.
-type PersonEnrollHolderArgs struct {
-	// enroll_holder: an existing kit's recovery seed, which signs the change (32 bytes, unpadded base64url)
-	RecoverySecret string `json:"recovery_secret"`
-	// enroll_holder: the printed kit to add
-	Holder PersonEnrollHolderArgsHolder `json:"holder"`
-	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
-	RequestId string `json:"request_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonEnrollHolderArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonEnrollHolderArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonEnrollHolder, fields: fields(args)})
-}
-
-type PersonEnrollHolderArgsHolder struct {
-	// The added kit's recovery seed, drawn by the trusted form (32 bytes, unpadded base64url)
-	RecoverySecret string `json:"recovery_secret"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *PersonEnrollHolderArgsHolder) UnmarshalJSON(data []byte) error {
-	type fields PersonEnrollHolderArgsHolder
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = PersonEnrollHolderArgsHolder(value)
-	return nil
-}
-
-// PersonKitArgs carries arguments for person.kit.
-type PersonKitArgs struct {
-	// The enrollment or added-kit attempt whose kit this is (kit, kit_ack)
-	AttemptId string `json:"attempt_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonKitArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonKitArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonKit, fields: fields(args)})
-}
-
-// PersonKitAckArgs carries arguments for person.kit_ack.
-type PersonKitAckArgs struct {
-	// The enrollment or added-kit attempt whose kit this is (kit, kit_ack)
-	AttemptId string `json:"attempt_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonKitAckArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonKitAckArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonKitAck, fields: fields(args)})
-}
-
 // PersonLinkDoorArgs carries arguments for person.link_door.
 type PersonLinkDoorArgs struct {
 	// link_door: the sign-in method to link, as its provider name
@@ -3462,6 +3397,71 @@ func (args PersonLinkDoorArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonLinkDoor, fields: fields(args)})
+}
+
+// PersonRecoveryCodeArgs carries arguments for person.recovery_code.
+type PersonRecoveryCodeArgs struct {
+	// The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)
+	AttemptId string `json:"attempt_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonRecoveryCodeArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonRecoveryCodeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonRecoveryCode, fields: fields(args)})
+}
+
+// PersonRecoveryCodeAddArgs carries arguments for person.recovery_code_add.
+type PersonRecoveryCodeAddArgs struct {
+	// recovery_code_add: a recovery code you hold, which signs the change
+	RecoveryCode string `json:"recovery_code"`
+	// recovery_code_add: the new code's secret
+	Holder PersonRecoveryCodeAddArgsHolder `json:"holder"`
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonRecoveryCodeAddArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonRecoveryCodeAddArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonRecoveryCodeAdd, fields: fields(args)})
+}
+
+type PersonRecoveryCodeAddArgsHolder struct {
+	// The new code's secret, drawn by the trusted form (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *PersonRecoveryCodeAddArgsHolder) UnmarshalJSON(data []byte) error {
+	type fields PersonRecoveryCodeAddArgsHolder
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = PersonRecoveryCodeAddArgsHolder(value)
+	return nil
+}
+
+// PersonRecoveryCodeSavedArgs carries arguments for person.recovery_code_saved.
+type PersonRecoveryCodeSavedArgs struct {
+	// The enrollment or added-code attempt whose code this is (recovery_code, recovery_code_saved)
+	AttemptId string `json:"attempt_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonRecoveryCodeSavedArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonRecoveryCodeSavedArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonRecoveryCodeSaved, fields: fields(args)})
 }
 
 // PersonRenewCertificateArgs carries arguments for person.renew_certificate.
@@ -3483,7 +3483,7 @@ func (args PersonRenewCertificateArgs) MarshalJSON() ([]byte, error) {
 
 // PersonRotateArgs carries arguments for person.rotate.
 type PersonRotateArgs struct {
-	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)
 	RequestId string `json:"request_id"`
 }
 

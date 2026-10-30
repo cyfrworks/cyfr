@@ -46,20 +46,22 @@ defmodule Sanctum.RecoveryTest do
 
   Enrollment is asked for its `recovery_material` proof before anything is
   opened, consumes it with its one durable attempt, registers the same
-  genesis bytes however often its reply is lost, and answers the kit until
-  its acknowledgment erases the seed. One the directory has not accepted
-  is abandoned, and a retry under its request id then registers nothing;
-  an accepted one is not. Another kit is a `recover` an
-  existing kit signs, keeping the online keys and moving the head.
+  genesis bytes however often its reply is lost, and answers the recovery
+  code (`Prima.RecoveryCode`) until the person says it is saved, which
+  erases the secret. One the directory has not accepted is abandoned, and
+  a retry under its request id then registers nothing; an accepted one is
+  not. Another recovery code is a `recover` one the person holds signs,
+  keeping the online keys and moving the head. A code that does not read
+  is refused before anything is read, asked or sent.
 
-  Restore checks the installation capability first, holds the kit to the
-  identity's current recovery set before it claims anything, and walks
-  its durable phases: a reply lost after acceptance resumes once, a later
-  recovery supersedes it at any phase before its session, even one this
-  home caches after the head's last read, a crash after the mint resumes
-  at the mint, and
-  the restored person stands at the door and may install their first
-  method within the restore session's window, or by a reproof after it.
+  Restore checks the installation capability first, reads the code, holds
+  it to the identity's current recovery set at the pinned directory before
+  it claims anything, and walks its durable phases: a reply lost after
+  acceptance resumes once, a later recovery supersedes it at any phase
+  before its session, even one this home caches after the head's last
+  read, a crash after the mint resumes at the mint, and the restored
+  person stands at the door and may install their first method within the
+  restore session's window, or by a reproof after it.
   """
 
   # The directory and restore settings, the installation mode, the
@@ -130,10 +132,30 @@ defmodule Sanctum.RecoveryTest do
 
   defp holder_args(signer, added, id) do
     %{
-      "recovery_secret" => b64(signer),
+      "recovery_code" => signer,
       "holder" => %{"recovery_secret" => b64(added)},
       "request_id" => id
     }
+  end
+
+  defp code(identifier, seed), do: Prima.RecoveryCode.encode(identifier, seed)
+
+  # The restore ingress's body for `identifier`'s code over `seed`.
+  defp body(identifier, seed), do: %{"recovery_code" => code(identifier, seed)}
+
+  # Forgets the names the resolver was asked so far.
+  defp forget_resolved do
+    receive do
+      {:resolved, _name} -> forget_resolved()
+    after
+      0 -> :ok
+    end
+  end
+
+  # `code` with its last symbol changed: it reads, and its check fails.
+  defp typo(code) do
+    {kept, last} = String.split_at(code, -1)
+    kept <> if(last == "0", do: "1", else: "0")
   end
 
   # Setup's mint of the installation's first person, which the guard
@@ -194,10 +216,10 @@ defmodule Sanctum.RecoveryTest do
     seed = seed()
     args = args(seed, request_id())
 
-    {:ok, %{phase: "accepted"} = enrolled} =
+    {:ok, %{phase: "accepted", code: code} = enrolled} =
       confirmed(person, &Recovery.enroll(&1, args, context.opts))
 
-    Map.merge(person, %{seed: seed, enrolled: enrolled})
+    Map.merge(person, %{seed: seed, code: code, enrolled: enrolled})
   end
 
   defp row(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
@@ -220,8 +242,8 @@ defmodule Sanctum.RecoveryTest do
     Enum.filter(Directory.requests(), &(&1.method == "POST"))
   end
 
-  # An identity held at another home: its online keys, one printed kit and
-  # its genesis at the scripted directory. This node holds none of it.
+  # An identity held at another home: its online keys, one recovery code
+  # and its genesis at the scripted directory. This node holds none of it.
   defp elsewhere!(directory) do
     {live, _} = keypair()
     {operational, operational_private} = keypair()
@@ -243,12 +265,10 @@ defmodule Sanctum.RecoveryTest do
       identifier: identifier,
       genesis: genesis,
       seed: seed,
-      kit: kit(identifier, directory.url, seed)
+      code: code(identifier, seed),
+      body: body(identifier, seed)
     }
   end
-
-  defp kit(identifier, url, seed),
-    do: %{"identifier" => identifier, "directory_url" => url, "recovery_secret" => b64(seed)}
 
   # This installation configured for restore, its first person reserved
   # for it.
@@ -257,7 +277,7 @@ defmodule Sanctum.RecoveryTest do
     InstallationClaims.install_mode!(:restore_reserved)
   end
 
-  # A later recovery, made elsewhere with the same kit: new online keys.
+  # A later recovery, made elsewhere with the same code: new online keys.
   defp recovered_elsewhere!(directory, identity) do
     log = Directory.log(directory.dir, identity.identifier)
     {:ok, state} = Identity.verify_chain(log)
@@ -285,7 +305,7 @@ defmodule Sanctum.RecoveryTest do
   # keys and stopped before the mint's transaction.
   defp stopped_at_keys_active!(context, identity) do
     Directory.next(context.directory.dir, identity.identifier, :drop)
-    {:error, {:retry, "submitted", _}} = Recovery.restore(identity.kit, @token, context.opts)
+    {:error, {:retry, "submitted", _}} = Recovery.restore(identity.body, @token, context.opts)
     [attempt] = attempts("restore")
     log = Directory.log(context.directory.dir, identity.identifier)
 
@@ -420,7 +440,7 @@ defmodule Sanctum.RecoveryTest do
     identity = elsewhere!(context.directory)
 
     {:ok, %{status: "completed"} = restored} =
-      Recovery.restore(identity.kit, @token, context.opts)
+      Recovery.restore(identity.body, @token, context.opts)
 
     {:ok, session} = Sanctum.Session.load(restored.session_token)
     Map.merge(restored, %{identity: identity, ctx: session})
@@ -483,20 +503,22 @@ defmodule Sanctum.RecoveryTest do
       refute preview =~ b64(seed)
     end
 
-    test "under its proof registers the genesis at the pinned directory and answers the kit",
+    test "under its proof registers the genesis at the pinned directory and answers the recovery code",
          context do
       person = seated!()
       seed = seed()
       args = args(seed, request_id())
 
-      assert {:ok, %{phase: "accepted", identifier: identifier, kit: kit}} =
+      assert {:ok, %{phase: "accepted", identifier: identifier} = enrolled} =
                confirmed(person, &Recovery.enroll(&1, args, context.opts))
 
-      assert kit == %{
-               identifier: identifier,
-               directory_url: context.directory.url,
-               recovery_secret: b64(seed)
-             }
+      assert Map.keys(enrolled) |> Enum.sort() ==
+               [:attempt_id, :code, :identifier, :phase, :request_id]
+
+      assert enrolled.code == code(identifier, seed)
+
+      assert {:ok, %{identifier: ^identifier, secret: ^seed}} =
+               Prima.RecoveryCode.decode(enrolled.code)
 
       row = row(person.user.id)
       assert row.identifier == identifier
@@ -597,7 +619,7 @@ defmodule Sanctum.RecoveryTest do
   end
 
   describe "an unfinished enrollment" do
-    test "abandoned at submitted, a retry under its request id registers nothing, and a new kit enrolls anew",
+    test "abandoned at submitted, a retry under its request id registers nothing, and a new secret enrolls anew",
          context do
       person = seated!()
       seed = seed()
@@ -633,7 +655,7 @@ defmodule Sanctum.RecoveryTest do
       # The genesis the directory registered stays there, unused.
       assert [_genesis] = Directory.log(context.directory.dir, genesis.identifier)
 
-      # A new kit enrolls anew, under a new identifier.
+      # A new secret enrolls anew, under a new identifier.
       anew = args(seed(), request_id())
 
       assert {:ok, %{phase: "accepted", identifier: identifier}} =
@@ -721,7 +743,7 @@ defmodule Sanctum.RecoveryTest do
       assert Directory.log(context.directory.dir, genesis.identifier) == nil
     end
 
-    test "an accepted one is registered: not abandoned, its kit still delivered", context do
+    test "an accepted one is registered: not abandoned, its recovery code still shown", context do
       person = enrolled!(context)
       attempt_id = person.enrolled.attempt_id
 
@@ -729,34 +751,40 @@ defmodule Sanctum.RecoveryTest do
       assert %{enrollment: "enrolled", identifier: identifier} = row(person.user.id)
       assert identifier == person.enrolled.identifier
 
-      assert {:ok, %{kit: kit}} = confirmed(person, &Recovery.kit(&1, attempt_id))
-      assert kit.recovery_secret == b64(person.seed)
+      assert {:ok, %{code: shown}} = confirmed(person, &Recovery.recovery_code(&1, attempt_id))
+      assert shown == code(identifier, person.seed)
 
       # Saved, it is no longer in progress: nothing is left to abandon.
-      assert {:ok, %{phase: "completed"}} = Recovery.kit_ack(person.ctx, attempt_id)
+      assert {:ok, %{phase: "completed"}} = Recovery.recovery_code_saved(person.ctx, attempt_id)
       assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
       assert %{enrollment: "enrolled", identifier: ^identifier} = row(person.user.id)
     end
   end
 
-  describe "the kit" do
-    test "is delivered again only under a fresh proof, until its acknowledgment erases it",
+  describe "the recovery code" do
+    test "is shown again only under a fresh proof, until saying it is saved erases it",
          context do
       person = enrolled!(context)
       attempt_id = person.enrolled.attempt_id
 
-      assert {:error, {:confirmation_required, %{operation: "person.kit"}}} =
-               Recovery.kit(person.ctx, attempt_id)
+      assert {:error, {:confirmation_required, %{operation: "person.recovery_code"}}} =
+               Recovery.recovery_code(person.ctx, attempt_id)
 
-      assert {:ok, %{kit: kit}} = confirmed(person, &Recovery.kit(&1, attempt_id))
-      assert kit.recovery_secret == b64(person.seed)
+      assert {:ok, shown} = confirmed(person, &Recovery.recovery_code(&1, attempt_id))
 
-      assert {:ok, %{phase: "completed"}} = Recovery.kit_ack(person.ctx, attempt_id)
+      assert shown == %{
+               attempt_id: attempt_id,
+               code: code(person.enrolled.identifier, person.seed)
+             }
+
+      assert {:ok, %{attempt_id: ^attempt_id, phase: "completed"}} =
+               Recovery.recovery_code_saved(person.ctx, attempt_id)
+
       assert Arca.Repo.get!(IdentityAttempt, attempt_id).kit_seed_sealed == nil
 
       # Gone for good: no proof brings it back, and a repeat restores nothing.
-      assert {:error, :kit_acknowledged} = Recovery.kit(person.ctx, attempt_id)
-      assert {:ok, %{phase: "completed"}} = Recovery.kit_ack(person.ctx, attempt_id)
+      assert {:error, :kit_acknowledged} = Recovery.recovery_code(person.ctx, attempt_id)
+      assert {:ok, %{phase: "completed"}} = Recovery.recovery_code_saved(person.ctx, attempt_id)
       assert Arca.Repo.get!(IdentityAttempt, attempt_id).kit_seed_sealed == nil
 
       assert {:ok, enrolled} =
@@ -766,33 +794,40 @@ defmodule Sanctum.RecoveryTest do
                  context.opts
                )
 
-      refute Map.has_key?(enrolled, :kit)
+      refute Map.has_key?(enrolled, :code)
 
       # Nobody else reaches it.
       other = seated!()
-      assert {:error, {:not_found, "kit", ^attempt_id}} = Recovery.kit(other.ctx, attempt_id)
-      assert {:error, {:not_found, "kit", ^attempt_id}} = Recovery.kit_ack(other.ctx, attempt_id)
+
+      assert {:error, {:not_found, "recovery_code", ^attempt_id}} =
+               Recovery.recovery_code(other.ctx, attempt_id)
+
+      assert {:error, {:not_found, "recovery_code", ^attempt_id}} =
+               Recovery.recovery_code_saved(other.ctx, attempt_id)
     end
 
-    test "acknowledged while its delivery is inside its confirmation, it prints nothing",
+    test "said saved while its showing is inside its confirmation, it shows nothing",
          context do
       person = enrolled!(context)
       attempt_id = person.enrolled.attempt_id
       user_id = person.user.id
       test = self()
-      handler = "recovery-kit-ack-#{System.unique_integer([:positive])}"
+      handler = "recovery-code-saved-#{System.unique_integer([:positive])}"
 
-      # The delivery's confirmation is consumed, on the delivery's own
-      # process, and the delivery has not opened the seed: the person
-      # acknowledges the kit then.
+      # The showing's confirmation is consumed, on the showing's own
+      # process, and it has not opened the secret: the person says the
+      # code is saved then.
       :ok =
         :telemetry.attach(
           handler,
           [:cyfr, :sanctum, :confirmation, :consumed],
           fn
-            _event, _measurements, %{operation: "person.kit", user_id: ^user_id}, _config ->
+            _event,
+            _measurements,
+            %{operation: "person.recovery_code", user_id: ^user_id},
+            _config ->
               :telemetry.detach(handler)
-              send(test, {:acknowledged, Recovery.kit_ack(person.ctx, attempt_id)})
+              send(test, {:saved, Recovery.recovery_code_saved(person.ctx, attempt_id)})
 
             _event, _measurements, _metadata, _config ->
               :ok
@@ -802,29 +837,32 @@ defmodule Sanctum.RecoveryTest do
 
       on_exit(fn -> :telemetry.detach(handler) end)
 
-      assert {:error, :kit_acknowledged} = confirmed(person, &Recovery.kit(&1, attempt_id))
-      assert_received {:acknowledged, {:ok, %{phase: "completed"}}}
+      assert {:error, :kit_acknowledged} =
+               confirmed(person, &Recovery.recovery_code(&1, attempt_id))
+
+      assert_received {:saved, {:ok, %{phase: "completed"}}}
       assert Arca.Repo.get!(IdentityAttempt, attempt_id).kit_seed_sealed == nil
     end
   end
 
-  describe "another printed kit" do
-    test "is a recover an existing kit signs, keeping the online keys, and moves the head",
+  describe "another recovery code" do
+    test "is a recover a code the person holds signs, keeping the online keys, and moves the head",
          context do
       person = enrolled!(context)
       before = row(person.user.id)
       added = seed()
-      args = holder_args(person.seed, added, request_id())
+      args = holder_args(person.code, added, request_id())
 
-      assert {:error, {:confirmation_required, %{operation: "person.enroll_holder"}}} =
-               Recovery.enroll_holder(person.ctx, args, context.opts)
+      assert {:error, {:confirmation_required, %{operation: "person.recovery_code_add"}}} =
+               Recovery.recovery_code_add(person.ctx, args, context.opts)
 
       assert attempts("holder") == []
 
-      assert {:ok, %{phase: "accepted", kit: kit, key_epoch: epoch}} =
-               confirmed(person, &Recovery.enroll_holder(&1, args, context.opts))
+      assert {:ok, %{phase: "accepted", code: added_code, key_epoch: epoch} = answer} =
+               confirmed(person, &Recovery.recovery_code_add(&1, args, context.opts))
 
-      assert kit.recovery_secret == b64(added)
+      assert added_code == code(before.identifier, added)
+      assert answer.identifier == before.identifier
 
       after_it = row(person.user.id)
       assert after_it.head_hash == epoch
@@ -839,61 +877,162 @@ defmodule Sanctum.RecoveryTest do
       assert Identity.hash(recover) == epoch
       assert {:ok, %{key_epoch: ^epoch, revision: 1}} = Identity.verify_chain(log)
 
-      # Its kit is acknowledged as the first one's.
+      # Its code is shown and saved as the first one's.
       [attempt] = attempts("holder")
-      assert {:ok, %{phase: "completed"}} = Recovery.kit_ack(person.ctx, attempt.id)
+      assert answer.attempt_id == attempt.id
 
-      # A kit the identity holds is not added twice.
+      assert {:ok, %{code: ^added_code}} =
+               confirmed(person, &Recovery.recovery_code(&1, attempt.id))
+
+      assert {:ok, %{phase: "completed"}} = Recovery.recovery_code_saved(person.ctx, attempt.id)
+
+      # A code the identity holds is not added twice, and the added one
+      # signs the next.
       assert {:error, :already_a_holder} =
-               Recovery.enroll_holder(
+               Recovery.recovery_code_add(
                  person.ctx,
-                 holder_args(person.seed, added, request_id()),
+                 holder_args(person.code, added, request_id()),
+                 context.opts
+               )
+
+      assert {:error, :already_a_holder} =
+               Recovery.recovery_code_add(
+                 person.ctx,
+                 holder_args(added_code, person.seed, request_id()),
                  context.opts
                )
     end
 
-    test "a seed that holds nothing and a holder twice are refused", context do
+    test "a secret that holds nothing and a holder twice are refused", context do
       person = enrolled!(context)
       added = seed()
 
       assert {:error, :not_a_holder} =
-               Recovery.enroll_holder(
+               Recovery.recovery_code_add(
                  person.ctx,
-                 holder_args(seed(), added, request_id()),
+                 holder_args(code(person.enrolled.identifier, seed()), added, request_id()),
                  context.opts
                )
 
-      # The kit that signs is never the one added.
+      # The code that signs is never the one added.
       assert {:error, {:invalid_argument, same}} =
-               Recovery.enroll_holder(
+               Recovery.recovery_code_add(
                  person.ctx,
-                 holder_args(person.seed, person.seed, request_id()),
+                 holder_args(person.code, person.seed, request_id()),
                  context.opts
                )
 
-      assert same =~ "another kit"
+      assert same == "The added code must be another than the one signing"
+
+      assert {:error, {:invalid_argument, holder}} =
+               Recovery.recovery_code_add(
+                 person.ctx,
+                 Map.put(holder_args(person.code, added, request_id()), "holder", %{}),
+                 context.opts
+               )
+
+      assert holder =~ "holder.recovery_secret"
       assert attempts("holder") == []
+    end
+
+    test "a code of another identity is no holder, refused before the directory is read",
+         context do
+      person = enrolled!(context)
+      elsewhere = elsewhere!(context.directory)
+      _drained = Directory.requests()
+      forget_resolved()
+
+      # Another identity's own code, and one whose secret is the person's
+      # own, so that only the identity it names differs.
+      for signer <- [elsewhere.code, code(elsewhere.identifier, person.seed)] do
+        assert {:error, :not_a_holder} =
+                 Recovery.recovery_code_add(
+                   person.ctx,
+                   holder_args(signer, seed(), request_id()),
+                   context.opts
+                 )
+      end
+
+      assert Directory.requests() == []
+      refute_received {:resolved, _}
+      assert attempts("holder") == []
+
+      assert [] =
+               Enum.filter(
+                 confirmations(person.user.id),
+                 &(&1.action == "recovery_material" and &1.state == "pending")
+               )
+    end
+
+    test "a signing code that does not read spends nothing: no request, no confirmation, no attempt",
+         context do
+      person = enrolled!(context)
+      added = seed()
+      id = request_id()
+      args = holder_args(person.code, added, id)
+
+      # The person proves the change first; the typed code then has a typo.
+      assert {:error, {:confirmation_required, %{id: confirmation}}} =
+               Recovery.recovery_code_add(person.ctx, args, context.opts)
+
+      TestContext.prove!(person.ctx, confirmation)
+      proved = confirmations(person.user.id)
+      _drained = Directory.requests()
+      forget_resolved()
+      under_proof = %{person.ctx | confirmation_id: confirmation}
+
+      for {signer, refusal} <- [
+            {typo(person.code), :typo},
+            {"CYFR-" <> String.duplicate("0", 8), :not_a_code},
+            {nil, :not_a_code},
+            {42, :not_a_code}
+          ] do
+        assert {:error, ^refusal} =
+                 Recovery.recovery_code_add(
+                   under_proof,
+                   %{args | "recovery_code" => signer},
+                   context.opts
+                 )
+      end
+
+      assert {:error, :typo} =
+               Recovery.recovery_code_add(
+                 under_proof,
+                 Map.delete(holder_args(typo(person.code), added, id), "holder"),
+                 context.opts
+               )
+
+      assert Directory.requests() == []
+      refute_received {:resolved, _}
+      assert attempts("holder") == []
+      assert confirmations(person.user.id) == proved
+
+      # The proof was never spent: the code as saved adds under it.
+      assert {:ok, %{phase: "accepted", code: added_code}} =
+               Recovery.recovery_code_add(under_proof, args, context.opts)
+
+      assert added_code == code(person.enrolled.identifier, added)
     end
   end
 
   # ---- restore -------------------------------------------------------------------
 
   describe "restore" do
-    test "a kit without this installation's token causes no row, no staging, no outbound call",
+    test "a code without this installation's token causes no row, no staging, no outbound call",
          context do
       identity = elsewhere!(context.directory)
 
       assert {:error, :restore_disabled} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       reserved!()
-      assert {:error, :invalid_token} = Recovery.restore(identity.kit, nil, context.opts)
+      assert {:error, :invalid_token} = Recovery.restore(identity.body, nil, context.opts)
 
       assert {:error, :invalid_token} =
-               Recovery.restore(identity.kit, String.duplicate("0", 64), context.opts)
+               Recovery.restore(identity.body, String.duplicate("0", 64), context.opts)
 
       assert {:error, :invalid_token} =
-               Recovery.restore(identity.kit, "Bearer " <> @token, context.opts)
+               Recovery.restore(identity.body, "Bearer " <> @token, context.opts)
 
       assert {:error, :invalid_token} = Recovery.restore_challenge("")
 
@@ -910,7 +1049,7 @@ defmodule Sanctum.RecoveryTest do
       identity = elsewhere!(context.directory)
 
       assert {:ok, %{status: "completed", user_id: user_id, session_token: token} = restored} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       assert restored.identifier == identity.identifier
 
@@ -970,38 +1109,70 @@ defmodule Sanctum.RecoveryTest do
              )
 
       # A plain retry issues no session.
-      assert {:error, :restored} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :restored} = Recovery.restore(identity.body, @token, context.opts)
     end
 
-    test "a mistyped kit spends nothing, and the right one then restores", context do
+    test "a code that does not read spends nothing and reaches nothing", context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+
+      for {params, refusal} <- [
+            {%{"recovery_code" => typo(identity.code)}, :typo},
+            {%{"recovery_code" => String.replace(identity.code, "-", "", global: false) <> "0"},
+             :not_a_code},
+            {%{"recovery_code" => "CYFR"}, :not_a_code},
+            {%{"recovery_code" => 7}, :not_a_code},
+            {%{"identifier" => identity.identifier, "recovery_secret" => b64(identity.seed)},
+             :not_a_code},
+            {%{}, :not_a_code}
+          ] do
+        assert {:error, ^refusal} = Recovery.restore(params, @token, context.opts)
+        assert {:error, ^refusal} = Recovery.reproof(params, @token, context.opts)
+      end
+
+      assert Directory.requests() == []
+      refute_received {:resolved, _}
+      assert count(IdentityAttempt) == 0
+      assert count(InstallationClaim) == 0
+      assert count(DirectoryHead) == 0
+    end
+
+    test "a code of no holder or of an unknown identity spends nothing, and the right one then restores",
+         context do
       reserved!()
       identity = elsewhere!(context.directory)
 
       assert {:error, :not_a_holder} =
-               Recovery.restore(
-                 %{identity.kit | "recovery_secret" => b64(seed())},
-                 @token,
-                 context.opts
-               )
+               Recovery.restore(body(identity.identifier, seed()), @token, context.opts)
 
       unknown = "per_" <> String.duplicate("0", 64)
 
       assert {:error, :unknown_identity} =
-               Recovery.restore(%{identity.kit | "identifier" => unknown}, @token, context.opts)
-
-      assert {:error, :invalid_kit} =
-               Recovery.restore(
-                 %{identity.kit | "directory_url" => "http://dir-a.test"},
-                 @token,
-                 context.opts
-               )
-
-      assert {:error, :invalid_kit} = Recovery.restore(%{}, @token, context.opts)
+               Recovery.restore(body(unknown, identity.seed), @token, context.opts)
 
       assert count(IdentityAttempt) == 0
       assert count(InstallationClaim) == 0
 
-      assert {:ok, %{status: "completed"}} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:ok, %{status: "completed", identifier: identifier}} =
+               Recovery.restore(identity.body, @token, context.opts)
+
+      assert identifier == identity.identifier
+    end
+
+    test "with no directory pinned, nothing is read and nothing is restored", context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      Prima.Test.Env.delete_app_env(:sanctum, :directory_url)
+
+      # The capability is still checked first.
+      assert {:error, :invalid_token} = Recovery.restore(identity.body, nil, context.opts)
+      assert {:error, :no_directory} = Recovery.restore(identity.body, @token, context.opts)
+      assert {:error, :no_directory} = Recovery.restore(%{}, @token, context.opts)
+
+      assert Directory.requests() == []
+      refute_received {:resolved, _}
+      assert count(IdentityAttempt) == 0
+      assert count(InstallationClaim) == 0
     end
 
     test "on a node with another person is refused before any write or outbound call", context do
@@ -1009,7 +1180,7 @@ defmodule Sanctum.RecoveryTest do
       reserved!()
       identity = elsewhere!(context.directory)
 
-      assert {:error, :not_empty} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :not_empty} = Recovery.restore(identity.body, @token, context.opts)
       assert Directory.requests() == []
       assert count(IdentityAttempt) == 0
       assert count(InstallationClaim) == 0
@@ -1022,12 +1193,12 @@ defmodule Sanctum.RecoveryTest do
       Directory.next(context.directory.dir, identity.identifier, :drop)
 
       assert {:error, {:retry, "submitted", _seconds}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       assert [%{phase: "submitted"} = staged] = attempts("restore")
 
       assert {:ok, %{status: "completed", user_id: user_id}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       assert [done] = attempts("restore")
       assert done.id == staged.id
@@ -1043,7 +1214,7 @@ defmodule Sanctum.RecoveryTest do
       reserved!()
       identity = elsewhere!(context.directory)
 
-      {:ok, %{user_id: user_id}} = Recovery.restore(identity.kit, @token, context.opts)
+      {:ok, %{user_id: user_id}} = Recovery.restore(identity.body, @token, context.opts)
       [attempt] = attempts("restore")
 
       # The instant after the mint's transaction committed and before the
@@ -1059,13 +1230,13 @@ defmodule Sanctum.RecoveryTest do
           set: [state: "pending", outcome: nil, ended_at: nil]
         )
 
-      # Another kit under this token, or setup, wins nothing.
+      # Another identity's code under this token, or setup, wins nothing.
       other = elsewhere!(context.directory)
-      assert {:error, :token_claimed} = Recovery.restore(other.kit, @token, context.opts)
+      assert {:error, :token_claimed} = Recovery.restore(other.body, @token, context.opts)
       assert {:error, :restore_reserved} = setup_mint()
 
       assert {:ok, %{status: "completed", user_id: ^user_id, session_token: _}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       assert count(User) == 1
       assert {:ok, %{state: "ended"}} = InstallationClaims.get(system())
@@ -1074,7 +1245,7 @@ defmodule Sanctum.RecoveryTest do
       Application.put_env(:sanctum, :restore_token, String.duplicate("6b", 32))
 
       assert {:error, :not_empty} =
-               Recovery.restore(other.kit, String.duplicate("6b", 32), context.opts)
+               Recovery.restore(other.body, String.duplicate("6b", 32), context.opts)
     end
 
     test "killed at staged, before its submission reached the directory, resumes and submits once",
@@ -1085,7 +1256,7 @@ defmodule Sanctum.RecoveryTest do
       Directory.next(context.directory.dir, identity.identifier, :drop)
 
       assert {:error, {:retry, "submitted", _}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       [attempt] = attempts("restore")
 
@@ -1100,12 +1271,12 @@ defmodule Sanctum.RecoveryTest do
           set: [phase: "staged"]
         )
 
-      # Another kit under this token wins nothing meanwhile.
+      # Another identity's code under this token wins nothing meanwhile.
       other = elsewhere!(context.directory)
-      assert {:error, :token_claimed} = Recovery.restore(other.kit, @token, context.opts)
+      assert {:error, :token_claimed} = Recovery.restore(other.body, @token, context.opts)
 
       assert {:ok, %{status: "completed", user_id: user_id}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       assert [%{id: same, phase: "completed"}] = attempts("restore")
       assert same == attempt.id
@@ -1125,7 +1296,7 @@ defmodule Sanctum.RecoveryTest do
       Directory.next(context.directory.dir, identity.identifier, :drop)
 
       assert {:error, {:retry, "submitted", _}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       [attempt] = attempts("restore")
       log = Directory.log(context.directory.dir, identity.identifier)
@@ -1142,7 +1313,7 @@ defmodule Sanctum.RecoveryTest do
       _drained = Directory.requests()
 
       assert {:ok, %{status: "completed", user_id: user_id, session_token: _}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       # Nothing was written to the directory on the way: the mint followed.
       assert writes() == []
@@ -1160,7 +1331,7 @@ defmodule Sanctum.RecoveryTest do
       Directory.next(context.directory.dir, identity.identifier, :drop)
 
       assert {:error, {:retry, "submitted", _}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       [attempt] = attempts("restore")
       log = Directory.log(context.directory.dir, identity.identifier)
@@ -1175,7 +1346,7 @@ defmodule Sanctum.RecoveryTest do
       recovered_elsewhere!(context.directory, identity)
       assert count(User) == 0
 
-      result = Recovery.restore(identity.kit, @token, context.opts)
+      result = Recovery.restore(identity.body, @token, context.opts)
 
       assert result == {:error, :superseded},
              "superseded restore returned #{inspect(result)}; person rows: #{count(User)}"
@@ -1186,7 +1357,7 @@ defmodule Sanctum.RecoveryTest do
       assert is_nil(ended.staged_live_key_sealed)
       assert is_nil(ended.staged_operational_key_sealed)
       assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
-      assert {:error, :superseded} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :superseded} = Recovery.restore(identity.body, @token, context.opts)
     end
 
     test "a later recovery this home caches between the head's read and the mint refuses the mint",
@@ -1198,7 +1369,7 @@ defmodule Sanctum.RecoveryTest do
       {answer, _observed} =
         held_at(
           &head_read_point/2,
-          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
+          fn -> Recovery.restore(identity.body, @token, context.opts) end,
           fn ->
             # The recovery lands at the directory, and this home reads it.
             recovered_elsewhere!(context.directory, identity)
@@ -1220,7 +1391,7 @@ defmodule Sanctum.RecoveryTest do
       stopped = stopped_at_keys_active!(context, identity)
 
       assert {:error, :unavailable} =
-               Recovery.restore(identity.kit, @token, unreachable(context.opts))
+               Recovery.restore(identity.body, @token, unreachable(context.opts))
 
       assert [%{id: same, phase: "keys_active"} = standing] = attempts("restore")
       assert same == stopped.id
@@ -1229,7 +1400,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{state: "pending"}} = InstallationClaims.get(system())
 
       assert {:ok, %{status: "completed", user_id: user_id, session_token: _}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       assert row(user_id).live_public_key == stopped.staged_live_public_key
       assert count(User) == 1
@@ -1244,8 +1415,8 @@ defmodule Sanctum.RecoveryTest do
       {held, completed} =
         held_at(
           &head_read_point/2,
-          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
-          fn -> Recovery.restore(identity.kit, @token, context.opts) end
+          fn -> Recovery.restore(identity.body, @token, context.opts) end,
+          fn -> Recovery.restore(identity.body, @token, context.opts) end
         )
 
       assert {:ok, %{status: "completed", user_id: user_id}} = completed
@@ -1270,7 +1441,7 @@ defmodule Sanctum.RecoveryTest do
       {answer, _published} =
         held_at(
           &minted_point/2,
-          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
+          fn -> Recovery.restore(identity.body, @token, context.opts) end,
           fn -> recovered_elsewhere!(context.directory, identity) end
         )
 
@@ -1290,7 +1461,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
 
       # It stays superseded, and no reproof reopens it.
-      assert {:error, :superseded} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :superseded} = Recovery.restore(identity.body, @token, context.opts)
       assert {:error, :superseded} = Recovery.restore_challenge(@token)
     end
 
@@ -1300,7 +1471,7 @@ defmodule Sanctum.RecoveryTest do
       identity = elsewhere!(context.directory)
 
       {:ok, %{user_id: user_id} = restored} =
-        Recovery.restore(identity.kit, @token, context.opts)
+        Recovery.restore(identity.body, @token, context.opts)
 
       :ok = stopped_at_minted!(restored)
 
@@ -1310,10 +1481,10 @@ defmodule Sanctum.RecoveryTest do
       {held, twin} =
         held_at(
           &session_point/2,
-          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
+          fn -> Recovery.restore(identity.body, @token, context.opts) end,
           fn ->
             recovered_elsewhere!(context.directory, identity)
-            Recovery.restore(identity.kit, @token, context.opts)
+            Recovery.restore(identity.body, @token, context.opts)
           end
         )
 
@@ -1331,7 +1502,7 @@ defmodule Sanctum.RecoveryTest do
       identity = elsewhere!(context.directory)
 
       {:ok, %{user_id: user_id} = restored} =
-        Recovery.restore(identity.kit, @token, context.opts)
+        Recovery.restore(identity.body, @token, context.opts)
 
       # The fill is asked for once the head still names the restored keys.
       {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user_id)
@@ -1340,7 +1511,7 @@ defmodule Sanctum.RecoveryTest do
       :ok = stopped_at_minted!(restored)
 
       assert {:error, :unavailable} =
-               Recovery.restore(identity.kit, @token, unreachable(context.opts))
+               Recovery.restore(identity.body, @token, unreachable(context.opts))
 
       refute_received {:fill, _athanor_id, _entry_kind}
       assert [%{phase: "minted"}] = attempts("restore")
@@ -1348,7 +1519,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{state: "pending"}} = InstallationClaims.get(system())
 
       assert {:ok, %{status: "completed", user_id: ^user_id, session_token: token}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       assert_received {:fill, ^athanor_id, "sign_in"}
       assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.get(token)
@@ -1363,11 +1534,11 @@ defmodule Sanctum.RecoveryTest do
       Directory.next(context.directory.dir, identity.identifier, :drop)
 
       assert {:error, {:retry, "submitted", _}} =
-               Recovery.restore(identity.kit, @token, context.opts)
+               Recovery.restore(identity.body, @token, context.opts)
 
       recovered_elsewhere!(context.directory, identity)
 
-      assert {:error, :superseded} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :superseded} = Recovery.restore(identity.body, @token, context.opts)
       assert [attempt] = attempts("restore")
       assert attempt.phase == "superseded"
       assert is_nil(attempt.staged_live_key_sealed)
@@ -1377,11 +1548,11 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
 
       # It stays superseded, and its token restarts nothing.
-      assert {:error, :superseded} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :superseded} = Recovery.restore(identity.body, @token, context.opts)
       assert {:error, :superseded} = Recovery.restore_challenge(@token)
 
       other = elsewhere!(context.directory)
-      assert {:error, :token_spent} = Recovery.restore(other.kit, @token, context.opts)
+      assert {:error, :token_spent} = Recovery.restore(other.body, @token, context.opts)
     end
 
     test "refused by the directory, the token is spent", context do
@@ -1389,12 +1560,12 @@ defmodule Sanctum.RecoveryTest do
       identity = elsewhere!(context.directory)
       Directory.next(context.directory.dir, identity.identifier, :refuse)
 
-      assert {:error, :refused} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :refused} = Recovery.restore(identity.body, @token, context.opts)
       assert [%{phase: "refused", staged_live_key_sealed: nil}] = attempts("restore")
-      assert {:error, :refused} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :refused} = Recovery.restore(identity.body, @token, context.opts)
 
       other = elsewhere!(context.directory)
-      assert {:error, :token_spent} = Recovery.restore(other.kit, @token, context.opts)
+      assert {:error, :token_spent} = Recovery.restore(other.body, @token, context.opts)
       assert count(User) == 0
     end
 
@@ -1405,7 +1576,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:error, :restore_reserved} = setup_mint()
 
       Directory.next(context.directory.dir, identity.identifier, :drop)
-      {:error, {:retry, _, _}} = Recovery.restore(identity.kit, @token, context.opts)
+      {:error, {:retry, _, _}} = Recovery.restore(identity.body, @token, context.opts)
 
       # With the token unset, the claim made still reserves the node.
       InstallationClaims.install_mode!(:ordinary)
@@ -1466,7 +1637,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
     end
 
-    test "a closed window reopens only by the kit and the capability against a new challenge",
+    test "a closed window reopens only by the recovery code and the capability against a new challenge",
          context do
       restored = restored!(context)
       {:ok, seconds} = Sanctum.Consent.Authz.seconds_setting("reauth_seconds")
@@ -1483,24 +1654,35 @@ defmodule Sanctum.RecoveryTest do
       {:ok, ctx} = Sanctum.Session.load(restored.session_token)
       assert {{:error, :reauth_required}, _auth} = first_passkey(ctx)
 
-      kit = restored.identity.kit
+      body = restored.identity.body
       assert {:error, :invalid_token} = Recovery.restore_challenge(nil)
       assert {:ok, %{challenge: challenge}} = Recovery.restore_challenge(@token)
 
       assert {:error, :challenge_refused} =
-               Recovery.reproof(Map.put(kit, "challenge", b64(seed())), @token, context.opts)
+               Recovery.reproof(Map.put(body, "challenge", b64(seed())), @token, context.opts)
 
       other = elsewhere!(context.directory)
 
       assert {:error, :token_spent} =
-               Recovery.reproof(Map.put(other.kit, "challenge", challenge), @token, context.opts)
+               Recovery.reproof(Map.put(other.body, "challenge", challenge), @token, context.opts)
+
+      # The identity's own identifier under a secret that never signed this
+      # restore is spent too, and a code with a typo is refused unread: the
+      # challenge stays held for the code as saved.
+      stranger = body(restored.identity.identifier, seed())
+
+      assert {:error, :token_spent} =
+               Recovery.reproof(Map.put(stranger, "challenge", challenge), @token, context.opts)
+
+      mistyped = %{"recovery_code" => typo(restored.identity.code), "challenge" => challenge}
+      assert {:error, :typo} = Recovery.reproof(mistyped, @token, context.opts)
 
       assert {:ok, %{status: "completed", session_token: fresh}} =
-               Recovery.reproof(Map.put(kit, "challenge", challenge), @token, context.opts)
+               Recovery.reproof(Map.put(body, "challenge", challenge), @token, context.opts)
 
       # Replayed, the challenge restarts nothing.
       assert {:error, :challenge_refused} =
-               Recovery.reproof(Map.put(kit, "challenge", challenge), @token, context.opts)
+               Recovery.reproof(Map.put(body, "challenge", challenge), @token, context.opts)
 
       {:ok, fresh_ctx} = Sanctum.Session.load(fresh)
       assert fresh_ctx.provider == "restore"
@@ -1520,7 +1702,7 @@ defmodule Sanctum.RecoveryTest do
 
       assert {:error, :superseded} =
                Recovery.reproof(
-                 Map.put(restored.identity.kit, "challenge", challenge),
+                 Map.put(restored.identity.body, "challenge", challenge),
                  @token,
                  context.opts
                )
