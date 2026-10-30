@@ -11,7 +11,7 @@
 #
 # The proof's prompts over a malicious fullscreen frame ask the server for
 # their part through the output directory (`ask-N.json`): this script
-# floats a tincture waiting for its grant in the person's layout (`grant`),
+# opens a tincture waiting for its grant in the person's layout (`grant`),
 # has another session of the person ask for a sensitive change
 # (`confirmation`), or puts the picker layout back (`reset`), and answers
 # `answer-N.json`.
@@ -113,11 +113,11 @@ other_token="$(field "$other" token)"
 [ -n "$other_token" ] || fail "the fixture opened no second session"
 
 # The person's layout: the picker alone (revision 1, as published above),
-# or with the waiting tincture floating over it.
+# or with the waiting tincture open over it as a window.
 LAYOUT_REVISION=1
-none='{"version":2,"canvases":[]}'
-floated='{"apps":[],"floating":[{"tincture":"tincture:local.ungranted-probe","position":{"x":6000,"y":6000}}]}'
-float="{\"version\":2,\"canvases\":[{\"id\":\"home\",\"tincture\":\"tincture:local.no-canvas\",\"postures\":{\"desk\":$floated,\"hand\":$floated}}]}"
+none='{"version":3,"canvases":[]}'
+windowed='{"apps":[{"tincture":"tincture:local.ungranted-probe","placement":"window","order":0,"minimised":false,"geometry":{"x":6000,"y":6000,"w":3000,"h":3000}}]}'
+window="{\"version\":3,\"canvases\":[{\"id\":\"home\",\"tincture\":\"tincture:local.no-canvas\",\"postures\":{\"desk\":$windowed,\"hand\":$windowed}}]}"
 publish_layout() {
   browser_layout "$CELL" "$token" "$1" "$LAYOUT_REVISION"
   LAYOUT_REVISION=$((LAYOUT_REVISION + 1))
@@ -129,8 +129,8 @@ answer_ask() {
   op="$(asked "$ask" op)"
   case "$op" in
     grant)
-      publish_layout "$float"
-      ANSWER='{"ok":"floated"}'
+      publish_layout "$window"
+      ANSWER='{"ok":"opened"}'
       ;;
     reset)
       publish_layout "$none"

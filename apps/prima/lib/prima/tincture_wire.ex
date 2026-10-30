@@ -69,13 +69,18 @@ defmodule Prima.TinctureWire do
     * `press` — press a feed's action: `args.binding`, a binding id
       (`Prima.Feed.binding_id?/1`), and `args.action`, the action's name
       (`Prima.Feed.name?/1`), exactly those two;
+    * `grant` — ask for the person's grant to a component: `args.ref`, a
+      component reference (`Prima.ComponentRef`) of a catalyst, reagent,
+      formula or tincture, at a version or none, and nothing else. Which
+      component it names, and whether the person is asked, are the
+      shell's; the person confirms in CYFR's own prompt;
     * `failed` — the page failed: `args.stage`, `load` or `runtime`
       (`stages/0`);
     * `ready`, `close` — no arguments.
 
   No verb places, sizes or raises a frame: which frame is shown is the
   shell's and the person's. Which verbs the shell acts on is the shell's,
-  by the frame's kind: `press` and `failed` only from a canvas
+  by the frame's kind: `press`, `failed` and `grant` only from a canvas
   (`canvas_verbs/0`).
 
   ## A canvas
@@ -97,8 +102,11 @@ defmodule Prima.TinctureWire do
   the version it serves, never from anything a frame or a page sends. The
   shell's later messages to a canvas over its port (`canvas`, `posture`,
   `covered`, `installed` and `state`) are JavaScript on both ends;
-  `installed` names at most `max_installed/0` tinctures, each a name of
-  1 to `max_installed_name/0` code points.
+  `installed` names at most `max_installed/0` tinctures, each exactly the
+  keys `installed_keys/0`: its `ref`, a tincture reference; its `name`, 1
+  to `max_installed_name/0` code points; its `icon`, an emoji of 1 to
+  `max_installed_icon/0` code points or null; and `open`, whether the
+  tincture is open over the canvas.
 
   `tests/fixtures/tincture_wire.json` holds one example of each request,
   one public request, one refusal, one event stream, how the SDK rejects
@@ -117,8 +125,8 @@ defmodule Prima.TinctureWire do
     stream_open: "/_f/v1/stream"
   }
 
-  @verbs ~w(open close title ready credential press failed)a
-  @canvas_verbs ~w(press failed)a
+  @verbs ~w(open close title ready credential press failed grant)a
+  @canvas_verbs ~w(press failed grant)a
   @stages ~w(load runtime)
 
   @stream_content_type "text/event-stream"
@@ -132,6 +140,8 @@ defmodule Prima.TinctureWire do
   @max_canvas_streams 64
   @max_installed 512
   @max_installed_name 128
+  @max_installed_icon 16
+  @installed_keys ~w(icon name open ref)
 
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
   @athanor_segment ~r/\A@?[a-z0-9]+(-[a-z0-9]+)*\z/
@@ -142,7 +152,7 @@ defmodule Prima.TinctureWire do
   @type kind :: :invoke | :action | :stream_open
 
   @typedoc "A message the frame sends the shell."
-  @type verb :: :open | :close | :title | :ready | :credential | :press | :failed
+  @type verb :: :open | :close | :title | :ready | :credential | :press | :failed | :grant
 
   @typedoc "The public tincture a request names in place of a bearer."
   @type public_identity :: %{athanor: String.t(), publisher: String.t(), name: String.t()}
@@ -191,8 +201,8 @@ defmodule Prima.TinctureWire do
   def verbs, do: @verbs
 
   @doc """
-  The shell verbs the shell takes from a canvas alone, `press` and
-  `failed`: from any other frame it drops them.
+  The shell verbs the shell takes from a canvas alone, `press`, `failed`
+  and `grant`: from any other frame it drops them.
   """
   @spec canvas_verbs() :: [verb()]
   def canvas_verbs, do: @canvas_verbs
@@ -498,6 +508,14 @@ defmodule Prima.TinctureWire do
   @spec max_installed_name() :: pos_integer()
   def max_installed_name, do: @max_installed_name
 
+  @doc "The most code points a tincture's icon in `installed` takes."
+  @spec max_installed_icon() :: pos_integer()
+  def max_installed_icon, do: @max_installed_icon
+
+  @doc "The keys of one tincture in `installed`, each present, sorted."
+  @spec installed_keys() :: [String.t()]
+  def installed_keys, do: @installed_keys
+
   @doc """
   The prefix every canvas page's path begins with, `/_c/v1/`: the segment
   after it is the asset credential, which a log or a telemetry span must
@@ -661,6 +679,20 @@ defmodule Prima.TinctureWire do
   end
 
   defp shell_args(:press, _args), do: {:error, "press names a binding id and an action"}
+
+  defp shell_args(:grant, %{"ref" => ref} = args) when map_size(args) == 1 do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %{type: type}} ->
+        if type in Prima.ComponentRef.valid_types(),
+          do: {:ok, args},
+          else: {:error, "grant names a component reference"}
+
+      _ ->
+        {:error, "grant names a component reference"}
+    end
+  end
+
+  defp shell_args(:grant, _args), do: {:error, "grant names a component reference"}
 
   defp shell_args(:failed, %{"stage" => stage} = args)
        when map_size(args) == 1 and stage in @stages,

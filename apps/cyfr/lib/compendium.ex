@@ -255,10 +255,11 @@ defmodule Compendium do
 
   @doc """
   The caller's layout as the screen places it: the whole document, its
-  revision and digest (the shipped default at revision 0, with
-  `shipped_default: true`, when the person never arranged one) and
+  revision and digest (the shipped default, with `shipped_default:
+  true`, when the person never arranged one or their stored document
+  names a version this code does not read) and
   `posture`'s arrangement, every canvas in the document's order as
-  `%{id, tincture, apps, floating}`, its apps by order, then reference.
+  `%{id, tincture, apps}`, its apps by order, then reference.
   Read under the caller's context for the person it names; an edit is
   never made here, only through the gate's `layout.edit`. Refusals are
   the `layout` tool's.

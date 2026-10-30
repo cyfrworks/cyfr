@@ -252,8 +252,8 @@ defmodule Compendium.Tincture.RulesTest do
     @declared %{
       "frame" => %{
         "capabilities" => ["pointer_lock"],
-        "placement" => "float",
-        "background" => true
+        "background" => true,
+        "size" => %{"preferred" => %{"w" => 400, "h" => 640}, "tile" => "right"}
       },
       "actions" => ["execution.list"],
       "streams" => [%{"name" => "executions.deltas", "subject" => "*"}]
@@ -287,11 +287,33 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "the placements are float and canvas, and a desktop is refused by the placement sentence" do
-      assert Rules.placements() == ~w(float canvas)
+    test "the one placement is canvas, and float and a desktop are refused by the placement sentence" do
+      assert Rules.placements() == ~w(canvas)
 
-      assert Rules.validate_declaration(manifest(%{"frame" => %{"placement" => "desktop"}})) ==
-               {:error, {:invalid_tincture, "tincture.frame.placement is one of float, canvas"}}
+      for placement <- ["float", "desktop"] do
+        assert Rules.validate_declaration(manifest(%{"frame" => %{"placement" => placement}})) ==
+                 {:error, {:invalid_tincture, "tincture.frame.placement is one of canvas"}},
+               placement
+      end
+    end
+
+    test "a size hint is held to its bounds at publish, and an app's hint within them is kept" do
+      assert {:ok, %Tincture{frame: %{size: size}}} =
+               Rules.validate_declaration(manifest(@declared))
+
+      assert size == %Prima.Manifest.Tincture.Size{preferred: %{w: 400, h: 640}, tile: "right"}
+
+      for hint <- [
+            %{"min" => %{"w" => 99, "h" => 100}},
+            %{"preferred" => %{"w" => 4001, "h" => 100}},
+            %{"aspect" => %{"w" => 0, "h" => 1}},
+            %{"tile" => "bottom"},
+            %{"max" => %{"w" => 100, "h" => 100}}
+          ] do
+        assert {:error, {:invalid_tincture, "tincture.frame.size" <> _}} =
+                 Rules.validate_declaration(manifest(%{"frame" => %{"size" => hint}})),
+               inspect(hint)
+      end
     end
 
     for action <- ~w(feed.bind feed.remove feed.press) do
@@ -301,7 +323,7 @@ defmodule Compendium.Tincture.RulesTest do
         sentence =
           "tincture.actions names #{action}: a tincture never binds, removes or presses a feed; the person does"
 
-        for placement <- Rules.placements() do
+        for placement <- [nil | Rules.placements()] do
           tincture = %{
             "frame" => %{"placement" => placement},
             "actions" => ["execution.list", action]
@@ -314,7 +336,7 @@ defmodule Compendium.Tincture.RulesTest do
 
           assert Rules.validate_declaration(%{"type" => "tincture", "tincture" => tincture}) ==
                    {:error, {:invalid_tincture, sentence}},
-                 placement
+                 inspect(placement)
         end
 
         # Reading the feeds is not one of them.
@@ -421,7 +443,7 @@ defmodule Compendium.Tincture.RulesTest do
                Rules.validate_declaration(
                  manifest(%{
                    "connect" => ["api.example.com"],
-                   "frame" => %{"placement" => "float"}
+                   "frame" => %{"capabilities" => ["pointer_lock"]}
                  })
                )
     end
@@ -725,7 +747,13 @@ defmodule Compendium.Tincture.RulesTest do
          "a canvas declares no component dependency, static or dynamic"},
         {canvas(%{"frame" => %{"placement" => "canvas", "capabilities" => ["fullscreen"]}}),
          "a canvas declares no frame capability"},
-        {canvas(%{"actions" => ["execution.list"]}), "a canvas declares no system action"}
+        {canvas(%{"actions" => ["execution.list"]}), "a canvas declares no system action"},
+        {canvas(%{
+           "frame" => %{
+             "placement" => "canvas",
+             "size" => %{"preferred" => %{"w" => 400, "h" => 640}}
+           }
+         }), "a canvas declares no size: it fills the screen"}
       ]
 
       for {manifest, sentence} <- refusals, do: canvas_refused(manifest, sentence)
@@ -830,9 +858,9 @@ defmodule Compendium.Tincture.RulesTest do
                      "version's files"}}
       end
 
-      # Another placement's files are no canvas's to hold.
-      float = %{"tincture" => %{"frame" => %{"placement" => "float"}}}
-      assert Rules.check_canvas_files(float, []) == :ok
+      # An app's files are no canvas's to hold.
+      app = %{"tincture" => %{"frame" => %{"capabilities" => ["pointer_lock"]}}}
+      assert Rules.check_canvas_files(app, []) == :ok
 
       assert Compendium.tincture_check_canvas_files(react, ["index.html"]) ==
                Rules.check_canvas_files(react, ["index.html"])
@@ -857,10 +885,10 @@ defmodule Compendium.Tincture.RulesTest do
           "tincture.streams names #{name}, which declares a shape: " <>
             "a stream that declares a shape is read by a canvas alone"}}
 
-    test "is refused in a floating tincture and in an app, whatever its subject" do
+    test "is refused in an app, framed or not, whatever its subject" do
       table = canvas_table()
 
-      for frame <- [%{"placement" => "float"}, %{}],
+      for frame <- [%{"capabilities" => ["pointer_lock"]}, %{}],
           entry <- [
             %{"name" => "feed.results", "subject" => "btc"},
             %{"name" => "feed.results", "subject" => "*"},
@@ -877,7 +905,7 @@ defmodule Compendium.Tincture.RulesTest do
 
       # Beside a stream it may open, the shaped one is still named.
       mixed =
-        declared(%{"placement" => "float"}, [
+        declared(%{}, [
           %{"name" => "executions.deltas", "subject" => "*"},
           %{"name" => "runs.changes"}
         ])
@@ -892,7 +920,7 @@ defmodule Compendium.Tincture.RulesTest do
       for name <- ["schedules.changes", "schedule_runs.changes"] do
         assert Rules.check_streams(streams_of([%{"name" => name}]), table) == :ok, name
 
-        for frame <- [%{"placement" => "float"}, %{}] do
+        for frame <- [%{"capabilities" => ["pointer_lock"]}, %{}] do
           assert Rules.check_streams(declared(frame, [%{"name" => name}]), table) ==
                    shaped_refusal(name)
         end
@@ -916,7 +944,7 @@ defmodule Compendium.Tincture.RulesTest do
 
       assert Rules.check_streams(canvas, table) == :ok
 
-      for frame <- [%{"placement" => "float"}, %{}] do
+      for frame <- [%{"capabilities" => ["pointer_lock"]}, %{}] do
         assert Rules.check_streams(
                  declared(frame, [%{"name" => "executions.deltas", "subject" => "*"}]),
                  table

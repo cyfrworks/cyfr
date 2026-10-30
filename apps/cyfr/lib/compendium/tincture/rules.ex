@@ -95,7 +95,7 @@ defmodule Compendium.Tincture.Rules do
   }
 
   @frame_capabilities ~w(pointer_lock fullscreen gamepad audio_autoplay)
-  @placements ~w(float canvas)
+  @placements ~w(canvas)
 
   # Every frame runs its scripts; nothing else is on unless granted.
   @sandbox_always ["allow-scripts"]
@@ -202,15 +202,17 @@ defmodule Compendium.Tincture.Rules do
   @doc """
   The frame capabilities a manifest may declare in
   `tincture.frame.capabilities`. Beside them the frame declares its
-  `placement` (`placements/0`) and whether it runs in the `background`.
+  `placement` (`placements/0`), whether it runs in the `background` and
+  its `size` hint (`Prima.Manifest.Tincture.Size`).
   """
   @spec frame_capabilities() :: [String.t()]
   def frame_capabilities, do: @frame_capabilities
 
   @doc """
-  The placements a frame may declare: floating over the shell, or a
-  canvas, the person's page, its version's own entry page
-  (`validate_declaration/1`).
+  The placements a frame may declare: `canvas`, the person's page, its
+  version's own entry page (`validate_declaration/1`). A frame that
+  declares none opens as an app, which the person places as a window, a
+  tile or full.
   """
   @spec placements() :: [String.t()]
   def placements, do: @placements
@@ -466,9 +468,9 @@ defmodule Compendium.Tincture.Rules do
 
   @doc """
   The manifest's frame, streams and system actions, held to their shapes
-  (`Prima.Manifest.Tincture`) and to these rules: every capability
-  is one of `frame_capabilities/0` and a placement is one of
-  `placements/0`. No tincture, whatever its placement, declares
+  (`Prima.Manifest.Tincture`, which also holds `frame.size` to its
+  bounds) and to these rules: every capability is one of
+  `frame_capabilities/0` and a placement is one of `placements/0`. No tincture, whatever its placement, declares
   `feed.bind`, `feed.remove` or `feed.press` among its system actions:
   those are the person's alone. Nor does any declare `layout.edit`: the
   layout is the person's arrangement, and no tincture writes it. Nor
@@ -483,7 +485,8 @@ defmodule Compendium.Tincture.Rules do
   (`lockfile_required?/1`). It reaches nothing of its own, and hidden it
   reads and acts on nothing: no `tincture.connect` origin, no
   `caps.egress`, no component dependency, static or dynamic, no frame
-  capability, no background and no system action. Each refusal says which.
+  capability, no background and no system action; and it fills the
+  screen, so it declares no size. Each refusal says which.
 
   A manifest that declares none of the blocks answers the empty
   declaration. Which streams exist, and that only a canvas names one that
@@ -796,6 +799,9 @@ defmodule Compendium.Tincture.Rules do
       declaration.actions != [] ->
         canvas_refuse("a canvas declares no system action")
 
+      not is_nil(declaration.frame.size) ->
+        canvas_refuse("a canvas declares no size: it fills the screen")
+
       true ->
         :ok
     end
@@ -834,7 +840,7 @@ defmodule Compendium.Tincture.Rules do
   # Binding, removing or pressing a feed is the person's alone: a bind or a
   # removal they approve, a press of a control Prism draws. The layout is
   # the person's arrangement of their screen, and Prism alone places frames
-  # from it: a tincture that could write it could place itself, float
+  # from it: a tincture that could write it could place, size or raise
   # itself or any other tincture, or take a canvas off the person's screen.
   # A schedule fires runs on its own under a profile's authority: a
   # tincture that could create or change one could schedule itself. A

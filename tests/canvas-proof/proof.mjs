@@ -643,24 +643,27 @@ async function diagnose(page) {
 
 // ---- layouts -------------------------------------------------------------------
 
-const posture = (apps = []) => ({ desk: { apps, floating: [] }, hand: { apps, floating: [] } });
+const posture = (apps = []) => ({ desk: { apps }, hand: { apps } });
 
 // The proof's layout: the shipped canvas `start` (canvas-full as its full
-// app), markets (canvas-full as a column app on the desk, the sibling the
-// activation step records a click in; in the hand a column is laid over the
-// whole canvas, so markets has none there), the probe (canvas-full as its
-// full app), canvas-broken, and any canvas a step adds or puts in another's
-// place.
+// app), markets (canvas-full as a window on the desk, which the shell shows
+// as a column, the sibling the activation step records a click in; in the
+// hand a column is laid over the whole canvas, so markets has none there),
+// the probe (canvas-full as its full app), canvas-broken, and any canvas a
+// step adds or puts in another's place.
 function layout(extra = [], { without = [] } = {}) {
-  const full = [{ tincture: "tincture:local.canvas-full", mode: "full", order: 0 }];
-  const column = [{ tincture: "tincture:local.canvas-full", mode: "column", order: 0 }];
+  const full = [{ tincture: "tincture:local.canvas-full", placement: "full", order: 0, minimised: false }];
+  const window = [{
+    tincture: "tincture:local.canvas-full", placement: "window", order: 0, minimised: false,
+    geometry: { x: 5000, y: 0, w: 5000, h: 10000 },
+  }];
   const base = [
     { id: "start", tincture: "tincture:local.canvas", postures: posture(full) },
-    { id: "markets", tincture: "tincture:local.markets", postures: { desk: { apps: column, floating: [] }, hand: { apps: [], floating: [] } } },
+    { id: "markets", tincture: "tincture:local.markets", postures: { desk: { apps: window }, hand: { apps: [] } } },
     { id: "probe", tincture: "tincture:local.canvas-probe", postures: posture(full) },
     { id: "broken", tincture: "tincture:local.canvas-broken", postures: posture() },
   ].filter((c) => !without.includes(c.id));
-  return { version: 2, canvases: [...base, ...extra.map((e) => ({ id: e.id, tincture: e.tincture, postures: posture() }))] };
+  return { version: 3, canvases: [...base, ...extra.map((e) => ({ id: e.id, tincture: e.tincture, postures: posture() }))] };
 }
 
 // Publish `document` and wait until the switcher lists exactly its canvases.
@@ -1484,7 +1487,7 @@ async function stepFailedFire(page, name) {
 // ---- the measurement -------------------------------------------------------------
 
 function measureLayout(id) {
-  return { version: 2, canvases: [
+  return { version: 3, canvases: [
     { id: "start", tincture: "tincture:local.canvas", postures: {} },
     { id, tincture: "tincture:local.measure", postures: {} },
   ] };

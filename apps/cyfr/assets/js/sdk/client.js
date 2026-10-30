@@ -4,6 +4,7 @@
 import {
   BEARER_HEADER,
   CANVAS_EVENTS,
+  CANVAS_VERBS,
   CREDENTIAL,
   HANDSHAKE,
   ROUTES,
@@ -209,7 +210,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // What reaches the shell: a canvas that failed to load sends no `ready`,
   // and a page that is no canvas sends no `press` and no `failed`.
   function send(name, args) {
-    if (kind === "canvas" ? name === "ready" && failure === "load" : name === "press" || name === "failed") return
+    if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) return
     post(name, args)
   }
 
@@ -455,11 +456,23 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     },
 
     /**
+     * On a canvas, ask the person to grant a component: a component
+     * reference, e.g. "c:local.openai". The person confirms in CYFR's own
+     * prompt, never in the canvas. The shell acts on it only within moments
+     * of the person's own input, never from a script on its own, and only
+     * for a component the athanor has installed.
+     */
+    grant(ref) {
+      verb("grant", {ref})
+    },
+
+    /**
      * On a canvas, hear what the shell tells it: `installed` (the installed
-     * tinctures, `[{ref, name}]`), `posture` (`desk` or `hand`), `covered`
-     * (the rects of it, `{x, y, width, height}` in its own pixels, that the
-     * shown apps cover) or `state` (`live` or `frozen`). The latest value,
-     * if one has come, is handed to a new handler first.
+     * tinctures, `[{ref, name, icon, open}]`), `posture` (`desk` or
+     * `hand`), `covered` (the rects of it, `{x, y, width, height}` in its
+     * own pixels, that the shown apps cover) or `state` (`live` or
+     * `frozen`). The latest value, if one has come, is handed to a new
+     * handler first.
      * @returns {function} stops the handler hearing more
      */
     on(event, handler) {

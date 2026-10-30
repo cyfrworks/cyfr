@@ -7,11 +7,15 @@ defmodule Compendium.Providers.LayoutTest do
   default, `edit` holds a whole document to the layout's shape and
   publishes it fenced over the revision read; an edit over a newer
   revision is refused, a document that names an operation or a stream is
-  refused and so is a version-1 document, a tincture nobody installed is
-  kept; `Compendium.layout/2` is the console's read of the same document,
+  refused and so is a document of another version, a tincture nobody
+  installed is kept; a stored document of a version this code does not
+  read answers the shipped default at its revision, which the next edit
+  replaces, while bytes that no longer hold their digest are refused; `Compendium.layout/2` is the console's read of the same document,
   each posture arranging every canvas in order.
   """
   use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
 
   alias Compendium.Providers.Layout
   alias Sanctum.Context
@@ -42,29 +46,75 @@ defmodule Compendium.Providers.LayoutTest do
     )
   end
 
-  # Two canvases: `home` on `canvas`, placing the vault as a column and a
-  # tincture nobody installed in full on the desk; and `notes`, placing
-  # nothing.
+  @vault %{
+    "tincture" => "tincture:local.vault",
+    "placement" => "window",
+    "order" => 0,
+    "geometry" => %{"x" => 1000, "y" => 500, "w" => 3000, "h" => 6000},
+    "minimised" => false
+  }
+  @never_installed %{
+    "tincture" => "tincture:acme.never-installed",
+    "placement" => "tile",
+    "order" => 1,
+    "side" => "right",
+    "share" => 2500,
+    "minimised" => true
+  }
+
+  # Two canvases: `home` on `canvas`, opening the vault as a window and a
+  # tincture nobody installed as a minimised tile on the desk; and
+  # `notes`, opening nothing.
   defp document(canvas \\ "tincture:local.canvas") do
+    %{
+      "version" => 3,
+      "canvases" => [
+        %{
+          "id" => "home",
+          "tincture" => canvas,
+          "postures" => %{"desk" => %{"apps" => [@vault, @never_installed]}}
+        },
+        %{"id" => "notes", "tincture" => "tincture:local.notes-canvas", "postures" => %{}}
+      ]
+    }
+  end
+
+  # A document as an earlier CYFR stored it, which this one does not read.
+  defp version_two do
     %{
       "version" => 2,
       "canvases" => [
         %{
           "id" => "home",
-          "tincture" => canvas,
+          "tincture" => "tincture:local.canvas",
           "postures" => %{
             "desk" => %{
               "apps" => [
-                %{"tincture" => "tincture:local.vault", "mode" => "column", "order" => 0},
-                %{"tincture" => "tincture:acme.never-installed", "mode" => "full", "order" => 1}
+                %{"tincture" => "tincture:local.vault", "mode" => "column", "order" => 0}
               ],
               "floating" => []
             }
           }
-        },
-        %{"id" => "notes", "tincture" => "tincture:local.notes-canvas", "postures" => %{}}
+        }
       ]
     }
+  end
+
+  # `bytes` published as the person's layout over `revision_read`, as an
+  # earlier CYFR published its own documents.
+  defp publish_bytes!(ctx, bytes, revision_read) do
+    actor = Context.actor(ctx)
+    {:ok, staged} = Arca.Storage.stage(actor, "layouts", bytes)
+    {:ok, slot} = Arca.ControlPlane.member_slot()
+
+    change = %Arca.FencedPublication.Change{
+      resource: {:document, actor.athanor_id, Arca.Layouts.key(ctx.user_id)},
+      staged: staged,
+      digest: Prima.Digest.sha256(bytes)
+    }
+
+    {:ok, revision} = Arca.FencedPublication.publish(change, revision_read, slot)
+    revision
   end
 
   defp get(ctx, args \\ %{}), do: Layout.handle("layout", ctx, Map.put(args, "action", "get"))
@@ -94,7 +144,7 @@ defmodule Compendium.Providers.LayoutTest do
       end
     end
 
-    test "the descriptions name canvases, apps and floating tinctures, never the desktop" do
+    test "the descriptions name canvases, apps and placements, never the desktop or floating" do
       [tool] = Layout.tools()
 
       described =
@@ -106,8 +156,8 @@ defmodule Compendium.Providers.LayoutTest do
         ]
         |> Enum.join(" ")
 
-      for word <- ["canvases", "apps", "floating"], do: assert(described =~ word)
-      for word <- ["desktop", "slots", "card"], do: refute(described =~ word)
+      for word <- ["canvases", "apps", "window", "tile", "full"], do: assert(described =~ word)
+      for word <- ["desktop", "slots", "card", "floating"], do: refute(described =~ word)
     end
 
     test "the provider is rostered, so the gate serves it" do
@@ -130,12 +180,7 @@ defmodule Compendium.Providers.LayoutTest do
               %{
                 posture: "hand",
                 arrangement: [
-                  %{
-                    "id" => "home",
-                    "tincture" => "tincture:local.canvas",
-                    "apps" => [],
-                    "floating" => []
-                  }
+                  %{"id" => "home", "tincture" => "tincture:local.canvas", "apps" => []}
                 ]
               }} = get(ctx, %{"posture" => "hand"})
     end
@@ -149,18 +194,13 @@ defmodule Compendium.Providers.LayoutTest do
       assert home == %{
                "id" => "home",
                "tincture" => "tincture:local.canvas",
-               "apps" => [
-                 %{"tincture" => "tincture:local.vault", "mode" => "column", "order" => 0},
-                 %{"tincture" => "tincture:acme.never-installed", "mode" => "full", "order" => 1}
-               ],
-               "floating" => []
+               "apps" => [@vault, @never_installed]
              }
 
       assert notes == %{
                "id" => "notes",
                "tincture" => "tincture:local.notes-canvas",
-               "apps" => [],
-               "floating" => []
+               "apps" => []
              }
 
       assert {:ok, %{arrangement: [%{"apps" => []}, %{"apps" => []}]}} =
@@ -207,7 +247,7 @@ defmodule Compendium.Providers.LayoutTest do
                get(ctx, %{"posture" => "desk"})
     end
 
-    test "a layout can only arrange: an operation, a stream or a version-1 document is refused",
+    test "a layout can only arrange: an operation, a stream or another version's document is refused",
          %{ctx: ctx} do
       [app | _] = hd(document()["canvases"])["postures"]["desk"]["apps"]
 
@@ -224,24 +264,62 @@ defmodule Compendium.Providers.LayoutTest do
           [put_in(home, ["postures", "desk", "stream"], "vault.status") | rest]
         end)
 
-      version_one = %{
-        "version" => 1,
-        "postures" => %{
-          "desk" => %{"desktop" => "tincture:local.canvas", "slots" => [], "floating" => []}
-        }
-      }
-
       assert {:error, {:invalid_argument, _}} = edit(ctx, with_action, 0)
       assert {:error, {:invalid_argument, _}} = edit(ctx, with_stream, 0)
-      assert {:error, {:invalid_argument, sentence}} = edit(ctx, version_one, 0)
-      assert sentence =~ "version must be 2"
-      assert {:error, {:invalid_argument, _}} = edit(ctx, %{"version" => 2}, 0)
+      assert {:error, {:invalid_argument, sentence}} = edit(ctx, version_two(), 0)
+      assert sentence =~ "version must be 3"
+      assert {:error, {:invalid_argument, _}} = edit(ctx, %{"version" => 3}, 0)
       assert {:error, {:invalid_argument, _}} = edit(ctx, document(), -1)
       assert {:ok, %{shipped_default: true}} = get(ctx)
     end
 
+    test "a stored version-2 document reads as the shipped default at its revision, and an edit there replaces it",
+         %{ctx: ctx} do
+      for revision <- 0..5, do: {:ok, _} = edit(ctx, document(), revision)
+      assert publish_bytes!(ctx, Jason.encode!(version_two()), 6) == 7
+
+      default = Prima.Layout.default()
+
+      assert {:ok, answer} = get(ctx, %{"posture" => "desk"})
+
+      assert Map.take(answer, [:document, :revision, :digest, :shipped_default, :arrangement]) ==
+               %{
+                 document: Prima.Layout.to_json(default),
+                 revision: 7,
+                 digest: Prima.Layout.digest(default),
+                 shipped_default: true,
+                 arrangement: [
+                   %{"id" => "home", "tincture" => "tincture:local.canvas", "apps" => []}
+                 ]
+               }
+
+      assert {:ok, %{revision: 7, shipped_default: true}} = Compendium.layout(ctx, "desk")
+      assert {:error, {:conflict, _}} = edit(ctx, document(), 6)
+      assert {:ok, %{revision: 8}} = edit(ctx, document(), 7)
+
+      assert {:ok, %{revision: 8, shipped_default: false, document: document}} = get(ctx)
+      assert document == document()
+    end
+
+    test "stored bytes that no longer hold their digest are refused, not read as the default",
+         %{ctx: ctx} do
+      assert publish_bytes!(ctx, Jason.encode!(version_two()), 0) == 1
+      key = Arca.Layouts.key(ctx.user_id)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(d in Arca.Schemas.FencedDocument,
+            where: d.athanor_id == ^ctx.athanor_id and d.key == ^key
+          ),
+          set: [digest: "sha256:" <> String.duplicate("0", 64)]
+        )
+
+      assert {:error, {:corrupt, {:digest, "The layout"}}} = get(ctx)
+      assert {:error, {:corrupt, _}} = Compendium.layout(ctx, "desk")
+    end
+
     test "an empty layout is published, and arranges no canvas", %{ctx: ctx} do
-      assert {:ok, %{revision: 1}} = edit(ctx, %{"version" => 2, "canvases" => []}, 0)
+      assert {:ok, %{revision: 1}} = edit(ctx, %{"version" => 3, "canvases" => []}, 0)
       assert {:ok, %{arrangement: [], shipped_default: false}} = get(ctx, %{"posture" => "desk"})
       assert {:ok, %{arrangement: []}} = Compendium.layout(ctx, "hand")
     end

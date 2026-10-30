@@ -4,13 +4,15 @@
 defmodule Compendium.Providers.Layout do
   @moduledoc """
   The `layout` tool: the caller's own layout document (`Prima.Layout`),
-  their canvases in order and, over each, per posture, the apps and the
-  floating tinctures placed and where.
+  their canvases in order and, over each, per posture, the apps open over
+  it and where each stands.
 
     * `get` answers the caller's document, its revision and digest, or the
-      shipped default at revision 0 when they have never arranged one; with
-      a `posture`, also that posture's arrangement: every canvas in order,
-      each with the apps and floating tinctures placed over it.
+      shipped default when they have never arranged one (at revision 0) or
+      their stored document names a version this code does not read (at
+      its revision, so the next edit replaces it); with a `posture`, also
+      that posture's arrangement: every canvas in order, each with the
+      apps open over it.
     * `edit` takes a whole document and the revision `get` answered, holds
       it to the layout's shape and publishes it fenced (`Arca.Layouts`): a
       document published since the revision was read refuses the edit, and
@@ -20,8 +22,8 @@ defmodule Compendium.Providers.Layout do
       announcement that does not go out leaves the edit made, and each
       shell reads the layout again on its next posture change or reconnect.
 
-  A layout can only arrange: the shape names tinctures, modes and places
-  and nothing else, so an edit never references an operation or a stream
+  A layout can only arrange: the shape names tinctures, placements and
+  geometry and nothing else, so an edit never references an operation or a stream
   and never widens a grant. A tincture nobody installed is kept. Which
   tinctures are installed is the component listing's to answer, not this
   tool's.
@@ -74,9 +76,11 @@ defmodule Compendium.Providers.Layout do
             Arg.new("document", :json,
               required: true,
               description:
-                "edit: the whole layout document — {version: 2, canvases: [{id, tincture, " <>
-                  "postures: {hand|desk: {apps: [{tincture, mode: full|column, order}], " <>
-                  "floating: [{tincture, position: {x, y}}]}}}]}"
+                "edit: the whole layout document — {version: 3, canvases: [{id, tincture, " <>
+                  "postures: {hand|desk: {apps: [{tincture, placement: window|tile|full, " <>
+                  "order, minimised, and for a window geometry: {x, y, w, h}, for a tile " <>
+                  "side: left|right and share}]}}}]}, positions and sizes in hundredths of " <>
+                  "a percent of the viewport"
             ),
             Arg.new("revision", :integer,
               required: true,
@@ -92,7 +96,7 @@ defmodule Compendium.Providers.Layout do
       ],
       description:
         "Your layout: your canvases in order and, over each canvas, per posture, the apps " <>
-          "and floating tinctures placed and where. An edit can only arrange; it names no " <>
+          "open over it and where each stands. An edit can only arrange; it names no " <>
           "operation, stream or grant.",
       title: "Layout"
     )
@@ -151,9 +155,12 @@ defmodule Compendium.Providers.Layout do
 
   @doc """
   The caller's layout document, its revision and digest, or the shipped
-  default at revision 0 when none was published (`shipped_default: true`).
-  Refused for a caller that is not a person, as `{:corrupt, {:digest,
-  "The layout"}}` when the stored bytes no longer hold their digest, and
+  default (`shipped_default: true`): at revision 0 when none was
+  published, and at the stored revision when the stored document names a
+  version this code does not read, so an edit at that revision publishes
+  the first document of this version in its place. Refused for a caller
+  that is not a person, as `{:corrupt, {:digest, "The layout"}}` when the
+  stored bytes no longer hold their digest or do not read, and
   `{:unavailable, "Layout"}` when the store cannot answer.
   """
   @spec read(Context.t()) :: {:ok, read()} | {:error, term()}
@@ -164,15 +171,10 @@ defmodule Compendium.Providers.Layout do
           {:ok, %{document: document, revision: revision, digest: digest, shipped_default: false}}
 
         {:error, :not_found} ->
-          default = Prima.Layout.default()
+          {:ok, shipped_default(0)}
 
-          {:ok,
-           %{
-             document: default,
-             revision: 0,
-             digest: Prima.Layout.digest(default),
-             shipped_default: true
-           }}
+        {:error, {:unsupported_version, revision}} ->
+          {:ok, shipped_default(revision)}
 
         {:error, reason} ->
           {:error, refusal(reason, nil)}
@@ -180,11 +182,21 @@ defmodule Compendium.Providers.Layout do
     end
   end
 
+  defp shipped_default(revision) do
+    default = Prima.Layout.default()
+
+    %{
+      document: default,
+      revision: revision,
+      digest: Prima.Layout.digest(default),
+      shipped_default: true
+    }
+  end
+
   @doc """
   The arrangement of `posture` in `layout`: every canvas in the
-  document's order, each with the apps (by order, then reference) and the
-  floating tinctures that posture places over it, none for a posture the
-  canvas does not name (`Prima.Layout.arrangement/2`).
+  document's order, each with the apps (by order, then reference) that
+  posture opens over it, none for a posture the canvas does not name (`Prima.Layout.arrangement/2`).
   """
   @spec arrangement(Prima.Layout.t(), term()) ::
           {:ok, [Prima.Layout.arranged()]} | {:error, {:invalid_argument, String.t()}}

@@ -4,22 +4,31 @@
 defmodule Prima.Layout do
   @moduledoc """
   The layout document: the person's canvases in order and, over each, per
-  posture, the tinctures placed and where. It is the person's, kept by
-  Arca (`Arca.Layouts`) and published fenced; editing it is instant and
-  can only arrange. Which canvas a glass shows, window geometry, which
-  apps are open and what hardware is present stay with the device and are
-  not in it.
+  posture, the apps open over it and where each stands. It is the
+  person's, kept by Arca (`Arca.Layouts`) and published fenced; editing it
+  is instant and can only arrange. Which canvas a browser shows, which
+  window has focus and what hardware is present stay with the device and
+  are not in it.
 
       %Prima.Layout{
-        version: 2,
+        version: 3,
         canvases: [
           %{
             id: "home",
             tincture: ref,
             postures: %{
               "desk" | "hand" => %{
-                apps: [%{tincture: ref, mode: :full | :column, order: n}],
-                floating: [%{tincture: ref, position: %{x, y}}]
+                apps: [
+                  %{
+                    tincture: ref,
+                    placement: :window | :tile | :full,
+                    order: n,
+                    geometry: %{x, y, w, h} | nil,
+                    side: :left | :right | nil,
+                    share: n | nil,
+                    minimised: boolean
+                  }
+                ]
               }
             }
           }
@@ -31,56 +40,62 @@ defmodule Prima.Layout do
       Each canvas has exactly an `id` (a short lowercase name, unique in
       the document), the `tincture` it runs (each canvas names a tincture
       of its own) and its `postures`, which may be empty.
-    * A posture is `hand` or `desk`. A posture has exactly `apps` and
-      `floating`, either possibly empty, and a posture a canvas does not
-      name reads as empty (`arrangement/2`).
-    * `apps` are the tinctures placed over the canvas, at most 32: each
-      exactly its `tincture`, its `mode` (`full`, the whole screen while it
-      is shown; `column`, a column beside the canvas) and its `order`, a
-      whole number from 0 to 1,000,000.
-    * `floating` entries are placed over the canvas, with permission, at
-      most 16: exactly the `tincture` and its `position`, `x` and `y`
-      in hundredths of a percent of the viewport (0 to 10000), so a
-      position means the same on every device.
-    * A tincture appears at most once per canvas and posture, across its
-      apps and its floating entries.
+    * A posture is `hand` or `desk`. A posture has exactly `apps`,
+      possibly empty, and a posture a canvas does not name reads as empty
+      (`arrangement/2`).
+    * `apps` are the tinctures open over the canvas, at most 32, a
+      tincture at most once. Each has its `tincture`, its `placement`, its
+      `order` (a whole number from 0 to 1,000,000: the stacking order of
+      windows, the left-to-right order of tiles) and whether it is
+      `minimised` (it keeps its placement), and exactly the keys its
+      placement takes:
+      * a `window` has its `geometry`: `x`, `y`, `w` and `h` in hundredths
+        of a percent of the viewport, `x` and `y` from 0 and `w` and `h`
+        from 1, each to 10000, so a window means the same on every device;
+      * a `tile` has its `side`, `left` or `right`, and its `share` of the
+        viewport's width in hundredths of a percent, from 1 to 10000;
+      * a `full` app has nothing more: it takes the whole area while it
+        is shown.
+      In the struct an app carries all three of `geometry`, `side` and
+      `share`, each `nil` where its placement takes none.
 
   A tincture reference is a versionless tincture reference in its
   canonical spelling (`tincture:local.canvas`): a code change is a new
   version, and the layout follows it. A reference to a tincture nobody
   installed is valid and is kept.
 
-  The document names tinctures, modes and places and nothing else: an
-  unknown key anywhere is refused, and so is a document of any other
+  The document names tinctures, placements and geometry and nothing else:
+  an unknown key anywhere is refused, and so is a document of any other
   version, so a layout can never carry an operation, a stream or a grant.
 
   `validate/1` reads the JSON form (string keys) and answers the struct
   with each posture's apps in `{order, tincture}` order; `to_json/1`
-  writes it back. `encode/1` is the canonical JSON (`Prima.JCS`) Arca
-  stores and `digest/1` its `sha256:` digest. `tests/fixtures/layout.json`
-  holds a valid document, its canonical bytes and digest, and refused
-  ones.
+  writes it back. `decode/1` reads stored bytes, and tells a document of
+  another version (`:unsupported_version`) from one that does not read.
+  `encode/1` is the canonical JSON (`Prima.JCS`) Arca stores and
+  `digest/1` its `sha256:` digest. `tests/fixtures/layout.json` holds a
+  valid document, its canonical bytes and digest, and refused ones.
   """
 
   @postures ~w(desk hand)
-  @modes [:full, :column]
-  @version 2
+  @placements [:window, :tile, :full]
+  @sides [:left, :right]
+  @version 3
 
   @max_canvases 8
   @max_apps 32
-  @max_floating 16
   @max_order 1_000_000
-  @max_position 10_000
+  @max_fraction 10_000
 
   @default_canvas "tincture:local.canvas"
   @default_id "home"
 
   @document_keys ~w(canvases version)
   @canvas_keys ~w(id postures tincture)
-  @posture_keys ~w(apps floating)
-  @app_keys ~w(mode order tincture)
-  @floating_keys ~w(position tincture)
-  @position_keys ~w(x y)
+  @posture_keys ~w(apps)
+  @app_keys ~w(minimised order placement tincture)
+  @placement_keys %{window: ~w(geometry), tile: ~w(share side), full: []}
+  @geometry_keys ~w(h w x y)
 
   @canvas_id ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
 
@@ -90,31 +105,58 @@ defmodule Prima.Layout do
   @typedoc "A posture's name."
   @type posture_name :: String.t()
 
-  @typedoc "How an app is shown over its canvas."
-  @type mode :: :full | :column
+  @typedoc "How an app stands over its canvas."
+  @type placement :: :window | :tile | :full
 
-  @typedoc "One app placed over a canvas."
-  @type app :: %{tincture: ref(), mode: mode(), order: non_neg_integer()}
+  @typedoc "The edge a tile is docked at."
+  @type side :: :left | :right
 
-  @typedoc "One floating tincture and where it sits."
-  @type floating :: %{
-          tincture: ref(),
-          position: %{x: non_neg_integer(), y: non_neg_integer()}
+  @typedoc "A window's place and size, each in hundredths of a percent of the viewport."
+  @type geometry :: %{
+          x: non_neg_integer(),
+          y: non_neg_integer(),
+          w: pos_integer(),
+          h: pos_integer()
         }
 
-  @typedoc "One posture's placements over a canvas."
-  @type posture :: %{apps: [app()], floating: [floating()]}
+  @typedoc "One app open over a canvas."
+  @type app ::
+          %{
+            tincture: ref(),
+            placement: :window,
+            order: non_neg_integer(),
+            geometry: geometry(),
+            side: nil,
+            share: nil,
+            minimised: boolean()
+          }
+          | %{
+              tincture: ref(),
+              placement: :tile,
+              order: non_neg_integer(),
+              geometry: nil,
+              side: side(),
+              share: pos_integer(),
+              minimised: boolean()
+            }
+          | %{
+              tincture: ref(),
+              placement: :full,
+              order: non_neg_integer(),
+              geometry: nil,
+              side: nil,
+              share: nil,
+              minimised: boolean()
+            }
+
+  @typedoc "One posture's apps over a canvas."
+  @type posture :: %{apps: [app()]}
 
   @typedoc "One canvas: its id, the tincture it runs and its postures."
   @type canvas :: %{id: String.t(), tincture: ref(), postures: %{posture_name() => posture()}}
 
   @typedoc "One canvas as a posture arranges it."
-  @type arranged :: %{
-          id: String.t(),
-          tincture: ref(),
-          apps: [app()],
-          floating: [floating()]
-        }
+  @type arranged :: %{id: String.t(), tincture: ref(), apps: [app()]}
 
   @typedoc "A layout document."
   @type t :: %__MODULE__{version: pos_integer(), canvases: [canvas()]}
@@ -129,9 +171,13 @@ defmodule Prima.Layout do
   @spec postures() :: [posture_name()]
   def postures, do: @postures
 
-  @doc "The modes an app may take."
-  @spec modes() :: [mode()]
-  def modes, do: @modes
+  @doc "The placements an app may take."
+  @spec placements() :: [placement()]
+  def placements, do: @placements
+
+  @doc "The edges a tile may be docked at."
+  @spec sides() :: [side()]
+  def sides, do: @sides
 
   @doc "The document version this module reads and writes."
   @spec version() :: pos_integer()
@@ -139,8 +185,7 @@ defmodule Prima.Layout do
 
   @doc """
   The shipped default: one canvas, `#{@default_id}`, running the shipped
-  canvas (`#{@default_canvas}`), with nothing placed over it in any
-  posture.
+  canvas (`#{@default_canvas}`), with nothing open over it in any posture.
   """
   @spec default() :: t()
   def default do
@@ -150,15 +195,15 @@ defmodule Prima.Layout do
   @doc """
   The canvases as posture `name` arranges them, in the document's order:
   each canvas's `id` and `tincture`, and that posture's `apps` (in
-  `{order, tincture}` order) and `floating` entries, empty for a posture
-  the canvas does not name. `:error` for a name that is not a posture.
+  `{order, tincture}` order), empty for a posture the canvas does not
+  name. `:error` for a name that is not a posture.
   """
   @spec arrangement(t(), term()) :: {:ok, [arranged()]} | :error
   def arrangement(%__MODULE__{canvases: canvases}, name) when name in @postures do
     {:ok,
      Enum.map(canvases, fn canvas ->
-       posture = Map.get(canvas.postures, name, %{apps: [], floating: []})
-       %{id: canvas.id, tincture: canvas.tincture, apps: posture.apps, floating: posture.floating}
+       posture = Map.get(canvas.postures, name, %{apps: []})
+       %{id: canvas.id, tincture: canvas.tincture, apps: posture.apps}
      end)}
   end
 
@@ -180,12 +225,24 @@ defmodule Prima.Layout do
 
   def validate(_other), do: refuse("the layout must be an object")
 
-  @doc "The document's bytes decoded and validated (`validate/1`)."
-  @spec decode(binary()) :: {:ok, t()} | {:error, error()}
+  @doc """
+  Stored bytes decoded and validated (`validate/1`). Bytes that decode as
+  a JSON object naming another whole-number `version` are
+  `:unsupported_version`: a document an earlier or a later CYFR wrote,
+  which this one does not read. Anything else that does not validate is
+  the refusal.
+  """
+  @spec decode(binary()) :: {:ok, t()} | {:error, :unsupported_version | error()}
   def decode(bytes) when is_binary(bytes) do
     case Prima.Json.decode(bytes) do
-      {:ok, document} -> validate(document)
-      {:error, :invalid_json} -> refuse("the layout is not JSON")
+      {:ok, %{"version" => version}} when is_integer(version) and version != @version ->
+        {:error, :unsupported_version}
+
+      {:ok, document} ->
+        validate(document)
+
+      {:error, :invalid_json} ->
+        refuse("the layout is not JSON")
     end
   end
 
@@ -201,11 +258,7 @@ defmodule Prima.Layout do
             "tincture" => canvas.tincture,
             "postures" =>
               Map.new(canvas.postures, fn {name, posture} ->
-                {name,
-                 %{
-                   "apps" => Enum.map(posture.apps, &app_json/1),
-                   "floating" => Enum.map(posture.floating, &floating_json/1)
-                 }}
+                {name, %{"apps" => Enum.map(posture.apps, &app_json/1)}}
               end)
           }
         end)
@@ -228,11 +281,7 @@ defmodule Prima.Layout do
   def tinctures(%__MODULE__{canvases: canvases}) do
     canvases
     |> Enum.flat_map(fn canvas ->
-      placed =
-        for {_name, posture} <- canvas.postures,
-            entry <- posture.apps ++ posture.floating,
-            do: entry.tincture
-
+      placed = for {_name, posture} <- canvas.postures, app <- posture.apps, do: app.tincture
       [canvas.tincture | placed]
     end)
     |> Enum.uniq()
@@ -241,26 +290,29 @@ defmodule Prima.Layout do
 
   @doc "One canvas as `arrangement/2` answers it, in the JSON form `to_json/1` writes."
   @spec arranged_to_json(arranged()) :: map()
-  def arranged_to_json(%{id: id, tincture: tincture, apps: apps, floating: floating}) do
-    %{
-      "id" => id,
-      "tincture" => tincture,
-      "apps" => Enum.map(apps, &app_json/1),
-      "floating" => Enum.map(floating, &floating_json/1)
-    }
+  def arranged_to_json(%{id: id, tincture: tincture, apps: apps}) do
+    %{"id" => id, "tincture" => tincture, "apps" => Enum.map(apps, &app_json/1)}
   end
 
   # ---- JSON ------------------------------------------------------------------
 
-  defp app_json(app),
-    do: %{"tincture" => app.tincture, "mode" => Atom.to_string(app.mode), "order" => app.order}
-
-  defp floating_json(entry) do
+  defp app_json(app) do
     %{
-      "tincture" => entry.tincture,
-      "position" => %{"x" => entry.position.x, "y" => entry.position.y}
+      "tincture" => app.tincture,
+      "placement" => Atom.to_string(app.placement),
+      "order" => app.order,
+      "minimised" => app.minimised
     }
+    |> Map.merge(placed_json(app))
   end
+
+  defp placed_json(%{placement: :window, geometry: geometry}),
+    do: %{"geometry" => Map.new(geometry, fn {key, value} -> {Atom.to_string(key), value} end)}
+
+  defp placed_json(%{placement: :tile, side: side, share: share}),
+    do: %{"side" => Atom.to_string(side), "share" => share}
+
+  defp placed_json(%{placement: :full}), do: %{}
 
   # ---- the shape -------------------------------------------------------------
 
@@ -331,18 +383,12 @@ defmodule Prima.Layout do
     with :ok <- known_keys(posture, @posture_keys, where),
          :ok <- required(posture, @posture_keys, where),
          {:ok, apps} <- apps(where, Map.get(posture, "apps")),
-         {:ok, floating} <- floating(where, Map.get(posture, "floating")),
-         :ok <-
-           distinct(
-             Enum.map(apps, & &1.tincture) ++ Enum.map(floating, & &1.tincture),
-             & &1,
-             "#{where}: the tincture"
-           ) do
-      {:ok, %{apps: Enum.sort_by(apps, &{&1.order, &1.tincture}), floating: floating}}
+         :ok <- distinct(apps, & &1.tincture, "#{where}: the tincture") do
+      {:ok, %{apps: Enum.sort_by(apps, &{&1.order, &1.tincture})}}
     end
   end
 
-  defp posture(where, _other), do: refuse("#{where} must be an object of apps and floating")
+  defp posture(where, _other), do: refuse("#{where} must be an object of apps")
 
   defp apps(where, apps) when is_list(apps) and length(apps) <= @max_apps,
     do: collect(apps, &app(where, &1))
@@ -355,22 +401,44 @@ defmodule Prima.Layout do
   defp app(where, %{} = app) do
     where = "#{where}: an app"
 
-    with :ok <- known_keys(app, @app_keys, where),
-         :ok <- required(app, @app_keys, where),
-         {:ok, tincture} <- tincture(Map.get(app, "tincture"), "#{where}'s tincture"),
-         {:ok, mode} <- mode(where, Map.get(app, "mode")),
-         {:ok, order} <- order(where, Map.get(app, "order")) do
-      {:ok, %{tincture: tincture, mode: mode, order: order}}
+    with {:ok, placement} <- placement(where, Map.get(app, "placement")),
+         keys = @app_keys ++ Map.fetch!(@placement_keys, placement),
+         where = "#{where} placed as a #{placement}",
+         :ok <- known_keys(app, keys, where),
+         :ok <- required(app, keys, where),
+         {:ok, tincture} <- tincture(Map.get(app, "tincture"), "#{where}: its tincture"),
+         {:ok, order} <- order(where, Map.get(app, "order")),
+         {:ok, minimised} <- minimised(where, Map.get(app, "minimised")),
+         {:ok, placed} <- placed(where, placement, app) do
+      {:ok,
+       Map.merge(
+         %{
+           tincture: tincture,
+           placement: placement,
+           order: order,
+           geometry: nil,
+           side: nil,
+           share: nil,
+           minimised: minimised
+         },
+         placed
+       )}
     end
   end
 
   defp app(where, _other), do: refuse("#{where}: an app must be an object")
 
-  defp mode(_where, "full"), do: {:ok, :full}
-  defp mode(_where, "column"), do: {:ok, :column}
+  defp placement(where, placement) do
+    case Enum.find(@placements, &(Atom.to_string(&1) == placement)) do
+      nil ->
+        refuse(
+          "#{where}: the placement must be #{Enum.join(@placements, ", ")}, got #{show(placement)}"
+        )
 
-  defp mode(where, mode),
-    do: refuse("#{where}: the mode must be full or column, got #{show(mode)}")
+      placement ->
+        {:ok, placement}
+    end
+  end
 
   defp order(_where, order) when is_integer(order) and order >= 0 and order <= @max_order,
     do: {:ok, order}
@@ -378,41 +446,46 @@ defmodule Prima.Layout do
   defp order(where, _order),
     do: refuse("#{where}: the order must be a whole number from 0 to #{@max_order}")
 
-  defp floating(where, entries) when is_list(entries) and length(entries) <= @max_floating,
-    do: collect(entries, &floating_entry(where, &1))
+  defp minimised(_where, minimised) when is_boolean(minimised), do: {:ok, minimised}
+  defp minimised(where, _other), do: refuse("#{where}: minimised must be true or false")
 
-  defp floating(where, entries) when is_list(entries),
-    do: refuse("#{where} floats at most #{@max_floating} tinctures")
+  defp placed(where, :window, %{"geometry" => %{} = geometry}) do
+    with :ok <- known_keys(geometry, @geometry_keys, "#{where}: the geometry"),
+         :ok <- required(geometry, @geometry_keys, "#{where}: the geometry") do
+      %{"x" => x, "y" => y, "w" => w, "h" => h} = geometry
 
-  defp floating(where, _other), do: refuse("#{where}: floating must be a list")
-
-  defp floating_entry(where, %{} = entry) do
-    where = "#{where}: a floating tincture"
-
-    with :ok <- known_keys(entry, @floating_keys, where),
-         :ok <- required(entry, @floating_keys, where),
-         {:ok, tincture} <- tincture(Map.get(entry, "tincture"), where),
-         {:ok, position} <- position(where, Map.get(entry, "position")) do
-      {:ok, %{tincture: tincture, position: position}}
+      if fraction?(x, 0) and fraction?(y, 0) and fraction?(w, 1) and fraction?(h, 1),
+        do: {:ok, %{geometry: %{x: x, y: y, w: w, h: h}}},
+        else:
+          refuse(
+            "#{where}: x and y must be whole numbers from 0, and w and h from 1, to #{@max_fraction}"
+          )
     end
   end
 
-  defp floating_entry(where, _other), do: refuse("#{where}: a floating entry must be an object")
+  defp placed(where, :window, _app),
+    do: refuse("#{where}: the geometry must be an object of x, y, w and h")
 
-  defp position(where, %{} = position) do
-    x = Map.get(position, "x")
-    y = Map.get(position, "y")
+  defp placed(where, :tile, app) do
+    side = Enum.find(@sides, &(Atom.to_string(&1) == app["side"]))
+    share = app["share"]
 
-    with :ok <- known_keys(position, @position_keys, "#{where}: the position") do
-      if coordinate?(x) and coordinate?(y),
-        do: {:ok, %{x: x, y: y}},
-        else: refuse("#{where}: x and y must be whole numbers from 0 to #{@max_position}")
+    cond do
+      is_nil(side) ->
+        refuse("#{where}: the side must be left or right, got #{show(app["side"])}")
+
+      not fraction?(share, 1) ->
+        refuse("#{where}: the share must be a whole number from 1 to #{@max_fraction}")
+
+      true ->
+        {:ok, %{side: side, share: share}}
     end
   end
 
-  defp position(where, _other), do: refuse("#{where}: the position must be an object of x and y")
+  defp placed(_where, :full, _app), do: {:ok, %{}}
 
-  defp coordinate?(value), do: is_integer(value) and value >= 0 and value <= @max_position
+  defp fraction?(value, least),
+    do: is_integer(value) and value >= least and value <= @max_fraction
 
   # A versionless tincture reference, spelt as `Prima.ComponentRef` spells
   # it, so one tincture has one spelling in every document.

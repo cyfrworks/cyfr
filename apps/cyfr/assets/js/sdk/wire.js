@@ -24,7 +24,11 @@ export const ROUTES = Object.freeze({
   stream_open: "/_f/v1/stream"
 })
 
-export const VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed"])
+export const VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed", "grant"])
+
+// The verbs only a canvas sends: from any other frame the SDK sends none
+// of them, and the shell drops them.
+export const CANVAS_VERBS = Object.freeze(["press", "failed", "grant"])
 
 // Where a frame that posts `failed` failed: before its `ready`, or after.
 export const STAGES = Object.freeze(["load", "runtime"])
@@ -58,6 +62,9 @@ export function decodeCredentialClosed(data, frame) {
 
 const FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/
 const TINCTURE_REF = /^(t|tincture):\S+$/
+// A component reference a `grant` names: a catalyst, reagent, formula or
+// tincture, in full or by its shorthand (`Prima.ComponentRef`).
+const COMPONENT_REF = /^(c|catalyst|r|reagent|f|formula|t|tincture):\S+$/
 const MAX_TITLE = 120
 // `Prima.Feed.binding_id?/1`.
 const BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -313,6 +320,10 @@ function argsError(verb, args) {
         : "press names a binding id and an action"
     case "failed":
       return sameKeys(args, ["stage"]) && STAGES.includes(args.stage) ? null : "failed names a stage"
+    case "grant":
+      return keys.length === 1 && typeof args.ref === "string" && COMPONENT_REF.test(args.ref)
+        ? null
+        : "grant names a component reference"
     default:
       return keys.length === 0 ? null : verb + " takes no arguments"
   }
@@ -354,6 +365,7 @@ export const MAX_RECTS = 64
 const RECT_KEYS = ["x", "y", "width", "height"]
 const MAX_TINCTURES = 512
 const MAX_NAME = 128
+const MAX_ICON = 16
 
 // The key one declared stream is held under: its name and its subject.
 export const pairKey = ({name, subject}) => JSON.stringify([name, subject])
@@ -379,13 +391,20 @@ const isRect = (rect) =>
 
 const codePoints = (value) => Array.from(value).length
 
+const isIcon = (icon) =>
+  icon === null || (isText(icon) && codePoints(icon) >= 1 && codePoints(icon) <= MAX_ICON)
+
+// One installed tincture: its reference, its name, its emoji or null, and
+// whether it is open over the canvas.
 const isInstalled = (tincture) =>
   isObject(tincture) &&
-  sameKeys(tincture, ["ref", "name"]) &&
+  sameKeys(tincture, ["ref", "name", "icon", "open"]) &&
   isTinctureRef(tincture.ref) &&
   isText(tincture.name) &&
   codePoints(tincture.name) >= 1 &&
-  codePoints(tincture.name) <= MAX_NAME
+  codePoints(tincture.name) <= MAX_NAME &&
+  isIcon(tincture.icon) &&
+  typeof tincture.open === "boolean"
 
 // A canvas block, as the handshake reply carries it and the `canvas`
 // message's args are: the open's mode, its frame's data path and the
@@ -415,7 +434,7 @@ function toFrameArgsError(verb, args, frame) {
     case "installed":
       return sameKeys(args, ["tinctures"]) && bounded(args.tinctures, MAX_TINCTURES, isInstalled)
         ? null
-        : `installed names at most ${MAX_TINCTURES} tinctures of ref and name`
+        : `installed names at most ${MAX_TINCTURES} tinctures of ref, name, icon and open`
     case "state":
       return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen"
     default:

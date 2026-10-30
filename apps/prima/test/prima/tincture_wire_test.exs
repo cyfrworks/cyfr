@@ -308,9 +308,83 @@ defmodule Prima.TinctureWireTest do
     end
   end
 
-  test "a press and a failure are the verbs the shell takes from a canvas alone" do
-    assert TinctureWire.canvas_verbs() == [:press, :failed]
+  test "a press, a failure and a grant are the verbs the shell takes from a canvas alone" do
+    assert TinctureWire.canvas_verbs() == [:press, :failed, :grant]
+
+    assert Enum.map(TinctureWire.canvas_verbs(), &Atom.to_string/1) ==
+             vectors()["canvas"]["verbs"]
+
     assert TinctureWire.canvas_verbs() -- TinctureWire.verbs() == []
+  end
+
+  test "a grant names exactly one component reference, of any component type, at a version or none" do
+    for ref <- [
+          "catalyst:local.openai:1.4.1",
+          "c:local.openai",
+          "reagent:local.notes",
+          "formula:example.com.digest:0.2.0",
+          "tincture:local.vault"
+        ] do
+      message = TinctureWire.shell_message(:grant, "frm_01a09fee2e4f", %{"ref" => ref})
+
+      assert {:ok, %{verb: :grant, args: %{"ref" => ^ref}}} =
+               TinctureWire.decode_shell_message(message)
+    end
+
+    for args <- [
+          %{},
+          %{"ref" => 7},
+          %{"ref" => "openai"},
+          %{"ref" => "agent:local.helper"},
+          %{"ref" => "catalyst:local.openai", "label" => "OpenAI"}
+        ] do
+      message = TinctureWire.shell_message(:grant, "frm_01a09fee2e4f", args)
+
+      assert {:error, "grant names a component reference"} =
+               TinctureWire.decode_shell_message(message),
+             inspect(args)
+    end
+  end
+
+  test "every installed tincture the fixture sends a canvas is the wire's entry, and the refused ones break it" do
+    rows = vectors()["canvas"]["to_frame"]
+    keys = TinctureWire.installed_keys()
+    code_points = &(&1 |> String.codepoints() |> length())
+
+    entries =
+      for %{"message" => %{"verb" => "installed", "args" => %{"tinctures" => tinctures}}} <-
+            rows["valid"],
+          entry <- tinctures,
+          do: entry
+
+    assert entries != []
+    assert Enum.any?(entries, &is_nil(&1["icon"]))
+    assert Enum.any?(entries, &(&1["open"] == true))
+
+    assert Enum.any?(
+             entries,
+             &(is_binary(&1["icon"]) and
+                 code_points.(&1["icon"]) == TinctureWire.max_installed_icon())
+           )
+
+    for entry <- entries do
+      assert entry |> Map.keys() |> Enum.sort() == keys
+      assert is_boolean(entry["open"])
+      assert code_points.(entry["name"]) in 1..TinctureWire.max_installed_name()
+
+      assert is_nil(entry["icon"]) or
+               code_points.(entry["icon"]) in 1..TinctureWire.max_installed_icon()
+    end
+
+    refused =
+      for %{"why" => why, "message" => %{"verb" => "installed"}} <- rows["invalid"], do: why
+
+    for why <- [
+          "an installed entry lacking open",
+          "an installed entry lacking its icon",
+          "an icon past 16 code points"
+        ],
+        do: assert(why in refused, why)
   end
 
   test "no verb raises a frame: focus is no verb" do

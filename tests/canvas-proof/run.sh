@@ -248,7 +248,7 @@ for written in "markets $READS_CANDLES" "measure []"; do
   server_fixture "$CELL" grant "$TOKEN" "$canvas" "$(field "$answer" ok version)" >/dev/null
 done
 
-# The person's layout, version 2, published through the console at the
+# The person's layout, version 3, published through the console at the
 # revision this script last published; the console's answer is left in
 # LAYOUT_ANSWER. It runs in this shell, never a command substitution's, so
 # the revision it counts is the one the next publication reads. The proof

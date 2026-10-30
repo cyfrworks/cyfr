@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given, the stream grant as the SDK's reader decodes it among them; one refusal, the projection of a Prima.Refusal a frame may read; the text/event-stream body an admitted stream_open is answered with, and the events it reads back as, ending with the refusal event of a stream the endpoint closed; how the SDK rejects a stream_open that opens no stream, for each answer it can get (`stream_rejections`: no answer or a server error is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press` and `failed` among them, which the shell takes from a canvas alone), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' statuses; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, the stream reads back as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built.",
+  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given, the stream grant as the SDK's reader decodes it among them; one refusal, the projection of a Prima.Refusal a frame may read; the text/event-stream body an admitted stream_open is answered with, and the events it reads back as, ending with the refusal event of a stream the endpoint closed; how the SDK rejects a stream_open that opens no stream, for each answer it can get (`stream_rejections`: no answer or a server error is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press`, `failed` and `grant` among them, which the shell takes from a canvas alone), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' statuses; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, the stream reads back as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built.",
   "version": 1,
   "bearer_header": "authorization",
   "routes": {
@@ -381,6 +381,28 @@
           "stage": "runtime"
         }
       }
+    },
+    {
+      "verb": "grant",
+      "message": {
+        "v": 1,
+        "verb": "grant",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "catalyst:local.openai:1.4.1"
+        }
+      }
+    },
+    {
+      "verb": "grant",
+      "message": {
+        "v": 1,
+        "verb": "grant",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "c:local.openai"
+        }
+      }
     }
   ],
   "shell_invalid": [
@@ -489,13 +511,61 @@
           "stage": "boot"
         }
       }
+    },
+    {
+      "why": "a grant naming nothing",
+      "message": {
+        "v": 1,
+        "verb": "grant",
+        "frame": "frm_01a09fee2e4f",
+        "args": {}
+      }
+    },
+    {
+      "why": "a grant naming an address, not a component",
+      "message": {
+        "v": 1,
+        "verb": "grant",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "https://example.com/"
+        }
+      }
+    },
+    {
+      "why": "a grant naming an agent, which nothing installs",
+      "message": {
+        "v": 1,
+        "verb": "grant",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "agent:local.helper"
+        }
+      }
+    },
+    {
+      "why": "a grant carrying more than its reference",
+      "message": {
+        "v": 1,
+        "verb": "grant",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "catalyst:local.openai",
+          "reason": "runs failed"
+        }
+      }
     }
   ],
   "canvas": {
-    "comment": "A canvas frame's part of the tincture wire. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. `to_frame` are the messages the bridge posts to a canvas over its port, each exactly v, verb, frame and args, read by the SDK. A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream route. Every invalid row is refused for the reason `why` gives.",
+    "comment": "A canvas frame's part of the tincture wire. `verbs` are the shell verbs the shell takes from a canvas alone. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. `to_frame` are the messages the bridge posts to a canvas over its port, each exactly v, verb, frame and args, read by the SDK. An `installed` tincture is exactly ref, name, icon (an emoji of 1 to 16 code points, or null) and open (a boolean). A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream route. Every invalid row is refused for the reason `why` gives.",
     "stages": [
       "load",
       "runtime"
+    ],
+    "verbs": [
+      "press",
+      "failed",
+      "grant"
     ],
     "handshake": {
       "valid": [
@@ -1654,11 +1724,21 @@
               "tinctures": [
                 {
                   "ref": "tincture:local.vault",
-                  "name": "Vault"
+                  "name": "Vault",
+                  "icon": "🔐",
+                  "open": true
                 },
                 {
                   "ref": "tincture:example.com.timer",
-                  "name": "Kitchen timer ⏲"
+                  "name": "Kitchen timer ⏲",
+                  "icon": null,
+                  "open": false
+                },
+                {
+                  "ref": "tincture:local.pride",
+                  "name": "Pride",
+                  "icon": "🏳️‍🌈🏳️‍🌈🏳️‍🌈🏳️‍🌈",
+                  "open": false
                 }
               ]
             }
@@ -2744,7 +2824,9 @@
               "tinctures": [
                 {
                   "ref": "tincture:local.vault",
-                  "name": ""
+                  "name": "",
+                  "icon": null,
+                  "open": false
                 }
               ]
             }
@@ -2760,7 +2842,9 @@
               "tinctures": [
                 {
                   "ref": "tincture:local.vault",
-                  "name": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+                  "name": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+                  "icon": null,
+                  "open": false
                 }
               ]
             }
@@ -2776,7 +2860,9 @@
               "tinctures": [
                 {
                   "ref": "catalyst:local.markets",
-                  "name": "Markets"
+                  "name": "Markets",
+                  "icon": null,
+                  "open": false
                 }
               ]
             }
@@ -2793,7 +2879,115 @@
                 {
                   "ref": "tincture:local.vault",
                   "name": "Vault",
-                  "icon": "v.png"
+                  "icon": null,
+                  "open": false,
+                  "url": "v.png"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an installed entry lacking open",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault",
+                  "icon": null
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an installed entry lacking its icon",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault",
+                  "open": false
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an icon past 16 code points",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault",
+                  "icon": "🏳️‍🌈🏳️‍🌈🏳️‍🌈🏳️‍🌈✨",
+                  "open": false
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an empty icon",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault",
+                  "icon": "",
+                  "open": false
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an icon that is not a string",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault",
+                  "icon": 7,
+                  "open": false
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "open that is not a boolean",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault",
+                  "icon": null,
+                  "open": "yes"
                 }
               ]
             }

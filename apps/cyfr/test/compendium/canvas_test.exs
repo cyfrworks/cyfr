@@ -242,7 +242,7 @@ defmodule Compendium.CanvasTest do
          %{ctx: ctx} do
       install!(ctx, "notes", "1.0.0", %{
         "entry" => "index.html",
-        "frame" => %{"placement" => "float"}
+        "frame" => %{"size" => %{"preferred" => %{"w" => 400, "h" => 640}}}
       })
 
       assert {:error, {:conflict, sentence}} = Canvas.write(ctx, write_args(name: "notes"))
@@ -485,7 +485,7 @@ defmodule Compendium.CanvasTest do
          %{ctx: ctx} do
       install!(ctx, "notes", "1.0.0", %{
         "entry" => "index.html",
-        "frame" => %{"placement" => "float"}
+        "frame" => %{"size" => %{"preferred" => %{"w" => 400, "h" => 640}}}
       })
 
       assert {:error, {:conflict, _}} =

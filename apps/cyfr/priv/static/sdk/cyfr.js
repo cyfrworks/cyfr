@@ -10,7 +10,8 @@
     action: "/_f/v1/action",
     stream_open: "/_f/v1/stream"
   });
-  var VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed"]);
+  var VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed", "grant"]);
+  var CANVAS_VERBS = Object.freeze(["press", "failed", "grant"]);
   var STAGES = Object.freeze(["load", "runtime"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
@@ -179,13 +180,15 @@
   var RECT_KEYS = ["x", "y", "width", "height"];
   var MAX_TINCTURES = 512;
   var MAX_NAME = 128;
+  var MAX_ICON = 16;
   var pairKey = ({ name, subject }) => JSON.stringify([name, subject]);
   var bounded = (list, max, each) => Array.isArray(list) && list.length <= max && list.every(each);
   var isStream = (stream) => isObject(stream) && sameKeys(stream, ["name", "subject"]) && typeof stream.name === "string" && STREAM_NAME.test(stream.name) && (stream.subject === null || isText(stream.subject));
   var isStreams = (streams) => bounded(streams, MAX_STREAMS, isStream) && new Set(streams.map(pairKey)).size === streams.length;
   var isRect = (rect) => isObject(rect) && sameKeys(rect, RECT_KEYS) && RECT_KEYS.every((key) => typeof rect[key] === "number" && Number.isFinite(rect[key]) && rect[key] >= 0);
   var codePoints = (value) => Array.from(value).length;
-  var isInstalled = (tincture) => isObject(tincture) && sameKeys(tincture, ["ref", "name"]) && isTinctureRef(tincture.ref) && isText(tincture.name) && codePoints(tincture.name) >= 1 && codePoints(tincture.name) <= MAX_NAME;
+  var isIcon = (icon) => icon === null || isText(icon) && codePoints(icon) >= 1 && codePoints(icon) <= MAX_ICON;
+  var isInstalled = (tincture) => isObject(tincture) && sameKeys(tincture, ["ref", "name", "icon", "open"]) && isTinctureRef(tincture.ref) && isText(tincture.name) && codePoints(tincture.name) >= 1 && codePoints(tincture.name) <= MAX_NAME && isIcon(tincture.icon) && typeof tincture.open === "boolean";
   function canvasError(block, frame) {
     if (!isObject(block) || !sameKeys(block, ["mode", "data_path", "streams"])) {
       return "a canvas is exactly mode, data_path and streams";
@@ -206,7 +209,7 @@
       case "covered":
         return sameKeys(args, ["rects"]) && bounded(args.rects, MAX_RECTS, isRect) ? null : `covered names at most ${MAX_RECTS} rects of x, y, width and height`;
       case "installed":
-        return sameKeys(args, ["tinctures"]) && bounded(args.tinctures, MAX_TINCTURES, isInstalled) ? null : `installed names at most ${MAX_TINCTURES} tinctures of ref and name`;
+        return sameKeys(args, ["tinctures"]) && bounded(args.tinctures, MAX_TINCTURES, isInstalled) ? null : `installed names at most ${MAX_TINCTURES} tinctures of ref, name, icon and open`;
       case "state":
         return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen";
       default:
@@ -325,7 +328,7 @@
       port.postMessage(shellMessage(name, frame, args));
     }
     function send(name, args) {
-      if (kind === "canvas" ? name === "ready" && failure === "load" : name === "press" || name === "failed") return;
+      if (kind === "canvas" ? name === "ready" && failure === "load" : CANVAS_VERBS.includes(name)) return;
       post(name, args);
     }
     function verb(name, args = {}) {
@@ -529,11 +532,22 @@
         verb("press", { binding, action });
       },
       /**
+       * On a canvas, ask the person to grant a component: a component
+       * reference, e.g. "c:local.openai". The person confirms in CYFR's own
+       * prompt, never in the canvas. The shell acts on it only within moments
+       * of the person's own input, never from a script on its own, and only
+       * for a component the athanor has installed.
+       */
+      grant(ref) {
+        verb("grant", { ref });
+      },
+      /**
        * On a canvas, hear what the shell tells it: `installed` (the installed
-       * tinctures, `[{ref, name}]`), `posture` (`desk` or `hand`), `covered`
-       * (the rects of it, `{x, y, width, height}` in its own pixels, that the
-       * shown apps cover) or `state` (`live` or `frozen`). The latest value,
-       * if one has come, is handed to a new handler first.
+       * tinctures, `[{ref, name, icon, open}]`), `posture` (`desk` or
+       * `hand`), `covered` (the rects of it, `{x, y, width, height}` in its
+       * own pixels, that the shown apps cover) or `state` (`live` or
+       * `frozen`). The latest value, if one has come, is handed to a new
+       * handler first.
        * @returns {function} stops the handler hearing more
        */
       on(event, handler) {

@@ -661,8 +661,8 @@ defmodule Prism.TinctureRegistryTest do
     test "each row carries the frame its manifest declares, as the frame's rules read it" do
       frame = %{
         "capabilities" => ["pointer_lock", "fullscreen", "audio_autoplay"],
-        "placement" => "float",
-        "background" => true
+        "background" => true,
+        "size" => %{"preferred" => %{"w" => 400, "h" => 640}, "tile" => "right"}
       }
 
       lay("declares-frame", %{"frame" => frame})
@@ -674,8 +674,13 @@ defmodule Prism.TinctureRegistryTest do
       row = rows["declares-frame"]
       assert row.frame == declared.frame
       assert Enum.sort(row.frame.capabilities) == ~w(audio_autoplay fullscreen pointer_lock)
-      assert row.frame.placement == "float"
+      assert row.frame.placement == nil
       assert row.frame.background == true
+
+      assert row.frame.size == %Prima.Manifest.Tincture.Size{
+               preferred: %{w: 400, h: 640},
+               tile: "right"
+             }
 
       # A tincture that declares no frame holds none of its capabilities.
       assert rows["test-dash"].frame.capabilities == []
