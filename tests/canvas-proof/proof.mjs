@@ -1091,6 +1091,7 @@ async function stepCrashSafeMode(page, name) {
   note("crash_safe_mode", name,
     activated.working === written.ok.version && activated.kept === before.working &&
       receiptsOf(marks, from, null, "ready").length >= 1 && reloaded === 1 &&
+      receiptsOf(marks, from, null, "failed").length === 0 &&
       safe.kind === "safe_mode" && !!kept && safe.offers.some((o) => o.offer === "retry") && safe.offers.some((o) => o.offer === "shipped") &&
       regrant.asked_for && regrant.meanwhile.working === written.ok.version && regrant.meanwhile.kept === before.working &&
       regrant.place.frame === null &&
