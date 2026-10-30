@@ -4,31 +4,33 @@
 // The identity proof, run in the official Playwright image by run.sh
 // against `cyfr` releases behind the harness's HTTPS front (README.md):
 // homes A, B, C, C2 and C3 and a directory, each a cell on its own `.test`
-// name. Chromium alone, since a passkey is made and used by its virtual
-// authenticator; the glass's steps run once more at the
-// handheld's 720×720 touch viewport (../browser/handheld.mjs). Each step is
-// one row of the record; the proof fails when a row does not hold, and
-// stops at the first row a later one rests on.
+// name, and the cyfr.run stand-in A registers names at. A's first person
+// comes through setup's two screens. Chromium alone, since a passkey is
+// made and used by its virtual authenticator; the glass's steps run once
+// more at the handheld's 720×720 touch viewport (../browser/handheld.mjs).
+// Each step is one row of the record; the proof fails when a row does not
+// hold, and stops at the first row a later one rests on.
 //
 // The homes' part of a step — a cell stopped, copied, killed or started
 // again, the directory's front broken on purpose, a restore posted at a
 // phase, and what a home holds — is run.sh's, asked for through OUT_DIR
 // (`ask-N.json`, answered `answer-N.json`). An ask or an answer that
-// carries a recovery code or an installation token is deleted once read.
+// carries a recovery code, a setup token or an installation token is
+// deleted once read.
 //
-// Usage: node proof.mjs HOMES_FILE SEGMENT_A COOKIE_A OUT_DIR
+// Usage: node proof.mjs HOMES_FILE OUT_DIR
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import {
-  ask as askRunSh, instrumentDevice, launchBrowser, readCode, readHomes, redact as redactKnown, saveCode, signedIn, sleep,
-  startProxy, virtualAuthenticator, waitFor,
+  admit, ask as askRunSh, instrumentDevice, launchBrowser, readCode, readHomes, redact as redactKnown,
+  saveAdmissionCode, saveCode, sleep, startProxy, virtualAuthenticator, waitFor,
 } from "../browser/lib.mjs";
 
-const [homesFile, segmentA, cookieA, outDir] = process.argv.slice(2);
-if (!homesFile || !segmentA || !cookieA || !outDir) {
-  console.error("usage: node proof.mjs HOMES_FILE SEGMENT_A COOKIE_A OUT_DIR");
+const [homesFile, outDir] = process.argv.slice(2);
+if (!homesFile || !outDir) {
+  console.error("usage: node proof.mjs HOMES_FILE OUT_DIR");
   process.exit(64);
 }
 mkdirSync(outDir, { recursive: true });
@@ -38,6 +40,12 @@ const homeNamed = (name) => homes.find((home) => home.name === name) || (() => {
 const A = homeNamed("a").origin;
 const C = homeNamed("c").origin;
 const C3 = homeNamed("c3").origin;
+// The name A's person types on setup's first screen.
+const NAME = "identity-a";
+// The landing page's flash once the recovery code is saved.
+const SAVED = "Saved. You can add another recovery code in Settings, and keep it apart from this one.";
+// The route segment of A's person's own athanor, read once setup lands.
+let segmentA = null;
 const settingsOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/settings`;
 const shellOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/tinctures`;
 const rows = [];
@@ -201,48 +209,63 @@ async function pairAtA(desk, glass) {
   return storedDevice(glass);
 }
 
-async function pairLocally(desk, phone) {
-  const device = await pairAtA(desk, phone);
-  const identity = await ask({ op: "a_head" });
-  record.pair = { enrolled_before: identity.enrollment, subject: device && device.certificate.subject };
-  return [row("pair", identity.enrollment === "none" && device && device.certificate.subject.kind === "local",
-    "before any enrollment, a glass pairs locally under a local subject, with no directory read",
-    record.pair), device];
+// A's first person, made through setup's two screens at A's setup link,
+// the setup token in its fragment: the name typed on the first and found
+// free at the stand-in, a passkey made, the second's recovery code once
+// the identity is registered at dir.test and the name claimed, and "I
+// saved it", which signs the browser in and lands in CYFR with the
+// sentence that offers another code; Settings' identity card then names
+// the person. Answers the row and the code.
+async function setUp(desk, authenticator, proxy) {
+  const mark = proxy.seen.length;
+  const { token } = await ask({ op: "token", cell: "a" }, { secret: true });
+  secrets.push(token);
+  await desk.goto(`${A}/setup#${token}`);
+  await connected(desk);
+  const { recovery: code } = await admit(desk, NAME, secrets);
+  const shownBeforeSave = (await desk.content()).includes(code.code);
+  const landed = await saveAdmissionCode(desk);
+  await connected(desk);
+  const saidSaved = await flashed(desk, SAVED).then(() => true, () => false);
+  const afterSave = (await desk.content()).includes(code.code);
+  const leaked = await leaks(desk, proxy, mark);
+  const person = await ask({ op: "a_person" });
+  segmentA = person.segment;
+  const head = await ask({ op: "a_head" });
+  const held = (await authenticator.credentials()).filter((c) => c.rpId === new URL(A).host).length;
+  await open(desk, settingsOf(A, segmentA));
+  const card = await desk.locator('[data-test="identity"]').getAttribute("data-state", { timeout: 30_000 });
+  const nameShown = (await desk.locator('[data-test="identity-name"]').innerText({ timeout: 30_000 })).trim();
+  record.setup = {
+    people: person.people, admission: person.admission, identifier: code.identifier, a_identifier: head.identifier,
+    enrollment: head.enrollment, card, name_shown: nameShown, credentials_for_rp: held,
+    landed: new URL(landed).pathname, said_saved: saidSaved, drawn_on_screen_2: shownBeforeSave,
+    kept_after_saving: afterSave, leaked,
+  };
+  return [row("setup",
+    person.people === 1 && person.admission === "setup" && code.identifier === head.identifier &&
+      head.enrollment === "enrolled" && card === "named" && nameShown === `Your name is @${NAME}.` && held === 1 &&
+      saidSaved && shownBeforeSave && !afterSave && leaked === 0,
+    `A's first person comes through setup's two screens: @${NAME} typed and free, a passkey made, the identity registered at dir.test and the name claimed, the recovery code naming A's identity drawn on the second screen, and "I saved it" erases it and lands in CYFR signed in; neither the code, its secret nor the setup token reaches the browser's storage, an address or any request the proxy saw`,
+    record.setup), code];
 }
 
-async function enroll(desk, proxy) {
-  const mark = proxy.seen.length;
-  await open(desk, settingsOf(A, segmentA));
-  const directory = await desk.locator('[data-test="identity-directory"]').textContent();
-  await desk.locator('[data-test="identity-enroll"]').click();
-  await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="enrollment"]`, { timeout: 30_000 });
-  const statements = await desk.locator(`${layer} [data-test="recovery-statements"]`).innerText();
-  await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
-  await confirmHere(desk);
-  const code = await readCode(desk, secrets);
-  const shownBeforeSave = (await desk.content()).includes(code.code);
-  await saveCode(desk);
-  await desk.waitForSelector('[data-test="identity"][data-enrollment="enrolled"]', { timeout: 30_000 });
-  const leaked = await leaks(desk, proxy, mark);
-  const afterSave = (await desk.content()).includes(code.code);
-  const head = await ask({ op: "a_head" });
-  // The enrollment prompt's statements are matched as the page words them.
-  record.enroll = {
-    directory: directory.trim(), identifier: code.identifier, a_identifier: head.identifier,
-    statements: ["cannot be reached", "If every kit is lost", "never your private data"].map((s) => statements.includes(s)),
-    drawn_in_the_prompt: shownBeforeSave, kept_after_saving: afterSave, leaked,
-  };
-  return [row("enroll",
-    directory.trim() === "https://dir.test" && code.identifier === head.identifier &&
-      record.enroll.statements.every(Boolean) && shownBeforeSave && !afterSave && leaked === 0,
-    "enrolled from the settings page at the pinned directory: the form says what it commits to, the confirmed secret is shown in the system layer as a recovery code naming A's identity, and saying it is saved erases it",
-    record.enroll), code];
+// The stand-in's answer for A's name, and the directory A's genesis names.
+async function named(code) {
+  const answer = await ask({ op: "handle_answer", name: NAME });
+  record.name = answer;
+  return row("name",
+    answer.status === 200 && answer.answer?.handle === NAME && answer.answer?.identifier === code.identifier &&
+      answer.held_by === code.identifier && answer.answer?.directory === "https://dir.test" &&
+      answer.genesis_directory === "https://dir.test" && answer.attempt_directory === "https://dir.test",
+    `the stand-in answers @${NAME} with A's identifier and https://dir.test, the directory A's genesis names`,
+    answer);
 }
 
 async function secondCode(desk, proxy, first) {
   const mark = proxy.seen.length;
   await open(desk, settingsOf(A, segmentA));
-  await desk.locator('[data-test="identity-add-kit"]').click();
+  await desk.locator('[data-test="identity-add-code"]').click();
   await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="holder"]`, { timeout: 30_000 });
   await desk.locator(`${layer} [data-test="recovery-signer"]`).fill(first.code);
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
@@ -335,8 +358,8 @@ async function restoredHome(page, proxy, base, cell, token, code, step) {
 // ---------------------------------------------------------------------------
 
 // A second glass, the handheld, follows the phone through the glass's
-// steps: paired locally at A before any enrollment, reconnected at A after
-// the rotation under a renewed certificate, and opened at C, a home that
+// steps: paired locally at A, reconnected at A after the rotation under a
+// renewed certificate, and opened at C, a home that
 // holds no device of it. Each of those screens meets the handheld's
 // checks, which the `viewport` row holds.
 async function handheldPairs(browser, desk) {
@@ -379,19 +402,24 @@ async function handheldElsewhere(hand) {
 }
 
 async function main(browser, proxy) {
-  const deskContext = await signedIn(browser, A, cookieA);
+  const deskContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const desk = await deskContext.newPage();
   const deskAuthenticator = await virtualAuthenticator(desk);
   const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await phoneContext.addInitScript(instrumentDevice);
   const phone = await phoneContext.newPage();
 
-  if (!(await firstPasskey(desk, deskAuthenticator, A, segmentA, "passkey"))) return;
-  const [paired, device] = await pairLocally(desk, phone);
-  if (!paired) return;
+  const [setUpHeld, code1] = await setUp(desk, deskAuthenticator, proxy);
+  if (!setUpHeld) return;
+  if (!(await named(code1))) return;
+  // The phone and the handheld, each a glass paired at A, which the
+  // rotation renews.
+  const device = await pairAtA(desk, phone);
+  if (!device) {
+    row("rotate", false, "the phone paired at A holds a device", { device });
+    return;
+  }
   const hand = await handheldPairs(browser, desk);
-  const [enrolled, code1] = await enroll(desk, proxy);
-  if (!enrolled) return;
   const [added, code2] = await secondCode(desk, proxy, code1);
   if (!added) return;
   const handBefore = await storedDevice(hand.page);
@@ -565,7 +593,7 @@ try {
 }
 
 const STEPS = [
-  "passkey", "pair", "enroll", "second_code", "rotate", "cache", "reserved", "claims", "phases", "replay", "thief",
+  "setup", "name", "second_code", "rotate", "cache", "reserved", "claims", "phases", "replay", "thief",
   "restore", "b_observes", "window", "first_passkey", "door", "pair_again", "viewport", "without_a", "without_a_reach",
   "superseded", "b_observes_again", "directory_down",
 ];
