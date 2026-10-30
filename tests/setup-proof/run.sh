@@ -13,11 +13,14 @@
 #
 #   local    Welcome, "Only this device", which starts it: .env written
 #            and the home started, the browser moved to the setup link
-#            http://localhost:<CYFR_PORT>/setup#<token>, a passkey from a
-#            virtual authenticator making the first person, the handle
-#            skipped and the person in CYFR, the same link in another
-#            browser then closed, and the command exited 0, its address
-#            gone.
+#            http://localhost:<CYFR_PORT>/setup#<token>, a name typed on
+#            its first screen, which says cyfr.run did not answer, a
+#            passkey from a virtual authenticator making the first person,
+#            and the second screen saying "cyfr.run did not answer. Try
+#            again." with no recovery code and no way into CYFR, since the
+#            home's directory and registry are `.invalid` names
+#            (compose.yml); the same link in another browser then closed,
+#            and the command exited 0, its address gone.
 #   refusal  `cyfr setup` again in that project: exit 1 with the sentence
 #            of an existing home, which points at `cyfr access`, nothing
 #            written and nothing served at the port asked for.

@@ -14,6 +14,11 @@
 #     (tests/compose-proof/tailscale-standin/) in place of the pinned
 #     tailscale image, each named by a variable of the run's template (no
 #     COMPOSE_* name: cyfr refuses one in .env);
+#   - a directory and a registry under `.invalid` names for cyfr, which
+#     resolve nowhere, so the first person meets a cyfr.run that does not
+#     answer and nothing of the run reaches cyfr.run (the container cannot
+#     reach this machine's loopback, where the cyfr.run stand-in would
+#     listen);
 #   - the project's names in place of the shipped container name, and a
 #     loopback port Docker picks for the tailscale service's SOCKS5 proxy,
 #     so a run meets no deployed stack;
@@ -27,6 +32,9 @@ services:
     image: ${PROOF_APP_IMAGE:?set PROOF_APP_IMAGE}
     pull_policy: never
     container_name: !reset null
+    environment:
+      - CYFR_DIRECTORY_URL=https://directory.invalid
+      - CYFR_REGISTRY_URL=registry.invalid
   tailscale:
     image: ${PROOF_TAILSCALE_IMAGE:?set PROOF_TAILSCALE_IMAGE}
     pull_policy: never
