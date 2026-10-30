@@ -903,9 +903,11 @@ async function showCanvasAway(page, id) {
 // shell last told it; switched away, once it has heard `frozen` no stream
 // open of it reaches the server, a new feed result reaches it not, and a
 // press it sends is dropped (counted in the frame's data-dropped, never
-// received by the shell); switched back, its stream refreshes to the new
-// result, and no feed event it ever read is tagged `frozen`. Nothing here
-// reads the page's own timer as proof it stopped.
+// received by the shell), a count that outlives the next switch, which
+// draws every frame again, the hidden one's iframe included; switched
+// back, its stream refreshes to the new result, and no feed event it ever
+// read is tagged `frozen`. Nothing here reads the page's own timer as proof
+// it stopped.
 async function stepHiddenCanvas(page, name, proxy) {
   const probe = await showCanvas(page, "probe");
   const before = await until(probe.frame, probeState, (s) => s.stream.settled && s.stream.events >= 1 && s.candles === 6 && s.told === "live", "the probe reading its stream");
@@ -931,6 +933,26 @@ async function stepHiddenCanvas(page, name, proxy) {
   const pressReceipts = receiptsOf(await instrument(page), from, probe.id, "press");
   const pressForwarded = pressReceipts.filter((r) => r.dropped === false).length;
 
+  // Another switch while the probe stays hidden draws every frame again,
+  // which patches the probe's iframe to the view's attributes: its count
+  // stays. The patch is watched on the iframe, so the record says whether
+  // one came.
+  await page.evaluate((id) => {
+    const el = document.querySelector(`iframe[data-frame-id="${id}"]`);
+    const seen = [];
+    const observer = new MutationObserver((records) => { for (const r of records) seen.push(r.attributeName); });
+    observer.observe(el, { attributes: true });
+    window.__probePatch = { seen, observer };
+  }, probe.id);
+  await showCanvas(page, "markets");
+  const patch = await page.evaluate(() => {
+    const { seen, observer } = window.__probePatch;
+    observer.disconnect();
+    delete window.__probePatch;
+    return { patched: seen.length > 0, attributes: [...new Set(seen)] };
+  });
+  const droppedAfterSwitch = Number((await canvasFrame(page, probe.id)).dropped);
+
   // The probe asks for its stream again on a timer while it is hidden; no
   // open of it reached the server since it heard `frozen`.
   const streamPath = `/_f/v1/o/${probe.id}/stream`;
@@ -946,7 +968,7 @@ async function stepHiddenCanvas(page, name, proxy) {
     back.id === probe.id && frozen.state === "frozen" &&
       whileHidden.stream.events === before.stream.events && whileHidden.revision === before.revision &&
       opensWhileHidden === 0 &&
-      droppedAfterPress === droppedBefore + 1 && pressForwarded === 0 &&
+      droppedAfterPress === droppedBefore + 1 && pressForwarded === 0 && droppedAfterSwitch === droppedAfterPress &&
       after.stream.events > whileHidden.stream.events && after.revision === accepted.revision &&
       after.tagged.frozen === 0 && after.tagged.none === 0 && after.tagged.live === after.stream.events,
     {
@@ -959,8 +981,10 @@ async function stepHiddenCanvas(page, name, proxy) {
         revision: whileHidden.revision,
         stream_event_reached_it: whileHidden.stream.events !== before.stream.events,
         stream_opens_reaching_the_server: opensWhileHidden,
+        press_received: pressReceipts.length,
         press_dropped: droppedAfterPress - droppedBefore,
         press_forwarded: pressForwarded,
+        after_another_switch: { patched: patch.patched, attributes: patch.attributes, dropped_kept: droppedAfterSwitch === droppedAfterPress },
         tagged: whileHidden.tagged,
       },
       shown_again: { same_frame: back.id === probe.id, told: after.told, events: after.stream.events, refresh: after.stream.refresh, revision: after.revision, tagged: after.tagged },

@@ -71,21 +71,43 @@ defmodule Prism.ArrangementTest do
       {:ok, layout: layout([window(@a, 0), tile(@b, 1), window(@c, 2)])}
     end
 
-    test "a move stands the app as a window at the geometry, keeping its order", %{layout: layout} do
+    test "a move stands the app as a window at the geometry, raised above every other",
+         %{layout: layout} do
       geometry = %{x: 0, y: 2000, w: 5000, h: 8000}
       assert {:ok, moved} = Arrangement.apply(layout, "home", "desk", {:move, @b, geometry})
 
       assert app(moved, @b) == %{
                tincture: @b,
                placement: :window,
-               order: 1,
+               order: 2,
                geometry: geometry,
                side: nil,
                share: nil,
                minimised: false
              }
 
-      assert Enum.map(apps(moved), & &1.tincture) == [@a, @b, @c]
+      assert Enum.map(apps(moved), &{&1.tincture, &1.order}) == [{@a, 0}, {@c, 1}, {@b, 2}]
+    end
+
+    test "a resize and a tile raise the app too; a minimise and a close raise nothing",
+         %{layout: layout} do
+      order = fn layout -> Enum.map(apps(layout), &{&1.tincture, &1.order}) end
+      geometry = %{x: 100, y: 100, w: 9000, h: 9000}
+
+      assert {:ok, resized} = Arrangement.apply(layout, "home", "desk", {:resize, @a, geometry})
+      assert order.(resized) == [{@b, 0}, {@c, 1}, {@a, 2}]
+
+      assert {:ok, resized} = Arrangement.apply(layout, "home", "desk", {:resize, @b, 4000})
+      assert order.(resized) == [{@a, 0}, {@c, 1}, {@b, 2}]
+
+      assert {:ok, tiled} = Arrangement.apply(layout, "home", "desk", {:tile, @a, :left, 2000})
+      assert order.(tiled) == [{@b, 0}, {@c, 1}, {@a, 2}]
+
+      assert {:ok, minimised} = Arrangement.apply(layout, "home", "desk", {:minimise, @a})
+      assert order.(minimised) == order.(layout)
+
+      assert {:ok, closed} = Arrangement.apply(layout, "home", "desk", {:close, @a})
+      assert order.(closed) == [{@b, 0}, {@c, 1}]
     end
 
     test "a resize takes a window's geometry or a tile's share, and nothing of another kind",

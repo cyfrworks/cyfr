@@ -10,10 +10,12 @@ defmodule Prism.Arrangement do
 
   A gesture names an app by its versionless tincture reference:
 
-    * `{:move, ref, geometry}` — the app stands as a window at `geometry`;
+    * `{:move, ref, geometry}` — the app stands as a window at `geometry`,
+      raised above every other, so a window dragged lands on top;
     * `{:resize, ref, geometry}` — a window takes `geometry`, and
-      `{:resize, ref, share}` a tile takes `share` of the width;
-    * `{:tile, ref, side, share}` — the app stands as a tile;
+      `{:resize, ref, share}` a tile takes `share` of the width, raised; a
+      size of the other kind changes nothing;
+    * `{:tile, ref, side, share}` — the app stands as a tile, raised;
     * `{:full, ref}` — the app takes the whole area, raised above every
       other, so it shows;
     * `{:minimise, ref}`, `{:restore, ref}` — the app leaves the screen
@@ -31,7 +33,8 @@ defmodule Prism.Arrangement do
   (`{:invalid, sentence}`) — every bound is `Prima.Layout`'s, so a
   geometry, a share or a side outside it is refused there. A gesture
   renumbers the posture's apps `0..n-1` in stacking order, the app it
-  raises or opens last, so `order` never grows past the apps placed.
+  raises or opens last (every gesture but a minimise and a close raises
+  its app), so `order` never grows past the apps placed.
   Each gesture states where the app ends up, so making one twice gives
   the document making it once does; a close made again is refused, its
   app already gone.
@@ -164,22 +167,26 @@ defmodule Prism.Arrangement do
     )
   end
 
-  # The posture's apps in stacking order, `0..n-1`: an app raised, restored
-  # or opened goes last; a gesture that raises nothing keeps the order.
+  # The posture's apps in stacking order, `0..n-1`: an app moved, resized,
+  # tiled, made full, raised, restored or opened goes last; a minimise or a
+  # close keeps the order of the rest.
   defp renumber(apps, gesture) do
     {top, rest} =
       apps
       |> Enum.sort_by(&{&1.order, &1.tincture})
-      |> Enum.split_with(&(raises?(gesture) and &1.tincture == ref(gesture)))
+      |> Enum.split_with(&(&1.tincture == ref(gesture) and raises?(gesture, &1)))
 
     (rest ++ top)
     |> Enum.with_index()
     |> Enum.map(fn {app, index} -> %{app | order: index} end)
   end
 
-  defp raises?({kind, _}) when kind in [:raise, :restore, :full], do: true
-  defp raises?({:open, _, _}), do: true
-  defp raises?(_gesture), do: false
+  defp raises?({kind, _}, _app) when kind in [:raise, :restore, :full], do: true
+  defp raises?({kind, _, _}, _app) when kind in [:move, :open], do: true
+  defp raises?({:tile, _, _, _}, _app), do: true
+  defp raises?({:resize, _, %{}}, %{placement: :window}), do: true
+  defp raises?({:resize, _, share}, %{placement: :tile}) when is_integer(share), do: true
+  defp raises?(_gesture, _app), do: false
 
   # In the hand every app is full: there is nothing to move, size or tile.
   defp posture_allows("hand", {kind, _, _}) when kind in [:move, :resize], do: {:error, :hand}
