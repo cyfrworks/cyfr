@@ -332,7 +332,6 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
 
       assert html =~ ~r/<div data-recovery-code="k1" hidden(="")?><\/div>/
       refute html =~ ~r/>\s*Print\s*</
-      refute html =~ "data-recovery-print"
       refute html =~ "recovery-print"
       refute html =~ "data-recovery-kit"
     end
