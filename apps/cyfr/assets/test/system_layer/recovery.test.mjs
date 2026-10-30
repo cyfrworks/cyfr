@@ -34,6 +34,10 @@ import {
 } from "../../js/system_layer/recovery.js"
 
 const restoreKit = JSON.parse(readFileSync(new URL("../../../../../tests/fixtures/restore_kit.json", import.meta.url), "utf8"))
+const codes = JSON.parse(readFileSync(new URL("../../../../../tests/fixtures/recovery_code.json", import.meta.url), "utf8"))
+
+// A recovery code a person holds, and the identifier and secret it spells.
+const held = codes.valid[0]
 
 // A cryptographic source that counts its draws and fills each from a
 // counter, so every draw is distinct and reproducible.
@@ -199,15 +203,15 @@ describe("a kit's lines", () => {
 })
 
 describe("the restore ingress's request", () => {
-  test("carries the token in its authorization header and the kit in its body, never its address", () => {
-    const {url, init} = restoreRequest("/restore", "a".repeat(64), {identifier: "per_abc", directory_url: "https://dir.test", recovery_secret: "s"})
+  test("carries the token in its authorization header and the recovery code in its body, never its address", () => {
+    const {url, init} = restoreRequest("/restore", "a".repeat(64), {recovery_code: held.code})
     assert.equal(url, "/restore")
     assert.equal(init.method, "POST")
     assert.equal(init.credentials, "same-origin")
     assert.equal(init.cache, "no-store")
     assert.equal(init.headers.authorization, `Bearer ${"a".repeat(64)}`)
-    assert.deepEqual(JSON.parse(init.body), {identifier: "per_abc", directory_url: "https://dir.test", recovery_secret: "s"})
-    assert.doesNotMatch(init.body, /aaaa/)
+    assert.deepEqual(JSON.parse(init.body), {recovery_code: held.code})
+    assert.doesNotMatch(url + init.body, /aaaa/)
   })
 
   test("its answers read as the page's states", () => {
@@ -219,16 +223,16 @@ describe("the restore ingress's request", () => {
     assert.equal(restoreOutcome(503, {status: "accepted", retry_after: 9999}).retryAfter, 60)
     assert.equal(restoreOutcome(409, {error: "restored"}).state, "restored")
     assert.match(restoreOutcome(409, {error: "superseded"}).text, /nothing was activated/)
-    assert.match(restoreOutcome(401, {error: "invalid_token"}).text, /not this installation's/)
+    assert.match(restoreOutcome(401, {error: "invalid_token"}).text, /not this CYFR's/)
     assert.match(restoreOutcome(404, {error: "restore_disabled"}).text, /CYFR_RESTORE_TOKEN/)
     assert.equal(restoreOutcome(500, null).state, "refused")
   })
 })
 
-// The restore page's element: its form of four unnamed inputs, its status,
+// The restore page's element: its form of two unnamed inputs, its status,
 // the reproof control and the link onward.
 function restorePage(values) {
-  const inputs = Object.fromEntries(["token", "identifier", "directory_url", "recovery_secret"].map((field) => {
+  const inputs = Object.fromEntries(["token", "recovery_code"].map((field) => {
     const input = node("input")
     input.value = values[field] ?? ""
     return [field, input]
@@ -247,7 +251,7 @@ function restorePage(values) {
   return {el, form, inputs, status, reproof, onward}
 }
 
-const kitValues = {token: "f".repeat(64), identifier: "per_abc", directory_url: "https://dir.test", recovery_secret: "seed-line"}
+const restoreValues = {token: "f".repeat(64), recovery_code: held.code}
 
 function scripted(answers) {
   const asked = []
@@ -277,7 +281,7 @@ function manualTimers() {
 
 describe("the restore page", () => {
   test("asks again under the same token while the restore stands at a phase, then clears what was typed", async () => {
-    const page = restorePage(kitValues)
+    const page = restorePage(restoreValues)
     const {fetch, asked} = scripted([[503, {status: "submitted", retry_after: 2}], [200, {status: "completed"}]])
     const timers = manualTimers()
     const restore = new RestorePage(page.el, {fetch, ...timers})
@@ -289,17 +293,18 @@ describe("the restore page", () => {
     await timers.fire()
     assert.equal(asked.length, 2)
     assert.deepEqual(asked.map((entry) => entry.init.headers.authorization), [`Bearer ${"f".repeat(64)}`, `Bearer ${"f".repeat(64)}`])
+    assert.deepEqual(JSON.parse(asked[0].init.body), {recovery_code: held.code})
     assert.equal(asked[0].init.body, asked[1].init.body)
     assert.ok(asked.every((entry) => entry.url === "/restore"))
 
     assert.equal(page.status.attrs["data-state"], "completed")
     assert.equal(page.onward.hidden, false)
-    assert.ok(Object.values(page.inputs).every((input) => input.value === ""), "the token and the kit leave the form")
+    assert.ok(Object.values(page.inputs).every((input) => input.value === ""), "the token and the code leave the form")
     assert.equal(restore.pending, null)
   })
 
-  test("cleared, it forgets the token and the kit and asks nothing more", async () => {
-    const page = restorePage(kitValues)
+  test("cleared, it forgets the token and the code and asks nothing more", async () => {
+    const page = restorePage(restoreValues)
     const {fetch, asked} = scripted([[503, {status: "accepted", retry_after: 1}]])
     const timers = manualTimers()
     const restore = new RestorePage(page.el, {fetch, ...timers})
@@ -314,19 +319,19 @@ describe("the restore page", () => {
 
   test("destroyed with its page, it empties the form and asks nothing more", async () => {
     // Typed and never sent.
-    const typed = restorePage(kitValues)
+    const typed = restorePage(restoreValues)
     new RestorePage(typed.el, {fetch: scripted([]).fetch, ...manualTimers()}).destroy()
     assert.ok(Object.values(typed.inputs).every((input) => input.value === ""), "what was typed leaves the form")
 
     // Sent, with an ask still to come.
-    const page = restorePage(kitValues)
+    const page = restorePage(restoreValues)
     const {fetch, asked} = scripted([[503, {status: "submitted", retry_after: 1}]])
     const timers = manualTimers()
     const restore = new RestorePage(page.el, {fetch, ...timers})
 
     await restore.begin()
     restore.destroy()
-    assert.ok(Object.values(page.inputs).every((input) => input.value === ""), "the token and the kit leave the form")
+    assert.ok(Object.values(page.inputs).every((input) => input.value === ""), "the token and the code leave the form")
     assert.equal(restore.pending, null)
     assert.equal(timers.timers[0], null, "the ask still to come is cancelled")
     assert.equal(page.form.listeners.submit, undefined)
@@ -335,29 +340,59 @@ describe("the restore page", () => {
   })
 
   test("a refusal keeps nothing but what the form shows, and asks nothing again", async () => {
-    const page = restorePage(kitValues)
+    const page = restorePage(restoreValues)
     const {fetch, asked} = scripted([[401, {error: "invalid_token"}]])
     const timers = manualTimers()
     const restore = new RestorePage(page.el, {fetch, ...timers})
 
     await restore.begin()
     assert.equal(page.status.attrs["data-state"], "refused")
-    assert.match(page.status.textContent, /not this installation's/)
+    assert.match(page.status.textContent, /not this CYFR's/)
     assert.equal(restore.pending, null)
     assert.equal(timers.timers.length, 0)
     assert.equal(asked.length, 1)
+    assert.equal(page.inputs.recovery_code.value, held.code, "the form keeps the code to mend")
   })
 
-  test("a missing line sends nothing", async () => {
-    const page = restorePage({...kitValues, recovery_secret: ""})
-    const {fetch, asked} = scripted([])
-    await new RestorePage(page.el, {fetch, ...manualTimers()}).begin()
-    assert.equal(asked.length, 0)
-    assert.equal(page.status.attrs["data-state"], "refused")
+  test("says each refusal of the ingress in its own sentence", async () => {
+    const refusals = [
+      [422, "not_a_code", "That is not a recovery code. A recovery code starts with CYFR-."],
+      [422, "typo", "That recovery code has a typo. Check it against the one you saved."],
+      [404, "no_directory", "This CYFR does not reach cyfr.run, so it cannot restore. Ask whoever runs this CYFR."],
+      [422, "unknown_identity", "cyfr.run knows no identity with that recovery code."],
+      [422, "not_a_holder", "That recovery code is not one of this identity's codes now."],
+      [409, "token_claimed", "Another restore holds this CYFR, or this token's restore is another code's."],
+      [409, "superseded", "A later recovery replaced the keys this restore introduced, so nothing was activated. Restore again with your recovery code, under a new token."],
+      [502, "refused", "cyfr.run refused this recovery. Nothing was activated."],
+      [409, "challenge_refused", "The challenge expired or was used. Check your recovery code again."],
+      [404, "restore_disabled", "This CYFR is not set up for a restore. Its operator sets CYFR_RESTORE_TOKEN first."],
+      [409, "not_empty", "This CYFR already holds a person: a restore runs only on an empty one."]
+    ]
+    for (const [status, error, sentence] of refusals) {
+      const page = restorePage(restoreValues)
+      const {fetch, asked} = scripted([[status, {error}]])
+      await new RestorePage(page.el, {fetch, ...manualTimers()}).begin()
+      assert.deepEqual(JSON.parse(asked[0].init.body), {recovery_code: held.code}, error)
+      assert.deepEqual([page.status.attrs["data-state"], page.status.textContent], ["refused", sentence], error)
+    }
+    assert.equal(restoreOutcome(200, {status: "completed"}).text, "Restored. Your identity is back on this CYFR; register a passkey on your CYFR's settings page to sign in again.")
+    assert.equal(restoreOutcome(409, {error: "restored"}).text, "This CYFR was restored already. If no passkey was registered in time, check your recovery code again to sign in.")
   })
 
-  test("a completed restore is proven again from the kit under a new challenge", async () => {
-    const page = restorePage(kitValues)
+  test("a missing token or code sends nothing", async () => {
+    for (const values of [{...restoreValues, recovery_code: ""}, {...restoreValues, token: "  "}]) {
+      const page = restorePage(values)
+      const {fetch, asked} = scripted([])
+      const restore = new RestorePage(page.el, {fetch, ...manualTimers()})
+      await restore.begin()
+      await restore.reproof()
+      assert.equal(asked.length, 0)
+      assert.deepEqual([page.status.attrs["data-state"], page.status.textContent], ["refused", "Type the installation token and your recovery code."])
+    }
+  })
+
+  test("a completed restore is checked again with the recovery code under a new challenge", async () => {
+    const page = restorePage(restoreValues)
     const {fetch, asked} = scripted([
       [409, {error: "restored"}],
       [200, {challenge: "Y2hhbGxlbmdl", expires_at: "2026-10-01T00:05:00Z"}],
@@ -370,14 +405,15 @@ describe("the restore page", () => {
 
     await restore.reproof()
     assert.deepEqual(asked.map((entry) => entry.url), ["/restore", "/restore/challenge", "/restore/reproof"])
-    assert.equal(JSON.parse(asked[2].init.body).challenge, "Y2hhbGxlbmdl")
-    assert.equal(JSON.parse(asked[1].init.body).recovery_secret, undefined, "the challenge asks for the token alone")
+    assert.deepEqual(JSON.parse(asked[1].init.body), {}, "the challenge asks for the token alone")
+    assert.deepEqual(JSON.parse(asked[2].init.body), {recovery_code: held.code, challenge: "Y2hhbGxlbmdl"})
+    assert.ok(asked.every((entry) => entry.init.headers.authorization === `Bearer ${"f".repeat(64)}`))
     assert.equal(page.status.attrs["data-state"], "completed")
     assert.equal(page.reproof.hidden, true)
   })
 
   test("calls the page's own fetch as a function, as a browser requires, never as its method", async () => {
-    const page = restorePage(kitValues)
+    const page = restorePage(restoreValues)
     const original = globalThis.fetch
     const asked = []
     // A browser's fetch refuses any receiver but the window ("Illegal invocation").
@@ -396,7 +432,7 @@ describe("the restore page", () => {
   })
 
   test("gives up asking after its bound of tries", async () => {
-    const page = restorePage(kitValues)
+    const page = restorePage(restoreValues)
     const answers = Array.from({length: RESTORE_RETRIES + 1}, () => [503, {status: "minted", retry_after: 1}])
     const {fetch} = scripted(answers)
     const timers = manualTimers()
@@ -546,7 +582,8 @@ describe("the layer's recovery prompts", () => {
 })
 
 // ---------------------------------------------------------------------------
-// The kit step: tests/fixtures/restore_kit.json
+// The recovery step: the kit proof of tests/fixtures/restore_kit.json,
+// signed by the secret of a code from tests/fixtures/recovery_code.json
 // ---------------------------------------------------------------------------
 
 const validKit = restoreKit.valid
@@ -625,10 +662,14 @@ describe("the kit ingress's requests", () => {
 
   test("its refusals read as sentences, and an ended credential says so", () => {
     assert.match(kitRefusal(404, {error: "not_recovering"}).text, /no open recovery/)
-    assert.match(kitRefusal(409, {error: "not_a_holder"}).text, /not one of this identity's kits/)
+    assert.equal(kitRefusal(409, {error: "not_a_holder"}).text, "That recovery code is not one of this identity's codes now.")
     assert.match(kitRefusal(409, {error: "challenge_refused"}).text, /expired or was used/)
-    assert.match(kitRefusal(422, {error: "invalid_proof"}).text, /recovery secret/)
-    assert.match(kitRefusal(503, null).text, /directory/)
+    assert.equal(kitRefusal(422, {error: "invalid_proof"}).text, "That recovery code did not make a proof this CYFR reads. Check your recovery code.")
+    assert.equal(
+      kitRefusal(401, {error: "invalid_credential"}).text,
+      "This recovery has ended: it lasts ten minutes and ends once a passkey or device is re-enabled. Recover again with your recovery code, or sign in with the method you re-enabled."
+    )
+    assert.match(kitRefusal(503, null).text, /cyfr\.run could not be reached/)
     assert.match(kitRefusal(409, {error: "revoked"}).text, /never re-enabled/)
     assert.deepEqual([kitRefusal(401, {error: "invalid_credential"}).ended, kitRefusal(403, {error: "operation_not_permitted"}).ended], [true, false])
     assert.equal(kitRefusal(500, null).ended, false)
@@ -642,10 +683,10 @@ describe("the kit ingress's requests", () => {
   })
 })
 
-// The kit step's element: its form of two unnamed inputs, its list and
-// its status, with the few members the code touches.
+// The recovery step's element: its form of one unnamed input, its list
+// and its status, with the few members the code touches.
 function kitPage(values) {
-  const inputs = Object.fromEntries(["identifier", "recovery_secret"].map((field) => {
+  const inputs = Object.fromEntries(["recovery_code"].map((field) => {
     const input = node("input")
     input.value = values[field] ?? ""
     return [field, input]
@@ -667,7 +708,10 @@ function walk(element) {
   return [element, ...element.children.flatMap((child) => walk(child))]
 }
 
-const kitTyped = {identifier: validKit.fields.identifier, recovery_secret: restoreKit.kit.seed}
+const kitTyped = {recovery_code: held.code}
+
+// The proof the held code's secret signs over the fixture's challenge.
+const heldProof = () => kitProof({seed: held.secret, restoreId: validKit.fields.restore_id, identifier: held.identifier, challenge: validKit.fields.challenge})
 const credential = "rkc_usr_01a09fee-0000-7000-8000-000000000001.c2VjcmV0LWNyZWRlbnRpYWwtYnl0ZXMtMzItbG9uZy4"
 
 // A kit ingress that answers by route, recording every request.
@@ -711,8 +755,8 @@ const suspended = {
   "passkey.reenable": [{id: "pk_1", label: "Laptop", rp_id: "home.test"}]
 }
 
-describe("the restore page's kit step", () => {
-  test("proves the kit over the home's challenge, then lists each class's suspended items under the credential", async () => {
+describe("the restore page's recovery step", () => {
+  test("reads the recovery code, proves its secret over the home's challenge, then lists each class's suspended items under the credential", async () => {
     const page = kitPage(kitTyped)
     const {fetch, asked} = kitIngress({items: suspended})
     const step = new KitStep(page.el, {fetch, doc: fakeDoc})
@@ -727,17 +771,20 @@ describe("the restore page's kit step", () => {
       "/restore/kit/reenable",
       "/restore/kit/reenable"
     ])
-    assert.deepEqual(JSON.parse(asked[0].init.body), {identifier: validKit.fields.identifier})
-    assert.deepEqual(JSON.parse(asked[1].init.body), {proof: validKit.proof})
+    assert.deepEqual(JSON.parse(asked[0].init.body), {identifier: held.identifier})
+    assert.deepEqual(JSON.parse(asked[1].init.body), {proof: await heldProof()})
     assert.equal(asked[0].init.headers.authorization, undefined)
     assert.equal(asked[1].init.headers.authorization, undefined)
     assert.deepEqual(asked.slice(2).map((entry) => JSON.parse(entry.init.body)), Object.keys(KIT_OPERATIONS).map((operation) => ({operation})))
     assert.ok(asked.slice(2).every((entry) => entry.init.headers.authorization === `Bearer ${credential}`))
 
-    // The seed is never sent, and leaves the form once the proof is accepted.
-    for (const entry of asked) assert.ok(!(entry.url + entry.init.body + JSON.stringify(entry.init.headers)).includes(restoreKit.kit.seed))
-    assert.equal(page.inputs.recovery_secret.value, "")
-    assert.equal(page.inputs.identifier.value, validKit.fields.identifier)
+    // Neither the code nor its secret is ever sent, and the code leaves the
+    // form once the proof is accepted.
+    for (const entry of asked) {
+      const sent = entry.url + entry.init.body + JSON.stringify(entry.init.headers)
+      assert.ok(!sent.includes(held.secret) && !sent.includes(held.code) && !sent.includes(held.code.slice(5, 13)))
+    }
+    assert.equal(page.inputs.recovery_code.value, "")
 
     assert.equal(page.status.attrs["data-state"], "listed")
     assert.equal(page.list.hidden, false)
@@ -797,9 +844,9 @@ describe("the restore page's kit step", () => {
     await step.begin()
     assert.equal(asked.length, 2)
     assert.equal(page.status.attrs["data-state"], "refused")
-    assert.match(page.status.textContent, /not one of this identity's kits/)
+    assert.equal(page.status.textContent, "That recovery code is not one of this identity's codes now.")
     assert.equal(step.credential, null)
-    assert.equal(page.inputs.recovery_secret.value, restoreKit.kit.seed)
+    assert.equal(page.inputs.recovery_code.value, held.code)
   })
 
   test("a home with no open recovery is said, and nothing is signed", async () => {
@@ -844,17 +891,70 @@ describe("the restore page's kit step", () => {
     assert.ok(texts(page.list).includes("ci (cyfr_ab…)"))
   })
 
-  test("a line that is not one sends nothing", async () => {
-    for (const typed of [{...kitTyped, recovery_secret: ""}, {...kitTyped, recovery_secret: restoreKit.kit.seed + "="}, {...kitTyped, identifier: "per_abc"}]) {
-      const page = kitPage(typed)
-      const {fetch, asked} = kitIngress()
+  test("a code that does not read, or none, sends nothing and says why", async () => {
+    const sentences = {
+      not_a_code: "That is not a recovery code. A recovery code starts with CYFR-.",
+      typo: "That recovery code has a typo. Check it against the one you saved."
+    }
+    const cases = [["", "Type your recovery code."], ...codes.refused.map(({text, error}) => [text, sentences[error]])]
+    assert.deepEqual(new Set(codes.refused.map(({error}) => error)), new Set(Object.keys(sentences)))
+    for (const [text, sentence] of cases) {
+      const page = kitPage({recovery_code: text})
+      let asked = 0
+      const fetch = async () => {
+        asked += 1
+        throw new Error("nothing is asked")
+      }
       await new KitStep(page.el, {fetch, doc: fakeDoc}).begin()
-      assert.equal(asked.length, 0)
-      assert.equal(page.status.attrs["data-state"], "refused")
+      assert.equal(asked, 0, text)
+      assert.deepEqual([page.status.attrs["data-state"], page.status.textContent], ["refused", sentence], text)
+      assert.equal(page.inputs.recovery_code.value, text.trim(), "the form keeps the code to mend")
     }
   })
 
-  test("cleared while an answer is awaited, it forgets the seed and the credential and drops the answer", async () => {
+  test("a code that does not read leaves the credential and the list it holds", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch, asked} = kitIngress({items: suspended})
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+    await step.begin()
+    const before = asked.length
+
+    page.inputs.recovery_code.value = codes.refused.find(({error}) => error === "typo").text
+    await step.begin()
+    assert.equal(asked.length, before)
+    assert.equal(step.credential, credential)
+    assert.ok(texts(page.list).includes("ci (cyfr_ab…)"))
+  })
+
+  test("a browser without WebCrypto reads no code, and says to use a current one", async () => {
+    for (const crypto of [null, {}]) {
+      const page = kitPage(kitTyped)
+      const {fetch, asked} = kitIngress()
+      await new KitStep(page.el, {fetch, crypto, doc: fakeDoc}).begin()
+      assert.equal(asked.length, 0)
+      assert.deepEqual([page.status.attrs["data-state"], page.status.textContent], ["refused", "This browser cannot read your recovery code. Use a current browser."])
+    }
+  })
+
+  test("cleared while the code is read, it asks nothing", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch, asked} = kitIngress()
+    let release
+    const gate = new Promise((resolve) => (release = resolve))
+    const slow = {subtle: {digest: async (algorithm, bytes) => {
+      await gate
+      return globalThis.crypto.subtle.digest(algorithm, bytes)
+    }}}
+    const step = new KitStep(page.el, {fetch, crypto: slow, doc: fakeDoc})
+    const running = step.begin()
+    step.clear("idle", "")
+    release()
+    await running
+    assert.equal(asked.length, 0)
+    assert.equal(page.status.attrs["data-state"], "idle")
+  })
+
+  test("cleared while an answer is awaited, it forgets the code and the credential and drops the answer", async () => {
     const page = kitPage(kitTyped)
     let release
     const gate = new Promise((resolve) => (release = resolve))
@@ -881,9 +981,9 @@ describe("the restore page's kit step", () => {
     assert.equal(page.status.attrs["data-state"], "idle")
   })
 
-  test("the restore page drives the kit step its element holds, and destroys it with itself", async () => {
+  test("the restore page drives the recovery step its element holds, and destroys it with itself", async () => {
     const kit = kitPage(kitTyped)
-    const page = restorePage(kitValues)
+    const page = restorePage(restoreValues)
     const outer = page.el.querySelector
     page.el.querySelector = (selector) => (selector === "[data-restore-kit]" ? kit.el : outer(selector))
     const {fetch, asked} = kitIngress({items: suspended})
