@@ -66,7 +66,7 @@ run's record.
 
 | Step | What holds |
 |---|---|
-| `setup` | A is set up through `/setup` with a passkey; `@proof` is chosen, which runs the enrollment at `registry.test`, confirmed with the passkey. With the kit shown and not yet acknowledged, the directory holds the genesis, the enrollment attempt is accepted, and the registry holds no `@proof`, no acceptance and no nonce of the identifier; once the kit is acknowledged the attempt completes (a transition from the attempt read before it) and the card claims the handle. A's person, passkey, identity, athanor and both seats (the athanor's and the first person's platform grant) are read whole |
+| `setup` | A is set up through `/setup` with a passkey; `@proof` is chosen, which runs the enrollment at `registry.test`, confirmed with the passkey. With the recovery code shown and not yet saved, the directory holds the genesis, the enrollment attempt is accepted, and the registry holds no `@proof`, no acceptance and no nonce of the identifier; once the recovery code is saved the attempt completes (a transition from the attempt read before it) and the card claims the handle. A's person, passkey, identity, athanor and both seats (the athanor's and the first person's platform grant) are read whole |
 | `allow` | B, set up through `/setup` by its administrator, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person, athanor and seats are its administrator's |
 | `sign_in` | a fresh profile at B's sign-in page, "I run my own CYFR" with A's address, reaches A, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, landing them on B's sign-in page as signed in with no athanor there; B's athanors and seats are still its administrator's alone, its sessions are its administrator's and the person's, and the person's session holds the token the browser's cookie carries |
 | `sync` | Sync push tokens at A, confirmed with the passkey, stores one push token for `@proof`, whose digest is the registry's token for it, made by A's identifier |
@@ -88,12 +88,12 @@ four classes:
   the browser's authenticator (a passkey's credential id, count, and the
   COSE key its private key gives), the browser's session cookie (the
   token's SHA-256 and first 8 characters, read inside the CYFR that set
-  it), the kit's lines, the directory's stored genesis (the identifier is
+  it), the recovery code, the directory's stored genesis (the identifier is
   its hash; the keys are its keys; a genesis's key and recovery epochs are
   its own hash), the run's admin account, the other store's digest;
 - **captured**: a value the server generated, read here for the first
   time, that no other source names (a row id, a registration digest, a
-  nonce, the kit's sealed seed): held to its shape and to the value its
+  nonce, the recovery code's sealed secret): held to its shape and to the value its
   first read read, and exact at every later read;
 - **bound**: a time the server stamps, inside a window whose two ends are
   the proof's own clock readings around the step (5 ms either side for the
@@ -188,12 +188,12 @@ row per field of each row of each step's objects:
 | setup:registry.directory.identity_log_entries[row] | outcome | exact | `"accepted"` |
 | setup:registry.directory.identity_log_entries[row] | outcome_body | exact | `null` |
 | setup:registry.directory.identity_log_entries[row] | bytes | derived | the entry's length |
-| setup:registry.directory.identity_log_entries[row] | inserted_at | bound | a time inside the enrollment, to the kit shown |
+| setup:registry.directory.identity_log_entries[row] | inserted_at | bound | a time inside the enrollment, to the recovery code shown |
 | setup:pre:a.identity_attempts[row] | id | captured | a new iat_ id |
 | setup:pre:a.identity_attempts[row] | kind | exact | `"enrollment"` |
 | setup:pre:a.identity_attempts[row] | request_id | captured | a new request id, req_ and 32 hexadecimal digits |
 | setup:pre:a.identity_attempts[row] | user_id | derived | A's passkey's person |
-| setup:pre:a.identity_attempts[row] | identifier | derived | the kit's identifier line, as the browser showed it |
+| setup:pre:a.identity_attempts[row] | identifier | derived | the identifier the recovery code names, as the browser showed it |
 | setup:pre:a.identity_attempts[row] | directory_url | exact | `"https://registry.test"` |
 | setup:pre:a.identity_attempts[row] | phase | exact | `"accepted"` |
 | setup:pre:a.identity_attempts[row] | genesis | derived | the directory's stored genesis |
@@ -207,40 +207,40 @@ row per field of each row of each step's objects:
 | setup:pre:a.identity_attempts[row] | staged_operational_public_key | exact | `null` |
 | setup:pre:a.identity_attempts[row] | staged_live_key_sealed | exact | `null` |
 | setup:pre:a.identity_attempts[row] | staged_operational_key_sealed | exact | `null` |
-| setup:pre:a.identity_attempts[row] | kit_seed_sealed | captured | the kit's seed, sealed until the kit is acknowledged: new sealed bytes |
+| setup:pre:a.identity_attempts[row] | kit_seed_sealed | captured | the recovery code's secret, sealed until the code is saved: new sealed bytes |
 | setup:pre:a.identity_attempts[row] | kit_acknowledged_at | exact | `null` |
 | setup:pre:a.identity_attempts[row] | outcome | exact | `"accepted"` |
 | setup:pre:a.identity_attempts[row] | reproof_challenge_digest | exact | `null` |
 | setup:pre:a.identity_attempts[row] | reproof_expires_at | exact | `null` |
 | setup:pre:a.identity_attempts[row] | revision | exact | `3`: the attempt as its enrollment's acceptance leaves it |
-| setup:pre:a.identity_attempts[row] | inserted_at | bound | a time inside the enrollment, to the kit shown |
-| setup:pre:a.identity_attempts[row] | updated_at | bound | a time inside the enrollment, to the kit shown |
-| setup:a.identity_attempts[row] | directory_url | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | entry | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | entry_hash | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | expected_head | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | expected_revision | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | genesis | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | id | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | identifier | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | inserted_at | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | kind | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | kit_acknowledged_at | bound | a time inside the kit's acknowledgement, to @proof claimed |
-| setup:a.identity_attempts[row] | kit_seed_sealed | exact | `null`: the kit's seed is dropped once the kit is acknowledged |
-| setup:a.identity_attempts[row] | outcome | exact | as read before the kit's acknowledgement |
+| setup:pre:a.identity_attempts[row] | inserted_at | bound | a time inside the enrollment, to the recovery code shown |
+| setup:pre:a.identity_attempts[row] | updated_at | bound | a time inside the enrollment, to the recovery code shown |
+| setup:a.identity_attempts[row] | directory_url | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | entry | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | entry_hash | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | expected_head | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | expected_revision | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | genesis | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | id | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | identifier | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | inserted_at | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | kind | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | kit_acknowledged_at | bound | a time inside saving the recovery code, to @proof claimed |
+| setup:a.identity_attempts[row] | kit_seed_sealed | exact | `null`: the recovery code's secret is dropped once the code is saved |
+| setup:a.identity_attempts[row] | outcome | exact | as read before the recovery code was saved |
 | setup:a.identity_attempts[row] | phase | exact | `"completed"` |
-| setup:a.identity_attempts[row] | reproof_challenge_digest | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | reproof_expires_at | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | request_digest | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | request_id | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | revision | exact | the revision read before the acknowledgement, plus one |
-| setup:a.identity_attempts[row] | staged_live_key_sealed | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | staged_live_public_key | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | staged_operational_key_sealed | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | staged_operational_public_key | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | token_digest | exact | as read before the kit's acknowledgement |
-| setup:a.identity_attempts[row] | updated_at | bound | a time inside the kit's acknowledgement, to @proof claimed |
-| setup:a.identity_attempts[row] | user_id | exact | as read before the kit's acknowledgement |
+| setup:a.identity_attempts[row] | reproof_challenge_digest | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | reproof_expires_at | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | request_digest | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | request_id | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | revision | exact | the revision read before the code was saved, plus one |
+| setup:a.identity_attempts[row] | staged_live_key_sealed | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | staged_live_public_key | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | staged_operational_key_sealed | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | staged_operational_public_key | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | token_digest | exact | as read before the recovery code was saved |
+| setup:a.identity_attempts[row] | updated_at | bound | a time inside saving the recovery code, to @proof claimed |
+| setup:a.identity_attempts[row] | user_id | exact | as read before the recovery code was saved |
 | setup:a.athanors[row] | id | captured | a new ath_ id |
 | setup:a.athanors[row] | kind | exact | `"person"` |
 | setup:a.athanors[row] | name | exact | `"Me"` |
@@ -293,7 +293,7 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | updated_at | bound | a time inside setup at A up to setup:a.users's read |
 | setup:a.person_identities[row] | id | captured | a new pid_ id |
 | setup:a.person_identities[row] | user_id | derived | A's passkey's person |
-| setup:a.person_identities[row] | identifier | derived | the kit's identifier line |
+| setup:a.person_identities[row] | identifier | derived | the identifier the recovery code names |
 | setup:a.person_identities[row] | provenance | exact | `"local"` |
 | setup:a.person_identities[row] | enrollment | exact | `"enrolled"` |
 | setup:a.person_identities[row] | live_public_key | derived | the directory's genesis's live key |
@@ -306,7 +306,7 @@ row per field of each row of each step's objects:
 | setup:a.person_identities[row] | first_method_at | bound | a time inside setup at A |
 | setup:a.person_identities[row] | revision | exact | `4`: 1 at insertion, then first_method! (person_identities.ex:233), enrolling! (:145) and enrolled! (:174), each one step (:259) |
 | setup:a.person_identities[row] | inserted_at | bound | a time inside setup at A |
-| setup:a.person_identities[row] | updated_at | bound | a time inside the enrollment, to the kit shown |
+| setup:a.person_identities[row] | updated_at | bound | a time inside the enrollment, to the recovery code shown |
 | setup:registry.namespaces[proof][row] | slug | exact | `"proof"` |
 | setup:registry.namespaces[proof][row] | kind | exact | `"personal"` |
 | setup:registry.namespaces[proof][row] | reserved | exact | `false` |
@@ -317,29 +317,29 @@ row per field of each row of each step's objects:
 | setup:registry.namespaces[proof][row] | consecutive_failures | exact | `0` |
 | setup:registry.namespaces[proof][row] | display_name | exact | `null` |
 | setup:registry.namespaces[proof][row] | expires_at | exact | `null` |
-| setup:registry.namespaces[proof][row] | created_at | bound | a time inside the kit's acknowledgement, to @proof claimed |
-| setup:registry.namespaces[proof][row] | updated_at | bound | a time inside the kit's acknowledgement, to @proof claimed |
-| setup:registry.namespaces[proof][row] | owner_identifier | derived | the kit's identifier |
+| setup:registry.namespaces[proof][row] | created_at | bound | a time inside saving the recovery code, to @proof claimed |
+| setup:registry.namespaces[proof][row] | updated_at | bound | a time inside saving the recovery code, to @proof claimed |
+| setup:registry.namespaces[proof][row] | owner_identifier | derived | the identifier the recovery code names |
 | setup:registry.namespaces[proof][row] | reserved_reason | exact | `null` |
 | setup:registry.identity_heads[a][row] | identifier | derived | the identity's genesis, hashed |
 | setup:registry.identity_heads[a][row] | head | derived | the genesis's hash: one entry, so the head (`Prima.Identity`) |
 | setup:registry.identity_heads[a][row] | entries | exact | `1` |
 | setup:registry.identity_heads[a][row] | recovery_epoch | derived | a genesis's own hash (`Prima.Identity`, identity.ex:1150) |
 | setup:registry.identity_heads[a][row] | key_epoch | derived | a genesis's own hash (`Prima.Identity`, identity.ex:1150) |
-| setup:registry.identity_heads[a][row] | read_at | bound | a time inside the kit's acknowledgement, to @proof claimed |
+| setup:registry.identity_heads[a][row] | read_at | bound | a time inside saving the recovery code, to @proof claimed |
 | setup:registry.policy_acceptances[a][row] | id | captured | an acceptance id: a new UUID, not the nil UUID |
 | setup:registry.policy_acceptances[a][row] | policy_version | derived | the registry's GET /v1/legal/version |
-| setup:registry.policy_acceptances[a][row] | accepted_at | bound | a time inside the kit's acknowledgement, to @proof claimed |
+| setup:registry.policy_acceptances[a][row] | accepted_at | bound | a time inside saving the recovery code, to @proof claimed |
 | setup:registry.policy_acceptances[a][row] | ip_address | exact | `"::ffff:127.0.0.1"`: the front's forwarded loopback address, as PostgreSQL's inet stores it |
 | setup:registry.policy_acceptances[a][row] | identifier | derived | the signer's identifier |
 | setup:registry.policy_acceptances[a][row] | former_identity | exact | `null` |
 | setup:registry.policy_acceptances[a][row] | user_agent | derived | the signer's HTTP client: Req's default for a CYFR (req 0.7.5, mix.lock) |
 | setup:registry.request_nonces[a][row 1] | identifier | derived | the signer's identifier |
 | setup:registry.request_nonces[a][row 1] | nonce | captured | 16 new bytes |
-| setup:registry.request_nonces[a][row 1] | expires_at | bound | a time inside the kit's acknowledgement, to @proof claimed, plus the 120 s a signed request lives |
+| setup:registry.request_nonces[a][row 1] | expires_at | bound | a time inside saving the recovery code, to @proof claimed, plus the 120 s a signed request lives |
 | setup:registry.request_nonces[a][row 2] | identifier | derived | the signer's identifier |
 | setup:registry.request_nonces[a][row 2] | nonce | captured | 16 new bytes |
-| setup:registry.request_nonces[a][row 2] | expires_at | bound | a time inside the kit's acknowledgement, to @proof claimed, plus the 120 s a signed request lives |
+| setup:registry.request_nonces[a][row 2] | expires_at | bound | a time inside saving the recovery code, to @proof claimed, plus the 120 s a signed request lives |
 | setup:handle_answer[proof] | status | exact | `200` |
 | setup:handle_answer[proof] | protocol | exact | `"cyfr-handle/v1"` |
 | setup:handle_answer[proof] | registry | exact | `"registry.test"` |
@@ -415,7 +415,7 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | updated_at | bound | a time inside setup at B up to allow:b.users's read |
 | allow:b.server_allowlist[row] | id | captured | a new door_ id |
 | allow:b.server_allowlist[row] | kind | exact | `"identifier"` |
-| allow:b.server_allowlist[row] | value | derived | the identifier @proof names at the registry (A's kit) |
+| allow:b.server_allowlist[row] | value | derived | the identifier @proof names at the registry (A's recovery code's) |
 | allow:b.server_allowlist[row] | effect | exact | `"allow"` |
 | allow:b.server_allowlist[row] | status | exact | `"allowed"` |
 | allow:b.server_allowlist[row] | requested_by | exact | `null` |
@@ -442,7 +442,7 @@ row per field of each row of each step's objects:
 | sign_in:b.person_identities[the administrator's] | updated_at | bound | a time inside setup at B |
 | sign_in:b.person_identities[the person's] | id | captured | a new pid_ id |
 | sign_in:b.person_identities[the person's] | user_id | captured | a new usr_ id |
-| sign_in:b.person_identities[the person's] | identifier | derived | A's kit |
+| sign_in:b.person_identities[the person's] | identifier | derived | the identifier A's recovery code names |
 | sign_in:b.person_identities[the person's] | provenance | exact | `"remote"` |
 | sign_in:b.person_identities[the person's] | enrollment | exact | `"enrolled"` |
 | sign_in:b.person_identities[the person's] | live_public_key | exact | `null`: B keeps no copy of a remote person's keys; it reads them at the directory |
