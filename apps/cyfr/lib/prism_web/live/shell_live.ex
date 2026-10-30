@@ -78,16 +78,19 @@ defmodule PrismWeb.ShellLive do
   `posture`, `covered` and `state` come from the glass. From the live,
   visible canvas, `ready` keeps it standing, `failed` before `ready`
   falls it back (below), `open` is the person's open of a listed
-  tincture (`app_open` below), and `press` presses a feed's action through
-  `feed.press` once the served version's declaration reads that feed.
+  tincture (`app_open` below), `press` presses a feed's action through
+  `feed.press` once the served version's declaration reads that feed, and
+  `grant` offers the person's grant to an installed component through the
+  system layer's generic grant path, unless an offer for it is open or it
+  is granted already; its outcome opens no frame.
   `ready` and `failed` report how a canvas's page loaded and runs, so they
   count from a hidden canvas too, frozen or not the one shown: its `ready`
   makes it ready, and its `failed` before that marks it died, which falls
   it back once the canvas is shown. A `failed` from a canvas
   this view recorded as ready, shown or hidden, changes nothing: a page
   error after `ready` is not a crash. From a validation frame only `ready` and `failed`
-  act. A canvas's other verbs, an `open` or a `press` from a canvas the
-  glass does not show live, and `press` and `failed` from a frame that is
+  act. A canvas's other verbs, an `open`, a `press` or a `grant` from a
+  canvas the glass does not show live, and `press` and `failed` from a frame that is
   not a canvas's are dropped and counted.
 
   ## Arranging
@@ -894,9 +897,55 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
     do: press(socket, frame, args)
 
+  defp live_canvas_verb(socket, _frame, %{verb: :grant, args: %{"ref" => ref}}),
+    do: grant_from_canvas(socket, ref)
+
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
   defp ready?(socket, %{id: id}), do: MapSet.member?(socket.assigns.canvas_ready, id)
+
+  # The person asked, from the canvas, for their grant to an installed
+  # component: offered through the system layer's generic grant path (the
+  # one AQUA's own asks take: Sanctum's preview, which the person confirms
+  # or not), and its outcome waits on no frame, since the component is
+  # most often a catalyst with none. Dropped and counted, offering nothing,
+  # when the reference names nothing installed, when an offer for the
+  # component is already open, or when the component is already granted.
+  defp grant_from_canvas(socket, ref) do
+    ctx = socket.assigns.context
+
+    with {:ok, component} <- installed_component(ctx, ref),
+         false <- offering?(socket.assigns.grant_prompts, component),
+         false <- granted?(ctx, component),
+         {:ok, offered} <- grant_prompt(socket, {:component, component}, nil, component) do
+      offered
+    else
+      _refused -> drop_message(socket)
+    end
+  end
+
+  # The component `ref` names among the athanor's installed ones, versionless
+  # or at an installed version, as the grant names it: without its version.
+  defp installed_component(ctx, ref) do
+    with {:ok, %{"component_ref" => canonical}} <- Compendium.inspect_component(ctx, ref),
+         {:ok, parsed} <- Prima.ComponentRef.parse(canonical) do
+      {:ok, Prima.ComponentRef.to_string(%{parsed | version: nil})}
+    else
+      _none -> :error
+    end
+  end
+
+  defp offering?(prompts, component),
+    do: Enum.any?(prompts, &match?({_id, {{:component, ^component}, _}}, &1))
+
+  # Granted: an active profile of the person's for the component. A store
+  # that cannot answer decides nothing here; the offer's own plan does.
+  defp granted?(ctx, component) do
+    case Sanctum.Consent.profiles(ctx, component) do
+      {:ok, entries} -> Enum.any?(entries, &(&1.status == :active))
+      {:error, _unreadable} -> false
+    end
+  end
 
   defp died(socket, %{id: id}), do: update(socket, :canvas_died, &MapSet.put(&1, id))
 
@@ -2031,6 +2080,9 @@ defmodule PrismWeb.ShellLive do
     |> forget_refusal(canvas_id, :any)
     |> place()
   end
+
+  # A grant the canvas asked for opens nothing: no frame waited on it.
+  defp granted(socket, {{:component, _component}, nil}), do: socket
 
   defp granted(socket, {key, tincture_id}) do
     %{context: ctx, frames: frames} = socket.assigns
