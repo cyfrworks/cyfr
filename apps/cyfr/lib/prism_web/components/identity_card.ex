@@ -7,18 +7,18 @@ defmodule PrismWeb.IdentityCard do
   (`PrismWeb.SetupLive`) and Settings (`PrismWeb.SettingsLive`). It reads
   where the person stands from `person.status` (`Sanctum.Recovery.status/1`)
   and their preferences, and drives the existing enrollment ceremony
-  (`person.enroll`, `person.enroll_abandon`, the kit and its
-  acknowledgement) through the system layer's recovery prompts
-  (`PrismWeb.SystemLayer.Recovery`), which hold every seed and kit line;
-  this component never does.
+  (`person.enroll`, `person.enroll_abandon`, the recovery code and "I saved
+  it") through the system layer's recovery prompts
+  (`PrismWeb.SystemLayer.Recovery`), which hold every secret and recovery
+  code; this component never does.
 
   | Where the person stands | The card offers |
   |---|---|
   | not enrolled | choose a handle, then enroll; or enroll without one, for an identifier alone |
   | an enrollment the directory has not accepted, its prompt open here | nothing beside the prompt, which retries under the same request id and seed |
   | the same, with no prompt here holding its seed | "Abandon and start again", then enroll under a new seed |
-  | accepted, kit not acknowledged | show the kit again, under a fresh confirmation |
-  | kit acknowledged, a handle wanted | "Claim @name" |
+  | accepted, recovery code not saved | show the recovery code again, under a fresh confirmation |
+  | recovery code saved, a handle wanted | "Claim @name" |
   | claimed | the handle |
 
   A handle is checked live against the registry's answer for it
@@ -26,12 +26,12 @@ defmodule PrismWeb.IdentityCard do
   free one is chosen, and it is kept in the person's preferences
   (`handle_wanted`) until it is claimed, so a page closed, a registry
   unreachable or a connection lost mid-step resumes at the state the
-  card reads. The claim waits for the kit's acknowledgement: it accepts
+  card reads. The claim waits for the recovery code to be saved: it accepts
   the registry's current policies, then claims the handle
   (`registry.legal_accept`, `registry.claim_personal`), and a claim whose
   answer was lost answers success when repeated. A taken handle asks for
-  another; the enrollment stands. When this card began the enrollment, the
-  acknowledgement claims at once; otherwise "Claim @name" does.
+  another; the enrollment stands. When this card began the enrollment,
+  "I saved it" claims at once; otherwise "Claim @name" does.
 
   The view that embeds it embeds the system layer, mounts
   `PrismWeb.SystemLayer.Hook`, and hands it the reports of its prompts
@@ -214,8 +214,8 @@ defmodule PrismWeb.IdentityCard do
   end
 
   # Enrollment on its own, with no handle: an identifier, which signs the
-  # person in at another CYFR, and the kit that recovers it, whether or not
-  # the registry answers; a handle is claimed later.
+  # person in at another CYFR, and the recovery code that brings it back,
+  # whether or not the registry answers; a handle is claimed later.
   defp act("enroll", _params, %{assigns: %{status: %{enrollment: "none"}}} = socket),
     do: {:noreply, socket |> enroll() |> assign(:claim_on_ack, false)}
 
@@ -252,7 +252,7 @@ defmodule PrismWeb.IdentityCard do
   end
 
   # A handle chosen before enrolling begins the enrollment; one chosen
-  # once the kit is acknowledged (another, after a taken one) is claimed.
+  # once the recovery code is saved (another, after a taken one) is claimed.
   defp after_choice(%{assigns: %{status: %{enrollment: "none"}}} = socket), do: enroll(socket)
 
   defp after_choice(%{assigns: %{status: %{enrollment: "enrolled"}}} = socket),
@@ -282,7 +282,7 @@ defmodule PrismWeb.IdentityCard do
     end
   end
 
-  # The enrollment this card began, its kit acknowledged: the handle is
+  # The enrollment this card began, its recovery code saved: the handle is
   # claimed at once.
   defp claim_when_acknowledged(%{assigns: %{claim_on_ack: true}} = socket) do
     if state(socket.assigns) == :claim,
@@ -292,10 +292,10 @@ defmodule PrismWeb.IdentityCard do
 
   defp claim_when_acknowledged(socket), do: socket
 
-  # The order is register, kit, acknowledge, then claim, held here from
-  # where the person stands now (`person.status`), never by the markup:
-  # until the enrollment's kit is acknowledged, nothing reaches the
-  # registry.
+  # The order is register, recovery code, "I saved it", then claim, held
+  # here from where the person stands now (`person.status`), never by the
+  # markup: until the enrollment's recovery code is saved, nothing reaches
+  # the registry.
   defp claim(%{assigns: %{context: ctx, wanted: handle}} = socket) when is_binary(handle) do
     case Ops.call_tool(ctx, "person/status", %{}) do
       {:ok, status} ->
@@ -469,8 +469,9 @@ defmodule PrismWeb.IdentityCard do
 
         <div :if={@state == :choose} class="space-y-2">
           <p :if={@status.enrollment == "none"} class="text-sm text-gray-300">
-            Choose a handle, and CYFR registers your identity at its directory and prints the kit
-            that recovers it. The handle is claimed once you say the kit is saved.
+            Choose a handle, and CYFR registers your identity at its directory and makes the
+            recovery code that brings it back. The handle is claimed once you say your recovery
+            code is saved.
           </p>
           <p
             :if={@claim_error}
@@ -490,7 +491,8 @@ defmodule PrismWeb.IdentityCard do
           <div :if={@status.enrollment == "none"} class="space-y-2 pt-2">
             <p class="text-sm text-gray-400">
               Or enroll without a handle: your identity gets an identifier, which signs you in at
-              another CYFR, and the kit that recovers it. A handle can be claimed later.
+              another CYFR, and the recovery code that brings it back. A handle can be claimed
+              later.
             </p>
             <.button
               variant="ghost"
@@ -509,7 +511,7 @@ defmodule PrismWeb.IdentityCard do
           </p>
           <div :if={is_nil(@enrolling)} class="space-y-2">
             <p class="text-sm text-gray-300">
-              Only the browser that began it holds its kit. If that browser lost it, abandon it and enroll again with a new kit; a registration the directory may already hold stays there unused.
+              Only the browser that began it holds its recovery code. If that browser lost it, abandon it and enroll again with a new one; a registration the directory may already hold stays there unused.
             </p>
             <.button
               variant="ghost"
@@ -531,10 +533,10 @@ defmodule PrismWeb.IdentityCard do
             data-phase={kit.phase}
           >
             <span :if={kit.deliverable}>
-              A printed kit ({kit_kind(kit)}) waits for you to say it is saved.
+              Your recovery code ({kit_kind(kit)}) waits for you to say you saved it.
             </span>
             <span :if={not kit.deliverable}>
-              A printed kit ({kit_kind(kit)}) is at {kit.phase}; finish it in the prompt that began it.
+              Your recovery code ({kit_kind(kit)}) is at {kit.phase}; finish it in the prompt that began it.
             </span>
             <.button
               :if={kit.deliverable}
@@ -544,14 +546,14 @@ defmodule PrismWeb.IdentityCard do
               phx-target={@myself}
               data-test="identity-kit-show"
             >
-              Show kit
+              Show your recovery code
             </.button>
           </li>
         </ul>
 
         <div :if={@state == :claim} class="space-y-2">
           <p class="text-sm text-gray-300">
-            Your kit is saved. Claim your handle at the registry.
+            Your recovery code is saved. Claim your handle at the registry.
           </p>
           <p
             :if={@claim_error}
@@ -580,7 +582,7 @@ defmodule PrismWeb.IdentityCard do
     """
   end
 
+  # `person.status` lists only enrollment and holder attempts.
   defp kit_kind(%{kind: "enrollment"}), do: "your first"
   defp kit_kind(%{kind: "holder"}), do: "an added one"
-  defp kit_kind(_kit), do: "a kit"
 end

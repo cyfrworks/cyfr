@@ -1645,7 +1645,7 @@ defmodule PrismWeb.SettingsLiveTest do
   end
 
   # The person's enrollment, accepted, as a retry records the directory's
-  # acceptance: their kit is not saved yet.
+  # acceptance: their recovery code is not saved yet.
   defp enrolled!(person) do
     begun = pending!(person)
     as = %Prima.Actor{user_id: person.user_id}
@@ -1829,7 +1829,7 @@ defmodule PrismWeb.SettingsLiveTest do
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(user, %{"handle_wanted" => handle})
   end
 
-  # Enrolled at the directory, the kit acknowledged.
+  # Enrolled at the directory, the recovery code saved.
   defp acknowledged!(person) do
     state = RegistryStub.enroll!(person.user_id)
     as = %Prima.Actor{user_id: person.user_id}
@@ -1861,6 +1861,12 @@ defmodule PrismWeb.SettingsLiveTest do
 
       assert has_element?(view, ~s([data-test="identity"][data-state="choose"]))
       assert has_element?(view, ~s([data-test="identity-directory"]), @directory)
+
+      assert has_element?(
+               view,
+               ~s([data-test="identity"]),
+               ~r/makes the\s+recovery code that brings it back\. The handle is claimed once you say your\s+recovery\s+code is saved\./
+             )
 
       type_handle(view, "alice")
       assert has_element?(view, ~s([data-test="identity-handle-check"][data-check="taken"]))
@@ -1894,7 +1900,7 @@ defmodule PrismWeb.SettingsLiveTest do
       refute has_element?(view, ~s(#system-layer [data-test="recovery"]))
     end
 
-    test "with the registry not answering, the person still enrolls on their own, for an identifier and its kit",
+    test "with the registry not answering, the person still enrolls on their own, for an identifier and its recovery code",
          %{conn: conn} do
       person = test_user()
       registry(nil, %{"alice" => :close})
@@ -1911,7 +1917,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert wanted(person) == nil
     end
 
-    test "a kit not yet saved is offered again; another kit and the rotation are offered once enrolled",
+    test "a recovery code not yet saved is offered again; another code and the rotation are offered once enrolled",
          %{conn: conn} do
       person = test_user()
       enrolled = enrolled!(person)
@@ -1921,17 +1927,40 @@ defmodule PrismWeb.SettingsLiveTest do
       assert has_element?(view, ~s([data-test="identity-identifier"]), enrolled.identifier)
       refute html =~ "sealed-kit-seed"
 
-      kit = ~s([data-test="identity-kit"][data-attempt="#{enrolled.attempt_id}"])
-      assert has_element?(view, kit)
+      row = ~s([data-test="identity-kit"][data-attempt="#{enrolled.attempt_id}"])
+
+      assert has_element?(
+               view,
+               row,
+               "Your recovery code (your first) waits for you to say you saved it."
+             )
+
+      assert has_element?(
+               view,
+               ~s(#{row} [data-test="identity-kit-show"]),
+               "Show your recovery code"
+             )
+
+      assert has_element?(
+               view,
+               "#identity-card",
+               "Your recovery code brings your identity back on a new CYFR. Add a second before " <>
+                 "you rely on one: if every code is lost, nothing can add one."
+             )
+
+      assert has_element?(view, ~s([data-test="identity-add-kit"]), "Add another recovery code")
+      refute has_element?(view, "#identity-card", ~r/\bkits?\b|printed/i)
 
       view |> element(~s([data-test="identity-kit-show"])) |> render_click()
       render(view)
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="kit"]))
+      assert has_element?(view, "#system-layer-title", "Your recovery code")
       view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
 
       view |> element(~s([data-test="identity-add-kit"])) |> render_click()
       render(view)
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="holder"]))
+      assert has_element?(view, "#system-layer-title", "Add another recovery code")
       view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
 
       # Rotating the live key asks for its fresh confirmation in the layer,
@@ -1955,7 +1984,7 @@ defmodule PrismWeb.SettingsLiveTest do
              ) == []
     end
 
-    test "an enrollment no prompt here holds is abandoned and begun again under a new kit",
+    test "an enrollment no prompt here holds is abandoned and begun again under a new recovery code",
          %{conn: conn} do
       person = test_user()
       pending = pending!(person)
@@ -1963,6 +1992,21 @@ defmodule PrismWeb.SettingsLiveTest do
 
       assert has_element?(view, ~s([data-test="identity"][data-state="pending"]))
       refute has_element?(view, ~s([data-test="identity-handle"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="identity"]),
+               "Only the browser that began it holds its recovery code. If that browser lost " <>
+                 "it, abandon it and enroll again with a new one;"
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-test="identity-kit"][data-attempt="#{pending.attempt_id}"]),
+               "Your recovery code (your first) is at submitted; finish it in the prompt that began it."
+             )
+
+      refute has_element?(view, ~s([data-test="identity-kit-show"]))
 
       # No confirmation is asked: it discards an unfinished attempt and
       # mints nothing.
@@ -2016,7 +2060,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert has_element?(view, ~s([data-test="identity-abandon"]))
     end
 
-    test "the card's own enrollment claims the wanted handle once its kit is acknowledged",
+    test "the card's own enrollment claims the wanted handle once its recovery code is saved",
          %{conn: conn} do
       person = test_user()
       parent = self()
@@ -2027,7 +2071,7 @@ defmodule PrismWeb.SettingsLiveTest do
       view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alicia"})
       id = prompt_id(view)
 
-      # The ceremony ran in the prompt and its kit was acknowledged.
+      # The ceremony ran in the prompt and its recovery code was saved.
       state = acknowledged!(person)
 
       registry(state, %{}, fn %{path: path, signed: signed} ->
@@ -2051,7 +2095,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert wanted(person) == nil
     end
 
-    test "an acknowledged kit with a wanted handle offers Claim @name; a lost answer's repeat claims",
+    test "a saved recovery code with a wanted handle offers Claim @name; a lost answer's repeat claims",
          %{conn: conn} do
       person = test_user()
       state = acknowledged!(person)
@@ -2075,6 +2119,12 @@ defmodule PrismWeb.SettingsLiveTest do
       {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
       assert has_element?(view, ~s([data-test="identity"][data-state="claim"]))
 
+      assert has_element?(
+               view,
+               ~s([data-test="identity"]),
+               "Your recovery code is saved. Claim your handle at the registry."
+             )
+
       view |> element(~s([data-test="identity-claim"])) |> render_click()
       assert has_element?(view, ~s([data-test="identity-claim-error"]))
       assert has_element?(view, ~s([data-test="identity-claim"]), "Claim @alicia")
@@ -2086,7 +2136,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert wanted(person) == nil
     end
 
-    test "a claim sent before the enrollment's kit is acknowledged claims nothing, and sends the registry nothing",
+    test "a claim sent before the enrollment's recovery code is saved claims nothing, and sends the registry nothing",
          %{conn: conn} do
       person = test_user()
       parent = self()
@@ -2110,7 +2160,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
     end
 
-    test "a handle chosen while the enrollment's kit is unacknowledged is kept, and claimed only after it",
+    test "a handle chosen while the enrollment's recovery code is unsaved is kept, and claimed only after it",
          %{conn: conn} do
       person = test_user()
       parent = self()
