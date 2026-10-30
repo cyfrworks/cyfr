@@ -278,38 +278,31 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   end
 
   # Whether the dev database the checkout configures is yet to be made, read
-  # as a boot of this build resolves it (`config/runtime.exs`).
+  # as a boot of this build resolves it (`config/runtime.exs`) and asked of
+  # Arca, which alone names the adapter.
   defp new_database(env) do
     getenv = fn name -> set(env, name) end
 
-    case Arca.adapter_facts().adapter do
-      :sqlite ->
-        with {:ok, %{database_path: path}} <- Cyfr.RuntimeConfig.resolve_paths(getenv) do
-          {:ok, not File.exists?(path)}
-        end
+    options =
+      case Arca.adapter_facts().adapter do
+        :sqlite ->
+          with {:ok, %{database_path: path}} <- Cyfr.RuntimeConfig.resolve_paths(getenv),
+               do: {:ok, [database: path]}
 
-      :postgres ->
-        with {:ok, repo} <- Cyfr.RuntimeConfig.resolve_postgres(getenv) do
-          postgres_new(repo)
-        end
-    end
-  end
+        :postgres ->
+          Cyfr.RuntimeConfig.resolve_postgres(getenv)
+      end
 
-  defp postgres_new(repo) do
-    {:ok, _started} = Application.ensure_all_started(:postgrex)
-    options = Ecto.Repo.Supervisor.parse_url(repo[:url]) ++ Keyword.delete(repo, :url)
+    with {:ok, options} <- options do
+      case Arca.database_exists(options) do
+        {:ok, exists?} ->
+          {:ok, not exists?}
 
-    case Ecto.Adapters.Postgres.storage_status(options) do
-      :up ->
-        {:ok, false}
-
-      :down ->
-        {:ok, true}
-
-      {:error, reason} ->
-        {:error,
-         "The PostgreSQL server CYFR_DATABASE_URL names could not say whether its database " <>
-           "exists (#{Prima.LoggerContext.shape(reason)}). Start it, or fix CYFR_DATABASE_URL."}
+        {:error, reason} ->
+          {:error,
+           "The database server CYFR_DATABASE_URL names could not say whether its database " <>
+             "exists (#{Prima.LoggerContext.shape(reason)}). Start it, or fix CYFR_DATABASE_URL."}
+      end
     end
   end
 

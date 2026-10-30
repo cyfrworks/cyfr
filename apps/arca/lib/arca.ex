@@ -248,6 +248,26 @@ defmodule Arca do
   defp database(Ecto.Adapters.SQLite3), do: :sqlite
 
   @doc """
+  Whether the database a repository configuration names exists yet, asked
+  of this build's adapter without starting the repository: under SQLite
+  its file (`database:`), under PostgreSQL the database its `url:` or
+  `database:` names, on the server they name. For a caller that must know
+  before any boot, as the source development stack does; the adapter
+  stays Arca's to name.
+  """
+  @spec database_exists(keyword()) :: {:ok, boolean()} | {:error, term()}
+  def database_exists(options) when is_list(options) do
+    {url, options} = Keyword.pop(options, :url)
+    options = if url, do: Ecto.Repo.Supervisor.parse_url(url) ++ options, else: options
+
+    case repo_adapter().storage_status(options) do
+      :up -> {:ok, true}
+      :down -> {:ok, false}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Whether the calling process is inside a transaction of the repository:
   for a layer above that must make no network call and no write of its
   own while a caller's transaction holds its locks.
