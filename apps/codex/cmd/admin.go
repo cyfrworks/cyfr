@@ -36,9 +36,9 @@ var adminCmd = &cobra.Command{
 		"is let in by an allow naming their person identifier (per_…), or by `*`, which " +
 		"lets anyone in, and lets anyone create an identity here. A deny names a person " +
 		"here by their id (usr_…) or a person identifier; it is sticky and ejects the " +
-		"person. An allow or a deny may name a handle (@name) instead: the registry is " +
-		"asked which identifier the handle names, and the entry keeps that identifier, " +
-		"with the handle shown beside it, so a handle that later changes hands moves no " +
+		"person. An allow or a deny may give a name (@name) instead: cyfr.run is " +
+		"asked which identifier the name belongs to, and the entry keeps that identifier, " +
+		"with the name shown beside it, so a name that later changes hands moves no " +
 		"access. Requests are invites members made for identifiers the allowlist does " +
 		"not know, and sign-ins it refused. Only platform admins may edit the list, and " +
 		"no deny names one.",
@@ -102,8 +102,8 @@ var adminRequestsCmd = &cobra.Command{
 }
 
 var adminAllowCmd = &cobra.Command{
-	Use:   "allow <identifier|@handle|*>",
-	Short: "Let a person from elsewhere sign in, by person identifier (per_…) or handle (@name), or * for anyone",
+	Use:   "allow <identifier|@name|*>",
+	Short: "Let a person from elsewhere sign in, by person identifier (per_…) or name (@name), or * for anyone",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
@@ -122,8 +122,8 @@ var adminAllowCmd = &cobra.Command{
 }
 
 var adminDenyCmd = &cobra.Command{
-	Use:   "deny <person|identifier|@handle>",
-	Short: "Keep a person out, by their id here (usr_…), person identifier (per_…) or handle (@name), and eject them if they are here",
+	Use:   "deny <person|identifier|@name>",
+	Short: "Keep a person out, by their id here (usr_…), person identifier (per_…) or name (@name), and eject them if they are here",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
@@ -187,8 +187,8 @@ var adminResolveCmd = &cobra.Command{
 	},
 }
 
-// entryShown is an entry's value, and beside an identifier the handle it
-// was made from when it was made from one.
+// entryShown is an entry's value, and beside an identifier the name it was
+// made from when it was made from one.
 func entryShown(entry map[string]any) string {
 	if label := str(entry["label"]); label != "" {
 		return str(entry["value"]) + " (@" + label + ")"

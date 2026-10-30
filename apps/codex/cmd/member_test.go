@@ -130,11 +130,11 @@ func TestMemberArgsSendTheOneFieldTheFormFills(t *testing.T) {
 }
 
 func TestMemberHelpNamesTheForms(t *testing.T) {
-	if !strings.Contains(memberAddCmd.Use, "<user_id|identifier|@handle>") {
+	if !strings.Contains(memberAddCmd.Use, "<@name|identifier|user_id>") {
 		t.Errorf("usage %q does not name the three forms", memberAddCmd.Use)
 	}
-	if !strings.Contains(memberAddCmd.Short, "handle (@name)") {
-		t.Errorf("help %q does not name a handle", memberAddCmd.Short)
+	if want := "Add someone, by name (@name), person identifier (per_…) or user id."; memberAddCmd.Short != want {
+		t.Errorf("help %q, want %q", memberAddCmd.Short, want)
 	}
 	if !strings.Contains(memberRemoveCmd.Use, "<user_id|identifier>") {
 		t.Errorf("usage %q does not name the two forms", memberRemoveCmd.Use)
@@ -152,13 +152,19 @@ func TestMemberHelpNamesTheForms(t *testing.T) {
 			t.Errorf("help %q %q still names an email", cmd.use, cmd.short)
 		}
 	}
-	for _, form := range []string{"user id", "person identifier", "handle (@name)"} {
+	for _, form := range []string{"user id", "person identifier", "name (@name)"} {
 		if !strings.Contains(memberCmd.Long, form) {
 			t.Errorf("member help does not name %s", form)
 		}
 	}
 	if strings.Contains(strings.ToLower(memberCmd.Long), "email") {
 		t.Errorf("member help still names an email: %q", memberCmd.Long)
+	}
+	help := strings.ToLower(memberCmd.Long + memberAddCmd.Use + memberAddCmd.Short + memberRemoveCmd.Use + memberRemoveCmd.Short)
+	for _, word := range []string{"handle", "registry"} {
+		if strings.Contains(help, word) {
+			t.Errorf("member help says %q", word)
+		}
 	}
 }
 

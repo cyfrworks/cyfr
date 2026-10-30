@@ -4,8 +4,9 @@
 // Registry namespace and push-token management commands.
 // Each command delegates to the MCP registry tool. The server signs each
 // request with the person's identity key and resolves the push tokens it
-// stores for them; `cyfr registry claim` claims the personal namespace and
-// `cyfr registry sync` provisions push tokens. Sign-in never does either.
+// stores for them. A person's name, their personal namespace, is taken at
+// cyfr.run when CYFR makes them; `cyfr registry sync` provisions push
+// tokens, which sign-in never does.
 package cmd
 
 import (
@@ -25,7 +26,6 @@ var (
 func init() {
 	// Top-level
 	registryCmd.AddCommand(registryWhoamiCmd)
-	registryCmd.AddCommand(registryClaimCmd)
 	registryCmd.AddCommand(registrySyncCmd)
 	registryCmd.AddCommand(registryGetNamespaceCmd)
 
@@ -72,36 +72,6 @@ you only want the registry state.`,
 		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryWhoamiArgs{})
 		if err != nil {
 			return handleToolError(err, "Registry whoami failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		output.KeyValue(result)
-		return nil
-	},
-}
-
-// ----------------------------------------------------------------------------
-// registry claim <handle> — claim the personal namespace
-// ----------------------------------------------------------------------------
-
-var registryClaimCmd = &cobra.Command{
-	Use:   "claim <handle>",
-	Short: "Claim your handle (your personal namespace) at cyfr.run",
-	Long: `Claims your handle at cyfr.run with a request your identity signs, so
-it needs an enrolled identity. The handle is your personal namespace: what
-` + "`cyfr push`" + ` publishes under. A repeat by the same identity answers the
-same claim again.
-
-The claim issues no token — run ` + "`cyfr registry sync`" + ` for push tokens.`,
-	Args:    cobra.ExactArgs(1),
-	Example: "  cyfr registry claim alice",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryClaimPersonalArgs{Handle: args[0]})
-		if err != nil {
-			return handleToolError(err, "Registry claim failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -184,8 +154,8 @@ var registryPublisherCmd = &cobra.Command{
 var registryPublisherClaimCmd = &cobra.Command{
 	Use:   "claim <domain>",
 	Short: "Start a publisher-namespace claim (issues a DNS TXT challenge)",
-	Long: `Sent as a request your identity signs; needs a claimed handle (see
-` + "`cyfr registry claim <handle>`" + `). cyfr.run returns a TXT challenge to
+	Long: `Sent as a request your identity signs, so it needs your name at
+cyfr.run, taken when CYFR made you. cyfr.run returns a TXT challenge to
 install at _cyfr-verify.<domain>; run
 ` + "`cyfr registry publisher verify <domain>`" + ` once the record is live.`,
 	Args:    cobra.ExactArgs(1),

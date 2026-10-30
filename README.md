@@ -1091,13 +1091,13 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr login` | Sign this command line in by approving it in Prism: prints a link and a code to check against Prism's, and waits; the session is saved under the context used (`--context` or the current one, a `--url` that is not its address refused) and listed under Devices in Prism, where it is revoked; `--provider github\|google` signs in with the provider's device flow instead (see [devices-guide.md](devices-guide.md)); `--setup` signs in this CYFR's first person with the setup token in the working directory's `.env`, again until they hold a passkey, a paired device or a linked sign-in method |
+| `cyfr login` | Sign this command line in by approving it in Prism: prints a link and a code to check against Prism's, and waits; the session is saved under the context used (`--context` or the current one, a `--url` that is not its address refused) and listed under Devices in Prism, where it is revoked; `--provider github\|google` signs in with the provider's device flow instead (see [devices-guide.md](devices-guide.md)); `--setup [--name NAME]` makes this CYFR's first person with the setup token in the working directory's `.env` and the name `--name` gives (asked for on a terminal), takes the name at cyfr.run, prints their recovery code and signs them in once they press Enter to say they saved it; run again, it signs them in again, with the same code until it is saved, until they hold a passkey, a paired device or a linked sign-in method |
 | `cyfr logout` | End the context's session (`--context` or the current one; a `--url` that is not its address is refused) |
 | `cyfr open` | Open the context's address in your browser, this machine's loopback context as `http://localhost:<port>`; no session travels with it |
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
 | `cyfr athanor list/get/use/create/rename/settings/provision/archive/unarchive` | Your athanors, your own and your groups: list and show them, point this session at one, create, rename or archive a group, merge settings, retry a provisioning that failed |
-| `cyfr member list/add/remove/leave` | Who is in an athanor: add someone by user id (`usr_…`), person identifier (`per_…`) or handle (`@name`), remove someone by user id or person identifier, or leave a group |
+| `cyfr member list/add/remove/leave` | Who is in an athanor: add someone by name (`@name`), person identifier (`per_…`) or user id (`usr_…`), remove someone by user id or person identifier, or leave a group |
 
 ### Components
 
@@ -1157,7 +1157,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr admin list/allow/deny/remove/requests/resolve` | The sign-in allowlist: allows of a person identifier (`per_…`), a handle (`@name`, kept as the identifier it names) or `*`, denies of a person (`usr_…`), a person identifier or a handle, and the pending requests to approve or drop (platform admins) |
+| `cyfr admin list/allow/deny/remove/requests/resolve` | The sign-in allowlist: allows of a person identifier (`per_…`), a name (`@name`, kept as the identifier it belongs to) or `*`, denies of a person (`usr_…`), a person identifier or a name, and the pending requests to approve or drop (platform admins) |
 | `cyfr settings list/set/reset` | The platform settings: limits, windows and the log level, and where each value comes from (platform admins; [configuration-guide.md](configuration-guide.md)) |
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr decision list/get/correlate` | View admission decisions, and cross-reference a request's decisions with its logs and executions |
@@ -1166,7 +1166,6 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `file offer/offers/accept/decline/withdraw` (MCP) | Offer a snapshot of a file to someone you share an athanor with, list the offers, and accept, decline or withdraw them |
 | `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
-| `cyfr registry claim <handle>` | Claim your handle, your personal namespace, at cyfr.run, by a request your live key signs; needs an enrolled identity |
 | `cyfr registry sync` | Mint and store your push tokens (your personal namespace and each publisher membership); needs a fresh confirmation given in Prism |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |
 | `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace by signed requests; verifying stores the founding member's push token under a fresh confirmation `[i]` |
