@@ -110,10 +110,10 @@ func renderWhoami(composed map[string]any, registryErr error) {
 		cyfrUser = personal
 	case hasRegistry && authenticated:
 		cyfrUser = "(no personal namespace claimed)"
-		hint = "Run `cyfr registry claim <handle>` to claim your personal namespace."
+		hint = "Your name is not finished yet: finish it in Settings."
 	case hasRegistry:
 		cyfrUser = "(no cyfr.run push tokens)"
-		hint = "Run `cyfr registry claim <handle>` to claim a personal namespace, then `cyfr registry sync` to provision push tokens."
+		hint = "Finish your name in Settings if it is not finished, then run `cyfr registry sync` to provision push tokens."
 	default:
 		cyfrUser = "(registry.cyfr.run unreachable)"
 	}
