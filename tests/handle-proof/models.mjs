@@ -443,7 +443,7 @@ function models(S) {
     updated_at: within(win(S, "setup")),
   }];
 
-  // setup, before the kit's acknowledgement: the accepted enrollment, the
+  // setup, before the recovery code is saved: the accepted enrollment, the
   // directory's entry, and nothing of the person at the registry yet.
   M["setup:registry.directory.identity_log_entries"] = () => [logEntry(id, genesisA, win(S, "enroll"))];
   M["setup:pre:a.identity_attempts"] = () => {
@@ -453,7 +453,7 @@ function models(S) {
       kind: exact("enrollment"),
       request_id: captured("a new request id, req_ and 32 hexadecimal digits", (v) => typeof v === "string" && /^req_[0-9a-f]{32}$/.test(v), "~"),
       user_id: derived(aUser(), "A's passkey's person"),
-      identifier: derived(id, "the kit's identifier line, as the browser showed it"),
+      identifier: derived(id, "the identifier the recovery code names, as the browser showed it"),
       directory_url: exact(DIRECTORY),
       phase: exact("accepted"),
       genesis: derived(storedForm(fromB64(genesisA)), "the directory's stored genesis"),
@@ -467,7 +467,7 @@ function models(S) {
       staged_operational_public_key: nil(),
       staged_live_key_sealed: nil(),
       staged_operational_key_sealed: nil(),
-      kit_seed_sealed: sealedBytes("the kit's seed, sealed until the kit is acknowledged"),
+      kit_seed_sealed: sealedBytes("the recovery code's secret, sealed until the code is saved"),
       kit_acknowledged_at: noTime(),
       outcome: exact("accepted"),
       reproof_challenge_digest: nil(),
@@ -485,10 +485,10 @@ function models(S) {
   M["setup:a.identity_attempts"] = () => [held(first("setup:pre:a.identity_attempts")[0], {
     phase: exact("completed"),
     kit_acknowledged_at: within(win(S, "ack")),
-    kit_seed_sealed: exact(null, { shown: "`null`: the kit's seed is dropped once the kit is acknowledged" }),
-    revision: exact(first("setup:pre:a.identity_attempts")[0].revision + 1, { shown: "the revision read before the acknowledgement, plus one" }),
+    kit_seed_sealed: exact(null, { shown: "`null`: the recovery code's secret is dropped once the code is saved" }),
+    revision: exact(first("setup:pre:a.identity_attempts")[0].revision + 1, { shown: "the revision read before the code was saved, plus one" }),
     updated_at: within(win(S, "ack")),
-  }, "as read before the kit's acknowledgement")];
+  }, "as read before the recovery code was saved")];
   M["setup:a.users"] = () => [{
     id: derived(aUser(), "the user A's passkey names"),
     email: nil(),
@@ -548,7 +548,7 @@ function models(S) {
     return [{
       id: anId("pid"),
       user_id: derived(aUser(), "A's passkey's person"),
-      identifier: derived(id, "the kit's identifier line"),
+      identifier: derived(id, "the identifier the recovery code names"),
       provenance: exact("local"),
       enrollment: exact("enrolled"),
       live_public_key: derived(genesisKey(genesisA, "live_key"), "the directory's genesis's live key"),
@@ -564,7 +564,7 @@ function models(S) {
       updated_at: within(win(S, "enroll")),
     }];
   };
-  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the kit's identifier"), within(win(S, "ack")), within(win(S, "ack")))];
+  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the identifier the recovery code names"), within(win(S, "ack")), within(win(S, "ack")))];
   M["setup:registry.identity_heads[a]"] = () => [head(id, genesisHash, within(win(S, "ack")))];
   M["setup:registry.policy_acceptances[a]"] = () => [policy(id, win(S, "ack"))];
   M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "ack")), nonce(id, win(S, "ack"))];
@@ -613,7 +613,7 @@ function models(S) {
   M["allow:b.server_allowlist"] = () => [{
     id: anId("door"),
     kind: exact("identifier"),
-    value: derived(id, "the identifier @proof names at the registry (A's kit)"),
+    value: derived(id, "the identifier @proof names at the registry (A's recovery code's)"),
     effect: exact("allow"),
     status: exact("allowed"),
     requested_by: nil(),
@@ -655,7 +655,7 @@ function models(S) {
     {
       id: anId("pid"),
       user_id: anId("usr"),
-      identifier: derived(id, "A's kit"),
+      identifier: derived(id, "the identifier A's recovery code names"),
       provenance: exact("remote"),
       enrollment: exact("enrolled"),
       live_public_key: exact(null, { shown: "`null`: B keeps no copy of a remote person's keys; it reads them at the directory" }),

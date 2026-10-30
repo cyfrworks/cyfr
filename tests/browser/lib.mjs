@@ -6,8 +6,8 @@
 // browsers launched to trust the run's authority, the attacker's receiver,
 // the signed-in shell, the harness's own pages and the checks made with
 // them, Chromium's virtual WebAuthn authenticator, the percentiles of a
-// measurement, and a proof's asks of its run.sh and the redaction of what
-// it writes.
+// measurement, the recovery code the system layer shows, and a proof's
+// asks of its run.sh and the redaction of what it writes.
 //
 // Every cell of a run is a home (tests/browser/harness.sh `browser_home`):
 // a public home of a `.test` hostname of its own, reached at https://HOST,
@@ -40,6 +40,7 @@ import { createServer as createFront } from "node:https";
 import { createSecureContext } from "node:tls";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
 import { connect } from "node:net";
 
@@ -802,9 +803,47 @@ export function instrumentDevice() {
   window.WebSocket = Watched;
 }
 
-// Acknowledge the recovery kit the system layer shows, and wait for the
-// layer to close.
-export async function saveKit(page) {
+// ---------------------------------------------------------------------------
+// The recovery code the system layer shows
+// ---------------------------------------------------------------------------
+
+// The system layer's own reader of a recovery code, imported the first time
+// a proof reads one: from the checkout beside this file, or, inside the
+// Playwright container, which runs a copy of tests/browser apart from the
+// checkout, from the console's assets it mounts at /assets (harness.sh
+// `playwright_run`).
+const READER = "js/system_layer/recovery_code.js";
+let reader = null;
+function recoveryCodeReader() {
+  if (!reader) {
+    const beside = new URL(`../../apps/cyfr/assets/${READER}`, import.meta.url);
+    reader = import(existsSync(beside) ? beside.href : pathToFileURL(`/assets/${READER}`).href);
+  }
+  return reader;
+}
+
+// The recovery code the system layer's prompt shows, read as the person
+// reads it, and decoded by that reader: `{code, identifier, secret}`, the
+// code as shown, the identifier it names and its 32-byte secret in
+// unpadded base64url. `secrets` is the proof's list of what it handled
+// and never writes (`redact`): the code joins it as soon as it is read,
+// before it is decoded, and its secret once decoded. A code that does not
+// read throws, naming its refusal and never the code.
+export async function readCode(page, secrets) {
+  const shown = '#system-layer-dialog [data-recovery-code]:not([hidden]) [data-test="recovery-code"]';
+  await page.waitForSelector(shown, { timeout: 60_000 });
+  const code = (await page.locator(shown).textContent()).trim();
+  secrets.push(code);
+  const { decodeRecoveryCode } = await recoveryCodeReader();
+  const read = await decodeRecoveryCode(code);
+  if (read.error) throw new Error(`the recovery code the system layer shows does not read: ${read.error}`);
+  secrets.push(read.secret);
+  return { code, identifier: read.identifier, secret: read.secret };
+}
+
+// Say the recovery code the system layer shows is saved ("I saved it"),
+// and wait for the layer to close.
+export async function saveCode(page) {
   await page.locator('#system-layer-dialog [data-test="recovery-ack"]').click();
   await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
 }
