@@ -221,6 +221,9 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 			"as the account 'Geo account': a weather.example account, sent only to " +
 			"https://*.weather.example port 8443, methods GET, POST, paths /v2. " +
 			"CYFR attaches the value and the component never holds it.",
+		"reagent:local.quotes uses Shared by Terry, a key shared with you, from reagent:local.weather: " +
+			"a market.example account, sent only to https://api.market.example, methods GET, paths /v1/. " +
+			"CYFR attaches the value and the component never holds it.",
 		"reagent:local.maps uses maps public key, provided by local, the app's public configuration, " +
 			"from reagent:local.weather for its geocode need: sent only to https://geo.maps.example, " +
 			"paths /geocode. The component reads the value itself.",
@@ -238,10 +241,10 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 		t.Errorf("no row of the vectors asks for a choice:\n%s", text)
 	}
 	// The attach claim is each attach-only row's, and no disclosed row's: the
-	// vectors hold two of each.
+	// vectors hold three attach-only rows and two disclosed ones.
 	attached := "CYFR attaches the value and the component never holds it."
-	if got := strings.Count(text, attached); got != 2 {
-		t.Errorf("%q said %d times, want once per attach-only row (2):\n%s", attached, got, text)
+	if got := strings.Count(text, attached); got != 3 {
+		t.Errorf("%q said %d times, want once per attach-only row (3):\n%s", attached, got, text)
 	}
 	if got := strings.Count(text, "The component never holds the value."); got != 0 {
 		t.Errorf("an attach-only row says the component never holds the value without "+
@@ -274,6 +277,7 @@ func TestRenderPreview_ListsWhatTheGrantRemoves(t *testing.T) {
 		"    Removes api_key default: weather-old\n",
 		"    Removes api_key account 'Work': weather-work\n",
 		"    Removes a binding of reagent:local.geo from reagent:local.weather account 'Old geo': ine_old_geo\n",
+		"    Removes a binding of reagent:local.geo from reagent:local.weather account 'Old share': Shared by Terry\n",
 		"    Removes a binding of reagent:local.maps from reagent:local.weather default: " +
 			"the key its 'old-maps' profile lent\n",
 	}
@@ -1588,6 +1592,8 @@ func expected(row map[string]any, field string, value any) []string {
 		return []string{"an entry of this athanor"}
 	case field == "source" && value == "instance":
 		return []string{"provided by this instance"}
+	case field == "source" && value == "share":
+		return []string{"a key shared with you"}
 	case field == "source" && value == "provided":
 		return []string{"provided by " + publisherOf(str(row["node"]), "")}
 	case field == "label":

@@ -2511,6 +2511,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp removed_entry(%{"name" => name}) when is_binary(name), do: name
   defp removed_entry(%{"entry_id" => id}), do: id
   defp removed_entry(%{"instance_entry_id" => id}), do: id
+  defp removed_entry(%{"share_id" => id}), do: id
   defp removed_entry(%{"via" => label}), do: "the key its '#{label}' profile lent"
 
   # Each value the ask names, and each the grant holds, with whether the
@@ -2617,10 +2618,12 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   # Whose credential a binding is: the athanor's own entry, an entry the
-  # instance offers, or the public configuration the app's publisher
-  # ships.
+  # instance offers, a key another person shares (its name already says
+  # whose, "Shared by" its owner), or the public configuration the app's
+  # publisher ships.
   defp source_words("own", _node), do: "an entry of this athanor"
   defp source_words("instance", _node), do: "provided by this instance"
+  defp source_words("share", _node), do: "a key shared with you"
 
   defp source_words("provided", node),
     do: "provided by #{publisher(node)}, the app's public configuration"

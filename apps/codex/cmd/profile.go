@@ -1705,6 +1705,8 @@ func removalLine(item map[string]any) string {
 		entry = str(item["entry_id"])
 	case str(item["instance_entry_id"]) != "":
 		entry = str(item["instance_entry_id"])
+	case str(item["share_id"]) != "":
+		entry = str(item["share_id"])
 	default:
 		entry = fmt.Sprintf("the key its '%s' profile lent", str(item["via"]))
 	}
@@ -1746,14 +1748,17 @@ func credentialSentence(node string, values map[string]any) string {
 }
 
 // sourceWords says whose credential a binding is: the athanor's own entry,
-// an entry the instance offers, or the public configuration the
-// publisher of node ships.
+// an entry the instance offers, a key another person shares (its name
+// already says whose: "Shared by" its owner), or the public configuration
+// the publisher of node ships.
 func sourceWords(source, node string) string {
 	switch source {
 	case "own":
 		return "an entry of this athanor"
 	case "instance":
 		return "provided by this instance"
+	case "share":
+		return "a key shared with you"
 	case "provided":
 		return "provided by " + publisherOf(node, "its publisher") + ", the app's public configuration"
 	default:
