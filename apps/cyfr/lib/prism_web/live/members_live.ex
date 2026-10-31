@@ -323,7 +323,7 @@ defmodule PrismWeb.MembersLive do
       put_flash(
         socket,
         :error,
-        "This CYFR does not reach cyfr.run, so it cannot make your name. Ask whoever runs this CYFR."
+        "This CYFR does not reach cyfr.run, so nobody can be found by name."
       )
 
   defp add_refused(socket, _name, reason),
