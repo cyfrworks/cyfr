@@ -115,8 +115,8 @@ func TestRenderWhoami_Unclaimed(t *testing.T) {
 	if !strings.Contains(out, "CYFR User: (no personal namespace claimed)") {
 		t.Errorf("expected unclaimed status on CYFR User line, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Run `cyfr registry claim <handle>` to claim your personal namespace.") {
-		t.Errorf("expected registry-claim hint on stderr, got:\n%s", out)
+	if !strings.Contains(out, "Your name is not finished yet: finish it in Settings.") {
+		t.Errorf("expected the unfinished-name hint on stderr, got:\n%s", out)
 	}
 }
 
@@ -137,8 +137,8 @@ func TestRenderWhoami_RegistryUnauthenticated(t *testing.T) {
 	if !strings.Contains(out, "CYFR User: (no cyfr.run push tokens)") {
 		t.Errorf("expected registry-unauthenticated status, got:\n%s", out)
 	}
-	if !strings.Contains(out, "`cyfr registry claim <handle>`") || !strings.Contains(out, "`cyfr registry sync`") {
-		t.Errorf("expected the claim and sync hint on stderr, got:\n%s", out)
+	if !strings.Contains(out, "Finish your name in Settings") || !strings.Contains(out, "`cyfr registry sync`") {
+		t.Errorf("expected the name and sync hint on stderr, got:\n%s", out)
 	}
 }
 

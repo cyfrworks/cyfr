@@ -12,13 +12,14 @@ defmodule PrismWeb.SettingsLive do
   that needs a fresh confirmation is asked through the page's system
   layer (`PrismWeb.SystemLayer.call/5`) and made again once confirmed.
 
-    * **Identity** — the identity card (`PrismWeb.IdentityCard`): the
-      person's identifier and the directory this CYFR pins, their handle,
-      the enrollment that claims it and its recovery code; beside it, for
-      an enrolled person, another recovery code and the live key's
-      rotation (`person.rotate`). Every recovery code renders only in the
-      system layer's recovery prompts (`PrismWeb.SystemLayer.Recovery`):
-      this page never holds a secret or a recovery code.
+    * **Your name** — the identity card (`PrismWeb.IdentityCard`): the
+      person's name and identifier, another recovery code, what losing it
+      costs, and, for a person whose page ended before they saved their
+      recovery code, the finish of their name and code; beside it, for a
+      named person, the live key's rotation (`person.rotate`). Every
+      recovery code renders only in the system layer's recovery prompts
+      (`PrismWeb.SystemLayer.Recovery`): this page never holds a secret or
+      a recovery code.
     * **Doors** — each linked door, unlinked through `person.unlink_door`;
       a GitHub or Google door linked through a device flow that answers a
       link ticket (`Sanctum.Auth.DeviceFlow`'s `poll_for_link/4`), and an
@@ -66,8 +67,7 @@ defmodule PrismWeb.SettingsLive do
   among them, are shown as the refusal's own sentence.
 
   The identity card's controls carry its own `data-test` names, and this
-  page's beside it `identity-add-kit`, `identity-rotate` and
-  `identity-rotation`; `doors`, `door` (with `data-key`), `door-unlink`,
+  page's beside it `identity-rotate` and `identity-rotation`; `doors`, `door` (with `data-key`), `door-unlink`,
   `door-link-github`, `door-link-google`, `door-link-oidcc`,
   `door-link-flow`, `door-link-code`, `door-link-cancel`; `passkeys`,
   `passkey` (with `data-id` and `data-state`), `passkey-register` and
@@ -84,7 +84,7 @@ defmodule PrismWeb.SettingsLive do
   require Logger
 
   alias PrismWeb.{IdentityCard, SystemLayer}
-  alias PrismWeb.SystemLayer.{Prompt, Recovery}
+  alias PrismWeb.SystemLayer.Prompt
   alias Sanctum.Auth.DeviceFlow
 
   @default_link_poll_s 5
@@ -134,6 +134,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:system_status, nil)
       |> assign(:log_stats, %{total: 0, errors: 0, avg_duration_ms: 0, error_rate: 0.0})
       |> assign(:door_entries, [])
+      |> assign(:door_names, %{})
       |> assign(:door_requests, [])
       |> assign(:door_value, "")
       |> assign(:door_note, "")
@@ -226,8 +227,6 @@ defmodule PrismWeb.SettingsLive do
   end
 
   # ---- identity --------------------------------------------------------------
-
-  def handle_event("add_kit", _params, socket), do: show_recovery(socket, &Recovery.holder/1)
 
   # A rotation in progress is finished under its own request id; otherwise
   # a new one begins.
@@ -405,9 +404,6 @@ defmodule PrismWeb.SettingsLive do
         send_update(IdentityCard, id: IdentityCard.id(), report: {prompt_id, outcome})
         {:noreply, load_identity(socket)}
 
-      recovery_prompt?(prompt_id) ->
-        {:noreply, socket |> load_identity() |> reload_card()}
-
       instance_prompt?(prompt_id) ->
         {:noreply, instance_prompt_ended(socket, report)}
 
@@ -565,11 +561,36 @@ defmodule PrismWeb.SettingsLive do
         _ -> []
       end
 
-    socket |> assign(:door_entries, entries) |> assign(:door_requests, requests)
+    socket
+    |> assign(:door_entries, entries)
+    |> assign(:door_names, names(entries))
+    |> assign(:door_requests, requests)
   end
 
   # A socket whose capability went since it read the door drops what it read.
-  defp load_door(socket), do: socket |> assign(:door_entries, []) |> assign(:door_requests, [])
+  defp load_door(socket),
+    do: assign(socket, door_entries: [], door_names: %{}, door_requests: [])
+
+  # The name each person an entry names holds here, by their id; an entry
+  # made from a name shows its label instead.
+  defp names(entries) do
+    for %{kind: "person", value: user_id} = entry <- entries,
+        is_nil(entry[:label]),
+        {:ok, %{namespace: name}} when is_binary(name) <- [Sanctum.Tenancy.Users.get(user_id)],
+        into: %{},
+        do: {user_id, name}
+  end
+
+  # An allowlist entry's name: the person's name here, everyone for `*`,
+  # or, for an entry nothing here names, where it came from.
+  defp entry_name(%{kind: "wildcard"}, _names), do: "everyone"
+
+  defp entry_name(%{value: value}, names) do
+    case Map.fetch(names, value) do
+      {:ok, name} -> "@" <> name
+      :error -> "added from the command line"
+    end
+  end
 
   defp setting_call(socket, tool, args, ok_message) do
     args = if is_nil(args["revision"]), do: Map.delete(args, "revision"), else: args
@@ -1132,23 +1153,6 @@ defmodule PrismWeb.SettingsLive do
     socket
   end
 
-  # A recovery prompt, under an id of this page's own, in the page's layer.
-  defp show_recovery(socket, build) do
-    prompt_id = "recovery-" <> Integer.to_string(System.unique_integer([:positive]))
-
-    case build.(prompt_id) do
-      {:ok, prompt} ->
-        SystemLayer.show(SystemLayer.layer_id(), prompt)
-        {:noreply, socket}
-
-      {:error, :invalid_prompt} ->
-        {:noreply, put_flash(socket, :error, "That cannot be shown here.")}
-    end
-  end
-
-  defp recovery_prompt?("recovery-" <> _rest), do: true
-  defp recovery_prompt?(_prompt_id), do: false
-
   defp new_request_id(prefix),
     do: prefix <> "_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
 
@@ -1404,15 +1408,10 @@ defmodule PrismWeb.SettingsLive do
 
       <div :if={!@loading} class="space-y-6">
         <.card>
-          <.live_component
-            module={IdentityCard}
-            id={IdentityCard.id()}
-            context={@context}
-            offer="settings"
-          >
-            <:enrolled :let={status}>
-              <.enrolled_actions status={status} />
-            </:enrolled>
+          <.live_component module={IdentityCard} id={IdentityCard.id()} context={@context}>
+            <:named :let={status}>
+              <.rotation status={status} />
+            </:named>
           </.live_component>
         </.card>
 
@@ -1491,99 +1490,101 @@ defmodule PrismWeb.SettingsLive do
 
         <%!-- The door: who may sign in (platform admins) --%>
         <.card :if={@context.platform_admin}>
-          <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
-          <p class="text-xs text-gray-500 mb-4">
-            Who may sign in here. A person made here signs in unless denied. A person
-            whose keys another CYFR holds signs in when <code>*</code>
-            or an allow names their identifier (<code>per_…</code>). A deny names a person
-            (<code>usr_…</code>) or an identifier, is sticky and ejects the person. Allow
-            or deny someone by their handle (<code>@name</code>) and the entry keeps the
-            identifier the handle names now, with the handle shown beside it.
-          </p>
+          <section id="allowlist">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
+            <p class="text-xs text-gray-500 mb-4">
+              Who may sign in here. A person made here signs in unless denied. A person
+              whose keys another CYFR holds signs in when <code>*</code>
+              or an allow names them. Allow or deny someone by their name (<code>@name</code>):
+              the entry keeps the identifier that name stands for now. A deny is sticky and
+              ejects the person.
+            </p>
 
-          <div :if={@door_requests != []} class="mb-4">
-            <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
-            <.table id="door-requests" rows={@door_requests}>
-              <:col :let={r} label="Identifier">{r.value}</:col>
-              <:col :let={r} label="Asked by">{r.requested_by || "-"}</:col>
-              <:col :let={r} label="Actions">
-                <div class="flex gap-2">
-                  <.button
-                    variant="ghost"
-                    phx-click="door_resolve"
-                    phx-value-id={r.id}
-                    phx-value-decision="allow"
-                  >
-                    Allow
-                  </.button>
-                  <.button
-                    variant="ghost"
-                    phx-click="door_resolve"
-                    phx-value-id={r.id}
-                    phx-value-decision="reject"
-                  >
-                    Reject
-                  </.button>
-                </div>
+            <div :if={@door_requests != []} class="mb-4">
+              <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
+              <.table id="door-requests" rows={@door_requests}>
+                <:col :let={r} label="Identifier">{r.value}</:col>
+                <:col :let={r} label="Asked by">{r.requested_by || "-"}</:col>
+                <:col :let={r} label="Actions">
+                  <div class="flex gap-2">
+                    <.button
+                      variant="ghost"
+                      phx-click="door_resolve"
+                      phx-value-id={r.id}
+                      phx-value-decision="allow"
+                    >
+                      Allow
+                    </.button>
+                    <.button
+                      variant="ghost"
+                      phx-click="door_resolve"
+                      phx-value-id={r.id}
+                      phx-value-decision="reject"
+                    >
+                      Reject
+                    </.button>
+                  </div>
+                </:col>
+              </.table>
+            </div>
+
+            <div :if={@door_entries == []} class="py-4">
+              <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
+            </div>
+            <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
+              <:col :let={e} label="Entry">{e.value}</:col>
+              <:col :let={e} label="Name">
+                <span :if={e[:label]} data-test="door-entry-label">@{e[:label]}</span>
+                <span :if={is_nil(e[:label])} class="text-gray-400" data-test="door-entry-name">
+                  {entry_name(e, @door_names)}
+                </span>
+              </:col>
+              <:col :let={e} label="Kind">{e.kind}</:col>
+              <:col :let={e} label="Effect">
+                <.badge color={if e.effect == "allow", do: "green", else: "red"}>{e.effect}</.badge>
+              </:col>
+              <:col :let={e} label="Note">{e.note || "-"}</:col>
+              <:col :let={e} label="Actions">
+                <.button variant="ghost" phx-click="door_remove" phx-value-id={e.id}>
+                  Remove
+                </.button>
               </:col>
             </.table>
-          </div>
 
-          <div :if={@door_entries == []} class="py-4">
-            <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
-          </div>
-          <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
-            <:col :let={e} label="Entry">
-              {e.value}
-              <span :if={e[:label]} class="text-gray-400 ml-1" data-test="door-entry-label">
-                @{e[:label]}
-              </span>
-            </:col>
-            <:col :let={e} label="Kind">{e.kind}</:col>
-            <:col :let={e} label="Effect">
-              <.badge color={if e.effect == "allow", do: "green", else: "red"}>{e.effect}</.badge>
-            </:col>
-            <:col :let={e} label="Note">{e.note || "-"}</:col>
-            <:col :let={e} label="Actions">
-              <.button variant="ghost" phx-click="door_remove" phx-value-id={e.id}>
-                Remove
-              </.button>
-            </:col>
-          </.table>
-
-          <form id="door-entry-form" phx-change="door_form_changed" class="mt-4 space-y-2">
-            <div class="flex gap-2 items-end">
-              <div class="flex-1">
-                <.input
-                  name="value"
-                  value={@door_value}
-                  required
-                  placeholder="per_…, @handle, usr_…, or *"
-                />
+            <form id="door-entry-form" phx-change="door_form_changed" class="mt-4 space-y-2">
+              <div class="flex gap-2 items-end">
+                <div class="flex-1">
+                  <.input
+                    name="value"
+                    value={@door_value}
+                    required
+                    placeholder="@name, or * for everyone"
+                  />
+                </div>
+                <div class="flex-1">
+                  <.input name="note" value={@door_note} placeholder="note (optional)" />
+                </div>
+                <.button
+                  type="button"
+                  phx-click="door_allow"
+                  phx-value-door={@door_value}
+                  phx-value-note={@door_note}
+                >
+                  Allow
+                </.button>
+                <.button
+                  type="button"
+                  variant="ghost"
+                  phx-click="door_deny"
+                  phx-value-door={@door_value}
+                  phx-value-note={@door_note}
+                  data-confirm="Deny this person? Their sessions and keys are revoked."
+                >
+                  Deny
+                </.button>
               </div>
-              <div class="flex-1">
-                <.input name="note" value={@door_note} placeholder="note (optional)" />
-              </div>
-              <.button
-                type="button"
-                phx-click="door_allow"
-                phx-value-door={@door_value}
-                phx-value-note={@door_note}
-              >
-                Allow
-              </.button>
-              <.button
-                type="button"
-                variant="ghost"
-                phx-click="door_deny"
-                phx-value-door={@door_value}
-                phx-value-note={@door_note}
-                data-confirm="Deny this person? Their sessions and keys are revoked."
-              >
-                Deny
-              </.button>
-            </div>
-          </form>
+            </form>
+          </section>
         </.card>
 
         <%!-- The platform settings (platform admins) --%>
@@ -1718,26 +1719,14 @@ defmodule PrismWeb.SettingsLive do
 
   attr :status, :map, required: true
 
-  # Beside the identity card, for an enrolled person: another recovery code
-  # and the live key's rotation.
-  defp enrolled_actions(assigns) do
+  # Beside the identity card, for a named person: the live key's rotation.
+  defp rotation(assigns) do
     ~H"""
     <div class="space-y-2">
-      <p class="text-sm text-gray-300">
-        Your recovery code brings your identity back on a new CYFR. Add a second before you rely on one: if every code is lost, nothing can add one.
-      </p>
       <p :if={@status.rotation} class="text-sm" data-test="identity-rotation">
         A rotation of your live key stands at {@status.rotation.phase}.
       </p>
       <div class="flex flex-wrap gap-2">
-        <.button
-          :if={not Enum.any?(@status.kits, &(&1.kind == "holder"))}
-          variant="ghost"
-          phx-click="add_kit"
-          data-test="identity-add-kit"
-        >
-          Add another recovery code
-        </.button>
         <.button variant="ghost" phx-click="rotate" data-test="identity-rotate">
           {if @status.rotation, do: "Finish the rotation", else: "Rotate the live key"}
         </.button>

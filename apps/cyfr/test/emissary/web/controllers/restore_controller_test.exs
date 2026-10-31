@@ -609,7 +609,10 @@ defmodule Emissary.Web.RestoreControllerTest do
       attempt!(directory, identity(directory), ["submitted"])
 
       assert {:error, :restore_reserved} =
-               Sanctum.Newcomer.admit({:setup, token}, {:command_line, "laptop"})
+               Sanctum.Newcomer.admit(
+                 {:setup, token},
+                 {:command_line, "laptop", Sanctum.Test.Newcomers.identity()}
+               )
 
       assert Arca.Repo.aggregate(User, :count) == 0
     end

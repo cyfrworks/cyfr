@@ -8,7 +8,8 @@ defmodule Sanctum.InvitationsTest do
 
   The platform administrator issues one naming no athanor; anyone issues
   one naming a group athanor they hold a seat in, the administrator
-  included, and to anyone else that athanor answers as a missing one. The
+  included, and to anyone else that athanor answers as a missing one. One
+  may offer its newcomer a name, which the invitation page reads. The
   code is given once and only its hash is stored. The issuer or the
   administrator revokes; the administrator lists every invitation and
   anyone else their own. `lookup/1` names who invited and to which
@@ -80,7 +81,7 @@ defmodule Sanctum.InvitationsTest do
       Arca.Repo.update_all(from(i in Invitation, where: i.id == ^id), set: [expires_at: past])
   end
 
-  describe "create/2" do
+  describe "create/3" do
     test "a member issues one for their group: the code is given once and only its hash is stored" do
       alice = person!()
       group = group!(alice)
@@ -117,6 +118,27 @@ defmodule Sanctum.InvitationsTest do
       refute Map.has_key?(invitation, :athanor_id)
       refute Map.has_key?(invitation, :athanor_name)
       assert row(invitation.id).athanor_id == nil
+    end
+
+    test "offers the newcomer a name the invitation page reads, and refuses one that is no name" do
+      alice = person!()
+      group = group!(alice)
+
+      assert {:ok, %{invitation: invitation, code: code}} =
+               Invitations.create(ctx(alice), group.id, "mira")
+
+      assert row(invitation.id).name == "mira"
+      assert {:ok, %{name: "mira"}} = Invitations.lookup(code)
+
+      before = invitations()
+
+      for name <- ["Not A Name", "", "-mira", String.duplicate("a", 40)] do
+        assert {:error, {:invalid_argument, _}} =
+                 Invitations.create(ctx(alice), group.id, name),
+               inspect(name)
+      end
+
+      assert invitations() == before
     end
 
     test "a member cannot issue one naming no athanor, and a non-member cannot issue for a group" do

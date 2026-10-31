@@ -14,10 +14,15 @@
 #       proof", recorded on their row, the membership read, the session):
 #       everything but the identity provider, which the proofs cannot
 #       reach. An installation's first person is made by the setup
-#       admission (`Sanctum.Newcomer.admit/2`, under a setup token the
-#       fixture puts for the call and takes away after), and so is its
-#       platform administrator; the command-line session setup mints is
-#       ended at once. Every later person is made with the rows an open
+#       admission (`Sanctum.Newcomer.admit/2`, with `{:command_line,
+#       "release-proof", identity}` under a setup token the fixture puts
+#       for the call and takes away after, the identity drawn as the
+#       command line draws it, named `release-proof`), and so is its
+#       platform administrator. Their enrollment is then finished through
+#       Arca with no network: accepted as the directory's answer is
+#       recorded, its recovery code saved and its name recorded on their
+#       row, so every proof gets a finished person. The command-line
+#       session setup mints is ended at once. Every later person is made with the rows an open
 #       admission writes (`Arca.Users.mint/4` under `open`, its caps
 #       counted before the person's row, their keys, their athanor), once
 #       the door's `*` admits newcomers, which the proof opens as an administrator does (`door.allow`); a sign-in
@@ -104,15 +109,22 @@ fn args ->
   end
 
   # The setup admission (`Sanctum.Newcomer.admit/2`) under a setup token
-  # put for this call alone: the installation's configured token, if it
-  # has one, is put back however the admission ends.
+  # put for this call alone, with the identity a command line draws: the
+  # installation's configured token, if it has one, is put back however
+  # the admission ends.
   setup = fn machine ->
     token = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
     configured = Application.fetch_env(:sanctum, :setup_token)
     Application.put_env(:sanctum, :setup_token, token)
 
+    identity = %{
+      name: "release-proof",
+      recovery_secret: :crypto.strong_rand_bytes(32),
+      request_id: "req_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+    }
+
     try do
-      Sanctum.Newcomer.admit({:setup, token}, {:command_line, machine})
+      Sanctum.Newcomer.admit({:setup, token}, {:command_line, machine, identity})
     after
       case configured do
         {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
@@ -121,12 +133,30 @@ fn args ->
     end
   end
 
+  # The enrollment the setup admission opened, finished with no network:
+  # accepted as the directory's answer is recorded, its recovery code
+  # saved and its name recorded on the person's row.
+  finished = fn user_id, %{attempt_id: attempt_id, name: name} ->
+    system = Prima.Actor.system()
+    {:ok, _} = Arca.IdentityAttempts.advance(system, attempt_id, "staged", "submitted")
+
+    {:ok, _} =
+      Arca.IdentityAttempts.advance(system, attempt_id, "submitted", "accepted", %{
+        outcome: "accepted"
+      })
+
+    {:ok, %{phase: "completed"}} = Arca.IdentityAttempts.acknowledge_kit(system, attempt_id)
+    {:ok, _} = Arca.Users.set_namespace(system, user_id, name)
+    :ok
+  end
+
   # The person the identity `key` is linked to, made the first time (the
   # `person` command above). The setup admission makes the installation's
   # first person and refuses every later one (`:setup_closed`), which an
   # open admission's rows then make, past a door whose `*` admits.
   admitted = fn key ->
     system = Prima.Actor.system()
+
     {:ok, %{provider: provider, issuer: issuer, subject: subject}} =
       Sanctum.Auth.Identity.parse(key)
 
@@ -138,8 +168,9 @@ fn args ->
 
       {:error, :not_found} ->
         case setup.("release-proof") do
-          {:ok, %{person: person, readmitted: false, session_token: token}} ->
+          {:ok, %{person: person, readmitted: false, session_token: token, recovery: recovery}} ->
             :ok = Sanctum.Session.destroy(token)
+            :ok = finished.(person.id, recovery)
             {:ok, %{linked: true}} = Arca.Users.link_identity(system, person.id, link)
             :ok
 

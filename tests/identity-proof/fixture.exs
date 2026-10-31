@@ -11,9 +11,10 @@
 #   setup
 #       The installation's setup admission (`Sanctum.Newcomer.admit/2`),
 #       the one admission besides a restore that makes a first person,
-#       under a setup token put for the call and taken away after:
-#       `{admitted: user_id}` or `{refused: reason}`. On a restore-reserved
-#       installation it is refused.
+#       under a setup token put for the call and taken away after, with
+#       the identity a command line draws, named `identity-proof`, which
+#       opens their enrollment: `{admitted: user_id}` or `{refused:
+#       reason}`. On a restore-reserved installation it is refused.
 #
 #   genesis USER_ID
 #       The person's identifier and the genesis their identity rests on
@@ -95,9 +96,15 @@ fn args ->
       configured = Application.fetch_env(:sanctum, :setup_token)
       Application.put_env(:sanctum, :setup_token, token)
 
+      identity = %{
+        name: "identity-proof",
+        recovery_secret: :crypto.strong_rand_bytes(32),
+        request_id: "req_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      }
+
       admitted =
         try do
-          Sanctum.Newcomer.admit({:setup, token}, {:command_line, "identity-proof"})
+          Sanctum.Newcomer.admit({:setup, token}, {:command_line, "identity-proof", identity})
         after
           case configured do
             {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)

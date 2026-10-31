@@ -34,7 +34,7 @@ apps/cyfr/test/sanctum/provider_vault_profile_test.exs	1	pending
 apps/cyfr/test/sanctum/providers/athanor_member_door_tools_test.exs	2	pending
 apps/cyfr/test/sanctum/providers/cli_sign_in_test.exs	1	pending
 apps/cyfr/test/sanctum/providers/confirmation_test.exs	11	pending
-apps/cyfr/test/sanctum/providers/person_test.exs	3	pending
+apps/cyfr/test/sanctum/providers/person_test.exs	2	pending
 apps/cyfr/test/sanctum/providers/profile_grants_test.exs	1	pending
 apps/cyfr/test/sanctum/providers/session_setup_test.exs	2	pending
 apps/cyfr/test/sanctum/provisioning_closure_test.exs	4	pending

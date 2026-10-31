@@ -8,12 +8,15 @@
 # the person's home a.test, the relying home b.test, and three empty
 # installations, c.test, c2.test and c3.test, each configured for one
 # restore under its own token — with the directory reached by the cells
-# through a front of this proof's own (front.sh, cells.sh). proof.mjs
-# drives Chromium through enrollment, two recovery codes, a rotation, the
-# restores and what each home sees; this script answers its asks for the
-# homes' part (`ask-N.json`, answered `answer-N.json`): cells stopped,
-# copied, killed and started again, the directory broken on purpose,
-# restores posted at a phase, and what a home holds.
+# through a front of this proof's own (front.sh, cells.sh), and the
+# cyfr.run stand-in (tests/registry-stand-in/standin.py) as every home's
+# registry, naming dir.test as the directory of every name it holds.
+# proof.mjs drives Chromium through A's setup, its two screens and their
+# recovery code, a second recovery code, a rotation, the restores and what
+# each home sees; this script answers its asks for the homes' part
+# (`ask-N.json`, answered `answer-N.json`): cells stopped, copied, killed
+# and started again, the directory broken on purpose, restores posted at a
+# phase, and what a home and the stand-in hold.
 #
 # Usage: tests/identity-proof/run.sh
 # Writes identity-proof.json and identity-proof.md into PROOF_OUT (default:
@@ -24,9 +27,9 @@
 # on C, in seconds.
 #
 # Everything it starts is removed when it ends, whether it succeeds or
-# fails: the cells' servers, the directory's front container, the
-# Playwright container, and the scratch directory with the run's authority
-# key, every token and every recovery code.
+# fails: the cells' servers, the stand-in, the directory's front
+# container, the Playwright container, and the scratch directory with the
+# run's authority key, every token and every recovery code.
 set -euo pipefail
 
 ADAPTER=sqlite
@@ -48,6 +51,11 @@ SLACK=6
 PROOF_PID=""
 SECRETS="$WORK/secrets"
 mkdir -p -m 700 "$SECRETS"
+# The cyfr.run stand-in: a loopback address of the identity proofs' block
+# (the fronts hold 127.77.0.1 to .3) and the port it picks free.
+STANDIN_ADDRESS=127.77.0.4
+STANDIN_PORT=""
+STANDIN_PID=""
 
 # The scratch directory holds the run's authority key, the tokens and the
 # recovery codes, so it goes even when a stop fails; the asks and answers
@@ -63,6 +71,7 @@ cleanup() {
   identity_front_stop
   jobs -p | xargs -r kill 2>/dev/null || true
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
+  standin_stop
   rm -f "$OUT"/ask-* "$OUT"/answer-* 2>/dev/null || true
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -75,6 +84,39 @@ trap cleanup EXIT
 
 json() { python3 -c "import json, sys; print(json.dumps($1))"; }
 now() { date +%s; }
+
+# The stand-in on STANDIN_ADDRESS, at the port it picks and writes to its
+# ready file, left in STANDIN_PORT, answering every name with dir.test as
+# its directory: its state in `$WORK/cyfr-run.json` and its log in
+# `$WORK/cyfr-run.log`. A stand-in that ends, or writes no port within
+# 30 s, fails the run.
+standin_start() {
+  local ready="$WORK/cyfr-run.ready" closes=$((SECONDS + 30))
+  python3 -I "$ROOT/tests/registry-stand-in/standin.py" --address "$STANDIN_ADDRESS" --port 0 \
+    --state "$WORK/cyfr-run.json" --ready-file "$ready" --directory https://dir.test \
+    </dev/null >"$WORK/cyfr-run.log" 2>&1 &
+  STANDIN_PID=$!
+  until [ -s "$ready" ]; do
+    case "$(ps -o stat= -p "$STANDIN_PID" 2>/dev/null)" in
+      '' | Z*)
+        tail -n 20 "$WORK/cyfr-run.log" >&2 || true
+        fail "the cyfr.run stand-in ended before it served on $STANDIN_ADDRESS"
+        ;;
+    esac
+    [ "$SECONDS" -lt "$closes" ] || fail "the cyfr.run stand-in wrote no port within 30 s"
+    sleep 0.1
+  done
+  STANDIN_PORT="$(tr -d '\n' <"$ready")"
+  [[ "$STANDIN_PORT" =~ ^[0-9]+$ ]] || fail "the cyfr.run stand-in wrote no port: '$STANDIN_PORT'"
+}
+
+# The stand-in stopped by SIGTERM, which it takes, and waited for.
+standin_stop() {
+  [ -n "$STANDIN_PID" ] || return 0
+  kill "$STANDIN_PID" 2>/dev/null || true
+  wait "$STANDIN_PID" 2>/dev/null || true
+  STANDIN_PID=""
+}
 
 release_build
 
@@ -98,6 +140,8 @@ cell_pick_port THIEF_PORT
 for cell in c c2 c3; do
   openssl rand -hex 32 | tr -d '\n' >"$SECRETS/token-$cell"
 done
+# A's setup token, the one A's first person is set up under.
+openssl rand -hex 32 | tr -d '\n' >"$SECRETS/token-a"
 
 identity_directory dir.test 127.77.0.1
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
@@ -108,19 +152,22 @@ identity_reaches_directory "$C" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/tok
 identity_reaches_directory "$C2" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c2")"
 identity_reaches_directory "$C3" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c3")"
 
+step "the cyfr.run stand-in, every home's registry"
+standin_start
+echo "the stand-in answers at http://$STANDIN_ADDRESS:$STANDIN_PORT"
+for cell in "$A" "$B" "$C" "$C2" "$C3"; do
+  identity_env "$cell" CYFR_REGISTRY_URL "$STANDIN_ADDRESS:$STANDIN_PORT"
+  identity_env "$cell" CYFR_PRIVATE_EGRESS_TARGETS "$(cell_value "$cell" CYFR_PRIVATE_EGRESS_TARGETS),$STANDIN_ADDRESS"
+done
+identity_env "$A" CYFR_SETUP_TOKEN "$(cat "$SECRETS/token-a")"
+
 step "starting the directory, its front, and the homes"
 server_start "$DIR"
 identity_front_start "$DIR"
 for cell in "$A" "$B" "$C" "$C2" "$C3"; do identity_start "$cell"; done
 
-step "the person at a.test, signed in by the release fixture"
-person="$(server_fixture "$A" person operator@example.com identity-proof)"
-[ -n "$person" ] || fail "the fixture signed nobody in"
-USER_A="$(field "$person" user_id)"
-SEGMENT_A="$(field "$person" segment)"
-COOKIE_A="$(browser_cookie "$A" "$(field "$person" token)")"
-browser_picker_layout "$A" "$(field "$person" token)"
-
+# A's person, whom the browser sets up (`a_person`).
+USER_A=""
 IDENTIFIER=""
 MOVED_AT=0
 B_VERIFIED_AT=0
@@ -185,8 +232,41 @@ answer_ask() {
   local ask="$1" op code started observed target
   op="$(asked "$ask" op)"
   case "$op" in
+    a_person)
+      # A's one person, whom the browser set up, and their athanor's route
+      # segment.
+      people="$(identity_fixture "$A" people)"
+      USER_A="$(field "$people" people 0 user_id)"
+      ANSWER="$(python3 - "$people" "$(identity_fixture "$A" segment "$USER_A")" <<'PY'
+import json, sys
+people, segment = (json.loads(a) for a in sys.argv[1:])
+first = people["people"][0]
+print(json.dumps({"people": len(people["people"]), "user_id": first["user_id"], "admission": first["admission"],
+                  "segment": segment["segment"]}))
+PY
+)"
+      ;;
     a_head)
       ANSWER="$(identity_fixture "$A" head "$USER_A")"
+      ;;
+    handle_answer)
+      # The stand-in's answer for the name, who its state says holds it,
+      # and the directory A's genesis and enrollment attempt name.
+      name="$(asked "$ask" name)"
+      status="$(curl -sS -m 10 -o "$WORK/handle.json" -w '%{http_code}' \
+        "http://$STANDIN_ADDRESS:$STANDIN_PORT/v1/handles/$name")" || status=0
+      ANSWER="$(python3 - "$status" "$WORK/handle.json" "$(identity_fixture "$A" genesis "$USER_A")" "$WORK/cyfr-run.json" "$name" <<'PY'
+import json, sys
+status, body, genesis, state, name = sys.argv[1:]
+try:
+    answer = json.load(open(body))
+except Exception:
+    answer = None
+genesis = json.loads(genesis)
+print(json.dumps({"status": int(status), "answer": answer, "held_by": json.load(open(state))["names"].get(name),
+                  "genesis_directory": genesis["genesis"].get("directory"), "attempt_directory": genesis["directory_url"]}))
+PY
+)"
       ;;
     b_resolve)
       genesis="$(identity_fixture "$A" genesis "$USER_A")"
@@ -399,7 +479,7 @@ PY
 step "the identity proof in Chromium, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run identity-proof proof.mjs /authority/homes.json "$SEGMENT_A" "$COOKIE_A" /out &
+playwright_run identity-proof proof.mjs /authority/homes.json /out &
 PROOF_PID=$!
 proof_await answer_ask
 

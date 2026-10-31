@@ -408,8 +408,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
         Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Person Sanctum.Provisioning
-        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn Sanctum.TinctureAuth
-        Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
+        Sanctum.Recovery Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
+        Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
@@ -422,7 +422,11 @@ defmodule Cyfr.Boundaries do
           "request a person makes at the registry is signed by their live key " <>
           "(`Sanctum.Person.sign_registry_request/3`), and what its answer writes is " <>
           "written only while the caller still stands " <>
-          "(`Sanctum.Caller.revalidate_session/1`); " <>
+          "(`Sanctum.Caller.revalidate_session/1`). " <>
+          "`Sanctum.Recovery` is `registry.register`'s drive of the enrollment a " <>
+          "person's admission opened: registering it at the directory (`advance/1`) " <>
+          "and replacing the name it wants before the registry's claim " <>
+          "(`rename/2`), each decided by Sanctum on the caller's own attempt; " <>
           "removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
@@ -611,7 +615,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Newcomer` is the setup page's admission of the installation's first " <>
           "person: whether the setup link's token opens setup now (`setup_open/1`), " <>
           "before any ceremony, and the setup admission its passkey brings (`admit/2`), " <>
-          "which decides in its own transaction; it is also the sign-in page's open " <>
+          "with the new person's name, recovery secret and request id parsed from the " <>
+          "page's fields (`identity/1`), which decides in its own transaction; it is " <>
+          "also the sign-in page's open " <>
           "admission, offered while the door's `*` admits " <>
           "(`Sanctum.Door.Store.wildcard/0`, which only shows the offer: the admission " <>
           "asks the door again), and the invitation page's admission of the person an " <>
@@ -871,7 +877,8 @@ defmodule Cyfr.Boundaries do
       reason:
         "the console reads components, agents, path grammars, the projection epoch " <>
           "and the registry's legal pages through the component domain's root facade " <>
-          "(the claim page claims through the gate, `registry.claim_personal`), and a " <>
+          "(the pages that admit a person register them through the gate, " <>
+          "`registry.register`), and a " <>
           "registry refusal reaches it as a `%Prima.Refusal{}`; " <>
           "the publisher and version vocabularies it reads are Prima's. " <>
           "Boundary's exports are global, and `Compendium` exports its two paths, " <>
@@ -1736,24 +1743,6 @@ defmodule Cyfr.Boundaries do
           "completes it, so a ticket cannot be replayed: server-local memory, never a row."
     },
     %{
-      from: "PrismWeb.SetupLive",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the setup page leaves the passkey sign-in's single-use ticket, bound to the " <>
-          "browser, for the callback that completes it, for a bounded time: server-local " <>
-          "memory, never a row."
-    },
-    %{
-      from: "PrismWeb.InviteLive",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the invitation page leaves the passkey sign-in's single-use ticket, bound to the " <>
-          "browser, for the callback that completes it, for a bounded time: server-local " <>
-          "memory, never a row."
-    },
-    %{
       from: "PrismWeb.LoginLive",
       into: "Arca.Cache",
       functions: [:put],
@@ -1761,6 +1750,15 @@ defmodule Cyfr.Boundaries do
         "the login page leaves a single-use ticket, bound to the browser, for the " <>
           "callback that completes the sign-in, for a bounded time: server-local memory, " <>
           "never a row."
+    },
+    %{
+      from: "PrismWeb.AdmissionCard",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the page that admitted a newcomer leaves the passkey sign-in's single-use ticket, " <>
+          "bound to the browser, for the callback that completes it, once the person says " <>
+          "their recovery code is saved, for a bounded time: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.ModelCatalog",
@@ -2033,7 +2031,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Invitations" => [lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
-    "Sanctum.Newcomer" => [admit: 2, setup_open: 1],
+    "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
     "Sanctum.Passkeys" => [newcomer_options: 0, sign_in: 2, sign_in_challenge: 0],
@@ -2062,10 +2060,12 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Proxy" => [install!: 1],
     "Sanctum.Recovery" => [
+      advance: 1,
       checklist: 1,
       kit_challenge: 1,
       kit_proof: 1,
       kit_reenable: 4,
+      rename: 2,
       reproof: 2,
       restore: 2,
       restore_challenge: 1

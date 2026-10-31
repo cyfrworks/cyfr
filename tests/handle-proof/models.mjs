@@ -300,6 +300,8 @@ export const REGISTRY = "registry.test";
 // `registry.` before CYFR_REGISTRY_URL (`Compendium.RegistryHost`).
 export const OCI = `registry.${REGISTRY}`;
 export const HANDLE = "proof";
+// The name B's administrator types on B's first screen.
+export const ADMIN_HANDLE = "proof-b";
 // This fresh proof database mints IDs from 1; the largest exact JS integer
 // remains a valid PostgreSQL BIGINT without colliding with another proof row.
 const DIRECTORY_ID_TAMPER = Number.MAX_SAFE_INTEGER;
@@ -444,7 +446,7 @@ function models(S) {
   }];
 
   // setup, before the recovery code is saved: the accepted enrollment, the
-  // directory's entry, and nothing of the person at the registry yet.
+  // directory's entry, and the name claimed at the registry.
   M["setup:registry.directory.identity_log_entries"] = () => [logEntry(id, genesisA, win(S, "enroll"))];
   M["setup:pre:a.identity_attempts"] = () => {
     const pre = first("setup:pre:a.identity_attempts")[0];
@@ -455,6 +457,7 @@ function models(S) {
       user_id: derived(aUser(), "A's passkey's person"),
       identifier: derived(id, "the identifier the recovery code names, as the browser showed it"),
       directory_url: exact(DIRECTORY),
+      name: exact(HANDLE, { shown: "`\"proof\"`: the name typed on setup's first screen" }),
       phase: exact("accepted"),
       genesis: derived(storedForm(fromB64(genesisA)), "the directory's stored genesis"),
       entry: nil(),
@@ -477,9 +480,6 @@ function models(S) {
       updated_at: within(win(S, "enroll")),
     }];
   };
-  M["setup:pre:registry.namespaces[proof]"] = () => [];
-  M["setup:pre:registry.policy_acceptances[a]"] = () => [];
-  M["setup:pre:registry.request_nonces[a]"] = () => [];
 
   // setup, after it: the transition, and the claim.
   M["setup:a.identity_attempts"] = () => [held(first("setup:pre:a.identity_attempts")[0], {
@@ -564,10 +564,10 @@ function models(S) {
       updated_at: within(win(S, "enroll")),
     }];
   };
-  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the identifier the recovery code names"), within(win(S, "ack")), within(win(S, "ack")))];
-  M["setup:registry.identity_heads[a]"] = () => [head(id, genesisHash, within(win(S, "ack")))];
-  M["setup:registry.policy_acceptances[a]"] = () => [policy(id, win(S, "ack"))];
-  M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "ack")), nonce(id, win(S, "ack"))];
+  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the identifier the recovery code names"), within(win(S, "enroll")), within(win(S, "enroll")))];
+  M["setup:registry.identity_heads[a]"] = () => [head(id, genesisHash, within(win(S, "enroll")))];
+  M["setup:registry.policy_acceptances[a]"] = () => [policy(id, win(S, "enroll"))];
+  M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "enroll")), nonce(id, win(S, "enroll"))];
   M["setup:handle_answer[proof]"] = () => handleAnswer(HANDLE, id);
 
   // The nonces read before, each held, and `added` new ones.
@@ -594,7 +594,7 @@ function models(S) {
   M["allow:b.users"] = () => [{
     ...M["setup:a.users"]()[0],
     id: derived(bAdmin(), "the user B's administrator's passkey names"),
-    namespace: nil(),
+    namespace: exact(ADMIN_HANDLE, { shown: "`\"proof-b\"`: the name typed on B's first screen" }),
     personal_athanor_id: derived(first("allow:b.athanors")[0]?.id, "B's one athanor"),
     first_seen_at: within(win(S, "admin")),
     last_seen_at: within(until(S, "admin", "allow:b.users")),
@@ -625,8 +625,9 @@ function models(S) {
   }];
 
   // sign_in: B's people, identities, sessions, athanors and seats. The
-  // administrator's keys exist from setup though it never enrolled: each
-  // public key is the public half of its sealed key, opened in B.
+  // administrator's keys are minted at setup, which also registers them at
+  // registry.test: each public key is the public half of its sealed key,
+  // opened in B, and the identifier is the hash of the genesis over them.
   const adminKeys = () => {
     const row = first("sign_in:b.person_identities").find((r) => r.user_id === bAdmin()) ?? {};
     const pair = (role, pub, sealedCol) => ({
@@ -636,19 +637,20 @@ function models(S) {
     return { ...pair("live", "live_public_key", "live_key_sealed"), ...pair("operational", "operational_public_key", "operational_key_sealed") };
   };
   const remote = () => first("sign_in:b.person_identities").find((r) => r.identifier === id)?.user_id;
+  const adminIdentifier = () => first("sign_in:b.person_identities").find((r) => r.user_id === bAdmin())?.identifier;
   M["sign_in:b.person_identities"] = () => withLabels(["the administrator's", "the person's"], [
     {
       id: anId("pid"),
       user_id: derived(bAdmin(), "B's administrator"),
-      identifier: nil(),
+      identifier: captured("B's administrator's identifier, per_ and 64 hexadecimal digits", (v) => typeof v === "string" && /^per_[0-9a-f]{64}$/.test(v), "~"),
       provenance: exact("local"),
-      enrollment: exact("none"),
+      enrollment: exact("enrolled"),
       ...adminKeys(),
-      genesis_hash: nil(),
-      head_hash: nil(),
-      directory_url: nil(),
+      genesis_hash: derived(`sha256:${adminIdentifier()?.slice(4)}`, "the identifier's 64 hexadecimal digits: the genesis's hash"),
+      head_hash: derived(`sha256:${adminIdentifier()?.slice(4)}`, "the genesis: the administrator's log holds one entry"),
+      directory_url: exact(DIRECTORY),
       first_method_at: within(win(S, "admin")),
-      revision: exact(2, { shown: "`2`: 1 at insertion, then first_method! (person_identities.ex:233)" }),
+      revision: exact(4, { shown: "`4`: 1 at insertion, then first_method! (person_identities.ex:233), enrolling! (:145) and enrolled! (:174), each one step (:259)" }),
       inserted_at: within(win(S, "admin")),
       updated_at: within(win(S, "admin")),
     },

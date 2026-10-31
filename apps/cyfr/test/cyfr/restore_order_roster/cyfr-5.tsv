@@ -32,8 +32,7 @@ apps/cyfr/test/prism_web/live/company_login_live_test.exs	3	pending
 apps/cyfr/test/prism_web/live/components_live_test.exs	1	pending
 apps/cyfr/test/prism_web/live/files_live_test.exs	4	pending
 apps/cyfr/test/prism_web/live/login_live_test.exs	25	pending
-apps/cyfr/test/prism_web/live/settings_live_test.exs	6	pending
-apps/cyfr/test/prism_web/live/setup_live_test.exs	2	pending
+apps/cyfr/test/prism_web/live/settings_live_test.exs	5	pending
 apps/cyfr/test/prism_web/live/shell_canvas_test.exs	2	pending
 apps/cyfr/test/prism_web/live/shell_frame_test.exs	1	pending
 apps/cyfr/test/prism_web/live/shell_live_test.exs	1	pending
@@ -41,7 +40,7 @@ apps/cyfr/test/prism_web/live/shell_live_visibility_test.exs	2	pending
 apps/cyfr/test/prism_web/live/shell_prompts_test.exs	1	pending
 apps/cyfr/test/prism_web/live/shell_tincture_url_test.exs	2	pending
 apps/cyfr/test/prism_web/live/system_layer_pairing_test.exs	6	pending
-apps/cyfr/test/prism_web/live/system_layer_recovery_test.exs	3	pending
-apps/cyfr/test/prism_web/live/system_layer_test.exs	6	pending
+apps/cyfr/test/prism_web/live/system_layer_recovery_test.exs	1	pending
+apps/cyfr/test/prism_web/live/system_layer_test.exs	5	pending
 apps/cyfr/test/prism_web/live/thread_pane_live_test.exs	2	pending
 apps/cyfr/test/prism_web/sign_in_trace_test.exs	7	pending

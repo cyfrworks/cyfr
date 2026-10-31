@@ -11,9 +11,9 @@ import (
 	"github.com/cyfr/codex/internal/ops"
 )
 
-// A handle is passed to door.allow and door.deny as typed, in the value the
+// A name is passed to door.allow and door.deny as typed, in the value the
 // operation reads its kind from.
-func TestAdminSendsAHandleAsTheValue(t *testing.T) {
+func TestAdminSendsANameAsTheValue(t *testing.T) {
 	for action, payload := range map[string]any{
 		"allow": ops.DoorAllowArgs{Value: "@alice"},
 		"deny":  ops.DoorDenyArgs{Value: "@alice"},
@@ -27,31 +27,37 @@ func TestAdminSendsAHandleAsTheValue(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(sent) != 2 || sent["action"] != action || sent["value"] != "@alice" {
-			t.Errorf("%s sent %v, want the action and the handle as its value", action, sent)
+			t.Errorf("%s sent %v, want the action and the name as its value", action, sent)
 		}
 	}
 }
 
-func TestAdminHelpNamesAHandle(t *testing.T) {
+func TestAdminHelpNamesAName(t *testing.T) {
 	for _, cmd := range []struct{ use, short string }{
 		{adminAllowCmd.Use, adminAllowCmd.Short},
 		{adminDenyCmd.Use, adminDenyCmd.Short},
 	} {
-		if !strings.Contains(cmd.use, "@handle") {
-			t.Errorf("usage %q does not name a handle", cmd.use)
+		if !strings.Contains(cmd.use, "@name") {
+			t.Errorf("usage %q does not name a name", cmd.use)
 		}
-		if !strings.Contains(cmd.short, "handle (@name)") {
-			t.Errorf("help %q does not name a handle", cmd.short)
+		if !strings.Contains(cmd.short, "name (@name)") {
+			t.Errorf("help %q does not name a name", cmd.short)
 		}
 	}
-	if !strings.Contains(adminCmd.Long, "handle (@name)") {
-		t.Errorf("admin help does not name a handle: %q", adminCmd.Long)
+	if !strings.Contains(adminCmd.Long, "name (@name)") {
+		t.Errorf("admin help does not name a name: %q", adminCmd.Long)
+	}
+	help := strings.ToLower(adminCmd.Long + adminAllowCmd.Use + adminAllowCmd.Short + adminDenyCmd.Use + adminDenyCmd.Short)
+	for _, word := range []string{"handle", "registry"} {
+		if strings.Contains(help, word) {
+			t.Errorf("admin help says %q", word)
+		}
 	}
 }
 
-// An entry made from a handle shows the handle beside its identifier; one
-// made otherwise shows its value alone.
-func TestAdminShowsAnEntrysHandle(t *testing.T) {
+// An entry made from a name shows the name beside its identifier; one made
+// otherwise shows its value alone.
+func TestAdminShowsAnEntrysName(t *testing.T) {
 	identifier := "per_" + strings.Repeat("ab", 32)
 	cases := []struct {
 		entry map[string]any

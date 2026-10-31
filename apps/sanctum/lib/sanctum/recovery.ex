@@ -3,11 +3,11 @@
 
 defmodule Sanctum.Recovery do
   @moduledoc """
-  Recovery material and restore (`ARCHITECTURE.md` §9.1): enrollment under
-  a fresh confirmation, delivery of the person's recovery code until they
-  say it is saved, which erases the sealed secret, another recovery code
-  added by one the person holds, and restore on an installation-authorized
-  empty node through durable, resumable phases. Every use of a recovery
+  Recovery material and restore (`ARCHITECTURE.md` §9.1): enrollment at
+  admission, delivery of the person's recovery code until they say it is
+  saved, which erases the sealed secret, another recovery code added by
+  one the person holds, and restore on an installation-authorized empty
+  node through durable, resumable phases. Every use of a recovery
   key, and of the keys a restore stages, is here; the person's online keys
   are used only through `Sanctum.Person`.
 
@@ -24,40 +24,34 @@ defmodule Sanctum.Recovery do
 
   ## Enrollment
 
-  `enroll/3` gives an enrolled-to-be local person an identifier at the
-  directory this deployment pins (`Sanctum.directory_url/0`; no operation
-  takes a directory URL). The genesis names their live and operational
-  public keys, the secret's recovery key and that directory
-  (`Sanctum.Person.sign_genesis/3`). The `recovery_material` confirmation
-  is asked for the exact set, directory and genesis digest before
-  anything is opened (`Sanctum.Consent.Authz.check/3`), and consumed in
-  the transaction that opens the one enrollment attempt, which holds the
-  immutable genesis and the sealed secret. Registration
-  (`Sanctum.Directory.Client.register/3`) is retried under the same
-  request id with the same genesis bytes until the directory answers: an
-  acceptance writes the identifier, a refusal leaves the person without
-  one and the attempt recorded. A retry resumes the attempt with the
-  authorization it committed, and only for the secret it holds.
+  Every local person is enrolled by the admission that makes them
+  (`Sanctum.Newcomer`), which brings their name, a recovery secret the
+  trusted form or the command line drew and the attempt's request id. In
+  the admission's transaction `open_at_admission/3` signs the genesis
+  naming their live and operational public keys, the secret's recovery key
+  and the directory this deployment pins (`Sanctum.directory_url/0`; no
+  operation takes a directory URL), seals the secret and opens the one
+  enrollment attempt at `staged` with the name. The admission's first
+  proof is the fresh proof this recovery material needs, so no
+  confirmation is asked, and nothing is sent before the commit.
 
-  An enrollment the directory has not accepted waits on the secret of the
-  browser that began it. A person whose browser lost that secret abandons
-  it (`abandon_enrollment/1`): the attempt ends `superseded` and the
-  person is unenrolled again, free to enroll under a new secret, so a new
-  identifier. A genesis the directory may already have registered stays
-  there unused, under an identifier nobody holds a recovery code for. A
-  retry under the abandoned request id answers `:enrollment_abandoned`
-  and registers nothing.
+  `advance/2` then registers the genesis (`Sanctum.Directory.Client.register/3`)
+  under the same request id with the same bytes until the directory
+  answers: an acceptance writes the identifier, a refusal ends the attempt
+  `refused` and leaves the person without one. Until the person's row
+  records a name, `rename/2` replaces the one the attempt wants
+  registered; the registry's claim of it is Compendium's
+  (`registry.register`).
 
-  The accepted attempt answers the recovery code, until
-  `recovery_code_saved/2` records that the person saved it and erases the
-  sealed secret in the same write. `recovery_code/2` shows it again, each
-  time under a fresh `recovery_material` confirmation; once it is saved
-  its secret is gone, and the code is never shown again.
+  The admission answers the recovery code at once. `recovery_code/2` shows
+  it again once the directory accepted the genesis, each time under a
+  fresh `recovery_material` confirmation. `recovery_code_saved/2` records
+  that the person saved it, erasing the sealed secret in the same write,
+  and only once their name is recorded; the code is never shown again.
 
   `status/1` reads what the person's own settings show: the identity row,
-  the attempts still in progress and the doors, never a secret or a
-  sealed value. `enrollment_effect/1` is the sentence the enrollment
-  preview stores.
+  their recorded name, the attempts still in progress and the doors,
+  never a secret or a sealed value.
 
   ## Another recovery code
 
@@ -66,11 +60,12 @@ defmodule Sanctum.Recovery do
   identity. It keeps the person's live and operational keys and names the
   current recovery set with the added code's key, at the revision the
   directory serves now, read fresh (`Sanctum.IdentityFreshness.fresh!/2`)
-  and held to the head the person's row names. The confirmation is asked
-  and consumed as enrollment's, and the accepted entry is the person's
-  new head (`key_epoch`): every home that relies on the identity retires
-  what was bound to the old one. The added code is shown and saved as the
-  first.
+  and held to the head the person's row names. A `recovery_material`
+  confirmation is asked for the exact change before anything is opened
+  and consumed in the transaction that opens the attempt, and the
+  accepted entry is the person's new head (`key_epoch`): every home that
+  relies on the identity retires what was bound to the old one. The added
+  code is shown and saved as the first.
 
   ## Restore
 
@@ -166,12 +161,21 @@ defmodule Sanctum.Recovery do
   alias Sanctum.{CipherAAD, Context}
   alias Sanctum.Consent.Authz
   alias Sanctum.Directory.Client
+  alias Sanctum.Tenancy.Users
 
   @seed_bytes 32
   @reproof_ms 5 * 60 * 1000
 
   @typedoc "The directory client's options: `:resolver` and `:cacerts`."
   @type opts :: [resolver: module(), cacerts: [binary()]]
+
+  @typedoc "Where the person's enrollment stands, and the name it wants registered."
+  @type registration :: %{
+          attempt_id: String.t(),
+          identifier: String.t(),
+          name: String.t() | nil,
+          phase: String.t()
+        }
 
   @typedoc """
   The restore ingress's body: the person's recovery code under
@@ -183,49 +187,44 @@ defmodule Sanctum.Recovery do
   # Enrollment
   # ===========================================================================
 
-  @doc """
-  Enroll the person of `ctx` (the module doc): `args` holds the new
-  code's secret under `"recovery_secret"` and the attempt's
-  `"request_id"`.
+  @doc false
+  # The admission's enrollment, run last in the mint's transaction
+  # (`Sanctum.Newcomer`, its one caller): the genesis over the keys just
+  # minted and the secret's recovery key, the secret sealed, and the one
+  # enrollment attempt opened at `staged` with the name, so the person and
+  # the attempt commit together or not at all. The admission's first proof
+  # is the fresh proof this recovery material needs, so no confirmation is
+  # asked; nothing is sent.
+  @spec open_at_admission(String.t(), Sanctum.Newcomer.identity(), String.t()) ::
+          :ok | {:error, term()}
+  def open_at_admission(user_id, identity, directory)
+      when is_binary(user_id) and is_binary(directory) do
+    %{name: name, recovery_secret: secret, request_id: request_id} = identity
 
-  Answers `%{attempt_id, request_id, phase, identifier, code}` once the
-  directory accepted the genesis, `code` being the recovery code
-  (`Prima.RecoveryCode.encode/2` over the identifier and the secret) while
-  the person has not said it is saved, and absent after.
+    with {:ok, {recovery_key, _private}} <- Identity.derive_recovery_key(secret),
+         {:ok, genesis} <- Sanctum.Person.sign_genesis(user_id, [recovery_key], directory),
+         {:ok, sealed} <- seal(secret, CipherAAD.person_key(user_id, :kit_seed)) do
+      attrs = %{
+        kind: "enrollment",
+        request_id: request_id,
+        user_id: user_id,
+        identifier: genesis.identifier,
+        directory_url: directory,
+        genesis: genesis.genesis,
+        request_digest: genesis.genesis_hash,
+        kit_seed_sealed: sealed,
+        name: name
+      }
 
-  Refusals: `{:invalid_argument, _}` (no secret, or a malformed one or
-  request id), `:no_directory` (this deployment pins none), `:not_found`
-  (no local key set: the person's keys are at another home),
-  `:already_enrolled`, `{:attempt_in_progress, request_id}`,
-  `:request_id_reused`, the consent signal `{:confirmation_required, _}`
-  and the confirmation's other refusals, `:enrollment_refused` (the
-  directory refused the genesis), `:enrollment_abandoned` (the person
-  abandoned the attempt this request id names), and the retryable
-  `:directory_unavailable` and `:unavailable`, after which a retry under
-  the same request id resumes the attempt.
-  """
-  @spec enroll(Context.t(), map(), opts()) :: {:ok, map()} | {:error, term()}
-  def enroll(%Context{} = ctx, args, opts \\ []) when is_map(args) do
-    opts = client_options!(opts)
+      case Arca.IdentityAttempts.open(system(), attrs) do
+        {:ok, _attempt} ->
+          :ok
 
-    with {:ok, user_id} <- person(ctx),
-         {:ok, request_id} <- request_id(args),
-         {:ok, seed} <- seed(Map.get(args, "recovery_secret")),
-         {:ok, {recovery_key, _private}} <- Identity.derive_recovery_key(seed) do
-      case Arca.IdentityAttempts.get_by_request(Context.actor(ctx), request_id) do
-        {:ok, %{kind: "enrollment", user_id: ^user_id} = attempt} ->
-          if holds_seed?(attempt, recovery_key),
-            do: continue_enrollment(ctx, attempt, opts),
-            else: {:error, :request_id_reused}
+        {:error, :request_id_reused} ->
+          {:error, {:invalid_argument, "The request_id names another request; draw a new one"}}
 
-        {:ok, _another} ->
-          {:error, :request_id_reused}
-
-        {:error, :cross_tenant} ->
-          {:error, :request_id_reused}
-
-        {:error, :not_found} ->
-          begin_enrollment(ctx, user_id, request_id, seed, recovery_key, opts)
+        {:error, :not_owner} ->
+          {:error, :not_owner}
 
         {:error, _unanswered} ->
           {:error, :unavailable}
@@ -233,89 +232,94 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  @doc """
-  What confirming an enrollment approves (`t:Sanctum.Consent.Authz.change/0`):
-  the request, the genesis digest, the recovery set and the pinned
-  directory. The secret is never in it; its public key is.
-  """
-  @spec enrollment_change(String.t(), map(), binary(), String.t()) :: Authz.change()
-  def enrollment_change(request_id, genesis, recovery_key, directory) do
-    %{
-      operation: "person.enroll",
-      arguments: %{
-        "request_id" => request_id,
-        "genesis" => genesis.genesis_hash,
-        "recovery_keys" => [Encoding.b64(recovery_key)],
-        "directory" => directory
-      },
-      resource: genesis.identifier,
-      details: %{
-        "directory" => directory,
-        "recovery_key" => Encoding.b64(recovery_key),
-        "genesis" => genesis.genesis_hash,
-        "effect" => enrollment_effect(directory)
-      }
-    }
-  end
-
-  @doc """
-  What enrolling at `directory` means, in the words the stored preview
-  and the trusted enrollment form both say: the directory pinned, what
-  its unavailability means, what losing every recovery code means, and
-  that a recovery restores the identity alone.
-  """
-  @spec enrollment_effect(String.t()) :: String.t()
-  def enrollment_effect(directory) when is_binary(directory) do
-    effect = effect_at(directory)
-
-    # A preview's text is bounded (`Prima.Confirmation.Preview.max_text/0`);
-    # a directory URL too long to sit in the sentence as well is named by
-    # the preview's `directory` detail alone.
-    if byte_size(effect) <= Prima.Confirmation.Preview.max_text(),
-      do: effect,
-      else: effect_at("named under directory")
-  end
-
-  defp effect_at(directory) do
-    "Registers your identity at the directory #{directory}, which this CYFR pins, and " <>
-      "prints its recovery kit. Anyone holding a kit can replace your keys. While that " <>
-      "directory cannot be reached, key rotation, recovery and identity checks by any other CYFR " <>
-      "wait; if it is gone for good, they end, and no identity moves to " <>
-      "another directory. If every kit is lost, nothing can add one: your identity keeps " <>
-      "working here with no way to recover it. A recovery restores your identity alone, " <>
-      "never your private data or the CYFR addresses your devices saved: you add those addresses " <>
-      "again from surviving devices or invitations."
-  end
-
-  defp begin_enrollment(ctx, user_id, request_id, seed, recovery_key, opts) do
-    with {:ok, directory} <- pinned_directory(),
-         :ok <- enrollable(ctx, user_id),
-         {:ok, genesis} <- Sanctum.Person.sign_genesis(user_id, [recovery_key], directory) do
-      change = enrollment_change(request_id, genesis, recovery_key, directory)
-
-      with :ok <- Authz.check(ctx, :recovery_material, change),
-           {:ok, sealed} <- seal(seed, CipherAAD.person_key(user_id, :kit_seed)) do
-        attrs = %{
-          kind: "enrollment",
-          request_id: request_id,
-          user_id: user_id,
-          identifier: genesis.identifier,
-          directory_url: directory,
-          genesis: genesis.genesis,
-          request_digest: genesis.genesis_hash,
-          kit_seed_sealed: sealed
-        }
-
-        also = fn _attempt -> Authz.consume(ctx, {:recovery_material, change}) end
-
-        case Arca.IdentityAttempts.open(Context.actor(ctx), attrs, also: also) do
-          {:ok, attempt} ->
-            Authz.consumed(ctx)
-            continue_enrollment(ctx, attempt, opts)
-
-          {:error, reason} ->
-            open_refusal(ctx, user_id, "enrollment", reason)
+  @doc false
+  # What an admission answers of its person's enrollment (`Sanctum.Newcomer`):
+  # the attempt, its identifier and name, and the recovery code while the
+  # secret is sealed on it, composed from that secret. A readmission answers
+  # the attempt that stands; nil when the person has none.
+  @spec admission_recovery(String.t()) :: {:ok, map() | nil} | {:error, :unavailable}
+  def admission_recovery(user_id) when is_binary(user_id) do
+    case Arca.IdentityAttempts.enrollment(system(), user_id) do
+      {:ok, attempt} ->
+        with {:ok, code} <- code(attempt) do
+          answer = %{attempt_id: attempt.id, identifier: attempt.identifier, name: attempt.name}
+          {:ok, if(code, do: Map.put(answer, :code, code), else: answer)}
         end
+
+      {:error, :not_found} ->
+        {:ok, nil}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  Move the enrollment the person's admission opened on (the module doc):
+  their one enrollment attempt (`Arca.IdentityAttempts.enrollment/2`) is
+  submitted, and its genesis registered at the directory it names under
+  its request id, the same bytes however often a reply is lost, until the
+  directory answers. An attempt the directory accepted, or whose code the
+  person saved, answers at once and sends nothing.
+
+  Answers `%{attempt_id, identifier, name, phase}`, `name` being the name
+  the attempt wants registered, which is the name the person's row records
+  once one is: the attempt follows it first.
+
+  Refusals: `:no_attempt` (the person has no enrollment), `:directory_refused`
+  (the directory refused the genesis, and the attempt is `refused`),
+  `:directory_unavailable` (the directory did not answer; the attempt stays
+  `submitted` and a repeat sends the same bytes), `{:rate_limited,
+  seconds}`, `:unavailable`, `:unauthenticated`, `:guest_plane`.
+  """
+  @spec advance(Context.t(), opts()) :: {:ok, registration()} | {:error, term()}
+  def advance(%Context{} = ctx, opts \\ []) do
+    opts = client_options!(opts)
+
+    with {:ok, user_id} <- person(ctx),
+         {:ok, attempt} <- enrollment(ctx, user_id),
+         {:ok, attempt} <- follow_name(ctx, attempt),
+         {:ok, attempt} <- continue_enrollment(ctx, attempt, opts),
+         do: {:ok, registration(attempt)}
+  end
+
+  # The attempt carrying the name the person's row records, once one is
+  # (`Arca.IdentityAttempts.follow_name/2`).
+  defp follow_name(ctx, attempt) do
+    case Arca.IdentityAttempts.follow_name(Context.actor(ctx), attempt.id) do
+      {:ok, followed} -> {:ok, followed}
+      {:error, :not_found} -> {:error, :no_attempt}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  Replace the name the person's enrollment wants registered, while their
+  row records none: a name once recorded is theirs for life. The attempt
+  must not have ended. Answers as `advance/2` does, the phase unchanged.
+
+  Refusals: `{:invalid_argument, _}` (not a name, or the person's name is
+  recorded already), `:no_attempt` (no enrollment, or one that ended),
+  `:unavailable`, `:unauthenticated`, `:guest_plane`.
+  """
+  @spec rename(Context.t(), term()) :: {:ok, registration()} | {:error, term()}
+  def rename(%Context{} = ctx, name) do
+    with {:ok, user_id} <- person(ctx),
+         :ok <- Sanctum.Newcomer.name(name),
+         :ok <- unnamed(user_id),
+         {:ok, attempt} <- enrollment(ctx, user_id) do
+      case Arca.IdentityAttempts.rename(Context.actor(ctx), attempt.id, name) do
+        {:ok, renamed} ->
+          {:ok, registration(renamed)}
+
+        {:error, :named} ->
+          {:error, {:invalid_argument, "Your name is set and cannot be changed."}}
+
+        {:error, :not_found} ->
+          {:error, :no_attempt}
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
       end
     end
   end
@@ -327,26 +331,34 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  defp enrollable(ctx, user_id) do
-    case Arca.PersonIdentities.get(Context.actor(ctx), user_id) do
-      {:ok, %{provenance: "local", identifier: nil, enrollment: "none"}} ->
+  defp enrollment(ctx, user_id) do
+    case Arca.IdentityAttempts.enrollment(Context.actor(ctx), user_id) do
+      {:ok, attempt} -> {:ok, attempt}
+      {:error, :not_found} -> {:error, :no_attempt}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp unnamed(user_id) do
+    case Users.get(user_id) do
+      {:ok, %{namespace: nil}} ->
         :ok
 
-      {:ok, %{provenance: "local", identifier: nil, enrollment: "pending"}} ->
-        {:error, {:attempt_in_progress, in_progress_request(ctx, user_id, "enrollment")}}
-
-      {:ok, %{provenance: "local"}} ->
-        {:error, :already_enrolled}
-
-      {:ok, _remote} ->
-        {:error, :not_found}
-
-      {:error, :not_found} ->
-        {:error, :not_found}
+      {:ok, _named} ->
+        {:error, {:invalid_argument, "Your name is set and cannot be changed."}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
     end
+  end
+
+  defp registration(attempt) do
+    %{
+      attempt_id: attempt.id,
+      identifier: attempt.identifier,
+      name: attempt.name,
+      phase: attempt.phase
+    }
   end
 
   defp continue_enrollment(ctx, %{phase: "staged"} = attempt, opts) do
@@ -356,69 +368,28 @@ defmodule Sanctum.Recovery do
 
   defp continue_enrollment(ctx, %{phase: "submitted"} = attempt, opts) do
     case Client.register(attempt.identifier, attempt.genesis, opts) do
-      # The phase the attempt holds after the move decides the answer: an
-      # abandonment that committed first leaves it `superseded`.
+      # The phase the attempt holds after the move decides the answer: a
+      # repeat that moved it first is read back.
       {:ok, %{entry_hash: hash}} when hash == attempt.request_digest ->
         with {:ok, accepted} <- move(ctx, attempt, "accepted", %{outcome: "accepted"}),
              do: continue_enrollment(ctx, accepted, opts)
 
       {:ok, _other} ->
-        refuse(ctx, attempt, "invalid_response", :enrollment_refused)
+        refuse(ctx, attempt, "invalid_response", :directory_refused)
 
       {:error, reason} ->
         if refused?(reason),
-          do: refuse(ctx, attempt, word(reason), :enrollment_refused),
+          do: refuse(ctx, attempt, word(reason), :directory_refused),
           else: retryable(attempt, reason)
     end
   end
 
   defp continue_enrollment(_ctx, %{phase: phase} = attempt, _opts)
        when phase in ["accepted", "completed"],
-       do: enrolled(attempt)
+       do: {:ok, attempt}
 
-  defp continue_enrollment(_ctx, %{phase: "refused"}, _opts), do: {:error, :enrollment_refused}
-
-  defp continue_enrollment(_ctx, %{phase: "superseded"}, _opts),
-    do: {:error, :enrollment_abandoned}
-
-  @doc """
-  Abandon the person's enrollment the directory has not accepted
-  (`person.enroll_abandon`, the module doc): a `staged` or `submitted`
-  attempt ends `superseded`, its sealed secret erased, and the person is
-  unenrolled in the same write (`Arca.IdentityAttempts.advance/5`). It
-  discards an unfinished attempt and mints nothing, so it asks no
-  confirmation. Answers `%{request_id, phase: "superseded"}`, the
-  abandoned request id.
-
-  Refusals: `:registered` (the directory accepted it: the identity stands
-  and `recovery_code/2` shows its code), `:not_found` (no enrollment of the
-  person's in progress: none begun, or it completed, was refused or was
-  abandoned), `:unauthenticated`, `:guest_plane`, `:unavailable`.
-  """
-  @spec abandon_enrollment(Context.t()) :: {:ok, map()} | {:error, term()}
-  def abandon_enrollment(%Context{} = ctx) do
-    with {:ok, user_id} <- person(ctx),
-         {:ok, attempt} <- in_progress(ctx, user_id, "enrollment"),
-         do: abandon(ctx, attempt)
-  end
-
-  # Decided on the phase the attempt holds; a move that met a later phase
-  # decides again on the one it read back.
-  defp abandon(ctx, %{phase: phase} = attempt) when phase in ["staged", "submitted"] do
-    case move(ctx, attempt, "superseded") do
-      {:ok, %{phase: "superseded", request_id: request_id}} ->
-        {:ok, %{request_id: request_id, phase: "superseded"}}
-
-      {:ok, moved} ->
-        abandon(ctx, moved)
-
-      {:error, _reason} = refusal ->
-        refusal
-    end
-  end
-
-  defp abandon(_ctx, %{phase: "accepted"}), do: {:error, :registered}
-  defp abandon(_ctx, _ended_or_none), do: {:error, :not_found}
+  defp continue_enrollment(_ctx, %{phase: "refused"}, _opts), do: {:error, :directory_refused}
+  defp continue_enrollment(_ctx, _ended, _opts), do: {:error, :no_attempt}
 
   defp enrolled(attempt) do
     with {:ok, code} <- code(attempt) do
@@ -432,16 +403,6 @@ defmodule Sanctum.Recovery do
       {:ok, if(code, do: Map.put(answer, :code, code), else: answer)}
     end
   end
-
-  # The genesis the attempt holds names this secret's key as its recovery set.
-  defp holds_seed?(%{genesis: genesis}, recovery_key) when is_binary(genesis) do
-    case Prima.Json.decode(genesis) do
-      {:ok, %{} = map} -> Map.get(map, "recovery_keys") == [Encoding.b64(recovery_key)]
-      _other -> false
-    end
-  end
-
-  defp holds_seed?(_attempt, _recovery_key), do: false
 
   # ===========================================================================
   # The recovery code
@@ -459,7 +420,7 @@ defmodule Sanctum.Recovery do
   Refusals: `{:not_found, "recovery_code", attempt_id}` (no such attempt
   of the person's), `:kit_acknowledged` (the person said it is saved, which
   erased the secret), `:not_accepted` (the directory has not accepted it),
-  `:enrollment_refused`, the consent signal and the confirmation's other
+  `:directory_refused`, the consent signal and the confirmation's other
   refusals, `:unavailable`.
   """
   @spec recovery_code(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
@@ -478,16 +439,20 @@ defmodule Sanctum.Recovery do
   @doc """
   The person says the recovery code of `attempt_id` is saved
   (`person.recovery_code_saved`): its sealed secret is erased in that
-  write, and a repeat never restores it. Answers `%{attempt_id, phase:
-  "completed"}`.
+  write, and a repeat never restores it. An enrollment's code is saved
+  only once the person's name is recorded, so the code is never erased
+  before their name and identity are both registered. Answers
+  `%{attempt_id, phase: "completed"}`.
 
-  Refusals: `{:not_found, "recovery_code", attempt_id}`, `:not_accepted`,
+  Refusals: `{:not_found, "recovery_code", attempt_id}`, `{:conflict, _}`
+  (an enrollment whose person's name is not recorded yet), `:not_accepted`,
   `:unavailable`.
   """
   @spec recovery_code_saved(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def recovery_code_saved(%Context{} = ctx, attempt_id) when is_binary(attempt_id) do
     with {:ok, user_id} <- person(ctx),
-         {:ok, attempt} <- own_code_attempt(ctx, user_id, attempt_id) do
+         {:ok, attempt} <- own_code_attempt(ctx, user_id, attempt_id),
+         :ok <- named(attempt) do
       case Arca.IdentityAttempts.acknowledge_kit(Context.actor(ctx), attempt.id) do
         {:ok, saved} -> {:ok, %{attempt_id: saved.id, phase: saved.phase}}
         {:error, :not_accepted} -> {:error, :not_accepted}
@@ -512,9 +477,25 @@ defmodule Sanctum.Recovery do
     end
   end
 
+  defp named(%{kind: "enrollment", user_id: user_id}) do
+    case Users.get(user_id) do
+      {:ok, %{namespace: name}} when is_binary(name) ->
+        :ok
+
+      {:ok, _unnamed} ->
+        {:error,
+         {:conflict, "Your name is not recorded yet, so your recovery code cannot be saved."}}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp named(_holder), do: :ok
+
   defp deliverable(%{phase: "accepted", kit_seed_sealed: sealed}) when is_binary(sealed), do: :ok
   defp deliverable(%{phase: "completed"}), do: {:error, :kit_acknowledged}
-  defp deliverable(%{phase: "refused"}), do: {:error, :enrollment_refused}
+  defp deliverable(%{phase: "refused"}), do: {:error, :directory_refused}
   defp deliverable(_attempt), do: {:error, :not_accepted}
 
   defp code_change(attempt) do
@@ -550,13 +531,15 @@ defmodule Sanctum.Recovery do
 
   @doc """
   The identity of the person of `ctx` as their own settings read it
-  (`person.status`): `provenance` and `identifier`; `directory_url`, the
-  directory this home pins for enrollment (`CYFR_DIRECTORY_URL`), or nil
-  when it pins none; `enrollment` (`none`, `pending` or `enrolled`) and
-  `key_epoch`, the head their row names; `kits`, each enrollment or
-  added-code attempt still in progress (`Arca.IdentityAttempts.in_progress/3`)
-  as `%{attempt_id, kind, phase, request_id, deliverable}`, `deliverable`
-  while its code's secret is still sealed for delivery; `rotation`, the
+  (`person.status`): `provenance` and `identifier`; `name`, the name their
+  row records, or nil; `directory_url`, the directory this home pins for
+  enrollment (`CYFR_DIRECTORY_URL`), or nil when it pins none;
+  `enrollment` (`none`, `pending` or `enrolled`) and `key_epoch`, the head
+  their row names; `kits`, each enrollment or added-code attempt still in
+  progress (`Arca.IdentityAttempts.in_progress/3`) as `%{attempt_id, kind,
+  phase, request_id, name, deliverable}`, `name` the name an enrollment
+  wants registered (nil for an added code), `deliverable` while its
+  code's secret is still sealed for delivery; `rotation`, the
   rotation in progress as `%{request_id, phase}`, or nil; and `doors`, each
   linked door as `%{key, provider, issuer, subject}`.
 
@@ -569,6 +552,7 @@ defmodule Sanctum.Recovery do
   def status(%Context{} = ctx) do
     with {:ok, user_id} <- person(ctx),
          {:ok, identity} <- status_identity(ctx, user_id),
+         {:ok, name} <- recorded_name(user_id),
          {:ok, enrollment} <- in_progress(ctx, user_id, "enrollment"),
          {:ok, holder} <- in_progress(ctx, user_id, "holder"),
          {:ok, rotation} <- in_progress(ctx, user_id, "rotation"),
@@ -577,6 +561,7 @@ defmodule Sanctum.Recovery do
        %{
          provenance: identity.provenance,
          identifier: identity.identifier,
+         name: name,
          directory_url: pinned_or_nil(),
          enrollment: identity.enrollment,
          key_epoch: identity.head_hash,
@@ -601,6 +586,13 @@ defmodule Sanctum.Recovery do
     end
   end
 
+  defp recorded_name(user_id) do
+    case Users.get(user_id) do
+      {:ok, user} -> {:ok, user.namespace}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
   defp in_progress(ctx, user_id, kind) do
     case Arca.IdentityAttempts.in_progress(Context.actor(ctx), user_id, kind) do
       {:ok, attempt} -> {:ok, attempt}
@@ -615,6 +607,7 @@ defmodule Sanctum.Recovery do
       kind: attempt.kind,
       phase: attempt.phase,
       request_id: attempt.request_id,
+      name: if(attempt.kind == "enrollment", do: attempt.name),
       deliverable: deliverable(attempt) == :ok
     }
   end
@@ -818,7 +811,7 @@ defmodule Sanctum.Recovery do
 
   defp continue_holder(_ctx, %{phase: "refused"}, _opts), do: {:error, :holder_refused}
 
-  defp holder(%{"recovery_secret" => secret}), do: seed(secret)
+  defp holder(%{"recovery_secret" => secret}), do: secret(secret)
 
   defp holder(_holder),
     do:
@@ -1583,7 +1576,7 @@ defmodule Sanctum.Recovery do
   end
 
   defp continue_restore(%{phase: "staged"} = attempt, opts) do
-    with {:ok, attempt} <- advance(attempt, "staged", "submitted"),
+    with {:ok, attempt} <- step(attempt, "staged", "submitted"),
          do: continue_restore(attempt, opts)
   end
 
@@ -1592,7 +1585,7 @@ defmodule Sanctum.Recovery do
       case Client.recover(attempt.identifier, attempt.genesis, request, opts) do
         {:ok, %{entry_hash: hash}} ->
           with {:ok, attempt} <-
-                 advance(attempt, "submitted", "accepted", %{
+                 step(attempt, "submitted", "accepted", %{
                    entry_hash: hash,
                    outcome: "accepted"
                  }),
@@ -1601,7 +1594,7 @@ defmodule Sanctum.Recovery do
         {:error, reason} ->
           if refused?(reason) do
             with {:ok, _ended} <-
-                   advance(attempt, "submitted", "refused", %{outcome: word(reason)}),
+                   step(attempt, "submitted", "refused", %{outcome: word(reason)}),
                  do: {:error, :refused}
           else
             {:error, {:retry, "submitted", retry_seconds(reason)}}
@@ -1617,7 +1610,7 @@ defmodule Sanctum.Recovery do
     case live_state(attempt.identifier, attempt.genesis, opts) do
       {:ok, state} ->
         if introduced?(state, attempt) do
-          with {:ok, attempt} <- advance(attempt, "accepted", "keys_active"),
+          with {:ok, attempt} <- step(attempt, "accepted", "keys_active"),
                do: continue_restore(attempt, opts)
         else
           supersede(attempt, opts)
@@ -1674,7 +1667,7 @@ defmodule Sanctum.Recovery do
       # (`advance/4` reads it back): the session issued here stands. One
       # that superseded it after this request's read leaves it superseded:
       # the session issued here never leaves, and its row goes.
-      case advance(attempt, "minted", "completed") do
+      case step(attempt, "minted", "completed") do
         {:ok, %{phase: "completed"}} -> {:ok, answer}
         {:ok, %{phase: "superseded"}} -> withdrawn(answer)
         {:error, reason} -> {:error, reason}
@@ -1719,7 +1712,7 @@ defmodule Sanctum.Recovery do
   # the installation claim. A concurrent request that moved it first leaves
   # it at a later phase, which decides again.
   defp supersede(attempt, opts) do
-    case advance(attempt, attempt.phase, "superseded", %{outcome: "superseded"}) do
+    case step(attempt, attempt.phase, "superseded", %{outcome: "superseded"}) do
       {:ok, %{phase: "superseded"}} -> {:error, :superseded}
       {:ok, moved} -> continue_restore(moved, opts)
       {:error, reason} -> {:error, reason}
@@ -1900,7 +1893,7 @@ defmodule Sanctum.Recovery do
   defp read_back({:ok, attempt}), do: {:ok, attempt}
   defp read_back({:error, _unanswered}), do: {:error, :unavailable}
 
-  defp advance(attempt, from, to, attrs \\ %{}) do
+  defp step(attempt, from, to, attrs \\ %{}) do
     case Arca.IdentityAttempts.advance(system(), attempt.id, from, to, attrs) do
       {:ok, moved} -> {:ok, moved}
       {:error, :stale} -> Arca.IdentityAttempts.get(system(), attempt.id) |> read_back()
@@ -1978,14 +1971,19 @@ defmodule Sanctum.Recovery do
   defp request_id(_args),
     do: {:error, {:invalid_argument, "The attempt's request_id is required"}}
 
-  defp seed(value) when is_binary(value) do
+  @doc false
+  # A recovery secret as the trusted form or the command line sends it: 32
+  # bytes of unpadded base64url. The one rule for every field that carries
+  # one, an admission's identity (`Sanctum.Newcomer.identity/1`) included.
+  @spec secret(term()) :: {:ok, <<_::256>>} | {:error, {:invalid_argument, String.t()}}
+  def secret(value) when is_binary(value) do
     case Encoding.unb64(value, @seed_bytes) do
       {:ok, seed} -> {:ok, seed}
       :error -> {:error, seed_refusal()}
     end
   end
 
-  defp seed(_value), do: {:error, seed_refusal()}
+  def secret(_value), do: {:error, seed_refusal()}
 
   defp seed_refusal,
     do:

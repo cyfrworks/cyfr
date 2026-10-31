@@ -6,7 +6,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -132,17 +131,6 @@ func (h *stubHome) answer(action string) map[string]any {
 			"user": map[string]any{"email": "alice@example.com"}}
 	case "logout":
 		return map[string]any{"message": "Logged out successfully"}
-	case "setup":
-		// The first setup makes the person; each later one signs them in
-		// again, with a session of its own.
-		n := 0
-		for _, c := range h.calls {
-			if c.action == "setup" {
-				n++
-			}
-		}
-		return map[string]any{"session_token": fmt.Sprintf("setup-session-%d", n), "user_id": "per_first",
-			"readmitted": n > 1}
 	}
 	return map[string]any{}
 }

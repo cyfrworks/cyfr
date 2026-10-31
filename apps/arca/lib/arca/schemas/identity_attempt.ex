@@ -7,7 +7,7 @@ defmodule Arca.Schemas.IdentityAttempt do
   `Arca.IdentityAttempts`): one enrollment, added-kit (`holder`), restore
   or rotation attempt, keyed by its request id, with the immutable
   submission it makes, the sealed material it stages and the phase it has
-  reached.
+  reached. An enrollment holds the name its person wants registered.
   """
 
   use Ecto.Schema
@@ -47,6 +47,7 @@ defmodule Arca.Schemas.IdentityAttempt do
     field :staged_operational_key_sealed, :binary, redact: true
     field :kit_seed_sealed, :binary, redact: true
     field :kit_acknowledged_at, :utc_datetime_usec
+    field :name, :string
     field :outcome, :string
     field :reproof_challenge_digest, :string
     field :reproof_expires_at, :utc_datetime_usec

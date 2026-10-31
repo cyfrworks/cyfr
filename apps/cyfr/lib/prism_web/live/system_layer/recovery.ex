@@ -3,15 +3,16 @@
 
 defmodule PrismWeb.SystemLayer.Recovery do
   @moduledoc """
-  The recovery prompts, which only the system layer draws: enrollment, a
-  recovery code shown again (kind `:kit`), and another recovery code
-  (kind `:holder`). Each is under the action `:recovery_material`, so each
-  change it dispatches is confirmed fresh where Sanctum decides it.
+  The recovery prompts, which only the system layer draws: a recovery
+  code shown again (kind `:kit`, "Your recovery code") and another
+  recovery code (kind `:holder`, "Add another recovery code"). Each is
+  under the action `:recovery_material`, so each change it dispatches is
+  confirmed fresh where Sanctum decides it.
 
-  The material never rests on the server. Enrollment's 32-byte secret, and
-  an added code's, are drawn in the browser with its cryptographic random
-  source (`assets/js/system_layer/recovery.js`) and held there for the
-  pending request alone; the recovery code that signs an added one is
+  The material never rests on the server. An added code's 32-byte secret
+  is drawn in the browser with its cryptographic random source
+  (`assets/js/system_layer/recovery.js`) and held there for the pending
+  request alone; the recovery code that signs an added one is
   typed into the prompt and held the same way. The browser submits them
   (`recovery_submit`): a drawn secret under `recovery_secret`, the typed
   code under `recovery_code`. The layer dispatches them and assigns none,
@@ -22,10 +23,9 @@ defmodule PrismWeb.SystemLayer.Recovery do
   they saved it, or the prompt ends however it ends, the browser forgets
   the material and empties the prompt (`recovery:clear`).
 
-  A prompt names no secret (`PrismWeb.SystemLayer.Prompt`): enrollment
-  names the directory this home pins, which its form shows with what
-  enrolling commits to before anything is asked; a recovery code shown
-  again names the attempt whose code it is; another code names nothing.
+  A prompt names no secret (`PrismWeb.SystemLayer.Prompt`): a recovery
+  code shown again names the attempt whose code it is; another code names
+  nothing.
 
   A frame never reaches one of these: no shell verb opens a recovery
   prompt, and a frame's credential is refused by every `person` action
@@ -42,11 +42,6 @@ defmodule PrismWeb.SystemLayer.Recovery do
           phase: :form | :kit,
           attempt_id: String.t() | nil
         }
-
-  @doc "The enrollment prompt `id`, naming the directory this home pins."
-  @spec enrollment(String.t(), String.t()) :: {:ok, Prompt.t()} | {:error, :invalid_prompt}
-  def enrollment(id, directory_url),
-    do: build(id, :enrollment, %{directory_url: directory_url})
 
   @doc "The prompt `id` that shows again the recovery code of the attempt `attempt_id`."
   @spec recovery_code(String.t(), String.t()) :: {:ok, Prompt.t()} | {:error, :invalid_prompt}
@@ -74,14 +69,6 @@ defmodule PrismWeb.SystemLayer.Recovery do
   """
   @spec request(Prompt.t(), map()) ::
           {:ok, String.t(), map(), term()} | {:error, String.t()}
-  def request(%{kind: :enrollment}, params) do
-    with {:ok, seed} <- material(params, "recovery_secret"),
-         {:ok, request_id} <- material(params, "request_id") do
-      {:ok, "person/enroll", %{"recovery_secret" => seed, "request_id" => request_id},
-       :recovery_resubmit}
-    end
-  end
-
   def request(%{kind: :holder}, params) do
     with {:ok, signer} <- material(params, "recovery_code", typed: true),
          {:ok, added} <- material(Map.get(params, "holder", %{}), "recovery_secret"),
@@ -125,17 +112,11 @@ defmodule PrismWeb.SystemLayer.Recovery do
 
   @doc "The prompt's title."
   @spec title(Prompt.t()) :: String.t()
-  def title(%{kind: :enrollment}), do: "Enroll your identity"
   def title(%{kind: :kit}), do: "Your recovery code"
   def title(%{kind: :holder}), do: "Add another recovery code"
 
   @doc "The prompt's one-line description."
   @spec description(Prompt.t()) :: String.t()
-  def description(%{kind: :enrollment}),
-    do:
-      "Enrolling gives you an identifier any CYFR knows you by, and prints the kit that " <>
-        "recovers it. Read what it commits you to first."
-
   def description(%{kind: :kit}),
     do:
       "Show your recovery code again. Each time needs a fresh confirmation, and once you say " <>
@@ -223,7 +204,6 @@ defmodule PrismWeb.SystemLayer.Recovery do
     """
   end
 
-  defp submit_label(%{kind: :enrollment}, true), do: "Enroll and print my kit"
   defp submit_label(%{kind: :kit}, true), do: "Show my recovery code"
   defp submit_label(%{kind: :holder}, true), do: "Continue"
   defp submit_label(_prompt, false), do: "Request confirmation"
@@ -232,36 +212,9 @@ defmodule PrismWeb.SystemLayer.Recovery do
 
   @doc """
   What a recovery prompt commits the person to, before anything is
-  asked. Enrollment's are the stored preview's statements
-  (`Sanctum.Recovery.enrollment_effect/1`) in the form's own words: the
-  pinned directory and what its unavailability means, what losing every
-  recovery holder means, and that a recovery restores the identity alone.
+  asked: what another code means for every other CYFR, or what seeing a
+  code allows.
   """
-  def statements(%{prompt: %{kind: :enrollment}} = assigns) do
-    ~H"""
-    <ul class="list-disc space-y-1 pl-5 text-sm text-gray-200" data-test="recovery-statements">
-      <li data-test="recovery-directory">
-        Your identity is registered at the directory <span class="font-mono break-all">{@prompt.subject.directory_url}</span>, which this CYFR pins. No other directory can be chosen here.
-      </li>
-      <li>
-        While that directory cannot be reached, key rotation, recovery and identity checks by any other CYFR wait. If it is gone for good, they end: an identity never moves to another directory.
-      </li>
-      <li>
-        Your printed kit recovers your identity. Anyone who holds a copy can replace your keys, so keep it apart from your devices and add a second kit before you rely on one.
-      </li>
-      <li>
-        If every kit is lost, nothing can add one: your identity keeps working here with no way to recover it.
-      </li>
-      <li>
-        A recovery restores your identity alone, never your private data or the CYFR addresses your devices saved: you add those addresses again from surviving devices or invitations.
-      </li>
-      <li>
-        A printed kit is the one recovery holder here; no device holds recovery material.
-      </li>
-    </ul>
-    """
-  end
-
   def statements(%{prompt: %{kind: :holder}} = assigns) do
     ~H"""
     <ul class="list-disc space-y-1 pl-5 text-sm text-gray-200" data-test="recovery-statements">

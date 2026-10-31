@@ -22,7 +22,9 @@ defmodule Arca.IdentityAttempts do
       writes the identifier onto the person's identity row in the same
       transaction, and a refusal or an abandonment returns the person to
       unenrolled; completion is the kit's acknowledgment
-      (`acknowledge_kit/2`), which erases the sealed seed with it.
+      (`acknowledge_kit/2`), which erases the sealed seed with it. It holds
+      the name its person wants registered, which `rename/3` replaces
+      until it ends; `enrollment/2` reads the person's latest.
     * **holder** (another printed kit, added by a `recover` an existing
       kit signs, keeping the online keys) — `staged → submitted →
       accepted → completed`, or `submitted → refused`. Acceptance names
@@ -131,9 +133,11 @@ defmodule Arca.IdentityAttempts do
 
     * **enrollment** — `:user_id`, `:identifier`, `:directory_url`, the
       immutable `:genesis` bytes, `:request_digest` (the genesis entry's
-      hash) and the sealed `:kit_seed_sealed`. The person's identity row
-      moves `none → pending` with it; a person with no local identity row,
-      or one already enrolled, is refused `:not_enrollable`.
+      hash), the sealed `:kit_seed_sealed` and, optionally, the `:name`
+      the person wants registered, which an exact retry does not compare.
+      The person's identity row moves `none → pending` with it; a person
+      with no local identity row, or one already enrolled, is refused
+      `:not_enrollable`.
     * **holder** — `:user_id`, `:identifier`, `:directory_url`, the signed
       recover request's `:entry` bytes and `:request_digest`, the
       `:expected_revision` it names, the `:expected_head` the person's row
@@ -236,6 +240,59 @@ defmodule Arca.IdentityAttempts do
     |> Arca.Data.project()
   end
 
+  @doc """
+  Replace the name the enrollment `id` wants registered, while it has not
+  ended (`completed`, `refused` or `superseded`) and its person's row
+  records no name: one conditional write under the person's row lock, the
+  lock `follow_name/2` takes, so a rename and the record of a claimed name
+  are ordered. A person whose row records a name is `:named`; an attempt
+  that ended, or that is no enrollment, is `:not_found`.
+  """
+  @spec rename(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, row()} | {:error, :named | :not_found | :cross_tenant | :database_error}
+  def rename(%Prima.Actor{} = actor, id, name) when is_binary(id) and is_binary(name) do
+    Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.rename", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with {:ok, attempt} <- held(actor, id),
+             nil <- recorded_name!(attempt.user_id) do
+          renamed(attempt, name)
+        else
+          name when is_binary(name) -> {:error, :named}
+          {:error, _reason} = refusal -> refusal
+        end
+        |> Arca.Repo.committed()
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  @doc """
+  Make the enrollment `id` carry the name its person's row records, once
+  one is recorded, whatever its phase but `superseded`: the name the
+  registry accepted is the person's for life, and the attempt follows it.
+  Under the person's row lock, as `rename/3`, so a rename that read no
+  recorded name before the record committed is overwritten here, and one
+  after it is refused. Answers the attempt as it stands after.
+  """
+  @spec follow_name(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+  def follow_name(%Prima.Actor{} = actor, id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.follow_name", fn ->
+      # The attempt is read again once the person's lock is held: a rename
+      # that held the lock first, and committed while this waited, is what
+      # the comparison and the write must see.
+      Arca.Repo.locking_transaction(fn ->
+        with {:ok, %{user_id: user_id}} <- held(actor, id),
+             recorded = recorded_name!(user_id),
+             {:ok, attempt} <- held(actor, id) do
+          followed(attempt, recorded)
+        end
+        |> Arca.Repo.committed()
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
   @doc "The attempt `id`, if the actor may read it."
   @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
@@ -294,6 +351,33 @@ defmodule Arca.IdentityAttempts do
         from(a in IdentityAttempt,
           where: a.user_id == ^user_id and a.kind == ^kind and a.phase not in ^@terminal,
           order_by: [desc: a.inserted_at],
+          limit: 1
+        )
+        |> Arca.Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          attempt -> {:ok, attempt}
+        end
+      end)
+      |> Arca.Data.project()
+    else
+      {:error, :cross_tenant}
+    end
+  end
+
+  @doc """
+  The person's latest enrollment, whatever its phase but `superseded`, or
+  `{:error, :not_found}`: the one attempt an admission opened, read again
+  once its recovery code is saved.
+  """
+  @spec enrollment(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+  def enrollment(%Prima.Actor{} = actor, user_id) when is_binary(user_id) do
+    if person?(actor, user_id) do
+      Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.enrollment", fn ->
+        from(a in IdentityAttempt,
+          where: a.user_id == ^user_id and a.kind == "enrollment" and a.phase != "superseded",
+          order_by: [desc: a.inserted_at, desc: a.id],
           limit: 1
         )
         |> Arca.Repo.one()
@@ -724,6 +808,41 @@ defmodule Arca.IdentityAttempts do
 
   defp acknowledged(%IdentityAttempt{}), do: {:error, :not_accepted}
 
+  defp renamed(%IdentityAttempt{kind: "enrollment", phase: phase} = attempt, name)
+       when phase not in @terminal do
+    {count, _} =
+      from(a in IdentityAttempt, where: a.id == ^attempt.id and a.phase not in ^@terminal)
+      |> Arca.Repo.update_all(
+        set: [name: name, updated_at: Arca.ServerMetaStorage.now!()],
+        inc: [revision: 1]
+      )
+
+    if count == 1,
+      do: {:ok, Arca.Repo.get!(IdentityAttempt, attempt.id)},
+      else: {:error, :not_found}
+  end
+
+  defp renamed(%IdentityAttempt{}, _name), do: {:error, :not_found}
+
+  # The name the person's row records, read under the person's row lock,
+  # the first of the standing order.
+  defp recorded_name!(user_id) when is_binary(user_id) do
+    _locked = Arca.DirectoryHeads.lock_person!(user_id)
+    Arca.Repo.one(from(u in Arca.Schemas.User, where: u.id == ^user_id, select: u.namespace))
+  end
+
+  defp followed(%IdentityAttempt{kind: "enrollment", phase: phase, name: current} = attempt, name)
+       when is_binary(name) and name != current and phase != "superseded" do
+    Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^attempt.id),
+      set: [name: name, updated_at: Arca.ServerMetaStorage.now!()],
+      inc: [revision: 1]
+    )
+
+    {:ok, Arca.Repo.get!(IdentityAttempt, attempt.id)}
+  end
+
+  defp followed(%IdentityAttempt{} = attempt, _name), do: {:ok, attempt}
+
   defp reproof(id, change) do
     with %IdentityAttempt{kind: "restore", phase: "completed", user_id: user_id} = attempt
          when is_binary(user_id) <- Arca.Repo.get(IdentityAttempt, id) || {:error, :not_found},
@@ -805,7 +924,11 @@ defmodule Arca.IdentityAttempts do
     |> required(attrs, :genesis, &bytes?/1)
     |> required(attrs, :request_digest, &Prima.Identity.Encoding.digest?/1)
     |> required(attrs, :kit_seed_sealed, &nonempty_binary?/1)
-    |> row(attrs, ~w(user_id identifier directory_url genesis request_digest kit_seed_sealed)a)
+    |> optional(attrs, :name, &nonempty?/1)
+    |> row(
+      attrs,
+      ~w(user_id identifier directory_url genesis request_digest kit_seed_sealed name)a
+    )
   end
 
   defp build(%{kind: "holder"} = attrs) do
@@ -888,6 +1011,7 @@ defmodule Arca.IdentityAttempts do
          staged_live_key_sealed: nil,
          staged_operational_key_sealed: nil,
          kit_seed_sealed: nil,
+         name: nil,
          revision: 1,
          inserted_at: now,
          updated_at: now
