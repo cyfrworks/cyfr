@@ -12,9 +12,10 @@ defmodule Sanctum.Providers.Share do
   `list`, `usage` and `offered` are reads on both planes, so the assistant
   reads them in a chain. `create`, `set_audience`, `set_caps` and `revoke`
   are the owner's writes, on the interactive consent class and the
-  external plane alone; `revoke` only takes authority away. Every answer
-  names shares, entries and people by id, with audiences, caps and counts,
-  and never a value of the entry.
+  external plane alone; `revoke` only takes authority away. No answer
+  carries a value of an entry: shares, entries and people are named by id,
+  with audiences, caps and counts, and an offered share by its owner's
+  name and its entry's kind, provider, field names and destination.
   """
 
   require Logger
@@ -98,8 +99,9 @@ defmodule Sanctum.Providers.Share do
         Operation.new(
           "share",
           "create",
-          "Share a key: one attach-only entry of your own athanor, an API key or a bundle " <>
-            "whose destination names its methods and paths, offered to everyone or to a " <>
+          "Share a key: one attach-only entry of your own athanor, of kind " <>
+            Enum.join(Prima.CredentialKinds.shareable(), " or ") <>
+            ", whose destination names its methods and paths, offered to everyone or to a " <>
             "group you are in, with optional daily caps",
           [
             Arg.new("entry_id", :string,
