@@ -497,7 +497,7 @@ defmodule Sanctum.Test.DirectoryServer do
   A recovery of the identity, signed by its recovery key and published in
   `dir`: by default it replaces the live and operational keys (a new
   recovery epoch); `keep_live: true` keeps them and adds a recovery holder,
-  as a second printed kit does (the recovery epoch stays).
+  as a second recovery code does (the recovery epoch stays).
   """
   @spec recover!(pid(), map(), keyword()) :: map()
   def recover!(dir, identity, opts \\ []) do

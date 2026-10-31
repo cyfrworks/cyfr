@@ -558,13 +558,13 @@ if config_env() != :test do
   config :cyfr, :registry_url, registry_url_config
   config :sanctum, :registry_url, registry_url_config
 
-  # The directory this deployment enrolls its local people at: an https
+  # The directory this deployment registers its local people at: an https
   # directory URL, or an http one on a loopback host
   # (`Sanctum.enrollment_directory?/1`). Unset, it is `https://cyfr.run`
   # (the directory cyfr.run hosts) in production and none in development,
-  # as the registry is. Nothing reads a directory from a request. An
-  # enrollment's confirmation preview names the directory, so it is no
-  # longer than a preview's text.
+  # as the registry is. Nothing reads a directory from a request. The
+  # confirmation that shows a recovery code again names the directory in
+  # its preview, so it is no longer than a preview's text.
   {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
   directory_url = directory_url || if(config_env() == :dev, do: nil, else: "https://cyfr.run")
 

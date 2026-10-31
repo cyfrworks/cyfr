@@ -85,9 +85,10 @@ cyfr init
 # Start the server
 cyfr up
 
-# Set CYFR up: open the setup link `cyfr init` printed and create your
-# passkey, which makes you its first person and its administrator
-# (on a headless server: cyfr login --setup)
+# Set CYFR up: open the setup link `cyfr init` printed, type your name and
+# create your passkey, which makes you its first person and its
+# administrator, then save the recovery code it shows
+# (on a headless server: cyfr login --setup --name <your name>)
 
 # Open Prism, your athanor's chat
 cyfr open
@@ -134,7 +135,7 @@ your-project/
 ├── integration-guide.md   # How to use CYFR as your app backend
 ├── component-guide.md      # Full guide to building components
 ├── tincture-guide.md       # Guide to building tinctures
-├── identity-guide.md       # Your identifier, keys and printed kit, restore, and joining another CYFR
+├── identity-guide.md       # Your name, keys and recovery code, restore, and joining another CYFR
 ├── devices-guide.md        # Pairing devices and confirming sensitive changes
 ├── docker-compose.yml      # Self-hosted stack: cyfr, locus-runtime, locus-builds, locus-backends (+ tailscale for tailnet access, caddy for public access)
 ├── Caddyfile               # The reverse proxy of public access: everything → cyfr's proxy listener
@@ -272,7 +273,7 @@ cyfr push c:local.my-api:1.0.0
 
 The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies. A Rust build is locked to the component's `Cargo.lock` after its first build; compile with `--resolve` after changing a dependency.
 
-`cyfr push` pushes a local component to the registry under your **personal namespace**, the handle you claimed at cyfr.run — `c:local.my-api` is pushed as `c:<your-handle>.my-api`. With an enrolled identity ([identity-guide.md](identity-guide.md)), `cyfr registry claim <handle>` claims the handle and `cyfr registry sync` mints and stores your push tokens under a fresh confirmation; each is a request your live key signs, and sign-in never speaks to the registry. A push whose namespace has no stored token, or whose token the registry revoked, refuses and says to run `cyfr registry sync`. A deployment with `CYFR_REGISTRY_URL=none` refuses every registry request before it is sent.
+`cyfr push` pushes a local component to the registry under your **personal namespace**, the name your CYFR claimed for you at cyfr.run when it made you ([identity-guide.md](identity-guide.md)) — `c:local.my-api` is pushed as `c:<your-name>.my-api`. `cyfr registry sync` mints and stores your push tokens under a fresh confirmation, a request your live key signs, and sign-in never speaks to the registry. A push whose namespace has no stored token, or whose token the registry revoked, refuses and says to run `cyfr registry sync`. A deployment with `CYFR_REGISTRY_URL=none` refuses every registry request before it is sent.
 
 ### Tinctures
 
@@ -532,7 +533,7 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 - **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `apps/cyfr/test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening sign-in to everyone if that posture is too generous for your deployment.
 - **The audit trail carries identity fields.** The allowlist's refusal telemetry carries the person and the identifier it turned away (that is the audit content — who was turned away), and `Prima.Sanitizer` deliberately does not redact identity fields on the audit plane. Every entry is logged, and is also emitted once as the `[:cyfr, :audit, :recorded]` telemetry event carrying the sanitized `Arca.Audit.Event`: attach your own handler there to write the trail to a SIEM or an object store, and only to one that may hold PII.
-- **Sign-in never asks the registry; filling the athanor needs it.** The person and their own athanor are minted at sign-in, and the athanor is then filled in the background, pulling the bundle's published dependencies, the AQUA formula's provider catalysts among them, from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds. A cyfr.run handle and push tokens are needed only to publish (`cyfr push`, above), never to sign in.
+- **Sign-in never asks the registry; making a person and filling the athanor need it.** A person made here is registered at cyfr.run under their name before they are finished ([identity-guide.md](identity-guide.md)). The person and their own athanor are minted at their first admission, and the athanor is then filled in the background, pulling the bundle's published dependencies, the AQUA formula's provider catalysts among them, from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds. Push tokens are needed only to publish (`cyfr push`, above), never to sign in.
 - **A webhook's replay store is part of its delivery.** A webhook configured with an idempotency key header runs a delivery only once its claim is recorded; when the store cannot answer the claim, the delivery answers 503 `unavailable` with `Retry-After: 5` and runs nothing, and the `[:cyfr, :emissary, :webhook, :dedup_unavailable]` telemetry event is the alarm for the outage. The sender's retry runs it once the store answers.
 
 ### Reaching Prism on the server
@@ -617,8 +618,8 @@ It is offered once all three are set, beside GitHub and Google when they
 are configured; a partly set issuer refuses the boot. A sign-in method
 unlocks a person who already linked it, and never makes one: a person is
 made only by an admission at this CYFR: its setup, an invitation, signing
-up here while the allowlist admits everyone (`*`), or a verified CYFR
-sign-in.
+up here while the allowlist admits everyone (`*`), a verified CYFR
+sign-in, or a restore onto it empty.
 
 ### Requiring a company sign-in
 
@@ -657,60 +658,71 @@ requires nothing more and keeps the bindings.
 
 A person signs in at a server with one of its sign-in methods: GitHub, Google or
 your OIDC provider, a passkey they registered at this server, or, for a
-person whose keys another CYFR holds, their CYFR identity (**Sign in with your
+person whose keys another CYFR holds, their CYFR identity (**Sign in from your
 CYFR** on the sign-in page; [identity-guide.md](identity-guide.md)). The
 server allowlist judges people, never a sign-in method: a person made here
 signs in unless a deny names them, and a person whose keys another CYFR
 holds by `*` or an allow naming their identifier, `per_…` (`cyfr admin allow
-<identifier|@handle|*>`, `cyfr admin deny <person|identifier|@handle>`). An
-entry made by handle keeps the identifier the registry names for that handle
-when the entry is written, shown with the handle, so a handle that later
-passes to someone else moves no access.
+<identifier|@name|*>`, `cyfr admin deny <person|identifier|@name>`). An
+entry given a name (`@name`) keeps the identifier cyfr.run answers for that
+name when the entry is written, shown with the name; Settings' allowlist
+takes a name or `*`, and the command line an identifier too.
 
 The sign-in page offers, top to bottom: **Sign in with a passkey**; **Sign
-in with your CYFR**, where **I run my own CYFR** takes a handle (`@name`) or
-the address of the CYFR that holds your keys; **Create your identity here**, shown only
+in from your CYFR**, which opens one field, **Your CYFR**, for the address of
+the CYFR that holds your keys; **Create your identity here**, shown only
 while `*` admits; and **Other ways to sign in**, each linked method this
 server is configured for, which signs in a person who already linked it and
-never makes one. A handle is resolved at the registry to the identifier it
-names and the address its owner published; one with no published address
-asks for the address instead, and the sign-in is refused when the CYFR at
-that address signs in someone other than the handle's owner. With no person
-yet the page offers none of these: it says the CYFR is not set up and points
-to the link `cyfr init` or `cyfr setup` printed.
+never makes one. The field is filled from a link's `#from=<address>`, or
+from the address this browser last continued with on this page, which it
+keeps in its own storage; this server learns the address only when the
+person continues, keeps it for that sign-in alone, and shows no address it
+stored or learned on a page without a session. cyfr.run holds no address
+of any CYFR. With no person yet the page offers none of these: it says the
+CYFR is not set up and points to the link `cyfr init` or `cyfr setup`
+printed.
 
-An invitation makes a person here without opening sign-in to everyone. A
+An invitation admits someone without opening sign-in to everyone. A
 member creates an invitation link for a group they sit in, on **Members**
-(or `cyfr call invitation '{"action":"create","athanor_id":"ath_…"}'`); the
-platform administrator may also create one that names no group. The link is
-`<CYFR address>/invite#<code>`: it is shown once, works once and expires
-after seven days, and this CYFR keeps only the code's hash. Its page names
-who invited and to which group, and **Create your identity here** makes a
-passkey, the person, their keys, their athanor and the seat in the group.
+(or `cyfr call invitation '{"action":"create","athanor_id":"ath_…"}'`, with
+an optional `"name"`); typing a name on **Members** that nobody holds yet
+offers a link with that name filled in. The platform administrator may also
+create one that names no group. The link is `<CYFR address>/invite#<code>`:
+it is shown once, works once and expires after seven days, and this CYFR
+keeps only the code's hash. Its page names who invited and to which group.
+Someone new types their name and creates a passkey, which makes the person,
+their keys, their athanor and the seat in the group, then saves their
+recovery code. Someone who already has a CYFR name takes **Already have a
+CYFR name? Sign in with it.** and signs in from their own CYFR; the sign-in
+redeems the invitation, seats them and writes an allow of their identifier,
+so they sign in later without the link. That allow is written only where no
+deny names them, a deny written later outranks it, and it shows in `cyfr
+admin list` and Settings' allowlist, where it is removed like any other.
 The issuer or the administrator revokes a link; a link whose issuer has
 since left the group or been denied, or whose issuer's standing has changed
-since it was made (a restore from backup changes everyone's), admits no one. Someone who already has a
-CYFR identity is added by handle instead.
+since it was made (a restore from backup changes everyone's), admits no one.
 
 The first person of a CYFR is made by its setup, or by a restore onto an
 empty installation, and is its platform administrator; nothing else makes
 anyone an administrator. `cyfr init` and `cyfr setup` write the setup token
 `CYFR_SETUP_TOKEN` into `.env` and print the setup link, `<CYFR
 address>/setup#<token>`; the token travels only in the link's fragment,
-which no server log records. The setup page asks for a passkey, and its
+which no server log records. Every person this CYFR makes meets the same
+two screens, at setup, on an invitation and when signing up under `*`. The
+first asks for their name, checked live at cyfr.run, and a passkey, whose
 registration makes the person, their keys, their athanor and the passkey in
-one transaction, with no network. The page then offers a handle at the
-registry, never required: a free one chosen runs the enrollment, which
-registers the identity at the directory and prints its kit, and the handle
-is claimed once the kit is said to be saved; skipping leaves the person
-complete at this CYFR, and Settings offers the handle later. On a headless
-server, `cyfr login --setup` in the project's directory reads the token
-from `.env` and signs the command line in as the first person. Until that
-person holds a passkey, a paired device or a linked sign-in method, the
-token signs them in again, so a lost answer or an expired command-line
-session never locks them out; from then on, and for any other token, the
-link says it is not valid or setup is complete. A local admission at this
-server (setup, an invitation, an open admission or a restore) makes the person with their
+one transaction, with no network. The second registers their identity at
+cyfr.run and claims their name there, shows their recovery code, one line
+starting `CYFR-`, and signs them in once they say they saved it; a name
+taken meanwhile asks for another, and a cyfr.run that does not answer is
+tried again, from that screen or later from Settings. A name is for life. On
+a headless server, `cyfr login --setup --name <name>` in the project's
+directory reads the token from `.env`, does the same and prints the
+recovery code. Until that person holds a passkey, a paired device or a
+linked sign-in method, the token signs them in again, so a lost answer or
+an expired command-line session never locks them out; from then on, and
+for any other token, the link says it is not valid or setup is complete.
+A local admission at this server (setup, an invitation, an open admission or a restore) makes the person with their
 own keys and their own athanor, and an invitation adds the seat it names; a remote admission, of a person whose keys
 another CYFR holds, makes neither. The athanor is seeded and baseline-consented
 (the bundled `catalyst:local.http`
@@ -721,8 +733,8 @@ when it pins a running component's outbound address, so a LAN device is
 reachable from a chain as an MCP server on `CYFR_PRIVATE_EGRESS_TARGETS`,
 which is the server's own, and not as a URL to fetch). Sign-in never asks
 cyfr.run: the athanor is filled in the background (see [Operator
-notes](#operator-notes-for-shared-servers-and-open-sign-in)), and a cyfr.run
-handle is needed only to publish. A remote person's keys and athanor stay at
+notes](#operator-notes-for-shared-servers-and-open-sign-in)), and push tokens
+are needed only to publish. A remote person's keys and athanor stay at
 their own CYFR, and here they hold what their memberships give them. An
 installation set up for a restore (`CYFR_RESTORE_TOKEN`) reserves its first
 person for the restore: setup makes no one before it ([Backup and
@@ -776,19 +788,18 @@ CYFR of their own joins from it, where their keys and their own
 athanor stay:
 
 - **Letting them in.** The platform admin of the group's CYFR allows their
-  handle (`cyfr admin allow @name`) or their person identifier, `per_…`,
-  which their own CYFR's **Settings → Your identity** shows (`cyfr admin
-  allow per_…`), and a member adds them to a group the same way
-  (**Members**, or `cyfr member add @name`). Either keeps the identifier, so
-  a handle that later changes hands moves no access. An identifier the
-  group's CYFR has not seen yet leaves an invitation that activates at their
-  first sign-in.
-- **Signing in.** On the sign-in page of the group's CYFR they choose **I run
-  my own CYFR** and give their handle, when they publish their address with
-  it, or their own CYFR's address; they confirm there, and both show the
-  same short code. A sign-in begun from a handle admits only the identity
-  that handle names. The group's CYFR reads their identity at the
-  directory it names, which need not be its own, and mints them no
+  name (`cyfr admin allow @name`), and a member adds them to a group the
+  same way (**Members**, or `cyfr member add @name`); either keeps the
+  identifier the name belongs to. The command line also takes their person
+  identifier, `per_…`, which their own CYFR's **Settings → Your name** shows.
+  An identifier the group's CYFR has not seen yet leaves an invitation that
+  activates at their first sign-in. An invitation link does both at once:
+  signing in from their own CYFR with it seats them and lets them in.
+- **Signing in.** On the sign-in page of the group's CYFR they choose **Sign
+  in from your CYFR** and type their own CYFR's address, which a link can
+  fill and the browser remembers for that page; they confirm there, and
+  both show the same short code. The group's CYFR reads their identity at
+  the directory it names, which need not be its own, and mints them no
   keys and no athanor.
 - **Confirming at the group's CYFR.** Signing in with their CYFR identity is
   not a fresh proof. Their first passkey there, which its sensitive changes
@@ -799,7 +810,7 @@ athanor stay:
   membership, the sessions bound to it and the devices paired for it;
   their other athanors there, and their own CYFR, are untouched.
 
-CYFR enrolls its own people at the directory `CYFR_DIRECTORY_URL` names,
+CYFR registers its own people at the directory `CYFR_DIRECTORY_URL` names,
 `https://cyfr.run` by default. Any operator, a household or a team
 included, may serve another (`CYFR_DIRECTORY_SERVE=writer`) and name it
 there, but the only writer on the CYFR it recovers loses that recovery
@@ -919,8 +930,9 @@ the web tier, whose crashes restart it alone, never restarts the rest.
 `CYFR_HEADLESS=true` makes a server Codex-only: `/mcp`, `/api` and public
 tinctures under `/t` are served, and every browser page — sign-in, the chat,
 Prism — answers 404. Its first person is set up with `cyfr login --setup`,
-which `cyfr up` names while no one is set up, and the CLI signs in on `/mcp`,
-so this is for servers that never show a face (a build worker, a relay); it does not combine with an external OIDC provider, which moves
+which `cyfr up` names while no one is set up; it takes their name (`--name`,
+or asked on a terminal) and prints their recovery code. The CLI signs in on
+`/mcp`, so this is for servers that never show a face (a build worker, a relay); it does not combine with an external OIDC provider, which moves
 sign-in to the browser page a headless server refuses.
 
 ### Storage paths
@@ -1032,7 +1044,7 @@ The next boot retires what the backup's authority
 could still do before it admits anything: every session ends; API keys,
 webhook secrets, paired devices and passkeys are suspended until their
 person re-enables them from the system layer's checklist under a fresh
-sign-in with one of their sign-in methods, an emailed code or their kit (`/restore`, **Recover after a
+sign-in with one of their sign-in methods, an emailed code or their recovery code (`/restore`, **Recover after a
 restore**); every component grant asks for consent again; standing
 approvals, unused once-bindings and pending confirmations are dropped;
 every invitation link still open is revoked;
@@ -1060,9 +1072,9 @@ still work, and a revocation made after the backup was taken is not seen.
 Declare every restore.
 
 A backup restores the server. A person's identity has its own recovery,
-for a CYFR lost with no backup to put back: someone who enrolled (their
-own CYFR's **Settings → Your identity**) restores their identifier and new
-keys onto a fresh installation from their printed kit, never their data.
+for a CYFR lost with no backup to put back: a person restores their
+identifier and new keys onto a fresh installation from their recovery code,
+never their data.
 The operator sets a one-time `CYFR_RESTORE_TOKEN` there and hands it to
 them, and they open `https://<installation>/restore`; until it completes,
 no sign-in method signs anyone in. Their memberships at any other CYFR stand, and they
@@ -1220,16 +1232,16 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — | — |
 | cluster | several control-plane servers sharing one database | — | — | — | — | — | — | — |
 | sign-in method | a way a person signs in at CYFR: GitHub, Google, an OIDC provider, a passkey, or their CYFR identity when another CYFR holds their keys; the server allowlist decides who may come in by each | — | — | — | — | — | — | — |
-| person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every CYFR and grants no membership anywhere | — | — | — | — | — | — | — |
+| person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every CYFR, their name at cyfr.run names it, and it grants no membership anywhere | — | — | — | — | — | — | — |
 | directory | the CYFR that orders an identifier's identity log and serves its current public keys, holding no private key and no address of a person's CYFR | — | — | — | — | — | — | — |
 | live key | the key a person's CYFR holds for them to sign their sign-ins at any other CYFR and their devices' certificates | — | — | — | — | — | — | — |
 | operational key | the key a person's CYFR holds for them to rotate the live key, and nothing else | — | — | — | — | — | — | — |
-| recovery key | a key held away from the person's CYFR that replaces the live and operational keys without their cooperation | — | — | — | — | — | — | — |
-| recovery kit | three printed lines, the identifier, the directory and a recovery secret, from which a person restores their identity | — | — | — | — | — | — | — |
+| recovery key | a key held away from the person's CYFR, in a recovery code, that replaces the live and operational keys without their cooperation | — | — | — | — | — | — | — |
+| recovery code | one line starting `CYFR-` that spells a person's identifier and a recovery secret, from which they restore their identity; only a code they hold adds another | — | — | — | — | — | — | — |
 | `key_epoch` | the identity log entry that introduced a person's current live key; when it changes, every other CYFR retires what it bound to the old one | — | — | — | — | — | — | — |
 | `recovery_epoch` | the first entry of a person's identity log, or the latest recovery that replaced their live key; a passkey another CYFR registered for them is bound to it | — | — | — | — | — | — | — |
-| restore | bringing a person's identity onto a fresh installation from their recovery kit, under that installation's single-use restore token; it restores no data | — | — | — | — | — | — | — |
-| carry | a sign-in at another CYFR, such as one that keeps a household's or a team's shared athanors always on, begun at the person's own CYFR and carried between the two by their browser | — | — | — | — | — | — | — |
+| restore | bringing a person's identity onto a fresh installation from their recovery code, under that installation's single-use restore token; it restores no data | — | — | — | — | — | — | — |
+| carry | a sign-in at another CYFR, such as one that keeps a household's or a team's shared athanors always on, from the address of the person's own CYFR given on its sign-in page, begun at their own CYFR and carried between the two by their browser | — | — | — | — | — | — | — |
 | pending action | the durable record of one carry: its destination, challenge and return address, resumed by an exact retry | — | — | — | — | — | — | — |
 | passkey | a credential registered at one CYFR, under that CYFR's host, that signs the person in there and gives their fresh confirmations there | — | — | — | — | — | — | — |
 | device key | the key pair a paired device makes and never exports, which its device certificates name | — | — | — | — | — | — | — |
@@ -1249,7 +1261,7 @@ Every setting of the control plane is a `CYFR_` variable; a part named with a pr
 | [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
 | [Component Guide](component-guide.md) | Practical guide to building catalysts, reagents, and formulas |
 | [Tincture Guide](tincture-guide.md) | Practical guide to building tinctures |
-| [Identity Guide](identity-guide.md) | A person's identifier, keys and printed kit, restoring them on a fresh installation, and joining a CYFR that is not your own |
+| [Identity Guide](identity-guide.md) | A person's name, identifier, keys and recovery code, restoring them on a fresh installation, and joining a CYFR that is not your own |
 | [Devices Guide](devices-guide.md) | Pairing a device with CYFR, how it stays connected, and confirming a sensitive change from any of your devices |
 | [Architecture](ARCHITECTURE.md) | What each part of CYFR owns, how the parts talk to each other, and why |
 
