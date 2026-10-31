@@ -980,6 +980,52 @@ defmodule Arca.VaultStorageTest do
                )
     end
 
+    test "a rebind to a destination without methods or paths is refused while an active " <>
+           "share names the entry, with nothing written",
+         %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
+      before = status_of(terry.actor, entry.id)
+
+      for incomplete <- [
+            %{"hosts" => ["api.openai.com"], "paths" => ["/v1/"]},
+            %{"hosts" => ["api.openai.com"], "methods" => ["POST"]}
+          ] do
+        {:ok, parsed} = Prima.Destination.from_map(incomplete)
+
+        assert {:error, {:shared_destination_incomplete, id}} =
+                 VaultStorage.move_binding(
+                   terry.actor,
+                   entry.id,
+                   "sha256:d0",
+                   %{
+                     destination: Prima.Destination.canonical(parsed),
+                     binding_digest: "sha256:d1"
+                   },
+                   @blocked
+                 )
+
+        assert id == entry.id
+        assert status_of(terry.actor, entry.id) == before
+        assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == "active"
+        assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
+      end
+
+      # Once no active share names the entry, the same move lands.
+      {:ok, _} = Arca.Shares.revoke(terry.actor, share.id, @blocked)
+      {:ok, parsed} = Prima.Destination.from_map(%{"hosts" => ["api.openai.com"]})
+
+      assert {:ok, %{rebound_share_ids: []}} =
+               VaultStorage.move_binding(
+                 terry.actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{
+                   destination: Prima.Destination.canonical(parsed),
+                   binding_digest: "sha256:d1"
+                 },
+                 @blocked
+               )
+    end
+
     test "a revoke and a delete revoke every share of the entry and block their dependents",
          %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
       other = Arca.Test.Shares.entry!(terry.actor)

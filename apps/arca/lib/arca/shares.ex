@@ -323,14 +323,20 @@ defmodule Arca.Shares do
   def eligible(%{kind: _, destination: _} = entry) do
     cond do
       entry.kind not in Prima.CredentialKinds.shareable() -> {:error, :kind_not_shareable}
-      not complete_destination?(entry.destination) -> {:error, :destination_incomplete}
+      not destination_complete?(entry.destination) -> {:error, :destination_incomplete}
       true -> :ok
     end
   end
 
-  # A shared key goes only where its destination names, so the
-  # destination must name its methods and paths.
-  defp complete_destination?(text) do
+  @doc """
+  Whether an entry's stored destination (its canonical text) may carry a
+  share: a shared key goes only where its destination names, so the
+  destination names its methods and paths. `eligible/1` asks it of a new
+  share, and `Arca.VaultStorage` of a binding move while a share is
+  active.
+  """
+  @spec destination_complete?(String.t() | nil) :: boolean()
+  def destination_complete?(text) when is_binary(text) do
     with {:ok, %{} = map} <- Jason.decode(text),
          {:ok, %Prima.Destination{methods: [_ | _], paths: [_ | _]}} <-
            Prima.Destination.from_map(map) do
@@ -339,6 +345,8 @@ defmodule Arca.Shares do
       _ -> false
     end
   end
+
+  def destination_complete?(_none), do: false
 
   # Both adapters' names for the natural key's index: PostgreSQL reports
   # the index, and ecto_sqlite3 the index SQLite names in its error text.

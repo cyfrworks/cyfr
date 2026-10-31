@@ -57,9 +57,12 @@ defmodule Arca.VaultStorage do
   An entry offered through shares (`Arca.Shares`) carries them with it.
   A binding move blocks every profile, in every athanor, whose head binds
   the entry or one of its active shares, and leaves the shares as they
-  are. A move to disclosure is refused `{:error, {:shared, entry_id}}`
-  under the entry's lock while an active share names it, since a shared
-  entry is used attach-only. A revoke (`set_status/3` to `revoked`) and a
+  are. While an active share names the entry, a move to disclosure is
+  refused `{:error, {:shared, entry_id}}` and a move to a destination
+  that names no methods or no paths
+  `{:error, {:shared_destination_incomplete, entry_id}}`, each under the
+  entry's lock with nothing written, since a shared entry is used
+  attach-only and goes only to named methods and paths. A revoke (`set_status/3` to `revoked`) and a
   tombstone revoke every share of the entry and block their dependents in
   the same transaction. Each takes the entry's row before the shares and
   the shares before the profiles (`Arca.ConsentStorage`'s order).
@@ -435,7 +438,9 @@ defmodule Arca.VaultStorage do
   athanor, takes `blocked_status` with it, so no consent is ever left
   covering a binding it did not approve. A profile already revoked is not
   blocked: it stays revoked. A move to disclosure (`attach_only: false`)
-  of an entry an active share names is `{:error, {:shared, id}}`.
+  of an entry an active share names is `{:error, {:shared, id}}`, and a
+  move of one to a destination without methods or paths
+  `{:error, {:shared_destination_incomplete, id}}`.
 
   `{:error, :binding_moved}` when another change landed first or the entry
   is gone; the caller re-reads and recomputes. The answer on success is
@@ -760,7 +765,7 @@ defmodule Arca.VaultStorage do
        }) do
     with :ok <- cas_binding(athanor_id, id, from_digest, changes),
          share_ids = active_shares(athanor_id, id),
-         :ok <- attach_only_while_shared(id, changes, share_ids),
+         :ok <- shareable_while_shared(id, changes, share_ids),
          {:ok, blocked} <-
            Arca.ConsentStorage.block_dependents(
              Prima.Actor.in_athanor(athanor_id),
@@ -790,8 +795,19 @@ defmodule Arca.VaultStorage do
     |> Arca.Repo.all()
   end
 
-  defp attach_only_while_shared(id, %{attach_only: false}, [_ | _]), do: {:error, {:shared, id}}
-  defp attach_only_while_shared(_id, _changes, _share_ids), do: :ok
+  # A move of an entry an active share names keeps it shareable: used
+  # attach-only, to a destination that names its methods and paths
+  # (`Arca.Shares.destination_complete?/1`).
+  defp shareable_while_shared(_id, _changes, []), do: :ok
+  defp shareable_while_shared(id, %{attach_only: false}, _share_ids), do: {:error, {:shared, id}}
+
+  defp shareable_while_shared(id, %{destination: destination}, _share_ids) do
+    if Arca.Shares.destination_complete?(destination),
+      do: :ok,
+      else: {:error, {:shared_destination_incomplete, id}}
+  end
+
+  defp shareable_while_shared(_id, _changes, _share_ids), do: :ok
 
   # A revoke or a tombstone that landed: every share of the entry is
   # revoked and their dependents blocked, under the entry's row it holds.
