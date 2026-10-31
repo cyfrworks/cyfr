@@ -178,6 +178,10 @@ answer_ask() {
         "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)" \
         "$(asked "$ask" digest)" "$(asked "$ask" field)")"
       ;;
+    held_claim)
+      ANSWER="$(entry_fixture held_claim "$(asked "$ask" user_id)" "$(asked "$ask" id)" "$(asked "$ask" count)" \
+        "$(asked "$ask" url)" "$(asked "$ask" method)" "$(asked "$ask" digest)" "$(asked "$ask" field)")"
+      ;;
     row_binding) ANSWER="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" share_id)")" ;;
     focus) ANSWER="$(entry_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;

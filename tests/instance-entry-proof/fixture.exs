@@ -29,7 +29,8 @@
 #       those profiles, every binding row of those consents, the instance
 #       entries offered to her (`Sanctum.InstanceEntries.offered/1`) and the
 #       shares (`Sanctum.Shares.offered/1`); once Bea has signed in, her row
-#       (`users`); and, once every row is read, the database's time and its
+#       (`users`) and the shares offered to her under the context she held
+#       (`held_claim` below), or the refusal; and, once every row is read, the database's time and its
 #       UTC date, the end of the window and the today a use row's day is
 #       held to. It picks no row out of a set and leaves no column out.
 #
@@ -93,6 +94,13 @@
 #       admitted, or the refusal with a cap's reset, and the database's
 #       next UTC midnight, computed here from its clock. The material
 #       resolved is dropped here.
+#
+#   held_claim USER_ID SHARE_ID COUNT URL METHOD DIGEST FIELD
+#       `claim`'s `granted` claims under the person's context as a request
+#       established it and still holds it, built from their row (their own
+#       athanor, at Prism) rather than from their session, which a deny
+#       ends: the share's own checks, not the session's, are what a request
+#       already in flight meets.
 #
 #   row_binding SESSION_TOKEN SHARE_ID
 #       The person's openai head's share row naming SHARE_ID, read live by
@@ -216,6 +224,88 @@ fn args ->
     query |> Arca.Repo.all() |> Enum.map(&Map.delete(Map.from_struct(&1), :__meta__))
   end
 
+  # A person's context as a request established it and still holds it,
+  # built from their row (their own athanor, at Prism) rather than from
+  # their session: a deny ends the session, and the share's own checks, not
+  # the session's, are what a request already in flight meets.
+  held_ctx = fn user_id ->
+    {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: user_id,
+        athanor_id: user.personal_athanor_id,
+        permissions: Sanctum.Context.person_permissions(),
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    %{ctx | origin: :interactive}
+  end
+
+  # The shares offered to the person `ctx` names, by id, or the refusal.
+  shared_with = fn ctx ->
+    case Sanctum.Shares.offered(ctx) do
+      {:ok, shared} -> Enum.map(shared, & &1.id)
+      {:error, reason} -> %{refused: tag.(reason)}
+    end
+  end
+
+  claim_for = fn ctx, source, id, count, url, method, digest, field ->
+    request = %{uri: URI.parse(url), method: method}
+
+    # One claim of the source, its material dropped here, unread.
+    resolve =
+      case source do
+        "granted" ->
+          fn ->
+            with {:ok, _value} <-
+                   Sanctum.Shares.resolve(ctx, id, digest, request, {:field, field, field}),
+                 do: :admitted
+          end
+
+        "share" ->
+          bound =
+            case head.(ctx) do
+              {_profile, head} -> bound_share.(head, id)
+              :timeout -> {:error, :not_bound}
+            end
+
+          fn ->
+            with {:ok, approved, take} <- bound,
+                 {:ok, _value} <- Sanctum.Shares.resolve(ctx, id, approved, request, take),
+                 do: :admitted
+          end
+      end
+
+    results =
+      for _ <- 1..String.to_integer(count) do
+        case resolve.() do
+          :admitted ->
+            %{admitted: true}
+
+          {:error, {:connection_cap, %DateTime{} = reset_at}} ->
+            %{
+              admitted: false,
+              refusal: "connection_cap",
+              reset_at: DateTime.to_iso8601(reset_at)
+            }
+
+          {:error, {:entry_unavailable, status}} ->
+            %{admitted: false, refusal: "entry_unavailable", status: status}
+
+          {:error, reason} ->
+            %{admitted: false, refusal: tag.(reason)}
+        end
+      end
+
+    answer.(%{
+      results: results,
+      next_utc_midnight: DateTime.to_iso8601(next_midnight.())
+    })
+  end
+
   case args do
     ["clock"] ->
       answer.(%{now: DateTime.to_iso8601(Arca.ServerMetaStorage.now!())})
@@ -298,18 +388,23 @@ fn args ->
             )
 
           {:ok, offered} = Sanctum.InstanceEntries.offered(ctx)
-          {:ok, shared} = Sanctum.Shares.offered(ctx)
 
           %{
             profiles: profiles,
             consents: consents,
             rows: rows,
             offered: Enum.map(offered, & &1.id),
-            shared: Enum.map(shared, & &1.id)
+            shared: shared_with.(ctx)
           }
         end
 
-      bea = if(bea_id == "-", do: nil, else: %{user: stored.(Arca.Schemas.User, bea_id)})
+      bea =
+        if bea_id == "-",
+          do: nil,
+          else: %{
+            user: stored.(Arca.Schemas.User, bea_id),
+            shared: shared_with.(held_ctx.(bea_id))
+          }
 
       # The database's time once every row is read: the end of the window a
       # stored time is held to, and the today a use row's day is.
@@ -458,58 +553,10 @@ fn args ->
       end
 
     ["claim", token, source, id, count, url, method, digest, field] ->
-      ctx = person_ctx.(token)
-      request = %{uri: URI.parse(url), method: method}
+      claim_for.(person_ctx.(token), source, id, count, url, method, digest, field)
 
-      # One claim of the source, its material dropped here, unread.
-      resolve =
-        case source do
-          "granted" ->
-            fn ->
-              with {:ok, _value} <-
-                     Sanctum.Shares.resolve(ctx, id, digest, request, {:field, field, field}),
-                   do: :admitted
-            end
-
-          "share" ->
-            bound =
-              case head.(ctx) do
-                {_profile, head} -> bound_share.(head, id)
-                :timeout -> {:error, :not_bound}
-              end
-
-            fn ->
-              with {:ok, approved, take} <- bound,
-                   {:ok, _value} <- Sanctum.Shares.resolve(ctx, id, approved, request, take),
-                   do: :admitted
-            end
-        end
-
-      results =
-        for _ <- 1..String.to_integer(count) do
-          case resolve.() do
-            :admitted ->
-              %{admitted: true}
-
-            {:error, {:connection_cap, %DateTime{} = reset_at}} ->
-              %{
-                admitted: false,
-                refusal: "connection_cap",
-                reset_at: DateTime.to_iso8601(reset_at)
-              }
-
-            {:error, {:entry_unavailable, status}} ->
-              %{admitted: false, refusal: "entry_unavailable", status: status}
-
-            {:error, reason} ->
-              %{admitted: false, refusal: tag.(reason)}
-          end
-        end
-
-      answer.(%{
-        results: results,
-        next_utc_midnight: DateTime.to_iso8601(next_midnight.())
-      })
+    ["held_claim", user_id, id, count, url, method, digest, field] ->
+      claim_for.(held_ctx.(user_id), "granted", id, count, url, method, digest, field)
 
     ["row_binding", token, share_id] ->
       ctx = person_ctx.(token)
