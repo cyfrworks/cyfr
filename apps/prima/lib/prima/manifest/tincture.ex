@@ -10,8 +10,8 @@ defmodule Prima.Manifest.Tincture do
     * `frame` — `capabilities` (names; which names exist, and what each
       opens, are `Compendium.Tincture.Rules`'), `placement` (a name, or
       absent for the shell's default), `background` (a boolean, default
-      false) and `size`, the size hint the shell opens a window at
-      (`Size`), every part of it optional.
+      false) and `size`, the size hint (`Size`), every part of it
+      optional.
     * `streams` — the streams the tincture may open, each a provider
       stream `name` and a `subject`: a literal, `"*"` for any subject the
       provider's grammar admits (`Prima.Provider.Stream`), or absent for a
@@ -45,7 +45,8 @@ defmodule Prima.Manifest.Tincture do
     width `w` and a height `h` in CSS pixels; `aspect`, the width-to-height
     ratio as two whole numbers; and `tile`, `left` or `right`, for a
     tincture that would rather open tiled at that edge than as a window.
-    The shell reads it as a hint and fits it to the screen.
+    The shell reads only `tile`, when it first places the app; the rest
+    is held to its bounds here and kept with the version.
     """
     @type extent :: %{w: pos_integer(), h: pos_integer()}
     @type t :: %__MODULE__{

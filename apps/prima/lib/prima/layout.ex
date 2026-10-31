@@ -50,10 +50,11 @@ defmodule Prima.Layout do
       `minimised` (it keeps its placement), and exactly the keys its
       placement takes:
       * a `window` has its `geometry`: `x`, `y`, `w` and `h` in hundredths
-        of a percent of the viewport, `x` and `y` from 0 and `w` and `h`
-        from 1, each to 10000, so a window means the same on every device;
+        of a percent of the apps' area (the screen between Prism's top bar
+        and its shelf), `x` and `y` from 0 and `w` and `h` from 1, each to
+        10000, so a window means the same on every device;
       * a `tile` has its `side`, `left` or `right`, and its `share` of the
-        viewport's width in hundredths of a percent, from 1 to 10000;
+        apps' area's width in hundredths of a percent, from 1 to 10000;
       * a `full` app has nothing more: it takes the whole area while it
         is shown.
       In the struct an app carries all three of `geometry`, `side` and
