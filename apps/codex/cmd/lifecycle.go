@@ -398,6 +398,7 @@ func init() {
 	initCmd.Flags().String("access", "", "How the new CYFR is reached: local, tailnet or public (asked on a terminal; local otherwise)")
 	addAccessFlags(initCmd)
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
+	initCmd.Flags().Bool("yes", false, "Agree to install the requirements init shows this machine lacks, without asking")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -410,6 +411,8 @@ var initCmd = &cobra.Command{
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
+
+On Ubuntu 26.04 LTS, init first installs what CYFR needs that this machine lacks, from Ubuntu's archive: Docker (docker.io, docker-compose-v2 and apparmor), its running service, and this account's membership of the docker group. It shows the exact commands, asks before running them, and runs them as root through one sudo; --yes agrees without asking. When the account joins the docker group, the rest of init runs in a process that has the group, and this terminal needs 'newgrp docker' or a new login before 'cyfr up'. A machine that has everything is shown and asked nothing, and other systems keep their own Docker as they have it.
 
 How CYFR is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. .env is written for this computer only, with every key; then, for tailnet access, the machine joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves CYFR reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: access is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional).
 
@@ -429,16 +432,21 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .en
 		o.force, _ = cmd.Flags().GetBool("force")
 		o.noPull, _ = cmd.Flags().GetBool("no-pull")
 		o.mode, _ = cmd.Flags().GetString("access")
+		o.yes, _ = cmd.Flags().GetBool("yes")
+		o.continuation = continuationArgs(cmd)
 		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
 // initOptions are cyfr init's flags; mode is --access, empty when it is not
-// given.
+// given. yes agrees to the requirements init shows (--yes), and
+// continuation is the flags given, for the init run that continues once
+// they are installed (prepareMachine).
 type initOptions struct {
 	accessOptions
-	force, noPull bool
-	mode          string
+	force, noPull, yes bool
+	mode               string
+	continuation       []string
 }
 
 // accessChoice is the mode init applies to a new home, with its inputs.
@@ -475,8 +483,16 @@ func (f initFace) begin(name string) {
 	}
 }
 
-// runInit is `cyfr init` in the working directory, asking on the terminal.
+// runInit is `cyfr init` in the working directory, asking on the terminal:
+// the machine's missing requirements first (prepareMachine), then the
+// project, unless the run continued in a process of its own.
 func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
+	switch continued, err := prepareMachine(ctx, o.yes, o.continuation, out, errOut); {
+	case err != nil:
+		return err
+	case continued:
+		return nil
+	}
 	return initProject(ctx, o, initFace{
 		answers: func(ctx context.Context) (accessChoice, error) {
 			choice, err := chooseAccess(ctx, o, askTerminal(), bufio.NewReader(askInput), out)

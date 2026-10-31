@@ -52,10 +52,14 @@ Stand up the self-hosted stack on a server (see [Deploy to a Server](#deploy-to-
 
 ### Develop with Codex + Prism
 
-Run CYFR locally and drive it with the `cyfr` CLI. Install Docker first — the shell installer and Homebrew cask install the `cyfr` CLI only; they do not install Docker, and Docker must be running before `cyfr init` / `cyfr up`:
+Run CYFR locally and drive it with the `cyfr` CLI.
+
+On **Ubuntu 26.04 LTS** nothing needs installing by hand. The install script installs what it lacks to verify a release (cosign, and curl and ca-certificates where missing) from Ubuntu's archive, then puts the verified `cyfr` in `/usr/local/bin`, root's. Under either verification knob below, it installs nothing root would own: it puts `cyfr` in `/usr/local/bin` if you can write it, else `~/.local/bin`, and refuses a `CYFR_INSTALL_DIR` you cannot write, a `~/.local/bin` you cannot write, and a run as root, since `cyfr init` would run that unverified program as root. `cyfr init` installs Docker from Ubuntu's archive (`docker.io`, `docker-compose-v2` and `apparmor`) when the machine lacks it, starts its service and adds your account to the `docker` group. Each shows the exact commands, asks `Install these requirements?`, and runs them through `sudo`, which asks for your password once per command; `cyfr init --yes`, and `CYFR_INSTALL_YES=1` after the install command's pipe, agree without asking; `sudo` still asks for the password in a terminal, and without one it must work without a password prompt. Members of the `docker` group control Docker, which is root's power over the machine. Joining the group takes effect in a new login: `cyfr init` finishes in a process that has the group, and the terminal you ran it in needs `newgrp docker`, or a new login, before `cyfr up`. Ubuntu's universe archive must be enabled (`sudo add-apt-repository universe`); neither command edits apt's sources.
+
+On other systems, install Docker first. The install script and Homebrew cask install the `cyfr` CLI only, and Docker must be running before `cyfr init` / `cyfr up`:
 
 - macOS / Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- Linux: quick dev install via Docker's convenience script: `curl -fsSL https://get.docker.com | sh` (for production hosts, prefer your distro's Docker packages). Then, **if you are not running as root**, add yourself to the `docker` group so the CLI can reach the daemon without `sudo`:
+- Linux: your distribution's Docker packages, or Docker's convenience script for a quick dev install: `curl -fsSL https://get.docker.com | sh`. Then, **if you are not running as root**, add yourself to the `docker` group so the CLI can reach the daemon without `sudo`:
 
   ```bash
   sudo groupadd docker
@@ -64,25 +68,27 @@ Run CYFR locally and drive it with the `cyfr` CLI. Install Docker first — the 
   ```
 
 ```bash
-# Install the cyfr CLI via shell script (Linux, macOS, WSL)
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
-
-# The installer takes the newest release that is not a pre-release; CYFR_VERSION
-# names any release, pre-releases included. The installer needs
-# cosign (`brew install cosign`) to verify the release's signature; without
-# it, CYFR_ALLOW_UNVERIFIED=1 verifies the archive's checksum alone.
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.1 sh
+# Install the cyfr CLI via shell script (Linux, macOS, WSL). Every release so
+# far is a pre-release, so CYFR_VERSION names the one to install; without it
+# the installer takes the newest release that is not a pre-release. The
+# installer needs cosign to verify the release's signature: on Ubuntu 26.04
+# LTS it offers to install it, elsewhere install it yourself
+# (`brew install cosign`); without it, CYFR_ALLOW_UNVERIFIED=1 verifies the
+# archive's checksum alone.
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.5 sh
 
 # Or via Homebrew (macOS), which installs the newest release that is not a pre-release
 brew tap cyfrworks/cyfr
 brew install --cask cyfr
 
-# Initialize a project; it prints this CYFR's setup link
+# Initialize a project; on Ubuntu 26.04 LTS it first installs Docker if the
+# machine lacks it; it prints this CYFR's setup link
 mkdir <project-directory>
 cd <project-directory>
 cyfr init
 
-# Start the server
+# Start the server (after `newgrp docker` or a new login, if init just added
+# you to the docker group)
 cyfr up
 
 # Set CYFR up: open the setup link `cyfr init` printed, type your name and
@@ -108,7 +114,7 @@ cyfr profile grant c:local.claude
 cyfr -h
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `locus-runtime` service's seccomp profile), `.env.example` and the services' own env examples, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, asking how CYFR is reached (your devices via Tailscale, a public domain via Caddy, or this computer only), and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the runtime root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on, and the setup token `CYFR_SETUP_TOKEN`. It then prints the setup link, `<CYFR address>/setup#<token>`, which sets CYFR up once `cyfr up` has started it: the page asks you to create a passkey, and that makes you its first person (see [Sign-in methods, and what a first sign-in needs](#sign-in-methods-and-what-a-first-sign-in-needs)). Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `locus-runtime` (the runtime that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers), and the proxy that lets other devices reach CYFR: `tailscale` (Tailscale Serve, for tailnet access) or `caddy` (TLS and the reverse proxy at `:80`/`:443`, for public access); `cyfr up` brings up the first four, and the proxy CYFR's access mode selects. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `locus-runtime` service's seccomp profile), `.env.example` and the services' own env examples, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, asking how CYFR is reached (your devices via Tailscale, a public domain via Caddy, or this computer only), and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the runtime root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on, and the setup token `CYFR_SETUP_TOKEN`. It then prints the setup link, `<CYFR address>/setup#<token>`, which sets CYFR up once `cyfr up` has started it: the page asks you to create a passkey, and that makes you its first person (see [Sign-in methods, and what a first sign-in needs](#sign-in-methods-and-what-a-first-sign-in-needs)). Pass `--no-interactive` to take the defaults. On Ubuntu 26.04 LTS it installs Docker first when the machine lacks it, as above; on other systems it does not install Docker. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `locus-runtime` (the runtime that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers), and the proxy that lets other devices reach CYFR: `tailscale` (Tailscale Serve, for tailnet access) or `caddy` (TLS and the reverse proxy at `:80`/`:443`, for public access); `cyfr up` brings up the first four, and the proxy CYFR's access mode selects. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -398,7 +404,7 @@ There is **no censorship-circumvention layer** here — Tailscale and Caddy give
 
 ### Prerequisites
 
-- A Linux VPS (or any Docker host) with Docker + the Compose plugin: **Docker Engine 28 or later on a cgroup v2 host** (cgroup v2 is the default of current distributions and of Docker Desktop). `locus-runtime`, `locus-builds` and `locus-backends` hold every runner, build and backend to a memory bound of its own, a cgroup `cyfr-locus` makes for it, which needs the containers' `security_opt: writable-cgroups=true` (in the shipped `docker-compose.yml`; it adds no capability). Without it — an older engine, a cgroup v1 host, or the option removed — nothing runs unbounded and nothing runs: `locus-runtime` starts no runner and logs, naming `writable-cgroups=true`, that it cannot bound one, so no component runs; every build is refused as `unavailable`, naming the option; and every backend's spawn is refused as `memory_unavailable`, which its status reports.
+- A Linux VPS (or any Docker host) with Docker + the Compose plugin: **Docker Engine 28 or later on a cgroup v2 host**. On Ubuntu 26.04 LTS, `cyfr init` installs them from Ubuntu's archive when the machine lacks them, with AppArmor, whose default Docker profile Ubuntu's user-namespace restriction requires; it needs Ubuntu's universe archive enabled. It keeps another provider's Docker as it is, and refuses, naming the check, a remote or rootless Docker context, a Docker older than 28 it did not install, and a host without unprivileged user namespaces, cgroup v2 or Docker's AppArmor profile; it changes no boot or security setting. Other systems need Docker installed first. cgroup v2 is the default of current distributions and of Docker Desktop. `locus-runtime`, `locus-builds` and `locus-backends` hold every runner, build and backend to a memory bound of its own, a cgroup `cyfr-locus` makes for it, which needs the containers' `security_opt: writable-cgroups=true` (in the shipped `docker-compose.yml`; it adds no capability). Without it — an older engine, a cgroup v1 host, or the option removed — nothing runs unbounded and nothing runs: `locus-runtime` starts no runner and logs, naming `writable-cgroups=true`, that it cannot bound one, so no component runs; every build is refused as `unavailable`, naming the option; and every backend's spawn is refused as `memory_unavailable`, which its status reports.
 - A host that allows unprivileged user namespaces, and `locus-runtime` under the shipped seccomp profile: every runner gets a user and network namespace of its own (see [Execution workers](#execution-workers)).
 - For public access: a domain pointing at the VPS. For tailnet access: a Tailscale account. For local access: nothing extra.
 - Firewall: **public** opens `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). In every mode CYFR publishes `4000/tcp` on `127.0.0.1` only (`CYFR_PORT` changes it). With **tailnet** access, CYFR also publishes SOCKS5 `1055/tcp` on `127.0.0.1` only, for the device's own browser; it opens no port to other machines. This is a general proxy on this machine's loopback for the device's own browser; a program on this machine can reach through it whatever the sidecar can reach.
@@ -408,12 +414,14 @@ There is **no censorship-circumvention layer** here — Tailscale and Caddy give
 Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks how CYFR is reached, and mints the stack's keys), and brings the stack up:
 
 ```bash
-# Install the CLI (the installer/cask install the CLI only, not Docker):
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
+# Install the CLI (on Ubuntu 26.04 LTS the installer installs cosign to
+# verify it; elsewhere it installs the CLI only):
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.5 sh
 #   …or:  brew tap cyfrworks/cyfr && brew install --cask cyfr
 
 mkdir my-cyfr && cd my-cyfr
-cyfr init        # downloads compose + Caddyfile, asks how CYFR is reached, writes .env and its keys
+cyfr init        # installs Docker on Ubuntu 26.04 LTS if missing, downloads compose + Caddyfile, asks how CYFR is reached, writes .env and its keys
+newgrp docker    # only if init just added you to the docker group (or log in again)
 cyfr up          # starts cyfr + locus-runtime + locus-builds + locus-backends (and the proxy of tailnet or public access)
 ```
 
@@ -1094,7 +1102,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, asks how CYFR is reached (tailnet, public or local; `--access`, `--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`), writes `.env` with the stack's keys and the setup token minted into it and prints the setup link (on a headless `.env`, `cyfr login --setup` instead), joins the tailnet for tailnet access, opening the approval link in the default browser on a machine with a display (`--no-open` does not), creates dirs and pulls the images (`--no-pull`); in an existing project it adds only the keys `.env` lacks (`--force` re-fetches the deploy files; never replaces `.env`) |
+| `cyfr init` | Scaffold a CYFR project — on Ubuntu 26.04 LTS first installs the Docker, Docker service and `docker` group membership the machine lacks, after showing the commands and asking (`--yes` agrees), through one `sudo`; then downloads `docker-compose.yml` + `Caddyfile`, asks how CYFR is reached (tailnet, public or local; `--access`, `--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`), writes `.env` with the stack's keys and the setup token minted into it and prints the setup link (on a headless `.env`, `cyfr login --setup` instead), joins the tailnet for tailnet access, opening the approval link in the default browser on a machine with a display (`--no-open` does not), creates dirs and pulls the images (`--no-pull`); in an existing project it adds only the keys `.env` lacks (`--force` re-fetches the deploy files; never replaces `.env`) |
 | `cyfr setup` | Set up a new CYFR from pages on this machine's own screen, `cyfr init`'s face for a device with a touch screen: serves them on `127.0.0.1` before the stack runs (`--port`, a free port when not given), prints their address, writes it to `.cyfr/setup.url` and opens them in the default browser on a machine with a display (`--no-open` does not); the pages ask how CYFR is reached, run `cyfr init`'s steps and `cyfr up`'s start (`--no-pull`), show a tailnet join's link as a QR code, and open the setup link once CYFR is up (on a headless install, name `cyfr login --setup` instead), then stop; refuses a project whose `.env` exists, and a second `cyfr setup` while one serves the project's pages |
 | `cyfr access <mode>` | Change how CYFR is reached, `local`, `tailnet` or `public`: asks first about a tailnet join the change needs, shows who can reach it, its address, the certificate email and the ports opened, before → after (and the tailnet machine, the port on this computer and the builds service when they change), then stops the stack, rewrites `.env` and starts what ran (`--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`, `--new-node`, `--yes`; a join's approval link opens in the default browser on a machine with a display, `--no-open` not; `--tailscale-auth-key-file` and `--hostname` apply to a new join, so a machine already on the tailnet refuses them without `--new-node`); when CYFR has tailnet access and its Serve is closed (HTTPS off, say), `cyfr access tailnet` serves it on the tailnet again; `cyfr access --resume` finishes a change an interruption left |
 | `cyfr access status` | Show how CYFR is reached, what runs and the last change, without the lock and changing nothing |
@@ -1283,6 +1291,14 @@ PATH it refuses. Two knobs adjust the policy:
   signature bundle: the checksum is still verified, the signature is not.
 - `CYFR_INSECURE_SKIP_VERIFY=1` — skip verification entirely (not
   recommended; for airgapped/bootstrap edge cases).
+
+On Ubuntu 26.04 LTS, under either knob the CLI is never root's: it goes
+to `/usr/local/bin` if you can write it, else `~/.local/bin`, or to a
+`CYFR_INSTALL_DIR` you can write. A `CYFR_INSTALL_DIR` or `~/.local/bin`
+you cannot write, and the install command run as root (`… | sudo sh`),
+are refused before
+anything is downloaded, since `cyfr init` would run that unverified
+program as root to install the machine's requirements.
 
 All release binaries are signed and attested. You can also verify manually at
 three levels:

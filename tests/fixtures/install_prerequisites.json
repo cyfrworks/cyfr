@@ -1,0 +1,1581 @@
+{
+ "version": 1,
+ "about": "The installer's decisions on observed facts, read by apps/codex/internal/install's tests and tests/install-verify-test.sh. systems: /etc/os-release text and the CPU architecture, whether automatic preparation supports them and the system named in refusals. universe: the output of `apt-get indextargets --no-release-info --format '$(RELEASE) $(COMPONENT) $(IDENTIFIER)'` and the release codename, whether universe's packages are enabled. bootstrap: the install script's facts (supported system, universe enabled, a verification bypass set, commands on PATH, packages dpkg reports installed, read on the supported system alone) and the packages it offers before release verification; cosign is not needed under a bypass. init: cyfr init's facts (internal/install.Facts) and its decision: the outcome, the root actions in order, the refusal's cause and whether init continues in a process carrying the docker group. sudo: what sudo printed when it ran nothing, and the cause policy.json's sudo words read in it (needs-password, wrong-password, not-allowed, unknown).",
+ "systems": [
+  {
+   "name": "Ubuntu 26.04 point release on amd64",
+   "arch": "amd64",
+   "supported": true,
+   "system": "Ubuntu 26.04.1 LTS",
+   "os_release": "PRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nVERSION=\"26.04.1 LTS (Resolute Raccoon)\"\nVERSION_CODENAME=resolute\nID=ubuntu\nID_LIKE=debian\nUBUNTU_CODENAME=resolute\n"
+  },
+  {
+   "name": "Ubuntu 26.04 on arm64",
+   "arch": "arm64",
+   "supported": true,
+   "system": "Ubuntu 26.04 LTS",
+   "os_release": "PRETTY_NAME=\"Ubuntu 26.04 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nVERSION_CODENAME=resolute\nID=ubuntu\n"
+  },
+  {
+   "name": "unquoted and single-quoted values, comments and blank lines",
+   "arch": "amd64",
+   "supported": true,
+   "system": "Ubuntu 26.04 LTS",
+   "os_release": "# written by hand\n\nNAME='Ubuntu'\nID=ubuntu\nVERSION_ID=26.04\nPRETTY_NAME='Ubuntu 26.04 LTS'\n"
+  },
+  {
+   "name": "Ubuntu 26.04 on an architecture the CLI does not ship for",
+   "arch": "riscv64",
+   "supported": false,
+   "system": "Ubuntu 26.04 LTS",
+   "os_release": "PRETTY_NAME=\"Ubuntu 26.04 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nID=ubuntu\n"
+  },
+  {
+   "name": "Ubuntu 24.04 is not accepted",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Ubuntu 24.04.3 LTS",
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\nID=ubuntu\n"
+  },
+  {
+   "name": "a later Ubuntu is not accepted by numeric comparison",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Ubuntu 26.10",
+   "os_release": "PRETTY_NAME=\"Ubuntu 26.10\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.10\"\nID=ubuntu\n"
+  },
+  {
+   "name": "a version that compares equal as a number is not 26.04",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Ubuntu 26.040",
+   "os_release": "NAME=\"Ubuntu\"\nVERSION_ID=\"26.040\"\nID=ubuntu\n"
+  },
+  {
+   "name": "a derivative naming Ubuntu in ID_LIKE is not Ubuntu",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Linux Mint 23",
+   "os_release": "PRETTY_NAME=\"Linux Mint 23\"\nNAME=\"Linux Mint\"\nVERSION_ID=\"26.04\"\nID=linuxmint\nID_LIKE=\"ubuntu debian\"\n"
+  },
+  {
+   "name": "an ID differing in case is another system",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Ubuntu 26.04 LTS",
+   "os_release": "PRETTY_NAME=\"Ubuntu 26.04 LTS\"\nVERSION_ID=\"26.04\"\nID=Ubuntu\n"
+  },
+  {
+   "name": "Debian",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Debian GNU/Linux 13 (trixie)",
+   "os_release": "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"13\"\nID=debian\n"
+  },
+  {
+   "name": "no PRETTY_NAME names the system by NAME and VERSION_ID",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Fedora Linux 43",
+   "os_release": "NAME=\"Fedora Linux\"\nVERSION_ID=43\nID=fedora\n"
+  },
+  {
+   "name": "an empty os-release",
+   "arch": "amd64",
+   "supported": false,
+   "system": "Linux",
+   "os_release": ""
+  }
+ ],
+ "universe": [
+  {
+   "name": "the Ubuntu archive with universe",
+   "codename": "resolute",
+   "enabled": true,
+   "indextargets": "resolute main Packages\nresolute restricted Packages\nresolute universe Packages\nresolute universe Translations\nresolute-updates universe Packages\nresolute-security universe Packages\n"
+  },
+  {
+   "name": "universe in the security suite alone",
+   "codename": "resolute",
+   "enabled": false,
+   "indextargets": "resolute main Packages\nresolute-security main Packages\nresolute-security universe Packages\n"
+  },
+  {
+   "name": "universe of another release",
+   "codename": "resolute",
+   "enabled": false,
+   "indextargets": "noble universe Packages\nresolute main Packages\n"
+  },
+  {
+   "name": "universe's translations without its packages",
+   "codename": "resolute",
+   "enabled": false,
+   "indextargets": "resolute main Packages\nresolute universe Translations\n"
+  },
+  {
+   "name": "a third-party repository's own universe component is not the archive's suite",
+   "codename": "resolute",
+   "enabled": false,
+   "indextargets": "stable universe Packages\nresolute main Packages\n"
+  },
+  {
+   "name": "no sources at all",
+   "codename": "resolute",
+   "enabled": false,
+   "indextargets": ""
+  }
+ ],
+ "bootstrap": [
+  {
+   "name": "a fresh cloud image lacks cosign alone",
+   "supported": true,
+   "universe": true,
+   "commands": [
+    "curl"
+   ],
+   "installed": [
+    "ca-certificates"
+   ],
+   "outcome": "install",
+   "packages": [
+    "cosign"
+   ],
+   "bypass": false
+  },
+  {
+   "name": "a minimal system lacks every bootstrap tool",
+   "supported": true,
+   "universe": true,
+   "commands": [],
+   "installed": [],
+   "outcome": "install",
+   "packages": [
+    "ca-certificates",
+    "curl",
+    "cosign"
+   ],
+   "bypass": false
+  },
+  {
+   "name": "wget is a downloader, so curl is not offered",
+   "supported": true,
+   "universe": true,
+   "commands": [
+    "wget"
+   ],
+   "installed": [
+    "ca-certificates"
+   ],
+   "outcome": "install",
+   "packages": [
+    "cosign"
+   ],
+   "bypass": false
+  },
+  {
+   "name": "every tool present asks for nothing",
+   "supported": true,
+   "universe": true,
+   "commands": [
+    "curl",
+    "cosign"
+   ],
+   "installed": [
+    "ca-certificates"
+   ],
+   "outcome": "satisfied",
+   "packages": [],
+   "bypass": false
+  },
+  {
+   "name": "every tool present asks for nothing even without universe",
+   "supported": true,
+   "universe": false,
+   "commands": [
+    "curl",
+    "cosign"
+   ],
+   "installed": [
+    "ca-certificates"
+   ],
+   "outcome": "satisfied",
+   "packages": [],
+   "bypass": false
+  },
+  {
+   "name": "cosign missing without universe refuses",
+   "supported": true,
+   "universe": false,
+   "commands": [
+    "curl"
+   ],
+   "installed": [
+    "ca-certificates"
+   ],
+   "outcome": "universe-missing",
+   "packages": [
+    "cosign"
+   ],
+   "bypass": false
+  },
+  {
+   "name": "main's packages alone need no universe",
+   "supported": true,
+   "universe": false,
+   "commands": [
+    "cosign"
+   ],
+   "installed": [],
+   "outcome": "install",
+   "packages": [
+    "ca-certificates",
+    "curl"
+   ],
+   "bypass": false
+  },
+  {
+   "name": "another system names what it lacks",
+   "supported": false,
+   "universe": false,
+   "commands": [
+    "curl"
+   ],
+   "installed": [],
+   "outcome": "unsupported",
+   "packages": [
+    "cosign"
+   ],
+   "bypass": false
+  },
+  {
+   "name": "another system with every tool asks for nothing",
+   "supported": false,
+   "universe": false,
+   "commands": [
+    "curl",
+    "cosign"
+   ],
+   "installed": [],
+   "outcome": "satisfied",
+   "packages": [],
+   "bypass": false
+  },
+  {
+   "name": "a verification bypass needs no cosign",
+   "supported": true,
+   "universe": false,
+   "bypass": true,
+   "commands": [
+    "curl"
+   ],
+   "installed": [
+    "ca-certificates"
+   ],
+   "outcome": "satisfied",
+   "packages": []
+  },
+  {
+   "name": "a verification bypass still offers a missing downloader",
+   "supported": true,
+   "universe": true,
+   "bypass": true,
+   "commands": [],
+   "installed": [
+    "ca-certificates"
+   ],
+   "outcome": "install",
+   "packages": [
+    "curl"
+   ]
+  }
+ ],
+ "init": [
+  {
+   "name": "a fresh machine without Docker",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "apt-update"
+     },
+     {
+      "kind": "apt-install",
+      "packages": [
+       "docker.io",
+       "docker-compose-v2"
+      ]
+     },
+     {
+      "kind": "docker-enable"
+     },
+     {
+      "kind": "group-add",
+      "account": "alice"
+     }
+    ],
+    "continue": true
+   }
+  },
+  {
+   "name": "a minimal machine without AppArmor's package",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {},
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "apt-update"
+     },
+     {
+      "kind": "apt-install",
+      "packages": [
+       "docker.io",
+       "docker-compose-v2",
+       "apparmor"
+      ]
+     },
+     {
+      "kind": "docker-enable"
+     },
+     {
+      "kind": "group-add",
+      "account": "alice"
+     }
+    ],
+    "continue": true
+   }
+  },
+  {
+   "name": "Docker from universe without universe refuses, editing nothing",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": false,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "universe"
+   }
+  },
+  {
+   "name": "a ready machine asks for nothing",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "satisfied",
+    "actions": [],
+    "continue": false
+   }
+  },
+  {
+   "name": "a ready machine needs no universe",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": false,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "satisfied",
+    "actions": [],
+    "continue": false
+   }
+  },
+  {
+   "name": "an account the group lists, in a terminal started before it joined, refreshes its groups",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "denied",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "refresh"
+   }
+  },
+  {
+   "name": "an account outside the docker group joins it and init continues",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "denied",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "group-add",
+      "account": "alice"
+     }
+    ],
+    "continue": true
+   }
+  },
+  {
+   "name": "a stopped Ubuntu daemon is started for an account that has to refresh",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "stopped",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": true,
+     "service": "inactive",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "docker-enable"
+     }
+    ],
+    "continue": true
+   }
+  },
+  {
+   "name": "a service running but not enabled at boot is enabled",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "docker-enable"
+     }
+    ],
+    "continue": false
+   }
+  },
+  {
+   "name": "root installs and joins no group",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "root",
+     "uid": 0,
+     "root": true,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "apt-update"
+     },
+     {
+      "kind": "apt-install",
+      "packages": [
+       "docker.io",
+       "docker-compose-v2"
+      ]
+     },
+     {
+      "kind": "docker-enable"
+     }
+    ],
+    "continue": false
+   }
+  },
+  {
+   "name": "another provider's adequate Docker is kept as it is",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "other",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "satisfied",
+    "actions": [],
+    "continue": false
+   }
+  },
+  {
+   "name": "another provider's Docker older than 28 is not replaced",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "other",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 27,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "provider"
+   }
+  },
+  {
+   "name": "another provider's Docker without Compose v2 is not replaced",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "other",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": false,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "provider"
+   }
+  },
+  {
+   "name": "another provider's stopped managed daemon is started",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "other",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "stopped",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": true,
+     "service": "inactive",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "docker-enable"
+     }
+    ],
+    "continue": false
+   }
+  },
+  {
+   "name": "another provider's stopped daemon without a service is not managed",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "other",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "stopped",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": true,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "provider"
+   }
+  },
+  {
+   "name": "a remote Docker context is not changed",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "tcp://build.example.com:2376",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "context"
+   }
+  },
+  {
+   "name": "a rootless daemon is not changed",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "seccomp",
+      "rootless",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "context"
+   }
+  },
+  {
+   "name": "Ubuntu's Docker older than 28 is upgraded to the archive's candidate",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 27,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "apt-update"
+     },
+     {
+      "kind": "apt-install",
+      "packages": [
+       "docker.io"
+      ]
+     }
+    ],
+    "continue": false
+   }
+  },
+  {
+   "name": "Ubuntu's Docker without its Compose package gets it",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": false,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "apt-update"
+     },
+     {
+      "kind": "apt-install",
+      "packages": [
+       "docker-compose-v2"
+      ]
+     }
+    ],
+    "continue": false
+   }
+  },
+  {
+   "name": "Compose installed and not answering is named, not reinstalled",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": false,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "provider"
+   }
+  },
+  {
+   "name": "no unprivileged user namespaces refuses",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": false,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "security"
+   }
+  },
+  {
+   "name": "a cgroup v1 host refuses",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": false
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "security"
+   }
+  },
+  {
+   "name": "a daemon on cgroup v1 refuses",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "1",
+     "security": [
+      "apparmor",
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "security"
+   }
+  },
+  {
+   "name": "a daemon without its AppArmor profile refuses",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "docker.io": "installed",
+     "docker-compose-v2": "installed",
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "ubuntu",
+     "endpoint": "unix:///var/run/docker.sock",
+     "daemon": "running",
+     "major": 29,
+     "cgroup": "2",
+     "security": [
+      "seccomp",
+      "cgroupns"
+     ],
+     "compose": true,
+     "service": "active",
+     "enabled": true
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": true,
+     "process": true
+    }
+   },
+   "want": {
+    "outcome": "refuse",
+    "actions": [],
+    "continue": false,
+    "cause": "security"
+   }
+  },
+  {
+   "name": "an interrupted dpkg is repaired before the install it left unfinished",
+   "facts": {
+    "supported": true,
+    "system": "Ubuntu 26.04.1 LTS",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed",
+     "docker-compose-v2": "installed",
+     "docker.io": "unpacked"
+    },
+    "dpkg_interrupted": true,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "install",
+    "actions": [
+     {
+      "kind": "dpkg-configure"
+     },
+     {
+      "kind": "apt-update"
+     },
+     {
+      "kind": "apt-install",
+      "packages": [
+       "docker.io"
+      ]
+     },
+     {
+      "kind": "docker-enable"
+     },
+     {
+      "kind": "group-add",
+      "account": "alice"
+     }
+    ],
+    "continue": true
+   }
+  },
+  {
+   "name": "another system is prepared as it always was",
+   "facts": {
+    "supported": false,
+    "system": "Debian GNU/Linux 13 (trixie)",
+    "universe": true,
+    "packages": {
+     "apparmor": "installed"
+    },
+    "dpkg_interrupted": false,
+    "docker": {
+     "cli": "",
+     "endpoint": "",
+     "daemon": "",
+     "major": 0,
+     "cgroup": "",
+     "security": [],
+     "compose": false,
+     "service": "absent",
+     "enabled": false
+    },
+    "kernel": {
+     "userns": true,
+     "cgroup2": true
+    },
+    "account": {
+     "name": "alice",
+     "uid": 1000,
+     "root": false,
+     "member": false,
+     "process": false
+    }
+   },
+   "want": {
+    "outcome": "other",
+    "actions": [],
+    "continue": false
+   }
+  }
+ ],
+ "sudo": [
+  {
+   "name": "sudo-rs -n with no cached login",
+   "printed": "sudo: interactive authentication is required\n",
+   "cause": "needs-password"
+  },
+  {
+   "name": "classic sudo -n",
+   "printed": "sudo: a password is required\n",
+   "cause": "needs-password"
+  },
+  {
+   "name": "sudo-rs after three wrong passwords",
+   "printed": "[sudo: authenticate] Password: \nsudo: Authentication failed, try again.\nsudo: maximum 3 incorrect authentication attempts\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "sudo-rs after one wrong password",
+   "printed": "sudo: Authentication failed, try again.\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "sudo-rs's limit of attempts alone",
+   "printed": "sudo: maximum 3 incorrect authentication attempts\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "a wrong password read before a refusal of the account",
+   "printed": "sudo: Authentication failed, try again.\nsudo: I'm sorry alice. I'm afraid I can't do that\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "a password asked for read before a refusal of the account",
+   "printed": "sudo: a password is required\nSorry, user alice may not run sudo on cyfr.\n",
+   "cause": "needs-password"
+  },
+  {
+   "name": "classic sudo after three wrong passwords",
+   "printed": "Sorry, try again.\nsudo: 3 incorrect password attempts\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "sudo-rs for an account sudoers does not name",
+   "printed": "sudo: I'm sorry alice. I'm afraid I can't do that\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "classic sudo for an account outside sudoers",
+   "printed": "alice is not in the sudoers file.\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "classic sudo for a command sudoers does not allow",
+   "printed": "Sorry, user alice may not run sudo on cyfr.\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "classic sudo for another host",
+   "printed": "alice is not allowed to run sudo on cyfr.\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "no new privileges is no known cause",
+   "printed": "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.\n",
+   "cause": "unknown"
+  },
+  {
+   "name": "a locked account is no known cause",
+   "printed": "sudo: account validation failure, is your account locked?\n",
+   "cause": "unknown"
+  },
+  {
+   "name": "nothing printed",
+   "printed": "",
+   "cause": "unknown"
+  }
+ ]
+}

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/install"
 )
 
 // watchdogChild marks a run of this test binary that a test started as the
@@ -47,6 +48,13 @@ func TestMain(m *testing.M) {
 	// No test opens the browser of the machine it runs on: a test that
 	// opens one stands in for both.
 	hasDisplay = func() bool { return false }
+	// No test observes or changes the machine it runs on: cyfr init sees
+	// a system it does not prepare, unless a test stands in a machine.
+	machine.observe = func(context.Context, install.Policy) (install.Facts, error) { return install.Facts{}, nil }
+	machine.entry = func(install.Policy, bool, bool) ([]string, error) {
+		return nil, errors.New("a test ran the root entry without standing in for it")
+	}
+	machine.forget = func() {}
 	launchBrowser = func(string) error { return errors.New("a test launched the browser without standing in for it") }
 	// The program a handover started (TestUpdateHandsOverForReal), which
 	// carries the handover scenario's environment on.
