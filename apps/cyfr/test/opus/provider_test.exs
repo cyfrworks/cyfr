@@ -972,7 +972,6 @@ defmodule Opus.ProviderTest do
           vault_refs: [
             %{
               binding_key: lender_key,
-              scope: "athanor",
               vault_entry_id: "vault-lend-key",
               binding_digest: "sha256:lend-key"
             }
@@ -1019,7 +1018,6 @@ defmodule Opus.ProviderTest do
           vault_refs: [
             %{
               binding_key: Prima.Authority.Blob.binding_key(root, @lender, nil),
-              scope: "athanor",
               via_label: "default",
               binding_digest: nil
             }
@@ -1101,7 +1099,6 @@ defmodule Opus.ProviderTest do
                 ] do
               %{
                 binding_key: key,
-                scope: "athanor",
                 vault_entry_id: "vault-twice",
                 binding_digest: digest
               }

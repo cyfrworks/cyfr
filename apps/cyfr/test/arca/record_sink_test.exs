@@ -309,7 +309,7 @@ defmodule Arca.RecordSinkRevisionRaceTest do
   end
 
   defp ref(key, entry_id) do
-    %{binding_key: key, scope: "athanor", vault_entry_id: entry_id, binding_digest: "sha256:b"}
+    %{binding_key: key, vault_entry_id: entry_id, binding_digest: "sha256:b"}
   end
 
   defp attrs(athanor, profile) do

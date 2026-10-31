@@ -25,7 +25,6 @@ defmodule Cyfr.BusPayloadTest do
     FeedRun,
     FileOffer,
     FrameCredential,
-    InstanceEntryChanged,
     LayoutPublished,
     McpServers,
     Membership,
@@ -106,7 +105,6 @@ defmodule Cyfr.BusPayloadTest do
       Membership.new(:changed, "u", "ath_payload", :joined),
       CallerInvalidated.new(:crypto.hash(:sha256, "session")),
       AthanorArchived.new("ath_payload"),
-      InstanceEntryChanged.new(:policy, "ine_payload"),
       ShareChanged.new(:revoked, "shr_payload"),
       FileOffer.new(:offered, "ofr_payload", "usr_sender", "q3.csv"),
       FrameCredential.new(:revoked, "usr_payload", "fcr_payload"),
@@ -256,9 +254,6 @@ defmodule Cyfr.BusPayloadTest do
             fn -> ThreadEvent.new(@actor, "t", :message_updated, %{}) end,
             fn -> Progress.new(@actor, {:request, "r"}) end,
             fn -> ExecutionEvent.new(@actor, :durable, %{delta: 1}) end,
-            fn -> InstanceEntryChanged.new(:renamed, "ine_1") end,
-            fn -> InstanceEntryChanged.new(:policy, "") end,
-            fn -> InstanceEntryChanged.new(:policy, nil) end,
             fn -> ShareChanged.new(:policy, "shr_1") end,
             fn -> ShareChanged.new(:revoked, "") end,
             fn -> ShareChanged.new(:revoked, nil) end,
@@ -384,22 +379,6 @@ defmodule Cyfr.BusPayloadTest do
         assert {:error, :cross_tenant} = Bus.broadcast(@actor, topic, sample),
                "#{key} took #{inspect(module)} from another tenant"
       end
-    end
-  end
-
-  describe "an instance entry's change" do
-    test "is its entry id and kind, and nothing a page could read an entry from" do
-      fields = InstanceEntryChanged.new(:caps, "ine_1") |> Map.from_struct() |> Map.keys()
-      assert Enum.sort(fields) == [:entry_id, :kind]
-
-      assert Enum.sort(InstanceEntryChanged.kinds()) ==
-               Enum.sort(~w(created rotated rebound audience policy caps revoked deleted)a)
-
-      row = Enum.find(Bus.topics(), &(&1.key == :instance_entries))
-
-      assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
-               {:global, "sanctum:instance_entries", InstanceEntryChanged,
-                ["Cyfr.TelemetryBridge"], ["PrismWeb.VaultLive"]}
     end
   end
 

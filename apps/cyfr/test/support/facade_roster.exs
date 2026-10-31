@@ -27,7 +27,6 @@
     "Sanctum.DeviceCerts",
     "Sanctum.Directory",
     "Sanctum.Gate",
-    "Sanctum.InstanceEntries",
     "Sanctum.Pairing",
     "Sanctum.Passkeys",
     "Sanctum.Recovery",

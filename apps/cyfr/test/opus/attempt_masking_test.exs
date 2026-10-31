@@ -283,7 +283,7 @@ defmodule Opus.AttemptMaskingTest do
       assert Process.alive?(fixture.pid)
     end
 
-    test "a provided value is handed over, and an instance entry is not" do
+    test "a provided value is handed over whole" do
       ctx = Sanctum.TestContext.local(:api)
 
       {pinned, _entry} =
@@ -303,24 +303,6 @@ defmodule Opus.AttemptMaskingTest do
 
       assert %{secrets: %{"anon_key" => "pk"}} =
                AttemptFixtures.attached!(ctx: ctx, authority: provided)
-
-      instance = %{
-        pinned
-        | resources: %Prima.Authority.Blob.Edge{
-            vault: %{
-              entry_id: "ine_not_disclosed",
-              binding_digest: "sha256:instance",
-              scope: "instance",
-              binding_key: "catalyst:local.attempt-fixture|@ingress|default",
-              destination: destination,
-              attach: rule,
-              projection: %{fields: %{"API_KEY" => "API_KEY"}, scopes: []}
-            }
-          }
-      }
-
-      assert %{secrets: secrets} = AttemptFixtures.attached!(ctx: ctx, authority: instance)
-      assert secrets == %{}
     end
 
     test "a share is never disclosed, and an edge of a scope none names closes the run" do

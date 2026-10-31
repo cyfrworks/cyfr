@@ -100,7 +100,6 @@ defmodule Cyfr.BusTest do
             Bus.platform_notify(),
             Bus.health_check(7),
             Bus.schedule_completions(),
-            Bus.instance_entries(),
             Bus.shares(),
             Bus.file_offers("user_1")
           ] do
@@ -122,7 +121,6 @@ defmodule Cyfr.BusTest do
                "health_check:<nonce>",
                "cyfr:schedule_completions",
                "cyfr:settings_changed",
-               "sanctum:instance_entries",
                "sanctum:shares",
                "arca:file_offers:<user_id>"
              ]

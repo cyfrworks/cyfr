@@ -88,8 +88,6 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
     [
       {"CredentialKinds", "every credential kind a manifest need may name",
        Prima.CredentialKinds.all()},
-      {"InstanceCredentialKinds", "the credential kinds an instance entry holds",
-       Prima.CredentialKinds.instance()},
       {"SignInProviders", "every sign-in provider", Prima.SignInProviders.all()},
       {"DeviceFlowProviders", "the sign-in providers a device flow starts with",
        Prima.SignInProviders.device_flow()}

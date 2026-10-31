@@ -6,7 +6,7 @@ defmodule Cyfr.RosterLiteralTest do
   The credential kinds and the sign-in providers each have one owner, and
   no library source spells them again.
 
-  `Prima.CredentialKinds` owns the kinds (`all/0`, `instance/0`) and
+  `Prima.CredentialKinds` owns the kinds (`all/0`, `shareable/0`) and
   `Prima.SignInProviders` the sign-in providers (`all/0`, `device_flow/0`);
   the identity domain's `Sanctum.Auth.DeviceFlow.providers/0` derives
   from it. A second
@@ -25,7 +25,7 @@ defmodule Cyfr.RosterLiteralTest do
 
   One spelling is no roster: the commit's no-scopes policy
   (`Sanctum.Consent.Commit`'s `check_token_grant/3`), which says that a key
-  or a bundle need grants no scopes. It coincides with the instance kinds
+  or a bundle need grants no scopes. It coincides with the shareable kinds
   and is its own owner, so it is exempt in that function alone.
   """
   use ExUnit.Case, async: true
@@ -35,13 +35,13 @@ defmodule Cyfr.RosterLiteralTest do
   # The rosters' ordered vocabularies; the first test holds the owners to
   # them.
   @kinds ~w(api_key oauth bundle)
-  @instance_kinds ~w(api_key bundle)
+  @shareable_kinds ~w(api_key bundle)
   @sign_in ~w(github google oidcc)
   @device_flow ~w(github google)
 
   @rosters [
     {"credential kinds", @kinds},
-    {"instance credential kinds", @instance_kinds},
+    {"shareable credential kinds", @shareable_kinds},
     {"sign-in providers", @sign_in},
     {"device-flow providers", @device_flow}
   ]
@@ -49,7 +49,7 @@ defmodule Cyfr.RosterLiteralTest do
   @owners %{
     "apps/prima/lib/prima/credential_kinds.ex" => [
       "credential kinds",
-      "instance credential kinds"
+      "shareable credential kinds"
     ],
     "apps/prima/lib/prima/sign_in_providers.ex" => [
       "sign-in providers",
@@ -61,14 +61,14 @@ defmodule Cyfr.RosterLiteralTest do
   # roster it coincides with.
   @policies [
     {"apps/sanctum/lib/sanctum/consent/commit.ex", :check_token_grant,
-     "instance credential kinds"}
+     "shareable credential kinds"}
   ]
 
   @commit "apps/sanctum/lib/sanctum/consent/commit.ex"
 
   test "the owners answer the rosters" do
     assert Prima.CredentialKinds.all() == @kinds
-    assert Prima.CredentialKinds.instance() == @instance_kinds
+    assert Prima.CredentialKinds.shareable() == @shareable_kinds
     assert Prima.SignInProviders.all() == @sign_in
     assert Prima.SignInProviders.device_flow() == @device_flow
     assert Sanctum.Auth.DeviceFlow.providers() == @device_flow
@@ -102,9 +102,9 @@ defmodule Cyfr.RosterLiteralTest do
       {~S'@k ~w(api_key oauth bundle)', "credential kinds"},
       {~S'@k ~w(bundle api_key oauth)a', "credential kinds"},
       {~S'def k, do: ["api_key", "oauth", "bundle"]', "credential kinds"},
-      {~S'def k(x) when x in ~w(api_key bundle), do: x', "instance credential kinds"},
+      {~S'def k(x) when x in ~w(api_key bundle), do: x', "shareable credential kinds"},
       {~S'def k, do: Arg.new("kind", :string, enum: ["api_key", "bundle"])',
-       "instance credential kinds"},
+       "shareable credential kinds"},
       {~S'@p ~w(github google oidcc)', "sign-in providers"},
       {~S'def p, do: ["github", "google", "oidcc"]', "sign-in providers"},
       {~S'def p(x) when x in ["github", "google"], do: x', "device-flow providers"},
@@ -159,7 +159,7 @@ defmodule Cyfr.RosterLiteralTest do
     assert planted != source
 
     assert [finding] = refused(@commit, planted)
-    assert finding =~ "planted_kind" and finding =~ "(instance credential kinds)"
+    assert finding =~ "planted_kind" and finding =~ "(shareable credential kinds)"
   end
 
   defp module_with(line), do: "defmodule Planted do\n  @moduledoc false\n  #{line}\nend\n"

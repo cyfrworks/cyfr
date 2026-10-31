@@ -54,7 +54,6 @@ defmodule Cyfr.Bus do
     FeedRun,
     FileOffer,
     FrameCredential,
-    InstanceEntryChanged,
     LayoutPublished,
     McpServers,
     Membership,
@@ -439,19 +438,6 @@ defmodule Cyfr.Bus do
           "which every member's cache drops, and the revision each member has observed"
     },
     %{
-      key: :instance_entries,
-      scope: :global,
-      struct: InstanceEntryChanged,
-      match: {:exact, "sanctum:instance_entries"},
-      template: "sanctum:instance_entries",
-      producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["PrismWeb.VaultLive"],
-      reason:
-        "the instance's own credentials belong to no athanor: a change, by entry id and " <>
-          "kind alone, sends the administrator's cards and every person's vault page back " <>
-          "to the operations, which answer each under its own context"
-    },
-    %{
       key: :shares,
       scope: :global,
       struct: ShareChanged,
@@ -753,10 +739,6 @@ defmodule Cyfr.Bus do
   """
   @spec settings_changed() :: String.t()
   def settings_changed, do: "cyfr:settings_changed"
-
-  @doc "An instance entry changed (`Cyfr.Bus.InstanceEntryChanged`)."
-  @spec instance_entries() :: String.t()
-  def instance_entries, do: "sanctum:instance_entries"
 
   @doc "A share changed (`Cyfr.Bus.ShareChanged`)."
   @spec shares() :: String.t()
