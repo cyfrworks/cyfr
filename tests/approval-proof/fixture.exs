@@ -285,8 +285,8 @@ fn args ->
       # binding fields and the ingress edge's vault, never a consent's or an
       # athanor's id.
       binding_fields =
-        ~w(binding_key scope vault_entry_id instance_entry_id via_label binding_digest
-           lifetime_kind expires_at consumed_by_root)a
+        ~w(binding_key vault_entry_id via_label binding_digest lifetime_kind expires_at
+           consumed_by_root)a
 
       head_of = fn profile ->
         head_id = profile.head_consent_id

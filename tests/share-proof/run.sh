@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The instance-entry proof (README.md): a `cyfr` release started as the
+# The share proof (README.md): a `cyfr` release started as the
 # browser harness starts a home (tests/browser/harness.sh), home.test behind
 # the harness's HTTPS front, its platform administrator signed in. In
 # Chromium (proof.mjs) the administrator makes two keys on the Vault page
@@ -16,7 +16,7 @@
 # (`ask-N.json`), and this script answers each (`answer-N.json`): a
 # person's sign-in through the release fixture's door
 # (tests/release-boot/fixture.exs `person`), and the claims and reads of
-# the proof's own fixture (tests/instance-entry-proof/fixture.exs), which
+# the proof's own fixture (tests/share-proof/fixture.exs), which
 # answers bounded facts and never material, and seeds the group the
 # narrowing names.
 #
@@ -24,9 +24,9 @@
 # an admission is the loader's answer, and a claim is the resolver's, not
 # a request sent anywhere (README.md).
 #
-# Usage: tests/instance-entry-proof/run.sh
+# Usage: tests/share-proof/run.sh
 # VAULT_PROOF_VIEWPORT is desktop (1280x900, the default) or 720x720.
-# Writes instance-entry-proof.json and instance-entry-proof.md into
+# Writes share-proof.json and share-proof.md into
 # PROOF_OUT (default: the scratch directory, kept with RELEASE_BOOT_KEEP=1).
 # The release is the one a previous build left (RELEASE_BOOT_SKIP_BUILD=1,
 # which this proof requires).
@@ -48,7 +48,7 @@ esac
 }
 
 ADAPTER=sqlite
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-instance-entry-proof-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-share-proof-XXXXXX")"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=../release-boot/release.sh
 source "$HERE/../release-boot/release.sh"
@@ -83,8 +83,8 @@ trap cleanup EXIT
 # The proof's fixture inside the running server, as `bin/cyfr rpc`. A
 # command that raises answers nothing, which the proof reads as a failed
 # step; what it raised is kept in the scratch directory, not the record.
-entry_fixture() {
-  cell_fixture "$CELL" "$HERE/fixture.exs" ENTRY "$@" 2>>"$WORK/fixture.err" || :
+share_fixture() {
+  cell_fixture "$CELL" "$HERE/fixture.exs" SHARE "$@" 2>>"$WORK/fixture.err" || :
 }
 
 # A person signed in through the release fixture's door, and the browser
@@ -131,7 +131,7 @@ step "starting home.test on a fresh SQLite cell"
 server_start "$CELL"
 
 step "the platform administrator, signed in"
-admin="$(server_fixture "$CELL" person operator@example.com instance-entry-proof-admin)"
+admin="$(server_fixture "$CELL" person operator@example.com share-proof-admin)"
 [ -n "$admin" ] || fail "the fixture signed the administrator in"
 admin_segment="$(field "$admin" segment)"
 admin_token="$(field "$admin" token)"
@@ -145,8 +145,8 @@ answer_ask() {
   local ask="$1" op ana_token ana_id bea_id
   op="$(asked "$ask" op)"
   case "$op" in
-    sign_in) ANSWER="$(sign_in "$(asked "$ask" email)" "instance-entry-proof-$(asked "$ask" name)")" ;;
-    clock) ANSWER="$(entry_fixture clock)" ;;
+    sign_in) ANSWER="$(sign_in "$(asked "$ask" email)" "share-proof-$(asked "$ask" name)")" ;;
+    clock) ANSWER="$(share_fixture clock)" ;;
     admin)
       ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$admin")"
       ;;
@@ -157,44 +157,44 @@ answer_ask() {
       [ -n "$ana_id" ] && ana_token="$(token_of_user "$ana_id")"
       bea_id="$(asked "$ask" bea)"
       [ -n "$bea_id" ] || bea_id=-
-      ANSWER="$(entry_fixture state "$ana_token" "$bea_id" \
+      ANSWER="$(share_fixture state "$ana_token" "$bea_id" \
         "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['payloads']))" "$ask")")"
       ;;
     requested_digest)
-      ANSWER="$(entry_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
+      ANSWER="$(share_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
         "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
       ;;
     group)
-      ANSWER="$(entry_fixture group "$admin_token" "$(asked "$ask" member)" "$(asked "$ask" name)")"
+      ANSWER="$(share_fixture group "$admin_token" "$(asked "$ask" member)" "$(asked "$ask" name)")"
       ;;
     derived_head)
-      ANSWER="$(entry_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" share_id)" \
+      ANSWER="$(share_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" share_id)" \
         "$(asked "$ask" provider)" "$(asked "$ask" field)" \
         "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
       ;;
-    admit) ANSWER="$(entry_fixture admit "$(token_of "$ask")")" ;;
+    admit) ANSWER="$(share_fixture admit "$(token_of "$ask")")" ;;
     claim)
-      ANSWER="$(entry_fixture claim "$(token_of "$ask")" "$(asked "$ask" source)" "$(asked "$ask" id)" \
+      ANSWER="$(share_fixture claim "$(token_of "$ask")" "$(asked "$ask" source)" "$(asked "$ask" id)" \
         "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)" \
         "$(asked "$ask" digest)" "$(asked "$ask" field)")"
       ;;
     held_claim)
-      ANSWER="$(entry_fixture held_claim "$(asked "$ask" user_id)" "$(asked "$ask" id)" "$(asked "$ask" count)" \
+      ANSWER="$(share_fixture held_claim "$(asked "$ask" user_id)" "$(asked "$ask" id)" "$(asked "$ask" count)" \
         "$(asked "$ask" url)" "$(asked "$ask" method)" "$(asked "$ask" digest)" "$(asked "$ask" field)")"
       ;;
-    row_binding) ANSWER="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" share_id)")" ;;
-    focus) ANSWER="$(entry_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
+    row_binding) ANSWER="$(share_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" share_id)")" ;;
+    focus) ANSWER="$(share_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;
   esac
 }
 
-step "the instance-entry proof in Chromium at $VIEWPORT, in $PLAYWRIGHT_IMAGE"
+step "the share proof in Chromium at $VIEWPORT, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run instance-entry-proof proof.mjs /authority/homes.json "$admin_segment" "$admin_cookie" /out \
+playwright_run share-proof proof.mjs /authority/homes.json "$admin_segment" "$admin_cookie" /out \
   "$VIEWPORT" &
 PROOF_PID=$!
 proof_await answer_ask
 
-echo "the record: $OUT/instance-entry-proof.json and $OUT/instance-entry-proof.md"
+echo "the record: $OUT/share-proof.json and $OUT/share-proof.md"
 exit "$PROOF_STATUS"

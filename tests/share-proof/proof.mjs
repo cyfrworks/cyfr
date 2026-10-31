@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// The instance-entry proof, run in the official Playwright image by run.sh
+// The share proof, run in the official Playwright image by run.sh
 // against a `cyfr` release behind the harness's HTTPS front (README.md).
 // The platform administrator, in Chromium, makes two keys on the Vault page
 // and shares each with everyone through the system layer's sharing sheet;
@@ -247,7 +247,6 @@ const SIGN_IN = "the person's sign-in named";
 const ADMIN = "the administrator's sign-in named";
 const REQUESTED = "requested_digest, from the destination its form requested";
 const DERIVED = "derived_head, built by the owner's builders from the installed catalyst, the request and the share";
-const NONE = "no row is expected: nothing in this proof makes one";
 
 const FIELDS = {
   vault_entries: {
@@ -267,38 +266,6 @@ const FIELDS = {
     sealed_payload: typedPayload,
     last_used_at: clock,
     inserted_at: clock,
-    updated_at: clock,
-  },
-  instance_entries: {
-    id: minted(NONE),
-    name: exact,
-    kind: exact,
-    provider_hint: exact,
-    field_names: exact,
-    binding_digest: derived(REQUESTED),
-    destination: derived(REQUESTED),
-    status: exact,
-    payload_rev: exact,
-    sealed_payload: exact,
-    last_used_at: clock,
-    audience: exact,
-    person_daily: exact,
-    total_daily: exact,
-    component_policy: exact,
-    created_by: minted(ADMIN),
-    inserted_at: clock,
-    updated_at: clock,
-  },
-  instance_entry_members: {
-    instance_entry_id: minted(NONE),
-    user_id: minted(SIGN_IN),
-    inserted_at: clock,
-  },
-  instance_entry_usage: {
-    instance_entry_id: minted(NONE),
-    user_id: minted(`${SIGN_IN}, or the empty id of the entry's own total`),
-    day,
-    count: exact,
     updated_at: clock,
   },
   shares: {
@@ -355,9 +322,7 @@ const FIELDS = {
     consent_id: minted(ADMISSION),
     athanor_id: minted(SIGN_IN),
     binding_key: exact,
-    scope: exact,
     vault_entry_id: exact,
-    instance_entry_id: exact,
     share_id: minted(SHARED_ROW),
     via_label: exact,
     binding_digest: derived(REQUESTED),
@@ -406,24 +371,19 @@ function classified(table, row, read, problems) {
 
 // Everything the README names, as the home holds it (`fixture.exs`
 // `state`), every field through its class, shaped for the one comparison:
-// every vault entry, every entry, member and use row of the instance,
-// every share and share use row, Ana's profiles, consents, binding rows,
-// offered instance entries and shares, and Bea's row and the shares
-// offered to her, or the refusal.
+// every vault entry, every share and share use row, Ana's profiles,
+// consents, binding rows and the shares offered to her, and Bea's row and
+// the shares offered to her, or the refusal.
 function storedState(state, read, problems) {
   const each = (table, rows) => (rows || []).map((r) => classified(table, r, read, problems));
   return {
     vault_entries: each("vault_entries", state && state.vault_entries),
-    entries: each("instance_entries", state && state.entries),
-    members: each("instance_entry_members", state && state.members),
-    usage: each("instance_entry_usage", state && state.usage),
     shares: each("shares", state && state.shares),
     share_usage: each("share_usage", state && state.share_usage),
     ana: (state && state.ana) ? {
       profiles: each("profiles", state.ana.profiles),
       consents: each("consents", state.ana.consents),
       rows: each("consent_vault_refs", state.ana.rows),
-      offered: state.ana.offered || [],
       shared: state.ana.shared || [],
     } : null,
     bea: (state && state.bea) ? {
@@ -699,15 +659,14 @@ async function main() {
   try {
     // The proof's own model of everything the README names, changed at each
     // step only by what that step did: the administrator's vault entries,
-    // the instance's entries, their listed members and their use (none),
-    // the shares and their use, Ana's profiles, consents, binding rows,
-    // offered entries and shares once she has signed in, and Bea's row once
+    // the shares and their use, Ana's profiles, consents, binding rows and
+    // the shares offered to her once she has signed in, and Bea's row once
     // she has. After every step the whole of it is compared with the whole
     // of what the home holds, in one read, every field through its class: a
     // change behind the browser to any of it fails the next step, whichever
     // step that is.
     const model = {
-      vault_entries: [], entries: [], members: [], usage: [], shares: [], share_usage: [], ana: null, bea: null,
+      vault_entries: [], shares: [], share_usage: [], ana: null, bea: null,
     };
     // The database's time as the run starts: the window every stored time
     // is held to opens here, before anything the proof names is made.
@@ -881,8 +840,8 @@ async function main() {
     // compared as stored text. The head holds one binding row, Company AI's
     // share on the catalyst's own default slot, standing, at the digest
     // Company AI's request implies; the share is used once by Ana, which
-    // its entry's last use says; her vault offers no instance entry and
-    // both shares, each by the administrator's name.
+    // its entry's last use says; her vault offers both shares, each by the
+    // administrator's name.
     model.ana = {
       profiles: [{
         id: admitted.profile_id,
@@ -917,9 +876,7 @@ async function main() {
         consent_id: admitted.consent_id,
         athanor_id: ana.athanor_id,
         binding_key: "catalyst:local.openai|@ingress|default",
-        scope: "share",
         vault_entry_id: null,
-        instance_entry_id: null,
         share_id: ai.share,
         via_label: null,
         binding_digest: aiImplied.binding_digest,
@@ -927,7 +884,6 @@ async function main() {
         expires_at: null,
         consumed_by_root: null,
       }],
-      offered: [],
       shared: [ai.share, mail.share],
     };
     aiOver = { ...aiOver, last_used_at: IN_WINDOW };
@@ -1201,12 +1157,12 @@ async function main() {
       .map((f) => readFileSync(join(outDir, f), "utf8"));
     const leaked = holdsKey(recorded) || answers.some(holdsKey) || asks.some(holdsKey);
     if (leaked) rows.push({ step: "material", held: false, what: "a key reached an answer or the record", detail: {} });
-    writeFileSync(join(outDir, "instance-entry-proof.json"),
+    writeFileSync(join(outDir, "share-proof.json"),
       JSON.stringify({ viewport: record.viewport, browser: record.browser, rows, record, material_in_answers: leaked }, null, 2));
     const table = [`Viewport: ${viewportName} (${viewport.width}×${viewport.height}), Chromium ${record.browser || "?"}`, "",
       "| Step | Held | What |", "|---|---|---|",
       ...rows.map((r) => `| \`${r.step}\` | ${r.held ? "held" : "FAILED"} | ${r.what} |`)].join("\n");
-    writeFileSync(join(outDir, "instance-entry-proof.md"), table + "\n");
+    writeFileSync(join(outDir, "share-proof.md"), table + "\n");
     console.log(table);
   }
 }

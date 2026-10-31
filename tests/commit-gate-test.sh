@@ -1484,8 +1484,8 @@ tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/multi-home-smoke/run.sh |skip= browsers= join= db= case_image=
 tests/grant-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/instance-entry-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/instance-entry-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/share-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/share-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/proxy-hsts/run.sh |skip=unset browsers= join= db= case_image=
@@ -1509,7 +1509,7 @@ fs --scanners misconfig --format table --exit-code 1 --severity CRITICAL,HIGH --
   fail "the close's scans are not the workflows': $(cat "$ct/trivy.calls")"
 [ "$(tr '\n' ' ' < "$ct/trivy.trees")" = 'tracked tracked ' ] || fail "a repository scan read more than the tracked tree: $(cat "$ct/trivy.trees")"
 # No shard opens with a proof that refuses to build the release.
-for proof in grant instance-entry approval file-offer; do
+for proof in grant share approval file-offer; do
   grep -qF 'build the release first and run with RELEASE_BOOT_SKIP_BUILD=1' "$root/tests/$proof-proof/run.sh" ||
     fail "the $proof proof builds its own release now: the shards' check of what opens them is stale"
   no_line "^tests/$proof-proof/run.sh \|skip= " "$ct/harness.calls" || fail "a shard opens with the $proof proof, which refuses to build the release"

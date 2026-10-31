@@ -1598,7 +1598,7 @@ jobs:
   # `proofs` name it, in the order below. A shard's first release-backed
   # proof (its `build`) builds the release, and every later proof, and a
   # proof's second viewport, reuses it (RELEASE_BOOT_SKIP_BUILD); the grant,
-  # instance-entry, approval and file-offer proofs only reuse one, so each
+  # share, approval and file-offer proofs only reuse one, so each
   # shard opens with a proof that builds, and the markdown proof starts no
   # release. Three
   # browsers run where the engine decides the answer (the frame facts, the
@@ -1631,8 +1631,8 @@ jobs:
             proofs: [pairing, approval, file-offer]
             build: pairing
           - shard: d
-            title: multi-home smoke, grant, instance-entry and canvas proofs, HSTS
-            proofs: [multi-home-smoke, grant, instance-entry, canvas, hsts]
+            title: multi-home smoke, grant, share and canvas proofs, HSTS
+            proofs: [multi-home-smoke, grant, share, canvas, hsts]
             build: multi-home-smoke
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1736,14 +1736,14 @@ jobs:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'grant' && '1' || '' }}
           PROOF_OUT: ${{ runner.temp }}/proofs/grant
         run: tests/grant-proof/run.sh
-      - name: The instance-entry proof (Chromium, desktop and 720x720)
-        if: contains(matrix.proofs, 'instance-entry')
+      - name: The share proof (Chromium, desktop and 720x720)
+        if: contains(matrix.proofs, 'share')
         env:
-          RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'instance-entry' && '1' || '' }}
+          RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'share' && '1' || '' }}
         run: |
           set -euo pipefail
           for viewport in desktop 720x720; do
-            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/instance-entry/$viewport" tests/instance-entry-proof/run.sh
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/share/$viewport" tests/share-proof/run.sh
             export RELEASE_BOOT_SKIP_BUILD=1
           done
       - name: The approval proof (Chromium, desktop and 720x720)
