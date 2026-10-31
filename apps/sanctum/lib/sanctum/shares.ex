@@ -444,8 +444,9 @@ defmodule Sanctum.Shares do
     8. the material is unsealed under the owner's internal context
        through `Sanctum.VaultReader.load_and_unseal/2`, with a resource
        naming the source entry and `approved_digest`, so that read decides
-       the digest once more (`{:error, :binding_mismatch}`,
-       `{:error, :unseal_failed}`), and the one field is read
+       the digest once more (`{:error, :binding_went_stale}`), and material
+       that does not open or decode is `{:error, :unseal_failed}`, a
+       refusal that carries none of it; then the one field is read
        (`{:error, {:missing_field, need_field}}`).
 
   A use counted stands whatever follows: the request was admitted. The
@@ -477,11 +478,7 @@ defmodule Sanctum.Shares do
       owner = owner_context(offered)
 
       with {:ok, _counted} <- claim(owner, offered.share, ctx.user_id),
-           {:ok, _entry, payload} <-
-             VaultReader.load_and_unseal(owner, %{
-               entry_id: offered.source.id,
-               binding_digest: approved_digest
-             }) do
+           {:ok, payload} <- unseal(owner, offered.source.id, approved_digest) do
         field_value(payload, take)
       end
     end
@@ -530,6 +527,33 @@ defmodule Sanctum.Shares do
       {:error, :not_found} -> {:error, :not_offered}
       {:error, {:connection_cap, _reset_at}} = capped -> capped
       {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # The one unseal, through the owner's own read. Its refusals are this
+  # module's own words and carry nothing the read decoded: a source moved
+  # since the digest was compared is stale, one gone is no longer offered,
+  # and any material that does not open or decode is `:unseal_failed`,
+  # whatever the reader or the decoder answered.
+  defp unseal(owner, entry_id, approved_digest) do
+    case VaultReader.load_and_unseal(owner, %{entry_id: entry_id, binding_digest: approved_digest}) do
+      {:ok, _entry, payload} ->
+        {:ok, payload}
+
+      {:error, {:entry_unavailable, status}} when is_binary(status) ->
+        {:error, {:entry_unavailable, status}}
+
+      {:error, :binding_mismatch} ->
+        {:error, :binding_went_stale}
+
+      {:error, :not_found} ->
+        {:error, :not_offered}
+
+      {:error, outage} when outage in [:unavailable, :database_error] ->
+        {:error, :unavailable}
+
+      {:error, _unopened_or_undecoded} ->
+        {:error, :unseal_failed}
     end
   end
 

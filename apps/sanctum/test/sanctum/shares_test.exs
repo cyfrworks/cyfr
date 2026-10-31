@@ -305,6 +305,31 @@ defmodule Sanctum.SharesTest do
                Shares.resolve(alice, share.id, digest!(entry), request(), {:field, "SECRET", "X"})
     end
 
+    # The material is the owner's sealed document, cut short: it opens and
+    # does not decode. The refusal is this module's own and carries none
+    # of what opened, the field the projection maps or any other.
+    test "material that opens and does not decode is refused unseal_failed, carrying none of " <>
+           "it, and the use stands counted for the person",
+         %{terry: terry, alice: alice} do
+      entry = key!(terry)
+      share = share!(terry, entry)
+      plaintext = ~s({"v":3,"fields":{"KEY":"#{@secret}","OTHER":"sk-unmapped-canary")
+      aad = Sanctum.CipherAAD.vault_entry(terry.athanor_id, entry.id, entry.provider_hint)
+      {:ok, sealed} = Sanctum.Cipher.encrypt(plaintext, aad)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(v in Arca.Schemas.VaultEntry, where: v.id == ^entry.id),
+          set: [sealed_payload: sealed]
+        )
+
+      assert {:error, :unseal_failed} = refusal = resolve(alice, share, digest!(entry))
+      refute inspect(refusal) =~ "sk-"
+      refute inspect(refusal) =~ plaintext
+      assert counts(terry, share) == %{people: %{alice.user_id => 1}, total: 1}
+      assert last_used(terry, entry) == nil
+    end
+
     test "a person who does not stand is refused, with nothing counted or unsealed",
          %{terry: terry, alice: alice} do
       entry = key!(terry)

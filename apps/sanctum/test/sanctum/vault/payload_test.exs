@@ -41,7 +41,18 @@ defmodule Sanctum.Vault.PayloadTest do
       assert {:error, {:invalid_payload, {:malformed, "oauth"}}} =
                Payload.decode(~s({"v":3,"fields":{},"oauth":{"access_token":"t","expires_at":5}}))
 
-      assert {:error, {:invalid_payload, _}} = Payload.decode("not json")
+      assert Payload.decode("not json") == {:error, {:invalid_payload, {:not_json, 0}}}
+    end
+
+    test "a plaintext that does not read as JSON is refused by where it stopped, naming none " <>
+           "of its bytes" do
+      plaintext = ~s({"v":3,"fields":{"KEY":"sk-mapped","OTHER":"sk-unmapped-canary")
+
+      assert {:error, {:invalid_payload, {:not_json, position}} = refusal} =
+               Payload.decode(plaintext)
+
+      assert position == byte_size(plaintext)
+      refute inspect(refusal) =~ "sk-"
     end
 
     test "refuses a bundle key the document does not hold" do
