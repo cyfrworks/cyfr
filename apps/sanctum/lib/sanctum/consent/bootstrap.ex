@@ -599,7 +599,7 @@ defmodule Sanctum.Consent.Bootstrap do
            Prima.Authority.Blob.ingress(blob, source_ref),
          %{} = need <- attached_need(component, source_ref),
          {:ok, view} <- share_view(ctx, id, source_ref),
-         true <- is_binary(view.binding_digest) and view.binding_digest == digest,
+         true <- view.binding_digest == digest,
          {:ok, binding} <- view_binding(view, need) do
       {:ok, binding}
     else

@@ -2824,7 +2824,7 @@ defmodule Sanctum.Consent.Commit do
 
     Enum.reduce_while(bound, :ok, fn binding, :ok ->
       with {:ok, digest} <- live_digest(ctx, binding),
-           true <- Plug.Crypto.secure_compare(digest || "", binding.binding_digest) do
+           true <- Plug.Crypto.secure_compare(digest, binding.binding_digest) do
         {:cont, :ok}
       else
         false -> {:halt, {:error, {:binding_went_stale, binding.entry_id}}}
