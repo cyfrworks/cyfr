@@ -356,6 +356,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       assert has_element?(view, ~s([data-recovery-code="k1"][hidden]))
       refute has_element?(view, ~s([data-test="recovery-saved"]))
       refute has_element?(view, "#system-layer", ~r/\bkits?\b|printed|Print/)
+      PrismWeb.AdmissionScreens.refute_vocabulary(view |> element("#system-layer") |> render())
       view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
 
       {:ok, holder} = Recovery.holder("h1")
@@ -395,6 +396,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       assert has_element?(view, ~s([data-test="recovery-submit"]), "Continue")
       assert has_element?(view, ~s([data-recovery-code="h1"][hidden]))
       refute has_element?(view, "#system-layer", ~r/\bkits?\b|printed|Print/)
+      PrismWeb.AdmissionScreens.refute_vocabulary(view |> element("#system-layer") |> render())
     end
   end
 
