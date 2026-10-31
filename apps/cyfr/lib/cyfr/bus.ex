@@ -445,7 +445,7 @@ defmodule Cyfr.Bus do
       match: {:exact, "sanctum:instance_entries"},
       template: "sanctum:instance_entries",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["PrismWeb.SettingsLive", "PrismWeb.VaultLive"],
+      consumers: ["PrismWeb.VaultLive"],
       reason:
         "the instance's own credentials belong to no athanor: a change, by entry id and " <>
           "kind alone, sends the administrator's cards and every person's vault page back " <>
