@@ -243,11 +243,16 @@ and paths it may be sent to. Entries are attach-only by default; disclose
 one only when a component must read its fields. A provider's default
 suggests a choice on the grant sheet and binds nothing by itself. Each
 binding has its own lifetime: standing, until a time, or once under one
-root run. Platform admins offer attach-only instance entries on **Settings**,
-with an audience, method and path bounds and request caps; members choose
-them through the same grant sheet. Entering or rotating a key, or widening
-who may use an instance entry or its `shipped` policy to `any`, requires
-fresh confirmation.
+root run. **Share** offers an attach-only API key or bundle whose
+destination names its methods and paths to everyone on this CYFR or to one
+group you are in, with optional daily caps per person and in total. The
+people it is offered to see it under **Shared with you** and pick it on
+their own grant sheet, and CYFR attaches the key to their requests without
+disclosing it. **Shared by you** lists your shares with today's use, where
+you change a share's audience or caps or revoke it. A platform admin's key
+shared with everyone is what a new person's AQUA uses at first sign-in when
+it fits. Entering or rotating a key, sharing one, or widening who it is
+shared with requires fresh confirmation.
 
 ## Build Your Own Component
 
@@ -365,7 +370,7 @@ time, after the scheme when there is one, so credentials stay encrypted at rest 
 appear in the server config. The entry's destination must cover the server's URL: a
 definition whose header names an entry it does not cover is refused at create, at update
 and again when it connects. A definition names only its own athanor's entries,
-never an instance entry.
+never a key shared with you.
 
 ## Deploy to a Server
 
