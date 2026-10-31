@@ -786,8 +786,8 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
     # Terry recovers his passkey, as a recovery re-enables it, and rotates
     # both keys. A rotation revives neither share nor Alice's grant: the
-    # shares stay revoked, her run is refused, the revoked share cannot be
-    # granted again, and a first sign-in still binds nothing.
+    # shares stay revoked, her run is refused, a first sign-in still binds
+    # nothing, and the revoked share cannot be granted again.
     passkey = Arca.Repo.get_by!(Arca.Schemas.Passkey, user_id: terry.user.id)
 
     {:ok, _reenabled} =
@@ -801,14 +801,13 @@ defmodule Locus.Runtime.AttachedFetchTest do
     assert share_statuses(terry) == %{share.id => "revoked", model_share => "revoked"}
     assert offered_ids(alice) == []
     refused_before_request!(run!(alice.ctx, probe, request(port, "/hello")))
+    {_ned, _head, refs} = first_sign_in!("Ned")
+    assert refs == []
 
     assert Commit.preview(alice.ctx, %{
              ref: probe,
              bindings: [%{need: "api_key", share_id: share.id}]
            }) == {:error, {:share_not_offered, "api_key"}}
-
-    {_ned, _head, refs} = first_sign_in!("Ned")
-    assert refs == []
 
     # Terry shares the key with Traders again: a new share, offered to
     # Alice. Her grant still names the one the restore revoked, so her run
