@@ -13,6 +13,8 @@ defmodule Emissary.Web.SetupStatusControllerTest do
   # The setup token is process-wide configuration.
   use CyfrWeb.ConnCase, async: false
 
+  @moduletag :capture_log
+
   alias Arca.Schemas.User
   alias Sanctum.Newcomer
   alias Sanctum.Test.Newcomers
@@ -124,7 +126,7 @@ defmodule Emissary.Web.SetupStatusControllerTest do
         put_req_header(conn, name, value)
       end)
 
-    send = fn -> post(conn, @path, body(exchange)) end
+    send = fn -> post(conn, exchange["request_path"] || @path, body(exchange)) end
 
     if exchange["parser"] do
       {status, headers, body} = assert_error_sent(exchange["status"], send)
@@ -159,10 +161,13 @@ defmodule Emissary.Web.SetupStatusControllerTest do
       {response, log} =
         ExUnit.CaptureLog.with_log([level: :debug], fn -> request(exchange) end)
 
+      Logger.configure(level: previous)
+
       assert response.status == exchange["status"]
 
-      # The request's own line: this log is the one the token is kept out of.
-      assert log =~ @path
+      # The request's own line: this log is the one the token is kept out
+      # of. A refusal of the front comes before the endpoint's log.
+      if response.status != 403, do: assert(log =~ (exchange["request_path"] || @path))
 
       case exchange do
         %{"answer" => answer} -> assert Jason.decode!(response.body) == answer
@@ -170,8 +175,7 @@ defmodule Emissary.Web.SetupStatusControllerTest do
         %{"parser" => true} -> :ok
       end
 
-      unless exchange["parser"], do: assert(header(response, "cache-control") == ["no-store"])
-
+      assert header(response, "cache-control") == ["no-store"]
       assert header(response, "set-cookie") == []
       assert rows() == before
 
@@ -259,5 +263,195 @@ defmodule Emissary.Web.SetupStatusControllerTest do
       assert header(refused, "cache-control") == ["no-store"]
       assert [_seconds] = header(refused, "retry-after")
     end
+
+    test "counts a malformed request as it counts any other" do
+      malformed = %{"token" => "setup", "body" => "{", "parser" => true, "status" => 400}
+
+      for _ <- 1..120, do: assert(request(malformed).status == 400)
+
+      assert request(%{"token" => "setup"}).status == 429
+    end
+
+    test "counts a request whose path is spelled in escapes as it counts any other" do
+      for _ <- 1..120 do
+        assert request(%{"token" => "setup", "request_path" => "/api/setup/%73tatus"}).status ==
+                 200
+      end
+
+      assert request(%{"token" => "setup"}).status == 429
+    end
+  end
+
+  # ---- the fence every route stands behind ------------------------------------
+
+  describe "a member that lost its slot" do
+    test "keeps the fence: 503, no-store, and that refusal alone is recorded" do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      before = rows()
+      Arca.ControlPlane.record(:lost)
+
+      response = request(%{"token" => "setup"})
+
+      assert response.status == 503
+      assert header(response, "cache-control") == ["no-store"]
+      assert Jason.decode!(response.body)["state"] == nil
+
+      changed = rows() |> Enum.reject(fn {table, held} -> before[table] == held end)
+      assert [{"decision_logs", held}] = changed
+      assert length(held) == length(before["decision_logs"]) + 1
+    end
+  end
+
+  # ---- every other route ----------------------------------------------------------
+
+  describe "the route's front" do
+    test "leaves every other request as it came" do
+      front = Emissary.Web.Plugs.SetupStatusFront
+
+      for {method, path} <- [
+            {:get, @path},
+            {:get, "/api/health"},
+            {:post, "/api/setup"},
+            {:post, "/api/setup/status/more"},
+            {:post, "/api/setup/%zz"},
+            {:put, @path}
+          ] do
+        conn =
+          Plug.Test.conn(method, path)
+          |> Sanctum.ClientIp.put_ingress(:proxy)
+          |> put_req_header("origin", "http://localhost")
+
+        untouched = front.call(conn, front.init([]))
+
+        refute untouched.halted, path
+        assert untouched.resp_headers == conn.resp_headers, path
+      end
+    end
+
+    test "answers the route's path as the router decodes it, and no other" do
+      for path <- [@path, "/%61pi/setup/status", "/api/%73etup/status", "/api/setup/%73tatus"] do
+        assert Prima.SetupStatus.path?(split(path)), path
+      end
+
+      for path <- [
+            "/api/setup",
+            "/api/setup/%zz",
+            "/api/setup/status/more",
+            "/api/setup%2Fstatus"
+          ] do
+        refute Prima.SetupStatus.path?(split(path)), path
+      end
+    end
+
+    defp split(path), do: String.split(path, "/", trim: true)
+  end
+
+  # ---- the real listeners, and what their instrumentation records ---------------------
+
+  describe "on the real listeners, under the instrumentation a release attaches" do
+    setup do
+      known = handlers()
+
+      on_exit(fn ->
+        for id <- handlers() -- known, do: :telemetry.detach(id)
+      end)
+
+      OpentelemetryBandit.setup()
+      OpentelemetryPhoenix.setup(adapter: :bandit)
+      Cyfr.OtelTenantHandler.attach()
+
+      on_exit(fn ->
+        ExUnit.CaptureLog.capture_log(fn -> :otel_batch_processor.set_exporter(:none) end)
+      end)
+
+      :otel_batch_processor.set_exporter(:otel_exporter_pid, self())
+
+      previous = Logger.level()
+      on_exit(fn -> Logger.configure(level: previous) end)
+      Logger.configure(level: :debug)
+      :ok
+    end
+
+    defp handlers do
+      for event <- [[:phoenix], [:bandit]], %{id: id} <- :telemetry.list_handlers(event), do: id
+    end
+
+    defp listening(ingress) do
+      server =
+        start_supervised!(
+          {Bandit,
+           plug: {CyfrWeb.Ingress, {ingress, CyfrWeb.Endpoint}},
+           port: 0,
+           ip: :loopback,
+           startup_log: false},
+          id: ingress
+        )
+
+      {:ok, {_address, port}} = ThousandIsland.listener_info(server)
+      port
+    end
+
+    defp posted(port) do
+      request =
+        "POST #{@path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n" <>
+          "authorization: Bearer #{@token}\r\ncontent-type: application/json\r\n" <>
+          "content-length: #{byte_size(@vectors["request"])}\r\n\r\n#{@vectors["request"]}"
+
+      {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+      :ok = :gen_tcp.send(socket, request)
+      read_all(socket, "")
+    end
+
+    defp read_all(socket, read) do
+      case :gen_tcp.recv(socket, 0, 5_000) do
+        {:ok, more} -> read_all(socket, read <> more)
+        {:error, :closed} -> read
+      end
+    end
+
+    defp spans(found) do
+      receive do
+        {:span, span} -> spans([span | found])
+      after
+        0 -> found
+      end
+    end
+
+    test "the loopback listener opens, the proxy listener refuses, and no span or log holds the token" do
+      {{open, refused}, log} =
+        ExUnit.CaptureLog.with_log([level: :debug], fn ->
+          {posted(listening(:loopback)), posted(listening(:proxy))}
+        end)
+
+      assert open =~ ~r{\AHTTP/1\.1 200 }
+      assert open =~ ~s("state":"open")
+      assert refused =~ ~r{\AHTTP/1\.1 403 }
+
+      :otel_tracer_provider.force_flush()
+      Process.sleep(100)
+      recorded = spans([])
+
+      assert recorded != [], "no span was recorded, so this holds nothing"
+      assert Enum.any?(recorded, &(inspect(&1, limit: :infinity) =~ @path))
+
+      for text <- [log | Enum.map(recorded, &inspect(&1, limit: :infinity))] do
+        refute text =~ @token
+        refute text =~ "authorization"
+      end
+    end
+  end
+
+  # ---- the instrumentation's own roster -------------------------------------------
+
+  # A release adds the three the real listeners' setup above attaches. A new
+  # handler on these events fails here, and belongs in that setup.
+  test "nothing but Phoenix's own log lines listens to a request otherwise" do
+    owners =
+      for prefix <- [[:phoenix], [:bandit]],
+          %{id: {owner, _event}} <- :telemetry.list_handlers(prefix),
+          uniq: true,
+          do: owner
+
+    assert Enum.sort(owners) == [Phoenix.LiveView.Logger, Phoenix.Logger]
   end
 end

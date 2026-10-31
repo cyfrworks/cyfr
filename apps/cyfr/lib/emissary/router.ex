@@ -188,19 +188,17 @@ defmodule Emissary.Router do
       end
 
       # The setup status read (`Emissary.Web.SetupStatusController`), for a
-      # program on this machine: no session and no call identity, since it
-      # writes nothing, not even a refusal's decision. `LocalOnly` comes
-      # first so a request off the loopback listener never counts against
-      # the local bucket, which a once-a-second poll stays under.
+      # program on this machine: no session and no call identity, so
+      # neither an answer nor a refusal of the route's writes a row. The
+      # ownership fence every route stands behind still applies: a member
+      # that lost its slot refuses, and that refusal's record is the
+      # server's own audit, not setup state. The rate limit and the first
+      # `LocalOnly` run earlier, before that fence and the parsers
+      # (`Emissary.Web.Plugs.SetupStatusFront`).
       pipeline :setup_status do
         plug CyfrWeb.Plugs.ApiSecurityHeaders
         plug Emissary.Web.Plugs.LocalOnly
         plug :accepts, ["json"]
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :setup_status,
-          max_requests: 120,
-          window_ms: 60_000
       end
 
       # The identity directory's routes (`Sanctum.Directory`), which decide

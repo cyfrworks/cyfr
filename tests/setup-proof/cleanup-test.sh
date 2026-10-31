@@ -11,6 +11,11 @@
 # the container is stopped, the proof job and the stand-in have ended, the
 # stand-in having been asked to stop, and the scratch directory is gone.
 #
+# It holds the proof's log guard (tests/setup-proof/logs.sh) first, on
+# streams made here: a token found however much follows it, a stream
+# without one passing, and a log that could not be read or says nothing
+# never passing.
+#
 # Usage: tests/setup-proof/cleanup-test.sh
 # Env: SETUP_PROOF_IMAGE, an image with `sleep` (default cyfr:setup-proof),
 # which is never pulled.
@@ -42,6 +47,38 @@ finish() {
   exit "$code"
 }
 trap finish EXIT
+
+# The guard on a writer of the token, or not, followed by `$2` chunks of
+# 64 KiB, which dies of SIGPIPE when nothing reads it, then exits `$3`.
+guard_on() {
+  local token="$1" chunks="$2" code="$3" status=0
+  (
+    WORK="$BASE/work"
+    fail() { exit 99; }
+    # shellcheck source=tests/setup-proof/logs.sh
+    . "$HERE/logs.sh"
+    logs_hold_no REVIEW_TOKEN "the stream" python3 -I -c '
+import os, signal, sys
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+os.write(1, sys.argv[1].encode() + b"\n")
+for _ in range(int(sys.argv[2])):
+    os.write(1, b"x" * 65536)
+sys.exit(int(sys.argv[3]))' "$token" "$chunks" "$code"
+  ) || status=$?
+  echo "$status"
+}
+guard_failures=()
+[ "$(guard_on REVIEW_TOKEN 0 0)" = 99 ] || guard_failures+=("the token alone was not found")
+[ "$(guard_on REVIEW_TOKEN 100 0)" = 99 ] || guard_failures+=("the token was lost to what followed it")
+[ "$(guard_on clean 100 0)" = 0 ] || guard_failures+=("a clean stream did not pass")
+[ "$(guard_on clean 1 1)" = 99 ] || guard_failures+=("a log that could not be read passed")
+status=0
+(WORK="$BASE/work"; fail() { exit 99; }; . "$HERE/logs.sh"; logs_hold_no REVIEW_TOKEN "the stream" true) || status=$?
+[ "$status" = 99 ] || guard_failures+=("a log that said nothing passed")
+if [ ${#guard_failures[@]} -gt 0 ]; then
+  printf 'FAIL: %s\n' "${guard_failures[@]}"
+  exit 1
+fi
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
   echo "::error::the image $IMAGE is not here; set SETUP_PROOF_IMAGE to one with sleep" >&2

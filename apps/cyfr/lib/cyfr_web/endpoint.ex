@@ -205,6 +205,10 @@ defmodule CyfrWeb.Endpoint do
   # composition router serves is one of theirs.
   plug(CyfrWeb.MetricsPlug)
   plug(Plug.RequestId)
+  # Before the fence and the parsers: every answer of this one route, a
+  # refusal of either among them, carries `no-store`, and a malformed
+  # request counts against its limit.
+  plug(Emissary.Web.Plugs.SetupStatusFront)
   # A boot that lost the control plane serves nothing but health.
   plug(CyfrWeb.Plugs.ControlPlaneOwnership)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])

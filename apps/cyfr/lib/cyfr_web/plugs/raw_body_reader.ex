@@ -128,8 +128,8 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   authenticated, the attachment allowance (28 MB) for one its pipeline
   has; never more than the webhook cap under `/hooks/*`, nor the
   directory's 16 KiB write-body limit under `/directory/*`, `/restore*`
-  and `/certify/*`, nor the setup status request's own at
-  `/api/setup/status`. `{:error, message}` when the webhook cap's
+  and `/certify/*`, nor the setup status request's own at its path, as
+  the router decodes it (`Prima.SetupStatus.path?/1`). `{:error, message}` when the webhook cap's
   configuration is out of its range.
   """
   @spec cap(Plug.Conn.t()) :: {:ok, pos_integer()} | {:error, String.t()}
@@ -234,10 +234,11 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   defp directory_cap(conn),
     do: if(directory_path?(conn), do: @directory_max_body_bytes, else: @max_body_bytes)
 
-  defp setup_status_cap(%Plug.Conn{path_info: ["api", "setup", "status"]}),
-    do: Prima.SetupStatus.max_body_bytes()
-
-  defp setup_status_cap(_conn), do: @max_body_bytes
+  defp setup_status_cap(%Plug.Conn{path_info: path_info}) do
+    if Prima.SetupStatus.path?(path_info),
+      do: Prima.SetupStatus.max_body_bytes(),
+      else: @max_body_bytes
+  end
 
   # No body past a host call's from a caller no pipeline has authenticated.
   defp unauthenticated_cap(conn),

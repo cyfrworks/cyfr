@@ -12,10 +12,13 @@ defmodule Emissary.Web.SetupStatusController do
 
   An invalid token, a spent one and an absent one all answer `closed`, so
   the route tells a guesser nothing, and a store that cannot answer is
-  `unavailable`, never `closed`. This route makes no session, admits no
-  one and writes nothing: its pipeline mints no call identity, so a
-  refusal records no decision. `Emissary.Web.Plugs.LocalOnly` admits the
-  caller; a request that is not the wire's is refused 400.
+  `unavailable`, never `closed`. This route makes no session and admits
+  no one, and neither its answers nor its refusals write a row: its
+  pipeline mints no call identity. The ownership fence every route stands
+  behind records its own refusal, the server's audit and not setup state.
+  `Emissary.Web.Plugs.SetupStatusFront` and
+  `Emissary.Web.Plugs.LocalOnly` admit the caller; a request that is not
+  the wire's is refused 400.
   """
 
   use Emissary.Web, :controller

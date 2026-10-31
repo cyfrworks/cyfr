@@ -63,8 +63,7 @@
         "setup_status" => [
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "Emissary.Web.Plugs.LocalOnly",
-          ":accepts",
-          "CyfrWeb.Plugs.AuthRateLimit"
+          ":accepts"
         ],
         "tincture" => [
           "CyfrWeb.Plugs.CallIdentity",

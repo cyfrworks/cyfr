@@ -109,6 +109,8 @@ free_port() {
 
 # shellcheck source=tests/setup-proof/cleanup.sh
 . "$HERE/cleanup.sh"
+# shellcheck source=tests/setup-proof/logs.sh
+. "$HERE/logs.sh"
 trap cleanup EXIT
 
 # `cyfr setup --no-pull` `$2...` in the project `$1`, as a person runs it
@@ -360,9 +362,7 @@ setup_wait 120
 [ "$(stat -c %a "$WORK/$LOCAL/.env")" = 600 ] || fail ".env is not mode 0600"
 token="$(env_value "$LOCAL" CYFR_SETUP_TOKEN)"
 [[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail ".env holds no setup token of 64 lowercase hexadecimal characters"
-if compose_in "$LOCAL" logs --no-color cyfr 2>&1 | grep -qF "$token"; then
-  fail "the cyfr service's log records the setup token"
-fi
+logs_hold_no "$token" "the cyfr service" compose_in "$LOCAL" logs --no-color cyfr
 ok "the home runs at http://localhost:$LOCAL_PORT, set up by its first person, and cyfr setup exited 0"
 
 step "refusal: cyfr setup again where .env exists"
@@ -398,9 +398,7 @@ setup_wait 120
 [ "$(env_value "$TAILNET" CYFR_HOST)" = proofhome.proof.ts.net ] || fail ".env's host is $(env_value "$TAILNET" CYFR_HOST)"
 token="$(env_value "$TAILNET" CYFR_SETUP_TOKEN)"
 [[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail ".env holds no setup token of 64 lowercase hexadecimal characters"
-if compose_in "$TAILNET" logs --no-color 2>&1 | grep -qF "$token"; then
-  fail "a service of the tailnet home logged the setup token"
-fi
+logs_hold_no "$token" "the tailnet home's services" compose_in "$TAILNET" logs --no-color
 ok "the home is served at https://proofhome.proof.ts.net, and cyfr setup exited 0"
 
 echo

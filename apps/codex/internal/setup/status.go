@@ -84,25 +84,51 @@ func ReadStatus(ctx context.Context, base, token string) (Status, error) {
 }
 
 // parseStatus reads the wire's answer: open or closed at 200, unavailable
-// at 503, and exactly its two fields.
+// at 503, one JSON object of exactly the fields version and state, each
+// once and spelled exactly, and nothing after it. It walks the object's
+// tokens because a decode into a struct would take any spelling's case
+// and a repeated field's last value.
 func parseStatus(code int, body []byte) (Status, bool) {
 	if len(body) > statusMaxAnswer {
 		return "", false
 	}
-	var answer struct {
-		Version int    `json:"version"`
-		State   Status `json:"state"`
-	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&answer) != nil || decoder.More() || answer.Version != statusVersion {
+	if open, err := decoder.Token(); err != nil || open != json.Delim('{') {
+		return "", false
+	}
+	var version int
+	var state Status
+	seen := map[string]bool{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		field, isField := key.(string)
+		if err != nil || !isField || seen[field] {
+			return "", false
+		}
+		seen[field] = true
+		switch field {
+		case "version":
+			err = decoder.Decode(&version)
+		case "state":
+			err = decoder.Decode(&state)
+		default:
+			return "", false
+		}
+		if err != nil {
+			return "", false
+		}
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
+		return "", false
+	}
+	if _, err := decoder.Token(); err != io.EOF || version != statusVersion {
 		return "", false
 	}
 	switch {
-	case code == http.StatusOK && (answer.State == StatusOpen || answer.State == StatusClosed):
-		return answer.State, true
-	case code == http.StatusServiceUnavailable && answer.State == StatusUnavailable:
-		return answer.State, true
+	case code == http.StatusOK && (state == StatusOpen || state == StatusClosed):
+		return state, true
+	case code == http.StatusServiceUnavailable && state == StatusUnavailable:
+		return state, true
 	}
 	return "", false
 }

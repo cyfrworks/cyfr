@@ -36,6 +36,7 @@ defmodule Emissary.Web do
       OAuthCallbackController,
       Plugs.LocalOnly,
       Plugs.MCPRequestMetadata,
+      Plugs.SetupStatusFront,
       RestoreController,
       SetupStatusController,
       TinctureController,

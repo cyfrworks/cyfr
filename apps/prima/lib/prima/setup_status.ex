@@ -18,12 +18,27 @@ defmodule Prima.SetupStatus do
 
   @version 1
   @max_body_bytes 1024
+  @segments ["api", "setup", "status"]
 
   @type state :: :open | :closed | :unavailable
 
   @doc "The most bytes a request's body may hold."
   @spec max_body_bytes() :: pos_integer()
   def max_body_bytes, do: @max_body_bytes
+
+  @doc """
+  Whether `path_info` is the route's path, each segment decoded as the
+  router decodes it, so a segment spelled in percent escapes is the same
+  path here as there.
+  """
+  @spec path?([String.t()]) :: boolean()
+  def path?([_, _, _] = path_info) do
+    Enum.map(path_info, &URI.decode/1) == @segments
+  rescue
+    ArgumentError -> false
+  end
+
+  def path?(_path_info), do: false
 
   @doc "Whether the decoded `body` is this wire's request."
   @spec request?(term()) :: boolean()
