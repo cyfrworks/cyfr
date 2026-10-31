@@ -20,11 +20,11 @@ defmodule Cyfr.TelemetryCatalogTest do
   @event_re ~r/\[:cyfr(?:,\s*:[a-z_0-9]+)+\]/
 
   defp source_events do
-    Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
-    |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
+    source_files()
     |> Enum.flat_map(fn path ->
+      code = Prima.Test.SourceTree.read(path)
       # Collapse formatting so a list wrapped across lines still matches.
-      source = path |> Prima.Test.SourceTree.read() |> String.replace(~r/\n\s*/, " ")
+      source = String.replace(code, ~r/\n\s*/, " ")
 
       Regex.scan(@event_re, source)
       |> Enum.map(fn [match] ->
@@ -34,29 +34,38 @@ defmodule Cyfr.TelemetryCatalogTest do
         |> String.split(~r/,\s*/)
         |> Enum.map(&String.trim_leading(&1, ":"))
       end)
-      |> Kernel.++(family_events(source))
+      |> Kernel.++(family_events(path, code))
     end)
     |> MapSet.new()
   end
 
   # A family's events where its producer passes `[prefix..., kind]` to
-  # `:telemetry.execute` (`Cyfr.Test.TelemetryFamilies`): the call itself,
-  # so a consumer or a doc naming the family is no producer.
-  defp family_events(source) do
-    for {prefix, kinds} <- Cyfr.Test.TelemetryFamilies.all(),
-        source =~ family_literal(prefix),
-        kind <- kinds,
-        do: Enum.map(prefix ++ [kind], &Atom.to_string/1)
+  # `:telemetry.execute` in the canonical form the one rule states
+  # (`Cyfr.Test.TelemetryFamilies.scan/2`), as segment strings.
+  defp family_events(path, source) do
+    families(path, source).events
+    |> Enum.map(fn event -> Enum.map(event, &Atom.to_string/1) end)
   end
 
-  defp family_literal(prefix) do
-    atoms = Enum.map_join(prefix, ",\\s*", &(":" <> Atom.to_string(&1)))
-    Regex.compile!(":telemetry\\.execute\\(\\s*\\[" <> atoms <> ",\\s*kind\\]")
+  defp families(path, source),
+    do: Cyfr.Test.TelemetryFamilies.scan(source, Path.relative_to(path, @umbrella_root))
+
+  # Every family producer outside the canonical form, by file and line.
+  defp unbounded_producers do
+    for path <- source_files(),
+        message <- families(path, Prima.Test.SourceTree.read(path)).unbounded,
+        do: message
+  end
+
+  defp source_files do
+    Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+    |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
   end
 
   # Compared as segment strings, so a source event the catalog lacks is
   # never made an atom.
   test "every event named in source is catalogued, and none is stale" do
+    assert unbounded_producers() == [], "a family producer outside the canonical form"
     found = source_events()
     catalogued = MapSet.new(Catalog.events(), fn event -> Enum.map(event, &Atom.to_string/1) end)
 
