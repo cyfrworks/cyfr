@@ -25,9 +25,11 @@
 //                    counted, its row binding reads offered, and her vault's
 //                    Shared with you offers both, by the administrator's
 //                    name, and shows no material
-//   claim_cap        two more claims through the share are admitted, her
-//                    vault says her use today is 3, and the next is refused
-//                    with the database's next UTC midnight
+//   claim_cap        two more claims through the share are admitted and the
+//                    next is refused with its reset at the database's next
+//                    UTC midnight; her vault's Shared with you, compared
+//                    whole, shows the owner and her use today, 3, and no
+//                    cap, which is the owner's
 //   narrow_audience  the administrator narrows Company AI's share to a group
 //                    holding Bea on Shared by you, which sends the audience
 //                    the row showed as expected: Ana's claim is refused, her
@@ -36,8 +38,11 @@
 //   revoke           Company Mail's share, claimed by Ana just before, is
 //                    revoked on Shared by you: her next claim is refused,
 //                    and her vault offers nothing
-//   deny_person      Bea is denied at the door on the Settings page: nothing
-//                    of a share changes, and Shared by you reads as before
+//   deny_person      Bea, in Traders, is offered Company AI's share and a
+//                    claim through it is admitted and counted; denied at the
+//                    door on the Settings page, she is offered nothing, the
+//                    same claim is refused and counts nothing, and nothing of
+//                    a share changes
 //   admin_focus      the administrator's switcher lists no athanor of Ana's,
 //                    a direct visit is refused, and Sanctum's focus decision
 //                    refuses it
@@ -403,7 +408,8 @@ function classified(table, row, read, problems) {
 // `state`), every field through its class, shaped for the one comparison:
 // every vault entry, every entry, member and use row of the instance,
 // every share and share use row, Ana's profiles, consents, binding rows,
-// offered instance entries and shares, and Bea's row.
+// offered instance entries and shares, and Bea's row and the shares
+// offered to her, or the refusal.
 function storedState(state, read, problems) {
   const each = (table, rows) => (rows || []).map((r) => classified(table, r, read, problems));
   return {
@@ -420,7 +426,10 @@ function storedState(state, read, problems) {
       offered: state.ana.offered || [],
       shared: state.ana.shared || [],
     } : null,
-    bea: (state && state.bea) ? { user: classified("users", state.bea.user, read, problems) } : null,
+    bea: (state && state.bea) ? {
+      user: classified("users", state.bea.user, read, problems),
+      shared: state.bea.shared === undefined ? { missing: true } : state.bea.shared,
+    } : null,
   };
 }
 
@@ -522,14 +531,36 @@ async function diagnose(page, name) {
     .catch(() => []);
 }
 
-// The rows of a person's "Shared with you", by share id, with what each
-// row says: whose it is and the person's own use.
+// The rows of a person's "Shared with you", by share id, each whole: all
+// it says, and its parts by name, the destination, whose it is and the
+// person's own use.
 async function sharedWithYou(page) {
   await page.waitForSelector('[data-test="shared-with-you"]', { timeout: 30_000 });
   return page.$$eval('[data-test="shared-with-you-row"]', (els) => els.map((el) => {
     const text = (sel) => ((el.querySelector(sel) || { textContent: "" }).textContent || "").replace(/\s+/g, " ").trim();
-    return { id: el.getAttribute("data-id"), by: text('[data-test="shared-by"]'), use: text('[data-test="shared-use"]') };
+    return {
+      id: el.getAttribute("data-id"),
+      text: el.textContent.replace(/\s+/g, " ").trim(),
+      destination: text('[data-test="shared-destination"]'),
+      by: text('[data-test="shared-by"]'),
+      use: text('[data-test="shared-use"]'),
+    };
   }));
+}
+
+// One "Shared with you" row as the person reads it, whole: the source's
+// provider and kind, where it goes (its canonical destination as the
+// request implied it, in one line), the owner, and the person's own use.
+// A share's caps are its owner's, and the row says nothing of them.
+function withYouRow(spec, shareId, implied, use) {
+  const to = JSON.parse(implied.destination);
+  const destination = `${to.scheme}://${to.hosts.join(", ")}` + (to.port ? `:${to.port}` : "") +
+    (to.methods ? ` · ${to.methods.join(" ")}` : "") + (to.paths ? ` · ${to.paths.join(" ")}` : "");
+  const by = `Shared by ${OWNER}`;
+  const useText = `Your use: ${use}`;
+  return {
+    id: shareId, text: `${spec.provider} · api_key ${destination} ${by} ${useText}`, destination, by, use: useText,
+  };
 }
 
 // The rows of the administrator's "Shared by you", by share id, with each
@@ -721,6 +752,15 @@ async function main() {
     // `count` claims under Ana's context: of a share her head binds
     // (`share`), or of one held to the digest its source's request implies
     // and its one field, as a grant of it would bind it (`granted`).
+    // `count` claims under the context Bea's request established and still
+    // holds, of a share held to the digest its source's request implies and
+    // its one field: what a deny must refuse though the request is already
+    // in flight.
+    const heldClaimOf = (shareId, spec, count, implied) =>
+      ask({
+        op: "held_claim", user_id: bea.user_id, id: shareId, count, url: spec.url, method: spec.method,
+        digest: implied.binding_digest, field: FIELD,
+      });
     const claimOf = (source, shareId, spec, count, implied) =>
       ask({
         op: "claim", user_id: ana.user_id, source, id: shareId, count, url: spec.url, method: spec.method,
@@ -894,8 +934,8 @@ async function main() {
     setModel();
     model.share_usage = [shareUse(ai.share, ana.user_id, 1), shareUse(ai.share, "", 1)];
     const shownFirst = [
-      { id: ai.share, by: `Shared by ${OWNER}`, use: "Your use: 1 request today" },
-      { id: mail.share, by: `Shared by ${OWNER}`, use: "Your use: none today" },
+      withYouRow(AI, ai.share, aiImplied, "1 request today"),
+      withYouRow(MAIL, mail.share, mailImplied, "none today"),
     ];
     const signed = await stateHolds();
     record.first_sign_in = {
@@ -920,21 +960,23 @@ async function main() {
     const fourth = await claimOf("share", ai.share, AI, 1);
     // Each claim's whole answer, the fourth's reset the database's next UTC
     // midnight; the share's use is Ana's three and the day's three on the
-    // database's today, no one else's and no other day.
+    // database's today, no one else's and no other day. Her Shared with you
+    // is compared whole: the owner and her own use, 3, and nothing of the
+    // cap, which is the owner's (`share.offered` carries no cap).
     const twoAdmitted = [{ admitted: true }, { admitted: true }];
     const fourthRefused = [{ admitted: false, refusal: "connection_cap", reset_at: fourth.next_utc_midnight }];
     model.share_usage = [shareUse(ai.share, ana.user_id, 3), shareUse(ai.share, "", 3)];
     const shownCapped = [
-      { id: ai.share, by: `Shared by ${OWNER}`, use: "Your use: 3 requests today" },
-      { id: mail.share, by: `Shared by ${OWNER}`, use: "Your use: none today" },
+      withYouRow(AI, ai.share, aiImplied, "3 requests today"),
+      withYouRow(MAIL, mail.share, mailImplied, "none today"),
     ];
     const claimed = await stateHolds();
     record.claim_cap = { two, fourth, shown: cappedShown, state: claimed.compared };
     if (!row("claim_cap",
       claimAnswer(two, twoAdmitted) && claimAnswer(fourth, fourthRefused) && same(cappedShown, shownCapped) &&
         claimed.held,
-      "two more claims admitted, her vault says her use today is 3, the next refused at the next UTC midnight; " +
-        "the whole state is the model",
+      "two more claims admitted, the next refused with its reset at the next UTC midnight; her Shared with you, " +
+        "compared whole, shows the owner and her use today, 3, and no cap; the whole state is the model",
       { two, fourth, shown: cappedShown, state: claimed.compared })) return;
 
     // -----------------------------------------------------------------------
@@ -984,6 +1026,9 @@ async function main() {
         created_at: IN_WINDOW,
         updated_at: IN_WINDOW,
       },
+      // Seated in Traders, she is offered Company AI's share, and Company
+      // Mail's, which is to everyone.
+      shared: [ai.share, mail.share],
     };
     aiShareOver = { ...aiShareOver, audience: "group", group_id: traders.group_id };
     setModel();
@@ -1033,6 +1078,7 @@ async function main() {
     setModel();
     model.share_usage = [...model.share_usage, shareUse(mail.share, ana.user_id, 1), shareUse(mail.share, "", 1)];
     model.ana.shared = [];
+    model.bea.shared = [ai.share];
     const linesRevoked = byYouLines([
       [ai.share, "active", "Company AI, shared with Traders, 3 today, at most 3 a person a day"],
       [mail.share, "revoked", "Company Mail, shared with everyone, revoked"],
@@ -1052,27 +1098,53 @@ async function main() {
     // -----------------------------------------------------------------------
     // deny_person
     // -----------------------------------------------------------------------
+    // The control first: Bea, in Traders, is offered Company AI's share, and
+    // a claim through it under the context her request holds is admitted
+    // and counted, Bea's 1 beside Ana's 3, the day's 4.
+    const beaBefore = await heldClaimOf(ai.share, AI, 1, aiImplied);
+    model.share_usage = [
+      shareUse(ai.share, ana.user_id, 3), shareUse(ai.share, bea.user_id, 1), shareUse(ai.share, "", 4),
+      shareUse(mail.share, ana.user_id, 1), shareUse(mail.share, "", 1),
+    ];
+    const offeredState = await stateHolds();
     // A deny names the person, by her user id.
     const denied = await door(admin, settings, bea.user_id, "deny");
+    // The same claim under the same held context is refused as hers, a
+    // person who no longer stands, and counts nothing.
+    const beaAfter = await heldClaimOf(ai.share, AI, 1, aiImplied);
     await open(admin, vault);
     const deniedLines = await sharedByYou(admin);
     // A deny commits three columns of her row together
     // (`Sanctum.Tenancy.Users`): denied, a denial time, and her security
     // generation one above the model's. A share's audience is read at use,
-    // so nothing of a share is written: Shared by you reads as before.
+    // so nothing of a share is written; what she is offered is now the
+    // refusal of a person who does not stand, and the use rows stand as
+    // they were. Shared by you reads Company AI's use with hers.
     model.bea.user = {
       ...model.bea.user,
       status: "denied",
       denied_at: IN_WINDOW,
       security_generation: model.bea.user.security_generation + 1,
     };
+    model.bea.shared = { refused: "denied" };
+    const linesDenied = byYouLines([
+      [ai.share, "active", "Company AI, shared with Traders, 4 today, at most 3 a person a day"],
+      [mail.share, "revoked", "Company Mail, shared with everyone, revoked"],
+    ]);
     const deniedState = await stateHolds();
-    record.deny_person = { denied, shared_by_you: deniedLines, state: deniedState.compared };
+    record.deny_person = {
+      bea_before: beaBefore, offered_state: offeredState.compared, denied, bea_after: beaAfter,
+      shared_by_you: deniedLines, state: deniedState.compared,
+    };
     if (!row("deny_person",
-      denied && same(deniedLines, linesRevoked) && deniedState.held,
-      "Bea denied at the door on the Settings page: no share changes, and Shared by you reads as before; the whole " +
-        "state is the model",
-      { shared_by_you: deniedLines, state: deniedState.compared })) return;
+      claimAnswer(beaBefore, [{ admitted: true }]) && offeredState.held && denied &&
+        claimAnswer(beaAfter, [{ admitted: false, refusal: "denied" }]) && same(deniedLines, linesDenied) &&
+        deniedState.held,
+      "Bea, in Traders, is offered Company AI's share and her claim through it is admitted and counted; denied at " +
+        "the door on the Settings page, she is offered nothing, the same claim is refused as denied and counts " +
+        "nothing, and no share changes; the whole state is the model before and after",
+      { bea_before: beaBefore, bea_after: beaAfter, shared_by_you: deniedLines, offered_state: offeredState.compared,
+        state: deniedState.compared })) return;
 
     // -----------------------------------------------------------------------
     // admin_focus
