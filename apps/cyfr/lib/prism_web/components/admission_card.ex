@@ -600,9 +600,9 @@ defmodule PrismWeb.AdmissionCard do
       id="admission-code-slot"
       data-recovery-code="admission"
       phx-update="ignore"
-      class="flex items-center gap-3"
+      class="space-y-2"
     >
-      <p data-test="recovery-code" class="flex-1 font-mono text-lg break-all text-white"></p>
+      <p data-test="recovery-code" class="font-mono text-lg break-normal text-white"></p>
       <button
         type="button"
         data-test="admission-copy"

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import SystemLayer from "../../js/system_layer/index.js"
+import SystemLayer, {drawAdmissionCode} from "../../js/system_layer/index.js"
 
 // A document with a frame in fullscreen and pointer lock. Every call the
 // hook makes on it, and on the dialog, is recorded in `calls`, in order.
@@ -827,6 +827,36 @@ describe("a newcomer page's recovery code", () => {
 
     const bare = screen("create", {withSlot: false})
     assert.doesNotThrow(() => bare.listeners.admission_code({code}))
+  })
+
+  test("is drawn so a line breaks only after a hyphen: a <wbr> follows each, and the text is the code", () => {
+    const doc = {
+      createTextNode: (text) => ({nodeName: "#text", textContent: text}),
+      createElement: (tag) => ({nodeName: tag.toUpperCase(), textContent: ""})
+    }
+    const shown = {
+      ownerDocument: doc,
+      children: [],
+      replaceChildren(...nodes) {
+        this.children = nodes
+      },
+      get textContent() {
+        return this.children.map((node) => node.textContent).join("")
+      }
+    }
+    drawAdmissionCode({querySelector: (selector) => (selector === '[data-test="recovery-code"]' ? shown : null)}, code)
+
+    assert.equal(shown.textContent, code)
+    const groups = code.split("-")
+    assert.equal(shown.children.filter((node) => node.nodeName === "WBR").length, groups.length - 1)
+    shown.children.forEach((node, i) => {
+      if (node.nodeName === "WBR") assert.ok(shown.children[i - 1].textContent.endsWith("-"), "a <wbr> only after a hyphen")
+      else assert.ok(!node.textContent.slice(0, -1).includes("-"), "no group is cut")
+    })
+    assert.deepEqual(
+      shown.children.filter((node) => node.nodeName === "#text").map((node) => node.textContent.replace(/-$/, "")),
+      groups
+    )
   })
 
   test("Copy writes the drawn code to the clipboard and says Copied., starting no ceremony", async () => {
