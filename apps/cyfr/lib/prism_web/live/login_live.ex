@@ -14,8 +14,11 @@ defmodule PrismWeb.LoginLive do
        `sign-in` mode) answers it, and `Sanctum.Passkeys.sign_in/2`
        verifies the answer against the challenge, which is spent on the
        first answer, and mints the session.
-    2. **Your CYFR.** "I run my own CYFR", which opens a field taking the
-       address of the person's own CYFR (the carry below).
+    2. **Your CYFR.** "Sign in from your CYFR", which opens one field
+       taking the address of the person's own CYFR (the carry below). The
+       script fills it from a link's `#from=<address>`, or from the address
+       this browser remembers for this page (`localStorage`, written on
+       Continue); the server learns it only when the person continues.
     3. **Create your identity here**, only while the door's `*` admits
        (`Sanctum.Door.Store.wildcard/0`): the two screens
        (`PrismWeb.AdmissionCard`). The name is checked against cyfr.run
@@ -48,9 +51,11 @@ defmodule PrismWeb.LoginLive do
     * **The entry.** The person names their CYFR by its address. An entry
       that is no address (a name with `@`, a bare word with no dot, colon
       or slash) is said, and the field stays open with what was typed.
-      Every attempt mints a one-time ticket bound to this browser, holding
+      Every attempt draws a fresh attempt id (`att_` and 32 lowercase hex
+      digits) and mints a one-time ticket bound to this browser, holding
       the CYFR's origin and its `/carry`
-      (`Sanctum.Auth.CyfrDoor.signing_home/1`), and the page answers
+      (`Sanctum.Auth.CyfrDoor.signing_home/1`), the attempt id and the
+      hash of the invitation the page keeps, or `nil`, and the page answers
       `cyfr:expect` with that origin and `GET /auth/cyfr/start` as where
       to go. The start keeps the request in the browser's session for the
       carry's lifetime, in place of any earlier attempt and its challenge,
@@ -72,7 +77,8 @@ defmodule PrismWeb.LoginLive do
       directory. The attempt is the request the start kept, read from
       the session at mount, never anything the browser sends with the
       carry: the page asks the door for the challenge
-      (`Sanctum.Auth.CyfrDoor.challenge/2`), as lost when the session
+      (`Sanctum.Auth.CyfrDoor.challenge/2`) of that request, whose
+      attempt and invitation the challenge copies, as lost when the session
       holds no live request for that CYFR (expired, cleared, or
       another's), which refuses before anything else: the person is told
       to begin again. Otherwise it is verified against the person's
@@ -88,6 +94,21 @@ defmodule PrismWeb.LoginLive do
       `fragment`, which the request log redacts (`Prima.Sanitizer`), with
       its CSRF token, to `POST /auth/cyfr/callback`, which reports the
       outcome back to their CYFR.
+
+  **An invitation for an existing identity.** The invitation page links
+  here as `/login#invite=<code>`, and the script hands the code to the
+  page (`login_invite`). The page reads it (`Sanctum.Invitations.lookup/1`)
+  and keeps only its hash (`Sanctum.Invitations.code_hash/1`) in this
+  process, says who invited, opens "Sign in from your CYFR" and hides the
+  passkey sign-in and the offer to create an identity. Its start carries
+  the hash, never the code, into the browser's session, and the CYFR
+  sign-in redeems it. A code that can no longer be used is said, with the
+  plain sign-in page.
+
+  **The sessionless rule.** No page this CYFR serves without a session
+  renders an address it stored or learned: the code panel names no CYFR,
+  and only the browser fills in an address, from what it typed,
+  remembered or was linked with.
 
   A held challenge carries the browser secret its login is bound to. The
   page keeps it whole for the hop, inside `PrismWeb.LoginLive.Held`,
@@ -164,9 +185,14 @@ defmodule PrismWeb.LoginLive do
      # "Create your identity here" while the door's `*` admits; the
      # admission asks the door again.
      |> assign(:open_door, set_up and Sanctum.Door.Store.wildcard() == {:ok, true})
-     # "I run my own CYFR": whether its field is open, and what was typed.
-     |> assign(:cyfr_own, false)
+     # "Sign in from your CYFR": whether its field is open, and what was
+     # typed and sent with Continue.
+     |> assign(:cyfr_open, false)
      |> assign(:cyfr_entry, "")
+     # The invitation an existing identity accepts here: its hash, kept in
+     # this process and never rendered, and the sentence saying who invited.
+     |> assign(:invitation, nil)
+     |> assign(:invitation_shown, nil)
      |> assign(:login_state, :idle)
      |> assign(:provider, nil)
      |> assign(:user_code, nil)
@@ -193,13 +219,22 @@ defmodule PrismWeb.LoginLive do
   end
 
   @impl true
-  def handle_event("cyfr_own", _params, socket), do: {:noreply, assign(socket, :cyfr_own, true)}
+  def handle_event("cyfr_open", _params, socket),
+    do: {:reply, %{}, assign(socket, :cyfr_open, true)}
+
+  # The invitation the invitation page sent here in the fragment: read, and
+  # kept as its hash while it can be used.
+  def handle_event("login_invite", %{"code" => code}, socket) when is_binary(code) do
+    {:reply, %{}, invited(socket, code)}
+  end
+
+  def handle_event("login_invite", _params, socket), do: {:reply, %{}, socket}
 
   # The person names their CYFR by its address; they begin the sign-in
   # there, or resume the exchange this browser already holds a challenge
   # of. The field stays open with what they typed.
   def handle_event("cyfr_entry", %{"entry" => entry}, socket) when is_binary(entry) do
-    socket = assign(socket, cyfr_own: true, cyfr_entry: entry)
+    socket = assign(socket, cyfr_open: true, cyfr_entry: entry)
 
     case read_entry(entry) do
       {:address, address} -> {:noreply, by_address(socket, address)}
@@ -570,8 +605,40 @@ defmodule PrismWeb.LoginLive do
 
   defp passkey_refused, do: "That passkey did not sign you in here."
 
+  defp invited(socket, code) do
+    with {:ok, shown} <- Sanctum.Invitations.lookup(code),
+         {:ok, hash} <- Sanctum.Invitations.code_hash(code) do
+      assign(socket,
+        invitation: hash,
+        invitation_shown: invitation_sentence(shown),
+        cyfr_open: true,
+        error: nil
+      )
+    else
+      {:error, :invitation_invalid} ->
+        assign(socket,
+          invitation: nil,
+          invitation_shown: nil,
+          error: Prima.Refusal.message(:invitation_invalid)
+        )
+
+      {:error, _unavailable} ->
+        assign(socket,
+          invitation: nil,
+          invitation_shown: nil,
+          error: "This CYFR could not read the invitation just now. Try again in a moment."
+        )
+    end
+  end
+
+  defp invitation_sentence(%{inviter: inviter, athanor: athanor}),
+    do: "#{inviter} invited you to #{athanor} on this CYFR. Sign in from your CYFR to accept."
+
+  defp invitation_sentence(%{inviter: inviter}),
+    do: "#{inviter} invited you to this CYFR. Sign in from your CYFR to accept."
+
   defp cyfr_refused(reason) when reason in [:identity_stale, :unavailable],
-    do: "Your identity could not be confirmed with its directory just now. Try again shortly."
+    do: "Your identity could not be confirmed just now. Try again shortly."
 
   defp cyfr_refused(:wrong_destination),
     do: "That sign-in was begun for another CYFR. Begin it again for this one."
@@ -601,7 +668,7 @@ defmodule PrismWeb.LoginLive do
 
         # A resumed exchange keeps no expectation: what comes back is its
         # assertion, never a carry.
-        case resumable(socket.assigns.cyfr_held, home) do
+        case resumable(socket.assigns.cyfr_held, home, socket.assigns.invitation) do
           {:ok, held} -> resume(socket, held)
           :none -> start(socket, %{home: home, to: url})
         end
@@ -615,9 +682,11 @@ defmodule PrismWeb.LoginLive do
   end
 
   # Every attempt goes through the start, which records it in this
-  # browser's session: the home. That record, never a field the browser
-  # sends back, is what the carry is judged against.
+  # browser's session: the home, a fresh attempt id and the invitation's
+  # hash. That record, never a field the browser sends back, is what the
+  # carry is judged against, and a later start replaces it.
   defp start(socket, %{home: home} = request) do
+    request = Map.merge(request, %{attempt: attempt_id(), invitation: socket.assigns.invitation})
     ticket = mint_ticket({:login_cyfr_start, request}, socket.assigns.browser_binding)
 
     push_event(socket, "cyfr:expect", %{
@@ -629,12 +698,18 @@ defmodule PrismWeb.LoginLive do
   defp resume(socket, held),
     do: push_event(socket, "cyfr:go", %{to: challenge_hop(held, socket.assigns.browser_binding)})
 
+  defp attempt_id, do: "att_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
   # What the attempt the carry answers requested, read from the live
-  # request this browser's session holds for the expected CYFR alone:
-  # lost when the session holds no live request for that CYFR (expired,
-  # cleared, or another's), which the door refuses before anything else.
-  defp requested(%{"home" => expected, "expires_at" => at}, expected),
-    do: if(at <= System.os_time(:millisecond), do: :lost, else: :none)
+  # request this browser's session holds for the expected CYFR alone: its
+  # attempt and invitation, or lost when the session holds no live request
+  # for that CYFR (expired, cleared, or another's), which the door refuses
+  # before anything else.
+  defp requested(%{"home" => expected, "expires_at" => at} = request, expected) do
+    if at <= System.os_time(:millisecond),
+      do: :lost,
+      else: Map.take(request, ["attempt", "invitation"])
+  end
 
   defp requested(_request, _expected), do: :lost
 
@@ -674,15 +749,15 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # What the page shows while the person compares codes: the CYFR they
-  # named and the comparison code of the challenge this CYFR issued, which
-  # that CYFR's confirmation names too. The challenge stays in this
-  # process until Continue hands it to the hop.
+  # What the page shows while the person compares codes: the comparison
+  # code of the challenge this CYFR issued, which their CYFR's confirmation
+  # names too, and no address (the sessionless rule). The challenge stays
+  # in this process until Continue hands it to the hop.
   defp pending(%Held{held: inner} = held) do
     {:ok, challenge} =
       Prima.Identity.Encoding.unb64(inner["challenge"], Prima.PersonAssertion.challenge_bytes())
 
-    %{held: held, home: inner["source"], code: Prima.PersonAssertion.comparison_code(challenge)}
+    %{held: held, code: Prima.PersonAssertion.comparison_code(challenge)}
   end
 
   # The challenge an earlier hop left in this browser's session
@@ -707,12 +782,17 @@ defmodule PrismWeb.LoginLive do
   end
 
   # The exchange this browser holds the challenge of resumes when the
-  # person names its CYFR again before it expires: the same action and
+  # person names its CYFR again before it expires, carrying the invitation
+  # this page keeps or none, as the challenge does: the same action and
   # challenge go back, never a new one.
-  defp resumable(%Held{held: %{"source" => home}} = held, home),
-    do: if(unexpired?(held), do: {:ok, held}, else: :none)
+  defp resumable(
+         %Held{held: %{"source" => home, "invitation" => invitation}} = held,
+         home,
+         invitation
+       ),
+       do: if(unexpired?(held), do: {:ok, held}, else: :none)
 
-  defp resumable(_held, _home), do: :none
+  defp resumable(_held, _home, _invitation), do: :none
 
   defp unexpired?(%Held{held: %{"expires_at" => at}}) when is_integer(at),
     do: at > System.os_time(:millisecond)
@@ -927,6 +1007,14 @@ defmodule PrismWeb.LoginLive do
               Sign in to continue
             </h2>
 
+            <p
+              :if={@invitation_shown && is_nil(@admission_state)}
+              data-test="invitation"
+              class="text-sm text-gray-300 text-center"
+            >
+              {@invitation_shown}
+            </p>
+
             <div
               :if={@cyfr_pending && is_nil(@admission_state)}
               id="cyfr-code"
@@ -934,8 +1022,7 @@ defmodule PrismWeb.LoginLive do
               class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 space-y-3"
             >
               <p class="text-sm text-gray-300">
-                Your CYFR, <span class="font-mono text-white">{@cyfr_pending.home}</span>,
-                will show this code when it asks you to confirm signing in here:
+                Your CYFR will show this code when it asks you to confirm signing in here:
               </p>
               <p class="text-center font-mono text-2xl tracking-widest text-white" data-test="code">
                 {@cyfr_pending.code}
@@ -990,7 +1077,7 @@ defmodule PrismWeb.LoginLive do
 
             <div :if={@login_state == :idle} class="space-y-6">
               <div
-                :if={is_nil(@admission_state)}
+                :if={is_nil(@admission_state) && is_nil(@invitation)}
                 id="passkey-sign-in"
                 phx-hook="SystemLayer"
                 data-webauthn="sign-in"
@@ -1008,30 +1095,29 @@ defmodule PrismWeb.LoginLive do
               <section
                 :if={is_nil(@admission_state)}
                 id="sign-in-cyfr"
-                class="flex flex-col gap-3 pt-4 border-t border-gray-800"
+                class="flex flex-col gap-3"
               >
-                <h3 class="text-sm font-medium text-gray-300">Sign in with your CYFR</h3>
                 <button
-                  :if={!@cyfr_own}
-                  id="cyfr-own-open"
+                  :if={!@cyfr_open}
+                  id="cyfr-from-open"
                   type="button"
-                  phx-click="cyfr_own"
-                  class="text-sm text-indigo-400 hover:text-indigo-300 text-left"
+                  phx-click="cyfr_open"
+                  class="flex items-center justify-center gap-3 w-full px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition-colors cursor-pointer"
                 >
-                  I run my own CYFR
+                  Sign in from your CYFR
                 </button>
                 <form
-                  :if={@cyfr_own}
-                  id="cyfr-own"
+                  :if={@cyfr_open}
+                  id="cyfr-from"
                   phx-submit="cyfr_entry"
                   class="flex flex-col gap-2"
                 >
-                  <label for="cyfr-own-entry" class="text-sm text-gray-300">
+                  <label for="cyfr-from-entry" class="text-sm text-gray-300">
                     Your CYFR
                   </label>
                   <div class="flex gap-2">
                     <input
-                      id="cyfr-own-entry"
+                      id="cyfr-from-entry"
                       name="entry"
                       type="text"
                       value={@cyfr_entry}
@@ -1055,7 +1141,7 @@ defmodule PrismWeb.LoginLive do
               </section>
 
               <section
-                :if={@open_door}
+                :if={@open_door && is_nil(@invitation)}
                 id="create-identity"
                 class="flex flex-col gap-3 pt-4 border-t border-gray-800"
               >

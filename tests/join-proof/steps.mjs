@@ -3,8 +3,10 @@
 //
 // The join proof's steps after the sign-ins, Chromium's alone
 // (README.md): what a crafted or forged link does, a copied session, a
-// dropped answer and closed tabs; a passkey and a phone at the hub; a
-// removal, a rotation and a recovery; and an unreachable directory.
+// dropped answer and closed tabs; an invitation the person, who already
+// has a name, accepts by signing in from their CYFR; a passkey and a
+// phone at the hub; a removal, a rotation and a recovery; and an
+// unreachable directory.
 
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -14,7 +16,7 @@ import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import {
   A, A2, H, SETTINGS, addSession, admitted, assertions, ask, authenticatorWith, begin, captureAssertions, closePrompt,
   confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, deviceLog, flashed,
-  freshContext, glassState, instrumentDevice, layer, nameHome, open, passkeySignIn, pressInLayer, ready, record, row,
+  confirmSignIn, freshContext, glassState, instrumentDevice, layer, nameHome, open, passkeySignIn, pressInLayer, ready, record, row,
   secrets, shownCode, signIn, signInAtHome, signInAtHub, sleep, storageOf, storedDevice, waitFor,
 } from "./common.mjs";
 
@@ -268,7 +270,7 @@ async function closedHops(chromium, { home, identifier }) {
     record.closed_hops);
 }
 
-async function forgedCompletion(chromium, { home, identifier, hub }) {
+async function forgedCompletion(chromium, { home, identifier, hub, hubContext }) {
   const before = { person: await atHub(identifier), receipts: await receiptsAtHub(identifier) };
   // A pending carry of the person's, never taken to H, and a return
   // fragment no home sent saying it was admitted.
@@ -285,18 +287,100 @@ async function forgedCompletion(chromium, { home, identifier, hub }) {
   const unknown = b64url({ protocol: "cyfr-carry/v1", action_id: "car_nobody", outcome: "admitted" });
   await open(home.desk, `${A}/carry#${unknown}`);
   await sleep(2_000);
-  const stored = { h: null, a: await storageOf(home.desk) };
+  // H's storage in the browser that signed in there: the one address it
+  // remembers for its sign-in page, and LiveView's reload counters.
+  const atH = await hubContext.newPage();
+  await atH.goto(`${H}/login`);
+  const stored = { h: await storageOf(atH), a: await storageOf(home.desk) };
+  await atH.close();
   const after = { person: await atHub(identifier), receipts: await receiptsAtHub(identifier) };
+  const ownKeysAtH = stored.h.local.filter((key) => !/consecutive-reloads/.test(key));
   record.forged_completion = {
     memberships: [before.person.memberships, after.person.memberships], receipts: [before.receipts, after.receipts],
-    sessions: [before.person.sessions.length, after.person.sessions.length], storage_at_a: stored.a,
+    sessions: [before.person.sessions.length, after.person.sessions.length], storage_at_a: stored.a, storage_at_h: stored.h,
   };
   return row("forged_completion", "chromium",
     JSON.stringify(after.person.memberships) === JSON.stringify(before.person.memberships) &&
       after.receipts === before.receipts && after.person.sessions.length === before.person.sessions.length &&
-      stored.a.local.every((key) => /consecutive-reloads/.test(key)) && stored.a.indexeddb.length === 0,
-    "a forged completion writes no membership, admission or saved address at either home",
+      stored.a.local.every((key) => /consecutive-reloads/.test(key)) && stored.a.indexeddb.length === 0 &&
+      JSON.stringify(ownKeysAtH) === JSON.stringify(["cyfr:sign-in:your-cyfr"]) && stored.h.indexeddb.length === 0,
+    "a forged completion writes no membership, admission or saved address at either home; H's storage holds only cyfr:sign-in:your-cyfr",
     record.forged_completion);
+}
+
+// An invitation link H's operator makes for a new group, opened in a
+// browser that signs in at A: "Already have a CYFR name? Sign in with it."
+// takes the code to H's sign-in page, the person signs in from A, and H
+// seats them and writes the allow under their identifier, which states
+// H's existing allow anew, naming the invitation (removing that allow
+// first would eject the sessions later steps use); a later sign-in needs
+// no link, and the link a second time is used.
+async function invited(chromium, { home, identifier }) {
+  const invitation = await ask({ op: "h_invitation", identifier }, { secret: true });
+  const code = new URL(invitation.link).hash.slice(1);
+  secrets.push(code);
+  const doorBefore = await ask({ op: "h_door", identifier });
+  const receiptsBefore = await receiptsAtHub(identifier);
+
+  const context = await freshContext(chromium);
+  const page = await context.newPage();
+  await authenticatorWith(page, await credentialsFor(home.desk, new URL(A).host));
+  await page.goto(invitation.link);
+  await connected(page);
+  const link = page.locator('[data-test="invite-sign-in"]');
+  await link.waitFor({ timeout: 30_000 });
+  const linkText = (await link.innerText()).trim();
+  await link.click();
+  await page.waitForURL((url) => url.origin === H && url.pathname === "/login", { timeout: 30_000 });
+  await page.waitForSelector('[data-test="invitation"]', { timeout: 30_000 });
+  const said = (await page.locator('[data-test="invitation"]').innerText()).trim();
+  const codeOnPage = (await page.content()).includes(code);
+  await nameHome(page, A, { at: null });
+  await signInAtHome(page, A);
+  await begin(page, A);
+  await continueAtHub(page);
+  await confirmSignIn(page, A, null);
+  await admitted(page);
+  await context.close();
+
+  const person = await atHub(identifier);
+  const doorAfter = await ask({ op: "h_door", identifier });
+  const receiptsInvited = await receiptsAtHub(identifier);
+
+  // A later sign-in with no link: the allow admits it.
+  const later = await freshContext(chromium);
+  const laterPage = await later.newPage();
+  await authenticatorWith(laterPage, await credentialsFor(home.desk, new URL(A).host));
+  await signInAtHub(laterPage, { home: A });
+  await later.close();
+  const receiptsLater = await receiptsAtHub(identifier);
+
+  // The link again, in another browser: used.
+  const again = await freshContext(chromium);
+  const againPage = await again.newPage();
+  await againPage.goto(invitation.link);
+  await connected(againPage);
+  const refused = await againPage.locator('[data-test="invite-refused"]').waitFor({ timeout: 30_000 }).then(() => true).catch(() => false);
+  const refusedText = refused ? (await againPage.locator('[data-test="invite-refused"]').innerText()).trim() : null;
+  await again.close();
+
+  const allow = doorAfter.entries.find((entry) => entry.effect === "allow");
+  record.invited = {
+    door_before: doorBefore.entries, door_after: doorAfter.entries,
+    link_text: linkText, said, code_on_sign_in_page: codeOnPage,
+    seated: person.memberships.includes(invitation.athanor_id),
+    admissions: [receiptsInvited - receiptsBefore, receiptsLater - receiptsInvited],
+    second_use_refused: refused, second_use_said: refusedText,
+  };
+  return row("invited", "chromium",
+    doorBefore.entries.length === 1 && !/^invitation /.test(doorBefore.entries[0].note || "") &&
+      linkText === "Already have a CYFR name? Sign in with it." &&
+      /Sign in from your CYFR to accept\.$/.test(said) && !codeOnPage && record.invited.seated &&
+      doorAfter.entries.length === 1 && allow && allow.status === "allowed" && /^invitation inv_/.test(allow.note || "") &&
+      receiptsInvited - receiptsBefore === 1 && receiptsLater - receiptsInvited === 1 &&
+      refused && /can no longer be used/.test(refusedText || ""),
+    "an invitation link opened in A's browser, taken through \"Already have a CYFR name? Sign in with it.\", seats the person in its group and writes the allow under their identifier; a later sign-in needs no link; the link a second time is used",
+    record.invited);
 }
 
 // The operator at H, signed in by the release fixture's door, with their
@@ -826,6 +910,7 @@ export async function rest(chromium, proxy, { home, hub, hubPage, hubContext }) 
     () => droppedCallback(chromium, state),
     () => closedHops(chromium, state),
     () => forgedCompletion(chromium, state),
+    () => invited(chromium, state),
     () => hubPasskey(chromium, state),
     () => aPasskeyAtHub(chromium, state),
     () => phoneStep(chromium, state),

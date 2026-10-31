@@ -624,7 +624,9 @@ defmodule Cyfr.Boundaries do
           "invitation names (`admit/2`). `Sanctum.Invitations` is that page's read of " <>
           "who invited and to which athanor, or that the code admits no one " <>
           "(`lookup/1`), before any ceremony, which grants nothing: the admission " <>
-          "decides again in its transaction. `Sanctum.Handle` is the identity card's " <>
+          "decides again in its transaction; the sign-in page reads the same for an " <>
+          "existing identity's invitation and keeps only its hash (`code_hash/1`), " <>
+          "which the CYFR sign-in redeems. `Sanctum.Handle` is the identity card's " <>
           "live check of a handle against the registry's answer (`resolve/1`), " <>
           "navigation that grants nothing. " <>
           "`Sanctum.CompanyLogin` is the company page's: whether the browser's session is " <>
@@ -2028,7 +2030,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Handle" => [resolve: 1],
     "Sanctum.InstanceEntries" => [sweep_usage: 0],
-    "Sanctum.Invitations" => [lookup: 1],
+    "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],

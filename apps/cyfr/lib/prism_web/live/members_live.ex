@@ -4,10 +4,9 @@
 defmodule PrismWeb.MembersLive do
   @moduledoc """
   Who is in the focused athanor: the members, the pending invites, and the
-  controls every member has — add by handle (`@name`, the identifier the
-  registry answers for it added in its place), by person identifier
-  (`per_…`) or by the person's id here (`usr_…`), remove, withdraw an
-  invite, leave. Withdraw reaches only an
+  controls every member has: add by name, remove, withdraw an invite,
+  leave. In an open group a name no one holds offers a link with that name
+  filled in. Withdraw reaches only an
   invitation: one accepted since the page loaded stays a member. A
   person's own athanor has one member and no controls beyond the list.
 
@@ -41,6 +40,7 @@ defmodule PrismWeb.MembersLive do
      |> assign(:members, [])
      |> assign(:groups, [])
      |> assign(:new_person, "")
+     |> assign(:unknown_name, nil)
      |> assign(:new_group_name, "")
      |> assign(:invitations, [])
      |> assign(:new_link, nil)
@@ -55,20 +55,26 @@ defmodule PrismWeb.MembersLive do
 
   @impl true
   def handle_event("add", %{"person" => person}, socket) do
-    case call_tool(socket, "member/add", target(person)) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> assign(:new_person, "")
-         |> load()
-         |> put_flash(
-           :info,
-           "Added. If they have never signed in here the seat waits for them; if the " <>
-             "operator has not allowed their address or identifier yet, it waits for that too."
-         )}
+    socket = socket |> assign(:unknown_name, nil) |> clear_flash()
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not add: #{error_message(reason)}")}
+    with {:ok, name} <- member_name(person) do
+      case call_tool(socket, "member/add", %{"handle" => name}) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> assign(:new_person, "")
+           |> load()
+           |> put_flash(
+             :info,
+             "Added. If they have never signed in here the seat waits for them; if the " <>
+               "operator has not allowed their address or identifier yet, it waits for that too."
+           )}
+
+        {:error, reason} ->
+          {:noreply, add_refused(socket, name, reason)}
+      end
+    else
+      {:error, sentence} -> {:noreply, put_flash(socket, :error, sentence)}
     end
   end
 
@@ -115,9 +121,10 @@ defmodule PrismWeb.MembersLive do
 
   # Growing a DM is a NEW open group with the three of you — the pair's
   # door stays closed and its history stays where it was said. The partner
-  # is seated by user id (an active seat at once); the new person arrives
-  # by identifier or user id, the ordinary first contact on an open athanor.
+  # is seated by user id (an active seat at once); the new person is named
+  # before the group is created, so an invalid or unanswered name leaves no group.
   def handle_event("add_third", %{"person" => person}, socket) do
+    socket = socket |> assign(:unknown_name, nil) |> clear_flash()
     %{athanor: pair, members: members, context: ctx} = socket.assigns
 
     partner =
@@ -128,12 +135,14 @@ defmodule PrismWeb.MembersLive do
 
     name = String.slice("#{pair.name} +", 0, 80)
 
-    with true <- is_binary(partner),
+    with {:ok, person_name} <- member_name(person),
+         {:ok, %{identifier: identifier}} <- Sanctum.Handle.resolve(person_name),
+         true <- is_binary(partner),
          {:ok, %{id: group_id}} <- call_tool(socket, "athanor/create", %{"name" => name}),
          {:ok, _} <-
            call_tool(socket, "member/add", %{"user_id" => partner, "athanor" => group_id}),
          {:ok, _} <-
-           call_tool(socket, "member/add", Map.put(target(person), "athanor", group_id)),
+           call_tool(socket, "member/add", %{"identifier" => identifier, "athanor" => group_id}),
          {:ok, %{athanor: %{route: route}}} <-
            call_tool(socket, "session/use", %{"athanor" => group_id}) do
       {:noreply,
@@ -145,8 +154,12 @@ defmodule PrismWeb.MembersLive do
        )
        |> push_navigate(to: PrismWeb.Focus.path(route, "/members"))}
     else
+      {:error, sentence} when is_binary(sentence) ->
+        {:noreply, put_flash(socket, :error, sentence)}
+
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not add: #{error_message(reason)}")}
+        name = person |> String.trim() |> String.trim_leading("@")
+        {:noreply, add_refused(socket, name, reason)}
 
       _ ->
         {:noreply, put_flash(socket, :error, "Could not add someone right now.")}
@@ -193,6 +206,29 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
+  def handle_event("invite_name", _params, socket) do
+    with %{unknown_name: name, athanor: %{id: id} = athanor} when is_binary(name) <-
+           socket.assigns,
+         true <- invitable?(athanor) do
+      case call_tool(socket, "invitation/create", %{"name" => name, "athanor_id" => id}) do
+        {:ok, %{invitation_url: link}} ->
+          {:noreply,
+           socket
+           |> assign(:new_link, link)
+           |> assign(:new_person, "")
+           |> assign(:unknown_name, nil)
+           |> clear_flash()
+           |> load()}
+
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not create the link: #{error_message(reason)}")}
+      end
+    else
+      _no_offer -> {:noreply, socket}
+    end
+  end
+
   def handle_event("invitation_revoke", %{"id" => id}, socket) do
     case call_tool(socket, "invitation/revoke", %{"invitation_id" => id}) do
       {:ok, _} ->
@@ -206,6 +242,7 @@ defmodule PrismWeb.MembersLive do
   def handle_event("form_changed", params, socket) do
     {:noreply,
      socket
+     |> assign(:unknown_name, nil)
      |> assign(:new_person, Map.get(params, "person", socket.assigns.new_person))
      |> assign(:new_group_name, Map.get(params, "name", socket.assigns.new_group_name))}
   end
@@ -250,17 +287,47 @@ defmodule PrismWeb.MembersLive do
   defp frozen?(%{roster: "frozen"}), do: true
   defp frozen?(_), do: false
 
-  # Who the add form names: a handle when it starts `@`, a person
-  # identifier when it starts `per_`, else a person's id here. A malformed
-  # handle or identifier is still sent as one, so the refusal names what
-  # was wrong with it.
-  defp target(person) do
-    case String.trim(person) do
-      "@" <> _ = handle -> %{"handle" => handle}
-      "per_" <> _ = identifier -> %{"identifier" => identifier}
-      user_id -> %{"user_id" => user_id}
+  defp member_name(person) do
+    name =
+      case String.trim(person) do
+        "@" <> name -> name
+        name -> name
+      end
+
+    cond do
+      String.starts_with?(name, ["per_", "usr_"]) ->
+        {:error,
+         "Add people by name here. To add someone by identifier, use cyfr member add on the command line."}
+
+      Prima.ComponentRef.valid_personal_slug?(name) ->
+        {:ok, name}
+
+      true ->
+        {:error,
+         "A name is lowercase letters and digits joined by single hyphens, at most 39 characters."}
     end
   end
+
+  defp add_refused(socket, name, %Prima.Refusal{reason: reason}),
+    do: add_refused(socket, name, reason)
+
+  defp add_refused(socket, name, reason) when reason in [:handle_not_found, :not_found],
+    do: assign(socket, :unknown_name, name)
+
+  defp add_refused(socket, _name, reason)
+       when reason in [:registry_unavailable, :malformed_answer],
+       do: put_flash(socket, :error, "cyfr.run did not answer. Try again.")
+
+  defp add_refused(socket, _name, :no_registry),
+    do:
+      put_flash(
+        socket,
+        :error,
+        "This CYFR does not reach cyfr.run, so nobody can be found by name."
+      )
+
+  defp add_refused(socket, _name, reason),
+    do: put_flash(socket, :error, "Could not add: #{error_message(reason)}")
 
   defp load(socket) do
     ctx = socket.assigns.context
@@ -355,9 +422,8 @@ defmodule PrismWeb.MembersLive do
 
           <div :if={@members == []} class="py-8"><.empty_state message="No members" /></div>
           <.table :if={@members != []} id="members" rows={@members}>
-            <:col :let={m} label="Who">{PrismWeb.People.label(m, @context)}</:col>
-            <:col :let={m} label="Identifier">
-              {m[:identifier] || m[:email] || "-"}
+            <:col :let={m} label="Name">
+              {if m[:namespace], do: "@#{m[:namespace]}", else: m[:email] || "-"}
             </:col>
             <:col :let={m} label="Status">
               <.badge color={if m[:status] == "active", do: "green", else: "yellow"}>
@@ -404,7 +470,7 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="@handle, per_… or usr_…"
+                placeholder="@name"
               />
             </div>
             <.button type="submit">Add member</.button>
@@ -414,9 +480,7 @@ defmodule PrismWeb.MembersLive do
             class="mt-1 text-xs text-gray-500"
             data-test="member-add-help"
           >
-            Name someone by their handle (@name), their person identifier (per_…) or
-            their id here (usr_…). A handle is looked up at the registry, and the
-            group keeps the identifier it names now.
+            Add someone by their name. A name no one holds yet offers an invitation link with that name filled in.
           </p>
 
           <%!-- A DM's door is closed; growing the room is a different act.
@@ -434,19 +498,26 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="@handle, per_… or usr_…"
+                placeholder="@name"
               />
             </div>
             <.button type="submit">Add someone — starts a new group</.button>
           </form>
+
+          <div :if={@unknown_name} data-test="member-unknown-name" class="mt-4 space-y-2">
+            <p class="text-sm text-gray-400">No one has @{@unknown_name} yet.</p>
+            <.button :if={invitable?(@athanor)} phx-click="invite_name">
+              Create an invitation link for @{@unknown_name}
+            </.button>
+          </div>
         </.card>
 
         <.card :if={invitable?(@athanor)}>
           <h3 class="text-sm font-medium text-gray-400 mb-1">Invitation links</h3>
           <p class="text-xs text-gray-500 mb-4">
-            A link makes someone new to this CYFR a person here and seats them in this group. It
-            works once and expires after seven days. Someone who already has a CYFR identity is
-            added above instead.
+            A link makes someone new to this CYFR a person here and seats them in this group.
+            Someone who already has a CYFR name signs in with it from the same link. It works once
+            and expires after seven days.
           </p>
 
           <div :if={@new_link} data-test="invitation-new" class="mb-4 space-y-2">

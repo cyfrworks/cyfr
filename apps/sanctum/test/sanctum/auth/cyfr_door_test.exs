@@ -22,6 +22,13 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   directory read is counted against the installation's 200 a minute
   first, on this member and then in the cell: past it no directory is
   read, and past this member's own count no database is asked.
+
+  The challenge copies the request's attempt and invitation. A challenge
+  carrying an invitation's hash admits by it: a known person is checked
+  against the door's deny, redeemed, seated and allowed, then unlocked; a
+  first-time one is admitted by the remote admission with it; an
+  invitation that can no longer be used signs in only a person the door
+  admits anyway, and the allow it wrote admits later sign-ins without it.
   """
 
   # The resolver's observer, the directory seam, the private-egress
@@ -73,10 +80,19 @@ defmodule Sanctum.Auth.CyfrDoorTest do
     do: DirectoryServer.carry_fragment(identity, home, opts)
 
   defp challenge!(identity, home, opts \\ []) do
+    {invitation, opts} = Keyword.pop(opts, :invitation)
     %{fragment: fragment} = carry(identity, home, opts)
-    {:ok, held} = CyfrDoor.challenge(fragment, :none)
+    {:ok, held} = CyfrDoor.challenge(fragment, request(invitation))
     held
   end
+
+  # The request a start keeps in the browser's session: a fresh attempt,
+  # and the invitation's hash or none.
+  defp request(invitation \\ nil),
+    do: %{
+      "attempt" => "att_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower),
+      "invitation" => invitation
+    }
 
   defp assertion(identity, held, home, opts \\ []),
     do: DirectoryServer.assertion_fragment(identity, held, home, opts)
@@ -176,7 +192,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       identity = identity!(context)
       %{fragment: fragment, action_id: action_id} = carry(identity, context.home)
 
-      assert {:ok, held} = CyfrDoor.challenge(fragment, :none)
+      assert {:ok, held} = CyfrDoor.challenge(fragment, request())
       assert held["action_id"] == action_id
       assert held["identifier"] == identity.identifier
       assert held["source"] == "https://a.example"
@@ -206,14 +222,16 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       identity = identity!(context)
       other = identity!(context)
       %{fragment: fragment} = carry(identity, "https://elsewhere.example")
-      assert {:error, :wrong_destination} = CyfrDoor.challenge(fragment, :none)
+      assert {:error, :wrong_destination} = CyfrDoor.challenge(fragment, request())
 
       %{fragment: forged} =
         carry(identity, context.home, payload: %{"genesis" => DirectoryServer.genesis_map(other)})
 
-      assert {:error, :invalid_carry} = CyfrDoor.challenge(forged, :none)
-      assert {:error, :invalid_carry} = CyfrDoor.challenge("not a fragment", :none)
-      assert {:error, :invalid_carry} = CyfrDoor.challenge(String.duplicate("A", 20_000), :none)
+      assert {:error, :invalid_carry} = CyfrDoor.challenge(forged, request())
+      assert {:error, :invalid_carry} = CyfrDoor.challenge("not a fragment", request())
+
+      assert {:error, :invalid_carry} =
+               CyfrDoor.challenge(String.duplicate("A", 20_000), request())
 
       assert drain() == []
       refute_received {:resolved, _}
@@ -238,10 +256,47 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert installation_window() == nil
     end
 
+    test "copies the request's attempt and invitation into the challenge", context do
+      identity = identity!(context)
+      %{fragment: fragment} = carry(identity, context.home)
+      hash = Prima.Digest.sha256_hex("an invitation")
+
+      ordinary = request()
+      assert {:ok, held} = CyfrDoor.challenge(fragment, ordinary)
+      assert Map.fetch!(held, "attempt") == ordinary["attempt"]
+      assert Map.fetch(held, "invitation") == {:ok, nil}
+
+      invited = request(hash)
+      %{fragment: fragment} = carry(identity, context.home)
+      assert {:ok, held} = CyfrDoor.challenge(fragment, invited)
+      assert {held["attempt"], held["invitation"]} == {invited["attempt"], hash}
+    end
+
+    test "a request with no attempt id, or an invitation that is no hash, is no request",
+         context do
+      identity = identity!(context)
+      %{fragment: fragment} = carry(identity, context.home)
+      watch_sources!()
+
+      for request <- [
+            %{},
+            %{"invitation" => nil},
+            %{"attempt" => "", "invitation" => nil},
+            %{"attempt" => nil, "invitation" => nil},
+            %{request() | "invitation" => "an invitation code"},
+            %{request() | "invitation" => String.upcase(Prima.Digest.sha256_hex("x"))}
+          ] do
+        assert {:error, :no_request} = CyfrDoor.challenge(fragment, request)
+      end
+
+      assert drain() == []
+      assert sources() == []
+    end
+
     test "a sign-in names no identity: a carry of any identity proceeds", context do
       for identity <- [identity!(context), identity!(context)] do
         %{fragment: fragment} = carry(identity, context.home)
-        assert {:ok, held} = CyfrDoor.challenge(fragment, :none)
+        assert {:ok, held} = CyfrDoor.challenge(fragment, request())
         assert held["identifier"] == identity.identifier
       end
     end
@@ -251,18 +306,18 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       {_public, forger} = :crypto.generate_key(:eddsa, :ed25519)
 
       %{fragment: forged} = carry(identity, context.home, live: forger)
-      assert {:error, {:refused, :bad_signature}} = CyfrDoor.challenge(forged, :none)
+      assert {:error, {:refused, :bad_signature}} = CyfrDoor.challenge(forged, request())
 
       # Signed under the key a rotation since replaced.
       %{fragment: old} = carry(identity, context.home)
       rotated = DirectoryServer.rotate!(context.directory.dir, identity)
-      assert {:error, {:refused, :stale_key_epoch}} = CyfrDoor.challenge(old, :none)
+      assert {:error, {:refused, :stale_key_epoch}} = CyfrDoor.challenge(old, request())
 
       # Issued long before it arrived.
       %{fragment: stale} =
         carry(rotated, context.home, issued_at: System.os_time(:millisecond) - 3_600_000)
 
-      assert {:error, {:refused, :stale}} = CyfrDoor.challenge(stale, :none)
+      assert {:error, {:refused, :stale}} = CyfrDoor.challenge(stale, request())
     end
 
     test "a directory that cannot be read admits nothing from a cache", context do
@@ -272,18 +327,18 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
       %{fragment: fragment} = carry(identity, context.home)
 
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, request())
     end
 
     test "a genesis naming a metadata or unlisted loopback directory reaches no address",
          context do
       metadata = DirectoryServer.identity!(context.directory.dir, "https://metadata.test")
       %{fragment: fragment} = carry(metadata, context.home)
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, request())
 
       loopback = DirectoryServer.identity!(context.directory.dir, "https://loopback.test")
       %{fragment: fragment} = carry(loopback, context.home)
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, request())
 
       refute_received :connected
       assert drain() == []
@@ -306,7 +361,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
         )
 
       %{fragment: fragment} = carry(identity, context.home)
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, request())
 
       # It asked the one directory once, and never the address it named.
       assert [_one] = drain()
@@ -326,17 +381,17 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       # Every other member counted all but one of the minute's carries.
       spend!(199)
       %{fragment: last} = carry(identity, context.home)
-      assert {:ok, _held} = CyfrDoor.challenge(last, :none)
+      assert {:ok, _held} = CyfrDoor.challenge(last, request())
       assert [_read] = drain()
 
       %{fragment: past} = carry(identity, context.home)
-      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(past, :none)
+      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(past, request())
       assert retry_after_ms in 1..60_000
       assert drain() == []
 
       # Another member: its own count is fresh, the cell's is not.
       Prima.Test.RateLimiter.reset!()
-      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past, :none)
+      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past, request())
       assert drain() == []
 
       # Nothing was counted past the cap.
@@ -350,10 +405,10 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       %{fragment: fragment} = carry(identity, context.home)
 
       # Refused by the cell's count, each still counted on this member.
-      for _ <- 1..200, do: {:error, {:rate_limited, _}} = CyfrDoor.challenge(fragment, :none)
+      for _ <- 1..200, do: {:error, {:rate_limited, _}} = CyfrDoor.challenge(fragment, request())
 
       watch_sources!()
-      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(fragment, :none)
+      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(fragment, request())
       assert retry_after_ms in 1..60_000
       assert sources() == []
       assert drain() == []
@@ -368,7 +423,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
       spend!(199)
       %{fragment: past} = carry(identity, context.home)
-      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past, :none)
+      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past, request())
 
       assert {:ok, %{resumed: false}} =
                CyfrDoor.callback(assertion(identity, held, context.home), held)
@@ -548,6 +603,17 @@ defmodule Sanctum.Auth.CyfrDoorTest do
                CyfrDoor.callback(assertion(identity, held, context.home), held)
     end
 
+    test "a held challenge without its attempt or its invitation key is no challenge", context do
+      identity = identity!(context)
+      allow!(identity)
+      held = challenge!(identity, context.home)
+      fragment = assertion(identity, held, context.home)
+
+      assert {:error, :no_challenge} = CyfrDoor.callback(fragment, Map.delete(held, "attempt"))
+      assert {:error, :no_challenge} = CyfrDoor.callback(fragment, Map.delete(held, "invitation"))
+      refute person_of(identity.identifier)
+    end
+
     test "a challenge past its expiry, or none, admits nothing", context do
       identity = identity!(context)
       allow!(identity)
@@ -664,6 +730,171 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
       assert {:error, :not_found} =
                Arca.CarryActions.receipt(Prima.Actor.system(), context.home, "chl_moved")
+    end
+  end
+
+  describe "an invitation for an existing identity" do
+    setup %{tls: _tls} do
+      {:ok, issuer} =
+        Sanctum.Tenancy.Users.get_by_identity("github|https://github.com|cyfr-door-installation")
+
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Invited at the door")
+      %{issuer: issuer, group: group}
+    end
+
+    defp invitation!(%{issuer: issuer, group: group}) do
+      ctx = Sanctum.TestContext.session!(issuer.id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+      {:ok, hash} = Sanctum.Invitations.code_hash(code)
+      {invitation, hash}
+    end
+
+    defp door(identifier), do: Enum.filter(Store.list(), &(&1.value == identifier))
+
+    # A remote person this home knows, signed in once under an allow that
+    # was then removed: known here, and unallowed.
+    defp known_unallowed!(context, identity) do
+      {:ok, allow} = Store.allow("identifier", identity.identifier, nil)
+      held = challenge!(identity, context.home)
+      {:ok, _} = CyfrDoor.callback(assertion(identity, held, context.home), held)
+      :ok = Store.remove(allow.id)
+      user_id = person_of(identity.identifier).user_id
+      assert {:error, :not_allowed} = Sanctum.Door.admit_person(%{id: user_id})
+      user_id
+    end
+
+    test "a known, unallowed person with an invitation is admitted, seated and allowed",
+         context do
+      identity = identity!(context)
+      user_id = known_unallowed!(context, identity)
+      {invitation, hash} = invitation!(context)
+
+      held = challenge!(identity, context.home, invitation: hash)
+
+      assert {:ok, %{invitation: :redeemed, resumed: false}} =
+               CyfrDoor.callback(assertion(identity, held, context.home), held)
+
+      assert Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      note = "invitation " <> invitation.id
+      assert [%{effect: "allow", status: "allowed", note: ^note}] = door(identity.identifier)
+
+      assert Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).redeemed_by == user_id
+    end
+
+    test "a first-time person with an invitation is admitted by it, with no allow before",
+         context do
+      identity = identity!(context)
+      {_invitation, hash} = invitation!(context)
+      held = challenge!(identity, context.home, invitation: hash)
+
+      assert {:ok, %{invitation: :redeemed}} =
+               CyfrDoor.callback(assertion(identity, held, context.home), held)
+
+      user_id = person_of(identity.identifier).user_id
+      assert Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      assert [%{effect: "allow"}] = door(identity.identifier)
+    end
+
+    test "a retry of the same completed sign-in resumes it and redeems nothing again", context do
+      identity = identity!(context)
+      {invitation, hash} = invitation!(context)
+      held = challenge!(identity, context.home, invitation: hash)
+      fragment = assertion(identity, held, context.home)
+
+      {:ok, first} = CyfrDoor.callback(fragment, held)
+
+      assert {:ok, %{resumed: true, invitation: :none} = again} =
+               CyfrDoor.callback(fragment, held)
+
+      assert again.session_token == first.session_token
+      assert Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).redeemed_at
+      assert length(door(identity.identifier)) == 1
+    end
+
+    test "a denied person or identifier cannot redeem, and the invitation stays unspent",
+         context do
+      identity = identity!(context)
+      user_id = known_unallowed!(context, identity)
+      other = identity!(context)
+      {invitation, hash} = invitation!(context)
+      {:ok, _} = Store.deny("person", user_id, nil)
+      {:ok, _} = Store.deny("identifier", other.identifier, nil)
+
+      for who <- [identity, other] do
+        held = challenge!(who, context.home, invitation: hash)
+
+        assert {:error, {:door, :denied}} =
+                 CyfrDoor.callback(assertion(who, held, context.home), held)
+      end
+
+      assert %{redeemed_at: nil} = Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id)
+      refute Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      refute person_of(other.identifier)
+    end
+
+    test "a spent invitation signs in a person the door admits, and refuses anyone else, writing nothing",
+         context do
+      allowed = identity!(context)
+      {:ok, _} = Store.allow("identifier", allowed.identifier, nil)
+      stranger = identity!(context)
+      known = identity!(context)
+      known_id = known_unallowed!(context, known)
+      {_invitation, hash} = invitation!(context)
+      {:ok, _} = Arca.Invitations.redeem(Prima.Actor.system(), hash, person_of_any!())
+
+      held = challenge!(allowed, context.home, invitation: hash)
+
+      assert {:ok, %{invitation: :unusable}} =
+               CyfrDoor.callback(assertion(allowed, held, context.home), held)
+
+      for who <- [stranger, known] do
+        held = challenge!(who, context.home, invitation: hash)
+
+        assert {:error, :invitation_invalid} =
+                 CyfrDoor.callback(assertion(who, held, context.home), held)
+      end
+
+      refute person_of(stranger.identifier)
+      refute Sanctum.Tenancy.Members.member?(known_id, context.group.id)
+      assert door(stranger.identifier) == []
+      assert door(known.identifier) == []
+
+      assert Enum.filter(Store.requests(), &(&1.value in [stranger.identifier, known.identifier])) ==
+               []
+    end
+
+    test "a failure after the redemption leaves a plain sign-in that admits", context do
+      identity = identity!(context)
+      user_id = known_unallowed!(context, identity)
+      {invitation, hash} = invitation!(context)
+
+      # The redemption committed, and nothing of the sign-in reached the
+      # browser after it.
+      assert {:ok, _} = Sanctum.Invitations.redeem_for(hash, user_id)
+
+      held = challenge!(identity, context.home)
+
+      assert {:ok, %{invitation: :none}} =
+               CyfrDoor.callback(assertion(identity, held, context.home), held)
+
+      assert Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      assert Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).redeemed_by == user_id
+
+      # The same invitation again is spent, and the allow still admits.
+      held = challenge!(identity, context.home, invitation: hash)
+
+      assert {:ok, %{invitation: :unusable}} =
+               CyfrDoor.callback(assertion(identity, held, context.home), held)
+    end
+
+    defp person_of_any! do
+      {:ok, person} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|cyfr-door-spent-#{System.unique_integer([:positive])}",
+          provider: "github"
+        })
+
+      person.id
     end
   end
 end

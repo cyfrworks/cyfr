@@ -92,6 +92,28 @@ defmodule Sanctum.Door.Store do
   end
 
   @doc """
+  Write an identifier allow, or turn a request or an allow of it into
+  one, unless its row is a deny: one conditional write
+  (`Arca.Doors.allow_unless_denied/3`), ordered against a deny's write of
+  the same identifier, so it never turns a deny into an allow, whichever
+  committed first. An invitation's redemption writes it in its own
+  transaction (`Sanctum.Invitations`) and rolls back on `{:error,
+  :denied}`. `opts` and the label as `allow/4` writes them.
+  """
+  @spec allow_unless_denied(String.t(), String.t(), String.t() | nil, write_opts()) ::
+          {:ok, entry()} | {:error, :denied | term()}
+  def allow_unless_denied("identifier" = kind, value, added_by, opts \\ [])
+      when is_binary(value) do
+    opts = Keyword.validate!(opts, [:note, :label])
+
+    Doors.allow_unless_denied(actor(), {kind, value}, %{
+      added_by: added_by,
+      note: opts[:note],
+      label: opts[:label]
+    })
+  end
+
+  @doc """
   Write a deny entry (or turn an existing allow / request into one).
   `kind` is `"person"` or `"identifier"`; `opts` and the label as
   `allow/4` writes them. Refuses a platform administrator

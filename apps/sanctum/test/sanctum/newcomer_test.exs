@@ -23,7 +23,11 @@ defmodule Sanctum.NewcomerTest do
   restore's raise among them, admits no one.
   A remote
   newcomer is admitted by the door's verdict on their identifier, with no
-  keys and no athanor, and a directory that cannot be read writes no row.
+  keys and no athanor, and a directory that cannot be read writes no row;
+  one whose sign-in carried an invitation is admitted by it unless a deny
+  names them, with the redemption, their seat and their identifier's allow
+  in the admission's transaction, so a deny committed after the check
+  rolls the whole admission back.
   A killed admission and a member that lost its slot write nothing.
   """
 
@@ -952,7 +956,88 @@ defmodule Sanctum.NewcomerTest do
       assert same == person.id
       assert people() == 2
     end
+
+    test "with an invitation, is admitted by it: the redemption, the seat and the allow in one transaction",
+         %{directory: directory, first: first} do
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      DirectoryServer.cached!(identity)
+      {:ok, group} = Athanors.create_group(first.id, "Invited remotely")
+      {invitation, hash} = invitation!(first, group)
+
+      assert {:ok, %{person: person}} =
+               Newcomer.admit({:remote, Map.put(remote(identity), :invitation, hash)}, :none)
+
+      assert person.admission == "remote"
+      assert Members.member?(person.id, group.id)
+      assert Arca.Repo.get!(Invitation, invitation.id).redeemed_by == person.id
+      note = "invitation " <> invitation.id
+      added_by = first.id
+
+      assert [%{effect: "allow", status: "allowed", added_by: ^added_by, note: ^note}] =
+               door(identity.identifier)
+
+      # The allow admits the next sign-in, with no invitation.
+      assert {:ok, :allowed} = Sanctum.Door.admit_person(person)
+    end
+
+    test "with an invitation, a denied identifier is refused and the invitation stays unspent",
+         %{directory: directory, first: first} do
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      DirectoryServer.cached!(identity)
+      {:ok, group} = Athanors.create_group(first.id, "Denied remotely")
+      {invitation, hash} = invitation!(first, group)
+      {:ok, deny} = Store.deny("identifier", identity.identifier, "ops")
+
+      assert {:error, {:door, :denied}} =
+               Newcomer.admit({:remote, Map.put(remote(identity), :invitation, hash)}, :none)
+
+      assert people() == 1
+      assert %{redeemed_at: nil} = Arca.Repo.get!(Invitation, invitation.id)
+      assert door(identity.identifier) == [deny]
+    end
+
+    test "with an invitation that can no longer be used, no one is admitted and nothing written",
+         %{directory: directory, first: first} do
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      DirectoryServer.cached!(identity)
+      {:ok, group} = Athanors.create_group(first.id, "Spent remotely")
+      {invitation, hash} = invitation!(first, group)
+      {:ok, _} = Sanctum.Invitations.revoke(Sanctum.TestContext.session!(first.id), invitation.id)
+
+      assert {:error, :invitation_invalid} =
+               Newcomer.admit({:remote, Map.put(remote(identity), :invitation, hash)}, :none)
+
+      assert people() == 1
+      assert door(identity.identifier) == []
+      assert Store.requests() == []
+    end
+
+    test "with an invitation, a refusal after the redemption rolls the whole admission back",
+         %{directory: directory, first: first} do
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      DirectoryServer.cached!(identity)
+      {:ok, group} = Athanors.create_group(first.id, "Full remotely")
+      {invitation, hash} = invitation!(first, group)
+      Settings.put("max_members_per_group", 1)
+
+      assert {:error, {:limit_reached, :max_members_per_group, 1}} =
+               Newcomer.admit({:remote, Map.put(remote(identity), :invitation, hash)}, :none)
+
+      assert people() == 1
+      assert %{redeemed_at: nil} = Arca.Repo.get!(Invitation, invitation.id)
+      assert door(identity.identifier) == []
+      refute Arca.Repo.get_by(PersonIdentity, identifier: identity.identifier)
+    end
   end
+
+  defp invitation!(issuer, group) do
+    ctx = Sanctum.TestContext.session!(issuer.id)
+    {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+    {:ok, hash} = Sanctum.Invitations.code_hash(code)
+    {invitation, hash}
+  end
+
+  defp door(identifier), do: Enum.filter(Store.list(), &(&1.value == identifier))
 
   describe "a linked sign-in method" do
     setup do
@@ -1401,5 +1486,170 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))
     Arca.Repo.delete_all(from(u in User, where: u.id in ^people))
     Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^athanors))
+  end
+end
+
+defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
+  @moduledoc """
+  A remote admission with an invitation, and a deny of the identifier that
+  commits on another connection after the admission's check of the door
+  and before its transaction writes the allow: the admission rolls back
+  whole, making no person, with the invitation unspent and no seat.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.Schemas.{
+    Athanor,
+    DirectoryHead,
+    ExternalIdentity,
+    Invitation,
+    Membership,
+    PersonIdentity,
+    User
+  }
+
+  alias Arca.Schemas.ServerAllowlistEntry, as: Entry
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Sanctum.Door.Store
+  alias Sanctum.Newcomer
+  alias Sanctum.Test.DirectoryServer
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup_all do
+    %{tls: DirectoryServer.tls()}
+  end
+
+  setup %{tls: tls} do
+    DirectoryServer.listen!()
+    DirectoryServer.seam!(tls)
+    directory = DirectoryServer.start!(tls)
+    identity = DirectoryServer.identity!(directory.dir, directory.url)
+    key = "github|https://github.com|remote-race-#{System.unique_integer([:positive])}"
+    remote_key = Sanctum.Auth.Identity.cyfr_key(identity.url, identity.identifier)
+    on_exit(fn -> unboxed(fn -> cleanup!([key, remote_key], identity.identifier) end) end)
+
+    unboxed(fn ->
+      DirectoryServer.cached!(identity)
+      {:ok, issuer} = Sanctum.Test.People.linked(%{id: key, provider: "github"})
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Remote race #{issuer.id}")
+      ctx = Sanctum.Context.build(user_id: issuer.id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+      {:ok, hash} = Sanctum.Invitations.code_hash(code)
+
+      remote = %{
+        identifier: identity.identifier,
+        directory_url: identity.url,
+        genesis_hash: Prima.Identity.hash(identity.genesis),
+        head_hash: DirectoryServer.key_epoch(identity),
+        invitation: hash
+      }
+
+      {:ok, remote: remote, remote_key: remote_key, group: group, invitation: invitation}
+    end)
+  end
+
+  # Pauses the admitting process once its check of the door has read the
+  # identifier's row: before its transaction opens.
+  defp pause_after_check! do
+    test = self()
+    handler = "remote-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if Process.get(:admitting) and metadata[:source] == "server_allowlist" and
+               String.starts_with?(metadata[:query] || "", "SELECT") do
+            Process.delete(:admitting)
+            send(test, {:checked, Arca.in_transaction?()})
+
+            receive do
+              :go -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  test "a deny committed between the check and the allow rolls the admission back", %{
+    remote: remote,
+    remote_key: remote_key,
+    group: group,
+    invitation: invitation
+  } do
+    pause_after_check!()
+
+    admitting =
+      Task.async(fn ->
+        unboxed(fn ->
+          Process.put(:admitting, true)
+          Newcomer.admit({:remote, remote}, :none)
+        end)
+      end)
+
+    assert_receive {:checked, false}, 10_000
+    {:ok, _deny} = unboxed(fn -> Store.deny("identifier", remote.identifier, "ops") end)
+    send(admitting.pid, :go)
+
+    assert {:error, {:door, :denied}} = Task.await(admitting, 25_000)
+
+    assert unboxed(fn ->
+             %{
+               people:
+                 Arca.Repo.aggregate(
+                   from(i in ExternalIdentity, where: i.key == ^remote_key),
+                   :count
+                 ),
+               identities:
+                 Arca.Repo.aggregate(
+                   from(p in PersonIdentity, where: p.identifier == ^remote.identifier),
+                   :count
+                 ),
+               redeemed_by: Arca.Repo.get!(Invitation, invitation.id).redeemed_by,
+               seats:
+                 Arca.Repo.aggregate(
+                   from(m in Membership, where: m.athanor_id == ^group.id),
+                   :count
+                 ),
+               door:
+                 Arca.Repo.all(
+                   from(e in Entry, where: e.value == ^remote.identifier, select: e.effect)
+                 )
+             }
+           end) == %{people: 0, identities: 0, redeemed_by: nil, seats: 1, door: ["deny"]}
+  end
+
+  defp cleanup!(keys, identifier) do
+    people =
+      Arca.Repo.all(from(i in ExternalIdentity, where: i.key in ^keys, select: i.user_id))
+
+    athanors =
+      Arca.Repo.all(
+        from(a in Athanor,
+          where: a.owner_user_id in ^people or a.created_by in ^people,
+          select: a.id
+        )
+      )
+
+    Arca.Repo.delete_all(from(e in Entry, where: e.value in ^[identifier | people]))
+    Arca.Repo.delete_all(from(h in DirectoryHead, where: h.identifier == ^identifier))
+    Arca.Repo.delete_all(from(i in Invitation, where: i.issued_by in ^people))
+
+    Arca.Repo.delete_all(
+      from(m in Membership, where: m.user_id in ^people or m.athanor_id in ^athanors)
+    )
+
+    Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id in ^people))
+    Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))
+    Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^athanors))
+    Arca.Repo.delete_all(from(u in User, where: u.id in ^people))
   end
 end
