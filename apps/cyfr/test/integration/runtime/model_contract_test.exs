@@ -20,10 +20,11 @@ defmodule Locus.Runtime.ModelContractTest do
   The fixture is laid in the mode a case names. Disclosed, the default
   here, binds the key as a disclosed entry the fixture reads, so a script
   can name it and the host's masking is what keeps it from a viewer.
-  Attach (`@tag mode: :attach`) offers everyone an instance entry to a
-  loopback upstream, which the athanor's first sign-in binds: the
-  fixture's step makes its request on the connection, CYFR attaches the
-  key, and the key reaches the upstream and nothing else.
+  Attach (`@tag mode: :attach`) has the platform administrator share
+  with everyone a key to a loopback upstream, which the person's first
+  sign-in binds: the fixture's step makes its request on the connection,
+  CYFR attaches the key, and the key reaches the upstream and nothing
+  else.
   """
 
   use ExUnit.Case, async: false
@@ -89,16 +90,16 @@ defmodule Locus.Runtime.ModelContractTest do
         {:ok, ctx: ctx}
 
       :attach ->
-        # The entry is offered before the athanor is filled, so its person's
+        # The key is shared before the athanor is filled, so its person's
         # first sign-in binds it; the wire is watched for what the runner
         # sent.
         TwoServices.watch!()
         port = Fixture.upstream!(@upstream_answer)
-        admin = Fixture.instance_admin!()
-        entry = Fixture.offer_instance_entry!(admin, port, @canary, Map.get(tags, :caps, %{}))
+        admin = Fixture.administrator!()
+        share = Fixture.share_key!(admin, port, @canary, Map.get(tags, :caps, %{}))
         ctx = Fixture.athanor!()
         on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
-        {:ok, ctx: ctx, port: port, admin: admin, entry: entry}
+        {:ok, ctx: ctx, port: port, admin: admin, share: share}
     end
   end
 
@@ -895,14 +896,15 @@ defmodule Locus.Runtime.ModelContractTest do
   # ---------------------------------------------------------------------------
 
   @tag mode: :attach
-  test "an instance entry drives a streamed model turn without exposing its value", %{
+  test "the administrator's share drives a streamed model turn without exposing its value", %{
     ctx: ctx,
     port: port,
-    entry: entry
+    admin: admin,
+    share: share
   } do
-    # The athanor's first sign-in bound the one entry it is offered.
-    assert [%{instance_entry_id: bound}] = fixture_refs(ctx)
-    assert bound == entry.id
+    # The person's first sign-in bound the administrator's share.
+    assert [%{scope: "share", share_id: bound}] = fixture_refs(ctx)
+    assert bound == share.id
 
     body = ~s({"model":"chat-fixture","messages":[{"role":"user","content":"hello"}]})
     deltas = ["Attached, ", "then ", "streamed."]
@@ -922,11 +924,11 @@ defmodule Locus.Runtime.ModelContractTest do
     assert [%{outcome: "ok", child_execution_id: id, id: step_id}] = model_steps(played)
 
     # The upstream received the request the fixture named, with the key
-    # CYFR attached; one use is counted against the entry.
+    # CYFR attached; one use is counted against the share.
     sent = Fixture.upstream_request!()
     assert %{method: "POST", path: "/v1/messages", body: ^body} = sent
     assert for({"x-api-key", value} <- sent.headers, do: value) == [@canary]
-    assert used(entry) == 1
+    assert used(admin, share) == 1
 
     # The request as the guest built it named the connection and carried no
     # credential, and the fixture was handed the upstream's answer.
@@ -956,15 +958,15 @@ defmodule Locus.Runtime.ModelContractTest do
   end
 
   @tag mode: :attach, caps: %{person_daily: 1}
-  test "instance cap and revocation refuse the next model request", %{
+  test "a share's cap and its revoke refuse the next model request", %{
     ctx: ctx,
     port: port,
     admin: admin,
-    entry: entry
+    share: share
   } do
     assert %{status: "completed"} = play(ctx, attached_step(port, "Within the cap.")).turn
     assert Fixture.upstream_request!().path == "/v1/messages"
-    assert used(entry) == 1
+    assert used(admin, share) == 1
 
     # The person's day cap is spent: the next request is refused before the
     # upstream, and the step fails with the refusal.
@@ -974,25 +976,25 @@ defmodule Locus.Runtime.ModelContractTest do
     assert [%{outcome: "error", error: ^capped, child_execution_id: id}] = model_steps(played)
     assert [%{args: %{"connection" => "api_key"}}] = TwoServices.calls(:attached_fetch, id)
     refute_received {Fixture, :upstream, _request}
-    assert used(entry) == 1
+    assert used(admin, share) == 1
 
-    # Raised, the cap admits the next request; revoked, the entry admits
+    # Raised, the cap admits the next request; revoked, the share admits
     # none, and the model is not reached.
     assert {:ok, :changed} =
-             Sanctum.InstanceEntries.set_caps(admin, %{entry_id: entry.id, person_daily: 10})
+             Sanctum.Shares.set_caps(admin, %{share_id: share.id, person_daily: 10})
 
     assert %{status: "completed"} = play(ctx, attached_step(port, "Raised.")).turn
     assert Fixture.upstream_request!().path == "/v1/messages"
-    assert used(entry) == 2
+    assert used(admin, share) == 2
 
-    assert {:ok, %{affected: [_ | _]}} = Sanctum.InstanceEntries.revoke(admin, entry.id)
+    assert {:ok, %{affected: [_ | _]}} = Sanctum.Shares.revoke(admin, share.id)
     played = play(ctx, attached_step(port, "Revoked."))
     # The revoke blocked the fixture's profile, which the soul's edge to it
     # selects: the turn asks for setup before the model runs.
     assert %{status: "failed", error: "Setup required" <> _} = played.turn
     assert [] = agent_rows(played)
     refute_received {Fixture, :upstream, _request}
-    assert used(entry) == 2
+    assert used(admin, share) == 2
     assert [] = key_leaks(ctx, played) ++ Fixture.leaks(@canary, wire: TwoServices.calls())
   end
 
@@ -1216,9 +1218,12 @@ defmodule Locus.Runtime.ModelContractTest do
     refs
   end
 
-  # The uses claimed against an instance entry today.
-  defp used(entry) do
-    {:ok, %{totals: totals}} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), entry.id, 1)
+  # The uses counted against the administrator's share today, as its
+  # owner reads them.
+  defp used(admin, share) do
+    {:ok, %{totals: totals}} =
+      Arca.ShareUsage.usage(Sanctum.Context.actor(admin), share.id, 1)
+
     Enum.sum(Enum.map(totals, & &1.count))
   end
 

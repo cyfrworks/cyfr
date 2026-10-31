@@ -11,15 +11,15 @@ defmodule Cyfr.Test.ChatFixture do
   - The athanor: `lay_seed!/2` lays a seed whose only catalyst is the
     fixture, in the mode the test names, and whose soul runs on it with a
     small tool policy of catalog operations; `athanor!/0` fills a fresh
-    group athanor from the configured seed the way a person's is filled
-    (`Compendium.Provisioning.provision/2`). In `:disclosed` mode the need
-    declares no attach rule and the fixture reads its key: `bind_key!/2`
-    connects a disclosed key through the consent walk. In `:attach` mode
-    the need attaches the key as `x-api-key` and the fixture never reads
-    it: `upstream!/1` starts the loopback upstream its egress names, and
-    `offer_instance_entry!/4`, run before `athanor!/0`, offers everyone an
-    instance entry to that upstream, which the athanor's first sign-in
-    binds.
+    person's own athanor from the configured seed as their first sign-in
+    fills it (`Compendium.Provisioning.provision/2`). In `:disclosed` mode
+    the need declares no attach rule and the fixture reads its key:
+    `bind_key!/2` connects a disclosed key through the consent walk. In
+    `:attach` mode the need attaches the key as `x-api-key` and the
+    fixture never reads it: `upstream!/1` starts the loopback upstream its
+    egress names, and `share_key!/4`, run before `athanor!/0`, has the
+    platform administrator (`administrator!/0`) share with everyone a key
+    to that upstream, which the person's first sign-in binds.
   - The script: `message/2` is the line a person sends, the script in a
     fenced block of it; `text/1`, `call_start/3`, `call_delta/2`,
     `call_end/1`, `usage/1`, `stop/1` and `error/2` are the contract's
@@ -39,8 +39,6 @@ defmodule Cyfr.Test.ChatFixture do
     received; `leaks/2` names every place a credential shows: a column of
     any table, a file under the base path, or a term the caller passes.
   """
-
-  alias Sanctum.Tenancy.Athanors
 
   @wasm Path.expand("test_wasm/chat_fixture/chat_fixture.wasm", __DIR__)
   @readme Path.expand("test_wasm/chat_fixture/README.md", __DIR__)
@@ -171,26 +169,31 @@ defmodule Cyfr.Test.ChatFixture do
   end
 
   @doc """
-  A fresh group athanor of a person of its own, filled from the configured
-  seed as a person's athanor is. Answers the person's context in it.
+  A fresh person's own athanor, filled from the configured seed as their
+  first sign-in fills it. Answers the person's context in it.
   """
   @spec athanor!() :: Sanctum.Context.t()
   def athanor! do
+    {user, own} = person!("chat-fixture")
+    {:ok, ctx} = Sanctum.Context.focus(%{Sanctum.TestContext.local() | user_id: user.id}, own)
+    {:ok, %{provisioned_at: %DateTime{}}} = Compendium.Provisioning.provision(own, ctx)
+    ctx
+  end
+
+  # A person made as an open admission makes one, with their own athanor.
+  defp person!(handle) do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
       Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|chat-fixture-#{n}",
+        id: "github|https://github.com|#{handle}-#{n}",
         provider: "github",
-        email: "chat-fixture-#{n}@example.com",
+        email: "#{handle}-#{n}@example.com",
         verified: true,
         name: "Fixture #{n}"
       })
 
-    {:ok, group} = Athanors.create_group(user.id, "Chat fixture #{n}")
-    {:ok, ctx} = Sanctum.Context.focus(%{Sanctum.TestContext.local() | user_id: user.id}, group)
-    {:ok, %{provisioned_at: %DateTime{}}} = Compendium.Provisioning.provision(group, ctx)
-    ctx
+    {user, Sanctum.Test.People.athanor!(user)}
   end
 
   @doc """
@@ -275,54 +278,57 @@ defmodule Cyfr.Test.ChatFixture do
   end
 
   @doc """
-  A platform administrator of the instance, a person of their own: who
-  offers, caps and revokes an instance entry.
+  The platform administrator of this CYFR, signed in to their own
+  athanor through Prism and holding the platform membership: who shares
+  a key with everyone, caps the share and revokes it.
   """
-  @spec instance_admin!() :: Sanctum.Context.t()
-  def instance_admin! do
-    {ctx, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
-    %{ctx | platform_admin: true}
+  @spec administrator!() :: Sanctum.Context.t()
+  def administrator! do
+    {user, own} = person!("chat-admin")
+    {:ok, _seat} = Sanctum.TestContext.ensure_platform(user.id)
+
+    Sanctum.Context.build(
+      user_id: user.id,
+      provider: "github",
+      namespace: "chat-admin-#{System.unique_integer([:positive])}",
+      athanor_id: own.id,
+      permissions: Sanctum.Context.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+    |> Sanctum.TestContext.via(:prism)
   end
 
   @doc """
-  Offer everyone an instance entry of the fixture's provider holding `key`
-  as its field, to the upstream at `port`: `http`, `POST` and the paths
-  under `/v1/`, under the component policy it is created with (`any`).
-  `opts` are merged into the creation's params, the caps
-  (`:person_daily`, `:total_daily`) among them. Run before `athanor!/0`,
-  whose first sign-in binds it. Answers the entry.
+  The administrator `admin` makes an attach-only key of the fixture's
+  provider in their own vault, holding `key` as its field, to the
+  upstream at `port` (`http`, `POST` and the paths under `/v1/`), and
+  shares it with everyone, each under the confirmation it asks. `caps`
+  are the share's (`:person_daily`, `:total_daily`), absent for no
+  limit. Run before `athanor!/0`, whose first sign-in binds it. Answers
+  the share as its owner reads it.
   """
-  @spec offer_instance_entry!(Sanctum.Context.t(), :inet.port_number(), String.t(), map()) ::
-          map()
-  def offer_instance_entry!(admin, port, key, opts \\ %{}) when is_binary(key) do
-    params =
-      Map.merge(
-        %{
-          name: "chat-fixture-#{System.unique_integer([:positive])}",
-          kind: "api_key",
-          provider_hint: @name,
-          fields: %{@key_field => key},
-          destination: %{
-            "hosts" => [@upstream_host],
-            "scheme" => "http",
-            "port" => port,
-            "methods" => ["POST"],
-            "paths" => @upstream_paths
-          },
-          audience: "everyone"
-        },
-        opts
-      )
-
-    confirmed =
-      Sanctum.TestContext.confirmed(admin, :credential_entry, %{
-        operation: "instance_entry.create",
-        arguments: params,
-        resource: params.name
+  @spec share_key!(Sanctum.Context.t(), :inet.port_number(), String.t(), map()) :: map()
+  def share_key!(admin, port, key, caps \\ %{}) when is_binary(key) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(admin, %{
+        name: "chat-fixture-#{System.unique_integer([:positive])}",
+        kind: "api_key",
+        provider_hint: @name,
+        fields: %{@key_field => key},
+        destination: %{
+          "hosts" => [@upstream_host],
+          "scheme" => "http",
+          "port" => port,
+          "methods" => ["POST"],
+          "paths" => @upstream_paths
+        }
       })
 
-    {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
-    entry
+    params = Map.merge(%{entry_id: entry.id, audience: "everyone"}, caps)
+    {:ok, share} = Sanctum.TestContext.confirming(admin, &Sanctum.Shares.create(&1, params))
+    share
   end
 
   # ---------------------------------------------------------------------------
