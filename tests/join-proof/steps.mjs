@@ -14,7 +14,7 @@ import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import {
   A, A2, H, SETTINGS, addSession, admitted, assertions, ask, authenticatorWith, begin, captureAssertions, closePrompt,
   confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, deviceLog, flashed,
-  freshContext, glassState, instrumentDevice, layer, nameHome, open, passkeySignIn, ready, record, row,
+  freshContext, glassState, instrumentDevice, layer, nameHome, open, passkeySignIn, pressInLayer, ready, record, row,
   secrets, shownCode, signIn, signInAtHome, signInAtHub, sleep, storageOf, storedDevice, waitFor,
 } from "./common.mjs";
 
@@ -394,7 +394,7 @@ async function pairPhone(chromium, { page, home, base = A, credentialsFrom, view
   await page.locator("#shell-devices").click();
   await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
   await page.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
-  await page.locator(`${layer} [data-test="pairing-begin"]`).click();
+  const press = await pressInLayer(page, '[data-test="pairing-begin"]');
   await confirmHere(page);
   await page.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
   const link = await page.locator(`${layer} [data-test="pairing-link"]`).inputValue();
@@ -427,7 +427,7 @@ async function pairPhone(chromium, { page, home, base = A, credentialsFrom, view
   await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
   if (viewport) measured.glass_ready = await measure(phone, "#glass");
   const stored = await storedDevice(phone);
-  return { phone, context, pending, panel, preview, stored, measured, step };
+  return { phone, context, pending, panel, preview, stored, measured, step, press };
 }
 
 async function phoneStep(chromium, state) {
@@ -441,7 +441,7 @@ async function phoneStep(chromium, state) {
     pending_kept: paired.pending && { certify: paired.pending.certify }, panel: paired.panel.slice(0, 300),
     preview: paired.preview.slice(0, 300), issuer: cert && cert.issuer, audience: cert && cert.audience,
     subject: cert && cert.subject && cert.subject.kind, certifications, clients,
-    pending_after: paired.stored.pending,
+    pending_after: paired.stored.pending, press: paired.press,
   };
   return row("phone", "chromium",
     cert && cert.issuer === A && cert.audience === H && cert.subject.kind === "identity" &&
@@ -774,7 +774,7 @@ async function viewport(chromium, state) {
   // console page is measured and recorded as a finding.
   const { other_home: otherHome, ...held } = measured;
   const failures = unmet(held);
-  record.viewport = { measured: held, glass_prompt_shown: shown, failures, finding_other_home_console: otherHome };
+  record.viewport = { measured: held, glass_prompt_shown: shown, failures, finding_other_home_console: otherHome, press: paired.press };
   return row("viewport", "chromium", paired.stored.device && shown && failures.length === 0,
     "at 720×720: pairing, reconnecting, switching homes, revocation and a consent read and confirmed in the system layer, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);
