@@ -178,14 +178,19 @@ for published in \
 done
 
 # The shipped canvas is installed by the seed; its page reads three bus
-# streams, so the person grants it (version 0.2.0) before the proof shows
+# streams, so the person grants it (version 0.3.0) before the proof shows
 # it, as they grant every canvas.
-server_fixture "$CELL" grant "$TOKEN" canvas 0.2.0 >/dev/null
+server_fixture "$CELL" grant "$TOKEN" canvas 0.3.0 >/dev/null
 
 source_answer="$(canvas_fixture source "$TOKEN" candles)"
 [ -n "$source_answer" ] || fail "the feed's source was not published"
 SOURCE="$(field "$source_answer" reference)"
 PROFILE="$(field "$source_answer" profile_id)"
+
+# A component installed and not granted, which the markets canvas's grant
+# control asks the person's grant for (grant_control).
+[ -n "$(canvas_fixture ungranted "$TOKEN" grant-target)" ] ||
+  fail "the component the grant control asks for was not published"
 
 # The person's feeds, by name: name -> binding id. Binding ids name no
 # credential; the proof names a feed by its name, or a binding the fixture

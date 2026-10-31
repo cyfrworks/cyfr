@@ -69,6 +69,7 @@ import { ask as askRunSh, redact as redactKnown } from "../browser/lib.mjs";
 const ALL = ["chromium", "firefox", "webkit"];
 const STEPS = [
   ["two_canvases", ["chromium"]],
+  ["attention_moves", ["chromium"]],
   ["switch", ["chromium"]],
   ["written_canvas", ["chromium"]],
   ["feed_chart", ["chromium"]],
@@ -81,6 +82,7 @@ const STEPS = [
   ["validation_failures", ["chromium"]],
   ["crash_fallback", ["chromium"]],
   ["activation", ALL],
+  ["grant_control", ALL],
   ["rebound_control", ALL],
   ["connection_allowlist", ALL],
   ["policy", ALL],
@@ -93,9 +95,9 @@ const STEPS = [
 // one of which ends in the fallback, and the socket cut and the scheduler's
 // fire come last.
 const ORDER = [
-  "two_canvases", "switch", "written_canvas", "feed_chart", "app_over_canvas",
+  "two_canvases", "attention_moves", "switch", "written_canvas", "feed_chart", "app_over_canvas",
   "window_drag", "tile_narrows", "covered_windows", "frame_kept", "hidden_canvas",
-  "activation", "rebound_control", "connection_allowlist", "policy",
+  "activation", "grant_control", "rebound_control", "connection_allowlist", "policy",
   "validation_failures", "crash_fallback", "disconnect", "failed_fire",
 ];
 
@@ -463,12 +465,12 @@ const posts = (frame) => frame.evaluate(() => [...(window.__posts || [])]);
 
 // ---- page readers ---------------------------------------------------------------
 
-// The shipped canvas's headings and its app launchers (`button.tile` with
-// the name in `.name`).
+// The shipped canvas's section headings (without the count each carries)
+// and its app launchers (`button.app` with the name in `.label`).
 const shippedDrawing = (frame) =>
   frame.evaluate(() => ({
-    headings: [...document.querySelectorAll("h2")].map((h) => h.textContent),
-    tiles: [...document.querySelectorAll(".tile .name")].map((n) => n.textContent),
+    headings: [...document.querySelectorAll("h2")].map((h) => (h.firstChild ? h.firstChild.textContent.trim() : "")),
+    tiles: [...document.querySelectorAll(".app .label")].map((n) => n.textContent),
   })).catch(() => null);
 
 // A written or broken canvas's single line of text.
@@ -750,7 +752,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.2.0" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.3.0" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -885,7 +887,7 @@ async function stepFeedChart(page, name) {
 async function stepAppOverCanvas(page, name) {
   const start = await showCanvas(page, "start");
   await until(start.frame, shippedDrawing, (d) => d.tiles.includes("canvas-full"), "the canvas-full launcher");
-  const tile = await centerOf(start.frame.locator('.tile', { has: start.frame.locator('.name', { hasText: "canvas-full" }) }).first());
+  const tile = await centerOf(start.frame.locator('.app', { has: start.frame.locator('.label', { hasText: "canvas-full" }) }).first());
   if (!tile) throw new Error("the canvas-full launcher could not be measured");
   const from = (await instrument(page)).receipts.length;
   await personClick(page, start.id, tile.x, tile.y);
@@ -926,6 +928,65 @@ async function stepAppOverCanvas(page, name) {
       switched_back: { full_frame: fullAgain.state },
       closed: { canvas_shown_again: startBack.state, same_frame: startBack.id === start.id },
     });
+}
+
+// attention_moves: the shipped canvas moves "Needs attention" out from
+// under a window and nothing else. Its runs stream is answered with three
+// failures a grant fixes and one long unrelated failure, so the card holds
+// both kinds; a window is reported covering the card. On the desk the card
+// moves to the other column and Recent runs, Apps and Schedules stand
+// exactly where they stood; in the hand every section stands in one
+// column. The stream is answered as usual again afterwards.
+const STREAM_ROUTE = "**/_f/v1/o/*/stream";
+
+function attentionFailures(route) {
+  let body = null;
+  try { body = route.request().postDataJSON(); } catch (_error) { body = null; }
+  if (!body || body.stream !== "runs.changes") return route.continue();
+  const grant = "This account is not granted to the component; grant it first.";
+  const events = [
+    ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "internal", message: grant } })),
+    { kind: "failed", execution_id: "attention_long", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", message: "The model provider answered with an error the runner could not read, so this run stopped before it finished; the provider may be down, or the reply may have been too large to hold at once." } },
+  ];
+  return route.fulfill({
+    status: 200,
+    contentType: "text/event-stream",
+    body: events.map((data, i) => `id: ${i + 1}\nevent: message\ndata: ${JSON.stringify(data)}\n\n`).join(""),
+  });
+}
+
+const sections = (frame) =>
+  frame.evaluate(() => Object.fromEntries([...document.querySelectorAll("section.card")].map((el) => {
+    const b = el.getBoundingClientRect();
+    return [el.querySelector("h2").firstChild.textContent.trim(), { x: b.x, y: b.y, width: b.width, height: b.height }];
+  }))).catch(() => null);
+
+async function stepAttentionMoves(page, name, viewport) {
+  const ctx = page.context();
+  await ctx.route(STREAM_ROUTE, attentionFailures);
+  try {
+    await openShell(page);
+    held.clear();
+    const start = await showCanvas(page, "start");
+    const before = await until(start.frame, sections, (s) => s["Needs attention"] && s["Recent runs"] && s.Apps && s.Schedules, "the shipped canvas's sections with Needs attention");
+    const others = ["Recent runs", "Apps", "Schedules"];
+
+    if (viewport.posture === "hand") {
+      const x = before["Needs attention"].x;
+      note("attention_moves", name, others.every((n) => near(before[n].x, x)), { posture: "hand", sections: before });
+      return;
+    }
+
+    const card = before["Needs attention"];
+    await page.$eval(`iframe[data-frame-id="${start.id}"]`, (el, rect) => el.dispatchEvent(new CustomEvent("cyfr:to-canvas", { detail: { verb: "covered", args: { rects: [rect] } } })), card);
+    const after = await until(start.frame, sections, (s) => s["Needs attention"] && s["Needs attention"].x > card.x + 10, "Needs attention moved out from under the window").catch(() => null);
+    const stayed = after !== null && others.every((n) => after[n] && after[n].x === before[n].x && after[n].y === before[n].y);
+    note("attention_moves", name, stayed, { covered: card, before, after });
+  } finally {
+    await ctx.unroute(STREAM_ROUTE, attentionFailures).catch(() => null);
+    await openShell(page);
+    held.clear();
+  }
 }
 
 // ---- windows ---------------------------------------------------------------------
@@ -1355,7 +1416,7 @@ async function marketsBound(page) {
   await shown.frame.evaluate(installRecorder);
   const box = async (sel) => shown.frame.locator(sel).boundingBox();
   const centers = {};
-  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"]]) {
+  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"], ["grant", "#grant"]]) {
     const b = await box(sel);
     centers[key] = b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null;
   }
@@ -1453,6 +1514,62 @@ async function stepActivation(page, name) {
       held_8s: { forwarded: held8.forwarded, dropped_delta: heldDropped1 - heldDropped0 },
       scripted_no_input: { forwarded: noInput.forwarded, dropped_delta: noInputDropped1 - noInputDropped0 },
       recorded_residuals: recorded,
+    });
+  await showCanvas(page, "start");
+}
+
+// grant_control: a canvas's request for a component's grant leaves it as
+// a press does: the grant control clicked by the person sends one `grant`,
+// which the shell receives inside the click with its activation and the
+// canvas its active element, and forwards; the same request sent from a
+// timer with no input near it is dropped (the frame's `data-dropped`
+// moves). The forwarded request raises the shell's grant offer for
+// catalyst:local.grant-target, installed, not granted and with no frame
+// (`fixture.exs` `ungranted`), in the system layer of
+// the shell's own page and nowhere in the canvas's document; it is
+// dismissed, and the timer's request raises no offer.
+const offerInCanvas = (frame) =>
+  frame.evaluate(() => document.querySelector('[data-kind="grant"], .consent-sheet, #system-layer-dialog') !== null).catch(() => null);
+
+async function stepGrantControl(page, name) {
+  const { shown, centers } = await marketsBound(page);
+  if (!centers.grant) throw new Error("the markets grant control could not be measured");
+  const classify = (receipts) =>
+    ({ forwarded: receipts.filter((r) => r.dropped === false).length, dropped: receipts.filter((r) => r.dropped === true).length, total: receipts.length, receipts });
+
+  let mark = (await instrument(page)).receipts.length;
+  await personClick(page, shown.id, centers.grant.x, centers.grant.y);
+  const inside = classify(await handled(page, mark, shown.id, "grant", 1));
+
+  // The offer: the shell's system layer, for the component the canvas
+  // named, and nothing of it in the canvas's document.
+  const offered = await lib.waitFor(async () => {
+    const p = await prompt(page);
+    return p && p.kind === "grant" ? p : null;
+  }, { timeoutMs: 20_000, what: "the grant offer in the system layer" }).catch(() => null);
+  const names = offered !== null && /catalyst:local\.grant-target/.test(`${offered.title} ${offered.description} ${await page.$eval("#system-layer-dialog", (d) => d.textContent).catch(() => "")}`);
+  const inCanvas = await offerInCanvas(shown.frame);
+  if (offered) {
+    await page.click('#system-layer-dialog button[phx-click="dismiss"]');
+    await lib.waitFor(async () => ((await prompt(page)) === null ? true : null), { timeoutMs: 15_000, what: "the grant offer dismissed" });
+  }
+
+  const dropped0 = Number((await canvasFrame(page, shown.id)).dropped);
+  mark = (await instrument(page)).receipts.length;
+  await shown.frame.evaluate(() => window.__canvas && window.__canvas.grantAfter(9000));
+  await sleep(9800);
+  const noInput = classify(receiptsOf(await instrument(page), mark, shown.id, "grant"));
+  const dropped1 = Number((await canvasFrame(page, shown.id)).dropped);
+  const offeredAfterTimer = await prompt(page);
+
+  note("grant_control", name,
+    inside.forwarded === 1 && inside.total === 1 && inside.receipts[0].active === true && inside.receipts[0].activeElementIsFrame === true &&
+      noInput.total === 1 && noInput.forwarded === 0 && dropped1 > dropped0 &&
+      offered !== null && names && inCanvas === false && offeredAfterTimer === null,
+    {
+      inside_click: { forwarded: inside.forwarded, total: inside.total, active: inside.receipts[0] && inside.receipts[0].active, active_element_is_frame: inside.receipts[0] && inside.receipts[0].activeElementIsFrame },
+      scripted_no_input: { received: noInput.total, forwarded: noInput.forwarded, dropped_delta: dropped1 - dropped0 },
+      offer: { in_system_layer: offered !== null, names_the_component: names, in_canvas: inCanvas, after_the_timer: offeredAfterTimer },
     });
   await showCanvas(page, "start");
 }
@@ -1954,6 +2071,7 @@ async function runBrowser(name, viewport, proxy, receiver, udp, { only, measurin
 
 const STEP_FNS = {
   two_canvases: (page, name, { viewport }) => stepTwoCanvases(page, name, viewport),
+  attention_moves: (page, name, { viewport }) => stepAttentionMoves(page, name, viewport),
   switch: async () => {},
   written_canvas: (page, name) => stepWrittenCanvas(page, name),
   feed_chart: (page, name) => stepFeedChart(page, name),
@@ -1964,6 +2082,7 @@ const STEP_FNS = {
   frame_kept: (page, name, { viewport }) => stepFrameKept(page, name, viewport),
   hidden_canvas: (page, name, { proxy }) => stepHiddenCanvas(page, name, proxy),
   activation: (page, name) => stepActivation(page, name),
+  grant_control: (page, name) => stepGrantControl(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),
   connection_allowlist: (page, name) => stepConnectionAllowlist(page, name),
   policy: (page, name, { proxy, receiver, udp }) => stepPolicy(page, name, proxy, receiver, udp),

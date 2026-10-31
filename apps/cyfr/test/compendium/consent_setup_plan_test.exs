@@ -346,6 +346,78 @@ defmodule Compendium.ConsentSetupPlanTest do
     assert plan.ready
   end
 
+  # A grant of `name`'s key with `lifetime`, and its one binding row.
+  defp lifetime_grant!(ctx, name, lifetime) do
+    publish!(ctx, name)
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "#{name}-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"},
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
+      })
+
+    _committed =
+      grant!(ctx, "reagent:local.#{name}", [
+        %{need: "@ingress", entry_id: entry.id, lifetime: lifetime}
+      ])
+
+    {:ok, [profile]} = Sanctum.Consent.profiles(ctx, "reagent:local.#{name}")
+    {:ok, head} = Sanctum.Consent.head_consent(ctx, profile.id)
+
+    row =
+      Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+        where: r.athanor_id == ^ctx.athanor_id and r.consent_id == ^head.id
+      )
+
+    {"reagent:local.#{name}", row}
+  end
+
+  test "a binding whose until has passed makes the plan not ready, as its attach refuses it", %{
+    ctx: ctx
+  } do
+    ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+    {ref, row} =
+      lifetime_grant!(ctx, "plan-until", %{kind: "until", until: DateTime.to_iso8601(ahead)})
+
+    assert {:ok, %{ready: true, consent: %{needs: [%{satisfied: true}]}}} =
+             Compendium.Component.setup_plan(ctx, ref)
+
+    {1, _} = Arca.Repo.update_all(row, set: [expires_at: DateTime.add(DateTime.utc_now(), -60)])
+
+    assert {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert [%{satisfied: false, detail: "its grant has expired — grant it again"}] =
+             plan.consent.needs
+
+    refute plan.consent.ready
+    refute plan.ready
+  end
+
+  test "a once binding is ready until a run uses it, and reading the plan uses nothing", %{
+    ctx: ctx
+  } do
+    {ref, row} = lifetime_grant!(ctx, "plan-once", %{kind: "once"})
+
+    for _read <- 1..2 do
+      assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
+    end
+
+    assert [%{consumed_by_root: nil}] = Arca.Repo.all(row)
+
+    {1, _} = Arca.Repo.update_all(row, set: [consumed_by_root: "exec_used"])
+
+    assert {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert [%{satisfied: false, detail: "its grant has expired — grant it again"}] =
+             plan.consent.needs
+
+    refute plan.ready
+  end
+
   test "a rebound connection makes the plan not-ready with an actionable detail",
        %{ctx: ctx} do
     publish!(ctx, "plan-rebound")
@@ -596,6 +668,60 @@ defmodule Compendium.ConsentSetupPlanTest do
 
       walk!(ctx, %{ref: @dep, bindings: [%{need: "api_key", entry_id: entry.id}]})
       {:ok, ctx: ctx, entry: entry}
+    end
+
+    test "a lender whose until has passed makes the borrower's grant not ready, as its attach refuses it",
+         %{ctx: ctx, entry: entry} do
+      ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      walk!(ctx, %{
+        ref: @dep,
+        bindings: [
+          %{
+            need: "api_key",
+            entry_id: entry.id,
+            lifetime: %{kind: "until", until: DateTime.to_iso8601(ahead)}
+          }
+        ]
+      })
+
+      ref = "reagent:local.plan-borrower"
+      walk!(ctx, %{ref: ref, selections: [%{dep: @dep, label: "default"}]})
+
+      {:ok, [borrower]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, borrower.id)
+      [binding] = head.vault_refs
+      {:selection, _, {:ok, resource}} = Sanctum.Consent.row_binding(ctx, head, binding)
+      use = %{profile_id: borrower.id, consent_id: head.id}
+
+      # Live on both sides: the run's attach and the plan agree.
+      assert :ok = Sanctum.Attach.lifetime(ctx, resource, use)
+      assert :ok = Sanctum.Consent.binding_live(ctx, borrower.id, head, binding)
+      assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
+
+      lender_id = resource.lender.consent_id
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+            where: r.athanor_id == ^ctx.athanor_id and r.consent_id == ^lender_id
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
+        )
+
+      # The lender's row has passed: the attach refuses, and so does the
+      # plan's read of the same binding.
+      assert {:error, :grant_expired} = Sanctum.Attach.lifetime(ctx, resource, use)
+
+      assert {:error, :grant_expired} =
+               Sanctum.Consent.binding_live(ctx, borrower.id, head, binding)
+
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+      assert [%{satisfied: false, detail: "its grant has expired — grant it again"}] =
+               plan.consent.needs
+
+      refute plan.ready
     end
 
     test "pinned by the walk, reads ready from the lender's entry, and not ready once it moves",
