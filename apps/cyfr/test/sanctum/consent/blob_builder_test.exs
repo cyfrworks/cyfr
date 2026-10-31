@@ -505,7 +505,6 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       # A resource that records no decision stands until revoked.
       ingress = %{
         binding_key: "#{root}|@ingress|default",
-        scope: "athanor",
         vault_entry_id: "vlt_1",
         binding_digest: "sha256:b",
         lifetime_kind: "standing",
@@ -528,7 +527,6 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                  ingress,
                  %{
                    binding_key: edge_key,
-                   scope: "athanor",
                    via_label: "work",
                    binding_digest: pin,
                    lifetime_kind: "standing",
@@ -543,8 +541,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
     end
 
     test "named accounts are rows of their own, each with its decision's lifetime and renew, " <>
-           "an instance entry's and a share's rows name them, and provided configuration is " <>
-           "no row",
+           "a share's row names it, and provided configuration is no row",
          %{ctx: ctx} do
       publish!(ctx, "narrow-dep", %{})
       publish!(ctx, "narrow-root", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
@@ -571,9 +568,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
           binding.("vlt_default", %{
             named: [
               binding.("vlt_one", %{name: "Supabase 1", lifetime: %{kind: "until", until: until}}),
-              binding.("ine_two", %{
+              binding.("vlt_two", %{
                 name: "Supabase 2",
-                scope: "instance",
                 lifetime: %{kind: "once", until: nil},
                 renew: true
               }),
@@ -605,7 +601,6 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       assert BlobBuilder.vault_refs(nodes) == [
                %{
                  binding_key: key.("default"),
-                 scope: "athanor",
                  vault_entry_id: "vlt_default",
                  binding_digest: "sha256:vlt_default",
                  lifetime_kind: "standing",
@@ -614,7 +609,6 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                },
                %{
                  binding_key: key.("name:Supabase 1"),
-                 scope: "athanor",
                  vault_entry_id: "vlt_one",
                  binding_digest: "sha256:vlt_one",
                  lifetime_kind: "until",
@@ -623,16 +617,14 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                },
                %{
                  binding_key: key.("name:Supabase 2"),
-                 scope: "instance",
-                 instance_entry_id: "ine_two",
-                 binding_digest: "sha256:ine_two",
+                 vault_entry_id: "vlt_two",
+                 binding_digest: "sha256:vlt_two",
                  lifetime_kind: "once",
                  expires_at: nil,
                  renew: true
                },
                %{
                  binding_key: key.("name:Supabase 3"),
-                 scope: "share",
                  share_id: "shr_three",
                  binding_digest: "sha256:shr_three",
                  lifetime_kind: "standing",
@@ -651,7 +643,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
       assert %{
                "Supabase 1" => %{binding_key: one},
-               "Supabase 2" => %{scope: "instance"},
+               "Supabase 2" => %{scope: "athanor", entry_id: "vlt_two"},
                "Supabase 3" => %{scope: "share", entry_id: "shr_three"}
              } = ingress.vault.named
 

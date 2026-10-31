@@ -432,13 +432,12 @@ defmodule Sanctum.Consent.BlobBuilder do
   the binding's own key — the node and edge it sits on and its slot
   (`Prima.Authority.Blob.binding_key/3`, as `encode/1` places it) — so one
   entry bound on two edges, or under two names, is two rows. A bound
-  entry's row names its scope, the entry (the athanor's own or the
-  instance's) or the share it reaches, and the digest it is bound at, and
-  each named account beside it is a row of its own; a selection's (`via`)
-  is the borrower's own binding, naming the label of the profile it
-  borrows from and the digest it pinned, if any. Each row carries its
-  binding's lifetime and `renew` as `vault_resource/1` recorded them,
-  standing when none was.
+  entry's row names the athanor's own entry or the share it reaches, and
+  the digest it is bound at, and each named account beside it is a row of
+  its own; a selection's (`via`) is the borrower's own binding, naming the
+  label of the profile it borrows from and the digest it pinned, if any.
+  Each row carries its binding's lifetime and `renew` as
+  `vault_resource/1` recorded them, standing when none was.
   Provided configuration names no entry and writes no row.
   """
   @spec vault_refs(map()) :: [Arca.ConsentStorage.ref_input()]
@@ -478,7 +477,8 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   @doc """
   The `consent_vault_refs` row of one vault resource under `binding_key`:
-  a bound entry (`entry_id`, `binding_digest`, `scope`) or a selection
+  a bound entry (`vault_entry_id` for the athanor's own, `share_id` for
+  a share, as its `scope` says, and `binding_digest`) or a selection
   (`via`: its `label` and pinned `binding_digest`), with the lifetime and
   `renew` `vault_resource/1` recorded beside it, standing until revoked
   when it recorded none (a resource read back from a stored blob).
@@ -488,7 +488,6 @@ defmodule Sanctum.Consent.BlobBuilder do
       when is_binary(binding_key) do
     %{
       binding_key: binding_key,
-      scope: "athanor",
       via_label: label,
       binding_digest: Map.get(via, "binding_digest")
     }
@@ -498,25 +497,12 @@ defmodule Sanctum.Consent.BlobBuilder do
   def ref_row(binding_key, %{"entry_id" => entry_id, "binding_digest" => digest} = vault)
       when is_binary(binding_key) do
     case Map.get(vault, "scope") do
-      "instance" ->
-        %{
-          binding_key: binding_key,
-          scope: "instance",
-          instance_entry_id: entry_id,
-          binding_digest: digest
-        }
-
       # A share's bound resource names the share as its entry.
       "share" ->
-        %{binding_key: binding_key, scope: "share", share_id: entry_id, binding_digest: digest}
+        %{binding_key: binding_key, share_id: entry_id, binding_digest: digest}
 
-      scope ->
-        %{
-          binding_key: binding_key,
-          scope: scope,
-          vault_entry_id: entry_id,
-          binding_digest: digest
-        }
+      _athanor ->
+        %{binding_key: binding_key, vault_entry_id: entry_id, binding_digest: digest}
     end
     |> Map.merge(decision_columns(vault))
   end
@@ -533,9 +519,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   blob's grammar reads (`Prima.Authority.Blob`):
 
     * a bound entry (`binding/0`): its `entry_id`, `binding_digest`,
-      `scope` (`athanor`, `instance` or `share`, whose `entry_id` is the
-      share's id), `destination` and `attach`
-      rule (absent for a disclose-only need), the `projection` it names
+      `scope` (`athanor` or `share`, whose `entry_id` is the share's id),
+      `destination` and `attach` rule (absent for a disclose-only need),
+      the `projection` it names
       (`{"fields": {need field: entry field}, "scopes": [...]}`), and
       under `named` each named account's own resource by its name.
       `encode/1` gives each its `binding_key` where it sits.

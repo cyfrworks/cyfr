@@ -138,7 +138,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert Enum.sort(Enum.map(refs, &{&1.binding_key, &1.via_label, &1.binding_digest})) ==
              Enum.sort(selections)
 
-    assert Enum.all?(refs, &(&1.vault_entry_id == nil and &1.instance_entry_id == nil))
+    assert Enum.all?(refs, &(&1.vault_entry_id == nil and &1.share_id == nil))
 
     # The soul's edge into its model selects the model's default profile;
     # its edge into a role carries no vault; its edges into its hands

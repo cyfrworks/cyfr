@@ -325,7 +325,7 @@ defmodule Sanctum.Test.ConsentFixtures do
           granted_by: ctx.user_id,
           granted_via: "interactive"
         },
-        head.vault_refs,
+        Enum.map(head.vault_refs, &Map.delete(&1, :scope)),
         head.id
       )
 

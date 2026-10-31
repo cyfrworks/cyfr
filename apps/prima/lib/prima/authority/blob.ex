@@ -38,9 +38,8 @@ defmodule Prima.Authority.Blob do
 
       * **bound** — an entry, the binding digest the consent approved, the
         entry's `scope` (`"athanor"` for an athanor's own entry,
-        `"instance"` for an instance entry, `"share"` for a share, whose
-        `entry_id` is the share's id), its `destination`
-        (`Prima.Destination`), the need's `attach` rule
+        `"share"` for a share, whose `entry_id` is the share's id), its
+        `destination` (`Prima.Destination`), the need's `attach` rule
         (`Prima.Manifest.Needs`, nil for a disclose-only need) and the
         binding's own `binding_key` (`binding_key/3`). Beside it, under
         `named`, an edge may bind further entries by account name, each
@@ -179,7 +178,7 @@ defmodule Prima.Authority.Blob do
   @ingress_key "@ingress"
 
   defstruct canonical: @canonical, nodes: %{}
-  @scopes ["athanor", "instance", "share"]
+  @scopes ["athanor", "share"]
   @default_slot "default"
   @name_slot "name:"
   @max_name_bytes 128
@@ -827,7 +826,7 @@ defmodule Prima.Authority.Blob do
   end
 
   defp validate_scope(scope) when scope in @scopes, do: {:ok, scope}
-  defp validate_scope(_scope), do: {:error, "scope must be athanor, instance or share"}
+  defp validate_scope(_scope), do: {:error, "scope must be athanor or share"}
 
   # Placed, a binding key names the node and edge it sits on and its own
   # slot: `default` for the unnamed binding, `name:<name>` for a named

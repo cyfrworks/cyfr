@@ -494,7 +494,7 @@ defmodule Prima.Authority.BlobTest do
                scopes: []
              }
 
-      assert %{"Archive" => %{scope: "instance", entry_id: "vault-entry-archive"}} =
+      assert %{"Archive" => %{scope: "athanor", entry_id: "vault-entry-archive"}} =
                dest.vault.named
 
       {:ok, lent} = Blob.lookup_edge(blob, @formula, @catalyst, "lent")
@@ -643,8 +643,8 @@ defmodule Prima.Authority.BlobTest do
              )
     end
 
-    test "a bound vault's scope is the athanor's entry, an instance entry or a share" do
-      for scope <- ["athanor", "instance", "share"] do
+    test "a bound vault's scope is the athanor's entry or a share" do
+      for scope <- ["athanor", "share"] do
         assert {:ok, blob} = Blob.parse(with_vault(@dest_key, dest_vault(scope: scope)))
 
         assert {:ok, %{vault: %{scope: ^scope}}} =
@@ -654,7 +654,7 @@ defmodule Prima.Authority.BlobTest do
       assert {:error, {:invalid_resource, @formula, @dest_key, :vault, why}} =
                Blob.parse(with_vault(@dest_key, dest_vault(scope: "shared")))
 
-      assert why == "scope must be athanor, instance or share"
+      assert why == "scope must be athanor or share"
     end
 
     test "a binding key names the node and edge it sits on and its own slot" do

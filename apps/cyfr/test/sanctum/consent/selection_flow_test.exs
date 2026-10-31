@@ -188,20 +188,21 @@ defmodule Sanctum.Consent.SelectionFlowTest do
            ]
   end
 
-  @inst_dep "reagent:local.sel-inst-dep"
-  @inst_source "reagent:local.sel-inst-source"
+  @shared_dep "reagent:local.sel-shared-dep"
+  @shared_source "reagent:local.sel-shared-source"
 
-  # A dependency whose need attaches an example.com key, so an instance
-  # entry can meet it, and a source that depends on it.
-  defp instance_lending!(ctx) do
-    publish!(ctx, "sel-inst-dep", %{
+  # A dependency whose need attaches an openai.com key, so a key shared
+  # with the person can meet it, and a source that depends on it, both in
+  # the athanor of `ctx`.
+  defp shared_lending!(ctx) do
+    publish!(ctx, "sel-shared-dep", %{
       "needs" => %{
         "api_key" => %{
-          "type" => "api_key:example.com",
-          "hosts" => ["api.example.com"],
-          "reason" => "to call the example API",
+          "type" => "api_key:openai.com",
+          "hosts" => ["api.openai.com"],
+          "reason" => "to call the model",
           "required" => true,
-          "fields" => ["KEY"],
+          "fields" => ["OPENAI_API_KEY"],
           "attach" => %{
             "in" => "header",
             "name" => "Authorization",
@@ -209,147 +210,70 @@ defmodule Sanctum.Consent.SelectionFlowTest do
           }
         }
       },
-      "caps" => %{"egress" => %{"domains" => ["api.example.com"], "methods" => ["POST"]}}
+      "caps" => %{"egress" => %{"domains" => ["api.openai.com"], "methods" => ["POST"]}}
     })
 
-    publish!(ctx, "sel-inst-source", %{"dependencies" => %{"static" => [%{"ref" => @inst_dep}]}})
-
-    {:ok, offered} =
-      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-        name: "company example key",
-        kind: "api_key",
-        provider_hint: "example.com",
-        field_names: ~s(["KEY"]),
-        destination:
-          ~s({"hosts":["api.example.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-        sealed_payload: "sealed",
-        binding_digest: "sha256:lent-#{System.unique_integer([:positive])}",
-        audience: "everyone",
-        created_by: "usr_admin"
-      })
-
-    offered
+    publish!(ctx, "sel-shared-source", %{
+      "dependencies" => %{"static" => [%{"ref" => @shared_dep}]}
+    })
   end
 
-  test "a dependency's profile bound to an offered instance entry lends it: the plan, the " <>
-         "preview, the commit and the readiness read it as an instance entry",
-       %{ctx: ctx} do
-    {person, _user} = Sanctum.TestContext.person!(ctx)
-    offered = instance_lending!(ctx)
+  # The readiness of a lent share, and its end when the person leaves the
+  # group, are `Compendium.ConsentSetupPlanTest`'s.
+  test "a dependency's profile bound to a key shared with the person lends it: the plan, the " <>
+         "preview, the commit and the load read it as the share" do
+    %{alice: alice, share: share} = Cyfr.Test.ShareFixtures.traders!()
+    shared_lending!(alice.ctx)
 
     {{:ok, _}, _} =
-      walk!(person, @inst_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+      walk!(alice.ctx, @shared_dep, %{bindings: [%{need: "api_key", share_id: share.id}]})
 
-    {:ok, plan} = Plan.plan(person, %{ref: @inst_source})
-    assert [%{dep: @inst_dep, candidates: [lender]}] = plan.dependency_needs
-    assert %{label: "default", source: "instance", entry_id: id, entry_name: name} = lender
-    assert {id, name} == {offered.id, offered.name}
+    {:ok, plan} = Plan.plan(alice.ctx, %{ref: @shared_source})
+    assert [%{dep: @shared_dep, candidates: [lender]}] = plan.dependency_needs
+    assert %{label: "default", source: "share", entry_id: id, entry_name: name} = lender
+    assert {id, name} == {share.id, "Shared by Terry"}
 
     {{:ok, %{profile_id: profile_id}}, preview} =
-      walk!(person, @inst_source, %{selections: [%{dep: @inst_dep, label: "default"}]})
+      walk!(alice.ctx, @shared_source, %{selections: [%{dep: @shared_dep, label: "default"}]})
 
-    assert [%{"node" => @inst_source, "values" => values}] =
+    assert [%{"node" => @shared_source, "values" => values}] =
              Enum.filter(preview.rows, &(&1["kind"] == "credential"))
 
-    assert values["source"] == "instance"
-    assert values["name"] == offered.name
+    assert values["source"] == "share"
+    assert values["name"] == "Shared by Terry"
     assert values["label"] == "default"
     assert values["disclosed"] == false
 
     # The borrower's row is the selection, both identities kept: its own
     # key and label here, the lender's binding resolved at load.
-    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(person), profile_id)
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(alice.ctx), profile_id)
 
-    assert [%{via_label: "default", vault_entry_id: nil, instance_entry_id: nil}] =
-             head.vault_refs
+    assert [%{via_label: "default", vault_entry_id: nil, share_id: nil}] = head.vault_refs
 
-    assert %{entry_id: ^id, scope: "instance", lender: %{profile_id: _}} =
-             edge_vault_of(person, @inst_source, @inst_dep)
-
-    section = Compendium.ConsentSetupPlan.section(person, @inst_source)
-    assert section.ready
-    assert [%{entry_id: ^id, satisfied: true, detail: detail}] = section.needs
-    assert detail =~ "instance entry"
-
-    # Offered to the person no longer (a narrowed audience blocks no
-    # profile), the lent entry is read live and is not ready.
-    {someone_else, _user} =
-      Sanctum.TestContext.person!(ctx, %{
-        id:
-          Sanctum.Auth.Identity.builtin_key(
-            :github,
-            "someone-else-#{System.unique_integer([:positive])}"
-          ),
-        email: "someone-else-#{System.unique_integer([:positive])}@example.com"
-      })
-
-    :ok =
-      Arca.InstanceEntries.set_audience(
-        Arca.Test.Actor.platform(),
-        offered.id,
-        %{audience: "everyone", members: []},
-        %{audience: "listed", members: [someone_else.user_id]}
-      )
-
-    section = Compendium.ConsentSetupPlan.section(person, @inst_source)
-    refute section.ready
-    assert [%{satisfied: false, detail: narrowed}] = section.needs
-    assert narrowed =~ "no longer offered to you"
+    assert %{entry_id: ^id, scope: "share", lender: %{profile_id: _}} =
+             edge_vault_of(alice.ctx, @shared_source, @shared_dep)
   end
 
-  test "a lent instance entry is refused to a person it is not offered to, and on a node its " <>
-         "policy does not admit",
-       %{ctx: ctx} do
-    {person, _user} = Sanctum.TestContext.person!(ctx)
-
-    {other, other_user} =
-      Sanctum.TestContext.person!(ctx, %{
-        id:
-          Sanctum.Auth.Identity.builtin_key(
-            :github,
-            "other-#{System.unique_integer([:positive])}"
-          ),
-        email: "other-#{System.unique_integer([:positive])}@example.com"
-      })
-
-    offered = instance_lending!(ctx)
+  test "a lent share is refused once it is no longer offered to the person: the plan offers " <>
+         "no lender and the preview refuses the selection" do
+    %{alice: alice, traders: traders, share: share} = Cyfr.Test.ShareFixtures.traders!()
+    shared_lending!(alice.ctx)
 
     {{:ok, _}, _} =
-      walk!(person, @inst_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+      walk!(alice.ctx, @shared_dep, %{bindings: [%{need: "api_key", share_id: share.id}]})
 
-    selections = [%{dep: @inst_dep, label: "default"}]
+    # Alice leaves Traders, which writes nothing to the share: it is
+    # offered to her no longer.
+    :ok = Cyfr.Test.ShareFixtures.leave!(traders, alice)
 
-    # Offered to the first person alone: the second may not borrow it.
-    :ok =
-      Arca.InstanceEntries.set_audience(
-        Arca.Test.Actor.platform(),
-        offered.id,
-        %{audience: "everyone", members: []},
-        %{audience: "listed", members: [person.user_id]}
-      )
-
-    refute other_user.id == person.user_id
-    {:ok, plan} = Plan.plan(other, %{ref: @inst_source})
+    {:ok, plan} = Plan.plan(alice.ctx, %{ref: @shared_source})
     assert [%{candidates: []}] = plan.dependency_needs
 
-    assert {:error, {:not_offered, @inst_dep}} =
-             Commit.preview(other, %{ref: @inst_source, selections: selections})
-
-    # Its policy admits shipped nodes alone, and the dependency is the
-    # person's own: no one may borrow it on that node.
-    :ok =
-      Arca.InstanceEntries.set_component_policy(
-        Arca.Test.Actor.platform(),
-        offered.id,
-        "any",
-        "shipped"
-      )
-
-    {:ok, plan} = Plan.plan(person, %{ref: @inst_source})
-    assert [%{candidates: []}] = plan.dependency_needs
-
-    assert {:error, {:component_not_admitted, @inst_dep}} =
-             Commit.preview(person, %{ref: @inst_source, selections: selections})
+    assert {:error, {:share_not_offered, @shared_dep}} =
+             Commit.preview(alice.ctx, %{
+               ref: @shared_source,
+               selections: [%{dep: @shared_dep, label: "default"}]
+             })
   end
 
   @oauth_dep "reagent:local.sel-oauth-dep"
@@ -523,7 +447,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                via_label: "default",
                binding_digest: ^home_digest,
                vault_entry_id: nil,
-               instance_entry_id: nil
+               share_id: nil
              }
            ] = head.vault_refs
 

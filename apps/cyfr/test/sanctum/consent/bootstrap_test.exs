@@ -8,7 +8,6 @@ defmodule Sanctum.Consent.BootstrapTest do
   alias Cyfr.Test.ShareFixtures
   alias Prima.Authority
   alias Prima.Authority.Blob
-  alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
 
@@ -134,7 +133,6 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     # What a mint or a revision that could not read a store skips.
     @shares_unavailable {:unavailable, "Shares"}
-    @instance_unavailable {:unavailable, "Instance entries"}
 
     # A shipped catalyst whose one need attaches an openai.com key calling
     # `hosts`, api.openai.com unless a release says otherwise, which its
@@ -202,129 +200,6 @@ defmodule Sanctum.Consent.BootstrapTest do
       %{entry: entry, share: Arca.Test.Shares.share!(owner.actor, entry.id)}
     end
 
-    # An instance entry offered to everyone, admitting only shipped code.
-    defp offer!(over \\ %{}) do
-      {:ok, entry} =
-        Arca.InstanceEntries.put(
-          Arca.Test.Actor.platform(),
-          Map.merge(
-            %{
-              name: "company-#{System.unique_integer([:positive])}",
-              kind: "api_key",
-              provider_hint: "openai.com",
-              field_names: ~s(["OPENAI_API_KEY"]),
-              destination: @inference,
-              sealed_payload: "sealed",
-              binding_digest: "sha256:company-#{System.unique_integer([:positive])}",
-              audience: "everyone",
-              created_by: "usr_admin",
-              component_policy: "shipped"
-            },
-            over
-          )
-        )
-
-      entry
-    end
-
-    # A bootstrap-only head of the catalyst `ref` whose ingress binds the
-    # instance entry `entry` in the default slot, standing, at revision 1,
-    # granted by the context's person: a head minted when a first sign-in
-    # still bound an instance entry, built by the bootstrap's own builders
-    # as that mint built it. A boot revises such a head while the instance
-    # entries stand.
-    defp instance_head!(ctx, entry, ref \\ @model) do
-      {:ok, cref} = Prima.ComponentRef.parse(ref)
-
-      {:ok, component} =
-        Sanctum.Consent.Components.get_latest(ctx, cref.name, cref.namespace, cref.type)
-
-      {:ok, activation} = Sanctum.Consent.Components.resolve(ctx, component)
-      {:ok, manifest} = Prima.Manifest.decode_strict(component.manifest)
-      [need] = Prima.Manifest.Needs.from_manifest(manifest)
-      {:ok, destination} = Prima.Destination.from_map(Jason.decode!(entry.destination))
-      fields = Sanctum.Consent.Plan.field_map(need, Jason.decode!(entry.field_names))
-
-      binding = %{
-        need: need.name,
-        entry_id: entry.id,
-        binding_digest: entry.binding_digest,
-        scope: "instance",
-        destination: Prima.Destination.to_map(destination),
-        attach: Prima.Manifest.Needs.attach_to_map(need.attach),
-        fields: fields,
-        scopes: need.scopes,
-        lifetime: %{kind: "standing", until: nil},
-        renew: false
-      }
-
-      vault_fn = fn node_key, _row, _manifest ->
-        if node_key == ref, do: BlobBuilder.vault_resource(binding)
-      end
-
-      {:ok, nodes} =
-        BlobBuilder.build(ctx, activation.graph, ref, vault_fn, source_row: component)
-
-      {:ok, blob} = BlobBuilder.encode(nodes)
-      blob_digest = Prima.Digest.sha256(blob)
-      {:ok, input} = Sanctum.Consent.ShapeDerivation.shape_input(ctx, ref)
-      {:ok, shape_digest} = Sanctum.Consent.ShapeDigest.compute(input)
-
-      {:ok, commit_digest} =
-        Sanctum.Consent.CommitDigest.compute(%{
-          shape_digest: shape_digest,
-          blob_digest: blob_digest,
-          label: "default",
-          kind: :owner,
-          invoke_mode: :open_inert,
-          origins: [:interactive, :programmatic],
-          bindings: [
-            %{
-              need: need.name,
-              instance_entry_id: entry.id,
-              binding_digest: entry.binding_digest,
-              fields: fields,
-              scopes: need.scopes,
-              lifetime: %{kind: "standing"},
-              renew: false
-            }
-          ]
-        })
-
-      {:ok, activation_json} = Prima.JCS.encode(activation.graph)
-      profile_id = Prima.UUID7.generate_id("prof")
-
-      {:ok, _consent} =
-        Arca.ConsentStorage.mint_profile_with_revision(
-          %{
-            id: profile_id,
-            athanor_id: ctx.athanor_id,
-            source_ref: ref,
-            kind: "owner",
-            label: "default",
-            status: "active"
-          },
-          %{
-            profile_id: profile_id,
-            revision: 1,
-            scope: "versionless",
-            pinned_version: "",
-            invoke_mode: "open_inert",
-            shape_digest: shape_digest,
-            commit_digest: commit_digest,
-            blob_digest: blob_digest,
-            resolved_policy: blob,
-            activation: activation_json,
-            admitted_origins: [:interactive, :programmatic],
-            granted_by: ctx.user_id,
-            granted_via: "bootstrap"
-          },
-          BlobBuilder.vault_refs(nodes)
-        )
-
-      profile_id
-    end
-
     defp model_head!(ctx, ref \\ @model) do
       {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
       {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
@@ -340,7 +215,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     # Run `fun` once, right after the walk's first read of `table`: for
     # the shares at a first mint, the administrator's shares, before the
     # mint's transaction locks the one it binds; for the binding rows, the
-    # head's, before a revision reads the share or entry it keeps.
+    # head's, before a revision reads the share it keeps.
     defp after_read!(table, fun) do
       test = self()
       handler = "bootstrap-after-read-#{System.unique_integer([:positive])}"
@@ -408,30 +283,21 @@ defmodule Sanctum.Consent.BootstrapTest do
     end
 
     # The catalyst's head at `revision`, minted or revised by the
-    # bootstrap, binds `bound` (`{:share, share_id}` or
-    # `{:instance, entry_id}`) at `digest` in the ingress's default slot,
-    # standing: its one binding row, whole.
-    defp assert_bound!(ctx, bound, digest, revision) do
+    # bootstrap, binds the share `share_id` at `digest` in the ingress's
+    # default slot, standing: its one binding row, whole.
+    defp assert_bound!(ctx, share_id, digest, revision) do
       {head, refs} = head_rows!(ctx)
       granted_by = if ctx.auth_method == :system, do: "system:bootstrap", else: ctx.user_id
 
       assert {head.revision, head.granted_via, head.granted_by} ==
                {revision, "bootstrap", granted_by}
 
-      {scope, share_id, instance_entry_id} =
-        case bound do
-          {:share, id} -> {"share", id, nil}
-          {:instance, id} -> {"instance", nil, id}
-        end
-
       assert refs == [
                %{
                  consent_id: head.id,
                  athanor_id: ctx.athanor_id,
                  binding_key: "#{@model}|@ingress|default",
-                 scope: scope,
                  vault_entry_id: nil,
-                 instance_entry_id: instance_entry_id,
                  share_id: share_id,
                  via_label: nil,
                  binding_digest: digest,
@@ -443,10 +309,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     end
 
     defp assert_shared!(ctx, %{share: share, entry: entry}, revision \\ 1),
-      do: assert_bound!(ctx, {:share, share.id}, entry.binding_digest, revision)
-
-    defp assert_offered!(ctx, entry, revision),
-      do: assert_bound!(ctx, {:instance, entry.id}, entry.binding_digest, revision)
+      do: assert_bound!(ctx, share.id, entry.binding_digest, revision)
 
     defp assert_unbound!(ctx) do
       assert {head, nil} = model_head!(ctx)
@@ -462,24 +325,8 @@ defmodule Sanctum.Consent.BootstrapTest do
       end
     end
 
-    # A revoke of `entry_id` landing right after the boot's revision read
-    # the entry's facts and before its transaction locks the entry: run
-    # from the walk's first read of an instance entry, once.
-    def revoke_after_facts(_event, _measurements, meta, %{test: test, entry_id: entry_id}) do
-      if self() == test and meta[:source] == "instance_entries" and
-           Process.get(:a0_revoked) == nil do
-        revoked =
-          Task.async(fn ->
-            Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), entry_id, "needs_consent")
-          end)
-          |> Task.await(30_000)
-
-        Process.put(:a0_revoked, revoked)
-      end
-    end
-
-    # `person`, signed in to the shared test athanor, a group, where the
-    # old store's heads are revised; Ana, signed in to her own athanor,
+    # `person`, signed in to the shared test athanor, a group, where a
+    # first sign-in binds no share; Ana, signed in to her own athanor,
     # where a first sign-in binds a share; the platform administrator.
     setup %{ctx: ctx} do
       {person, _user} = Sanctum.TestContext.person!(ctx)
@@ -885,7 +732,7 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert {row.lifetime_kind, row.expires_at} ==
                {first_row.lifetime_kind, first_row.expires_at}
 
-      assert_bound!(seed(ana), {:share, shared.share.id}, shared.entry.binding_digest, 2)
+      assert_bound!(seed(ana), shared.share.id, shared.entry.binding_digest, 2)
 
       # A revoke landing after the revision read the share as active: the
       # revision's lock refuses the share, nothing is written, and the boot
@@ -1015,7 +862,7 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert head_rows!(ana) == held
 
       assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
-      assert_bound!(seed(ana), {:share, shared.share.id}, shared.entry.binding_digest, 2)
+      assert_bound!(seed(ana), shared.share.id, shared.entry.binding_digest, 2)
     end
 
     test "a boot's revision of a head whose share binding has no ref row is the profile " <>
@@ -1042,51 +889,25 @@ defmodule Sanctum.Consent.BootstrapTest do
     end
 
     # -------------------------------------------------------------------------
-    # Revisions of a head binding an instance entry
+    # Revisions that meet damage
     # -------------------------------------------------------------------------
-
-    # A revision under a person keeps the head's entry only once it read
-    # it: a binding read the store could not answer keeps the head as it
-    # stands, never revised without the entry it bound.
-    @tag :capture_log
-    test "a revision under a person that cannot read the entry its head binds keeps the head, " <>
-           "and a run once the store answers revises it bound",
-         %{person: person} do
-      ship_model!(person)
-      offered = offer!()
-      instance_head!(person, offered)
-      held = head_rows!(person)
-
-      # The release moves the shape; the store goes once the head is read.
-      ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
-      after_read!("consent_vault_refs", fn -> away!("instance_entries") end)
-      {unanswered, log} = with_log(fn -> Bootstrap.run(person) end)
-      back!("instance_entries")
-
-      assert unanswered ==
-               {:ok, %{minted: [], revised: [], skipped: [{@model, @instance_unavailable}]}}
-
-      assert log =~ "#{@model} skipped: Instance entries could not answer (:database_error)"
-      assert head_rows!(person) == held
-
-      assert Bootstrap.run(person) == {:ok, %{minted: [], revised: [@model], skipped: []}}
-      assert_offered!(person, offered, 2)
-    end
 
     # A boot's revision carries the head's binding as the head holds it,
     # so a head it cannot read whole is damaged, not a head that bound
     # nothing: the source is skipped with the head kept.
     test "a boot's revision of a head whose policy does not parse is the profile damaged, " <>
            "and the head is kept",
-         %{ctx: ctx, person: person} do
-      ship_model!(person)
-      profile_id = instance_head!(person, offer!())
-      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(person, profile_id, resolved_policy: "{")
-      damaged = head_rows!(person)
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+      profile_id = head_profile_id(ana)
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ana, profile_id, resolved_policy: "{")
+      damaged = head_rows!(ana)
 
-      ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
 
-      assert Bootstrap.run(seed(ctx)) ==
+      assert Bootstrap.run(seed(ana)) ==
                {:ok,
                 %{
                   minted: [],
@@ -1094,7 +915,7 @@ defmodule Sanctum.Consent.BootstrapTest do
                   skipped: [{@model, {:corrupt, {:profile, profile_id}}}]
                 }}
 
-      assert head_rows!(person) == damaged
+      assert head_rows!(ana) == damaged
     end
 
     # Valid JSON can still hold a node or edge map the authority grammar
@@ -1104,10 +925,12 @@ defmodule Sanctum.Consent.BootstrapTest do
       @tag damaged_shape: damaged
       test "a boot's revision of a head with malformed #{damaged} structure skips the " <>
              "damaged profile and keeps the whole head",
-           %{ctx: ctx, person: person, damaged_shape: damaged} do
-        ship_model!(person)
-        profile_id = instance_head!(person, offer!())
-        {head, [_bound]} = head_rows!(person)
+           %{ana: ana, admin: admin, damaged_shape: damaged} do
+        ship_model!(ana)
+        share!(admin)
+        {:ok, _} = Bootstrap.run(ana)
+        profile_id = head_profile_id(ana)
+        {head, [_bound]} = head_rows!(ana)
         decoded = Jason.decode!(head.resolved_policy)
 
         corrupted =
@@ -1121,14 +944,14 @@ defmodule Sanctum.Consent.BootstrapTest do
         assert {:error, _} = Blob.parse(corrupted)
 
         :ok =
-          Sanctum.Test.ConsentFixtures.hand_edit_head!(person, profile_id,
+          Sanctum.Test.ConsentFixtures.hand_edit_head!(ana, profile_id,
             resolved_policy: corrupted
           )
 
-        held = head_rows!(person)
-        ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+        held = head_rows!(ana)
+        ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
 
-        assert Bootstrap.run(seed(ctx)) ==
+        assert Bootstrap.run(seed(ana)) ==
                  {:ok,
                   %{
                     minted: [],
@@ -1136,30 +959,8 @@ defmodule Sanctum.Consent.BootstrapTest do
                     skipped: [{@model, {:corrupt, {:profile, profile_id}}}]
                   }}
 
-        assert head_rows!(person) == held
+        assert head_rows!(ana) == held
       end
-    end
-
-    test "a boot's revision of a head whose ingress binding has no ref row is the profile " <>
-           "damaged, and the head is kept",
-         %{ctx: ctx, person: person} do
-      ship_model!(person)
-      profile_id = instance_head!(person, offer!())
-      {head, [_bound]} = head_rows!(person)
-      drop_refs!(head.id)
-      assert head_rows!(person) == {head, []}
-
-      ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
-
-      assert Bootstrap.run(seed(ctx)) ==
-               {:ok,
-                %{
-                  minted: [],
-                  revised: [],
-                  skipped: [{@model, {:corrupt, {:profile, profile_id}}}]
-                }}
-
-      assert head_rows!(person) == {head, []}
     end
 
     for mode <- [:person, :seed] do
@@ -1167,16 +968,16 @@ defmodule Sanctum.Consent.BootstrapTest do
       @tag revision_context: mode
       test "a #{mode} revision that read a damaged manifest keeps the whole head even when " <>
              "storage is repaired before its later reads",
-           %{ctx: ctx, person: person, revision_context: mode} do
-        ship_model!(person)
-        offered = offer!()
-        instance_head!(person, offered)
-        held = head_rows!(person)
+           %{ana: ana, admin: admin, revision_context: mode} do
+        ship_model!(ana)
+        shared = share!(admin)
+        {:ok, _} = Bootstrap.run(ana)
+        held = head_rows!(ana)
 
-        component = ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+        component = ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
         set_manifest!(component, "{not json")
         after_read!("components", fn -> set_manifest!(component, component.manifest) end)
-        revision_ctx = if mode == :person, do: person, else: seed(ctx)
+        revision_ctx = if mode == :person, do: ana, else: seed(ana)
 
         assert Bootstrap.run(revision_ctx) ==
                  {:ok,
@@ -1186,167 +987,13 @@ defmodule Sanctum.Consent.BootstrapTest do
                     skipped: [{@model, {:corrupt, {:manifest, @model}}}]
                   }}
 
-        assert head_rows!(person) == held
+        assert head_rows!(ana) == held
 
         assert Bootstrap.run(revision_ctx) ==
                  {:ok, %{minted: [], revised: [@model], skipped: []}}
 
-        assert_offered!(revision_ctx, offered, 2)
+        assert_shared!(revision_ctx, shared, 2)
       end
-    end
-
-    test "a revision keeps the head's instance binding while it is offered at its digest, and " <>
-           "binds none once it was rebound",
-         %{person: person} do
-      ship_model!(person)
-      offered = offer!()
-      instance_head!(person, offered)
-
-      # The release moves the shape: the bootstrap-only head is revised,
-      # and the entry it bound, unchanged and still offered, stays bound.
-      ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
-      assert {:ok, %{revised: [@model]}} = Bootstrap.run(person)
-      {head, vault} = model_head!(person)
-      assert head.revision == 2
-      assert vault.entry_id == offered.id
-      assert_offered!(person, offered, 2)
-
-      # Rebound since: the next revision binds none, and adds none back.
-      {:ok, _} =
-        Arca.InstanceEntries.move_binding(
-          Arca.Test.Actor.platform(),
-          offered.id,
-          offered.binding_digest,
-          %{
-            destination:
-              ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v2/"],"scheme":"https"}),
-            binding_digest: "sha256:moved"
-          },
-          "needs_consent"
-        )
-
-      ship_model!(person, "1.2.0", %{"limits" => %{"timeout" => "3m"}})
-      # The rebind blocked the profile; a bootstrap revision is still the
-      # seed's to write over a bootstrap-only head.
-      assert {:ok, %{revised: [@model]}} = Bootstrap.run(person)
-      {head, vault} = model_head!(person)
-      assert head.revision == 3
-      assert vault == nil
-    end
-
-    test "a boot's revision with no person carries the head's instance binding as held, is " <>
-           "refused by a revoke landing after its read, and then binds none",
-         %{ctx: ctx, person: person} do
-      ship_model!(person)
-      offered = offer!()
-      instance_head!(person, offered)
-      {first, bound} = model_head!(person)
-      assert bound.entry_id == offered.id
-      [first_row] = first.vault_refs
-
-      # A boot's seed sync runs under the server's own context: no person
-      # to read the offer as. The release moves the shape, and the revision
-      # carries the entry, its digest, its key and its lifetime unchanged.
-      seed_ctx = seed(ctx)
-
-      ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
-      assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed_ctx)
-      {head, vault} = model_head!(person)
-      assert head.revision == 2
-
-      assert %{entry_id: id, binding_digest: digest, binding_key: key, scope: "instance"} = vault
-      assert {id, digest, key} == {offered.id, offered.binding_digest, bound.binding_key}
-      assert vault.destination == bound.destination
-      assert vault.attach.name == "Authorization"
-
-      assert [row] = head.vault_refs
-
-      assert Map.take(row, [:binding_key, :instance_entry_id, :binding_digest, :scope]) ==
-               Map.take(first_row, [:binding_key, :instance_entry_id, :binding_digest, :scope])
-
-      assert {row.lifetime_kind, row.expires_at} ==
-               {first_row.lifetime_kind, first_row.expires_at}
-
-      {:ok, stored, _refs} =
-        Arca.ConsentStorage.get_head(Sanctum.Context.actor(person), head_profile_id(person))
-
-      assert stored.granted_by == "system:bootstrap"
-
-      # A revoke landing after the revision read the entry as active: the
-      # revision's lock refuses the entry, nothing is written, and the boot
-      # reports the source skipped with the refusal.
-      ship_model!(person, "1.2.0", %{"limits" => %{"timeout" => "3m"}})
-      handler = {__MODULE__, :revoke_after_facts, System.unique_integer([:positive])}
-
-      :ok =
-        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_after_facts/4, %{
-          test: self(),
-          entry_id: offered.id
-        })
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      assert {:ok, %{revised: [], skipped: skipped}} = Bootstrap.run(seed_ctx)
-      :telemetry.detach(handler)
-      assert {:ok, [_blocked]} = Process.get(:a0_revoked)
-      assert {@model, {:entry_unavailable, "revoked"}} in skipped
-      {after_revoke, _vault} = model_head!(person)
-      assert after_revoke.id == head.id
-
-      # Read as revoked, the entry is carried no further: the next boot's
-      # revision binds none.
-      assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed_ctx)
-      {unbound, vault} = model_head!(person)
-      assert unbound.revision == 3
-      assert vault == nil and unbound.vault_refs == []
-    end
-
-    test "a boot's revision carries nothing to a release whose need calls a host the entry " <>
-           "misses",
-         %{ctx: ctx, person: person} do
-      ship_model!(person)
-      offered = offer!()
-      instance_head!(person, offered)
-      {_first, bound} = model_head!(person)
-      assert bound.entry_id == offered.id
-
-      # The same need, now calling api.anthropic.com: the entry bound for
-      # api.openai.com meets it no longer, and the revision binds none.
-      ship_model!(person, "1.1.0", %{}, ["api.anthropic.com"])
-      assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
-      {head, vault} = model_head!(person)
-      assert head.revision == 2
-      assert vault == nil and head.vault_refs == []
-    end
-
-    test "a boot's revision carries nothing once the entry was rebound past the head's digest",
-         %{ctx: ctx, person: person} do
-      ship_model!(person)
-      offered = offer!()
-      instance_head!(person, offered)
-      {_first, bound} = model_head!(person)
-      assert bound.binding_digest == offered.binding_digest
-
-      {:ok, _} =
-        Arca.InstanceEntries.move_binding(
-          Arca.Test.Actor.platform(),
-          offered.id,
-          offered.binding_digest,
-          %{
-            destination:
-              ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v2/"],"scheme":"https"}),
-            binding_digest: "sha256:moved"
-          },
-          "needs_consent"
-        )
-
-      # Still active and its destination still covering the need, but no
-      # longer at the digest the head bound: the revision binds none.
-      ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
-      assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
-      {head, vault} = model_head!(person)
-      assert head.revision == 2
-      assert vault == nil and head.vault_refs == []
     end
 
     # -------------------------------------------------------------------------

@@ -21,28 +21,24 @@ defmodule Sanctum.Consent.Commit do
   ## Bindings and selections
 
   A binding (`:bindings`) binds a need of the source to exactly one of the
-  athanor's entries (`entry_id`), an instance entry offered to the
-  person (`instance_entry_id`) and a share offered to them (`share_id`,
-  `Sanctum.Shares.binding/2`, bound at the digest its source entry
-  derives), under the need's scopes or the `scopes`
-  it names, and a field map from each field the need reads to the entry
-  field that answers it: the `fields` it names, held to name each of the
-  need's fields once and only fields the entry holds
+  athanor's entries (`entry_id`) and a share offered to the person
+  (`share_id`, `Sanctum.Shares.binding/2`, bound at the digest its source
+  entry derives), under the need's scopes or the `scopes` it names, and a
+  field map from each field the need reads to the entry field that
+  answers it: the `fields` it names, held to name each of the need's
+  fields once and only fields the entry holds
   (`{:invalid_field_map, need}`), or the automatic one
   (`Sanctum.Consent.Plan.field_map/2`), and none is refused
   `{:fields_unmapped, need}`. The entry must be of the need's kind, and
   its destination must cover the hosts and paths the need declares,
   whatever its label (`Sanctum.Consent.Plan.entry_fit/2`,
-  `{:entry_mismatch, need}`); a need the component reads
-  itself — disclose-only, `disclose: true`, or the `@ingress` slot of a
-  manifest declaring no needs — takes a disclosed entry of the athanor
-  alone (`{:disclosure_refused, need}`); an instance entry must be
-  offered to the person (`{:not_offered, need}`), active, and admitted by
-  its component policy for the source (`{:component_not_admitted, need}`);
-  and a share must be offered to the person
-  (`{:share_not_offered, need}`, also when its audience moved after the
-  preview and the revision's lock refuses it), its owner standing
-  (`{:owner_not_standing, need}`) and its source active, with no
+  `{:entry_mismatch, need}`); a need the component reads itself —
+  disclose-only, `disclose: true`, or the `@ingress` slot of a manifest
+  declaring no needs — takes a disclosed entry of the athanor alone
+  (`{:disclosure_refused, need}`); and a share must be offered to the
+  person (`{:share_not_offered, need}`, also when its audience moved
+  after the preview and the revision's lock refuses it), its owner
+  standing (`{:owner_not_standing, need}`) and its source active, with no
   component policy to admit. A share is bound in the person's own
   athanor alone (`Arca.ConsentStorage`'s `:not_own_athanor`), and a
   share whose source moved or that was revoked after the preview is
@@ -62,11 +58,10 @@ defmodule Sanctum.Consent.Commit do
 
   A selection (`:selections`) fills a dependency's edge: by the `label`
   of the dependency's owner profile that lends its entry (`label:
-  "default"` when it names nothing), or with an entry of the athanor, an
-  instance entry or a share (`entry_id`, `instance_entry_id`,
-  `share_id`) chosen for one of
-  the dependency's credential needs (`need`, required when it declares
-  several), checked as a binding of that need against the dependency. A
+  "default"` when it names nothing), or with an entry of the athanor or a
+  share (`entry_id`, `share_id`) chosen for one of the dependency's
+  credential needs (`need`, required when it declares several), checked
+  as a binding of that need against the dependency. A
   dependency edge holds one need's credentials: a need the calling node's
   `provides` covers takes no selection, and an edge two needs would fill
   is refused. A lending profile is read as the plan reads the
@@ -117,7 +112,7 @@ defmodule Sanctum.Consent.Commit do
   app's own calls replaces every binding those calls held. Neither the
   blob nor a binding's row records its need, so a head binding's need is
   told by its entry, as the surfaces tell it: the one need whose
-  candidates hold the entry, or the one need there is (`Plan.need_choice/4`);
+  candidates hold the entry, or the one need there is (`Plan.need_choice/2`);
   on a dependency's edge, the need the edge names, or the dependency's
   one credential need. A head binding whose need cannot be told is
   compared by its key alone, so an entry changed under a kept key is a
@@ -626,7 +621,6 @@ defmodule Sanctum.Consent.Commit do
              needs: decided_needs(source_ref, bindings, selections, published),
              source_ref: source_ref,
              declared: declared,
-             graph: activation.graph,
              rows: closure_rows
            }),
          {:ok, commit_input} <-
@@ -1018,13 +1012,10 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # What the selection lends from: at most one of a label, an entry, an
-  # instance entry and a share, a label "default" when it names none.
+  # What the selection lends from: at most one of a label, an entry and a
+  # share, a label "default" when it names none.
   defp selection_lent(raw, dep) do
-    case Enum.filter(
-           [:label, :entry_id, :instance_entry_id, :share_id],
-           &(Map.get(raw, &1) != nil)
-         ) do
+    case Enum.filter([:label, :entry_id, :share_id], &(Map.get(raw, &1) != nil)) do
       [] ->
         {:ok, {:label, "default"}}
 
@@ -1040,13 +1031,11 @@ defmodule Sanctum.Consent.Commit do
       _several ->
         {:error,
          {:invalid_argument,
-          "The selection of #{dep} names at most one of label, entry_id, instance_entry_id " <>
-            "and share_id"}}
+          "The selection of #{dep} names at most one of label, entry_id and share_id"}}
     end
   end
 
   defp source_of(:entry_id), do: :own
-  defp source_of(:instance_entry_id), do: :instance
   defp source_of(:share_id), do: :share
 
   # A label selection lends what its profile binds, for whichever need
@@ -1085,10 +1074,10 @@ defmodule Sanctum.Consent.Commit do
   defp not_provided(%{need: provided}, dep, _need, what),
     do: {:error, one_credential(dep, provided, what)}
 
-  defp lender_selection(ctx, {from, dep, %{graph: graph, rows: rows}}, label) do
+  defp lender_selection(ctx, {from, dep, %{rows: rows}}, label) do
     with {:ok, profile} <- lender_profile(ctx, dep, label),
          {:ok, bound} <- lender_binding(ctx, profile),
-         {:ok, entry} <- lent_entry(ctx, bound, {dep, profile.label}, {graph, rows}),
+         {:ok, entry} <- lent_entry(ctx, bound, {dep, profile.label}),
          {:ok, lent} <- lent_projection(bound, dep, profile.label) do
       {:ok,
        %{
@@ -1118,14 +1107,10 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # The entry the lender's binding names, live, by its scope: the
-  # athanor's own, active at the digest the lender bound; or an instance
-  # entry, as the borrowing person is offered it
-  # (`Sanctum.InstanceEntries.binding/2`), at the digest the lender bound
-  # and admitted on the dependency node by its component policy, which the
-  # attach path checks again at each request; or a share, as the borrowing
-  # person is offered it (`Sanctum.Shares.binding/2`), its source at the
-  # digest the lender bound.
-  defp lent_entry(ctx, %{scope: "share"} = bound, {dep, label}, _closure) do
+  # athanor's own, active at the digest the lender bound; or a share, as
+  # the borrowing person is offered it (`Sanctum.Shares.binding/2`), its
+  # source at the digest the lender bound.
+  defp lent_entry(ctx, %{scope: "share"} = bound, {dep, label}) do
     with {:ok, view} <- lent_share(ctx, bound.entry_id, dep),
          :ok <- check_lender_digest(view.binding_digest, bound, dep, label),
          {:ok, destination} <-
@@ -1143,32 +1128,7 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp lent_entry(ctx, %{scope: "instance"} = bound, {dep, label}, {graph, rows}) do
-    with {:ok, view} <- lent_instance(ctx, bound.entry_id, dep),
-         :ok <- check_lender_digest(view.binding_digest || "", bound, dep, label),
-         :ok <-
-           check_admission(
-             ctx,
-             %{source: "instance", policy: view},
-             dep,
-             Plan.node_facts(dep, graph, rows)
-           ),
-         {:ok, destination} <-
-           bound_destination(%{source: "instance", id: view.id, destination: view.destination}) do
-      {:ok,
-       %{
-         source: "instance",
-         id: view.id,
-         name: view.name,
-         provider: view.provider_hint,
-         digest: view.binding_digest,
-         destination: destination,
-         disclosed: false
-       }}
-    end
-  end
-
-  defp lent_entry(ctx, bound, {dep, label}, _closure) do
+  defp lent_entry(ctx, bound, {dep, label}) do
     with {:ok, entry} <- fetch_active_entry(ctx, bound.entry_id),
          {:ok, live_digest} <- VaultReader.binding_digest(entry),
          :ok <- check_lender_digest(live_digest, bound, dep, label),
@@ -1183,15 +1143,6 @@ defmodule Sanctum.Consent.Commit do
          destination: destination,
          disclosed: not entry.attach_only
        }}
-    end
-  end
-
-  defp lent_instance(ctx, id, dep) do
-    case Sanctum.InstanceEntries.binding(ctx, id) do
-      {:ok, view} -> {:ok, view}
-      {:error, :not_offered} -> {:error, {:not_offered, dep}}
-      {:error, {:entry_unavailable, status}} -> {:error, {:entry_unavailable, id, status}}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1224,9 +1175,8 @@ defmodule Sanctum.Consent.Commit do
 
   # An entry chosen for one of the dependency's credential needs, bound on
   # the edge as a binding of that need is on the source: the need's kind
-  # and destination, its disclosure, the offer and the component policy read
-  # against the dependency, under the need's scopes and the selection's
-  # field map.
+  # and destination, its disclosure and the offer read against the
+  # dependency, under the need's scopes and the selection's field map.
   defp entry_selection(ctx, raw, {from, dep, place}, target, decided) do
     with {:ok, _row, dep_manifest} <- node_row_manifest(place.rows, dep),
          {:ok, need, declared_need} <- selected_need(raw, dep, dep_manifest),
@@ -1236,7 +1186,6 @@ defmodule Sanctum.Consent.Commit do
          {:ok, destination} <- bound_destination(bound),
          :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
-         :ok <- check_admission(ctx, bound, need, Plan.node_facts(dep, place.graph, place.rows)),
          {:ok, fields} <- field_map(raw, declared_need, bound, need),
          {:ok, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
          :ok <- check_scope_projection(bound, scopes) do
@@ -1495,9 +1444,9 @@ defmodule Sanctum.Consent.Commit do
 
   # A public profile's callers are anonymous, so it keeps of a binding
   # only what it can carry without widening: an athanor's entry bound
-  # standing. A kept edge whose binding is an instance entry or a share,
-  # carries named accounts, or lives `until` a time or `once` is refused,
-  # never dropped in silence.
+  # standing. A kept edge whose binding is a share, carries named
+  # accounts, or lives `until` a time or `once` is refused, never dropped
+  # in silence.
   defp publishable(nodes, need_ids, lifetimes) do
     Enum.find_value(Enum.sort(nodes), :ok, fn {_node_key, node} ->
       Enum.find_value(Enum.sort(node["edges"] || %{}), fn {edge_key, edge} ->
@@ -1511,14 +1460,6 @@ defmodule Sanctum.Consent.Commit do
       end)
     end)
   end
-
-  defp publishable_vault(%{"scope" => "instance"}, edge_key, _lifetimes),
-    do:
-      publish_refusal(
-        edge_key,
-        "binds an instance entry: an instance entry is offered to people, and a public " <>
-          "profile's callers are anonymous"
-      )
 
   defp publishable_vault(%{"scope" => "share"}, edge_key, _lifetimes),
     do:
@@ -1733,13 +1674,6 @@ defmodule Sanctum.Consent.Commit do
          {:ok, destination} <- bound_destination(bound),
          :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
-         :ok <-
-           check_admission(
-             ctx,
-             bound,
-             need,
-             Plan.node_facts(place.source_ref, place.graph, place.rows)
-           ),
          {:ok, fields} <- field_map(raw, declared_need, bound, need),
          {:ok, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
          :ok <- check_scope_projection(bound, scopes) do
@@ -1857,24 +1791,18 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # What a binding binds: exactly one of the athanor's entry, an instance
-  # entry and a share.
+  # What a binding binds: exactly one of the athanor's entry and a share.
   defp binding_target(raw, need) do
-    case {Map.get(raw, :entry_id), Map.get(raw, :instance_entry_id), Map.get(raw, :share_id)} do
-      {id, nil, nil} when is_binary(id) and id != "" ->
+    case {Map.get(raw, :entry_id), Map.get(raw, :share_id)} do
+      {id, nil} when is_binary(id) and id != "" ->
         {:ok, {:own, id}}
 
-      {nil, id, nil} when is_binary(id) and id != "" ->
-        {:ok, {:instance, id}}
-
-      {nil, nil, id} when is_binary(id) and id != "" ->
+      {nil, id} when is_binary(id) and id != "" ->
         {:ok, {:share, id}}
 
-      _none_or_several ->
+      _none_or_both ->
         {:error,
-         {:invalid_argument,
-          "The binding for #{need} names exactly one of entry_id, instance_entry_id and " <>
-            "share_id"}}
+         {:invalid_argument, "The binding for #{need} names exactly one of entry_id and share_id"}}
     end
   end
 
@@ -1952,10 +1880,9 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # The entry a binding names, live: the athanor's own, active, at the
-  # digest its row derives; or an instance entry offered to the person and
-  # active (`Sanctum.InstanceEntries.binding/2`), at the digest it stands
-  # at; or a share offered to the person (`Sanctum.Shares.binding/2`), at
-  # the digest its source derives. Nothing is unsealed.
+  # digest its row derives; or a share offered to the person
+  # (`Sanctum.Shares.binding/2`), at the digest its source derives.
+  # Nothing is unsealed.
   defp fetch_bound(ctx, {:own, id}, _need) do
     with {:ok, entry} <- fetch_active_entry(ctx, id),
          {:ok, digest} <- VaultReader.binding_digest(entry) do
@@ -1973,36 +1900,6 @@ defmodule Sanctum.Consent.Commit do
          oauth_scopes: stored_list(entry.oauth_scopes),
          destination: Map.get(entry, :destination)
        }}
-    end
-  end
-
-  defp fetch_bound(ctx, {:instance, id}, need) do
-    case Sanctum.InstanceEntries.binding(ctx, id) do
-      {:ok, view} ->
-        {:ok,
-         %{
-           source: "instance",
-           id: view.id,
-           entry: Map.put(view, :attach_only, true),
-           digest: view.binding_digest,
-           scope: "instance",
-           kind: view.kind,
-           provider: view.provider_hint,
-           disclosed: false,
-           policy: view,
-           field_names: view.field_names,
-           oauth_scopes: [],
-           destination: view.destination
-         }}
-
-      {:error, :not_offered} ->
-        {:error, {:not_offered, need}}
-
-      {:error, {:entry_unavailable, status}} ->
-        {:error, {:entry_unavailable, id, status}}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
@@ -2049,7 +1946,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # A need the component reads itself takes a disclosed entry of the
-  # athanor; an instance entry and a share are never disclosed.
+  # athanor; a share is never disclosed.
   defp check_disclosure(bound, declared_need, need) do
     reads_itself? =
       declared_need == nil or Prima.Manifest.Needs.disclose_only?(declared_need) or
@@ -2060,21 +1957,9 @@ defmodule Sanctum.Consent.Commit do
       else: :ok
   end
 
-  # An instance entry is bound on a node only where its stored component
-  # policy admits that node, read at the node's release digest in the
-  # closure. A share has no component policy.
-  defp check_admission(ctx, %{source: "instance"} = bound, need, facts) do
-    if Sanctum.InstanceEntries.admits?(ctx, bound.policy, facts),
-      do: :ok,
-      else: {:error, {:component_not_admitted, need}}
-  end
-
-  defp check_admission(_ctx, _bound, _need, _facts), do: :ok
-
   defp bound_destination(%{source: "own", entry: entry}), do: BlobBuilder.entry_destination(entry)
 
-  defp bound_destination(%{source: source, id: id, destination: %{} = map})
-       when source in ["instance", "share"] do
+  defp bound_destination(%{source: "share", id: id, destination: %{} = map}) do
     case Prima.Destination.from_map(map) do
       {:ok, destination} -> {:ok, Prima.Destination.to_map(destination)}
       {:error, _} -> {:error, {:entry_unavailable, id, :destination}}
@@ -2256,8 +2141,8 @@ defmodule Sanctum.Consent.Commit do
        origins: origins,
        # A binding's scope, destination and attach rule are the blob's,
        # which the blob digest above covers; the decision is what the
-       # person chose: the entry, instance entry or share, the account it
-       # rides under, its projection, its lifetime and whether it renews.
+       # person chose: the entry or share, the account it rides under, its
+       # projection, its lifetime and whether it renews.
        bindings: Enum.map(bindings, &digest_binding/1),
        selections: Enum.map(selections, &digest_selection/1),
        tool_servers:
@@ -2292,7 +2177,6 @@ defmodule Sanctum.Consent.Commit do
     |> Prima.MapUtil.put_present(:name, Map.get(selection, :name))
   end
 
-  defp entry_key(%{scope: "instance"}), do: :instance_entry_id
   defp entry_key(%{scope: "share"}), do: :share_id
   defp entry_key(_athanor), do: :entry_id
 
@@ -2381,11 +2265,10 @@ defmodule Sanctum.Consent.Commit do
   # remove the same binding for the same need. A dependency's need is told
   # from every candidate its declaration has, a need the app provides
   # configuration for included, though the plan offers that need no
-  # candidates. `reads` is `{ctx, sources,
-  # built}`: the caller's context, the choice sources
-  # (`Sanctum.Consent.Plan.choice_sources/1`) and the grant's
-  # `source_ref`, `declared` needs, `graph` and closure `rows`. A row
-  # whose key or binding cannot be read is
+  # candidates. `reads` is `{ctx, sources, built}`: the caller's context,
+  # the choice sources (`Sanctum.Consent.Plan.choice_sources/1`) and the
+  # grant's `source_ref`, `declared` needs and closure `rows`. A row whose
+  # key or binding cannot be read is
   # `{:error, {:preview_unrepresentable, :removed}}`.
   @spec head_place({Context.t(), term(), map()}, map()) ::
           {:ok,
@@ -2394,7 +2277,7 @@ defmodule Sanctum.Consent.Commit do
              edge: String.t(),
              name: String.t() | nil,
              dep: String.t() | nil,
-             identity: {:own | :instance | :share | :label, String.t()},
+             identity: {:own | :share | :label, String.t()},
              need: String.t() | nil
            }}
           | {:error, {:preview_unrepresentable, :removed}}
@@ -2429,7 +2312,6 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp head_identity(%{vault_entry_id: id}) when is_binary(id), do: {:ok, {:own, id}}
-  defp head_identity(%{instance_entry_id: id}) when is_binary(id), do: {:ok, {:instance, id}}
   defp head_identity(%{share_id: id}) when is_binary(id), do: {:ok, {:share, id}}
   defp head_identity(%{via_label: label}) when is_binary(label), do: {:ok, {:label, label}}
   defp head_identity(_ref), do: {:error, {:preview_unrepresentable, :removed}}
@@ -2441,7 +2323,7 @@ defmodule Sanctum.Consent.Commit do
   # the edge names, the dependency's one credential need, or the one of
   # its several whose candidates hold the entry; a lender's label names
   # none of several.
-  defp head_need({ctx, sources, built}, {node, @ingress}, identity)
+  defp head_need({_ctx, sources, built}, {node, @ingress}, identity)
        when node == built.source_ref do
     case identity do
       {:label, _label} ->
@@ -2454,11 +2336,11 @@ defmodule Sanctum.Consent.Commit do
             declared -> Enum.map(declared, &{&1.name, &1})
           end
 
-        told(ctx, sources, needs, Plan.node_facts(node, built.graph, built.rows), id)
+        told(sources, needs, id)
     end
   end
 
-  defp head_need({ctx, sources, built}, {_node, edge}, identity) do
+  defp head_need({_ctx, sources, built}, {_node, edge}, identity) do
     with {:ok, dep} <- edge_dep(edge),
          {:ok, _row, manifest} <- node_row_manifest(built.rows, dep),
          [_ | _] = credential <- credential_needs(manifest) do
@@ -2474,7 +2356,7 @@ defmodule Sanctum.Consent.Commit do
 
         {_bare, several, {_source, id}} ->
           needs = Enum.map(several, &{&1.name, &1})
-          told(ctx, sources, needs, Plan.node_facts(dep, built.graph, built.rows), id)
+          told(sources, needs, id)
       end
     else
       _ -> nil
@@ -2495,15 +2377,11 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # The one need whose candidates hold the entry, else the only need.
-  defp told(ctx, sources, needs, facts, id) do
+  defp told(sources, needs, id) do
     holding =
       for {name, declared} <- needs,
-          candidate <- Plan.need_choice(ctx, sources, declared, facts).candidates,
-          id in [
-            Map.get(candidate, :entry_id),
-            Map.get(candidate, :instance_entry_id),
-            Map.get(candidate, :share_id)
-          ],
+          candidate <- Plan.need_choice(sources, declared).candidates,
+          id in [Map.get(candidate, :entry_id), Map.get(candidate, :share_id)],
           uniq: true,
           do: name
 
@@ -2516,20 +2394,11 @@ defmodule Sanctum.Consent.Commit do
 
   # What a removed binding bound, as its row names it, with the entry's
   # name and source where they can be read: the athanor's entry by its
-  # row whatever its status, an instance entry or a share while it is
-  # offered to the person, a lender's entry while the lending profile
-  # binds one.
+  # row whatever its status, a share while it is offered to the person, a
+  # lender's entry while the lending profile binds one.
   defp removed_entry({ctx, _sources, _built}, {:own, id}, _edge),
     do:
       Prima.MapUtil.put_present(%{"entry_id" => id, "source" => "own"}, "name", own_name(ctx, id))
-
-  defp removed_entry({_ctx, sources, _built}, {:instance, id}, _edge) do
-    Prima.MapUtil.put_present(
-      %{"instance_entry_id" => id, "source" => "instance"},
-      "name",
-      offered_name(sources, id)
-    )
-  end
 
   defp removed_entry({_ctx, sources, _built}, {:share, id}, _edge) do
     Prima.MapUtil.put_present(
@@ -2546,7 +2415,6 @@ defmodule Sanctum.Consent.Commit do
          {:ok, bound} <- lender_binding(ctx, profile) do
       {source, name} =
         case bound.scope do
-          "instance" -> {"instance", offered_name(sources, bound.entry_id)}
           "share" -> {"share", shared_name(sources, bound.entry_id)}
           _athanor -> {"own", own_name(ctx, bound.entry_id)}
         end
@@ -2562,13 +2430,6 @@ defmodule Sanctum.Consent.Commit do
     case Arca.VaultStorage.get(Context.actor(ctx), id) do
       {:ok, %{name: name}} -> if Prima.ConsentPreview.Row.text?(name), do: name
       _unreadable -> nil
-    end
-  end
-
-  defp offered_name(sources, id) do
-    case Enum.find(sources.offered, &(&1.id == id)) do
-      %{name: name} -> if Prima.ConsentPreview.Row.text?(name), do: name
-      nil -> nil
     end
   end
 
@@ -2952,14 +2813,12 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # Runs inside the insert transaction, after the instance entries, the
-  # vault entries and the shares it names are locked
-  # (`Arca.ConsentStorage`): a vault.rebind, or an instance entry's, that
-  # landed after prepare must roll the revision back, not ship a consent
-  # that is dead on arrival. Every binding of the source and every entry a
-  # selection binds on a dependency's edge is read again, the athanor's
-  # entry from its row and an instance entry or a share as the person is
-  # offered it.
+  # Runs inside the insert transaction, after the vault entries and the
+  # shares it names are locked (`Arca.ConsentStorage`): a vault.rebind
+  # that landed after prepare must roll the revision back, not ship a
+  # consent that is dead on arrival. Every binding of the source and every
+  # entry a selection binds on a dependency's edge is read again, the
+  # athanor's entry from its row and a share as the person is offered it.
   defp verify_binding_liveness(ctx, prep) do
     bound = prep.bindings ++ Enum.filter(prep.selections, &(&1[:kind] == :entry))
 
@@ -2972,14 +2831,6 @@ defmodule Sanctum.Consent.Commit do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
-  end
-
-  defp live_digest(ctx, %{scope: "instance", entry_id: id}) do
-    case Sanctum.InstanceEntries.binding(ctx, id) do
-      {:ok, view} -> {:ok, view.binding_digest}
-      {:error, {:entry_unavailable, status}} -> {:error, {:entry_unavailable, id, status}}
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp live_digest(ctx, %{scope: "share", entry_id: id} = binding) do
@@ -3006,12 +2857,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, granted} <-
            BlobBuilder.grant_rows(prep.source_ref, nodes, prep.narrowed, prep.closure_rows),
          {:ok, sources} <- Plan.choice_sources(ctx),
-         {:ok, credentials} <-
-           credential_rows(
-             {ctx, sources, {prep.activation.graph, prep.closure_rows}},
-             prep,
-             nodes
-           ) do
+         {:ok, credentials} <- credential_rows(sources, prep, nodes) do
       rows = BlobBuilder.order_rows(granted ++ credentials ++ tool_server_rows(prep, nodes))
 
       case BlobBuilder.check_rows(rows) do
@@ -3049,19 +2895,19 @@ defmodule Sanctum.Consent.Commit do
   # it: the source for its ingress, the calling node for an edge into a
   # dependency, with the edge's key and the binding's own key, so one
   # entry lent on two edges, or bound under two names, is two rows. A
-  # bound entry is named by the entry, the athanor's own, an instance
-  # entry or a share, its named accounts each a row naming its
-  # `connection`; a selection by the lender's entry and the label of the
-  # profile lending it; provided configuration by the need it fills. Each
-  # row says the lifetime its binding was decided with, and whether the
-  # plan suggests its entry for that need and whether the need asks the
-  # person to choose, by the plan's own rule (`Plan.need_choice/4`);
-  # destination and disclosure are the entry's, read from its row.
-  defp credential_rows(reads, prep, nodes) do
+  # bound entry is named by the entry, the athanor's own or a share, its
+  # named accounts each a row naming its `connection`; a selection by the
+  # lender's entry and the label of the profile lending it; provided
+  # configuration by the need it fills. Each row says the lifetime its
+  # binding was decided with, and whether the plan suggests its entry for
+  # that need and whether the need asks the person to choose, by the
+  # plan's own rule (`Plan.need_choice/2`, over `sources`); destination
+  # and disclosure are the entry's, read from its row.
+  defp credential_rows(sources, prep, nodes) do
     carried =
       for {from, node} <- Enum.sort(nodes),
           {key, %{"vault" => vault}} <- Enum.sort(node["edges"] || %{}),
-          row <- credential_row(reads, prep, edge_place(from, key), vault),
+          row <- credential_row(sources, prep, edge_place(from, key), vault),
           do: row
 
     case Enum.find(carried, &match?({:error, _}, &1)) do
@@ -3086,15 +2932,15 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp credential_row(reads, prep, place, %{"entry_id" => _} = vault) do
+  defp credential_row(sources, prep, place, %{"entry_id" => _} = vault) do
     named = vault |> Map.get("named", %{}) |> Enum.sort()
 
     for {slot, bound} <- [{nil, vault} | named] do
-      bound_row(reads, prep, place, slot, bound)
+      bound_row(sources, prep, place, slot, bound)
     end
   end
 
-  defp credential_row(reads, prep, {from, key, target}, %{"via" => %{"label" => label}}) do
+  defp credential_row(sources, prep, {from, key, target}, %{"via" => %{"label" => label}}) do
     case Enum.find(prep.selections, &(&1[:kind] == :via and &1.from == from and &1.dep == target)) do
       nil ->
         [{:error, {:preview_unrepresentable, :credential}}]
@@ -3103,12 +2949,7 @@ defmodule Sanctum.Consent.Commit do
         identity = %{source_key(selection.source) => selection.entry_id}
 
         {suggested, choice_required} =
-          choice_values(
-            reads,
-            Map.get(selection, :declared_need, :unknown),
-            {:dep, target},
-            identity
-          )
+          choice_values(sources, Map.get(selection, :declared_need, :unknown), identity)
 
         [
           {:ok,
@@ -3139,7 +2980,7 @@ defmodule Sanctum.Consent.Commit do
 
   # Configuration the calling node provides: public by its publisher's
   # declaration, so disclosed, standing, and chosen by nobody.
-  defp credential_row(_reads, prep, {from, key, target}, %{
+  defp credential_row(_sources, prep, {from, key, target}, %{
          "provided" => provided
        }) do
     [
@@ -3165,16 +3006,15 @@ defmodule Sanctum.Consent.Commit do
     ]
   end
 
-  defp credential_row(_reads, _prep, _place, _vault), do: []
+  defp credential_row(_sources, _prep, _place, _vault), do: []
 
-  defp bound_row(reads, prep, {from, key, target}, slot, bound) do
+  defp bound_row(sources, prep, {from, key, target}, slot, bound) do
     with {:ok, entry} <- Map.fetch(prep.entries, bound["entry_id"]),
          {:ok, decided} <- bound_decision(prep, {from, target}, slot) do
       source = row_source(bound["scope"])
       identity = %{source_key(source) => entry.id}
 
-      {suggested, choice_required} =
-        choice_values(reads, decided.declared_need, decided.node, identity)
+      {suggested, choice_required} = choice_values(sources, decided.declared_need, identity)
 
       {:ok,
        BlobBuilder.row(
@@ -3211,7 +3051,7 @@ defmodule Sanctum.Consent.Commit do
       target == prep.source_ref ->
         case Enum.find(prep.bindings, &(Map.get(&1, :name) == slot)) do
           nil -> :error
-          binding -> {:ok, decision_of(binding, {:source, target})}
+          binding -> {:ok, decision_of(binding)}
         end
 
       selection =
@@ -3219,31 +3059,25 @@ defmodule Sanctum.Consent.Commit do
             prep.selections,
             &(&1.from == from and &1.dep == target and Map.get(&1, :name) == slot)
           ) ->
-        {:ok, decision_of(selection, {:dep, target})}
+        {:ok, decision_of(selection)}
 
       is_map(prep.publish_nodes) ->
-        {:ok, %{lifetime: nil, declared_need: :unknown, node: {:dep, target}}}
+        {:ok, %{lifetime: nil, declared_need: :unknown}}
 
       true ->
         :error
     end
   end
 
-  defp decision_of(item, node) do
-    %{
-      lifetime: Map.get(item, :lifetime),
-      declared_need: Map.get(item, :declared_need, :unknown),
-      node: node
-    }
+  defp decision_of(item) do
+    %{lifetime: Map.get(item, :lifetime), declared_need: Map.get(item, :declared_need, :unknown)}
   end
 
   # Whose a bound resource is, by its scope, and the key a candidate names
-  # it by (`Plan.need_choice/4`).
-  defp row_source("instance"), do: "instance"
+  # it by (`Plan.need_choice/2`).
   defp row_source("share"), do: "share"
   defp row_source(_athanor), do: "own"
 
-  defp source_key("instance"), do: :instance_entry_id
   defp source_key("share"), do: :share_id
   defp source_key(_own), do: :entry_id
 
@@ -3251,11 +3085,10 @@ defmodule Sanctum.Consent.Commit do
   # need asks the person to choose, by the plan's rule. A row whose need
   # cannot be named (a lender's need among several, a public twin's
   # binding) says neither.
-  defp choice_values(_reads, :unknown, _node, _identity), do: {false, false}
+  defp choice_values(_sources, :unknown, _identity), do: {false, false}
 
-  defp choice_values({ctx, sources, {graph, rows}}, declared_need, {_kind, node_key}, identity) do
-    facts = Plan.node_facts(node_key, graph, rows)
-    choice = Plan.need_choice(ctx, sources, declared_need, facts)
+  defp choice_values(sources, declared_need, identity) do
+    choice = Plan.need_choice(sources, declared_need)
     {choice.suggested == identity, choice.choice_required}
   end
 

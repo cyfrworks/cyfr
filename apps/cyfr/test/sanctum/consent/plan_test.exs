@@ -893,27 +893,39 @@ defmodule Sanctum.Consent.PlanTest do
       view
     end
 
-    defp instance!(over \\ %{}) do
-      {:ok, entry} =
-        Arca.InstanceEntries.put(
-          Arca.Test.Actor.platform(),
-          Map.merge(
-            %{
-              name: "instance-#{System.unique_integer([:positive])}",
-              kind: "api_key",
-              provider_hint: "openai.com",
-              field_names: ~s(["OPENAI_API_KEY"]),
-              destination: @inference,
-              sealed_payload: "sealed",
-              binding_digest: "sha256:instance",
-              audience: "everyone",
-              created_by: "usr_admin"
-            },
-            over
-          )
+    # Terry and Alice, each signed in to their own athanor and seated
+    # together in Traders: Alice plans, and what Terry shares with Traders
+    # is offered to her.
+    defp traders! do
+      terry = Cyfr.Test.ShareFixtures.person!("Terry")
+      alice = Cyfr.Test.ShareFixtures.person!("Alice")
+      traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+      %{terry: terry, alice: alice, traders: traders}
+    end
+
+    # Terry's attach-only openai.com key to the inference API, or the key
+    # `over` names, shared with Traders: stored at the digest its binding
+    # columns derive. Answers the share.
+    defp shared!(%{terry: terry, traders: traders}, over \\ %{}) do
+      attrs =
+        Map.merge(
+          %{
+            kind: "api_key",
+            provider_hint: "openai.com",
+            field_names: ~s(["OPENAI_API_KEY"]),
+            destination: @inference,
+            attach_only: true
+          },
+          over
         )
 
-      entry
+      {:ok, digest} =
+        Sanctum.VaultReader.binding_digest(
+          Map.merge(attrs, %{oauth_endpoints: nil, oauth_scopes: nil})
+        )
+
+      entry = Arca.Test.Shares.entry!(terry.actor, Map.put(attrs, :binding_digest, digest))
+      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
     end
 
     defp need_row!(ctx, ref, name) do
@@ -922,14 +934,15 @@ defmodule Sanctum.Consent.PlanTest do
     end
 
     test "candidates are the entries of the need's kind whose destination covers its hosts, " <>
-           "own and offered, each naming its fit and whether its label is the need's",
-         %{ctx: ctx} do
+           "own and shared, each naming its fit and whether its label is the need's" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       openai = own!(ctx, "openai.com")
       _elsewhere = own!(ctx, "openai.com", %{destination: %{"hosts" => ["api.anthropic.com"]}})
-      offered = instance!()
-      _offered_elsewhere = instance!(%{destination: @anthropic_inference})
-      _bundle = instance!(%{kind: "bundle"})
+      offered = shared!(shares)
+      _shared_elsewhere = shared!(shares, %{destination: @anthropic_inference})
+      _bundle = shared!(shares, %{kind: "bundle"})
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
 
@@ -948,9 +961,10 @@ defmodule Sanctum.Consent.PlanTest do
                  fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}
                },
                %{
-                 source: "instance",
-                 instance_entry_id: offered.id,
-                 name: offered.name,
+                 source: "share",
+                 share_id: offered.id,
+                 name: "Shared by Terry",
+                 owner: "Terry",
                  kind: "api_key",
                  provider: "openai.com",
                  destination: %{
@@ -976,16 +990,18 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.newer_shipped == nil
     end
 
-    test "an entry is a candidate by destination whatever its label", %{ctx: ctx} do
+    test "an entry is a candidate by destination whatever its label" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       unlabelled = own!(ctx, "")
       other_label = own!(ctx, "anthropic.com")
-      offered = instance!(%{provider_hint: ""})
+      offered = shared!(shares, %{provider_hint: ""})
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
 
       assert row.candidates
-             |> Enum.map(&{&1[:entry_id] || &1[:instance_entry_id], &1.provider, &1.label_match})
+             |> Enum.map(&{&1[:entry_id] || &1[:share_id], &1.provider, &1.label_match})
              |> Enum.sort() ==
                Enum.sort([
                  {unlabelled.id, "", false},
@@ -998,7 +1014,9 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.suggested == nil and row.choice_required
     end
 
-    test "an entry whose destination misses one need host is no candidate", %{ctx: ctx} do
+    test "an entry whose destination misses one need host is no candidate" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       hosts = ["api.openai.com", "uploads.openai.com"]
 
       publish!(ctx, "plan-two-hosts", "1.0.0", %{
@@ -1008,7 +1026,7 @@ defmodule Sanctum.Consent.PlanTest do
 
       ref = "reagent:local.plan-two-hosts"
       own!(ctx, "openai.com")
-      instance!()
+      shared!(shares)
 
       {plan, row} = need_row!(ctx, ref, "api_key")
       assert row.candidates == [] and row.suggested == nil
@@ -1033,40 +1051,41 @@ defmodule Sanctum.Consent.PlanTest do
     end
 
     test "a label equal to the qualifier ranks first, then exact, then wildcard, then own, " <>
-           "then name",
-         %{ctx: ctx} do
+           "then name" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       wildcard = %{"hosts" => ["*.openai.com"]}
       n = System.unique_integer([:positive])
 
       wildcard_own = own!(ctx, "", %{name: "rank-#{n}-b", destination: wildcard})
-      exact_instance = instance!(%{name: "rank-#{n}-a", provider_hint: ""})
+      exact_share = shared!(shares, %{provider_hint: ""})
       exact_own_d = own!(ctx, "", %{name: "rank-#{n}-d"})
       exact_own_c = own!(ctx, "", %{name: "rank-#{n}-c"})
       labelled = own!(ctx, "openai.com", %{name: "rank-#{n}-e", destination: wildcard})
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
 
-      assert Enum.map(row.candidates, &(&1[:entry_id] || &1[:instance_entry_id])) == [
+      assert Enum.map(row.candidates, &(&1[:entry_id] || &1[:share_id])) == [
                labelled.id,
                exact_own_c.id,
                exact_own_d.id,
-               exact_instance.id,
+               exact_share.id,
                wildcard_own.id
              ]
     end
 
-    test "an instance entry naming methods and paths is a candidate for a need declaring " <>
-           "neither",
-         %{ctx: ctx} do
+    test "a share naming methods and paths is a candidate for a need declaring neither" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       # POST alone, under /v1/ alone.
-      offered = instance!()
+      offered = shared!(shares)
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
-      assert [%{instance_entry_id: id, fit: "exact"}] = row.candidates
+      assert [%{share_id: id, fit: "exact"}] = row.candidates
       assert id == offered.id
-      assert row.suggested == %{instance_entry_id: offered.id}
+      assert row.suggested == %{share_id: offered.id}
 
       # A path the need declares is held to the entry's paths.
       publish!(ctx, "plan-v1", "1.0.0", keyed_manifest(keyed_need(%{"paths" => ["/v1/chat"]})))
@@ -1074,16 +1093,18 @@ defmodule Sanctum.Consent.PlanTest do
 
       {_plan, v1} = need_row!(ctx, "reagent:local.plan-v1", "api_key")
       {_plan, v2} = need_row!(ctx, "reagent:local.plan-v2", "api_key")
-      assert [%{instance_entry_id: ^id}] = v1.candidates
+      assert [%{share_id: ^id}] = v1.candidates
       assert v2.candidates == []
     end
 
-    test "a disclose-only need takes a disclosed own entry by destination", %{ctx: ctx} do
+    test "a disclose-only need takes a disclosed own entry by destination" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest(Map.delete(keyed_need(), "attach")))
       disclosed = own!(ctx, "", %{disclose: true})
       _disclosed_elsewhere = own!(ctx, "", %{disclose: true, destination: %{"hosts" => ["x.ai"]}})
       _attach_only = own!(ctx, "openai.com")
-      instance!(%{provider_hint: ""})
+      shared!(shares, %{provider_hint: ""})
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
 
@@ -1092,10 +1113,12 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.suggested == %{entry_id: disclosed.id}
     end
 
-    test "`attach_only_held` is true when the only fitting entries are attach-only", %{ctx: ctx} do
+    test "`attach_only_held` is true when the only fitting entries are attach-only" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest(Map.delete(keyed_need(), "attach")))
       own!(ctx, "openai.com", %{destination: %{"hosts" => ["x.ai"]}})
-      instance!()
+      shared!(shares)
 
       # Nothing fits: no attach-only entry explains the empty offer.
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
@@ -1118,7 +1141,9 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.attach_only_held == false
     end
 
-    test "a dependency's need offers its candidates by the same rule", %{ctx: ctx} do
+    test "a dependency's need offers its candidates by the same rule" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-offer-dep", "1.0.0", keyed_manifest())
 
       publish!(ctx, "plan-offer-app", "1.0.0", %{
@@ -1127,12 +1152,12 @@ defmodule Sanctum.Consent.PlanTest do
 
       unlabelled = own!(ctx, "")
       _elsewhere = own!(ctx, "openai.com", %{destination: %{"hosts" => ["api.anthropic.com"]}})
-      offered = instance!(%{provider_hint: "anthropic.com"})
+      offered = shared!(shares, %{provider_hint: "anthropic.com"})
 
       {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-offer-app"})
       assert [%{dep: "reagent:local.plan-offer-dep", needs: [need]}] = plan.dependency_needs
 
-      assert Enum.map(need.candidates, &{&1[:entry_id] || &1[:instance_entry_id], &1.fit}) == [
+      assert Enum.map(need.candidates, &{&1[:entry_id] || &1[:share_id], &1.fit}) == [
                {unlabelled.id, "exact"},
                {offered.id, "exact"}
              ]
@@ -1141,22 +1166,23 @@ defmodule Sanctum.Consent.PlanTest do
     end
 
     test "a candidate names its field names and its automatic map, nil when the person must " <>
-           "choose",
-         %{ctx: ctx} do
+           "choose" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       equal = own!(ctx, "openai.com", %{fields: %{"OPENAI_API_KEY" => "sk", "ORG" => "o"}})
       single = own!(ctx, "openai.com", %{fields: %{"API key" => "sk"}})
       unnamed = own!(ctx, "openai.com", %{fields: %{"secret" => "sk", "org" => "o"}})
-      offered_single = instance!(%{field_names: ~s(["API key"])})
-      offered_pair = instance!(%{field_names: ~s(["secret","org"])})
+      offered_single = shared!(shares, %{field_names: ~s(["API key"])})
+      offered_pair = shared!(shares, %{field_names: ~s(["secret","org"])})
       # No map is total over an entry holding no field: no candidate.
-      _offered_none = instance!(%{field_names: ~s([])})
+      _offered_none = shared!(shares, %{field_names: ~s([])})
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
 
       by_id =
         Map.new(row.candidates, fn candidate ->
-          {candidate[:entry_id] || candidate[:instance_entry_id],
+          {candidate[:entry_id] || candidate[:share_id],
            {candidate.field_names, candidate.fields}}
         end)
 
@@ -1196,10 +1222,12 @@ defmodule Sanctum.Consent.PlanTest do
              }
     end
 
-    test "the default suggests only when it is a candidate", %{ctx: ctx} do
+    test "the default suggests only when it is a candidate" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       own = own!(ctx, "openai.com")
-      instance!()
+      shared!(shares)
       :ok = Arca.VaultDefaults.clear(Sanctum.Context.actor(ctx), "openai.com")
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
@@ -1233,67 +1261,10 @@ defmodule Sanctum.Consent.PlanTest do
       refute row.choice_required
     end
 
-    test "the only candidate is suggested, an instance entry too, and a default may name an " <>
-           "instance entry",
-         %{ctx: ctx} do
-      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
-      offered = instance!()
-
-      {_plan, row} = need_row!(ctx, @keyed, "api_key")
-      assert row.suggested == %{instance_entry_id: offered.id}
-      assert row.source == "instance"
-      refute row.choice_required
-
-      second = instance!()
-      {_plan, row} = need_row!(ctx, @keyed, "api_key")
-      assert row.suggested == nil and row.choice_required
-
-      {:ok, _} =
-        Arca.VaultDefaults.set(Sanctum.Context.actor(ctx), "openai.com", %{
-          instance_entry_id: second.id
-        })
-
-      {_plan, row} = need_row!(ctx, @keyed, "api_key")
-      assert row.suggested == %{instance_entry_id: second.id}
-      assert row.source == "instance"
-    end
-
-    test "an instance entry under shipped is offered to an unmodified shipped node alone, " <>
-           "and under any to every node",
-         %{ctx: ctx} do
-      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
-
-      # A component of the person's own, which the media does not ship.
-      {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
-          name: "plan-custom",
-          version: "1.0.0",
-          type: "reagent",
-          manifest:
-            Jason.encode!(%{
-              "name" => "plan-custom",
-              "version" => "1.0.0",
-              "type" => "reagent",
-              "needs" => %{"api_key" => keyed_need()},
-              "caps" => @openai_caps
-            })
-        })
-
-      shipped = instance!(%{component_policy: "shipped"})
-      any = instance!(%{component_policy: "any"})
-
-      {_plan, shipped_row} = need_row!(ctx, @keyed, "api_key")
-      {_plan, custom_row} = need_row!(ctx, "reagent:local.plan-custom", "api_key")
-
-      ids = fn row -> row.candidates |> Enum.map(& &1[:instance_entry_id]) |> Enum.sort() end
-
-      assert ids.(shipped_row) == Enum.sort([shipped.id, any.id])
-      assert ids.(custom_row) == [any.id]
-    end
-
     test "a disclose-only need is met by disclosed entries alone, and names the newer " <>
-           "shipped version",
-         %{ctx: ctx} do
+           "shipped version" do
+      shares = traders!()
+      ctx = shares.alice.ctx
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest(Map.delete(keyed_need(), "attach")))
 
       # The release ships a newer version the athanor has not pulled.
@@ -1302,7 +1273,7 @@ defmodule Sanctum.Consent.PlanTest do
       )
 
       own!(ctx, "openai.com")
-      instance!()
+      shared!(shares)
 
       {plan, row} = need_row!(ctx, @keyed, "api_key")
 
@@ -1668,27 +1639,28 @@ defmodule Sanctum.Consent.PlanTest do
              ]
     end
 
-    test "a head binding of an instance entry names that entry, and an edge a lending " <>
-           "profile fills names the profile's label, never an entry",
+    test "a head binding of a share names that share, and an edge a lending profile fills " <>
+           "names the profile's label, never an entry",
          %{ctx: ctx} do
       ref = "reagent:local.plan-head-offered"
-      # An instance entry is bound by a person active on this server.
-      {person, _user} = Sanctum.TestContext.person!(ctx)
+      # A share is bound in the person's own athanor.
+      shares = traders!()
+      person = shares.alice.ctx
       publish!(person, "plan-head-offered", "1.0.0", keyed_manifest())
-      offered = instance!()
+      offered = shared!(shares)
 
-      commit!(person, ref, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+      commit!(person, ref, %{bindings: [%{need: "api_key", share_id: offered.id}]})
 
       {:ok, plan} = Plan.plan(person, %{ref: ref})
 
       assert plan.head_bindings == [
                %{
                  binding_key: "#{ref}|@ingress|default",
-                 instance_entry_id: offered.id,
+                 share_id: offered.id,
                  fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"},
                  lifetime: %{kind: "standing", until: nil},
                  consumed: false,
-                 source: "instance",
+                 source: "share",
                  node: ref,
                  edge: "@ingress",
                  need: "api_key"
@@ -1990,41 +1962,36 @@ defmodule Sanctum.Consent.PlanTest do
     end
 
     @tag :capture_log
-    test "an instance entry a lender binds that the store cannot answer refuses the plan",
-         %{ctx: ctx} do
-      # An instance entry is bound, and offered, to a person active here.
-      {person, _user} = Sanctum.TestContext.person!(ctx)
+    test "a share a lender binds that the store cannot answer refuses the plan" do
+      # A share is bound in the person's own athanor.
+      shares = traders!()
+      person = shares.alice.ctx
       lending_closure!(person)
-      offered = instance!()
-      commit!(person, @lend_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+      offered = shared!(shares)
+      commit!(person, @lend_dep, %{bindings: [%{need: "api_key", share_id: offered.id}]})
       {:ok, [%{id: lender}]} = Sanctum.Consent.profiles(person, @lend_dep)
 
-      assert [%{profile_id: ^lender, source: "instance", entry_id: entry_id}] = lenders(person)
+      assert [%{profile_id: ^lender, source: "share", entry_id: entry_id}] = lenders(person)
       assert entry_id == offered.id
 
       head = head_id!(person, lender)
-      away_after_lender_head!("instance_entries", head)
+      away_after_lender_head!("shares", head)
 
       assert {:error, {:lender_unavailable, @lend_dep}} =
                Plan.plan(person, %{ref: @lend_app})
 
-      Arca.Repo.query!("ALTER TABLE instance_entries_unavailable RENAME TO instance_entries")
-      away_after_lender_head!("instance_entries", head)
+      Arca.Repo.query!("ALTER TABLE shares_unavailable RENAME TO shares")
+      away_after_lender_head!("shares", head)
       assert_unreadable(plan_answer(person))
     end
 
     # The reader's own answers about a lent entry are the entry's state,
     # not a read that failed: each lends nothing. The lender's profile is
     # set active again after each move, so its head is read, not skipped.
-    test "a lent entry rebound or revoked lends nothing, its own or an instance entry",
-         %{ctx: ctx} do
-      lending_closure!(ctx)
-      lender = lender!(ctx)
-      [%{entry_id: key}] = lenders(ctx)
-
+    test "a lent entry rebound or revoked lends nothing, its own or a share", %{ctx: ctx} do
       # A move that blocked the lender leaves it at needs_consent; one
       # that did not leaves it active, with nothing to reactivate.
-      reactivate = fn ->
+      reactivate = fn ctx, lender ->
         case Arca.ProfileStorage.get(actor(ctx), lender) do
           {:ok, %{status: "active"}} ->
             :ok
@@ -2034,40 +2001,35 @@ defmodule Sanctum.Consent.PlanTest do
         end
       end
 
+      lending_closure!(ctx)
+      lender = lender!(ctx)
+      [%{entry_id: key}] = lenders(ctx)
+
       {:ok, _} = Sanctum.Vault.rebind(ctx, %{id: key, field_names: ["OPENAI_API_KEY", "REGION"]})
-      reactivate.()
+      reactivate.(ctx, lender)
       assert lenders(ctx) == []
 
       {:ok, _} = Sanctum.Vault.revoke(ctx, key)
-      reactivate.()
+      reactivate.(ctx, lender)
       assert lenders(ctx) == []
 
-      # An instance entry, lent to a person active here.
-      {person, _user} = Sanctum.TestContext.person!(ctx)
-      offered = instance!()
-      commit!(person, @lend_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
-      assert [%{source: "instance"}] = lenders(person)
+      # A share, lent in the person's own athanor.
+      shares = traders!()
+      person = shares.alice.ctx
+      lending_closure!(person)
+      offered = shared!(shares)
+      commit!(person, @lend_dep, %{bindings: [%{need: "api_key", share_id: offered.id}]})
+      {:ok, [%{id: shared_lender}]} = Sanctum.Consent.profiles(person, @lend_dep)
+      assert [%{source: "share"}] = lenders(person)
 
-      {:ok, _} =
-        Arca.InstanceEntries.move_binding(
-          Arca.Test.Actor.platform(),
-          offered.id,
-          "sha256:instance",
-          %{
-            destination:
-              ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v2/"],"scheme":"https"}),
-            binding_digest: "sha256:moved"
-          },
-          "needs_consent"
-        )
-
-      reactivate.()
+      Cyfr.Test.ShareFixtures.rebind!(shares.terry, %{id: offered.vault_entry_id})
+      reactivate.(person, shared_lender)
       assert lenders(person) == []
 
       {:ok, _} =
-        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), offered.id, "needs_consent")
+        Arca.Shares.revoke(shares.terry.actor, offered.id, Sanctum.Vault.blocked_profile_status())
 
-      reactivate.()
+      reactivate.(person, shared_lender)
       assert lenders(person) == []
     end
   end
@@ -2228,21 +2190,24 @@ defmodule Sanctum.Consent.PlanTest do
                Plan.plan(ctx, %{ref: @refused})
     end
 
-    # Read as none offered, an outage of the instance entries offered to the
-    # person would offer to connect a key over entries that exist.
+    # Read as none offered, an outage of the shares offered to the person
+    # would offer to connect a key over shares that exist.
     @tag :capture_log
-    test "an outage reading the instance entries offered is that store unavailable, never " <>
-           "nothing offered",
-         %{ctx: ctx} do
+    test "an outage reading the shares offered is that store unavailable, never nothing " <>
+           "offered" do
+      # Alice, to whom shares are offered, under no admission path, as the
+      # suite's own context is.
+      shares = traders!()
+      ctx = %{shares.alice.ctx | origin: nil}
       publish!(ctx, "plan-refused", "1.0.0", keyed_manifest())
 
-      Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
+      Arca.Repo.query!("ALTER TABLE shares RENAME TO shares_unavailable")
       answer = Plan.plan(ctx, %{ref: @refused})
       {response, decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => @refused})
-      Arca.Repo.query!("ALTER TABLE instance_entries_unavailable RENAME TO instance_entries")
+      Arca.Repo.query!("ALTER TABLE shares_unavailable RENAME TO shares")
 
-      assert answer == {:error, {:unavailable, "Instance entries"}}
-      assert failed_text(response) == "Instance entries is unavailable — retry shortly"
+      assert answer == {:error, {:unavailable, "Shares"}}
+      assert failed_text(response) == "Shares is unavailable — retry shortly"
       assert %{completion: :failed, completion_class: :unavailable} = decision
       assert {:ok, %{needs: [%{need: "api_key"}]}} = Plan.plan(ctx, %{ref: @refused})
     end

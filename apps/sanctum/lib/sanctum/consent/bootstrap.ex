@@ -58,54 +58,46 @@ defmodule Sanctum.Consent.Bootstrap do
   carries one need's bindings. A server-side mint (`auth_method:
   :system`) has no person and binds nothing, and neither does a mint in
   an athanor that is not the person's own, since a share is bound only
-  there. An instance entry is never a first mint's binding.
+  there.
 
   A boot revises a bootstrap-only head with the binding its ingress
-  holds, from either store, and never with one the head lacked, so an
-  athanor provisioned before the administrator shared a key meets the
-  share as the suggestion at its next grant. Under a person, the
-  revision keeps a share binding while the share is offered to them at
-  the digest the head bound (`Sanctum.Shares.binding/2`), and an
-  instance binding while the instance entry is offered to them at that
-  digest and its component policy admits the node at its new release
-  (`Sanctum.InstanceEntries.binding/2`); otherwise it binds none. Either
-  takes the automatic map again, from the need of the release it
-  revises to. A revision with no person, a boot's seed sync, chooses
-  nothing: it carries the head's binding row as the head holds it (the
-  share or the instance entry, the digest, the key and the lifetime)
-  onto the need CYFR attaches, so a shipped catalyst's new release does
-  not silently drop it, while the binding is still of that need's kind,
-  the destination it was bound at still covers the need, and it is
-  active and at the digest the head bound: for a share, an active share
-  whose active source derives that digest
-  (`Sanctum.Shares.binding_facts/1`); for an instance entry, the entry
-  (`Sanctum.InstanceEntries.binding_facts/1`). Otherwise it binds none.
-  A revoke landing after that read meets the revision's storage lock,
-  and the walk reports that source skipped with the refusal. A share's
-  binding is also held there to the audience the walk read it at
-  (`Arca.ConsentStorage`), and a narrowing that landed after the read is
-  refused by that lock, so the walk writes the mint or the revision again
-  with no binding, as when no share fits. `Sanctum.Attach` holds each
-  request to the share's audience and caps and its owner's standing, or
-  to the instance entry's audience, policy and caps.
+  holds, and never with one the head lacked, so an athanor provisioned
+  before the administrator shared a key meets the share as the
+  suggestion at its next grant. Under a person, the revision keeps a
+  share binding while the share is offered to them at the digest the
+  head bound (`Sanctum.Shares.binding/2`), taking the automatic map
+  again from the need of the release it revises to; otherwise it binds
+  none. A revision with no person, a boot's seed sync, chooses nothing:
+  it carries the head's binding row as the head holds it (the share, the
+  digest, the key and the lifetime) onto the need CYFR attaches, so a
+  shipped catalyst's new release does not silently drop it, while the
+  binding is still of that need's kind, the destination it was bound at
+  still covers the need, and an active share whose active source derives
+  the digest the head bound (`Sanctum.Shares.binding_facts/1`).
+  Otherwise it binds none. A revoke landing after that read meets the
+  revision's storage lock, and the walk reports that source skipped with
+  the refusal. A share's binding is also held there to the audience the
+  walk read it at (`Arca.ConsentStorage`), and a narrowing that landed
+  after the read is refused by that lock, so the walk writes the mint or
+  the revision again with no binding, as when no share fits.
+  `Sanctum.Attach` holds each request to the share's audience and caps
+  and its owner's standing.
 
   The first mint is the only one that binds, and a revision keeps only
   what its head bound, so a store that cannot answer is never read as
   nothing to bind. An outage of the shares (reading the administrator's
   shares, or the share a revision keeps) skips the source
-  `{:unavailable, "Shares"}`, and one of the instance entries (the
-  binding of the instance entry a revision keeps) skips it
-  `{:unavailable, "Instance entries"}`, with any head kept, and a later
-  run mints or revises it whole. A catalyst whose stored manifest does
-  not decode is skipped `{:corrupt, {:manifest, ref}}`, as its shape
-  derivation refuses it. A revision whose head policy does not parse,
-  or a revision with no person whose ingress names a binding no ref row
-  holds, is skipped `{:corrupt, {:profile, profile_id}}`, its head kept.
-  The reads' other refusals offer nothing: a context with no person to
-  read the offer as, as `Sanctum.Consent.Plan` reads the same call, a
-  share or an entry no longer offered or not active, an owner who does
-  not stand, or a person denied, and the catalyst is minted, or revised,
-  without a binding.
+  `{:unavailable, "Shares"}`, with any head kept, and a later run mints
+  or revises it whole. A catalyst whose stored manifest does not decode
+  is skipped `{:corrupt, {:manifest, ref}}`, as its shape derivation
+  refuses it. A revision whose head policy does not parse, or a revision
+  with no person whose ingress names a binding no ref row holds, is
+  skipped `{:corrupt, {:profile, profile_id}}`, its head kept. The reads'
+  other refusals offer nothing: a context with no person to read the
+  offer as, as `Sanctum.Consent.Plan` reads the same call, a share no
+  longer offered or not active or whose source is not active, an owner
+  who does not stand, or a person denied, and the catalyst is minted, or
+  revised, without a binding.
 
   A machine-minted revision admits the `interactive` and `programmatic`
   origins: the seed is the operator's own first-party install, run from
@@ -440,12 +432,11 @@ defmodule Sanctum.Consent.Bootstrap do
   defp person?(%Context{auth_method: :system}), do: false
   defp person?(%Context{}), do: true
 
-  # The one need of a shipped catalyst a shared or instance key can meet
-  # (it attaches, and the component never reads it), or nil when it has
-  # none or several. A stored manifest that does not decode declares no
-  # need this walk can read: the source is skipped as damaged, as its
-  # shape derivation refuses it, never bound or minted as one with no
-  # need.
+  # The one need of a shipped catalyst a shared key can meet (it
+  # attaches, and the component never reads it), or nil when it has none
+  # or several. A stored manifest that does not decode declares no need
+  # this walk can read: the source is skipped as damaged, as its shape
+  # derivation refuses it, never bound or minted as one with no need.
   defp attached_need(component, source_ref) do
     with "catalyst" <- to_string(component.component_type),
          {:ok, manifest} <- Prima.Manifest.decode_strict(Map.get(component, :manifest)),
@@ -495,7 +486,7 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp bindable(view, need) do
-    case view_binding(view, need, "share") do
+    case view_binding(view, need) do
       {:ok, %{} = binding} -> binding
       _unbindable -> nil
     end
@@ -534,24 +525,6 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # The instance entry `entry_id` as the person's consent binds it, for
-  # the instance entry a revision under a person keeps. An outage of the
-  # store is the read unanswered; any other refusal (the entry no longer
-  # offered or not active, the person denied or anonymous) offers nothing
-  # usable.
-  defp entry_binding(ctx, entry_id, source_ref) do
-    case Sanctum.InstanceEntries.binding(ctx, entry_id) do
-      {:ok, view} ->
-        {:ok, view}
-
-      {:error, outage} when outage in @outages ->
-        unanswered(source_ref, "Instance entries", outage)
-
-      {:error, reason} ->
-        {:refused, reason}
-    end
-  end
-
   defp unanswered(source_ref, store, reason) do
     Logger.warning(
       "[Sanctum.Consent.Bootstrap] #{source_ref} skipped: #{store} could not " <>
@@ -561,15 +534,15 @@ defmodule Sanctum.Consent.Bootstrap do
     {:skip, {:unavailable, store}}
   end
 
-  # A share's or an instance entry's binding under `scope`, from the view
-  # it was read as. The binding view is the read the binding takes its
-  # destination and digest from, so the fit is checked on it: a rebind
-  # after the head was read binds nothing. Provisioning has no person to
+  # A share's binding, from the view it was read as. The binding view is
+  # the read the binding takes its destination and digest from, so the
+  # fit is checked on it: a rebind after the head was read binds nothing.
+  # Provisioning has no person to
   # ask for a field map, so it binds only under the automatic one
   # (`Sanctum.Consent.Plan.field_map/2`), computed from the need it binds
   # and the source's field names, and refuses `{:fields_unmapped, need}`
   # where there is none.
-  defp view_binding(view, need, scope) do
+  defp view_binding(view, need) do
     with true <- Sanctum.Consent.Plan.entry_fit(need, view) != :none,
          %{} = map <- view.destination,
          {:ok, destination} <- Prima.Destination.from_map(map),
@@ -580,8 +553,8 @@ defmodule Sanctum.Consent.Bootstrap do
          need: need.name,
          entry_id: view.id,
          binding_digest: digest,
-         scope: scope,
-         admitted: admitted(scope, view),
+         scope: "share",
+         admitted: admitted(view),
          destination: Prima.Destination.to_map(destination),
          attach: Prima.Manifest.Needs.attach_to_map(need.attach),
          fields: fields,
@@ -596,9 +569,8 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   # The audience a share was read at, which the revision's lock holds its
-  # row to; an instance entry has none.
-  defp admitted("share", read), do: %{audience: read.audience, group_id: read.group_id}
-  defp admitted(_instance, _read), do: nil
+  # row to.
+  defp admitted(read), do: %{audience: read.audience, group_id: read.group_id}
 
   defp automatic_map(need, field_names) do
     case Sanctum.Consent.Plan.field_map(need, field_names) do
@@ -608,29 +580,27 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   # What a revision of a bootstrap-only head keeps of its binding: under a
-  # person, the same share or instance entry, still offered to them at the
-  # digest the head bound (an instance entry also still admitted for the
-  # node at its new release digest), for the need that admits it now; with
-  # no person, the head's binding carried as the head holds it. Nothing
-  # otherwise, and never a binding the head lacked.
-  defp kept_binding(ctx, {profile, head, refs}, component, source_ref, graph) do
+  # person, the same share, still offered to them at the digest the head
+  # bound, for the need that admits it now; with no person, the head's
+  # binding carried as the head holds it. Nothing otherwise, and never a
+  # binding the head lacked.
+  defp kept_binding(ctx, {profile, head, refs}, component, source_ref) do
     if person?(ctx),
-      do: offered_binding(ctx, head, component, source_ref, graph),
+      do: offered_binding(ctx, head, component, source_ref),
       else: carried_binding({profile.id, head, refs}, component, source_ref)
   end
 
   # Under a person, a binding read the store could not answer keeps the
   # head as it is, the source skipped, rather than revising it without the
-  # share or entry it bound.
-  defp offered_binding(ctx, head, component, source_ref, graph) do
+  # share it bound.
+  defp offered_binding(ctx, head, component, source_ref) do
     with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
-         {:ok, %{vault: %{scope: scope, entry_id: id, binding_digest: digest}}}
-         when scope in ["share", "instance"] <- Prima.Authority.Blob.ingress(blob, source_ref),
+         {:ok, %{vault: %{scope: "share", entry_id: id, binding_digest: digest}}} <-
+           Prima.Authority.Blob.ingress(blob, source_ref),
          %{} = need <- attached_need(component, source_ref),
-         {:ok, view} <- offered_view(ctx, scope, id, source_ref),
+         {:ok, view} <- share_view(ctx, id, source_ref),
          true <- is_binary(view.binding_digest) and view.binding_digest == digest,
-         true <- admitted?(ctx, scope, view, component, source_ref, graph),
-         {:ok, binding} <- view_binding(view, need, scope) do
+         {:ok, binding} <- view_binding(view, need) do
       {:ok, binding}
     else
       {:skip, _unread_or_damaged} = skip -> skip
@@ -639,50 +609,32 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  defp offered_view(ctx, "share", id, source_ref), do: share_view(ctx, id, source_ref)
-  defp offered_view(ctx, "instance", id, source_ref), do: entry_binding(ctx, id, source_ref)
-
-  # A share has no component policy; an instance entry's is read against
-  # the node at the release the revision moves to.
-  defp admitted?(_ctx, "share", _view, _component, _source_ref, _graph), do: true
-
-  defp admitted?(ctx, "instance", view, component, source_ref, graph) do
-    Sanctum.InstanceEntries.admits?(
-      ctx,
-      view,
-      Sanctum.Consent.Plan.node_facts(source_ref, graph, %{source_ref => component})
-    )
-  end
-
   # A boot's seed sync has no person to read the offer as, so its revision
   # chooses nothing: it carries the head's binding row as the head holds
-  # it (the share or the instance entry, the digest, the key and the
-  # lifetime) with the destination it was bound at, onto the need CYFR
-  # attaches now (a need the component reads itself is never met by one),
-  # while the source is still of that need's kind, the destination the
-  # head bound it at (pinned by the equal binding digest) covers the need,
-  # it is active, and it is at the digest the head bound: an active share
-  # whose active source derives that digest
-  # (`Sanctum.Shares.binding_facts/1`), or the instance entry
-  # (`Sanctum.InstanceEntries.binding_facts/1`). Any fact moved, or the
-  # share or entry is gone, and the revision binds none. A store that
-  # cannot answer decides nothing: the source is skipped this boot with
-  # the head kept, rather than revised without its binding, as the walk
-  # refuses facts it cannot read rather than reading them as none. A
-  # revoke landing after the facts are read meets the revision's storage
-  # lock, which the walk reports as the source's skip, and `Sanctum.Attach`
-  # holds each request to the share's or the entry's own rules. A head the
-  # revision cannot read whole (a policy that does not parse, or an
-  # ingress binding no ref row holds) is the profile damaged: the source
-  # is skipped with the head kept, never revised as a head that bound
-  # nothing.
+  # it (the share, the digest, the key and the lifetime) with the
+  # destination it was bound at, onto the need CYFR attaches now (a need
+  # the component reads itself is never met by one), while the source is
+  # still of that need's kind, the destination the head bound it at
+  # (pinned by the equal binding digest) covers the need, and the share is
+  # active with an active source that derives the digest the head bound
+  # (`Sanctum.Shares.binding_facts/1`). Any fact moved, or the share is
+  # gone, and the revision binds none. A store that cannot answer decides
+  # nothing: the source is skipped this boot with the head kept, rather
+  # than revised without its binding, as the walk refuses facts it cannot
+  # read rather than reading them as none. A revoke landing after the
+  # facts are read meets the revision's storage lock, which the walk
+  # reports as the source's skip, and `Sanctum.Attach` holds each request
+  # to the share's own rules. A head the revision cannot read whole (a
+  # policy that does not parse, or an ingress binding no ref row holds) is
+  # the profile damaged: the source is skipped with the head kept, never
+  # revised as a head that bound nothing.
   defp carried_binding({profile_id, head, refs}, component, source_ref) do
     with {:ok, blob} <- head_blob(profile_id, head),
-         {:ok, %{vault: %{scope: scope, entry_id: id, binding_key: key} = vault}}
-         when scope in ["share", "instance"] <- Prima.Authority.Blob.ingress(blob, source_ref),
-         {:ok, row} <- carried_row(profile_id, refs, key, scope, id),
+         {:ok, %{vault: %{scope: "share", entry_id: id, binding_key: key} = vault}} <-
+           Prima.Authority.Blob.ingress(blob, source_ref),
+         {:ok, row} <- carried_row(profile_id, refs, key, id),
          %{} = need <- attached_need(component, source_ref),
-         {:ok, facts} <- carried_facts(scope, id, source_ref),
+         {:ok, facts} <- carried_facts(id, source_ref),
          true <- still_holds?(facts, need, vault),
          {:ok, fields} <- automatic_map(need, facts.field_names) do
       {:ok,
@@ -690,8 +642,8 @@ defmodule Sanctum.Consent.Bootstrap do
          need: need.name,
          entry_id: id,
          binding_digest: vault.binding_digest,
-         scope: scope,
-         admitted: admitted(scope, facts),
+         scope: "share",
+         admitted: admitted(facts),
          destination: Prima.Destination.to_map(vault.destination),
          attach: Prima.Manifest.Needs.attach_to_map(need.attach),
          fields: fields,
@@ -701,7 +653,6 @@ defmodule Sanctum.Consent.Bootstrap do
        }}
     else
       {:skip, _damaged_or_unanswered} = skip -> skip
-      {:unanswered, reason} -> {:error, reason}
       {:refused, reason} -> unbound(source_ref, reason)
       _ -> {:ok, nil}
     end
@@ -714,12 +665,9 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # The ref row of the head's ingress binding: a share's names the share,
-  # an instance binding's the instance entry.
-  defp carried_row(profile_id, refs, key, scope, id) do
-    column = if scope == "share", do: :share_id, else: :instance_entry_id
-
-    case Enum.find(refs, &(&1.binding_key == key and Map.get(&1, column) == id)) do
+  # The ref row of the head's ingress binding, which names the share.
+  defp carried_row(profile_id, refs, key, id) do
+    case Enum.find(refs, &(&1.binding_key == key and Map.get(&1, :share_id) == id)) do
       %{} = row -> {:ok, row}
       nil -> {:skip, {:corrupt, {:profile, profile_id}}}
     end
@@ -727,19 +675,11 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # A share no longer active, or whose source is no longer active or no
   # longer one a share offers, binds none; an outage skips the source.
-  defp carried_facts("share", id, source_ref) do
+  defp carried_facts(id, source_ref) do
     case Sanctum.Shares.binding_facts(id) do
       {:ok, facts} -> {:ok, facts}
       {:error, outage} when outage in @outages -> unanswered(source_ref, "Shares", outage)
       {:error, _revoked_inactive_or_damaged} -> :gone
-    end
-  end
-
-  defp carried_facts("instance", id, _source_ref) do
-    case Sanctum.InstanceEntries.binding_facts(id) do
-      {:ok, facts} -> {:ok, facts}
-      {:error, :not_found} -> :gone
-      {:error, reason} -> {:unanswered, reason}
     end
   end
 
@@ -832,7 +772,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp revise_bootstrap({ctx, claim}, component, source_ref, profile, {head, refs}, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, binding} <-
-           kept_binding(ctx, {profile, head, refs}, component, source_ref, activation.graph) do
+           kept_binding(ctx, {profile, head, refs}, component, source_ref) do
       revise =
         &revise_with(
           {ctx, claim},
@@ -950,23 +890,20 @@ defmodule Sanctum.Consent.Bootstrap do
              kind: :owner,
              invoke_mode: :open_inert,
              origins: @seeded_origins,
-             # The share a first sign-in binds, or the share or instance
-             # entry a revision keeps, when there is one: what the revision
-             # decided, as a commit's digest names it.
+             # The share a first sign-in binds, or the share a revision
+             # keeps, when there is one: what the revision decided, as a
+             # commit's digest names it.
              bindings:
                Enum.map(bindings, fn binding ->
-                 Map.put(
-                   %{
-                     need: binding.need,
-                     binding_digest: binding.binding_digest,
-                     fields: binding.fields,
-                     scopes: binding.scopes,
-                     lifetime: digest_lifetime(binding.lifetime),
-                     renew: false
-                   },
-                   digest_identity(binding.scope),
-                   binding.entry_id
-                 )
+                 %{
+                   need: binding.need,
+                   share_id: binding.entry_id,
+                   binding_digest: binding.binding_digest,
+                   fields: binding.fields,
+                   scopes: binding.scopes,
+                   lifetime: digest_lifetime(binding.lifetime),
+                   renew: false
+                 }
                end)
            }) do
       {:ok,
@@ -977,10 +914,6 @@ defmodule Sanctum.Consent.Bootstrap do
        }}
     end
   end
-
-  # The key a commit's digest names a binding's identity under.
-  defp digest_identity("share"), do: :share_id
-  defp digest_identity("instance"), do: :instance_entry_id
 
   # A lifetime as the commit digest reads it, as `Sanctum.Consent.Commit`
   # names one: its kind, and an `until`'s instant.

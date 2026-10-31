@@ -89,7 +89,6 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
           vault_refs: [
             %{
               binding_key: key,
-              scope: "athanor",
               vault_entry_id: "vlt_until",
               binding_digest: "sha256:until",
               lifetime_kind: "until",

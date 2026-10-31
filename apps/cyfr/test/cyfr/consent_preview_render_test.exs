@@ -60,9 +60,9 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       "profile, from reagent:local.weather for its tiles need: sent only to " <>
       "https://tiles.maps.example, methods GET, paths /v1/tiles. " <>
       "The component reads the value itself.",
-    "reagent:local.geo uses weather-api, provided by this instance, from reagent:local.weather, " <>
-      "as the account 'Geo account': a weather.example account, sent only to " <>
-      "https://*.weather.example port 8443, methods GET, POST, paths /v2. " <>
+    "reagent:local.geo uses weather-api, an entry of this athanor, from " <>
+      "reagent:local.weather, as the account 'Geo account': a weather.example account, " <>
+      "sent only to https://*.weather.example port 8443, methods GET, POST, paths /v2. " <>
       "CYFR attaches the value and the component never holds it.",
     "reagent:local.quotes uses Shared by Terry, a key shared with you, from " <>
       "reagent:local.weather: a market.example account, sent only to " <>
@@ -80,7 +80,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     "Removes api_key default: weather-old",
     "Removes api_key account 'Work': weather-work",
     "Removes a binding of reagent:local.geo from reagent:local.weather account 'Old geo': " <>
-      "ine_old_geo",
+      "vlt_old_geo",
     "Removes a binding of reagent:local.geo from reagent:local.weather account 'Old share': " <>
       "Shared by Terry",
     "Removes a binding of reagent:local.maps from reagent:local.weather default: " <>
@@ -144,8 +144,8 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
         if row["narrowed"], do: assert(text =~ "narrowed by you")
 
-        # The instance entry's field is named apart from the need's.
-        if row["values"]["source"] == "instance",
+        # The Geo account's entry field is named apart from the need's.
+        if row["values"]["connection"] == "Geo account",
           do: assert(text =~ "Fields: api_key from API key", text)
       end
     end
@@ -200,7 +200,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     end
 
     assert Enum.any?(credentials, &(&1["values"]["disclosed"] != true))
-    assert Enum.any?(credentials, &(&1["values"]["source"] == "instance"))
+    assert Enum.any?(credentials, &(&1["values"]["source"] == "own"))
     assert Enum.any?(credentials, &(&1["values"]["source"] == "share"))
 
     # No control claims more than its methods, and no row says the
@@ -248,7 +248,6 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "lifetime", %{"kind" => "until", "until" => until}), do: ["until #{until}"]
   defp expected(_row, "lifetime", %{"kind" => "once"}), do: ["one run"]
   defp expected(_row, "source", "own"), do: ["an entry of this athanor"]
-  defp expected(_row, "source", "instance"), do: ["provided by this instance"]
   defp expected(_row, "source", "share"), do: ["a key shared with you"]
 
   defp expected(row, "source", "provided") do

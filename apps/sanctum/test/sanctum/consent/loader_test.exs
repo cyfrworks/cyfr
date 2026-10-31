@@ -49,7 +49,6 @@ defmodule Sanctum.Consent.LoaderTest do
           "#{Fixtures.catalyst_ref()}|#{need}",
           nil
         ),
-      scope: "athanor",
       vault_entry_id: entry_id,
       binding_digest: digest
     }
@@ -59,7 +58,7 @@ defmodule Sanctum.Consent.LoaderTest do
   defp dest_ref, do: ref("dest", "vault-dest", "sha256:bind-dest")
 
   defp identity(%{binding_key: key, vault_entry_id: id, binding_digest: digest}),
-    do: {:entry, "athanor", key, id, digest}
+    do: {:entry, key, id, digest}
 
   defp consent(overrides \\ %{}) do
     {:ok, policy_json} = Jason.encode(Fixtures.graph_map())
@@ -436,76 +435,7 @@ defmodule Sanctum.Consent.LoaderTest do
     end
   end
 
-  describe "an instance entry's row and provided configuration" do
-    @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
-
-    defp instance!(over \\ %{}) do
-      {:ok, entry} =
-        Arca.InstanceEntries.put(
-          Arca.Test.Actor.platform(),
-          Map.merge(
-            %{
-              name: "instance-#{System.unique_integer([:positive])}",
-              kind: "api_key",
-              provider_hint: "openai.com",
-              field_names: ~s(["OPENAI_API_KEY"]),
-              destination: @inference,
-              sealed_payload: "sealed",
-              binding_digest: "sha256:instance",
-              audience: "everyone",
-              created_by: "usr_admin"
-            },
-            over
-          )
-        )
-
-      entry
-    end
-
-    defp instance_row(entry, digest) do
-      %{
-        binding_key: Prima.Authority.Blob.binding_key(Fixtures.formula_ref(), "@ingress", nil),
-        scope: "instance",
-        instance_entry_id: entry.id,
-        binding_digest: digest
-      }
-    end
-
-    test "an instance row is read live as the person is offered it, held to its digest", %{
-      ctx: ctx
-    } do
-      {person, _user} =
-        Sanctum.TestContext.person!(%{
-          ctx
-          | user_id: "local|local|loader-person",
-            authenticated: true,
-            auth_method: :oidc
-        })
-
-      entry = instance!()
-
-      assert {:instance, id, {:ok, view}} =
-               Loader.row_binding(person, %{}, instance_row(entry, "sha256:instance"))
-
-      assert id == entry.id and view.binding_digest == "sha256:instance"
-
-      # Rebound since the row was approved.
-      assert {:instance, _, {:error, :binding_went_stale}} =
-               Loader.row_binding(person, %{}, instance_row(entry, "sha256:approved-earlier"))
-
-      # No longer offered, then revoked.
-      listed = instance!(%{audience: "listed"})
-
-      assert {:instance, _, {:error, :not_offered}} =
-               Loader.row_binding(person, %{}, instance_row(listed, "sha256:instance"))
-
-      {:ok, _} =
-        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), entry.id, "needs_consent")
-
-      assert {:instance, _, {:error, {:entry_unavailable, "revoked"}}} =
-               Loader.row_binding(person, %{}, instance_row(entry, "sha256:instance"))
-    end
-
+  describe "a share's row and provided configuration" do
     test "a share row is read live as the person is offered it, its source held to its digest" do
       terry = Arca.Test.Shares.owner!()
       alice = Arca.Test.Shares.owner!()

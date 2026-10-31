@@ -186,7 +186,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                          "Archive" => %{
                            entry_id: "vault-entry-archive",
                            binding_digest: "sha256:bind-archive",
-                           scope: "instance",
+                           scope: "athanor",
                            binding_key: key.("dest", "Archive"),
                            destination:
                              destination.(["archive.supabase.co"],
@@ -307,7 +307,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
     named_invoke = {:invoke, Map.put(target, :connection, "Archive")}
     {:child, archive} = Transition.step(auth, :call, named_invoke)
     assert archive.resources.vault.entry_id == "vault-entry-archive"
-    assert archive.resources.vault.scope == "instance"
+    assert archive.resources.vault.scope == "athanor"
 
     # A shared account rides as the share it names: its entry is the share.
     {:child, market} =

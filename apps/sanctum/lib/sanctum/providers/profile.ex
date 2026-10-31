@@ -62,18 +62,12 @@ defmodule Sanctum.Providers.Profile do
               Arg.new("need", :string),
               Arg.new("entry_id", :string,
                 description:
-                  "An entry of the athanor (vlt_…); exactly one of entry_id, " <>
-                    "instance_entry_id and share_id"
-              ),
-              Arg.new("instance_entry_id", :string,
-                description:
-                  "An instance entry offered to you (ine_…); exactly one of entry_id, " <>
-                    "instance_entry_id and share_id"
+                  "An entry of the athanor (vlt_…); exactly one of entry_id and share_id"
               ),
               Arg.new("share_id", :string,
                 description:
                   "A key shared with you (shr_…), attached and never disclosed; exactly one " <>
-                    "of entry_id, instance_entry_id and share_id"
+                    "of entry_id and share_id"
               ),
               Arg.new("name", :string,
                 description:
@@ -91,8 +85,8 @@ defmodule Sanctum.Providers.Profile do
             ]}
          )},
         description:
-          "The credentials to bind, one need's: [{need:'@ingress', entry_id | " <>
-            "instance_entry_id | share_id, name, lifetime, renew, fields, scopes}]"
+          "The credentials to bind, one need's: [{need:'@ingress', entry_id | share_id, " <>
+            "name, lifetime, renew, fields, scopes}]"
       )
 
     decisions_arg =
@@ -117,13 +111,10 @@ defmodule Sanctum.Providers.Profile do
                    Arg.new("label", :string,
                      description:
                        "The dependency's profile that lends its key; at most one of label, " <>
-                         "entry_id, instance_entry_id and share_id, label 'default' when none"
+                         "entry_id and share_id, label 'default' when none"
                    ),
                    Arg.new("entry_id", :string,
                      description: "An entry of the athanor bound on the dependency's edge"
-                   ),
-                   Arg.new("instance_entry_id", :string,
-                     description: "An instance entry offered to you, bound on the edge"
                    ),
                    Arg.new("share_id", :string,
                      description: "A key shared with you, bound on the edge"
@@ -178,8 +169,7 @@ defmodule Sanctum.Providers.Profile do
         required: true,
         description:
           "The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', " <>
-            "entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}], " <>
-            "selections, override"
+            "entry_id | share_id, name, lifetime, renew, fields, scopes}], selections, override"
       )
 
     Operation.tool(
@@ -320,7 +310,7 @@ defmodule Sanctum.Providers.Profile do
         )
       ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries, or keys shared with you, of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, share, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present, and lists a profile row that is damaged as status corrupt with head_state damaged, its head not read; grants reads which grants reach a resource: it is refused unavailable when the stored heads, or a profile a grant borrows a key from, cannot be read, and corrupt when a head the store returns fails its digest, does not parse or disagrees with its stored references, or when a profile a grant borrows a key from is damaged; a head row that does not decode is not listed by the store, so grants does not read it. plan is refused unavailable when the components, the consent profiles, the vault or the instance entries or shares offered to the person cannot be read, not_found when its component is not installed, and corrupt when its stored manifest is damaged or its profile's head row does not decode, fails its digest or does not parse. plan, preview, commit and grant are refused unavailable when the components, or a profile that would lend a dependency its key, cannot be read (for plan, or the entry that profile binds), and corrupt when that profile is damaged or when the head row of the profile they would revise does not decode; preview, commit and grant are refused corrupt when a dependency's stored manifest is damaged, which plan answers as a closure unresolved with reason corrupt_manifest, so nothing is granted over it. Nothing is granted outside this walk.",
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own entries, or keys shared with you, of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, share, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present, and lists a profile row that is damaged as status corrupt with head_state damaged, its head not read; grants reads which grants reach a resource: it is refused unavailable when the stored heads, or a profile a grant borrows a key from, cannot be read, and corrupt when a head the store returns fails its digest, does not parse or disagrees with its stored references, or when a profile a grant borrows a key from is damaged; a head row that does not decode is not listed by the store, so grants does not read it. plan is refused unavailable when the components, the consent profiles, the vault or the shares offered to the person cannot be read, not_found when its component is not installed, and corrupt when its stored manifest is damaged or its profile's head row does not decode, fails its digest or does not parse. plan, preview, commit and grant are refused unavailable when the components, or a profile that would lend a dependency its key, cannot be read (for plan, or the entry that profile binds), and corrupt when that profile is damaged or when the head row of the profile they would revise does not decode; preview, commit and grant are refused corrupt when a dependency's stored manifest is damaged, which plan answers as a closure unresolved with reason corrupt_manifest, so nothing is granted over it. Nothing is granted outside this walk.",
       title: "Profiles & Consent"
     )
   end
@@ -937,7 +927,6 @@ defmodule Sanctum.Providers.Profile do
       Enum.map(list, fn binding ->
         %{need: Map.get(binding, "need", Prima.Authority.Blob.ingress_key())}
         |> Prima.MapUtil.put_present(:entry_id, binding["entry_id"])
-        |> Prima.MapUtil.put_present(:instance_entry_id, binding["instance_entry_id"])
         |> Prima.MapUtil.put_present(:share_id, binding["share_id"])
         |> Prima.MapUtil.put_present(:name, binding["name"])
         |> Prima.MapUtil.put_present(:lifetime, decode_lifetime(binding["lifetime"]))
@@ -974,16 +963,15 @@ defmodule Sanctum.Providers.Profile do
 
   # A selection names a dependency edge of the closure and what fills it:
   # one of its profiles by label (the default one when it names nothing),
-  # or an entry, instance entry or share for one of its needs, under an account
-  # name beside the edge's default when it names one. `from` defaults to
-  # the source at commit. The field map, when given, is an entry's.
+  # or an entry or share for one of its needs, under an account name
+  # beside the edge's default when it names one. `from` defaults to the
+  # source at commit. The field map, when given, is an entry's.
   defp decode_selections(list) when is_list(list) do
     decoded =
       Enum.map(list, fn selection ->
         %{dep: selection["dep"]}
         |> Prima.MapUtil.put_present(:label, selection["label"])
         |> Prima.MapUtil.put_present(:entry_id, selection["entry_id"])
-        |> Prima.MapUtil.put_present(:instance_entry_id, selection["instance_entry_id"])
         |> Prima.MapUtil.put_present(:share_id, selection["share_id"])
         |> Prima.MapUtil.put_present(:need, selection["need"])
         |> Prima.MapUtil.put_present(:name, selection["name"])
@@ -1129,14 +1117,6 @@ defmodule Sanctum.Providers.Profile do
     do:
       "disclosure_refused: the component reads #{inspect(need)} itself, so it takes a " <>
         "disclosed entry of the athanor"
-
-  defp fmt({:component_not_admitted, need}) when is_binary(need),
-    do:
-      "component_not_admitted: the instance entry for #{inspect(need)} admits no such " <>
-        "component under its component policy"
-
-  defp fmt({:not_offered, need}) when is_binary(need),
-    do: "not_offered: the instance entry for #{inspect(need)} is not offered to you"
 
   defp fmt({:share_not_offered, need}) when is_binary(need),
     do: "share_not_offered: the key shared for #{inspect(need)} is not offered to you"
