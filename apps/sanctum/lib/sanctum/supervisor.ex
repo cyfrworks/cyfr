@@ -109,7 +109,8 @@ defmodule Sanctum.Supervisor do
       else:
         raise(
           "[Sanctum] FATAL: the enrollment directory (:sanctum, :directory_url, from " <>
-            "CYFR_DIRECTORY_URL) must be an https directory URL: an origin and an " <>
+            "CYFR_DIRECTORY_URL) must be an https directory URL, or an http one on " <>
+            "this machine's loopback: an origin and an " <>
             "optional path, with no user, query or fragment, at most " <>
             "#{Prima.Confirmation.Preview.max_text()} bytes long"
         )

@@ -366,7 +366,7 @@ defmodule Emissary.Router do
       end
 
       # Restore (`Sanctum.Recovery`): an identity brought back onto this
-      # empty node from its printed kit, under the installation capability
+      # empty node from its recovery code, under the installation capability
       # (`CYFR_RESTORE_TOKEN`) in the authorization header; and, on a home
       # restored from a backup, a recovering person's kit proof and the
       # re-enables it admits. Its body is

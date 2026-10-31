@@ -6,7 +6,7 @@
 # function of the argument list; each command prints nothing and answers
 # one line, `FIXTURE=` and a JSON object. An argument spelled `@PATH` is
 # read from that file, so a credential never rides a command line. No
-# command answers a seed, a kit line, a token or a private key.
+# command answers a seed, a recovery code, a token or a private key.
 #
 #   setup
 #       The installation's setup admission (`Sanctum.Newcomer.admit/2`),
