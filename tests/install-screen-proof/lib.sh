@@ -3,39 +3,60 @@
 # shellcheck shell=bash
 #
 # The install-and-screen proof's helpers, sourced by run.sh after
-# cleanup.sh. A case is one function made of them: proof_image_build,
-# proof_kvm_preflight, proof_base_fetch and proof_seed once per run, then
+# cleanup.sh. A case is one function made of them: proof_image_use,
+# proof_kvm_preflight, proof_base_verify and proof_seed once per run, then
 # per guest guest_boot, which starts a fresh guest and records that it runs
 # under KVM and reached its login prompt; tty1_login, which signs the test
 # account in on the guest's own screen and starts the tmux session `proof`
 # there; the pane_ helpers, which type into that terminal and read it back
 # over SSH, so what a case types reaches the program under test through the
 # guest's terminal as a person's typing does; guest_ssh and guest_copy_in
-# for evidence and files apart from the terminal; guest_screenshot; and
-# proof_guest_stop (cleanup.sh). check records each verdict.
+# for evidence and files apart from the terminal; guest_root for the
+# harness's own root actions; guest_screenshot; and proof_guest_stop
+# (cleanup.sh). check records each verdict.
 #
-# They read PROOF_PREFIX, IMAGE, VOLUME, WORK, OUT and HERE, which run.sh
-# sets, and set GUEST and GUEST_DIR for the guest under way. A
+# They read PROOF_PREFIX, VOLUME, WORK, OUT, HERE and ROOT, which run.sh
+# sets, and set IMAGE, and GUEST and GUEST_DIR for the guest under way. A
 # guest's evidence goes under GUEST_DIR.
 
 # The guests' base and the host's cache of it (CLOUD_*, BASE_DIR).
 # shellcheck source=base-image.sh
 . "$HERE/base-image.sh"
+# The predicates over the evidence (SUDO_REFUSAL, probe_refused, ...).
+# shellcheck source=predicates.sh
+. "$HERE/predicates.sh"
 
 PROOF_USER=proof
 # A password prompt of sudo-rs or of sudo, which run.sh's cases read.
 # shellcheck disable=SC2034
 SUDO_PROMPT='\[sudo[^]]*\] [Pp]assword'
 
-GUEST="" GUEST_PART="" GUEST_DIR=""
+# Every case ends itself within CASE_SECONDS of its start, with its own
+# evidence, before heavy-check stops it: the proof rows' hold
+# (scripts/stages.tsv, 3600 s) less 180 s for the teardown (each guest
+# stopped within 60 s, then each removal tried three times 3 s apart).
+# Each wait of a pane or a guest's boot is cut at that deadline (budget),
+# so the sum of the steps' own budgets never outlasts the hold.
+CASE_SECONDS=3420
+CASE_DEADLINE=$((SECONDS + CASE_SECONDS))
+
+GUEST="" GUEST_PART="" GUEST_DIR="" IMAGE="" STAND_IN=""
 CHECK_FAILURES=0
-PANE_ANSWERED=() PANE_SCREEN=""
+PANE_ANSWERED=() PANE_SCREEN="" PANE_BUDGET=0
 
 step() { printf '\n==> %s\n' "$*"; }
 ok() { printf 'ok: %s\n' "$*"; }
 fail() {
   printf '::error::%s\n' "$*" >&2
   exit 1
+}
+
+# Sets BUDGET to $1 seconds, or to what is left before the case's
+# deadline when that is less; answers 1 when nothing is left.
+budget() {
+  BUDGET=$((CASE_DEADLINE - SECONDS))
+  [ "$BUDGET" -le "$1" ] || BUDGET=$1
+  [ "$BUDGET" -gt 0 ]
 }
 
 # Records a verdict line in the guest's results.txt and on stdout.
@@ -66,31 +87,41 @@ for key in sys.argv[2:]:
 print(json.dumps(value))' "$@"
 }
 
-proof_image_build() {
-  step "building $IMAGE from $HERE/Dockerfile"
-  proof_own image "$IMAGE" || fail "the image $IMAGE cannot be the run's"
-  proof_fg docker build --build-arg "APT_REFRESH=$(date -u +%F)" --tag "$IMAGE" "$HERE" >"$OUT/image-build.log" 2>&1 || {
-    tail -n 40 "$OUT/image-build.log" >&2
-    fail "the image $IMAGE did not build"
-  }
-  ok "built $IMAGE"
+# The shared proof image this worktree's inputs name, which prepare.sh
+# built outside any lane, its use by this run recorded so the janitor
+# keeps it while the run lives. The run never builds or removes it.
+proof_image_use() {
+  local status=0
+  step "the proof image, built by tests/install-screen-proof/prepare.sh"
+  IMAGE=$("$HERE/prepare.sh" --use "$$") || status=$?
+  case $status in
+    0) ok "using $IMAGE" ;;
+    69) exit 69 ;;
+    *) fail "tests/install-screen-proof/prepare.sh --use exited $status" ;;
+  esac
 }
 
 # QEMU in the container creates a KVM machine before any guest is booted.
 # Without it nothing later can run, and the host is left as it is.
 proof_kvm_preflight() {
+  local why
   step "KVM inside the container"
   proof_own container "${PROOF_PREFIX}kvm" || fail "the container ${PROOF_PREFIX}kvm cannot be the run's"
   {
     echo "host /dev/kvm: $(stat -c '%A %U:%G' /dev/kvm)"
     echo "host account: $(id)"
+    echo "host kvm modules: $(cd /sys/module 2>/dev/null && ls -d kvm kvm_intel kvm_amd 2>/dev/null | tr '\n' ' ')"
+    echo "docker context: $(docker context show 2>&1), DOCKER_HOST=${DOCKER_HOST:-unset}"
+    echo "docker security options: $(docker info --format '{{json .SecurityOptions}}' 2>&1)"
   } >"$OUT/kvm-preflight.txt"
-  if ! proof_fg docker run --rm --init --name "${PROOF_PREFIX}kvm" --network none --device /dev/kvm "$IMAGE" \
+  if ! proof_fg timeout 120 docker run --rm --init --name "${PROOF_PREFIX}kvm" --network none --device /dev/kvm "$IMAGE" \
     /proof/kvm-check.sh >>"$OUT/kvm-preflight.txt" 2>&1; then
     cat "$OUT/kvm-preflight.txt" >&2
-    fail "KVM did not start inside the container; no later case can run, and nothing on the host was changed ($OUT/kvm-preflight.txt)"
+    why=$(kvm_diagnosis "$OUT/kvm-preflight.txt")
+    fail "KVM did not start inside the container: /dev/kvm must be usable by Docker's containers, and $why. No later case can run, and nothing on the host was changed ($OUT/kvm-preflight.txt)"
   fi
-  qmp_says_kvm "$OUT/kvm-preflight.txt" || fail "QEMU in the container started without KVM ($OUT/kvm-preflight.txt)"
+  qmp_says_kvm "$OUT/kvm-preflight.txt" ||
+    fail "QEMU in the container opened /dev/kvm and started without KVM; $(kvm_diagnosis "$OUT/kvm-preflight.txt") ($OUT/kvm-preflight.txt)"
   ok "QEMU in the container runs with KVM: $(grep -m 1 '^QEMU emulator' "$OUT/kvm-preflight.txt")"
 }
 
@@ -110,22 +141,21 @@ sys.exit(1)' "$1"
 }
 
 # The base the host's cache holds, verified inside the container with no
-# network, read-only. The run downloads nothing itself: fetch-base.sh
-# fills the cache outside any lane, so a held lane never waits on the
-# network.
+# network, read-only. The run downloads nothing itself: prepare.sh fills
+# the cache outside any lane, so a held lane never waits on the network.
 proof_base_verify() {
   step "the pinned Ubuntu 26.04 cloud image, from the host's cache $BASE_DIR, verified"
   if [ ! -f "$BASE_DIR/$CLOUD_IMAGE" ]; then
-    echo "install-screen proof: the base image is not in $BASE_DIR; run tests/install-screen-proof/fetch-base.sh first, outside any lane" >&2
+    echo "install-screen proof: the base image is not in $BASE_DIR; run tests/install-screen-proof/prepare.sh first, outside any lane" >&2
     exit 69
   fi
   proof_own volume "$VOLUME" || fail "the volume $VOLUME cannot be the run's"
   docker volume create "$VOLUME" >/dev/null || fail "the volume $VOLUME was not made"
   proof_own container "${PROOF_PREFIX}verify" || fail "the container ${PROOF_PREFIX}verify cannot be the run's"
-  proof_fg docker run --rm --init --name "${PROOF_PREFIX}verify" --network none --volume "$BASE_DIR:/base:ro" "$IMAGE" \
+  proof_fg timeout 300 docker run --rm --init --name "${PROOF_PREFIX}verify" --network none --volume "$BASE_DIR:/base:ro" "$IMAGE" \
     /proof/verify-base.sh "$CLOUD_IMAGE" "$CLOUD_IMAGE_SHA256" >"$OUT/base-image.txt" 2>&1 || {
     tail -n 20 "$OUT/base-image.txt" >&2
-    fail "the cached base image did not verify ($OUT/base-image.txt); run tests/install-screen-proof/fetch-base.sh again"
+    fail "the cached base image did not verify ($OUT/base-image.txt); run tests/install-screen-proof/prepare.sh again"
   }
   ok "$CLOUD_IMAGE: signature good, sum $CLOUD_IMAGE_SHA256"
 }
@@ -220,25 +250,28 @@ guest_boot() {
   docker start "$GUEST" >/dev/null || fail "the QEMU container $GUEST did not start"
 
   # A QEMU that cannot open /dev/kvm exits rather than answer QMP.
-  closes=$((SECONDS + 120))
+  budget 60 || fail "the case's deadline came before $part booted"
+  closes=$((SECONDS + BUDGET))
   until QMP_WAIT=2 guest_qmp query-status >"$GUEST_DIR/qmp-status.json" 2>/dev/null; do
     if ! guest_running; then
       docker logs "$GUEST" >"$GUEST_DIR/qemu.log" 2>&1
       fail "QEMU stopped in $GUEST before it answered QMP: $(tail -n 20 "$GUEST_DIR/qemu.log")"
     fi
-    [ "$SECONDS" -lt "$closes" ] || fail "QEMU in $GUEST answered no QMP within 120 s"
+    [ "$SECONDS" -lt "$closes" ] || fail "QEMU in $GUEST answered no QMP within $BUDGET s"
     sleep 1
   done
   guest_kvm_evidence
 
   PROOF_SSH_CONTROLS+=("$WORK/ssh-$part")
-  closes=$((SECONDS + 300))
+  budget 240 || fail "the case's deadline came before $part's SSH answered"
+  closes=$((SECONDS + BUDGET))
   until guest_ssh true 2>/dev/null; do
     guest_running || fail "QEMU stopped in $GUEST before the guest's SSH answered"
-    [ "$SECONDS" -lt "$closes" ] || fail "the guest's SSH did not answer within 300 s"
+    [ "$SECONDS" -lt "$closes" ] || fail "the guest's SSH did not answer within $BUDGET s"
     sleep 2
   done
-  GUEST_SSH_TIMEOUT=600 guest_ssh 'cloud-init status --wait --long' >"$GUEST_DIR/cloud-init.txt" 2>&1
+  budget 300 || fail "the case's deadline came before $part's cloud-init finished"
+  GUEST_SSH_TIMEOUT=$BUDGET guest_ssh 'cloud-init status --wait --long' >"$GUEST_DIR/cloud-init.txt" 2>&1
   check "$part: cloud-init finished" grep -qE '^\.*status: done' "$GUEST_DIR/cloud-init.txt"
   guest_ssh 'cat /etc/os-release; uname -a; echo "virt: $(systemd-detect-virt)"
     lscpu | grep -i -E "^(hypervisor vendor|virtualization type)"
@@ -250,8 +283,8 @@ guest_boot() {
   check "$part: the guest runs under KVM (systemd-detect-virt)" grep -qx 'virt: kvm' "$GUEST_DIR/guest.txt"
   check "$part: the test account is in its own group and sudo alone" \
     grep -qE '^id: uid=[0-9]+\(proof\) gid=[0-9]+\(proof\) groups=[0-9]+\(proof\),[0-9]+\(sudo\)$' "$GUEST_DIR/guest.txt"
-  check "$part: no sudoers rule lets the account skip its password (sudo -n true fails)" \
-    grep -qE '^sudo -n true status: [1-9][0-9]*$' "$GUEST_DIR/guest.txt"
+  check "$part: no sudoers rule lets the account skip its password (sudo -n true is sudo's refusal: exit 1, $SUDO_REFUSAL)" \
+    sh -c 'grep -qx "sudo -n true status: 1" "$1" && grep -qE "$2" "$1"' sh "$GUEST_DIR/guest.txt" "$SUDO_REFUSAL"
   check "$part: cloud-init wrote no sudoers file" guest_no_cloud_sudoers
   check "$part: tty1's getty runs" grep -qx 'getty@tty1: active' "$GUEST_DIR/guest.txt"
 
@@ -322,7 +355,7 @@ tty1_login() {
     [ "$SECONDS" -lt "$closes" ] || fail "no tmux session proof started on tty1 within 60 s"
     sleep 1
   done
-  pane_wait '\$ *$' 30 || fail "the shell in the tmux session drew no prompt within 30 s"
+  pane_wait '\$ *$' 30 || fail "the shell in the tmux session drew no prompt within $PANE_BUDGET s"
   guest_ssh 'tmux list-clients -F "#{client_tty} #{session_name}"' >"$GUEST_DIR/tmux-clients.txt" 2>&1
   check "$GUEST_PART: the tmux session proof is shown on tty1" grep -qx '/dev/tty1 proof' "$GUEST_DIR/tmux-clients.txt"
 }
@@ -370,9 +403,13 @@ pane_password() {
 }
 
 # pane_wait REGEX SECONDS: whether a pane line matches the extended REGEX
-# within SECONDS; PANE_SCREEN holds the last read.
+# within SECONDS, cut at the case's deadline (PANE_BUDGET holds what it
+# waited); PANE_SCREEN holds the last read.
 pane_wait() {
-  local closes=$((SECONDS + $2))
+  local closes
+  budget "$2" || { PANE_BUDGET=0; return 1; }
+  PANE_BUDGET=$BUDGET
+  closes=$((SECONDS + BUDGET))
   while :; do
     PANE_SCREEN=$(pane_capture 2>/dev/null) || PANE_SCREEN=""
     grep -qE -- "$1" <<<"$PANE_SCREEN" && return 0
@@ -382,25 +419,28 @@ pane_wait() {
 }
 
 # pane_converse SECONDS DONE [PATTERN ANSWER]...: reads the pane each
-# second until a line matches the extended regex DONE, within SECONDS.
-# Whenever more lines match a PATTERN than it has answered, it types that
-# PATTERN's ANSWER: a line, or for @password the test account's password.
+# second until a line matches the extended regex DONE, within SECONDS cut
+# at the case's deadline (PANE_BUDGET holds what it waited). Whenever more
+# lines match a PATTERN than it has answered, it types that PATTERN's
+# ANSWER: a line, or for @password the test account's password.
 # PANE_ANSWERED[i] counts the answers to the i-th PATTERN, which is the
 # number of times what it matches was asked; PANE_SCREEN holds the last
 # read. Returns 1 at the deadline, or when a PATTERN is asked a fourth time.
 pane_converse() {
-  local seconds=$1 done_re=$2 closes i seen
+  local done_re=$2 closes i seen
   local -a patterns=() answers=()
+  PANE_ANSWERED=() PANE_FIRST=() PANE_DONE_AT="" PANE_MARK_AT=()
+  budget "$1" || { PANE_BUDGET=0; return 1; }
+  PANE_BUDGET=$BUDGET
   shift 2
   while [ "$#" -ge 2 ]; do
     patterns+=("$1")
     answers+=("$2")
     shift 2
   done
-  PANE_ANSWERED=() PANE_FIRST=() PANE_DONE_AT="" PANE_MARK_AT=()
   for i in "${!patterns[@]}"; do PANE_ANSWERED[i]=0; done
   PANE_START=$SECONDS
-  closes=$((SECONDS + seconds))
+  closes=$((SECONDS + PANE_BUDGET))
   while :; do
     PANE_SCREEN=$(pane_capture 2>/dev/null) || PANE_SCREEN=""
     for i in "${!PANE_MARKS[@]}"; do
@@ -451,26 +491,58 @@ pane_step() {
   if ! pane_converse "$seconds" "^$name exit status [0-9]+" "$@"; then
     pane_save "transcript-$name.txt"
     guest_screenshot "$name-stuck.png" || true
-    fail "$name: no exit within $seconds s, or a question was asked a fourth time ($GUEST_DIR/transcript-$name.txt)"
+    fail "$name: no exit within $PANE_BUDGET s (its $seconds s, cut at the case's deadline), or a question was asked a fourth time ($GUEST_DIR/transcript-$name.txt)"
   fi
   PANE_STATUS=$(grep -oE "^$name exit status [0-9]+" <<<"$PANE_SCREEN" | tail -n 1 | awk '{print $NF}')
   pane_save "transcript-$name.txt"
+}
+
+# The pane probe NAME: `sudo -n true` typed into the pane, which never
+# asks for a password; its status, the prompts the pane showed and what
+# sudo said go to GUEST_DIR/sudo-probe.txt, which probe_refused and
+# probe_allowed (predicates.sh) read.
+pane_sudo_probe() {
+  pane_step "$1" 'sudo -n true' 30 "$SUDO_PROMPT" @password
+  echo "$1: sudo -n true exited $PANE_STATUS after ${PANE_ANSWERED[0]} password prompts; sudo said: $(grep -m 1 -E '^sudo[-a-z]*: ' "$GUEST_DIR/transcript-$1.txt")" >>"$GUEST_DIR/sudo-probe.txt"
+  pane_step_end "$1"
+}
+
+# The pane step NAME of the sudo command LINE, recorded in sudo-probe.txt;
+# sudo_step_was NAME STATUS PROMPTS (predicates.sh) checks what it
+# recorded.
+pane_sudo_step() {
+  pane_step "$1" "$2" 60 "$SUDO_PROMPT" @password
+  echo "$1: $2 exited $PANE_STATUS after ${PANE_ANSWERED[0]} password prompts ($(grep -cE -- "$SUDO_PROMPT" "$GUEST_DIR/transcript-$1.txt") in the transcript)" >>"$GUEST_DIR/sudo-probe.txt"
+  pane_step_end "$1"
+}
+
+# sudo -n true over SSH, without a terminal, recorded in sudo-probe.txt as
+# NAME; answers whether it was sudo's own refusal (exit 1 and its words),
+# not SSH's failure (255) or the harness's timeout (124).
+ssh_sudo_refused() {
+  local said status=0
+  said=$(guest_ssh 'sudo -n true' 2>&1) || status=$?
+  echo "$1: over SSH, sudo -n true exited $status; sudo said: $said" >>"$GUEST_DIR/sudo-probe.txt"
+  sudo_refused "$status" "$said"
 }
 
 # This tree's cyfr for the guests, built once per run, stamped as the
 # published release INSTALL_VERSION so that cyfr init fetches and verifies
 # that release's scaffold under production trust. Its own bytes are not a
 # signed release: cases that use it are stand-ins for the candidate's
-# delivery, which case 1 proves through the installer.
+# delivery, which case 1 proves through the installer, and say so in
+# candidate.txt and in each results.txt.
 CANDIDATE_BIN=""
 candidate_build() {
   [ -z "$CANDIDATE_BIN" ] || return 0
   step "this tree's cyfr for linux/amd64, stamped $INSTALL_VERSION (stand-in for a signed candidate)"
   CANDIDATE_BIN="$WORK/cyfr"
-  proof_fg env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C "$ROOT/apps/codex" -trimpath \
+  proof_fg timeout 300 env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C "$ROOT/apps/codex" -trimpath \
     -ldflags "-s -w -X github.com/cyfr/codex/internal/version.Version=$INSTALL_VERSION -X github.com/cyfr/codex/internal/version.Commit=$(git -C "$ROOT" rev-parse --short HEAD)" \
-    -o "$CANDIDATE_BIN" . >"$OUT/candidate-build.log" 2>&1 || fail "the candidate did not build ($OUT/candidate-build.log)"
+    -o "$CANDIDATE_BIN" . >"$OUT/candidate-build.log" 2>&1 || fail "the candidate did not build within 300 s ($OUT/candidate-build.log)"
+  STAND_IN="stand-in: /usr/local/bin/cyfr is this tree's cyfr, built here and stamped $INSTALL_VERSION, which the harness installs itself, not a signed release's delivery"
   {
+    echo "$STAND_IN"
     echo "built from $ROOT at $(git -C "$ROOT" rev-parse HEAD), with these changes:"
     git -C "$ROOT" status --short -- apps/codex
     echo "sha256: $(sha256sum <"$CANDIDATE_BIN" | cut -d ' ' -f 1)"
@@ -480,25 +552,28 @@ candidate_build() {
 
 # guest_root COMMAND: COMMAND as root over SSH, the harness's own setup or
 # its holders of locks, the password on sudo's standard input, its output
-# in GUEST_DIR/root.txt; then every
-# sudo timestamp of the account is removed (sudo -K), so no probe of the
-# terminal's cached login sees one the harness made.
+# in GUEST_DIR/root.txt. It leaves the terminal's sudo logins as they are:
+# sudo-rs keeps a login per terminal, or per parent process without one,
+# so this call, over SSH without a terminal in a shell of its own, can
+# neither give tty1's terminal a login nor take one away. Cases 2 and 3
+# check that premise in the pane before they read what the product left
+# (c2-probe-start, c3-probe-start and c3-probe-login).
 guest_root() {
   echo "== $1" >>"$GUEST_DIR/root.txt"
   { cat "$WORK/password"; printf '\n'; } | guest_ssh_in "sudo -S -k -p '' sh -c $(printf '%q' "$1")" >>"$GUEST_DIR/root.txt" 2>&1
   local status=$?
   echo "== status $status" >>"$GUEST_DIR/root.txt"
-  guest_ssh 'sudo -K' >/dev/null 2>&1 || true
   return "$status"
 }
 
 # The candidate at /usr/local/bin/cyfr, root's and mode 0755, where the
-# installer puts it on this system.
+# installer puts it on this system, labelled a stand-in in results.txt.
 guest_provision_candidate() {
   candidate_build
   guest_copy_in "$CANDIDATE_BIN" cyfr-candidate || fail "the candidate was not copied into the guest"
   guest_root "install -o root -g root -m 0755 /home/$PROOF_USER/cyfr-candidate /usr/local/bin/cyfr && rm /home/$PROOF_USER/cyfr-candidate" ||
     fail "the candidate was not installed at /usr/local/bin/cyfr"
+  printf '%s (%s)\n' "$STAND_IN" "$OUT/candidate.txt" | tee -a "$GUEST_DIR/results.txt"
   guest_ssh '/usr/local/bin/cyfr --version' >"$GUEST_DIR/cyfr.txt" 2>&1
   check "$GUEST_PART: /usr/local/bin/cyfr is the candidate, reporting $INSTALL_VERSION" grep -qF "$INSTALL_VERSION" "$GUEST_DIR/cyfr.txt"
 }
@@ -519,12 +594,16 @@ guest_cosign_absent() {
   guest_ssh '! command -v cosign >/dev/null && ! dpkg-query -W -f "\${db:Status-Abbrev}" cosign 2>/dev/null | grep -q "^ii"'
 }
 
-# part_verdict PART: the part's verdict in OUT/results.txt; 1 when a check failed.
+# part_verdict PART: the part's verdict in OUT/results.txt, with the
+# stand-in's label when the part ran one (cases 2 and 3); 1 when a check
+# failed.
 part_verdict() {
+  local label=""
+  [ -z "$STAND_IN" ] || label=" ($STAND_IN)"
   if [ "$CHECK_FAILURES" -eq 0 ]; then
-    printf '%s: passed\n' "$1" | tee -a "$OUT/results.txt"
+    printf '%s: passed%s\n' "$1" "$label" | tee -a "$OUT/results.txt"
     return 0
   fi
-  printf '%s: failed, %s checks (%s)\n' "$1" "$CHECK_FAILURES" "$GUEST_DIR/results.txt" | tee -a "$OUT/results.txt"
+  printf '%s: failed, %s checks (%s)%s\n' "$1" "$CHECK_FAILURES" "$GUEST_DIR/results.txt" "$label" | tee -a "$OUT/results.txt"
   return 1
 }

@@ -4,6 +4,7 @@
 package install
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -113,6 +114,26 @@ type Account struct {
 	// group; Process whether this process already carries that group.
 	Member  bool `json:"member"`
 	Process bool `json:"process"`
+	// SudoUser is the account a root process was started for by sudo
+	// (SUDO_USER, a normal account), "" otherwise.
+	SudoUser string `json:"sudo_user,omitempty"`
+}
+
+// SameSocket answers endpoint as want when both are unix sockets at the
+// same file once links are resolved (unix:///run/docker.sock and
+// unix:///var/run/docker.sock on Ubuntu), else endpoint as it is.
+func SameSocket(endpoint, want string) string {
+	path, ok := strings.CutPrefix(endpoint, "unix://")
+	wantPath, wantOK := strings.CutPrefix(want, "unix://")
+	if !ok || !wantOK || endpoint == want {
+		return endpoint
+	}
+	a, errA := filepath.EvalSymlinks(path)
+	b, errB := filepath.EvalSymlinks(wantPath)
+	if errA == nil && errB == nil && a == b {
+		return want
+	}
+	return endpoint
 }
 
 func (f Facts) installed(pkg string) bool {

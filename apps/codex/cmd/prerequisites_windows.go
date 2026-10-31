@@ -5,20 +5,7 @@
 
 package cmd
 
-import (
-	"errors"
-	"os"
-)
+import "os"
 
 // No root entry runs on Windows: automatic preparation is Linux's alone.
 func ownedByRoot(os.FileInfo) bool { return false }
-
-func ownedBy(os.FileInfo, int) bool { return false }
-
-// makeFIFO: no root entry runs on Windows.
-func makeFIFO(string) error { return errors.New("no FIFO on Windows") }
-
-const (
-	openNoFollow = 0
-	openNonBlock = 0
-)

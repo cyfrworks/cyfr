@@ -6,6 +6,8 @@ package install
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 // Requirements names what actions install, for the sentences that say
@@ -56,8 +58,13 @@ func Completed(p Policy, before, after Facts) string {
 			partly = append(partly, pkg.Package)
 		}
 	}
-	if len(partly) > 0 {
+	switch {
+	case len(partly) > 0:
 		done = append(done, "left "+joinAnd(partly)+" partly installed")
+	case after.Interrupted && !before.Interrupted:
+		// dpkg holds another package unfinished: a dependency the
+		// install brought in, which the policy does not name.
+		done = append(done, "left a package installation unfinished")
 	}
 	if !(before.Docker.Service == "active" && before.Docker.Enabled) && after.Docker.Service == "active" && after.Docker.Enabled {
 		done = append(done, "started the Docker service")
@@ -93,6 +100,56 @@ func Refusal(p Policy, d Decision, completed, command string) string {
 // could not be agreed or elevated.
 func NoSudo(requirements, completed, command string) string {
 	return fmt.Sprintf("This account cannot run sudo, so CYFR cannot install %s. %s Run %s from an account that can install software.", requirements, completed, command)
+}
+
+// SudoCause is why sudo did not run the root entry, read from what sudo
+// printed (its messages in sudo-rs and in sudo).
+type SudoCause int
+
+const (
+	SudoUnknown SudoCause = iota
+	// SudoNotAllowed: sudo's policy does not let the account run it.
+	SudoNotAllowed
+	// SudoNeedsPassword: sudo wants a password and none can be typed.
+	SudoNeedsPassword
+	// SudoWrongPassword: the password typed was refused, each time.
+	SudoWrongPassword
+)
+
+// ReadSudoCause reads sudo's own words for why it ran nothing.
+func ReadSudoCause(printed string) SudoCause {
+	text := strings.ToLower(printed)
+	has := func(words ...string) bool {
+		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(text, w) })
+	}
+	switch {
+	case has("incorrect authentication attempt", "incorrect password attempt", "authentication failed"):
+		return SudoWrongPassword
+	case has("interactive authentication is required", "a password is required"):
+		return SudoNeedsPassword
+	case has("i'm afraid i can't do that", "may not run", "is not in the sudoers", "is not allowed to"):
+		return SudoNotAllowed
+	}
+	return SudoUnknown
+}
+
+// SudoRefused is the sentence of a sudo that ran nothing, by its cause.
+func SudoRefused(cause SudoCause, requirements, completed, command string) string {
+	switch cause {
+	case SudoNeedsPassword:
+		return fmt.Sprintf("sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install %s. %s Run %s in a terminal, or give this account sudo without a password prompt.", requirements, completed, command)
+	case SudoWrongPassword:
+		return fmt.Sprintf("sudo did not accept the password, so CYFR cannot install %s. %s Run %s again and type this account's password.", requirements, completed, command)
+	case SudoNotAllowed:
+		return NoSudo(requirements, completed, command)
+	}
+	return fmt.Sprintf("sudo did not run CYFR's installer, so CYFR cannot install %s. %s Run %s again once sudo works for this account.", requirements, completed, command)
+}
+
+// UnderSudo is the sentence of cyfr init run as root through sudo where it
+// would install requirements: done so, it would set CYFR up for root.
+func UnderSudo(requirements, account string) string {
+	return fmt.Sprintf("`sudo cyfr init` would install %s and set CYFR up for root, not for %s. Nothing was changed. Run `cyfr init` without sudo: it asks for the administrator password itself when it needs one.", requirements, account)
 }
 
 func NoAgreement(requirements, command string) string {

@@ -10,11 +10,12 @@
 #
 # Every name the run gives Docker begins with PROOF_PREFIX, which must be a
 # whole prefix of RUN_NAMES_PATTERN (cyfr-<seed>-<pid>-), so janitor rule 1
-# removes what a killed run leaves. proof_own records a container, volume
-# or image before it is made, and refuses, recording nothing, without such
-# a prefix or for a name outside it; proof_watch records a background
-# process. The teardown removes what was recorded and nothing else: not
-# another run's names, nor a name the run did not record.
+# removes what a killed run leaves. proof_own records a container or volume
+# before it is made, and refuses, recording nothing, without such a prefix
+# or for a name outside it; proof_watch records a background process. The
+# teardown removes what was recorded and nothing else: not another run's
+# names, nor a name the run did not record, nor the proof image the
+# containers run, which every run shares (prepare.sh).
 #
 # Every long command runs through proof_fg, and every container whose first
 # process is a script runs with --init, which passes TERM on: a docker
@@ -24,20 +25,24 @@
 # proof_traps sets the EXIT, INT, TERM and HUP traps. Every exit then runs
 # the teardown and writes `_EXIT=<pid> <status>` last on stdout: 130, 143
 # or 129 after a signal, else the run's own status, made 1 when the run
-# passed but the teardown left something. The teardown goes in dependency
-# order and ignores further signals: the watchers stop; each guest's shared
-# SSH connection (PROOF_SSH_CONTROLS, a control socket) ends; each guest stops
-# (QEMU quits through QMP, then its container stops), and its /case
-# evidence and QEMU's log are copied to the directory recorded with it;
-# then the containers go, then the volume they mounted, then the image they
-# ran, each removal tried three times PROOF_CLEANUP_PAUSE seconds apart
-# (default 3), one that still fails named on stderr; then PROOF_WORK, the
-# run's scratch directory. Evidence directories stay.
+# passed but the teardown left something. A signal the run started with
+# ignored stays ignored, since a shell cannot trap it: a non-interactive
+# shell starts every asynchronous command with INT and QUIT ignored, and
+# heavy-check's contain.sh starts its command so. heavy-check stops a run
+# with TERM, which such a run still traps. The teardown goes in
+# dependency order and ignores further signals: the watchers stop; each
+# guest's shared SSH connection (PROOF_SSH_CONTROLS, a control socket)
+# ends; each guest stops (QEMU quits through QMP, then its container
+# stops), and its /case evidence and QEMU's log are copied to the
+# directory recorded with it; then the containers go, then the volume they
+# mounted, each removal tried three times PROOF_CLEANUP_PAUSE seconds
+# apart (default 3), one that still fails named on stderr; then
+# PROOF_WORK, the run's scratch directory. Evidence directories stay.
 
 PROOF_PREFIX=${PROOF_PREFIX:-}
 PROOF_WORK=${PROOF_WORK:-}
 PROOF_QMP_SOCKET=/run/proof/qmp.sock
-PROOF_CONTAINERS=() PROOF_VOLUMES=() PROOF_IMAGES=() PROOF_WATCHERS=() PROOF_SSH_CONTROLS=()
+PROOF_CONTAINERS=() PROOF_VOLUMES=() PROOF_WATCHERS=() PROOF_SSH_CONTROLS=()
 declare -A PROOF_EVIDENCE=() PROOF_STOPPED=()
 
 # Whether $1 is a whole run prefix: cyfr-<seed>-<pid>-.
@@ -45,8 +50,8 @@ proof_prefix_valid() {
   [[ ${1:-} =~ ${RUN_NAMES_PATTERN}$ ]]
 }
 
-# Records the container, volume or image ($1) named $2 as the run's, before
-# it is made; a container's evidence goes to the directory $3.
+# Records the container or volume ($1) named $2 as the run's, before it is
+# made; a container's evidence goes to the directory $3.
 proof_own() {
   local kind=$1 name=$2
   if ! proof_prefix_valid "$PROOF_PREFIX"; then
@@ -66,7 +71,6 @@ proof_own() {
       [ -z "${3:-}" ] || PROOF_EVIDENCE[$name]=$3
       ;;
     volume) PROOF_VOLUMES+=("$name") ;;
-    image) PROOF_IMAGES+=("$name") ;;
     *)
       echo "::error::install-screen proof: no kind $kind" >&2
       return 1
@@ -125,7 +129,7 @@ proof_guest_stop() {
   PROOF_STOPPED[$name]=1
 }
 
-# Removes the container, volume or image ($1) named $2, or finds it gone.
+# Removes the container or volume ($1) named $2, or finds it gone.
 proof_gone() {
   local kind=$1 name=$2 attempt err=""
   case $name in
@@ -142,7 +146,6 @@ proof_gone() {
     case $kind in
       container) err=$(docker container rm --force "$name" 2>&1 >/dev/null) && return 0 ;;
       volume) err=$(docker volume rm "$name" 2>&1 >/dev/null) && return 0 ;;
-      image) err=$(docker image rm --force "$name" 2>&1 >/dev/null) && return 0 ;;
     esac
     [ "$attempt" = 3 ] || sleep "${PROOF_CLEANUP_PAUSE:-3}"
   done
@@ -179,9 +182,6 @@ proof_cleanup() {
   done
   for name in ${PROOF_VOLUMES[@]+"${PROOF_VOLUMES[@]}"}; do
     proof_gone volume "$name" || failed=1
-  done
-  for name in ${PROOF_IMAGES[@]+"${PROOF_IMAGES[@]}"}; do
-    proof_gone image "$name" || failed=1
   done
   if [ -n "$PROOF_WORK" ]; then
     rm -rf -- "$PROOF_WORK" || failed=1

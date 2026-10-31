@@ -11,18 +11,16 @@ import (
 	"github.com/cyfr/codex/internal/install"
 )
 
-func initFlags(name string) bool { return name == "access" || name == "no-pull" || name == "yes" }
-
 // TestReadPlanAcceptsWhatInitSends reads the plan init sends for a fresh
-// machine, with its continuation.
+// machine.
 func TestReadPlanAcceptsWhatInitSends(t *testing.T) {
 	p := install.Load()
-	body := `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-update"},{"kind":"apt-install","packages":["docker.io","docker-compose-v2"]},{"kind":"docker-enable"},{"kind":"group-add","account":"alice"}],"continue":{"dir":"/home/alice/cyfr","args":["--access=local","--no-pull=true"],"terminal":true}}`
-	plan, err := install.ReadPlan(strings.NewReader(body), p, 1000, "alice", initFlags)
+	body := `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-update"},{"kind":"apt-install","packages":["docker.io","docker-compose-v2"]},{"kind":"docker-enable"},{"kind":"group-add","account":"alice"}]}`
+	plan, err := install.ReadPlan(strings.NewReader(body), p, 1000, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Actions) != 4 || plan.Continue == nil || plan.Continue.Dir != "/home/alice/cyfr" {
+	if len(plan.Actions) != 4 || plan.Account != "alice" || plan.UID != 1000 {
 		t.Fatalf("plan = %+v", plan)
 	}
 }
@@ -33,27 +31,23 @@ func TestReadPlanAcceptsWhatInitSends(t *testing.T) {
 func TestReadPlanRefusesAnythingOutsideThePolicy(t *testing.T) {
 	p := install.Load()
 	for name, body := range map[string]string{
-		"an unknown action":            `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"run","packages":["sh"]}]}`,
-		"a package outside the policy": `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-update"},{"kind":"apt-install","packages":["openssh-server"]}]}`,
-		"an option as a package":       `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-update"},{"kind":"apt-install","packages":["-oAPT::Update::Pre-Invoke::=sh"]}]}`,
-		"an install without update":    `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-install","packages":["docker.io"]}]}`,
-		"another account's group":      `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"group-add","account":"bob"}]}`,
-		"a plan for another account":   `{"version":1,"account":"bob","uid":1001,"actions":[{"kind":"docker-enable"}]}`,
-		"a uid that is not the caller": `{"version":1,"account":"alice","uid":0,"actions":[{"kind":"docker-enable"}]}`,
-		"an action twice":              `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"},{"kind":"docker-enable"}]}`,
-		"no actions":                   `{"version":1,"account":"alice","uid":1000,"actions":[]}`,
-		"an unknown field":             `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"command":"sh"}`,
-		"another version":              `{"version":2,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}]}`,
-		"a relative continuation":      `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"cyfr","args":[],"terminal":false}}`,
-		"an unclean continuation":      `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"/home/alice/../root","args":[],"terminal":false}}`,
-		"a continuation's command":     `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"/home/alice","args":["access"],"terminal":false}}`,
-		"a flag init does not take":    `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"/home/alice","args":["--exec=/bin/sh"],"terminal":false}}`,
-		"a value holding NUL":          `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"/home/alice","args":["--access=lo\u0000cal"],"terminal":false}}`,
-		"not JSON":                     `apt-get install docker.io`,
-		"an oversized plan":            `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"/home/alice","args":["--access=` + strings.Repeat("x", 70000) + `"],"terminal":false}}`,
+		"an unknown action":                              `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"run","packages":["sh"]}]}`,
+		"a package outside the policy":                   `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-update"},{"kind":"apt-install","packages":["openssh-server"]}]}`,
+		"an option as a package":                         `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-update"},{"kind":"apt-install","packages":["-oAPT::Update::Pre-Invoke::=sh"]}]}`,
+		"an install without update":                      `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"apt-install","packages":["docker.io"]}]}`,
+		"another account's group":                        `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"group-add","account":"bob"}]}`,
+		"a plan for another account":                     `{"version":1,"account":"bob","uid":1001,"actions":[{"kind":"docker-enable"}]}`,
+		"a uid that is not the caller":                   `{"version":1,"account":"alice","uid":0,"actions":[{"kind":"docker-enable"}]}`,
+		"an action twice":                                `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"},{"kind":"docker-enable"}]}`,
+		"no actions":                                     `{"version":1,"account":"alice","uid":1000,"actions":[]}`,
+		"an unknown field":                               `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"command":"sh"}`,
+		"another version":                                `{"version":2,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}]}`,
+		"a continuation, which the entry no longer runs": `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"/home/alice","args":[],"terminal":false}}`,
+		"not JSON":                                       `apt-get install docker.io`,
+		"an oversized plan":                              `{"version":1,"account":"alice","uid":1000,"actions":[{"kind":"docker-enable"}],"pad":"` + strings.Repeat("x", 70000) + `"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := install.ReadPlan(strings.NewReader(body), p, 1000, "alice", initFlags)
+			_, err := install.ReadPlan(strings.NewReader(body), p, 1000, "alice")
 			if !errors.Is(err, install.ErrInvalidPlan) {
 				t.Fatalf("ReadPlan = %v, want a refusal", err)
 			}
@@ -61,20 +55,19 @@ func TestReadPlanRefusesAnythingOutsideThePolicy(t *testing.T) {
 	}
 }
 
-// TestRootPlanTakesNoGroupOrContinuation refuses a plan for root that adds
-// root to the group or continues init as root.
-func TestRootPlanTakesNoGroupOrContinuation(t *testing.T) {
+// TestRootPlanTakesNoGroup refuses a plan for root that adds root to the
+// group.
+func TestRootPlanTakesNoGroup(t *testing.T) {
 	p := install.Load()
 	for _, body := range []string{
 		`{"version":1,"account":"root","uid":0,"actions":[{"kind":"group-add","account":"root"}]}`,
-		`{"version":1,"account":"root","uid":0,"actions":[{"kind":"docker-enable"}],"continue":{"dir":"/root","args":[],"terminal":false}}`,
 	} {
-		if _, err := install.ReadPlan(strings.NewReader(body), p, 0, "root", initFlags); !errors.Is(err, install.ErrInvalidPlan) {
+		if _, err := install.ReadPlan(strings.NewReader(body), p, 0, "root"); !errors.Is(err, install.ErrInvalidPlan) {
 			t.Errorf("ReadPlan(%s) = %v", body, err)
 		}
 	}
 	ok := `{"version":1,"account":"root","uid":0,"actions":[{"kind":"apt-update"},{"kind":"apt-install","packages":["docker.io"]}]}`
-	if _, err := install.ReadPlan(strings.NewReader(ok), p, 0, "root", initFlags); err != nil {
+	if _, err := install.ReadPlan(strings.NewReader(ok), p, 0, "root"); err != nil {
 		t.Errorf("root's install: %v", err)
 	}
 }

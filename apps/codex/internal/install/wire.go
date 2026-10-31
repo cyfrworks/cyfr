@@ -11,9 +11,8 @@ import (
 )
 
 // Event is one line the root entry writes on its standard output, one
-// JSON object per line: an action starting or done, the failure that
-// stopped it, or "continue", after which the stream is the continued
-// cyfr init's own output.
+// JSON object per line: an action starting or done, or the failure that
+// stopped it.
 type Event struct {
 	Event   string  `json:"event"`
 	Action  *Action `json:"action,omitempty"`
@@ -22,10 +21,9 @@ type Event struct {
 
 // The events.
 const (
-	EventStart    = "start"
-	EventDone     = "done"
-	EventFailed   = "failed"
-	EventContinue = "continue"
+	EventStart  = "start"
+	EventDone   = "done"
+	EventFailed = "failed"
 )
 
 // Failed is an Apply error carried across the root entry's output, so the
@@ -100,4 +98,3 @@ func (e Emitter) emit(ev Event) {
 func (e Emitter) Start(a Action)   { e.emit(Event{Event: EventStart, Action: &a}) }
 func (e Emitter) Done(a Action)    { e.emit(Event{Event: EventDone, Action: &a}) }
 func (e Emitter) Failed(err error) { e.emit(Event{Event: EventFailed, Failure: Fail(err)}) }
-func (e Emitter) Continue()        { e.emit(Event{Event: EventContinue}) }

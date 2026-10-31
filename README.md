@@ -54,7 +54,7 @@ Stand up the self-hosted stack on a server (see [Deploy to a Server](#deploy-to-
 
 Run CYFR locally and drive it with the `cyfr` CLI.
 
-On **Ubuntu 26.04 LTS** nothing needs installing by hand. The install script installs what it lacks to verify a release (cosign, and curl and ca-certificates where missing) from Ubuntu's archive, then puts the verified `cyfr` in `/usr/local/bin`. `cyfr init` installs Docker from Ubuntu's archive (`docker.io`, `docker-compose-v2` and `apparmor`) when the machine lacks it, starts its service and adds your account to the `docker` group. Each shows the exact commands, asks `Install these requirements?`, and runs them through `sudo`, which asks for your password once per command; `cyfr init --yes`, and `CYFR_INSTALL_YES=1` after the install command's pipe, agree without asking, and then `sudo` must work without a password prompt. Members of the `docker` group control Docker, which is root's power over the machine. Joining the group takes effect in a new login: `cyfr init` finishes in a process that has the group, and the terminal you ran it in needs `newgrp docker`, or a new login, before `cyfr up`. Ubuntu's universe archive must be enabled (`sudo add-apt-repository universe`); neither command edits apt's sources.
+On **Ubuntu 26.04 LTS** nothing needs installing by hand. The install script installs what it lacks to verify a release (cosign, and curl and ca-certificates where missing) from Ubuntu's archive, then puts the verified `cyfr` in `/usr/local/bin`, root's. Under either verification knob below, it installs nothing root's and puts `cyfr` where the plain install does, `/usr/local/bin` if you can write it, else `~/.local/bin`. `cyfr init` installs Docker from Ubuntu's archive (`docker.io`, `docker-compose-v2` and `apparmor`) when the machine lacks it, starts its service and adds your account to the `docker` group. Each shows the exact commands, asks `Install these requirements?`, and runs them through `sudo`, which asks for your password once per command; `cyfr init --yes`, and `CYFR_INSTALL_YES=1` after the install command's pipe, agree without asking; `sudo` still asks for the password in a terminal, and without one it must work without a password prompt. Members of the `docker` group control Docker, which is root's power over the machine. Joining the group takes effect in a new login: `cyfr init` finishes in a process that has the group, and the terminal you ran it in needs `newgrp docker`, or a new login, before `cyfr up`. Ubuntu's universe archive must be enabled (`sudo add-apt-repository universe`); neither command edits apt's sources.
 
 On other systems, install Docker first. The install script and Homebrew cask install the `cyfr` CLI only, and Docker must be running before `cyfr init` / `cyfr up`:
 
@@ -1286,6 +1286,11 @@ PATH it refuses. Two knobs adjust the policy:
   signature bundle: the checksum is still verified, the signature is not.
 - `CYFR_INSECURE_SKIP_VERIFY=1` — skip verification entirely (not
   recommended; for airgapped/bootstrap edge cases).
+
+Under either knob the CLI is never installed as root's: it goes to
+`/usr/local/bin` if you can write it, else `~/.local/bin`, or to the
+`CYFR_INSTALL_DIR` you name, so `cyfr init` cannot use it to install the
+machine's requirements.
 
 All release binaries are signed and attested. You can also verify manually at
 three levels:

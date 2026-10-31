@@ -229,6 +229,11 @@ func TestCompletedSaysWhatChanged(t *testing.T) {
 	if got, want := install.Completed(p, before, interrupted.Facts(alice, false)), "CYFR left docker.io partly installed."; got != want {
 		t.Errorf("after an interrupted install:\n got %q\nwant %q", got, want)
 	}
+	// An interrupt that leaves only a dependency unfinished changed the
+	// machine all the same.
+	if got, want := install.Completed(p, install.Facts{}, install.Facts{Interrupted: true}), "CYFR left a package installation unfinished."; got != want {
+		t.Errorf("after an interrupt that left a dependency unfinished:\n got %q\nwant %q", got, want)
+	}
 	if err := install.Apply(context.Background(), p, m.Host(), agree(t, p, m), noProgress{}); err != nil {
 		t.Fatal(err)
 	}

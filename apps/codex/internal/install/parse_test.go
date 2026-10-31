@@ -4,6 +4,8 @@
 package install
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -72,5 +74,54 @@ func TestParseCandidate(t *testing.T) {
 	}
 	if debianMajor("1:27.5.1-0ubuntu3") != 27 {
 		t.Error("an epoch hides the major")
+	}
+}
+
+// ReadSudoCause reads sudo-rs's and sudo's own refusals.
+func TestReadSudoCause(t *testing.T) {
+	for printed, want := range map[string]SudoCause{
+		"sudo: interactive authentication is required\n":                                      SudoNeedsPassword,
+		"sudo: a password is required\n":                                                      SudoNeedsPassword,
+		"[sudo: authenticate] Password: \nsudo: Authentication failed, try again.\n":          SudoWrongPassword,
+		"sudo: maximum 3 incorrect authentication attempts\n":                                 SudoWrongPassword,
+		"sudo: 3 incorrect password attempts\n":                                               SudoWrongPassword,
+		"sudo: I'm sorry alice. I'm afraid I can't do that\n":                                 SudoNotAllowed,
+		"Sorry, user alice may not run /usr/local/bin/cyfr internal install-apply on cyfr.\n": SudoNotAllowed,
+		"alice is not in the sudoers file.\n":                                                 SudoNotAllowed,
+		"sudo: unable to resolve host cyfr\n":                                                 SudoUnknown,
+		"":                                                                                    SudoUnknown,
+	} {
+		if got := ReadSudoCause(printed); got != want {
+			t.Errorf("ReadSudoCause(%q) = %d, want %d", printed, got, want)
+		}
+	}
+}
+
+// SameSocket takes a link to the policy's socket for the socket itself,
+// and nothing else.
+func TestSameSocket(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "run", "docker.sock")
+	if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "run"), filepath.Join(dir, "var-run")); err != nil {
+		t.Fatal(err)
+	}
+	want := "unix://" + filepath.Join(dir, "var-run", "docker.sock")
+	if got := SameSocket("unix://"+sock, want); got != want {
+		t.Errorf("the same socket by another path = %q", got)
+	}
+	other := filepath.Join(dir, "run", "other.sock")
+	if err := os.WriteFile(other, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"unix://" + other, "tcp://build.example.com:2376", ""} {
+		if got := SameSocket(endpoint, want); got != endpoint {
+			t.Errorf("SameSocket(%q) = %q", endpoint, got)
+		}
 	}
 }

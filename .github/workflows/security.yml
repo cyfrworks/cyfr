@@ -149,6 +149,9 @@ jobs:
       - name: Run the install proof's cleanup tests
         run: bash tests/install-screen-proof/cleanup-test.sh
 
+      - name: Run the install proof's evidence predicates tests
+        run: bash tests/install-screen-proof/predicates-test.sh
+
   repo-scan:
     name: Trivy (secrets + IaC misconfig)
     runs-on: ubuntu-latest

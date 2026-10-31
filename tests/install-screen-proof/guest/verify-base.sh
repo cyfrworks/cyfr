@@ -6,7 +6,7 @@
 # boots from it, with no network:
 #   verify-base.sh IMAGE SHA256
 # /base is the host's cache directory for the pinned sum
-# (tests/install-screen-proof/fetch-base.sh), mounted read-only. Its
+# (tests/install-screen-proof/prepare.sh), mounted read-only. Its
 # SHA256SUMS must carry a good signature of Ubuntu's cloud image keyring,
 # the sum it gives IMAGE must be SHA256, and so must the SHA-256 of
 # /base/IMAGE itself.

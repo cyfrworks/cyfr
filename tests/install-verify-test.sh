@@ -353,7 +353,7 @@ expect() {
 # case finds the host's own sudo, apt-get, dpkg-query, curl or cosign.
 base="$fixture/base"
 mkdir "$base"
-for tool in awk cat chmod cmp cp cut date dirname env flock grep gzip id ls mkdir mkfifo mktemp mv rm sed sha256sum sleep tar touch tr; do
+for tool in awk cat chmod cmp cp cut date dirname env flock grep gzip id ls mkdir mkfifo mktemp mv readlink rm sed sha256sum sleep tar tee touch tr; do
     if ! tool_file="$(find_tool "$tool")"; then
         printf 'install-verify-test: %s is not on PATH\n' "$tool" >&2
         exit 1
@@ -624,6 +624,41 @@ else
     fail_check "$desc" "exit $gen_status" "$gen_out"
 fi
 
+# A policy name assigned outside the block would override it however the
+# block reads, so --check and a write refuse it, naming the line, and a
+# write changes nothing; a line that only reads a policy name passes.
+# shellcheck disable=SC2016 # planted shell text, not expanded here
+for planted in "POLICY_LOCK_SECONDS=1" ': "${POLICY_INSTALL_PATH:=/tmp/cyfr}"' "export POLICY_LOCK_PATH=/tmp/lock" \
+    "read -r POLICY_SYSTEM_ID <&8" "x=1; POLICY_SYSTEM_NAME=Other"; do
+    cp "$INSTALL_SH" "$gen/assigned.sh"
+    printf '%s\n' "$planted" >>"$gen/assigned.sh"
+    cp "$gen/assigned.sh" "$gen/assigned.sh.before"
+    desc="--check refuses '$planted' after the policy block, naming it"
+    gen_out="$(python3 -I "$generator" --check --policy "$policy" --script "$gen/assigned.sh" 2>&1)"
+    gen_status=$?
+    case "$gen_status:$gen_out" in
+        1:*"assign a policy name"*": $planted"*) pass "$desc" ;;
+        *) fail_check "$desc" "exit $gen_status" "$gen_out" ;;
+    esac
+    desc="the generator refuses to write past '$planted', changing nothing"
+    python3 -I "$generator" --policy "$policy" --script "$gen/assigned.sh" >/dev/null 2>&1
+    gen_status=$?
+    if [ "$gen_status" -eq 1 ] && cmp -s "$gen/assigned.sh" "$gen/assigned.sh.before"; then
+        pass "$desc"
+    else
+        fail_check "$desc" "exit $gen_status"
+    fi
+done
+cp "$INSTALL_SH" "$gen/reads.sh"
+# shellcheck disable=SC2016 # planted shell text, not expanded here
+printf '%s\n' 'printf "%s %s\n" "$POLICY_LOCK_SECONDS" "${POLICY_INSTALL_PATH%/*}"' '# POLICY_LOCK_SECONDS=1' >>"$gen/reads.sh"
+desc="a line reading policy names and a comment naming one pass --check"
+if gen_out="$(python3 -I "$generator" --check --policy "$policy" --script "$gen/reads.sh" 2>&1)"; then
+    pass "$desc"
+else
+    fail_check "$desc" "$gen_out"
+fi
+
 # Prints the lines of the script $2 outside its policy block that restate
 # one of the policy $1's values, exiting 1 when there is one.
 restated() {
@@ -689,7 +724,7 @@ request=$3
 text=$4
 shift 4
 mkfifo "$dir/req" "$dir/rep"
-sh -c "$(cat "$text")" cyfr-install-helper "$dir" "$dest" "$@" >"$dir/helper.out" 2>&1 &
+sh -c "$(cat "$text")" cyfr-install-helper run "$dir" "$dest" "$@" >"$dir/helper.out" 2>&1 &
 pid=$!
 exec 4<"$dir/rep" 3>"$dir/req"
 IFS= read -r reply <&4
@@ -714,7 +749,76 @@ EOF
 
 verified_sum="$(printf 'verified-bytes' | sha256sum | awk '{print $1}')"
 
-# Runs one helper conversation in a fresh private directory holding the
+# The show mode is the same program, run by the person for the preview:
+# each command's words, one a line, an empty line after each, and nothing
+# run, so no apt, no lock file and no installed copy.
+shown_dir="$(mktemp -d "$helper/dir.XXXXXX")"
+desc="the helper's show mode prints root's commands and runs none of them"
+shown="$(sh -c "$(cat "$helper/text")" cyfr-install-helper show "$shown_dir" "$helper/dest/cyfr" cosign 2>&1 </dev/null)"
+shown_status=$?
+shown_want="flock
+-E
+75
+-w
+2
+9
+
+apt-get
+update
+
+apt-get
+-o
+DPkg::Lock::Timeout=2
+install
+-y
+--no-install-recommends
+cosign
+
+flock
+-E
+75
+-w
+2
+9
+
+mktemp
+$helper/dest/.cyfr.XXXXXX
+
+cp
+--
+$shown_dir/cyfr
+$helper/dest/.cyfr.XXXXXX
+
+sha256sum
+--
+$helper/dest/.cyfr.XXXXXX
+
+chmod
+0755
+$helper/dest/.cyfr.XXXXXX
+
+mv
+-f
+-T
+--
+$helper/dest/.cyfr.XXXXXX
+$helper/dest/cyfr"
+if [ "$shown_status" -eq 0 ] && [ "$shown" = "$shown_want" ] && [ ! -s "$helper/apt.log" ] &&
+    [ ! -e "$helper/install.lock" ] && [ -z "$(ls -A "$helper/dest")" ]; then
+    pass "$desc"
+else
+    fail_check "$desc" "status $shown_status" "wanted: $shown_want" "got:    $shown" "apt: $(cat "$helper/apt.log")" "$(ls -A "$helper")"
+fi
+desc="the helper refuses a mode other than run and show"
+sh -c "$(cat "$helper/text")" cyfr-install-helper root "$shown_dir" "$helper/dest/cyfr" cosign >"$helper/mode.out" 2>&1 </dev/null
+mode_status=$?
+if [ "$mode_status" -eq 64 ] && [ ! -s "$helper/mode.out" ] && [ ! -s "$helper/apt.log" ]; then
+    pass "$desc"
+else
+    fail_check "$desc" "status $mode_status" "$(cat "$helper/mode.out")"
+fi
+
+# Runs one helper exchange in a fresh private directory holding the
 # file $2 as cyfr; passes when its replies are exactly $3.
 helper_case() {
     helper_desc="$1"
@@ -777,7 +881,7 @@ status 1" "$helper/dest/cyfr" "rm -rf /"
 helper_case "the end of the requests installs nothing" other-bytes \
     "ready
 status 0" "$helper/dest/cyfr" none
-desc="the helper's ended conversation left the installed copy"
+desc="the helper's ended exchange left the installed copy"
 if [ "$(cat "$helper/dest/cyfr")" = verified-bytes ]; then
     pass "$desc"
 else
@@ -828,12 +932,14 @@ cmd_text='curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scrip
 # universe enabled, sudo that works), the release, a terminal answering
 # yes, and the assignments that point the sourced script at them. Every
 # stub finds its world two directories above itself and appends what it
-# was asked to $w/events.
+# was asked to $w/events; the commands root runs also append their argv
+# to $w/root-argv.
 make_world() {
     w="$fixture/world-$1"
     mkdir -p "$w/bin" "$w/rootbin" "$w/sysbin" "$w/home/.local/bin" "$w/usrlocal" "$w/tmp" "$w/release"
     cp "$release"/cyfr_1.2.3_linux_amd64.tar.gz "$release"/checksums.txt "$release"/checksums.txt.sigstore.json "$w/release/"
     : >"$w/events"
+    : >"$w/root-argv"
     printf 'ca-certificates\n' >"$w/dpkg-installed"
     : >"$w/dpkg-files"
     : >"$w/universe"
@@ -890,6 +996,10 @@ else
     cat "$W/release/$name"
 fi
 EOF
+    # sudo keeps CYFR's root step, its one multi-line argument, in
+    # root-step. Its modes print what sudo-rs 0.2.13 prints for each
+    # refusal; a command other than /bin/sh, as install_binary's sudo cp,
+    # is recorded and not run, since the test cannot be root.
     cat >"$w/bin/sudo" <<'EOF'
 #!/bin/sh
 W=${0%/*/*}
@@ -897,7 +1007,10 @@ line=sudo
 for arg in "$@"; do
     case "$arg" in
         *'
-'*) line="$line <script>" ;;
+'*)
+            line="$line <CYFR's root step>"
+            printf '%s' "$arg" >"$W/root-step"
+            ;;
         *) line="$line $arg" ;;
     esac
 done
@@ -911,12 +1024,23 @@ while [ "$#" -gt 0 ]; do
         -n) noninteractive=yes; shift ;;
         -k) shift ;;
         --) shift; break ;;
-        *) echo "fake sudo: unexpected $1" >&2; exit 2 ;;
+        -*) echo "fake sudo: unexpected $1" >&2; exit 2 ;;
+        *) break ;;
     esac
 done
 case "$(cat "$W/sudo-mode" 2>/dev/null)" in
-    refuse)
-        echo "sudo: 3 incorrect authentication attempts" >&2
+    wrong-password)
+        echo "sudo: Authentication failed, try again." >&2
+        echo "sudo: Authentication failed, try again." >&2
+        echo "sudo: maximum 3 incorrect authentication attempts" >&2
+        exit 1
+        ;;
+    not-allowed)
+        echo "sudo: I'm sorry person. I'm afraid I can't do that" >&2
+        exit 1
+        ;;
+    unknown)
+        echo "sudo: account validation failure, is your account locked?" >&2
         exit 1
         ;;
     refuse-n)
@@ -926,7 +1050,10 @@ case "$(cat "$W/sudo-mode" 2>/dev/null)" in
         fi
         ;;
 esac
-exec env -i "$@"
+case "$1" in
+    /bin/sh) exec env -i "$@" ;;
+esac
+exit 0
 EOF
     cat >"$w/bin/apt-get" <<'EOF'
 #!/bin/sh
@@ -945,6 +1072,9 @@ else
     environment=clean-env
 fi
 printf 'apt-get %s [%s]\n' "$*" "$environment" >>"$W/events"
+case "$0" in
+    */rootbin/*) printf 'apt-get %s\n' "$*" >>"$W/root-argv" ;;
+esac
 case " $* " in
     *" update "*)
         case "$(cat "$W/apt-update" 2>/dev/null)" in
@@ -972,15 +1102,15 @@ case " $* " in
         esac
         if [ -e "$W/hold-apt" ]; then
             : >"$W/at-apt"
-            sleep 30
+            "${W%/*}/base/sleep" 30
         fi
         listed=no
         for arg in "$@"; do
             if [ "$listed" = yes ]; then
                 printf '%s\n' "$arg" >>"$W/dpkg-installed"
                 if [ "$arg" = cosign ]; then
-                    cp "$W/cosign-stub" "$W/sysbin/cosign"
-                    chmod 755 "$W/sysbin/cosign"
+                    "${W%/*}/base/cp" "$W/cosign-stub" "$W/sysbin/cosign"
+                    "${W%/*}/base/chmod" 755 "$W/sysbin/cosign"
                 fi
                 echo "Setting up $arg"
             fi
@@ -992,6 +1122,21 @@ case " $* " in
 esac
 EOF
     cp "$w/bin/apt-get" "$w/rootbin/apt-get"
+    # The rest of root's commands keep their argv and run the real tool;
+    # flock also keeps the file its descriptor 9 is open on, and mktemp
+    # the name it made.
+    # shellcheck disable=SC2016 # the stub's own expansions
+    for tool in flock mktemp cp sha256sum chmod mv; do
+        {
+            printf '#!/bin/sh\nW=${0%%/*/*}\n'
+            printf 'printf "%%s\\n" "%s $*" >>"$W/root-argv"\n' "$tool"
+            case "$tool" in
+                flock) printf '"%s/readlink" "/proc/$$/fd/9" >>"$W/flock-fd9"\n' "$base" ;;
+                mktemp) printf 'made=$("%s/mktemp" "$@") || exit\nprintf "%%s\\n" "$made" >"$W/mktemp-made"\nprintf "%%s\\n" "$made"\nexit 0\n' "$base" ;;
+            esac
+            printf 'exec "%s/%s" "$@"\n' "$base" "$tool"
+        } >"$w/rootbin/$tool"
+    done
     cat >"$w/cosign-stub" <<'EOF'
 #!/bin/sh
 W=${0%/*/*}
@@ -1028,11 +1173,12 @@ EOF
 W=${0%/*/*}
 printf 'add-apt-repository %s\n' "$*" >>"$W/events"
 EOF
-    chmod +x "$w/bin/"* "$w/rootbin/apt-get" "$w/cosign-stub"
+    chmod +x "$w/bin/"* "$w/rootbin/"* "$w/cosign-stub"
     cat >"$w/overrides" <<EOF
 OS_RELEASE_PATHS='$w/os-release'
 TTY_DEVICE='$w/tty'
 ROOT_PATH='$w/rootbin:$base'
+PLAIN_INSTALL_DIRS='$w/homebrew $w/usrlocal'
 POLICY_INSTALL_PATH='$w/usrlocal/cyfr'
 POLICY_LOCK_PATH='$w/install.lock'
 POLICY_LOCK_SECONDS=2
@@ -1046,20 +1192,28 @@ with_cosign() {
     printf 'cosign\n' >>"$w/dpkg-installed"
 }
 
+# A clock for root's date and sleep: date prints the seconds in
+# $w/clock and sleep adds its argument to them, at once.
+# shellcheck disable=SC2016 # the stubs' own expansions
+with_clock() {
+    printf '1000\n' >"$w/clock"
+    printf '#!/bin/sh\ncat "${0%%/*/*}/clock"\n' >"$w/rootbin/date"
+    printf '#!/bin/sh\nW=${0%%/*/*}\nprintf "sleep %%s\\n" "$1" >>"$W/events"\necho $(($(cat "$W/clock") + $1)) >"$W/clock"\n' >"$w/rootbin/sleep"
+    chmod +x "$w/rootbin/date" "$w/rootbin/sleep"
+}
+
 world_env() {
     printf '%s\n' "HOME=$w/home" "PATH=$w/home/.local/bin:$w/bin:$w/sysbin:$base:$w/usrlocal" "TMPDIR=$w/tmp" "CYFR_VERSION=1.2.3"
 }
 
 # Runs the installer's main in the world with the extra settings given as
-# arguments; the output lands in $w/out, the status in $w/status and the
-# seconds it took in $elapsed.
+# arguments; the output lands in $w/out and the status in $w/status. The
+# timeout only ends a run that hangs.
 run_world() {
-    started="$(date +%s)"
     # shellcheck disable=SC2046 # one assignment a line, no blanks
     timeout 60 env -i $(world_env) "$@" /bin/sh -c 'CYFR_INSTALL_TEST=1; . "$1"; . "$2"; main' \
         sh "$INSTALL_SH" "$w/overrides" >"$w/out" 2>&1 </dev/null
     printf '%s\n' "$?" >"$w/status"
-    elapsed=$(($(date +%s) - started))
 }
 
 problems=
@@ -1072,15 +1226,19 @@ status_is() {
         note "exit $(cat "$w/status"), wanted $1"
     fi
 }
+# Whether the output holds the text $1 whole: a text of several lines
+# matches only as those lines, consecutive and in order, its first line
+# the end of an output line and its last the start of one.
 out_has() {
-    if ! grep -F -q -- "$1" "$w/out"; then
-        note "output lacks: $1"
-    fi
+    case "$(cat "$w/out")" in
+        *"$1"*) ;;
+        *) note "output lacks: $1" ;;
+    esac
 }
 out_lacks() {
-    if grep -F -q -- "$1" "$w/out"; then
-        note "output has: $1"
-    fi
+    case "$(cat "$w/out")" in
+        *"$1"*) note "output has: $1" ;;
+    esac
 }
 event_line() {
     if ! grep -F -x -q -- "$1" "$w/events"; then
@@ -1120,20 +1278,70 @@ elevated_once_then_cleaned() {
 nothing_as_root() {
     events_lack "sudo"
     events_lack "apt-get"
+    if [ -s "$w/root-argv" ]; then
+        note "root ran $(cat "$w/root-argv")"
+    fi
 }
 tmp_is_empty() {
     if [ -n "$(ls -A "$w/tmp")" ]; then
         note "the run left $(ls -A "$w/tmp") in its TMPDIR"
     fi
 }
+# Root's install: the release's cyfr, mode 0755 whatever the umask.
 installed_release() {
     if ! cmp -s "$release/stage/cyfr" "$1" || [ "$(ls -ln "$1" | cut -c1-10)" != -rwxr-xr-x ]; then
         note "$1 is not the release's cyfr, mode 0755"
     fi
 }
+# install_binary's: the release's cyfr, executable by its owner, the rest
+# of its mode the umask's.
+installed_plain() {
+    # shellcheck disable=SC2012 # one file the test made, its mode alone
+    if ! cmp -s "$release/stage/cyfr" "$1" || [ "$(ls -ln "$1" | cut -c4)" != x ]; then
+        note "$1 is not the release's cyfr, executable by its owner"
+    fi
+}
 not_installed() {
     if [ -e "$1" ]; then
         note "$1 was installed"
+    fi
+}
+# The private directory the run gave root's step, from sudo's arguments.
+run_dir() {
+    sed -n 's/^sudo .* cyfr-install-helper run \([^ ]*\) .*/\1/p' "$w/events" | head -n 1
+}
+# The commands the preview showed are the commands root ran, in order:
+# the indented lines under its heading against root's argv as the world's
+# stubs kept it, mktemp's name put back as its template; the step the
+# preview names against sudo's arguments; and each flock's descriptor 9
+# on the world's install lock.
+shown_is_run() {
+    awk '/^CYFR runs these commands as root:$/ { on = 1; next }
+        on && /^  / { print substr($0, 3); next }
+        on { exit }' "$w/out" >"$w/shown"
+    made="$(cat "$w/mktemp-made" 2>/dev/null)"
+    template="$(sed -n 's/^mktemp //p' "$w/root-argv" | head -n 1)"
+    awk -v made="$made" -v template="$template" '{
+        line = $0; out = ""
+        while (made != "" && (i = index(line, made)) > 0) {
+            out = out substr(line, 1, i - 1) template
+            line = substr(line, i + length(made))
+        }
+        print out line
+    }' "$w/root-argv" >"$w/ran"
+    if [ ! -s "$w/shown" ] || ! cmp -s "$w/shown" "$w/ran"; then
+        note "the preview's commands are not root's: shown
+$(cat "$w/shown")
+ran
+$(cat "$w/ran")"
+    fi
+    shown_step="$(sed -n 's/^They run as one root step: //p' "$w/out")"
+    ran_step="$(grep '^sudo .* /bin/sh -c ' "$w/events")"
+    if [ -z "$shown_step" ] || [ "$shown_step" != "$ran_step" ]; then
+        note "the preview names the step '$shown_step', and sudo ran '$ran_step'"
+    fi
+    if [ "$(sort -u "$w/flock-fd9" 2>/dev/null)" != "$w/install.lock" ]; then
+        note "flock's descriptor 9 was $(cat "$w/flock-fd9" 2>/dev/null), not $w/install.lock"
     fi
 }
 verdict() {
@@ -1145,19 +1353,63 @@ verdict() {
     problems=
 }
 
-elevation="sudo -k -- /bin/sh -c <script> cyfr-install-helper "
+# out_has matches a text of several lines whole: consecutive, in order.
+w="$fixture/out-check"
+mkdir "$w"
+printf 'first line\nsecond line\nthird line\n' >"$w/out"
+out_has "line
+second line
+thi"
+verdict "out_has finds consecutive lines, the first and last partly"
+out_has "first line
+third line"
+if [ -n "$problems" ]; then
+    problems=
+    pass "out_has refuses lines that are not consecutive"
+else
+    fail_check "out_has refuses lines that are not consecutive"
+fi
+out_has "second line
+first line"
+if [ -n "$problems" ]; then
+    problems=
+    pass "out_has refuses lines out of order"
+else
+    fail_check "out_has refuses lines out of order"
+fi
+
+elevation="sudo -k -- /bin/sh -c <CYFR's root step> cyfr-install-helper run "
+lock_note="flock takes CYFR's install lock, $fixture/world-@/install.lock, open as file descriptor 9, waiting up to 2 seconds for another installation to finish."
+retry_note="apt-get update is tried again each second, for up to 2 seconds, while another package-list update holds its lock."
+binary_note="mktemp's name takes the place of XXXXXX, and mv runs only when sha256sum gives the verified download's SHA-256."
+verify_note="The second flock and the commands after it run once the download passes the signature and checksum checks."
+# The lock note for the current world.
+world_lock_note() {
+    printf '%s\n' "$lock_note" | sed "s|$fixture/world-@/|$w/|"
+}
 
 make_world fresh
 run_world
 status_is 0
+d="$(run_dir)"
 out_has "CYFR runs these commands as root:
+  flock -E 75 -w 2 9
   apt-get update
   apt-get -o DPkg::Lock::Timeout=2 install -y --no-install-recommends cosign
-  install -o root -g root -m 0755 "
-out_has " $w/usrlocal/cyfr
-The last command runs once the download it installs passes the signature and checksum checks.
+  flock -E 75 -w 2 9
+  mktemp $w/usrlocal/.cyfr.XXXXXX
+  cp -- $d/cyfr $w/usrlocal/.cyfr.XXXXXX
+  sha256sum -- $w/usrlocal/.cyfr.XXXXXX
+  chmod 0755 $w/usrlocal/.cyfr.XXXXXX
+  mv -f -T -- $w/usrlocal/.cyfr.XXXXXX $w/usrlocal/cyfr
+$(world_lock_note)
+$retry_note
+$binary_note
+$verify_note
+They run as one root step: ${elevation}$d $w/usrlocal/cyfr cosign
 Install these requirements? [y/N] "
 out_has "cyfr v1.2.3 installed successfully to $w/usrlocal/cyfr"
+shown_is_run
 elevated_once_then_cleaned "$elevation"
 event_line "apt-get update [clean-env]"
 event_line "apt-get -o DPkg::Lock::Timeout=2 install -y --no-install-recommends cosign [clean-env]"
@@ -1167,12 +1419,19 @@ event_before "apt-get -o DPkg" "curl"
 event_before "apt-get -o DPkg" "cosign verify-blob"
 installed_release "$w/usrlocal/cyfr"
 tmp_is_empty
-verdict "a fresh image lacking cosign: one agreed elevation installs cosign before verification, then the verified cyfr"
-grep -F "$elevation" "$w/events" >"$w/elevation"
-case "$(cat "$w/elevation")" in
+verdict "a fresh image lacking cosign: one agreed elevation installs cosign before verification, then the verified cyfr, as the preview shows"
+case "$(grep -F "$elevation" "$w/events")" in
     *" $w/usrlocal/cyfr cosign") pass "the elevation names the destination and the packages as its arguments" ;;
-    *) fail_check "the elevation names the destination and the packages as its arguments" "$(cat "$w/elevation")" ;;
+    *) fail_check "the elevation names the destination and the packages as its arguments" "$(grep -F "$elevation" "$w/events")" ;;
 esac
+desc="sudo's root step is the helper program, as the script writes it"
+# shellcheck disable=SC2016 # expanded by the inner shell
+if helper_text="$(sh -c 'CYFR_INSTALL_TEST=1; . "$1"; . "$2"; root_helper_text' sh "$INSTALL_SH" "$w/overrides" 2>&1)" &&
+    printf '%s' "$helper_text" >"$w/helper-text" && cmp -s "$w/root-step" "$w/helper-text"; then
+    pass "$desc"
+else
+    fail_check "$desc" "$(diff "$w/helper-text" "$w/root-step" 2>&1 | head -n 20)"
+fi
 
 make_world declined
 printf 'n\n' >"$w/tty"
@@ -1199,28 +1458,72 @@ run_world CYFR_INSTALL_YES=1
 status_is 0
 out_has "CYFR_INSTALL_YES=1 approves these commands."
 out_lacks "Install these requirements?"
-elevated_once_then_cleaned "sudo -n -k -- /bin/sh -c <script> cyfr-install-helper "
+shown_is_run
+elevated_once_then_cleaned "sudo -n -k -- /bin/sh -c <CYFR's root step> cyfr-install-helper run "
 installed_release "$w/usrlocal/cyfr"
-verdict "CYFR_INSTALL_YES=1 approves the displayed plan and elevates with sudo -n -k"
+verdict "CYFR_INSTALL_YES=1 without a terminal approves the displayed plan and elevates with sudo -n -k"
+
+make_world yes-terminal
+run_world CYFR_INSTALL_YES=1
+status_is 0
+out_has "CYFR_INSTALL_YES=1 approves these commands."
+out_lacks "Install these requirements?"
+shown_is_run
+elevated_once_then_cleaned "$elevation"
+installed_release "$w/usrlocal/cyfr"
+verdict "CYFR_INSTALL_YES=1 in a terminal asks nothing, and sudo may ask for the password there"
 
 make_world yes-needs-password
+rm "$w/tty"
 printf 'refuse-n\n' >"$w/sudo-mode"
 run_world CYFR_INSTALL_YES=1
 status_is 1
-out_has "This account cannot run sudo, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=1.2.3 CYFR_INSTALL_YES=1 sh\` from an account that can install software."
+out_has "sudo: interactive authentication is required
+sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=1.2.3 CYFR_INSTALL_YES=1 sh\` in a terminal, or give this account sudo without a password prompt."
+out_lacks "cannot run sudo"
 events_lack "apt-get"
-elevated_once_then_cleaned "sudo -n -k -- /bin/sh -c <script> cyfr-install-helper "
-verdict "CYFR_INSTALL_YES=1 still needs sudo that works without a prompt"
+elevated_once_then_cleaned "sudo -n -k -- /bin/sh -c <CYFR's root step> cyfr-install-helper run "
+tmp_is_empty
+verdict "sudo -n needing a password names the missing terminal, not a missing sudo"
 
-make_world sudo-refuses
-printf 'refuse\n' >"$w/sudo-mode"
+make_world wrong-password
+printf 'wrong-password\n' >"$w/sudo-mode"
 run_world
 status_is 1
-out_has "This account cannot run sudo, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`$cmd_text\` from an account that can install software."
+out_has "sudo: maximum 3 incorrect authentication attempts
+sudo did not accept the password, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`$cmd_text\` again and type this account's password."
+out_lacks "cannot run sudo"
 events_lack "apt-get"
 elevated_once_then_cleaned "$elevation"
 tmp_is_empty
-verdict "sudo refusing the elevation refuses the install, and sudo -k still runs"
+verdict "a password sudo refused three times is named as such, and sudo -k still runs"
+
+make_world not-allowed
+printf 'not-allowed\n' >"$w/sudo-mode"
+run_world
+status_is 1
+out_has "sudo: I'm sorry person. I'm afraid I can't do that
+This account cannot run sudo, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`$cmd_text\` from an account that can install software."
+events_lack "apt-get"
+elevated_once_then_cleaned "$elevation"
+verdict "an account sudo does not allow is told it cannot run sudo"
+
+make_world sudo-unknown
+printf 'unknown\n' >"$w/sudo-mode"
+run_world
+status_is 1
+out_has "sudo: account validation failure, is your account locked?
+sudo did not run CYFR's installer, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`$cmd_text\` again once sudo works for this account."
+out_lacks "cannot run sudo"
+verdict "a sudo refusal of other words, in a terminal, claims no cause"
+
+make_world sudo-unknown-no-terminal
+rm "$w/tty"
+printf 'unknown\n' >"$w/sudo-mode"
+run_world CYFR_INSTALL_YES=1
+status_is 1
+out_has "sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install cosign and cyfr in $w/usrlocal."
+verdict "a sudo -n refusal of other words is the password it could not ask for"
 
 make_world no-sudo
 rm "$w/bin/sudo"
@@ -1263,7 +1566,7 @@ mkdir "$w/opt"
 run_world CYFR_INSTALL_DIR="$w/opt"
 status_is 0
 nothing_as_root
-installed_release "$w/opt/cyfr"
+installed_plain "$w/opt/cyfr"
 verdict "every tool present and a writable CYFR_INSTALL_DIR: no elevation and no apt"
 
 make_world satisfied-installed
@@ -1280,14 +1583,22 @@ make_world satisfied-new-cli
 with_cosign
 run_world
 status_is 0
-out_has "  install -o root -g root -m 0755 "
+d="$(run_dir)"
+out_has "CYFR runs these commands as root:
+  flock -E 75 -w 2 9
+  mktemp $w/usrlocal/.cyfr.XXXXXX
+  cp -- $d/cyfr $w/usrlocal/.cyfr.XXXXXX
+  sha256sum -- $w/usrlocal/.cyfr.XXXXXX
+  chmod 0755 $w/usrlocal/.cyfr.XXXXXX
+  mv -f -T -- $w/usrlocal/.cyfr.XXXXXX $w/usrlocal/cyfr
+$(world_lock_note)
+$binary_note
+They run as one root step: ${elevation}$d $w/usrlocal/cyfr
+Install these requirements? [y/N] "
 out_lacks "apt-get update"
+shown_is_run
 events_lack "apt-get"
 elevated_once_then_cleaned "$elevation"
-case "$(grep -F "$elevation" "$w/events")" in
-    *" $w/usrlocal/cyfr") ;;
-    *) note "the elevation carries packages" ;;
-esac
 checked="$(grep -n -F 'Checksum verified.' "$w/out" | cut -d: -f1)"
 asked="$(grep -n -F 'CYFR runs these commands as root:' "$w/out" | cut -d: -f1)"
 if [ -z "$checked" ] || [ -z "$asked" ] || [ "$checked" -ge "$asked" ]; then
@@ -1313,9 +1624,91 @@ run_world
 status_is 0
 events_lack "sudo"
 out_has "Install these requirements? [y/N] "
+out_has "
+They run as one root step: /bin/sh -c <CYFR's root step> cyfr-install-helper run "
 event_line "apt-get -o DPkg::Lock::Timeout=2 install -y --no-install-recommends cosign [person-env]"
 installed_release "$w/usrlocal/cyfr"
 verdict "as root packages still need agreement, and run without sudo"
+
+# --- A verification bypass: the plain install, never root's -----------------
+
+# Under a bypass on the supported system with every tool it needs, the CLI
+# goes where resolve_install_dir puts it: the world's /usr/local/bin only
+# when the person can write it, else ~/.local/bin.
+if [ "$("$real_id" -u)" = 0 ]; then
+    printf 'SKIP: a bypass with /usr/local/bin unwritable (the test runs as root, which writes every directory)\n'
+else
+    make_world bypass-home
+    chmod 555 "$w/usrlocal"
+    run_world CYFR_ALLOW_UNVERIFIED=1
+    chmod 755 "$w/usrlocal"
+    status_is 0
+    out_has "Installing cyfr v1.2.3 (linux/amd64) to $w/home/.local/bin"
+    out_has "cyfr v1.2.3 installed successfully to $w/home/.local/bin/cyfr"
+    out_lacks "as root"
+    out_lacks "signature and checksum checks"
+    nothing_as_root
+    not_installed "$w/usrlocal/cyfr"
+    installed_plain "$w/home/.local/bin/cyfr"
+    tmp_is_empty
+    verdict "CYFR_ALLOW_UNVERIFIED=1 on Ubuntu 26.04 installs in ~/.local/bin as the person when /usr/local/bin is not theirs"
+fi
+
+make_world bypass-usrlocal
+run_world CYFR_INSECURE_SKIP_VERIFY=1
+status_is 0
+out_has "Installing cyfr v1.2.3 (linux/amd64) to $w/usrlocal"
+out_lacks "as root"
+out_lacks "signature and checksum checks"
+nothing_as_root
+installed_plain "$w/usrlocal/cyfr"
+verdict "CYFR_INSECURE_SKIP_VERIFY=1 on Ubuntu 26.04 copies into a /usr/local/bin the person can write, without root"
+
+# Missing bootstrap packages under a bypass are still root's, and the CLI
+# is not: the elevation carries no destination.
+if [ "$("$real_id" -u)" != 0 ]; then
+    make_world bypass-packages
+    : >"$w/dpkg-installed"
+    chmod 555 "$w/usrlocal"
+    run_world CYFR_ALLOW_UNVERIFIED=1
+    chmod 755 "$w/usrlocal"
+    status_is 0
+    d="$(run_dir)"
+    out_has "CYFR runs these commands as root:
+  flock -E 75 -w 2 9
+  apt-get update
+  apt-get -o DPkg::Lock::Timeout=2 install -y --no-install-recommends ca-certificates
+$(world_lock_note)
+$retry_note
+They run as one root step: ${elevation}$d - ca-certificates
+Install these requirements? [y/N] "
+    out_lacks "signature and checksum checks"
+    out_lacks "mktemp"
+    shown_is_run
+    elevated_once_then_cleaned "$elevation"
+    not_installed "$w/usrlocal/cyfr"
+    installed_plain "$w/home/.local/bin/cyfr"
+    verdict "a bypass missing ca-certificates: root installs the package alone, and the CLI goes the plain way"
+fi
+
+# An explicit CYFR_INSTALL_DIR the person cannot write keeps install_binary's
+# own sudo cp under a bypass, and no root step.
+if [ "$("$real_id" -u)" != 0 ]; then
+    make_world bypass-explicit
+    mkdir "$w/locked"
+    chmod 555 "$w/locked"
+    run_world CYFR_ALLOW_UNVERIFIED=1 CYFR_INSTALL_DIR="$w/locked"
+    chmod 755 "$w/locked"
+    status_is 0
+    out_has "Elevated permissions required to install to $w/locked"
+    out_lacks "as root"
+    if ! grep -q "^sudo cp $w/tmp/[^ ]*/cyfr $w/locked/cyfr\$" "$w/events" || ! grep -q -x -F "sudo chmod +x $w/locked/cyfr" "$w/events"; then
+        note "install_binary's sudo cp and chmod did not run"
+    fi
+    events_lack "/bin/sh -c"
+    events_lack "apt-get"
+    verdict "a bypass with an unwritable CYFR_INSTALL_DIR keeps install_binary's sudo cp"
+fi
 
 make_world install-lock
 : >"$w/install.lock"
@@ -1330,31 +1723,31 @@ run_world
 status_is 1
 out_has "Another CYFR installation is still running after 2 seconds. Nothing was installed. Let it finish, then run \`$cmd_text\` again."
 events_lack "apt-get"
-elevated_once_then_cleaned "$elevation"
-if [ "$elapsed" -gt 7 ]; then
-    note "the refusal took $elapsed seconds"
+if [ "$(cat "$w/root-argv")" != "flock -E 75 -w 2 9" ] || [ "$(cat "$w/flock-fd9" 2>/dev/null)" != "$w/install.lock" ]; then
+    note "root did not wait on the install lock with flock -w 2 alone: $(cat "$w/root-argv")"
 fi
+elevated_once_then_cleaned "$elevation"
 if ! kill -0 "$holder" 2>/dev/null || [ ! -e "$w/install.lock" ]; then
     note "the other installation's lock or its holder is gone"
 fi
-verdict "a held install lock refuses after its deadline, leaving the holder and its lock"
+verdict "a held install lock refuses after flock's deadline, leaving the holder and its lock"
 kill "$holder" 2>/dev/null
 wait "$holder" 2>/dev/null
 
+# The list lock's deadline runs on root's clock: refused when date reads
+# the deadline, after one try at each second up to it.
 make_world list-lock
+with_clock
 printf 'list-lock\n' >"$w/apt-update"
 run_world
 status_is 1
 out_has "A package-list update is still running after 2 seconds. Nothing was installed. Let it finish, then run \`$cmd_text\` again."
-if [ "$(grep -c -F 'apt-get update' "$w/events")" -lt 2 ]; then
-    note "the list lock was not retried"
+if [ "$(grep -c -x -F 'apt-get update' "$w/root-argv")" != 3 ] || [ "$(grep -c -x -F 'sleep 1' "$w/events")" != 2 ]; then
+    note "not three tries a second apart: $(cat "$w/root-argv") $(grep sleep "$w/events")"
 fi
 events_lack "install -y"
-if [ "$elapsed" -lt 2 ] || [ "$elapsed" -gt 7 ]; then
-    note "the refusal took $elapsed seconds"
-fi
 elevated_once_then_cleaned "$elevation"
-verdict "the package-list lock is retried until its deadline, then refused"
+verdict "the package-list lock is retried each second until its deadline, then refused"
 
 make_world dpkg-lock
 printf 'dpkg-lock\n' >"$w/apt-install"

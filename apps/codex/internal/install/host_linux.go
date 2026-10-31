@@ -44,7 +44,13 @@ func ObserveSelf(ctx context.Context, p Policy) (Facts, error) {
 		return Facts{}, err
 	}
 	uid, _ := strconv.Atoi(u.Uid)
-	return osHost{policy: p}.Observe(ctx, Account{Name: u.Username, UID: uid, Root: uid == 0})
+	account := Account{Name: u.Username, UID: uid, Root: uid == 0}
+	if name := os.Getenv("SUDO_USER"); account.Root && name != "" && name != "root" {
+		if by, err := user.Lookup(name); err == nil && by.Uid != "0" {
+			account.SudoUser = name
+		}
+	}
+	return osHost{policy: p}.Observe(ctx, account)
 }
 
 func (h osHost) Now() time.Time { return time.Now() }
@@ -149,6 +155,7 @@ func observeDocker(ctx context.Context, p Policy) Docker {
 		out, _ := probe(ctx, path, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
 		d.Endpoint = strings.TrimSpace(out)
 	}
+	d.Endpoint = SameSocket(d.Endpoint, p.Docker.Endpoint)
 	out, err := probe(ctx, path, "info", "--format", "{{json .}}")
 	if major, cgroup, security, ok := parseDockerInfo(strings.TrimSpace(out)); err == nil && ok {
 		d.Daemon, d.Major, d.Cgroup, d.Security = "running", major, cgroup, security

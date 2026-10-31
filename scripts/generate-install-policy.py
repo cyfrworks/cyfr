@@ -10,10 +10,14 @@ one definition of the system the installer prepares automatically, its
 bootstrap packages, the CLI's install path and the install lock. The install
 script cannot read JSON before its own tools exist, so it carries the values
 it needs as shell assignments between its BEGIN and END lines, which this
-writes and nothing else in the script restates. `--check` changes nothing
-and exits 1 naming the drift when the block differs from what this would
-write. A policy value outside its grammar exits 2 and writes nothing: each
-value is placed in single quotes and some reach a root shell as arguments.
+writes and nothing else in the script restates or assigns. `--check`
+changes nothing and exits 1 naming the drift when the block differs from
+what this would write. A line outside the block that assigns a POLICY_
+name (NAME=, ${NAME=} or ${NAME:=}, or read, for, getopts, local or unset
+naming it) would override the block, so either run exits 1 naming it and
+writes nothing. A policy value outside its grammar exits 2 and writes
+nothing: each value is placed in single quotes and some reach a root shell
+as arguments.
 """
 
 import argparse
@@ -40,6 +44,13 @@ WORD = re.compile(r"[a-z0-9][a-z0-9._-]*")
 ARCH = re.compile(r"[a-z0-9_]+")
 TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._()/-]*")
 PATH = re.compile(r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
+# A shell assignment to a POLICY_ name: NAME= anywhere a word starts, so
+# also after export or readonly and inside ${NAME=} and ${NAME:=}; or a
+# builtin that sets or unsets the names it is given as words of their own.
+ASSIGNS = re.compile(
+    r"(?<![A-Za-z0-9_$])POLICY_[A-Za-z0-9_]*:?="
+    r"|\b(?:read|for|getopts|local|unset)\b[^;&|#]*(?<=\s)POLICY_[A-Za-z0-9_]*(?=\s|;|$)"
+)
 
 
 class PolicyError(Exception):
@@ -151,6 +162,19 @@ def main():
         print(f"{shown(args.script)}: needs one '{BEGIN}' line and, after it, one '{END}' line", file=sys.stderr)
         return 2
     start, end = lines.index(BEGIN) + 1, lines.index(END)
+    outside = [
+        f"{i + 1}: {line}"
+        for i, line in enumerate(lines)
+        if not start - 1 <= i <= end and not line.lstrip().startswith("#") and ASSIGNS.search(line)
+    ]
+    if outside:
+        print(
+            f"{shown(args.script)}: these lines outside the install policy block assign a policy name; "
+            "the block alone sets them:",
+            file=sys.stderr,
+        )
+        sys.stderr.writelines(line + "\n" for line in outside)
+        return 1
     current = "\n".join(lines[start:end]).split("\n") if end > start else []
     wanted = "\n".join(block).split("\n")
     if current == wanted:

@@ -5,7 +5,8 @@
 # scripts/janitor.sh against planted state: a stand-in docker
 # (tests/image-stub.sh) holding containers, networks, volumes and images
 # named for live and finished runs, heavy-check holder records, image
-# locks and uses, and run and log directories, under a toy repository with
+# locks and uses, run, log and evidence directories, and the
+# install-screen proof's base-image cache, under a toy repository with
 # three worktrees and a clone. Each janitor run's output is printed,
 # indented. It needs git, python3, flock, pgrep and setsid, and no
 # Docker, database or build.
@@ -20,6 +21,8 @@ cleanup() {
   if [ -s "$S/pids" ]; then
     while read -r p; do kill "$p" 2>/dev/null || :; done <"$S/pids"
   fi
+  # The cache's sets are read-only, as prepare.sh leaves them.
+  chmod -R u+w "$S" 2>/dev/null
   rm -rf "$S"
 }
 trap 'cleanup 2>/dev/null || :' EXIT
@@ -27,7 +30,7 @@ trap 'cleanup 2>/dev/null || :' EXIT
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR DOCKER_DEFAULT_PLATFORM STUB_PLATFORM PROOF_RUN_PREFIX
 export GIT_CEILING_DIRECTORIES="$S" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 mkdir -p "$S/run" "$S/tmp"
-export XDG_RUNTIME_DIR="$S/run" HEAVY_CHECK_LOCK="$S/hc.lock" JANITOR_TMP="$S/tmp"
+export XDG_RUNTIME_DIR="$S/run" HEAVY_CHECK_LOCK="$S/hc.lock" JANITOR_TMP="$S/tmp" CYFR_PROOF_CACHE="$S/cache"
 STATE="$S/run/cyfr-image"
 mkdir -p -m 700 "$STATE"
 
@@ -76,6 +79,15 @@ gone() { [ ! -e "$1" ] || fail "${1#"$S"/} is still there"; }
 there() { [ -e "$1" ] || fail "${1#"$S"/} went"; }
 
 toy_repo "$S/repo"
+# The install-screen proof's files the janitor reads: prepare.sh with its
+# inputs, and base-image.sh, whose pin each worktree varies below.
+proof="tests/install-screen-proof"
+mkdir -p "$S/repo/$proof/guest"
+cp "$ROOT/$proof/prepare.sh" "$ROOT/$proof/base-image.sh" "$S/repo/$proof/"
+printf 'FROM scratch\nCOPY guest/ /proof/\n' >"$S/repo/$proof/Dockerfile"
+printf '#!/bin/sh\n' >"$S/repo/$proof/guest/boot.sh"
+git -C "$S/repo" add -A
+git -C "$S/repo" -c user.name=test -c user.email=test@invalid commit -q -m proof
 git -C "$S/repo" worktree add -q --detach "$S/wt2"
 git -C "$S/repo" worktree add -q --detach "$S/wt3"
 git clone -q "$S/repo" "$S/clone"
@@ -127,7 +139,39 @@ t6=$(cd "$S/wt3" && scripts/image.sh --tag-only locus)
 plant_image "$t6" "${t6##*:in-}" "$OLD"
 printf 'ADD config/config.exs /x\n' >>"$S/wt3/Dockerfile.locus"
 
-# Rules 4 and 5: run and log directories.
+# Rule 2: the install-screen proof's images, one a worktree produces and
+# one none does; wt3's prepare.sh cannot read a symlink among its inputs.
+tp=$(cd "$S/repo" && "$proof/prepare.sh" --tag-only)
+[[ $tp =~ ^cyfr-install-screen:in-[0-9a-f]{20}$ ]] || fail "prepare.sh --tag-only printed $tp"
+tq=cyfr-install-screen:in-77777777777777777777
+plant_image "$tp" "${tp##*:in-}" "$OLD"
+plant_image "$tq" "${tq##*:in-}" "$OLD"
+ln -s boot.sh "$S/wt3/$proof/guest/link.sh"
+
+# Rule 7: the base-image cache. The repository pins the real sum; wt2, by
+# an uncommitted edit, another; wt3's file has no readable pin; the clone,
+# which is no worktree, pins one that therefore goes.
+sum0=$(sed -n 's/^CLOUD_IMAGE_SHA256=//p' "$S/repo/$proof/base-image.sh")
+sum2=2222222222222222222222222222222222222222222222222222222222222222
+sum3=3333333333333333333333333333333333333333333333333333333333333333
+sum4=4444444444444444444444444444444444444444444444444444444444444444
+sum5=5555555555555555555555555555555555555555555555555555555555555555
+sed -i "s/^CLOUD_IMAGE_SHA256=.*/CLOUD_IMAGE_SHA256=$sum2/" "$S/wt2/$proof/base-image.sh"
+sed -i 's/^CLOUD_IMAGE_SHA256=\(.*\)$/CLOUD_IMAGE_SHA256="\1"/' "$S/wt3/$proof/base-image.sh"
+sed -i "s/^CLOUD_IMAGE_SHA256=.*/CLOUD_IMAGE_SHA256=$sum5/" "$S/clone/$proof/base-image.sh"
+for sum in "$sum0" "$sum2" "$sum3" "$sum4" "$sum5"; do
+  mkdir -p "$S/cache/$sum"
+  echo image >"$S/cache/$sum/ubuntu-26.04-server-cloudimg-amd64.img"
+  chmod 0444 "$S/cache/$sum"/*
+  chmod 0555 "$S/cache/$sum"
+done
+mkdir -p "$S/cache/.fetch-123" "$S/cache/notasum"
+echo partial >"$S/cache/.fetch-123/part"
+echo other >"$S/cache/notasum/file"
+age 30 "$S/cache/$sum0" "$S/cache/$sum2" "$S/cache/$sum3" "$S/cache/$sum5" "$S/cache/.fetch-123" "$S/cache/notasum"
+age 0.5 "$S/cache/$sum4"
+
+# Rules 4 and 5: run, log and evidence directories.
 run_dir() { # NAME RUNNER-PID: a runner directory with its pid
   mkdir -p "$S/tmp/$1"
   echo "$2" >"$S/tmp/$1/runner-pid"
@@ -152,10 +196,11 @@ run_dir cyfr-t.r7 "$(dead_pid)"; mkdir -p "$S/tmp/cyfr-t.r7/p1"
 db1=cyfr_test_11111111111111111111111111111111_p1
 db2=cyfr_test_11111111111111111111111111111111_p2
 run_dir cyfr-t.r8 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r8" 1 "$db1"; receipt "$S/tmp/cyfr-t.r8" 2 "$db2" mismatched
-mkdir -p "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b" "$S/tmp/cyfr-stage.save.c"
+mkdir -p "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b" "$S/tmp/cyfr-stage.save.c" \
+  "$S/tmp/cyfr-evidence.install-screen-case2.d" "$S/tmp/cyfr-evidence.install-screen-case3.e"
 age 4 "$S"/tmp/cyfr-t.r1 "$S"/tmp/cyfr-t.r2 "$S"/tmp/cyfr-t.r3 "$S"/tmp/cyfr-t.r4 "$S"/tmp/cyfr-t.r7 "$S"/tmp/cyfr-t.r8
-age 1 "$S/tmp/cyfr-t.r5" "$S/tmp/cyfr-stage.save.c"
-age 8 "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b"
+age 1 "$S/tmp/cyfr-t.r5" "$S/tmp/cyfr-stage.save.c" "$S/tmp/cyfr-evidence.install-screen-case3.e"
+age 8 "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b" "$S/tmp/cyfr-evidence.install-screen-case2.d"
 
 # Rule 6: uses with dead and live pids.
 h6=66666666666666666666
@@ -163,7 +208,7 @@ printf '%s\n' "$(dead_pid)" "$user" "$(dead_pid)" >"$STATE/$h6.uses"
 touch "$STATE/$h6.lock"
 
 snapshot() {
-  (cd "$S" && find docker/images docker/containers docker/networks docker/volumes tmp run -type f -print0 |
+  (cd "$S" && find docker/images docker/containers docker/networks docker/volumes tmp run cache -type f -print0 |
     LC_ALL=C sort -z | xargs -0 cksum)
 }
 
@@ -179,6 +224,9 @@ has dry "would remove image $t0"
 has dry "would remove database $db"
 has dry "would remove directory $S/tmp/cyfr-t.r1"
 has dry "would remove 2 dead uses of $h6"
+has dry "would remove image $tq"
+has dry "would remove directory $S/tmp/cyfr-evidence.install-screen-case2.d"
+has dry "would remove base-image $S/cache/$sum3"
 
 lock_inode=$(inode "$STATE/$h6.lock")
 begin 'rule 1: a finished run, by its record or by no record and no process, loses its objects'
@@ -221,6 +269,11 @@ begin 'rule 2: a worktree whose tag cannot be read is named and keeps nothing'
 has main "worktree $S/wt3: no tag (65)"
 gone "$(image_file "$t6")"; has main "removed image $t6"
 
+begin "rule 2: the install-screen proof's image goes when no worktree's prepare.sh produces its tag"
+has main "kept image $tp: a worktree produces it"; there "$(image_file "$tp")"
+has main "removed image $tq"; gone "$(image_file "$tq")"
+has main "worktree $S/wt3: no proof tag (1)"
+
 begin 'rule 3: build cache unused for seven days is pruned'
 grep -qxF 'builder prune -f --filter until=168h' "$DOCKER_STUB/calls" || fail 'no build-cache prune'
 has main 'removed build-cache unused for 168h'
@@ -243,10 +296,22 @@ there "$S/tmp/cyfr-t.r8/p1/database-created"; there "$S/tmp/cyfr-t.r8/p2/databas
 if grep -qF "$db1" "$DOCKER_STUB/calls"; then fail "the readable partition's database was dropped: $(grep -F "$db1" "$DOCKER_STUB/calls")"; fi
 lacks main "removed database $db1"
 
-begin 'rule 5: log directories older than seven days go'
+begin 'rule 5: log and evidence directories older than seven days go'
 gone "$S/tmp/cyfr-stage.nightly.a"; gone "$S/tmp/cyfr-gate.b"; there "$S/tmp/cyfr-stage.save.c"
 has main "removed directory $S/tmp/cyfr-stage.nightly.a"
 has main "removed directory $S/tmp/cyfr-gate.b"
+gone "$S/tmp/cyfr-evidence.install-screen-case2.d"; has main "removed directory $S/tmp/cyfr-evidence.install-screen-case2.d"
+there "$S/tmp/cyfr-evidence.install-screen-case3.e"; lacks main cyfr-evidence.install-screen-case3.e
+
+begin 'rule 7: a base-image set no worktree pins goes once a day old; pinned, young and other entries stay'
+has main "kept base-image $S/cache/$sum0: a worktree pins it"; there "$S/cache/$sum0/ubuntu-26.04-server-cloudimg-amd64.img"
+has main "kept base-image $S/cache/$sum2: a worktree pins it"; there "$S/cache/$sum2"
+has main "removed base-image $S/cache/$sum3"; gone "$S/cache/$sum3"
+has main "removed base-image $S/cache/$sum5"; gone "$S/cache/$sum5"
+has main "kept base-image $S/cache/$sum4: it changed within 24 hours"; there "$S/cache/$sum4"
+has main "worktree $S/wt3: no base-image pin"
+there "$S/cache/.fetch-123/part"; there "$S/cache/notasum/file"
+lacks main .fetch-123; lacks main notasum
 
 begin 'rule 6: dead uses go under the lock, and no lock file is ever removed'
 [ "$(cat "$STATE/$h6.uses")" = "$user" ] || fail "the uses left: $(cat "$STATE/$h6.uses" | tr '\n' ' ')"

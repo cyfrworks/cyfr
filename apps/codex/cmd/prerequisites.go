@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,12 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/cyfr/codex/internal/install"
 	"github.com/cyfr/codex/internal/version"
@@ -31,8 +30,14 @@ import (
 const initCommand = "`cyfr init`"
 
 // installCommand is the documented install script command, which puts the
-// root entry at the policy's install path.
-const installCommand = "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh"
+// root entry at the policy's install path: for this program's version when
+// it is a pre-release, which the script installs only when named.
+func installCommand() string {
+	if strings.Contains(version.Version, "-") {
+		return "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=" + version.Version + " sh"
+	}
+	return "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh"
+}
 
 // machine is how cyfr init observes this machine and runs the root entry
 // on it. Tests stand in for all three.
@@ -73,27 +78,43 @@ func rootEntry(p install.Policy, root, interactive bool) ([]string, error) {
 		}
 		return append([]string{self}, apply...), nil
 	}
-	sudo, err := exec.LookPath("sudo")
+	sudo, err := entryChecks.sudo()
 	if err != nil {
 		return nil, errNoSudo
 	}
-	info, err := os.Lstat(p.InstallPath)
-	switch {
-	case err != nil:
-		return nil, fmt.Errorf("there is no %s", p.InstallPath)
-	case !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || !ownedByRoot(info):
-		return nil, fmt.Errorf("%s is not a program only root can change", p.InstallPath)
-	}
-	out, err := exec.Command(p.InstallPath, "--version").Output()
-	fields := strings.Fields(string(out))
-	if err != nil || len(fields) == 0 || fields[len(fields)-1] != version.Version {
-		return nil, fmt.Errorf("%s is not cyfr %s", p.InstallPath, version.Version)
+	if err := entryChecks.installed(p); err != nil {
+		return nil, err
 	}
 	argv := []string{sudo, "-k"}
 	if !interactive {
 		argv = append(argv, "-n")
 	}
 	return append(append(argv, "--", p.InstallPath), apply...), nil
+}
+
+// entryChecks are rootEntry's two observations of the machine, which
+// tests stand in for: where sudo is, and whether the policy's install path
+// holds this very program, root's and writable by root alone.
+var entryChecks = struct {
+	sudo      func() (string, error)
+	installed func(p install.Policy) error
+}{
+	sudo: func() (string, error) { return exec.LookPath("sudo") },
+	installed: func(p install.Policy) error {
+		info, err := os.Lstat(p.InstallPath)
+		switch {
+		case err != nil:
+			return fmt.Errorf("there is no %s", p.InstallPath)
+		case !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || !ownedByRoot(info):
+			return fmt.Errorf("%s is not a program only root can change", p.InstallPath)
+		}
+		out, err := exec.Command(p.InstallPath, "--version").Output()
+		fields := strings.Fields(string(out))
+		if err != nil || len(fields) == 0 || fields[len(fields)-1] != version.Version {
+			return fmt.Errorf("%s is not cyfr %s", p.InstallPath, version.Version)
+		}
+		return nil
+	},
 }
 
 // prepareMachine is cyfr init's first step: what this machine lacks of
@@ -117,6 +138,9 @@ func prepareMachine(ctx context.Context, yes bool, args []string, out, errOut io
 	}
 
 	requirements := install.Requirements(p, d.Actions)
+	if before.Account.Root && before.Account.SudoUser != "" {
+		return false, errors.New(install.UnderSudo(requirements, before.Account.SudoUser))
+	}
 	fmt.Fprintf(out, "CYFR needs %s on this machine. These commands make the changes, as root:\n", requirements)
 	for _, a := range d.Actions {
 		fmt.Fprintf(out, "  %s\n", a.Command(p).Display())
@@ -143,17 +167,10 @@ func prepareMachine(ctx context.Context, yes bool, args []string, out, errOut io
 	case errors.Is(err, errNoSudo):
 		return false, errors.New(install.NoSudo(requirements, "Nothing was installed.", initCommand))
 	case err != nil:
-		return false, fmt.Errorf("CYFR installs %s through %s, and %v. Nothing was installed. Run the install script (%s), then run %s again", requirements, p.InstallPath, err, installCommand, initCommand)
+		return false, fmt.Errorf("CYFR installs %s through %s, and %v. Nothing was installed. Run the install script (%s), then run %s again", requirements, p.InstallPath, err, installCommand(), initCommand)
 	}
 
 	plan := install.Plan{Version: install.PlanVersion, Account: before.Account.Name, UID: before.Account.UID, Actions: d.Actions}
-	if d.Continue {
-		dir, err := os.Getwd()
-		if err != nil {
-			return false, err
-		}
-		plan.Continue = &install.Continuation{Dir: dir, Args: args, Terminal: interactive}
-	}
 
 	defer machine.forget()
 	res := runEntry(argv, entryEnv(before.Account.Root), plan, out, errOut)
@@ -163,22 +180,21 @@ func prepareMachine(ctx context.Context, yes bool, args []string, out, errOut io
 	}
 	completed := install.Completed(p, before, after)
 	switch {
-	case ctx.Err() != nil && !res.continued:
+	case ctx.Err() != nil:
 		return false, interruption{fmt.Errorf("Interrupted while installing %s. %s Run %s again to finish", requirements, completed, initCommand)}
 	case res.failure != nil:
 		return false, errors.New(install.Failure(p, res.failure.Err(), completed, initCommand))
-	case res.continued:
-		if !after.Account.Process {
-			fmt.Fprintf(out, "\nThis terminal started before %s joined the %s group. Run `newgrp %s` here, or log out and in again, before `cyfr up`.\n", after.Account.Name, p.Docker.Group, p.Docker.Group)
-		}
-		if res.status != 0 {
-			return true, handedOver{res.status}
-		}
-		return true, nil
 	case !res.started:
-		return false, errors.New(install.NoSudo(requirements, completed, initCommand))
+		cause := install.ReadSudoCause(res.sudoSaid)
+		if cause == install.SudoUnknown && !interactive {
+			cause = install.SudoNeedsPassword
+		}
+		return false, errors.New(install.SudoRefused(cause, requirements, completed, initCommand))
 	case res.err != nil:
 		return false, errors.New(install.Failure(p, res.err, completed, initCommand))
+	}
+	if d.Continue && after.Account.Member && !after.Account.Process {
+		return true, continueWithGroup(p, args, after.Account.Name, out, errOut)
 	}
 	switch again := install.Decide(p, after); again.Outcome {
 	case install.Refuse:
@@ -189,39 +205,79 @@ func prepareMachine(ctx context.Context, yes bool, args []string, out, errOut io
 	return false, nil
 }
 
+// sgProgram runs a command with a group the account's processes do not
+// carry yet, without a password when /etc/group lists the account in it;
+// tests stand in for it.
+var sgProgram = "/usr/bin/sg"
+
+// continueWithGroup runs the rest of cyfr init, this same program with the
+// flags the person gave, through sg with the docker group, which /etc/group
+// now lists this account in and this process does not carry. It keeps this
+// process's terminal, environment and directory, so it asks its questions
+// and downloads as this run would; init's sudo cleanup runs after it. The
+// terminal it was started from still lacks the group, and is told how to
+// get it.
+func continueWithGroup(p install.Policy, args []string, account string, out, errOut io.Writer) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("%s joined the %s group, and cyfr init could not find its own program to go on with it (%v). Run `newgrp %s`, then %s again", account, p.Docker.Group, err, p.Docker.Group, initCommand)
+	}
+	cmd := exec.Command(sgProgram, p.Docker.Group, "-c", shellQuote(append([]string{self, "init"}, args...)))
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, terminalOr(out), terminalOr(errOut)
+	err = cmd.Run()
+	fmt.Fprintf(out, "\nThis terminal started before %s joined the %s group. Run `newgrp %s` here, or log out and in again, before `cyfr up`.\n", account, p.Docker.Group, p.Docker.Group)
+	var exit *exec.ExitError
+	switch {
+	case errors.As(err, &exit):
+		return handedOver{exit.ExitCode()}
+	case err != nil:
+		return fmt.Errorf("%s joined the %s group, and cyfr init could not go on with it (%v). Run `newgrp %s`, then %s again", account, p.Docker.Group, err, p.Docker.Group, initCommand)
+	}
+	return nil
+}
+
+// terminalOr answers w's file when it is one, so a child writes to the
+// terminal itself and sees one, else w.
+func terminalOr(w io.Writer) io.Writer {
+	if f, ok := w.(*os.File); ok {
+		return f
+	}
+	return w
+}
+
+// shellQuote joins argv as one command line for sh -c: each word in single
+// quotes, a single quote within it closed, escaped and reopened, so sh
+// reads every word back as it is.
+func shellQuote(argv []string) string {
+	words := make([]string, len(argv))
+	for i, w := range argv {
+		words[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+	}
+	return strings.Join(words, " ")
+}
+
 // entryResult is how a run of the root entry ended: whether it started
-// (it wrote an event), the failure it reported, whether it continued init
-// and that run's exit status, or why it could not be run or read.
+// (it wrote an event), the failure it reported, its exit status, or why it
+// could not be run or read.
 type entryResult struct {
-	started, continued bool
-	failure            *install.Failed
-	status             int
-	err                error
+	started bool
+	failure *install.Failed
+	status  int
+	err     error
+	// sudoSaid is the end of what the entry printed on standard error,
+	// sudo's refusal among it.
+	sudoSaid string
 }
 
 // runEntry runs the root entry with the plan on its standard input and
 // reads its events from its standard output, showing each action as it
-// starts; after "continue" the output is the continued init's, copied to
-// out as it arrives. Its standard error is the terminal's, where sudo
-// asks for the password and apt shows its progress.
+// starts. Its standard error is the terminal's, where sudo asks for the
+// password and apt shows its progress.
 func runEntry(argv, env []string, plan install.Plan, out, errOut io.Writer) entryResult {
 	body, err := json.Marshal(plan)
 	if err != nil {
 		return entryResult{err: err}
 	}
-	// The plan goes through a FIFO in a directory only this account can
-	// enter; the entry's standard input stays the terminal, which sudo
-	// relays to it and to the init it continues.
-	dir, err := os.MkdirTemp("", "cyfr-install-")
-	if err != nil {
-		return entryResult{err: err}
-	}
-	defer os.RemoveAll(dir)
-	fifo := filepath.Join(dir, "plan")
-	if err := makeFIFO(fifo); err != nil {
-		return entryResult{err: err}
-	}
-	argv = append(slices.Clone(argv), "--plan", fifo)
 	p := install.Load()
 	// The entry's standard error is copied while its events are shown;
 	// one writer given for both is written by one goroutine at a time.
@@ -229,10 +285,11 @@ func runEntry(argv, env []string, plan install.Plan, out, errOut io.Writer) entr
 		shared := &lockedWriter{w: out}
 		out, errOut = shared, shared
 	}
+	said := &tailWriter{max: 4096}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = env
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = errOut
+	cmd.Stdin = bytes.NewReader(append(body, '\n'))
+	cmd.Stderr = io.MultiWriter(errOut, said)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return entryResult{err: err}
@@ -240,16 +297,6 @@ func runEntry(argv, env []string, plan install.Plan, out, errOut io.Writer) entr
 	if err := cmd.Start(); err != nil {
 		return entryResult{err: err}
 	}
-	// The write waits for the entry to open the FIFO; an entry that ends
-	// without opening it (sudo refused, say) is stood in for below.
-	written := make(chan struct{})
-	go func() {
-		defer close(written)
-		if f, err := os.OpenFile(fifo, os.O_WRONLY, 0); err == nil {
-			_, _ = f.Write(append(body, '\n'))
-			_ = f.Close()
-		}
-	}()
 	var res entryResult
 	r := bufio.NewReader(stdout)
 	for {
@@ -267,12 +314,9 @@ func runEntry(argv, env []string, plan install.Plan, out, errOut io.Writer) entr
 				}
 			case install.EventFailed:
 				res.failure = ev.Failure
-			case install.EventContinue:
-				res.continued = true
-				_, _ = io.Copy(out, r)
 			}
 		}
-		if err != nil || res.continued {
+		if err != nil {
 			break
 		}
 	}
@@ -280,19 +324,12 @@ func runEntry(argv, env []string, plan install.Plan, out, errOut io.Writer) entr
 	// the entry is waited for, not killed: nothing it started outlives this
 	// run, and an apt step it stops ends as apt ends it.
 	werr := cmd.Wait()
-	select {
-	case <-written:
-	default:
-		if f, err := os.OpenFile(fifo, os.O_RDONLY|openNonBlock, 0); err == nil {
-			<-written
-			_ = f.Close()
-		}
-	}
+	res.sudoSaid = said.String()
 	var exit *exec.ExitError
 	switch {
 	case errors.As(werr, &exit):
 		res.status = exit.ExitCode()
-		if !res.continued && res.failure == nil && res.started {
+		if res.failure == nil && res.started {
 			res.err = fmt.Errorf("the installer exited with status %d", res.status)
 		}
 	case werr != nil:
@@ -311,6 +348,29 @@ func entryEnv(root bool) []string {
 		env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "SUDO_") })
 	}
 	return env
+}
+
+// tailWriter keeps the last max bytes written to it.
+type tailWriter struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func (t *tailWriter) Write(b []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, b...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
+	}
+	return len(b), nil
+}
+
+func (t *tailWriter) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
 }
 
 // lockedWriter serializes writes to w.
@@ -335,22 +395,14 @@ func continuationArgs(c *cobra.Command) []string {
 	return args
 }
 
-// initFlag reports whether name is a flag cyfr init takes.
-func initFlag(name string) bool {
-	return initCmd.Flags().Lookup(name) != nil || initCmd.InheritedFlags().Lookup(name) != nil
-}
-
 func init() {
-	installApplyCmd.Flags().String("plan", "", "The FIFO cyfr init writes the agreed plan to")
 	internalCmd.AddCommand(installApplyCmd)
 }
 
 // installApplyCmd is the root entry: run as root through sudo -k by cyfr
-// init, it reads one plan from the FIFO --plan names (openPlan), applies it
-// (install.Apply)
-// and writes its events on its standard output, then continues init as
-// the account when the plan says so. It takes no arguments and no
-// environment beyond sudo's caller variables.
+// init, it reads one plan on its standard input, applies it
+// (install.Apply) and writes its events on its standard output. It takes
+// no arguments and no environment beyond sudo's caller variables.
 var installApplyCmd = &cobra.Command{
 	Use:    "install-apply",
 	Short:  "Apply the requirements cyfr init agreed to install, as root",
@@ -361,83 +413,21 @@ var installApplyCmd = &cobra.Command{
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		path, _ := cmd.Flags().GetString("plan")
-		emit := install.Emitter{W: os.Stdout}
-		uid, _, err := sudoCaller()
-		if err != nil {
-			emit.Failed(fmt.Errorf("%w: %v", install.ErrInvalidPlan, err))
-			os.Exit(applyRefused)
-		}
-		plan, err := openPlan(path, uid)
-		if err != nil {
-			emit.Failed(fmt.Errorf("%w: %v", install.ErrInvalidPlan, err))
-			os.Exit(applyRefused)
-		}
-		status := installApply(ctx, install.NewHost(install.Load(), os.Stderr), plan, os.Stdin, os.Stdout, os.Stderr)
-		_ = plan.Close()
-		os.Exit(status)
+		os.Exit(installApply(ctx, install.NewHost(install.Load(), os.Stderr), os.Stdin, os.Stdout))
 	},
 }
 
-// planWait bounds how long the root entry waits for cyfr init to open the
-// plan's FIFO for writing.
-var planWait = 60 * time.Second
+// effectiveUID is the root entry's own identity; tests stand in for it.
+var effectiveUID = os.Geteuid
 
-// openPlan opens the plan cyfr init writes for the account uid: a FIFO of
-// that account's, alone in a directory of its own that only it can enter,
-// opened without following a link, and the same file the checks read.
-func openPlan(path string, uid int) (*os.File, error) {
-	dir, err := os.Lstat(filepath.Dir(path))
-	if err != nil || !dir.IsDir() || dir.Mode().Perm() != 0o700 || !ownedBy(dir, uid) {
-		return nil, fmt.Errorf("the plan's directory %s is not a private directory of the caller's", filepath.Dir(path))
-	}
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode().Type() != os.ModeNamedPipe || !ownedBy(info, uid) {
-		return nil, fmt.Errorf("%s is not the caller's FIFO", path)
-	}
-	// Opening a FIFO waits for its writer; one that never comes (cyfr init
-	// ended first) ends the wait at planWait.
-	type open struct {
-		f   *os.File
-		err error
-	}
-	opening := make(chan open, 1)
-	go func() {
-		f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0)
-		opening <- open{f, err}
-	}()
-	var f *os.File
-	select {
-	case o := <-opening:
-		if o.err != nil {
-			return nil, o.err
-		}
-		f = o.f
-	case <-time.After(planWait):
-		return nil, fmt.Errorf("no plan arrived on %s within %s", path, planWait)
-	}
-	if opened, err := f.Stat(); err != nil || !os.SameFile(info, opened) {
-		_ = f.Close()
-		return nil, fmt.Errorf("%s changed while it was opened", path)
-	}
-	return f, nil
-}
-
-// effectiveUID and continueProgram are the root entry's own identity and
-// the sudo it continues init through; tests stand in for both.
-var (
-	effectiveUID    = os.Geteuid
-	continueProgram = "/usr/bin/sudo"
-)
-
-// The root entry's exit statuses apart from a continuation's own.
+// The root entry's exit statuses.
 const (
 	applyRefused = 3
 	applyFailed  = 4
 )
 
 // installApply is the root entry over h.
-func installApply(ctx context.Context, h install.Host, planIn, stdin io.Reader, out, errOut io.Writer) int {
+func installApply(ctx context.Context, h install.Host, planIn io.Reader, out io.Writer) int {
 	emit := install.Emitter{W: out}
 	if effectiveUID() != 0 {
 		emit.Failed(fmt.Errorf("%w: not run as root", install.ErrInvalidPlan))
@@ -449,26 +439,16 @@ func installApply(ctx context.Context, h install.Host, planIn, stdin io.Reader, 
 		return applyRefused
 	}
 	p := install.Load()
-	plan, err := install.ReadPlan(planIn, p, uid, name, initFlag)
+	plan, err := install.ReadPlan(planIn, p, uid, name)
 	if err != nil {
 		emit.Failed(err)
 		return applyRefused
-	}
-	if c := plan.Continue; c != nil {
-		info, err := os.Stat(c.Dir)
-		if err != nil || !info.IsDir() || !ownedBy(info, plan.UID) {
-			emit.Failed(fmt.Errorf("%w: %s is not a directory of %s's", install.ErrInvalidPlan, c.Dir, plan.Account))
-			return applyRefused
-		}
 	}
 	if err := install.Apply(ctx, p, h, plan, emit); err != nil {
 		emit.Failed(err)
 		return applyFailed
 	}
-	if plan.Continue == nil {
-		return 0
-	}
-	return continueInit(p, plan, emit, stdin, out, errOut)
+	return 0
 }
 
 // sudoCaller is the account sudo ran this process for, from the variables
@@ -488,45 +468,4 @@ func sudoCaller() (int, string, error) {
 		return 0, "", fmt.Errorf("SUDO_USER does not name uid %d", uid)
 	}
 	return uid, u.Username, nil
-}
-
-// continueInit runs cyfr init as the plan's account in a process whose
-// groups are read afresh, so it carries the docker group the plan added:
-// sudo run by root asks no password. Its standard output follows the
-// "continue" event; its exit status is the entry's.
-func continueInit(p install.Policy, plan install.Plan, emit install.Emitter, in io.Reader, out, errOut io.Writer) int {
-	c := plan.Continue
-	// A run at a terminal continues at that terminal: its standard input,
-	// the terminal sudo relays, and its output drawn there, so it asks its
-	// questions as the run it continues would. Any other run reads nothing,
-	// and its output follows the "continue" event.
-	stdin, stdout := in, out
-	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); c.Terminal && err == nil {
-		defer tty.Close()
-		stdout = tty
-	} else {
-		if err == nil {
-			tty.Close()
-		}
-		stdin = nil
-	}
-	argv := append([]string{"-n", "-k", "-u", plan.Account, "-H", "--", p.InstallPath, "init"}, c.Args...)
-	if !c.Terminal {
-		argv = append(argv, "--no-interactive")
-	}
-	emit.Continue()
-	cmd := exec.Command(continueProgram, argv...)
-	cmd.Dir = c.Dir
-	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "TERM=" + os.Getenv("TERM")}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, errOut
-	err := cmd.Run()
-	var exit *exec.ExitError
-	switch {
-	case errors.As(err, &exit):
-		return exit.ExitCode()
-	case err != nil:
-		fmt.Fprintf(errOut, "cyfr init could not continue as %s (%v). Run %s again.\n", plan.Account, err, initCommand)
-		return applyFailed
-	}
-	return 0
 }

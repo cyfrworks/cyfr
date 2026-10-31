@@ -17,57 +17,70 @@
 # installer into that terminal as `cat install.sh | CYFR_VERSION=0.6.0-alpha.5 sh`,
 # the pipe `curl ... | sh` makes, with production trust and no bypass
 # variable, answering what it asks. PART is
-#   trunk      origin/main's scripts/install.sh, cosign absent: it refuses,
-#              cosign being required, asks no password and changes no
-#              package (s1-trunk.png).
+#   trunk      scripts/install.sh at TRUNK_COMMIT, the trunk before
+#              this change, cosign absent: it refuses, cosign being
+#              required, asks no password and changes no package
+#              (s1-trunk.png).
 #   candidate  this tree's scripts/install.sh, copied as the part starts:
 #              it previews, asks "Install these requirements?" (answered
 #              y), asks the sudo password once, installs cosign from
 #              Ubuntu and nothing else, verifies the release's signature
 #              and checksum and installs a root-owned /usr/local/bin/cyfr
 #              that reports 0.6.0-alpha.5 (s1-bootstrap.png). Afterwards
-#              `sudo -n true` fails, in that terminal and over SSH. A
-#              script without an `install policy` block is not run.
+#              `sudo -n true` meets sudo's own refusal, in that terminal
+#              and over SSH. A script without an `install policy` block is
+#              not run.
 #   all        (default) trunk, then candidate, each in its own guest.
 # Case 2, cyfr init on a machine without Docker: what sudo-rs's
 # per-command -k leaves, with and without a prior login; init's preview,
-# one question and one password, the continued init, newgrp before cyfr
-# up, Docker 28+, Compose v2, cgroup v2 and AppArmor, the account's
-# project files, no reusable sudo login after it, and a second init that
-# shows nothing and makes no apt transaction (s1-ready.png). Case 3, its
-# refusals and retries: declined, each of the three locks held, offline,
-# interrupted while dpkg unpacks and retried, then the terminal that
-# predates the group (s1-retry.png). Case 4, an earlier cyfr in
-# ~/.local/bin: the installer's migration declined, then accepted
-# (s1-path.png).
+# one question and one password, the init continued through sg docker,
+# newgrp before cyfr
+# up, Docker 28+ and Compose v2 installed from Ubuntu's archive, cgroup v2
+# and AppArmor, the account's project files, no reusable sudo login after
+# it, and a second init that shows nothing and makes no apt transaction
+# (s1-ready.png). Case 3, its refusals and retries: declined, each of the
+# three locks held, offline, then an interrupt at each durable action,
+# each retried: during apt-get update, during dpkg's unpack, while
+# systemctl enables and starts docker.service, and while usermod adds the
+# account to the docker group, each interrupted run saying what it left,
+# and a last retry that converges; then the terminal that predates the
+# group (s1-retry.png). Case 4, an earlier cyfr in ~/.local/bin: the
+# installer's migration declined, then accepted (s1-path.png). Cases 2
+# and 3 run a stand-in for the candidate's delivery, which their results
+# say (lib.sh, candidate_build).
 #
 # Evidence goes under DIR (default a fresh
-# /tmp/cyfr-install-screen-case<N>.XXXXXX, printed), which keeps it: the
-# image's build log, the KVM preflight and the base image's verification,
-# then one directory per part, which must not exist yet, holding
+# /tmp/cyfr-evidence.install-screen-case<N>.XXXXXX, printed, which
+# scripts/janitor.sh removes a week later, its rule 5), which keeps it:
+# the KVM preflight and the base image's verification, then one directory
+# per part, which must not exist yet, holding
 # results.txt, kvm.txt (QEMU's KVM state, version, descriptors and command
 # line), guest.txt, cloud-init.txt, the package lists before and after,
 # the installer's provenance and typed line (installer.txt), the terminal's
 # transcript, the serial console, QEMU's log, the journal, apt's history
 # and the named screenshots. DIR/results.txt holds one verdict per part.
 # Only disks are on disk: the base image is the host's cache, which
-# tests/install-screen-proof/fetch-base.sh fills and verifies outside any
+# tests/install-screen-proof/prepare.sh fills and verifies outside any
 # lane and the run mounts read-only and verifies again with no network,
 # and each guest's overlay is in the Docker volume ${PROOF_RUN_PREFIX}disk.
-# The run downloads no base image: without the cache it exits 69.
+# The containers run the proof image prepare.sh builds outside any lane,
+# shared by every worktree at the same inputs, which the run records its
+# use of and neither builds nor removes. Without either the run exits 69,
+# naming prepare.sh. Each case ends itself within 3420 s, inside the proof
+# rows' 3600 s hold with the teardown's margin (lib.sh, CASE_SECONDS).
 #
 # Every name the run gives Docker begins with PROOF_RUN_PREFIX, which
 # scripts/heavy-check.sh sets; unset, it is scripts/lib/run-names.sh's
 # prefix with this script's pid, and set to anything but such a prefix it
-# is refused. The run makes the image ${PROOF_RUN_PREFIX}qemu:proof, the
-# volume and the containers ${PROOF_RUN_PREFIX}kvm, ...verify and
-# ...qemu-<part>, and removes them on every exit (cleanup.sh). It is a
-# proof-lane check:
+# is refused. The run makes the volume and the containers
+# ${PROOF_RUN_PREFIX}kvm, ...verify and ...qemu-<part>, and removes them on
+# every exit (cleanup.sh). It is a proof-lane check:
 #   scripts/heavy-check.sh -p -t 3600 -- tests/install-screen-proof/run.sh --case 1
 #
 # Needs docker with the host's /dev/kvm, ssh, ssh-keygen, git, python3,
-# timeout, the base image's cache, and the guests' network: Ubuntu's
-# archive and GitHub's releases.
+# timeout, flock, the base image's cache and the proof image, go for
+# cases 2 and 3, and the guests' network: Ubuntu's archive and GitHub's
+# releases.
 #
 # Stdout is framed `_START=<pid>` first and `_EXIT=<pid> <status>` last
 # (scripts/await-task.sh). Exits 0 when every check of every part run
@@ -93,6 +106,9 @@ missing() {
 proof_traps
 
 INSTALL_VERSION=0.6.0-alpha.5
+# Case 1's trunk: the commit before this change, whose installer requires
+# cosign and installs nothing itself.
+TRUNK_COMMIT=6ac2382cc9981aa069d1aa337646b0c25d398797
 
 usage() { echo "usage: $0 --case N [--part trunk|candidate|all] [--out DIR]"; }
 CASE="" PART="" OUT=""
@@ -126,18 +142,16 @@ fi
 PROOF_PREFIX=$PROOF_RUN_PREFIX
 # Read by lib.sh's helpers.
 # shellcheck disable=SC2034
-IMAGE="${PROOF_PREFIX}qemu:proof"
-# shellcheck disable=SC2034
 VOLUME="${PROOF_PREFIX}disk"
 
-for tool in docker ssh ssh-keygen git python3 timeout; do
+for tool in docker ssh ssh-keygen git python3 timeout flock; do
   command -v "$tool" >/dev/null 2>&1 || { echo "install-screen proof: $tool is required" >&2; exit 69; }
 done
 [ -c /dev/kvm ] || { echo "install-screen proof: this host has no /dev/kvm" >&2; exit 69; }
 docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || { echo "install-screen proof: no Docker daemon answers" >&2; exit 69; }
 
 if [ -z "$OUT" ]; then
-  OUT=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-install-screen-case$CASE.XXXXXX") || exit 1
+  OUT=$(mktemp -d "/tmp/cyfr-evidence.install-screen-case$CASE.XXXXXX") || exit 1
 else
   mkdir -p "$OUT" || exit 1
 fi
@@ -171,14 +185,16 @@ guest_no_cyfr() {
 
 case_1_trunk() {
   local status
-  git -C "$ROOT" show origin/main:scripts/install.sh >"$WORK/install-trunk.sh" ||
-    fail "origin/main has no scripts/install.sh here"
+  git -C "$ROOT" cat-file -e "$TRUNK_COMMIT^{commit}" 2>/dev/null ||
+    fail "the trunk commit $TRUNK_COMMIT is not in this repository; fetch it (git fetch origin main)"
+  git -C "$ROOT" show "$TRUNK_COMMIT:scripts/install.sh" >"$WORK/install-trunk.sh" ||
+    fail "$TRUNK_COMMIT has no scripts/install.sh"
   guest_boot trunk 2048 20G
   tty1_login
   guest_packages packages-before.txt
   check "trunk: cosign is not installed before the run" guest_cosign_absent
   {
-    echo "script: origin/main:scripts/install.sh at $(git -C "$ROOT" rev-parse origin/main)"
+    echo "script: scripts/install.sh at $TRUNK_COMMIT, the trunk before this change"
     echo "sha256: $(sha256sum <"$WORK/install-trunk.sh" | cut -d ' ' -f 1)"
     echo "typed: $(install_line install.sh)"
   } >"$GUEST_DIR/installer.txt"
@@ -189,7 +205,7 @@ case_1_trunk() {
   if ! pane_converse 600 '^installer exit status [0-9]+' "$SUDO_PROMPT" @password; then
     pane_save transcript.txt
     guest_screenshot s1-trunk.png || true
-    fail "trunk: the installer did not finish within 600 s ($GUEST_DIR/transcript.txt)"
+    fail "trunk: the installer did not finish within $PANE_BUDGET s ($GUEST_DIR/transcript.txt)"
   fi
   pane_save transcript.txt
   status=$(installer_status)
@@ -213,8 +229,7 @@ preview_names() {
 }
 
 cosign_from_ubuntu() {
-  grep -q '^ii ' "$GUEST_DIR/cosign.txt" &&
-    awk '/\*\*\*/ { getline; print; exit }' "$GUEST_DIR/cosign.txt" | grep -qE 'https?://[a-z.]*ubuntu\.com/ubuntu'
+  grep -q '^ii ' "$GUEST_DIR/cosign.txt" && apt_installed_from_archive "$GUEST_DIR/cosign.txt" cosign '' '[a-z]+'
 }
 
 # Whether the only package change is cosign's installation.
@@ -222,11 +237,6 @@ only_cosign_added() {
   diff "$GUEST_DIR/packages-before.txt" "$GUEST_DIR/packages-after.txt" >"$GUEST_DIR/packages-changed.txt"
   [ "$(grep -c '^[<>]' "$GUEST_DIR/packages-changed.txt")" = 1 ] &&
     grep -qE $'^> cosign\t[^\t]+\tii $' "$GUEST_DIR/packages-changed.txt"
-}
-
-# Whether the probe line $1, `sudo -n status N`, says sudo refused.
-probe_failed() {
-  [ -n "$1" ] && [ "${1##* }" != 0 ]
 }
 
 cyfr_root_owned() {
@@ -237,7 +247,7 @@ cyfr_root_owned() {
 }
 
 case_1_candidate() {
-  local status prompts probe
+  local status prompts
   cp "$ROOT/scripts/install.sh" "$WORK/install-candidate.sh" || fail "the candidate script was not copied"
   guest_boot candidate 2048 20G
   tty1_login
@@ -256,7 +266,7 @@ case_1_candidate() {
   if ! pane_converse 900 '^installer exit status [0-9]+' 'Install these requirements\?' y "$SUDO_PROMPT" @password; then
     pane_save transcript.txt
     guest_screenshot s1-bootstrap.png || true
-    fail "candidate: the installer did not finish within 900 s, or asked a question a fourth time ($GUEST_DIR/transcript.txt)"
+    fail "candidate: the installer did not finish within $PANE_BUDGET s, or asked a question a fourth time ($GUEST_DIR/transcript.txt)"
   fi
   pane_save transcript.txt
   status=$(installer_status)
@@ -280,17 +290,16 @@ case_1_candidate() {
   pane_type '/usr/local/bin/cyfr --version; echo "version exit status $?"' &&
     pane_wait '^version exit status [0-9]+' 30
   check "candidate: screenshot s1-bootstrap.png" guest_screenshot s1-bootstrap.png
+  pane_save transcript.txt
 
   step "candidate: does a reusable sudo login remain?"
-  pane_type 'sudo -n true; echo "sudo -n status $?"' && pane_wait '^sudo -n status [0-9]+' 30
-  probe=$(grep -oE '^sudo -n status [0-9]+' <<<"$PANE_SCREEN" | tail -n 1)
-  echo "in the installer's terminal: ${probe:-no answer}" >"$GUEST_DIR/sudo-probe.txt"
-  check "candidate: sudo -n true fails in the installer's terminal (${probe:-no answer})" probe_failed "$probe"
-  status=0
-  guest_ssh 'sudo -n true' >>"$GUEST_DIR/sudo-probe.txt" 2>&1 || status=$?
-  echo "over SSH, without a terminal: status $status" >>"$GUEST_DIR/sudo-probe.txt"
-  check "candidate: sudo -n true fails over SSH (status $status)" test "$status" != 0
-  pane_save transcript.txt
+  pane_type 'clear' && guest_ssh 'tmux clear-history -t proof' && pane_wait '\$ *$' 30 ||
+    fail "candidate: the installer's terminal was not cleared for the probe"
+  : >"$GUEST_DIR/sudo-probe.txt"
+  pane_sudo_probe candidate-probe
+  check "candidate: sudo -n true in the installer's terminal is sudo's refusal (exit 1, no prompt, $SUDO_REFUSAL)" \
+    probe_refused candidate-probe
+  check "candidate: and over SSH, without a terminal" ssh_sudo_refused candidate-ssh-probe
   guest_packages packages-after.txt
   check "candidate: the only package change is cosign's installation" only_cosign_added
   guest_journal
@@ -308,7 +317,7 @@ case_1() {
     echo "candidate: not run: $ROOT/scripts/install.sh has no install policy block yet" | tee -a "$OUT/results.txt"
     return 77
   fi
-  proof_image_build
+  proof_image_use
   proof_kvm_preflight
   proof_base_verify
   proof_seed
@@ -331,7 +340,8 @@ case_1() {
 # locks, and an earlier cyfr on PATH. Each boots one fresh guest. Cases 2
 # and 3 run this tree's cyfr, built and placed root's at /usr/local/bin/cyfr
 # by the harness (candidate_build): a stand-in for its signed delivery,
-# which case 1 proves through the installer.
+# which case 1 proves through the installer, and which their results.txt
+# and candidate.txt say.
 # ---------------------------------------------------------------------------
 
 INIT_ANSWERS=('Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1, 2 or 3' 3)
@@ -339,15 +349,17 @@ INIT_ANSWERS=('Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @pass
 transcript_has() { grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
 transcript_lacks() { ! grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
 
-# sudo -n true in the pane: the status it answers, after the step NAME.
-pane_sudo_probe() {
-  pane_step "$1" 'sudo -n true' 30 "$SUDO_PROMPT" @password
-  echo "$1: sudo -n true exited $PANE_STATUS, ${PANE_ANSWERED[0]} password prompts" >>"$GUEST_DIR/sudo-probe.txt"
-  pane_step_end "$1"
-}
-
 apt_transactions() { guest_ssh 'grep -c "^Start-Date:" /var/log/apt/history.log 2>/dev/null || echo 0'; }
 
+# Case 2's budgets, in seconds, inside the case's 3420 (CASE_SECONDS):
+# cyfr init 1200 and cyfr up 900, the two steps that download, and the
+# second init 180, 2280 together; the 1140 left cover the preflight (at
+# most 120), the base's verification (at most 300, about 10), the
+# candidate's build (at most 300, about 30), the boot (at most 600, about
+# 60) and the sign-in, the sudo-rs probes and the checks between them
+# (about 300 together). Every wait is cut at the case's deadline as well
+# (budget), so a step that overruns its own budget cannot outlast the
+# hold.
 case_2() {
   local before after
   guest_boot c2 8192 40G
@@ -357,31 +369,34 @@ case_2() {
   check "c2: the guest's sudo is sudo-rs ($(head -n 1 "$GUEST_DIR/sudo-version.txt"))" grep -qi 'sudo-rs' "$GUEST_DIR/sudo-version.txt"
   check "c2: there is no Docker before init" guest_ssh '! command -v docker && ! dpkg-query -W -f "\${db:Status-Abbrev}" docker.io 2>/dev/null | grep -q "^ii"'
 
+  # Each step's premise is checked as well as its outcome, so none passes
+  # with nothing to observe: a refusal is sudo's own, with its words; a
+  # step that should log in did, after the prompts it should show.
   step "c2: what sudo-rs's per-command -k leaves behind"
   : >"$GUEST_DIR/sudo-probe.txt"
-  # No prior timestamp: a successful sudo -k, then a probe.
-  pane_step c2-k-fresh 'sudo -k true' 60 "$SUDO_PROMPT" @password
-  echo "c2-k-fresh: sudo -k true exited $PANE_STATUS after ${PANE_ANSWERED[0]} password prompts" >>"$GUEST_DIR/sudo-probe.txt"
-  pane_step_end c2-k-fresh
+  pane_sudo_probe c2-probe-start
+  check "c2: the terminal starts with no sudo login, the harness's own root calls having given it none (sudo's refusal)" \
+    probe_refused c2-probe-start
+  # No prior login: a successful sudo -k, then a probe.
+  pane_sudo_step c2-k-fresh 'sudo -k true'
+  check "c2: sudo -k true, with no prior login, exits 0 after exactly one password prompt" sudo_step_was c2-k-fresh 0 1
   pane_sudo_probe c2-probe-fresh
-  check "c2: with no prior timestamp, a successful sudo -k leaves no reusable login" grep -qE '^c2-probe-fresh: sudo -n true exited [1-9]' "$GUEST_DIR/sudo-probe.txt"
-  # A prior timestamp: sudo -v, then sudo -k, then a probe, then sudo -k alone.
-  pane_step c2-v 'sudo -v' 60 "$SUDO_PROMPT" @password
-  echo "c2-v: sudo -v exited $PANE_STATUS after ${PANE_ANSWERED[0]} password prompts" >>"$GUEST_DIR/sudo-probe.txt"
-  pane_step_end c2-v
-  pane_step c2-k-prior 'sudo -k true' 60 "$SUDO_PROMPT" @password
-  echo "c2-k-prior: sudo -k true exited $PANE_STATUS after ${PANE_ANSWERED[0]} password prompts" >>"$GUEST_DIR/sudo-probe.txt"
-  pane_step_end c2-k-prior
+  check "c2: with no prior login, a successful sudo -k leaves no reusable login (sudo's refusal)" probe_refused c2-probe-fresh
+  # A prior login: sudo -v, then sudo -k, then a probe, then sudo -k alone.
+  pane_sudo_step c2-v 'sudo -v'
+  check "c2: sudo -v exits 0 after one password prompt" sudo_step_was c2-v 0 1
+  pane_sudo_step c2-k-prior 'sudo -k true'
+  check "c2: sudo -k true, with a prior login, exits 0 ($(sed -n 's/^c2-k-prior: //p' "$GUEST_DIR/sudo-probe.txt"))" \
+    grep -qE '^c2-k-prior: .* exited 0 after ' "$GUEST_DIR/sudo-probe.txt"
   pane_sudo_probe c2-probe-prior
-  pane_step c2-invalidate 'sudo -k' 30 "$SUDO_PROMPT" @password
-  pane_step_end c2-invalidate
+  check "c2: with a prior login, sudo -k true leaves that login (the probe exits 0 without a prompt)" probe_allowed c2-probe-prior
+  pane_sudo_step c2-invalidate 'sudo -k'
+  check "c2: sudo -k alone exits 0 without a prompt" sudo_step_was c2-invalidate 0 0
   pane_sudo_probe c2-probe-invalidated
-  check "c2: sudo -k alone invalidates a prior login" grep -qE '^c2-probe-invalidated: sudo -n true exited [1-9]' "$GUEST_DIR/sudo-probe.txt"
-  guest_ssh 'sudo -K' >/dev/null 2>&1 || true
+  check "c2: sudo -k alone invalidates a prior login (sudo's refusal), so init starts with none" probe_refused c2-probe-invalidated
 
   step "c2: cyfr init on a machine without Docker"
-  before=$(apt_transactions)
-  pane_step c2-init 'mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 2400 "${INIT_ANSWERS[@]}"
+  pane_step c2-init 'mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1200 "${INIT_ANSWERS[@]}"
   check "c2: init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "c2: init asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
   check "c2: sudo asks the password once (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" = 1
@@ -396,9 +411,8 @@ case_2() {
   check "c2: init closes by naming cyfr up" transcript_has c2-init "Next: run 'cyfr up' to start the stack\."
   pane_step_end c2-init
   pane_sudo_probe c2-probe-after-init
-  check "c2: no reusable sudo login is left after init" grep -qE '^c2-probe-after-init: sudo -n true exited [1-9]' "$GUEST_DIR/sudo-probe.txt"
-  guest_ssh 'sudo -n true' >/dev/null 2>&1
-  check "c2: nor over SSH" test "$?" != 0
+  check "c2: no reusable sudo login is left after init (sudo's refusal)" probe_refused c2-probe-after-init
+  check "c2: nor over SSH (sudo's refusal)" ssh_sudo_refused c2-ssh-probe-after-init
 
   pane_step c2-groups 'echo "groups: $(id -nG)"; docker info >/dev/null 2>&1; echo "docker info $?"' 30
   check "c2: the terminal init ran in keeps its old groups" sh -c 'grep -q "^groups: " "$1" && ! grep -qE "^groups: (.* )?docker( |$)" "$1" && grep -qE "^docker info [1-9]" "$1"' sh "$GUEST_DIR/transcript-c2-groups.txt"
@@ -406,12 +420,14 @@ case_2() {
   guest_ssh_relogin
   guest_ssh 'getent group docker; stat -c "%U:%G %n" ~/cyfr ~/cyfr/.env ~/cyfr/docker-compose.yml ~/cyfr/data ~/cyfr/aqua; id' >"$GUEST_DIR/project.txt" 2>&1
   check "c2: the account is in the docker group" grep -qE '^docker:x:[0-9]+:(.*,)?proof(,.*)?$' "$GUEST_DIR/project.txt"
-  check "c2: the project's files are the account's" sh -c '[ "$(grep -c "^proof:proof " "$1")" = 5 ]' sh "$GUEST_DIR/project.txt"
+  # The init that continues through sg docker has docker for its group, so
+  # what it makes is the account's, in the docker group.
+  check "c2: the project's files are the account's" sh -c '[ "$(grep -cE "^proof:(proof|docker) " "$1")" = 5 ]' sh "$GUEST_DIR/project.txt"
 
   step "c2: newgrp docker, then cyfr up"
   pane_type 'newgrp docker' || fail "newgrp was not typed"
   pane_wait '\$ *$' 30 || true
-  pane_step c2-up 'cd ~/cyfr && cyfr up' 1800 "$SUDO_PROMPT" @password
+  pane_step c2-up 'cd ~/cyfr && cyfr up' 900 "$SUDO_PROMPT" @password
   check "c2: cyfr up exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "c2: cyfr up asks no password (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 0
   guest_ssh 'docker version --format "server {{.Server.Version}}"; docker compose version --short | sed "s/^/compose /"
@@ -422,7 +438,10 @@ case_2() {
   check "c2: Compose v2 or later" sh -c 'v=$(sed -n "s/^compose v\{0,1\}\([0-9]*\)\..*/\1/p" "$1"); [ -n "$v" ] && [ "$v" -ge 2 ]' sh "$GUEST_DIR/docker.txt"
   check "c2: the daemon uses cgroup v2" grep -qx 'cgroup 2' "$GUEST_DIR/docker.txt"
   check "c2: the daemon applies AppArmor" grep -q '^security .*name=apparmor' "$GUEST_DIR/docker.txt"
-  check "c2: Docker is Ubuntu's, from its archive" grep -qE '^policy +500 https?://[a-z.]*ubuntu\.com/ubuntu resolute(-updates|-security)?/universe' "$GUEST_DIR/docker.txt"
+  check "c2: the installed docker.io is Ubuntu's, from resolute's universe (its *** version's sources)" \
+    apt_installed_from_archive "$GUEST_DIR/docker.txt" docker.io 'policy ' universe
+  check "c2: the installed docker-compose-v2 is Ubuntu's, from resolute's universe (its *** version's sources)" \
+    apt_installed_from_archive "$GUEST_DIR/docker.txt" docker-compose-v2 'policy ' universe
   check "c2: the stack's cyfr service runs" grep -qE '^cyfr running' "$GUEST_DIR/docker.txt"
   check "c2: screenshot s1-ready.png" guest_screenshot s1-ready.png
   pane_step_end c2-up
@@ -430,7 +449,7 @@ case_2() {
   step "c2: a second init changes nothing"
   guest_ssh 'cd ~/cyfr && sha256sum .env docker-compose.yml Caddyfile; docker ps -q --no-trunc | sort' >"$GUEST_DIR/before-second-init.txt" 2>&1
   before=$(apt_transactions)
-  pane_step c2-init-again 'cd ~/cyfr && cyfr init --no-pull' 300 "${INIT_ANSWERS[@]}"
+  pane_step c2-init-again 'cd ~/cyfr && cyfr init --no-pull' 180 "${INIT_ANSWERS[@]}"
   after=$(apt_transactions)
   guest_ssh 'cd ~/cyfr && sha256sum .env docker-compose.yml Caddyfile; docker ps -q --no-trunc | sort' >"$GUEST_DIR/after-second-init.txt" 2>&1
   echo "apt transactions: $before before the second init, $after after" >>"$GUEST_DIR/results.txt"
@@ -440,31 +459,143 @@ case_2() {
   check "c2: the second init rewrites nothing and starts or stops no container" cmp -s "$GUEST_DIR/before-second-init.txt" "$GUEST_DIR/after-second-init.txt"
   pane_step_end c2-init-again
   pane_sudo_probe c2-probe-end
-  check "c2: no reusable sudo login at the end" grep -qE '^c2-probe-end: sudo -n true exited [1-9]' "$GUEST_DIR/sudo-probe.txt"
+  check "c2: no reusable sudo login at the end (sudo's refusal)" probe_refused c2-probe-end
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict c2
 }
 
-# hold LOCK UNIT: root holds the lock LOCK (install, lists or dpkg) in the
-# transient unit UNIT, as another installer, apt or dpkg would.
+# hold LOCK UNIT: root holds the lock LOCK in the transient unit UNIT, as
+# another holder would: install (CYFR's own), lists (apt's package
+# lists), dpkg (dpkg's front end), or pwd (/etc/.pwd.lock, which usermod
+# waits for through lckpwdf(3), up to 15 s, before it changes a group).
 hold() {
   local holder
   case $1 in
     install) holder='/usr/bin/flock /run/cyfr-install.lock /usr/bin/sleep 600' ;;
     lists) holder="/usr/bin/python3 -c 'import fcntl,time; f=open(\"/var/lib/apt/lists/lock\",\"w\"); fcntl.lockf(f,fcntl.LOCK_EX); time.sleep(600)'" ;;
     dpkg) holder="/usr/bin/python3 -c 'import fcntl,time; f=open(\"/var/lib/dpkg/lock-frontend\",\"w\"); fcntl.lockf(f,fcntl.LOCK_EX); time.sleep(600)'" ;;
+    pwd) holder="/usr/bin/python3 -c 'import fcntl,time; f=open(\"/etc/.pwd.lock\",\"a\"); fcntl.lockf(f,fcntl.LOCK_EX); time.sleep(600)'" ;;
   esac
   guest_root "systemd-run --unit=$2 --quiet $holder && sleep 2 && systemctl is-active --quiet $2" || fail "the $1 lock was not taken"
 }
 
+# The machine's state an interrupted install can change, in GUEST_DIR/$1:
+# every package dpkg knows with its version and state, the docker group,
+# the Docker service's state, and what dpkg --audit reports.
+guest_state() {
+  guest_ssh 'dpkg-query -W -f "\${binary:Package}\t\${Version}\t\${db:Status-Abbrev}\n" | sort
+    echo "group: $(getent group docker)"
+    echo "service: $(systemctl is-active docker.service) $(systemctl is-enabled docker.service 2>/dev/null)"
+    echo "audit:"; dpkg --audit' >"$GUEST_DIR/$1" 2>&1
+}
+
+# Run inside the guest as `sh interrupt-when.sh PATTERN SECONDS`: as soon
+# as a process whose command line matches the extended regex PATTERN
+# runs, within SECONDS, it types Ctrl-C into the pane and names the
+# process; past SECONDS it types Ctrl-C all the same, saying that nothing
+# matched, so the run still ends. It polls ten times a second.
+INTERRUPT_WHEN='pattern=$1 n=0
+while [ "$n" -lt "$(($2 * 10))" ]; do
+  line=$(pgrep -a -f -- "$pattern" | head -n 1)
+  if [ -n "$line" ]; then
+    tmux send-keys -t proof C-c
+    echo "interrupted while: $line"
+    ps -eo pid,ppid,pgid,stat,etimes,args
+    exit 0
+  fi
+  sleep 0.1
+  n=$((n + 1))
+done
+tmux send-keys -t proof C-c
+echo "interrupted late: no process matched $pattern within $2 s"
+ps -eo pid,ppid,pgid,stat,etimes,args
+exit 1'
+
+# c3_interrupted NAME MARK PATTERN SECONDS LATER: `cyfr init --no-pull`
+# typed into the pane and agreed as INIT_ANSWERS agree it until the pane
+# shows a line matching MARK, the action's `→ <command>` line, which the
+# parent prints as the action starts; then Ctrl-C, typed from inside the
+# guest within 0.1 s of a process matching PATTERN running, waited for up
+# to SECONDS (INTERRUPT_WHEN); then the run's end. LATER matches the line
+# of the action after it, which a run interrupted in time never shows.
+# Its evidence: transcript-NAME.txt, interrupt-NAME.txt and the machine's
+# state before and after the run (state-before-NAME.txt,
+# state-after-NAME.txt).
+c3_interrupted() {
+  local name=$1 mark=$2 pattern=$3 seconds=$4 later=$5 asked
+  step "c3: $name, interrupted while $pattern runs"
+  guest_state "state-before-$name.txt"
+  pane_type "cd ~/c3 && cyfr init --no-pull; echo \"$name exit status \$?\"" || fail "$name: the line was not typed"
+  if ! pane_converse 900 "$mark" "${INIT_ANSWERS[@]}"; then
+    pane_save "transcript-$name.txt"
+    guest_screenshot "$name-stuck.png" || true
+    fail "$name: no line matching $mark within $PANE_BUDGET s ($GUEST_DIR/transcript-$name.txt)"
+  fi
+  asked="${PANE_ANSWERED[0]}/${PANE_ANSWERED[1]}"
+  GUEST_SSH_TIMEOUT=$((seconds + 30)) guest_ssh "sh interrupt-when.sh $(printf '%q' "$pattern") $seconds" \
+    >"$GUEST_DIR/interrupt-$name.txt" 2>&1
+  if ! pane_converse 300 "^$name exit status [0-9]+"; then
+    pane_save "transcript-$name.txt"
+    guest_screenshot "$name-stuck.png" || true
+    fail "$name: the interrupted init did not end within $PANE_BUDGET s ($GUEST_DIR/transcript-$name.txt)"
+  fi
+  pane_save "transcript-$name.txt"
+  guest_state "state-after-$name.txt"
+  check "c3: $name: init asked once and sudo asked once before the interrupt (asked $asked)" test "$asked" = 1/1
+  check "c3: $name: the interrupt landed while $pattern ran ($(head -n 1 "$GUEST_DIR/interrupt-$name.txt"))" \
+    grep -q '^interrupted while: ' "$GUEST_DIR/interrupt-$name.txt"
+  check "c3: $name: the interrupted init exits 130" transcript_has "$name" "^$name exit status 130$"
+  check "c3: $name: no later action started" transcript_lacks "$name" "$later"
+  echo "$name: $(interrupt_sentence "$name")" >>"$GUEST_DIR/interrupts.txt"
+  check "c3: $name: its sentence says what the interrupt left, and to run cyfr init again ($(interrupt_sentence "$name"))" \
+    interrupt_sentence_true "$name"
+  pane_step_end "$name"
+  pane_sudo_probe "$name-probe"
+  check "c3: $name: no reusable sudo login after the interrupt (sudo's refusal)" probe_refused "$name-probe"
+}
+
+# While the interrupts at the update, the unpack and the service's start
+# run, maintainer scripts start no service (/usr/sbin/policy-rc.d exits
+# 101, as Debian's policy defines it) and docker.service's start waits
+# 60 s first (a drop-in's ExecStartPre): so `systemctl enable --now
+# docker.service`, not a package's postinst, is what starts it, and it
+# runs long enough for the interrupt to land in it. Both are removed once
+# that interrupt has landed, before the runs that follow.
+SLOW_START_ON='printf "#!/bin/sh\nexit 101\n" >/usr/sbin/policy-rc.d && chmod 0755 /usr/sbin/policy-rc.d &&
+  mkdir -p /etc/systemd/system/docker.service.d &&
+  printf "[Service]\nExecStartPre=/usr/bin/sleep 60\nTimeoutStartSec=300\n" >/etc/systemd/system/docker.service.d/cyfr-proof-slow-start.conf &&
+  systemctl daemon-reload'
+SLOW_START_OFF='rm -f /usr/sbin/policy-rc.d /etc/systemd/system/docker.service.d/cyfr-proof-slow-start.conf &&
+  rmdir --ignore-fail-on-non-empty /etc/systemd/system/docker.service.d && systemctl daemon-reload'
+
 case_3() {
-  local lock unit sentence begin elapsed before after
+  local lock unit sentence begin elapsed before after closes
   guest_boot c3 4096 30G
   tty1_login
   guest_provision_candidate
   guest_ssh 'mkdir -p ~/c3'
+  printf '%s\n' "$INTERRUPT_WHEN" >"$WORK/interrupt-when.sh"
+  guest_copy_in "$WORK/interrupt-when.sh" interrupt-when.sh || fail "the interrupter was not copied into the guest"
   guest_packages packages-before.txt
+
+  # The probes read what the product leaves, since the harness's root
+  # calls (guest_root) neither give tty1's terminal a sudo login nor take
+  # one away; checked here before anything else, against a login of the
+  # terminal's own.
+  step "c3: the probes' premise"
+  : >"$GUEST_DIR/sudo-probe.txt"
+  pane_sudo_probe c3-probe-start
+  check "c3: the terminal has no sudo login after the harness's own root calls (sudo's refusal)" probe_refused c3-probe-start
+  pane_sudo_step c3-v 'sudo -v'
+  check "c3: sudo -v in the terminal exits 0 after one password prompt" sudo_step_was c3-v 0 1
+  guest_root true || fail "the harness's root call failed ($GUEST_DIR/root.txt)"
+  pane_sudo_probe c3-probe-login
+  check "c3: a harness root call leaves the terminal's login as it was, and a probe sees it (exit 0, no prompt)" \
+    probe_allowed c3-probe-login
+  pane_sudo_step c3-k 'sudo -k'
+  pane_sudo_probe c3-probe-cleared
+  check "c3: sudo -k ends that login before the product runs (sudo's refusal)" probe_refused c3-probe-cleared
 
   step "c3: declined"
   pane_step c3-declined 'cd ~/c3 && cyfr init --no-pull' 120 'Install these requirements\? \(yes/no\)' no "$SUDO_PROMPT" @password
@@ -484,7 +615,7 @@ case_3() {
     pane_step "c3-$lock" 'cd ~/c3 && cyfr init --no-pull' 300 "${INIT_ANSWERS[@]}"
     PANE_MARKS=()
     begin=${PANE_MARK_AT[0]:-}
-    elapsed=$(( PANE_DONE_AT - ${begin:-0} ))
+    elapsed=$((PANE_DONE_AT - ${begin:-0}))
     echo "c3-$lock: refused ${elapsed}s after the wait began (mark at ${begin:-never}, end at $PANE_DONE_AT)" >>"$GUEST_DIR/locks.txt"
     check "c3: the $lock lock refuses with its own sentence" transcript_has "c3-$lock" "$sentence"
     check "c3: the $lock lock refuses within its 60 s wait and 5 s more (${elapsed}s, read each second)" test -n "$begin" -a "$elapsed" -ge 58 -a "$elapsed" -le 67
@@ -509,25 +640,47 @@ case_3() {
   check "c3: offline, init names the package step and the connection" transcript_has c3-offline '^(Error: )?CYFR could not (download Ubuntu.s package lists|finish installing docker\.io and docker-compose-v2)\. Nothing was installed\. Check the connection'
   pane_step_end c3-offline
 
-  step "c3: interrupted while dpkg unpacks, then retried"
-  PANE_MARKS=('^(Unpacking|Setting up) ')
-  pane_type 'cd ~/c3 && cyfr init --no-pull; echo "c3-interrupt exit status $?"'
-  pane_converse 900 '^(Unpacking|Setting up) ' 'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password ||
-    fail "dpkg did not start unpacking within 900 s"
-  PANE_MARKS=()
-  guest_ssh 'tmux send-keys -t proof C-c'
-  pane_converse 300 '^c3-interrupt exit status [0-9]+' || fail "the interrupted init did not end within 300 s"
-  pane_save transcript-c3-interrupt.txt
-  check "c3: the interrupted init exits 130" transcript_has c3-interrupt '^c3-interrupt exit status 130'
-  check "c3: it names what the interrupt left, not nothing, and how to finish" transcript_has c3-interrupt '^(\^C)?(Error: )?Interrupted while installing .*\. CYFR (installed|left|finished|started|added) .*\. Run `cyfr init` again to finish'
-  pane_step_end c3-interrupt
-  guest_ssh 'dpkg --audit; dpkg-query -W -f "\${Package} \${db:Status-Abbrev}\n" docker.io docker-compose-v2 apparmor' >"$GUEST_DIR/after-interrupt.txt" 2>&1
+  # An interrupt at each durable action, in the order init takes them, so
+  # each retry is the next one's run: the package lists' update (the
+  # lists removed first, so it downloads them whole and runs for long
+  # enough), dpkg's unpack, the service's start (SLOW_START_ON) and the
+  # group change (with /etc/.pwd.lock held, so usermod waits for it); then
+  # a last retry, which converges.
+  step "c3: an interrupt at each durable action, each retried"
+  guest_root "$SLOW_START_ON" || fail "the service's slow start was not set up ($GUEST_DIR/root.txt)"
+  guest_root 'find /var/lib/apt/lists -maxdepth 1 -type f ! -name lock -delete' || fail "the package lists were not removed"
+  c3_interrupted c3-update '^→ apt-get update' '^/usr/bin/apt-get update$' 60 '^→ apt-get -o '
+  c3_interrupted c3-unpack '^→ apt-get -o DPkg::Lock::Timeout=60 install' '^/usr/bin/dpkg .*--unpack' 600 '^→ systemctl '
+  check "c3: c3-unpack: dpkg's packages changed, so its sentence cannot say that nothing was installed" \
+    packages_changed c3-unpack
+  c3_interrupted c3-enable '^→ systemctl enable --now docker\.service' '^/usr/bin/systemctl enable --now docker\.service$' 30 '^→ usermod '
+  check "c3: c3-enable: the retry repaired the interrupted package installation first exactly when dpkg --audit reported one" \
+    repair_shown_iff_audit c3-enable
+  guest_root "$SLOW_START_OFF" || fail "the service's slow start was not removed ($GUEST_DIR/root.txt)"
+  # The start the interrupt left runs on in systemd; the next run is the
+  # group change's alone once it has.
+  closes=$((SECONDS + 180))
+  until guest_ssh 'systemctl is-active --quiet docker.service'; do
+    [ "$SECONDS" -lt "$closes" ] || fail "docker.service was not active within 180 s of the interrupted start"
+    sleep 2
+  done
+  hold pwd cyfr-proof-hold-pwd
+  c3_interrupted c3-group '^→ usermod -aG docker proof' '^/usr/sbin/usermod -aG docker proof$' 10 'How will you reach CYFR\?|started before proof joined'
+  guest_root 'systemctl stop cyfr-proof-hold-pwd' || true
+  check "c3: c3-group: the retry shows only what remained, the group change" test "$(preview_commands c3-group)" = 'usermod -aG docker proof'
+
+  step "c3: the last retry converges"
   pane_step c3-retry 'cd ~/c3 && cyfr init --no-pull' 1200 "${INIT_ANSWERS[@]}"
-  check "c3: the retry finishes and prepares the project (exit $PANE_STATUS)" test "$PANE_STATUS" = 0
-  check "c3: the retry shows only what remains, and asks once" test "${PANE_ANSWERED[0]}/${PANE_ANSWERED[1]}" = 1/1
-  guest_ssh 'getent group docker; dpkg --audit; dpkg-query -W -f "\${Package} \${db:Status-Abbrev}\n" docker.io docker-compose-v2 apparmor; systemctl is-active docker.service' >"$GUEST_DIR/after-retry.txt" 2>&1
-  check "c3: the account is in the docker group once" grep -qE '^docker:x:[0-9]+:proof$' "$GUEST_DIR/after-retry.txt"
-  check "c3: every package is installed and dpkg reports nothing unfinished" sh -c '[ "$(grep -c " ii $" "$1")" = 3 ] && grep -qx active "$1"' sh "$GUEST_DIR/after-retry.txt"
+  check "c3: the last retry finishes and prepares the project (exit $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "c3: the last retry asks once, and sudo once" test "${PANE_ANSWERED[0]}/${PANE_ANSWERED[1]}" = 1/1
+  check "c3: the last retry shows only what remained, the group change" test "$(preview_commands c3-retry)" = 'usermod -aG docker proof'
+  guest_ssh 'getent group docker; dpkg-query -W -f "\${Package} \${db:Status-Abbrev}\n" docker.io docker-compose-v2 apparmor
+    echo "service: $(systemctl is-active docker.service) $(systemctl is-enabled docker.service)"
+    echo "audit:"; dpkg --audit' >"$GUEST_DIR/after-retry.txt" 2>&1
+  check "c3: the account is in the docker group exactly once" grep -qE '^docker:x:[0-9]+:proof$' "$GUEST_DIR/after-retry.txt"
+  check "c3: every package is installed" sh -c '[ "$(grep -cE "^(docker\.io|docker-compose-v2|apparmor) ii $" "$1")" = 3 ]' sh "$GUEST_DIR/after-retry.txt"
+  check "c3: dpkg --audit reports nothing unfinished" sh -c '[ -z "$(sed -n "/^audit:\$/,\$p" "$1" | sed 1d)" ]' sh "$GUEST_DIR/after-retry.txt"
+  check "c3: the Docker service is active and enabled" grep -qx 'service: active enabled' "$GUEST_DIR/after-retry.txt"
   check "c3: screenshot s1-retry.png" guest_screenshot s1-retry.png
   pane_step_end c3-retry
 
@@ -539,7 +692,7 @@ case_3() {
   check "c3: the refresh sentence" transcript_has c3-refresh 'Run `newgrp docker`, or log out and in again, then run `cyfr init` again\.'
   pane_step_end c3-refresh
   pane_sudo_probe c3-probe-end
-  check "c3: no reusable sudo login at the end" grep -qE '^c3-probe-end: sudo -n true exited [1-9]' "$GUEST_DIR/sudo-probe.txt"
+  check "c3: no reusable sudo login at the end (sudo's refusal)" probe_refused c3-probe-end
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict c3
@@ -584,7 +737,7 @@ case_4() {
   check "c4: screenshot s1-path.png" guest_screenshot s1-path.png
   pane_step_end c4-after-accept
   pane_sudo_probe c4-probe-end
-  check "c4: no reusable sudo login at the end" grep -qE '^c4-probe-end: sudo -n true exited [1-9]' "$GUEST_DIR/sudo-probe.txt"
+  check "c4: no reusable sudo login at the end (sudo's refusal)" probe_refused c4-probe-end
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict c4
@@ -593,7 +746,7 @@ case_4() {
 case_n() {
   [ ! -e "$OUT/c$CASE" ] || { echo "install-screen proof: $OUT/c$CASE exists already" >&2; exit 64; }
   command -v go >/dev/null 2>&1 || [ "$CASE" = 4 ] || { echo "install-screen proof: go is required to build the candidate" >&2; exit 69; }
-  proof_image_build
+  proof_image_use
   proof_kvm_preflight
   proof_base_verify
   proof_seed

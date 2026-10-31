@@ -12,12 +12,15 @@ set -eu
 #                               such as 0.6.0-alpha.1 included (default: the
 #                               latest release that is not a pre-release)
 #   CYFR_INSTALL_DIR          - installation directory (default: on the system
-#                               the policy block below names, the directory of
-#                               its install path; elsewhere /opt/homebrew/bin,
-#                               /usr/local/bin or ~/.local/bin)
+#                               the policy block below names, without a
+#                               verification bypass, the directory of its
+#                               install path; otherwise /opt/homebrew/bin or
+#                               /usr/local/bin where writable, else
+#                               ~/.local/bin)
 #   CYFR_INSTALL_YES          - set to 1 to approve the displayed root commands
-#                               without a question; sudo must then run them
-#                               without a password prompt (sudo -n)
+#                               without a question; without a terminal, sudo
+#                               must then run them without a password prompt
+#                               (sudo -n)
 #   CYFR_ALLOW_UNVERIFIED     - set to 1 to install without cosign, or without the
 #                               release's signature bundle: checksums.txt's
 #                               signature is then NOT verified (the checksum is)
@@ -41,7 +44,9 @@ set -eu
 # terminal (CYFR_INSTALL_YES=1 answers for it), and then elevates once, to
 # a fixed helper (root_helper_text) that takes the machine-wide install
 # lock, runs apt and installs only the file whose SHA-256 the person's side
-# verified. Other systems install as before and are told what they lack.
+# verified. A verification bypass leaves nothing verified for root to
+# install, so under one the CLI is installed as on other systems, which
+# install as before and are told what they lack.
 
 GITHUB_REPO="cyfrworks/cyfr"
 BINARY_NAME="cyfr"
@@ -67,11 +72,13 @@ POLICY_LOCK_SECONDS='60'
 # END install policy
 
 # Where the system's identity, the person's answers and root's tools come
-# from. They are assigned here, never read from the environment; the test
-# harness sources this file and reassigns them.
+# from, and the directories a plain install tries, in order, before
+# ~/.local/bin. They are assigned here, never read from the environment;
+# the test harness sources this file and reassigns them.
 OS_RELEASE_PATHS='/etc/os-release /usr/lib/os-release'
 TTY_DEVICE=/dev/tty
 ROOT_PATH=/usr/sbin:/usr/bin:/sbin:/bin
+PLAIN_INSTALL_DIRS='/opt/homebrew/bin /usr/local/bin'
 
 main() {
     os="$(detect_os)"
@@ -99,18 +106,24 @@ main() {
         binary="${BINARY_NAME}.exe"
     fi
 
-    # On the supported system root installs the CLI: at the policy's path,
-    # or in an explicit CYFR_INSTALL_DIR the person cannot write. Elsewhere
-    # install_binary does, as it always has.
+    # On the supported system root installs the verified CLI: at the
+    # policy's path, or in an explicit CYFR_INSTALL_DIR the person cannot
+    # write. A download a bypass leaves unverified is never root's to
+    # install, so under a bypass, as on every other system, install_binary
+    # installs it, as it always has.
     root_dest=
-    if [ "$supported" = yes ] && [ -z "${CYFR_INSTALL_DIR:-}" ]; then
-        install_dir="${POLICY_INSTALL_PATH%/*}"
-        root_dest="$POLICY_INSTALL_PATH"
+    if [ "$supported" = yes ] && ! skip_verify && ! allow_unverified; then
+        if [ -z "${CYFR_INSTALL_DIR:-}" ]; then
+            install_dir="${POLICY_INSTALL_PATH%/*}"
+            root_dest="$POLICY_INSTALL_PATH"
+        else
+            install_dir="$(resolve_install_dir)"
+            if [ ! -w "$install_dir" ]; then
+                root_dest="$install_dir/$binary"
+            fi
+        fi
     else
         install_dir="$(resolve_install_dir)"
-        if [ "$supported" = yes ] && [ ! -w "$install_dir" ]; then
-            root_dest="$install_dir/$binary"
-        fi
     fi
 
     tmpdir="$(mktemp -d)"
@@ -528,26 +541,42 @@ add_setting() {
     if [ -z "$2" ]; then
         return
     fi
-    case "$2" in
-        *[!A-Za-z0-9._/:@%+,=-]*)
-            setting_rest="$2"
-            setting_value=
+    shell_word "$2"
+    command_settings="$command_settings$1=$word "
+}
+
+# Sets word to $1 as the shell reads it back as one word: as it is when
+# it holds nothing the shell treats specially, else in single quotes.
+shell_word() {
+    case "$1" in
+        ""|*[!A-Za-z0-9._/:@%+,=-]*)
+            word_rest="$1"
+            word=
             while :; do
-                case "$setting_rest" in
+                case "$word_rest" in
                     *\'*)
-                        setting_value="$setting_value${setting_rest%%\'*}'\\''"
-                        setting_rest="${setting_rest#*\'}"
+                        word="$word${word_rest%%\'*}'\\''"
+                        word_rest="${word_rest#*\'}"
                         ;;
                     *)
-                        setting_value="'$setting_value$setting_rest'"
+                        word="'$word$word_rest'"
                         break
                         ;;
                 esac
             done
             ;;
-        *) setting_value="$2" ;;
+        *) word="$1" ;;
     esac
-    command_settings="$command_settings$1=$setting_value "
+}
+
+# Prints the words $@ as one command line.
+command_line() {
+    line_text=
+    for line_word in "$@"; do
+        shell_word "$line_word"
+        line_text="${line_text:+$line_text }$word"
+    done
+    printf '%s\n' "$line_text"
 }
 
 # What has changed: the packages this run asked for that dpkg now reports
@@ -597,6 +626,40 @@ refuse_download() {
 
 refuse_no_sudo() {
     refuse "This account cannot run sudo, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` from an account that can install software."
+}
+
+# Why sudo started no root step, read from its own words as with_root_helper
+# kept them: sudo-rs's, and sudo's in the C locale. Words it does not know,
+# where no terminal could take a password, are sudo -n's missing password;
+# internal/install's ReadSudoCause and SudoRefused read and word them alike.
+refuse_sudo() {
+    if sudo_said 'incorrect authentication attempt' 'incorrect password attempt' 'authentication failed'; then
+        refuse "sudo did not accept the password, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` again and type this account's password."
+    fi
+    if sudo_said 'interactive authentication is required' 'a password is required'; then
+        refuse_needs_password
+    fi
+    if sudo_said "i'm afraid i can't do that" 'may not run' 'is not in the sudoers' 'is not allowed to'; then
+        refuse_no_sudo
+    fi
+    case " $elevation " in
+        *" -n "*) refuse_needs_password ;;
+    esac
+    refuse "sudo did not run CYFR's installer, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` again once sudo works for this account."
+}
+
+refuse_needs_password() {
+    refuse "sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` in a terminal, or give this account sudo without a password prompt."
+}
+
+# Whether sudo's kept words hold one of $@, in any case.
+sudo_said() {
+    for said_text in "$@"; do
+        if grep -i -q -F -- "$said_text" "$tmpdir/said" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Root's refusal $1, as the helper reported it.
@@ -680,17 +743,8 @@ agree_to_root_plan() {
         return
     fi
 
-    printf '\nCYFR runs these commands as root:\n'
-    if [ -n "$1" ]; then
-        printf '  apt-get update\n'
-        printf '  apt-get -o DPkg::Lock::Timeout=%s install -y --no-install-recommends %s\n' "$POLICY_LOCK_SECONDS" "$1"
-    fi
-    if [ -n "$2" ]; then
-        printf '  install -o root -g root -m 0755 %s %s\n' "$tmpdir/$binary" "$2"
-        if [ -n "$1" ]; then
-            printf 'The last command runs once the download it installs passes the signature and checksum checks.\n'
-        fi
-    fi
+    # shellcheck disable=SC2086 # package names, one argument each
+    show_root_step "${2:--}" $1
 
     if [ "$approval" = yes ]; then
         printf 'CYFR_INSTALL_YES=1 approves these commands.\n'
@@ -704,18 +758,69 @@ agree_to_root_plan() {
     fi
 }
 
-# Elevates "$@": directly as root, with sudo -n when CYFR_INSTALL_YES=1
-# approved without a terminal, otherwise through sudo's own prompt. -k
-# ignores a cached login, and cleanup's sudo -k invalidates the one this
-# leaves.
-elevate() {
-    if [ "$as_root" = yes ]; then
-        "$@"
-    elif [ "$approval" = yes ]; then
-        sudo -n -k -- "$@"
-    else
-        sudo -k -- "$@"
+# Shows root's step for the destination $1 (- for none) and the packages
+# after it: the commands root runs, as the helper's show mode prints them
+# from the very code root runs, and the command that starts it. A
+# destination or package the helper refuses is refused here.
+show_root_step() {
+    show_dest="$1"
+    shift
+    if ! shown_words="$(/bin/sh -c "$(root_helper_text)" cyfr-install-helper show "$tmpdir" "$show_dest" "$@")"; then
+        refuse_root arguments
     fi
+    printf '\nCYFR runs these commands as root:\n'
+    printf '%s\n' "$shown_words" | render_commands
+    printf "flock takes CYFR's install lock, %s, open as file descriptor 9, waiting up to %s seconds for another installation to finish.\n" "$POLICY_LOCK_PATH" "$POLICY_LOCK_SECONDS"
+    if [ "$#" -gt 0 ]; then
+        printf 'apt-get update is tried again each second, for up to %s seconds, while another package-list update holds its lock.\n' "$POLICY_LOCK_SECONDS"
+    fi
+    if [ "$show_dest" != - ]; then
+        printf "mktemp's name takes the place of XXXXXX, and mv runs only when sha256sum gives the verified download's SHA-256.\n"
+        if [ "$#" -gt 0 ]; then
+            printf 'The second flock and the commands after it run once the download passes the signature and checksum checks.\n'
+        fi
+    fi
+    elevation_words
+    # shellcheck disable=SC2086 # sudo's fixed words, one each
+    printf "They run as one root step: %s <CYFR's root step> %s\n" "$(command_line $elevation /bin/sh -c)" \
+        "$(command_line cyfr-install-helper run "$tmpdir" "$show_dest" "$@")"
+}
+
+# Prints, indented, the commands of the helper's show mode, which gives a
+# command's words one a line and an empty line after each.
+render_commands() {
+    set --
+    while IFS= read -r render_word || [ -n "$render_word" ]; do
+        if [ -n "$render_word" ]; then
+            set -- "$@" "$render_word"
+        elif [ "$#" -gt 0 ]; then
+            printf '  %s\n' "$(command_line "$@")"
+            set --
+        fi
+    done
+    if [ "$#" -gt 0 ]; then
+        printf '  %s\n' "$(command_line "$@")"
+    fi
+}
+
+# Sets elevation to the words elevate puts before root's command: none as
+# root, sudo -k where a terminal can take sudo's password, and sudo -n -k,
+# which asks for none, where nothing can. -k ignores a cached login, and
+# cleanup's sudo -k invalidates the one this leaves.
+elevation_words() {
+    if [ "$as_root" = yes ]; then
+        elevation=
+    elif tty_open; then
+        elevation='sudo -k --'
+    else
+        elevation='sudo -n -k --'
+    fi
+}
+
+# Elevates "$@" through elevation_words' words.
+elevate() {
+    # shellcheck disable=SC2086 # sudo's fixed words, one each
+    $elevation "$@"
 }
 
 # Runs root_helper_text as root for the destination $1 (- for none) and the
@@ -728,7 +833,10 @@ elevate() {
 # command ends, so a request to a helper that died fails as a reply rather
 # than as SIGPIPE. Being a pipeline element rather than a
 # background job keeps the terminal's interrupt reaching sudo, and the
-# pipeline returns only once sudo and its helper have exited.
+# pipeline returns only once sudo and its helper have exited. Their
+# messages reach the terminal through tee, which keeps them in the file
+# refuse_sudo reads; as an asynchronous command tee ignores the terminal's
+# interrupt and ends with the last writer, before "exited" is written.
 with_root_helper() {
     helper_dest="$1"
     shift
@@ -738,8 +846,9 @@ with_root_helper() {
         shift
     done
     shift
-    mkfifo "$tmpdir/req" "$tmpdir/rep"
+    mkfifo "$tmpdir/req" "$tmpdir/rep" "$tmpdir/err"
     helper_text="$(root_helper_text)"
+    elevation_words
     if [ "$as_root" = no ]; then
         sudo_cleanup=yes
     fi
@@ -748,9 +857,12 @@ with_root_helper() {
     {
         trap 'helper_signal=1' INT TERM HUP
         helper_status=0
+        tee "$tmpdir/said" <"$tmpdir/err" >&2 5>&- 6<&- 7>&- 8<&- &
+        said_pid=$!
         # shellcheck disable=SC2086 # package names, one argument each
-        elevate /bin/sh -c "$helper_text" cyfr-install-helper "$tmpdir" "$helper_dest" $helper_packages \
-            </dev/null >&5 5>&- 6<&- 7>&- 8<&- || helper_status=$?
+        elevate /bin/sh -c "$helper_text" cyfr-install-helper run "$tmpdir" "$helper_dest" $helper_packages \
+            </dev/null >&5 2>"$tmpdir/err" 5>&- 6<&- 7>&- 8<&- || helper_status=$?
+        wait "$said_pid" || :
         printf 'exited %s\n' "$helper_status" >&7
         cat <&6 >/dev/null
     } 7>"$tmpdir/rep" 6<"$tmpdir/req" | {
@@ -766,7 +878,8 @@ with_root_helper() {
 }
 
 # Reads root's next reply and returns when it is $1. A refusal, or an
-# elevation that ended before the reply, refuses here.
+# elevation that ended before the reply, refuses here: before ready,
+# through sudo, as sudo's own refusal.
 await_helper() {
     helper_reply=
     IFS= read -r helper_reply <&4 || helper_reply="exited ?"
@@ -775,8 +888,8 @@ await_helper() {
         "refused "*) refuse_root "${helper_reply#refused }" ;;
         "exited 64") refuse_root arguments ;;
         "exited "*)
-            if [ "$1" = ready ]; then
-                refuse_no_sudo
+            if [ "$1" = ready ] && [ "$as_root" = no ]; then
+                refuse_sudo
             fi
             refuse_root stopped
             ;;
@@ -785,9 +898,10 @@ await_helper() {
 }
 
 # The root side, a fixed program sudo runs as /bin/sh -c with the arguments
-# DIR DEST [PACKAGE...]. Its preamble fixes root's PATH, the lock, the
-# deadline and the packages it accepts; nothing from the person's side runs
-# as a command. It reads requests from DIR/req and replies on DIR/rep:
+# run DIR DEST [PACKAGE...]. Its preamble fixes root's PATH, locale, the
+# lock, the deadline and the packages it accepts; nothing from the
+# person's side runs as a command. It reads requests from DIR/req and
+# replies on DIR/rep:
 #   ready                      arguments accepted
 #   packages                   apt installed PACKAGE..., under the lock
 #   installed                  DEST holds the verified file, under the lock
@@ -799,6 +913,9 @@ await_helper() {
 # root-owned temporary beside DEST, installs it by rename only when the
 # copy's SHA-256 is the one sent, and "done", "abort" or the end of the
 # requests installs nothing.
+# With show in place of run, the person's side runs the same program for
+# its preview: it touches nothing and prints each command it would run
+# instead, so the commands shown are the commands root runs.
 root_helper_text() {
     printf "PATH='%s'\n" "$ROOT_PATH"
     printf "lock='%s'\n" "$POLICY_LOCK_PATH"
@@ -806,29 +923,59 @@ root_helper_text() {
     printf "allowed='%s'\n" "$(bootstrap_package_names)"
     printf "binary='%s'\n" "$BINARY_NAME"
     cat <<'HELPER'
-export PATH
+LC_ALL=C
+DEBIAN_FRONTEND=noninteractive
+export PATH LC_ALL DEBIAN_FRONTEND
 umask 022
 set -u
-dir=$1
-dest=$2
-shift 2
+mode=$1
+dir=$2
+dest=$3
+shift 3
 tmp=
-trap 'if [ -n "$tmp" ]; then rm -f -- "$tmp"; fi' EXIT
+trap 'if [ -n "$tmp" ] && [ "$mode" = run ]; then rm -f -- "$tmp"; fi' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 case "$dir" in
+    *'
+'*) exit 64 ;;
     /*) ;;
     *) exit 64 ;;
 esac
-if [ ! -d "$dir" ] || [ -h "$dir" ] || [ ! -p "$dir/req" ] || [ ! -p "$dir/rep" ]; then
-    exit 64
-fi
-exec 3>"$dir/rep" 4<"$dir/req" 6>&1
+case "$mode" in
+    run)
+        if [ ! -d "$dir" ] || [ -h "$dir" ] || [ ! -p "$dir/req" ] || [ ! -p "$dir/rep" ]; then
+            exit 64
+        fi
+        exec 3>"$dir/rep" 4<"$dir/req" 6>&1
+        ;;
+    show) exec 5>&1 6>&1 ;;
+    *) exit 64 ;;
+esac
+
+# Every command root runs goes through run. As root it runs the command;
+# shown, it prints the command's words, one a line and an empty line
+# after them, on file descriptor 5, and succeeds.
+run() {
+    if [ "$mode" = show ]; then
+        printf '%s\n' "$@" '' >&5
+        return 0
+    fi
+    "$@"
+}
 
 reply() {
-    printf '%s\n' "$1" >&3
+    if [ "$mode" = run ]; then
+        printf '%s\n' "$1" >&3
+    fi
+}
+
+say() {
+    if [ "$mode" = run ]; then
+        printf '%s\n' "$1"
+    fi
 }
 
 refuse() {
@@ -858,14 +1005,16 @@ for package in "$@"; do
 done
 reply ready
 
-# The machine-wide install lock, waited for until the deadline. Another
-# installation's lock is never removed.
+# The machine-wide install lock, open on file descriptor 9 and waited for
+# until the deadline. Another installation's lock is never removed.
 take_lock() {
-    (umask 077 && : >>"$lock") 2>/dev/null || true
-    if ! { command exec 9<"$lock"; } 2>/dev/null; then
-        refuse lock-file
+    if [ "$mode" = run ]; then
+        (umask 077 && : >>"$lock") 2>/dev/null || true
+        if ! { command exec 9<"$lock"; } 2>/dev/null; then
+            refuse lock-file
+        fi
     fi
-    flock -E 75 -w "$seconds" 9
+    run flock -E 75 -w "$seconds" 9
     case "$?" in
         0) ;;
         75) refuse install-lock ;;
@@ -876,14 +1025,13 @@ take_lock() {
 # apt-get "$@" with its output on the terminal and its errors, kept for
 # recognising a lock, in apt_errors.
 run_apt() {
-    apt_errors=$(LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get "$@" </dev/null 2>&1 1>&6 3>&- 4<&- 6>&- 9<&-)
+    apt_errors=$(run apt-get "$@" </dev/null 2>&1 1>&6 3>&- 4<&- 6>&- 9<&-)
 }
 
 if [ "$#" -gt 0 ]; then
     take_lock
-    deadline=$(( $(date +%s) + seconds ))
-    waiting=no
-    printf 'Running apt-get update\n'
+    deadline=
+    say 'Running apt-get update'
     until run_apt update; do
         case "$apt_errors" in
             *'Could not get lock /var/lib/apt/lists/lock'*) ;;
@@ -892,20 +1040,21 @@ if [ "$#" -gt 0 ]; then
                 refuse update
                 ;;
         esac
-        if [ "$(date +%s)" -ge "$deadline" ]; then
+        now=$(date +%s)
+        if [ -z "$deadline" ]; then
+            deadline=$((now + seconds))
+            say 'Waiting for another package-list update to finish'
+        fi
+        if [ "$now" -ge "$deadline" ]; then
             printf '%s\n' "$apt_errors" >&2
             refuse list-lock
-        fi
-        if [ "$waiting" = no ]; then
-            printf 'Waiting for another package-list update to finish\n'
-            waiting=yes
         fi
         sleep 1
     done
     if [ -n "$apt_errors" ]; then
         printf '%s\n' "$apt_errors" >&2
     fi
-    printf 'Running apt-get install %s\n' "$*"
+    say "Running apt-get install $*"
     if ! run_apt -o "DPkg::Lock::Timeout=$seconds" install -y --no-install-recommends "$@"; then
         printf '%s\n' "$apt_errors" >&2
         case "$apt_errors" in
@@ -924,34 +1073,41 @@ if [ "$dest" = - ]; then
     exit 0
 fi
 
-request=
-if ! IFS= read -r request <&4; then
-    exit 0
-fi
-case "$request" in
-    done|abort) exit 0 ;;
-    "install $dir/$binary "*) sha=${request#"install $dir/$binary "} ;;
-    *) refuse request ;;
-esac
-case "$sha" in
-    ""|*[!0-9a-f]*) refuse request ;;
-esac
-if [ "${#sha}" -ne 64 ]; then
-    refuse request
-fi
 src=$dir/$binary
-if [ ! -f "$src" ] || [ -h "$src" ]; then
-    refuse copy
+if [ "$mode" = run ]; then
+    request=
+    if ! IFS= read -r request <&4; then
+        exit 0
+    fi
+    case "$request" in
+        done|abort) exit 0 ;;
+        "install $src "*) sha=${request#"install $src "} ;;
+        *) refuse request ;;
+    esac
+    case "$sha" in
+        ""|*[!0-9a-f]*) refuse request ;;
+    esac
+    if [ "${#sha}" -ne 64 ]; then
+        refuse request
+    fi
+    if [ ! -f "$src" ] || [ -h "$src" ]; then
+        refuse copy
+    fi
 fi
 take_lock
-tmp=$(mktemp "${dest%/*}/.$binary.XXXXXX") || refuse copy
-cp -- "$src" "$tmp" || refuse copy
-actual=$(sha256sum <"$tmp") || refuse copy
-if [ "${actual%% *}" != "$sha" ]; then
+# Shown, the temporary goes by mktemp's template.
+template=${dest%/*}/.$binary.XXXXXX
+tmp=$(run mktemp "$template") || refuse copy
+if [ "$mode" = show ]; then
+    tmp=$template
+fi
+run cp -- "$src" "$tmp" || refuse copy
+actual=$(run sha256sum -- "$tmp") || refuse copy
+if [ "$mode" = run ] && [ "${actual%% *}" != "$sha" ]; then
     refuse mismatch
 fi
-chmod 0755 "$tmp" || refuse copy
-mv -f -T -- "$tmp" "$dest" || refuse copy
+run chmod 0755 "$tmp" || refuse copy
+run mv -f -T -- "$tmp" "$dest" || refuse copy
 tmp=
 reply installed
 HELPER
@@ -1313,16 +1469,16 @@ resolve_install_dir() {
         return
     fi
 
-    # Apple Silicon Homebrew prefix
-    if [ -d "/opt/homebrew/bin" ] && [ -w "/opt/homebrew/bin" ]; then
-        echo "/opt/homebrew/bin"
-    elif [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
-        echo "/usr/local/bin"
-    else
-        dir="${HOME}/.local/bin"
-        mkdir -p "$dir"
-        echo "$dir"
-    fi
+    # Apple Silicon Homebrew prefix, then /usr/local/bin
+    for dir in $PLAIN_INSTALL_DIRS; do
+        if [ -d "$dir" ] && [ -w "$dir" ]; then
+            echo "$dir"
+            return
+        fi
+    done
+    dir="${HOME}/.local/bin"
+    mkdir -p "$dir"
+    echo "$dir"
 }
 
 install_binary() {
