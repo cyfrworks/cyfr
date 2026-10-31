@@ -6,10 +6,13 @@ defmodule PrismWeb.Nav do
   The pages of an athanor, once: what the sidebar (dev), the drawer (both
   modes) and the command palette list, and in which mode.
 
-  `lite` is the chat and a drawer off it — AQUA, files, apps, members,
-  the Vault, schedules, webhooks, MCP servers, settings, legal. `dev` adds the
+  `lite` is the chat and a drawer off it — AQUA, files, members, the
+  Vault, schedules, webhooks, MCP servers, settings, legal. `dev` adds the
   ops surfaces, sectioned. Keys are the pages' `active_nav` values; the
   DOM id a surface renders is `<prefix>-<key>` with underscores as hyphens.
+  These are the Dashboard's pages; the Canvas (`canvas_path/0`) is no page
+  of the nav, and the mode switch on the top bar shows it in either mode
+  (`shown?/2`).
 
   Two scopes. An `:athanor` page lives under `/a/<athanor>` — the
   workbench, focused on one athanor. A `:global` page has no athanor in its
@@ -40,19 +43,14 @@ defmodule PrismWeb.Nav do
   # belongs to — the chat is one.
   @global_pages ~w(/chat)
 
+  # The Canvas mode's page, under `/a/<athanor>`.
+  @canvas_path "/canvas"
+
   # In dev order; the lite order is its own list below.
   @items [
     %{key: "chat", label: "Chat", path: "/chat", icon: "play", section: :top, modes: @both},
     %{key: "aqua", label: "AQUA", path: "/aqua", icon: "user", section: :top, modes: @both},
     %{key: "files", label: "Files", path: "/files", icon: "folder", section: :top, modes: @both},
-    %{
-      key: "tinctures",
-      label: :tinctures,
-      path: "/tinctures",
-      icon: "palette",
-      section: :top,
-      modes: @both
-    },
     %{
       key: "activities",
       label: "Activities",
@@ -175,7 +173,7 @@ defmodule PrismWeb.Nav do
     }
   ]
 
-  @lite_order ~w(chat aqua files tinctures members vault schedules webhooks mcp_servers settings legal)
+  @lite_order ~w(chat aqua files members vault schedules webhooks mcp_servers settings legal)
 
   @sections [
     {:top, nil},
@@ -237,6 +235,25 @@ defmodule PrismWeb.Nav do
     if global?(path),
       do: path,
       else: PrismWeb.Focus.path(athanor_route, path)
+  end
+
+  @doc "The Canvas mode's page path, focused on an athanor as any athanor page is."
+  @spec canvas_path() :: String.t()
+  def canvas_path, do: @canvas_path
+
+  @doc """
+  Whether `mode` shows the page at `path` (query string allowed): one of
+  its items, or a record under one, or the Canvas, which the mode switch
+  shows in either mode.
+  """
+  @spec shown?(String.t(), String.t()) :: boolean()
+  def shown?(path, mode) when is_binary(path) do
+    base = path |> String.split("?", parts: 2) |> hd()
+
+    base == @canvas_path or
+      Enum.any?(items(mode), fn %{path: page} ->
+        base == page or String.starts_with?(base, page <> "/")
+      end)
   end
 
   @doc "The paths of the pages that have no athanor in their address."

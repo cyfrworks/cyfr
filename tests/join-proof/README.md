@@ -28,7 +28,11 @@ scratch directory is read or changed. Everything the run starts, the
 cells' servers, the stand-in, the fronts and the Playwright container,
 and the scratch directory, with the run's authority key, the stand-in's
 state, every token, cookie and recovery code, is removed when it ends,
-whether it succeeds or fails.
+whether it succeeds or fails. A failed proof first prints the last
+lines of every cell's log (`JOIN_PROOF_LOG_TAIL`, 4000 by default), each
+redacted of the cell's own secrets and the run's, so a run whose scratch
+directory is gone still names what its cells did; H and A2 log at debug
+(`CYFR_LOG_LEVEL`) for that.
 
 ## Browsers
 
@@ -53,6 +57,13 @@ Firefox's and WebKit's sign-in at H, carry and second profile do not run,
 and the cross-home isolation each engine enforces is the multi-home smoke's
 to hold in all three. In-app browsers and mail clients that rewrite links
 are not covered.
+
+The press that begins a pairing in H's Devices prompt waits until the
+prompt's dialog is the page's modal top layer and two animation frames have
+passed. A canvas frame under the prompt runs in a process of its own, and
+Chromium can route a press made sooner to that frame, which then holds focus
+while the page hears nothing. A press that lands in a frame is recorded in
+the step's `press` and made once more; a second miss fails the step.
 
 ## Steps
 

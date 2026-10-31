@@ -1585,6 +1585,15 @@ defmodule Cyfr.Boundaries do
           "the shell and the scan name one entry; it reads nothing."
     },
     %{
+      from: "PrismWeb.Surface",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the mode a browser session was last in, and its last Dashboard page, are kept " <>
+          "under a hash of its token; a read answers them or a miss, and drops an " <>
+          "expired entry as it finds it, which is the cache's own housekeeping."
+    },
+    %{
       from: "PrismWeb.ThreadPaneLive",
       into: "Arca.Execution",
       functions: [:get_tenant],
@@ -1775,6 +1784,15 @@ defmodule Cyfr.Boundaries do
         "the shell marks its tincture scan running per athanor for a bounded time, so " <>
           "two refreshes start one scan, and clears the mark when the scan ends: " <>
           "server-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.Surface",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the mode switch keeps the mode a browser session was last in, and its last " <>
+          "Dashboard page, under a hash of its token, for a bounded time: server-local " <>
+          "memory, never a row."
     }
   ]
 
@@ -1942,7 +1960,10 @@ defmodule Cyfr.Boundaries do
     "Sanctum.ClientIp" => [from_connect_info: 1, ingress: 1, put_ingress: 2, resolve: 1],
     # A tincture version's frame opens, and its data routes answer, under
     # the grant held to that version by the decision a run is held to.
+    # A component's setup plan reads whether each binding its grant carries
+    # is still live, as a run's attach reads its lifetime, without using it.
     "Sanctum.Consent" => [
+      binding_live: 4,
       head_consent: 2,
       profiles: 2,
       revoke_source: 2,

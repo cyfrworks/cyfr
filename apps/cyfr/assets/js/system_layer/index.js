@@ -37,19 +37,17 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
 /**
  * SystemLayer hook — the browser half of the layer Prism alone draws above
  * every frame (`PrismWeb.SystemLayer`). Registered as `Hooks.SystemLayer`
- * on the component's root, which carries `data-open`, `data-prompt-id`,
- * `data-dismissable` and `data-mode`; the prompt is the `<dialog>` inside
- * it.
+ * on the component's root, which carries `data-open` and `data-prompt-id`;
+ * the prompt is the `<dialog>` inside it.
  *
- * A prompt is shown in the browser's top layer — `showModal()`, or for
- * safe mode `showPopover()`, which leaves the assistant's panel operable —
- * only after the document has been asked to leave pointer lock and its
+ * A prompt is shown modal in the browser's top layer (`showModal()`) only
+ * after the document has been asked to leave pointer lock and its
  * fullscreen exit has settled, so no frame's fullscreen covers it. While
  * it shows, a frame that takes fullscreen or pointer lock again is made to
  * leave them and the prompt is shown above it again. Focus moves into the
- * prompt and returns to where it was when the prompt closes; in a modal
- * prompt Tab and Shift+Tab wrap inside it. Escape dismisses every prompt
- * but safe mode; only the server closes a prompt.
+ * prompt and returns to where it was when the prompt closes; Tab and
+ * Shift+Tab wrap inside it. Escape dismisses every prompt; only the server
+ * closes a prompt.
  *
  * While a modal prompt is open, from the step that leaves fullscreen until
  * it closes, every frame on the page is hidden (`visibility: hidden`, by a
@@ -63,8 +61,7 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * the person's own panel's); the frames stay hidden while either has a
  * modal prompt open. When the last one closes the stylesheet goes, and
  * each frame keeps the `inert` its server and its bridge last gave it: the
- * layer removes only the `inert` it added and nobody wrote since. Safe
- * mode's popover hides nothing: no app runs then.
+ * layer removes only the `inert` it added and nobody wrote since.
  *
  * A frame's pointer lock is its own: no document can release a lock
  * another frame holds. Hiding a frame ends the lock in Chromium, but a
@@ -214,8 +211,8 @@ const added = new Set()
 let coverStyle = null
 let frameWatch = null
 
-// Whether a layer in `state` covers the page: a modal prompt opening or shown.
-export const covers = (state) => state.phase !== "hidden" && state.mode === "modal"
+// Whether a layer in `state` covers the page: a prompt opening or shown.
+export const covers = (state) => state.phase !== "hidden"
 
 // How long after the page left fullscreen its frames are given to see it,
 // beyond two of the page's animation frames: each sees it at its own next
@@ -566,9 +563,7 @@ export default {
     this.dispatch({
       type: "sync",
       open: this.el.dataset.open === "true",
-      promptId: this.el.dataset.promptId || null,
-      dismissable: this.el.dataset.dismissable === "true",
-      mode: this.el.dataset.mode === "popover" ? "popover" : "modal"
+      promptId: this.el.dataset.promptId || null
     })
   },
 
@@ -625,11 +620,7 @@ export default {
       }
 
       case "show":
-        if (this.layer.mode === "popover") {
-          if (!popoverOpen(this.dialog)) this.dialog.showPopover()
-        } else if (!this.dialog.open) {
-          this.dialog.showModal()
-        }
+        if (!this.dialog.open) this.dialog.showModal()
         break
 
       case "focus-first": {
@@ -641,7 +632,6 @@ export default {
       case "close":
         clearForms(this.dialog)
         this.forgetAllRecovery()
-        if (popoverOpen(this.dialog)) this.dialog.hidePopover()
         if (this.dialog.open) this.dialog.close()
         break
 
@@ -1094,9 +1084,9 @@ export default {
     this.el.replaceChildren(...nodes)
   },
 
-  // Only a modal prompt holds focus; safe mode leaves the page reachable.
+  // A shown prompt holds focus.
   trap(event) {
-    if (this.layer.phase !== "shown" || this.layer.mode !== "modal") return
+    if (this.layer.phase !== "shown") return
     const stops = this.stops()
     const current = stops.indexOf(globalThis.document.activeElement)
     const next = nextStop(stops.length, current, event.shiftKey)
@@ -1219,14 +1209,6 @@ function element(doc, tag, attrs = {}, children = []) {
 
 function button(doc, test, action, ref, text) {
   return element(doc, "button", {type: "button", "data-test": test, "data-action": action, "data-ref": ref}, text)
-}
-
-function popoverOpen(dialog) {
-  try {
-    return dialog.matches(":popover-open")
-  } catch (_error) {
-    return false
-  }
 }
 
 // A control as `focus.js` reads it.

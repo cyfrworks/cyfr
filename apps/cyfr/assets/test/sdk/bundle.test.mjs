@@ -21,7 +21,7 @@ const BUNDLE = readFileSync(new URL("../../../priv/static/sdk/cyfr.js", import.m
 const [{frame: CANVAS, reply: OPEN}] = fixture.canvas.handshake.valid
 const [{stream_path: STREAM_PATH}] = fixture.canvas.paths.valid.filter(({frame}) => frame === CANVAS)
 const DECLARED = OPEN.canvas.streams[0]
-const BASE = "https://cyfr.test/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/local/canvas/0.2.0/dist/"
+const BASE = "https://cyfr.test/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/local/canvas/0.3.0/dist/"
 
 const ports = []
 afterEach(() => {
@@ -111,14 +111,14 @@ describe("the built SDK in a canvas's page", () => {
     assert.deepEqual(heard, [failed("load")])
   })
 
-  test("hears the page's unhandled rejection after ready() as a failure at runtime", async () => {
+  test("hears nothing of the page's unhandled rejection after ready()", async () => {
     const {win} = page()
     const heard = handshake(win)
     win.cyfr.ready()
     await eventually(() => heard.length === 1)
 
     win.dispatchEvent(Object.assign(new Event("unhandledrejection"), {reason: new Error("no")}))
-    await eventually(() => heard.length === 2)
-    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}, failed("runtime")])
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}])
   })
 })

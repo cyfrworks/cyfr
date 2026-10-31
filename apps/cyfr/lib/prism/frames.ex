@@ -129,8 +129,7 @@ defmodule Prism.Frames do
 
   Every credential minted is remembered until it is revoked, and
   `revoke_all/2` revokes each one; the view calls it on every path that
-  ends it. `clear/2` revokes them all and holds no frame, which is how
-  safe mode starts.
+  ends it.
 
   The pure transitions — placement, visibility, attribution, the
   handshake and the signals the view sends — take no context and touch
@@ -849,17 +848,6 @@ defmodule Prism.Frames do
   @spec discard(Context.t(), t(), key()) :: t()
   def discard(%Context{} = ctx, %__MODULE__{} = t, key) do
     settle(ctx, drop(ctx, t, key))
-  end
-
-  @doc """
-  Every credential this value minted revoked, and no frame held: the
-  answer keeps the visible canvas and the count of dropped messages, and
-  remembers only the credentials whose revocation could not be recorded.
-  """
-  @spec clear(Context.t(), t()) :: t()
-  def clear(%Context{} = ctx, %__MODULE__{} = t) do
-    %{minted: unrevoked} = revoke_all(ctx, t)
-    %{new() | minted: unrevoked, dropped: t.dropped, canvas: t.canvas}
   end
 
   @doc """

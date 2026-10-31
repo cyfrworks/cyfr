@@ -237,7 +237,7 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
   # The shell, once the canvas has read the layout and the shell has
   # decided what it shows.
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     wait_until(fn -> render(view) && assigns(view).showing != :pending end, 2_000, "the canvas")
     view
   end

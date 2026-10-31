@@ -9,7 +9,8 @@ switched by the shelf's switcher, the chords and a swipe on the shelf; a candle 
 page draws itself; an app opened full over a canvas and frozen on a switch;
 a hidden canvas that reads and acts on nothing and refreshes when shown
 again; validation that keeps the working version when a candidate is not
-ready or dies, and safe mode's kept version after a live crash; the
+ready or dies, and the fallback after a live crash, its window kept
+and its kept version restored; the
 activation the shell forwards a press under; a rebound feed; and the
 canvas page's own policy against the browser, in Chromium, Firefox and
 WebKit alike.
@@ -68,7 +69,7 @@ grants each published tincture and each written version before the proof
 shows it, through the release fixture's `grant`, the consent walk's plan,
 preview and commit. Where a version reads a stream the working version
 does not, the shell's own grant prompt asks again, and the steps that meet
-it confirm it in the prompt (`validation_failures`, `crash_safe_mode`).
+it confirm it in the prompt (`validation_failures`, `crash_fallback`).
 `fixture.exs` holds the rest, which a person cannot do from a browser and a
 run would otherwise do: the feed's source and its profile, each fixed
 result, the feed's row as the store reads it, the scheduler's failed fire,
@@ -79,14 +80,15 @@ token, answers `answer-N.json`.
 
 ## The tinctures and the canvases
 
-- **The shipped canvas** `tincture:local.canvas` (0.2.0), the layout's
-  first canvas, placed under the id `start`: its React page draws a tile
-  for each installed tincture (`button.tile` with the name in `.name`),
-  the recent runs, the schedules and the last schedule runs, from the bus.
+- **The shipped canvas** `tincture:local.canvas` (0.3.0), the layout's
+  first canvas, placed under the id `start`: its React page draws the day
+  in one sentence, what needs attention grouped by cause, the recent runs,
+  a launcher for each installed tincture (`button.app` with the name in
+  `.label`) and the schedules, from the bus.
 - `canvas-full`: an ordinary tincture, opened full over a canvas from the
-  shipped canvas's launcher tile, and on the desk `markets`' column app,
-  the sibling frame the `activation` step clicks in. In the hand a column
-  app is laid over the whole canvas, so `markets` has none there.
+  shipped canvas's launcher tile, and on the desk `markets`' window, the
+  sibling frame the `activation` step clicks in. In the hand every app is
+  full over the whole canvas, so `markets` has none there.
 - `canvas-probe`: a canvas page (`tinctures/canvas-probe/`) that reads the
   feed `candles` and draws its candles as its own SVG, tags each feed event
   it reads with the state the shell last told it (`cyfr.on("state")`),
@@ -101,7 +103,8 @@ token, answers `answer-N.json`.
   page says.
 - `markets`, `measure`, `written`: canvases written with `canvas.write` on
   the vanilla template. `markets` draws the feed `candles` and presses the
-  feed's refresh action from a button the person clicks; `measure` is one
+  feed's refresh action from a button the person clicks, and asks for the
+  grant of `catalyst:local.grant-target` from another; `measure` is one
   line the measurement opens; `written` is the canvas `written_canvas`
   writes.
 
@@ -114,8 +117,8 @@ result is refused.
 
 Each step is recorded by name with the browsers it runs on, its
 observation and its result. Chromium runs every step; Firefox and WebKit
-also run the browser-behaviour steps (`activation`, `rebound_control`,
-`connection_allowlist`, `policy`). A browser that cannot launch fails its
+also run the browser-behaviour steps (`activation`, `grant_control`,
+`rebound_control`, `connection_allowlist`, `policy`). A browser that cannot launch fails its
 steps and is recorded absent, never as a pass. Every wait is bounded. What
 reached the server is read from the harness's proxy, which every request
 of the browsers passes through; what the shell received is read from the
@@ -138,6 +141,7 @@ received is read once it has handled the verbs the click sent.
 | step | what holds, and how it is seen |
 |---|---|
 | `two_canvases` | the switcher lists the shipped canvas (`start`) and a written one (`markets`); the shipped canvas's working version is shown live drawing its launchers, and the written one is validated (its validation frame's `ready`, one), activated (working 0.1.0) and shown live, and the canvas left is frozen |
+| `attention_moves` | the shipped canvas, its runs stream answered with three failures a grant fixes and one long unrelated failure, moves Needs attention to the other column when a window is reported over it, and Recent runs, Apps and Schedules stand exactly where they stood; in the hand every section stands in one column |
 | `switch` | the shelf's switcher, `Ctrl+Alt+1` (from markets, whose window on the desk is the active app, which the arrows would tile), `Ctrl+Alt+ArrowLeft` and `Ctrl+Alt+ArrowRight` (at `start`, which has no active app), and a swipe each way along the shelf (a touch swipe in the hand, a pointer drag on the desk) each move the shown canvas, resuming the frame a canvas held; the canvas left is frozen and inert; leftward at the first canvas does nothing, so nothing wraps |
 | `written_canvas` | a canvas written with `canvas.write` at 0.1.0 is validated in its own frame (ending on `ready`), activated (working 0.1.0, nothing failed) and opened live at that version, drawing its version |
 | `feed_chart` | the feed `candles`' fixed result is drawn by the probe page as six candles at the accepted revision; the observation says the result is fixed and no run executed |
@@ -147,20 +151,21 @@ received is read once it has handled the verbs the click sent.
 | `covered_windows` | on the desk, the canvas is told the dragged window's rectangle in its own pixels and nothing else, and nothing once the window is a tile; in the hand it is told nothing covers it |
 | `frame_kept` | on the desk, the window's iframe is the same element under the same frame id, with no new load, after it is raised from the shelf, tiled, made full and made a window again with Ctrl+Alt+ArrowDown; in the hand markets places no window |
 | `hidden_canvas` | switched away, the probe's frame is frozen and the probe hears `state` `frozen`; from then no stream open of it reaches the server, a feed result accepted while it is hidden reaches its closed stream not, and a press it sends is dropped (its frame's `data-dropped` moves, the shell receives nothing), a count that outlives another switch while it stays hidden, which draws its iframe again; switched back, its stream refreshes to the new result. Every feed event the probe read is tagged with the state the shell last told it, and none is tagged `frozen`. Nothing asserts the page's JavaScript stopped |
-| `validation_failures` | `canvas-broken` 1.0.0 is working; a later version that never becomes ready is recorded `not_ready` at its deadline, and one that dies before ready (the shell's receipt of its validation frame's `failed`) is recorded `died`; each later version reads a stream 1.0.0 does not, so once its validation fails the working version, 1.0.0, opens nothing (the canvas shows its `ungranted` refusal) and the shell's grant prompt asks for 1.0.0 itself; the person confirms it and 1.0.0 opens |
-| `crash_safe_mode` | a version that becomes ready is activated, then its live frame loads a second time after `ready()` (the page reloads itself, the frame's death, and posts no `failed`: none reaches the shell, so the second load alone is what took it down): safe mode `crashed`, offering retry, the kept version and the shipped canvas; the kept version reads no stream, so choosing it raises the grant prompt for the kept version in front of safe mode, with nothing restored and no canvas frame open; the person confirms it, and the kept version is restored and opens |
+| `validation_failures` | `canvas-broken` 1.0.0 is working; a later version that never becomes ready is recorded `not_ready` at its deadline, and one that dies before ready (the shell's receipt of its validation frame's `failed`) is recorded `died`; each later version reads a stream 1.0.0 does not, so once its validation fails the working version, 1.0.0, opens nothing (the canvas shows its `ungranted` refusal) and the shell's grant prompt asks for 1.0.0 itself; the person confirms it and 1.0.0 opens; neither falls the canvas back: no fallback line is drawn |
+| `crash_fallback` | a version that becomes ready is activated, then its live frame loads a second time after `ready()` (the page reloads itself, the frame's death, and posts no `failed`: none reaches the shell): the shipped canvas shows in its place, the window over it on the desk stays open as the same frame, and AQUA's control is as it was; one line in the shelf's area reads "Your canvas stopped. Showing the standard one." and offers Try again and Restore the last working one; the kept version reads no stream, so restoring it raises the grant prompt for the kept version, with nothing restored meanwhile; the person confirms it, the kept version is restored and opens, and the line goes |
 | `activation` | a person's click on the press button dispatches one `press`, inside the click, forwarded with the shell's activation active and the canvas its active element; several presses inside one click are each forwarded; a press the page sends with no input, and one held 8 s past the click, are each dropped (the frame's `data-dropped` moves, the shell receives nothing). Recorded per browser, no drop asserted: a press after a click elsewhere in the shell, and after a click in a sibling frame (on the desk; the hand has no sibling beside the canvas, which the record says), each with the canvas focusing itself by `window.focus()` and by an element's `focus()` and with neither |
+| `grant_control` | the markets canvas's grant control, clicked by the person, sends one `grant`, which the shell receives inside the click with its activation active and the canvas its active element, and forwards; the same request sent from a timer with no input near it is dropped (the frame's `data-dropped` moves). The forwarded request raises the shell's grant offer for `catalyst:local.grant-target`, a component the fixture installs ungranted and that no frame opens, in the system layer of the shell's page and nowhere in the canvas's document; it is dismissed, and the timer's request raises none |
 | `rebound_control` | while the binding is live, a press names it; the feed is removed and bound again with other arguments and a new binding id; `feed.press` naming the old binding is refused `not_found`; the canvas's stale press still names the old binding; once a result of the new binding reaches the canvas, its press names the new binding and the shell forwards it. Each press is sent from the page's click handler inside a person's click on the press button, measured on the frame shown at that moment, and the record carries what the shell did with each: how many it received, forwarded and dropped, and whether it held activation and the frame as its active element. The probe and markets open their feed stream again whenever it closes, and the step switches markets away and back before it waits, so the new binding reaches it on a reopened stream's refresh. That is because an open feed stream was once seen to keep its old binding after a rebind (one debug run, not proven): an open finding on the follow-up list, which a unit check would settle (after a rebind, an open feed stream delivers the new binding's results or closes). The step does not show what an open stream does across a rebind, and its record says so |
 | `connection_allowlist` | under the canvas page's `connection-allowlist` header the SDK loads and runs, the page's own stylesheet loads and applies, and the feed stream opens and delivers, in all three browsers |
 | `policy` | ordinary requests and checks on a canvas open, none framed as an escape (below) |
 | `disconnect` | the phone's or the PC's socket is cut: the canvas is marked disconnected, still drawn, and its frame is inert; regained, the canvas is live and the shell switches again |
 | `failed_fire` | a feed bound at one minute for this step alone: the fixture claims a seq, the scheduler's own fire at the due minute claims a later one and ends with an error, having run nothing and accepted nothing, and the fixture's claim is then accepted; the step records the seqs, the fires' runs and errors, and whether the accepted seq moved, and the binding is removed. Why a fire failed is not observable: the store keeps no reason for a fire's error |
 
-The steps run in this order in each browser: the first six on the shipped
-canvas, the probe and the written canvases, then `activation`,
-`rebound_control`, `connection_allowlist` and `policy`, then the steps on
-`canvas-broken` (whose validation fails or whose page crashes into safe
-mode), the socket cut and the scheduler's fire.
+The steps run in this order in each browser: the first eleven on the
+shipped canvas, the probe and the written canvases, then `activation`,
+`grant_control`, `rebound_control`, `connection_allowlist` and `policy`,
+then the steps on `canvas-broken` (whose validation fails or whose frame
+dies into the fallback), the socket cut and the scheduler's fire.
 
 ### `policy`, each check
 

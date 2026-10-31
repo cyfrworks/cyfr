@@ -337,9 +337,9 @@
       else if (queued.length < MAX_QUEUED_VERBS || name === "failed") queued.push([name, args]);
     }
     function onPageError(event) {
-      if (failure !== null) return;
+      if (failure !== null || readyCalled) return;
       if (event && BENIGN_ERRORS.includes(event.message)) return;
-      failure = readyCalled ? "runtime" : "load";
+      failure = "load";
       verb("failed", { stage: failure });
     }
     function identity() {

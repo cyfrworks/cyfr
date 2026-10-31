@@ -117,8 +117,8 @@ Around the chat:
 
 - **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<athanor>&c=<thread>` deep-links one). The athanor's **AQUA** page at `/a/<athanor>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search`, `forget` and `endorse` (a person's click making a note kept after outside reading their own) — and a schedule with `keep_outcome` in its metadata files each run's output as one.
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
-- **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Files**, **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the system layer's grant sheet binds an entry to the model's catalyst. The shipped model catalysts name their connection on each request; CYFR attaches the key in the host, and the catalyst receives no key.
-- **Canvases** — **Apps** in the drawer (`/a/<athanor>/tinctures`) is the shell: your canvases, each your own page, written in HTML, CSS and JavaScript like any app and showing what it reads, with the apps you open over them. Move between canvases with the canvas switcher, Ctrl+Alt+←/→ or a swipe along the bottom edge; only the canvas you are looking at reads and acts. A canvas changes nothing in CYFR, and what it reads can leave your browser as any app's can. Ask AQUA for a canvas and it writes one (`canvas.write`) as a new version once you approve it, on a card that names what the canvas reads; your browser validates the version before it shows it, keeping the version it replaces. A **feed** runs one operation of an installed component on an interval, and a canvas reads its results by the feed's name; AQUA always asks before it binds one, and the **Schedules** page lists and removes them. A canvas that does not start or that fails, or Ctrl+Alt+S, opens safe mode, which offers the canvas again, its kept version or the shipped canvas.
+- **The drawer** — off the chat, on every screen size: **AQUA**, **Files**, **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the system layer's grant sheet binds an entry to the model's catalyst. The shipped model catalysts name their connection on each request; CYFR attaches the key in the host, and the catalyst receives no key.
+- **Canvases** — **Canvas** on the top bar (`/a/<athanor>/canvas`) is the shell: your canvases, each your own page, written in HTML, CSS and JavaScript like any app and showing what it reads, with the apps you open over them, each a window, a tile at an edge or full, arranged as you leave it. Move between canvases with the dots on the shelf along the bottom, Ctrl+Alt+1 to 8, Ctrl+Alt+←/→ while no app is active, or a swipe on the shelf; only the canvas you are looking at reads and acts. A canvas changes nothing in CYFR, and what it reads can leave your browser as any app's can. Ask AQUA for a canvas and it writes one (`canvas.write`) as a new version once you approve it, on a card that names what the canvas reads; your browser validates the version before it shows it, keeping the version it replaces. A **feed** runs one operation of an installed component on an interval, and a canvas reads its results by the feed's name; AQUA always asks before it binds one, and the **Schedules** page lists and removes them. A canvas that does not start, or whose page stops, is replaced by the standard canvas while your windows and AQUA stay as they are, with one line offering to try it again or restore its last working version.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has an auth provider; operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
@@ -276,7 +276,7 @@ The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr 
 
 ### Tinctures
 
-Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism (private, authenticated — **Apps** in the drawer) or as standalone public pages at `https://<host>/t/<athanor>/<publisher>/<name>` (when explicitly made public).
+Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism (private, authenticated — over your canvases in **Canvas**) or as standalone public pages at `https://<host>/t/<athanor>/<publisher>/<name>` (when explicitly made public).
 
 ```bash
 # Scaffold a static HTML/JS/CSS tincture
@@ -289,7 +289,7 @@ cyfr new tincture stock-dashboard --template react
 cyfr build compile t:local.stock-dashboard:0.1.0
 
 # Open it in Prism (the athanor in focus is in the URL)
-open http://localhost:4000/a/@alice/tinctures
+open http://localhost:4000/a/@alice/canvas
 
 # Check whether it is publicly reachable at /t/@alice/local/stock-dashboard
 cyfr tincture visibility get local stock-dashboard

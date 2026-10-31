@@ -277,6 +277,41 @@ export async function confirmOnGlass(glass, operation, ref = null) {
   return shown;
 }
 
+// The first press after a prompt opens, on the control `selector` names in
+// the system layer. It waits for the dialog to be the document's modal top
+// layer and for two animation frames, since no person presses sooner. A
+// canvas frame is sandboxed and runs in a process of its own, and Chromium
+// may route a press there on hit-testing that still predates the cover:
+// the press never reaches the page and focus lands in the frame. Each
+// press is watched by a one-time capture listener on the control; one that
+// landed in a frame is answered `{ misses }` for the step's record and made
+// once more, and a second miss fails the step.
+export async function pressInLayer(page, selector) {
+  await page.waitForFunction(() => {
+    const dialog = document.querySelector("#system-layer-dialog");
+    return Boolean(dialog && dialog.open && dialog.matches(":modal"));
+  }, null, { timeout: 30_000 });
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  const misses = [];
+  while (true) {
+    const control = page.locator(`${layer} ${selector}`);
+    await control.evaluate((element) => {
+      window.__layerPress = false;
+      element.addEventListener("click", () => { window.__layerPress = true; }, { capture: true, once: true });
+    });
+    await control.click();
+    const landed = await page.waitForFunction(() => {
+      if (window.__layerPress) return "control";
+      const active = document.activeElement;
+      return active && active.nodeName === "IFRAME" ? `frame ${active.id || active.name || ""}`.trim() : null;
+    }, null, { timeout: 5_000 }).then((handle) => handle.jsonValue()).catch(() => null);
+    if (landed === "control") return { misses };
+    if (landed === null) throw new Error(`a press on ${selector} reached neither the control nor a frame`);
+    misses.push(landed);
+    if (misses.length === 2) throw new Error(`a press on ${selector} landed in a frame twice: ${misses.join(", ")}`);
+  }
+}
+
 // The page's own request, confirmed in its system layer with the passkey
 // its authenticator holds; answers what the prompt showed.
 export async function confirmHere(page) {
@@ -442,7 +477,7 @@ export async function setUpHome(chromium, proxy) {
   const glass = await glassContext.newPage();
   await authenticatorWith(glass, await credentialsFor(desk, new URL(A).host));
   const code = await shownCode(glass, A);
-  await open(desk, `${A}/a/${encodeURIComponent(segment)}/tinctures`);
+  await open(desk, `${A}/a/${encodeURIComponent(segment)}/canvas`);
   await desk.locator("#shell-devices").click();
   await desk.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
   await desk.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);

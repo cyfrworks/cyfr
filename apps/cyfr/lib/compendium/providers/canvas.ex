@@ -24,7 +24,7 @@ defmodule Compendium.Providers.Canvas do
       any chain.
     * `restore` makes the kept version the working one again, while it
       is still installed and under today's grant. Outside any chain, as
-      safe mode offers it.
+      the fallback's notice offers it.
 
   Every action runs under the caller's context, in the athanor in focus.
   """

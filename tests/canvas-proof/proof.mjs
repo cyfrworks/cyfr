@@ -69,6 +69,7 @@ import { ask as askRunSh, redact as redactKnown } from "../browser/lib.mjs";
 const ALL = ["chromium", "firefox", "webkit"];
 const STEPS = [
   ["two_canvases", ["chromium"]],
+  ["attention_moves", ["chromium"]],
   ["switch", ["chromium"]],
   ["written_canvas", ["chromium"]],
   ["feed_chart", ["chromium"]],
@@ -79,8 +80,9 @@ const STEPS = [
   ["frame_kept", ["chromium"]],
   ["hidden_canvas", ["chromium"]],
   ["validation_failures", ["chromium"]],
-  ["crash_safe_mode", ["chromium"]],
+  ["crash_fallback", ["chromium"]],
   ["activation", ALL],
+  ["grant_control", ALL],
   ["rebound_control", ALL],
   ["connection_allowlist", ALL],
   ["policy", ALL],
@@ -90,13 +92,13 @@ const STEPS = [
 
 // The order a browser runs its steps in. The browser-behaviour steps run on
 // the canvases held steady (markets, the probe); the steps on canvas-broken,
-// which end in safe mode, and the socket cut and the scheduler's fire come
-// last.
+// one of which ends in the fallback, and the socket cut and the scheduler's
+// fire come last.
 const ORDER = [
-  "two_canvases", "switch", "written_canvas", "feed_chart", "app_over_canvas",
+  "two_canvases", "attention_moves", "switch", "written_canvas", "feed_chart", "app_over_canvas",
   "window_drag", "tile_narrows", "covered_windows", "frame_kept", "hidden_canvas",
-  "activation", "rebound_control", "connection_allowlist", "policy",
-  "validation_failures", "crash_safe_mode", "disconnect", "failed_fire",
+  "activation", "grant_control", "rebound_control", "connection_allowlist", "policy",
+  "validation_failures", "crash_fallback", "disconnect", "failed_fire",
 ];
 
 const VIEWPORTS = {
@@ -463,12 +465,12 @@ const posts = (frame) => frame.evaluate(() => [...(window.__posts || [])]);
 
 // ---- page readers ---------------------------------------------------------------
 
-// The shipped canvas's headings and its app launchers (`button.tile` with
-// the name in `.name`).
+// The shipped canvas's section headings (without the count each carries)
+// and its app launchers (`button.app` with the name in `.label`).
 const shippedDrawing = (frame) =>
   frame.evaluate(() => ({
-    headings: [...document.querySelectorAll("h2")].map((h) => h.textContent),
-    tiles: [...document.querySelectorAll(".tile .name")].map((n) => n.textContent),
+    headings: [...document.querySelectorAll("h2")].map((h) => (h.firstChild ? h.firstChild.textContent.trim() : "")),
+    tiles: [...document.querySelectorAll(".app .label")].map((n) => n.textContent),
   })).catch(() => null);
 
 // A written or broken canvas's single line of text.
@@ -598,24 +600,42 @@ async function prompt(page) {
   }).catch(() => null);
 }
 
-const safeModePrompt = (page, timeoutMs = 20_000) =>
-  lib.waitFor(async () => {
-    const p = await prompt(page);
-    return p && p.kind === "safe_mode" ? p : null;
-  }, { timeoutMs, stepMs: 50, what: "safe mode" });
-
-async function chooseOffer(page, offer) {
-  await page.click(`#system-layer-dialog button[phx-value-offer="${offer}"]`);
-  await lib.waitFor(async () => {
-    const p = await prompt(page);
-    return !p || p.kind !== "safe_mode" ? true : null;
-  }, { timeoutMs: 20_000, what: `safe mode left by ${offer}` });
+// The fallback's one line, as the system layer draws it outside every
+// frame: its words and its offers, or null while none is drawn.
+async function notice(page) {
+  return page.evaluate(() => {
+    const el = document.getElementById("system-layer-notice");
+    if (!el) return null;
+    return {
+      id: el.dataset.noticeId,
+      text: el.textContent.replace(/\s+/g, " ").trim(),
+      offers: [...el.querySelectorAll("button[phx-value-offer]")].map((b) => ({ offer: b.getAttribute("phx-value-offer"), label: b.textContent.trim() })),
+    };
+  }).catch(() => null);
 }
+
+const fallbackNotice = (page, timeoutMs = 20_000) =>
+  lib.waitFor(async () => (await notice(page)) || null, { timeoutMs, stepMs: 50, what: "the fallback's notice" });
+
+// The window the shown canvas holds open, by its frame, or null.
+const shownWindow = (page) =>
+  page.evaluate(() => {
+    const wrapper = document.querySelector('[data-canvas-place="window"][data-canvas-shown="true"]');
+    const iframe = wrapper && wrapper.querySelector("iframe");
+    return iframe ? { id: iframe.dataset.frameId, state: iframe.dataset.frameState } : null;
+  }).catch(() => null);
+
+// AQUA's own control, as the page draws it beside the shell.
+const aquaState = (page) =>
+  page.evaluate(() => {
+    const button = document.getElementById("aqua-panel-button");
+    return button ? { present: true, expanded: button.getAttribute("aria-expanded"), inert: button.closest("[inert]") !== null } : { present: false };
+  }).catch(() => null);
 
 // The grant prompt a canvas version raises when what it reads differs from
 // today's grant (`Compendium.Canvas`): the shell's for the working version
-// a failed validation falls back to, safe mode's for the kept version it
-// restores. `ref` is the version it must ask for. While it is open the
+// a failed validation falls back to, the fallback notice's for the kept
+// version it restores. `ref` is the version it must ask for. While it is open the
 // shown canvas place is read and `whileOpen` is asked, and the person then
 // confirms it in the prompt's own sheet, which walks the consent plan,
 // preview and commit. Answers the prompt's title, what the place held and
@@ -666,6 +686,12 @@ async function diagnose(page) {
 
 const posture = (apps = []) => ({ desk: { apps }, hand: { apps } });
 
+// canvas-full as a window over the right half of a canvas, on the desk.
+const windowApp = [{
+  tincture: "tincture:local.canvas-full", placement: "window", order: 0, minimised: false,
+  geometry: { x: 5000, y: 0, w: 5000, h: 10000 },
+}];
+
 // The proof's layout: the shipped canvas `start` (canvas-full as its full
 // app, minimised, so it opens when the canvas asks for it), markets
 // (canvas-full as a window on the desk, the sibling the activation step
@@ -675,17 +701,13 @@ const posture = (apps = []) => ({ desk: { apps }, hand: { apps } });
 // another's place.
 function layout(extra = [], { without = [] } = {}) {
   const full = [{ tincture: "tincture:local.canvas-full", placement: "full", order: 0, minimised: true }];
-  const window = [{
-    tincture: "tincture:local.canvas-full", placement: "window", order: 0, minimised: false,
-    geometry: { x: 5000, y: 0, w: 5000, h: 10000 },
-  }];
   const base = [
     { id: "start", tincture: "tincture:local.canvas", postures: posture(full) },
-    { id: "markets", tincture: "tincture:local.markets", postures: { desk: { apps: window }, hand: { apps: [] } } },
+    { id: "markets", tincture: "tincture:local.markets", postures: { desk: { apps: windowApp }, hand: { apps: [] } } },
     { id: "probe", tincture: "tincture:local.canvas-probe", postures: posture(full) },
     { id: "broken", tincture: "tincture:local.canvas-broken", postures: posture() },
   ].filter((c) => !without.includes(c.id));
-  return { version: 3, canvases: [...base, ...extra.map((e) => ({ id: e.id, tincture: e.tincture, postures: posture() }))] };
+  return { version: 3, canvases: [...base, ...extra.map((e) => ({ id: e.id, tincture: e.tincture, postures: e.postures || posture() }))] };
 }
 
 // Publish `document` and wait until the switcher lists exactly its canvases.
@@ -722,15 +744,15 @@ async function stepTwoCanvases(page, name, viewport) {
   await lib.waitFor(async () => receiptsOf(await instrument(page), marks0, markets.id, "ready").length >= 1 || null, { timeoutMs: SAMPLE_MS, what: "markets live ready" }).catch(() => null);
   const marks = await instrument(page);
   const readies = receiptsOf(marks, marks0, null, "ready");
-  // A validation frame and the live canvas frame are canvas-kind; a column
-  // app beside the canvas (canvas-full) readies too, and is not counted.
+  // A validation frame and the live canvas frame are canvas-kind; the
+  // window over the canvas (canvas-full) readies too, and is not counted.
   const validationReady = readies.filter((r) => r.frame !== markets.id && r.kind === "canvas");
   const marketsReady = readies.filter((r) => r.frame === markets.id);
   const marketsVersions = await versions("markets");
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.2.0" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.3.0" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -865,7 +887,7 @@ async function stepFeedChart(page, name) {
 async function stepAppOverCanvas(page, name) {
   const start = await showCanvas(page, "start");
   await until(start.frame, shippedDrawing, (d) => d.tiles.includes("canvas-full"), "the canvas-full launcher");
-  const tile = await centerOf(start.frame.locator('.tile', { has: start.frame.locator('.name', { hasText: "canvas-full" }) }).first());
+  const tile = await centerOf(start.frame.locator('.app', { has: start.frame.locator('.label', { hasText: "canvas-full" }) }).first());
   if (!tile) throw new Error("the canvas-full launcher could not be measured");
   const from = (await instrument(page)).receipts.length;
   await personClick(page, start.id, tile.x, tile.y);
@@ -906,6 +928,65 @@ async function stepAppOverCanvas(page, name) {
       switched_back: { full_frame: fullAgain.state },
       closed: { canvas_shown_again: startBack.state, same_frame: startBack.id === start.id },
     });
+}
+
+// attention_moves: the shipped canvas moves "Needs attention" out from
+// under a window and nothing else. Its runs stream is answered with three
+// failures a grant fixes and one long unrelated failure, so the card holds
+// both kinds; a window is reported covering the card. On the desk the card
+// moves to the other column and Recent runs, Apps and Schedules stand
+// exactly where they stood; in the hand every section stands in one
+// column. The stream is answered as usual again afterwards.
+const STREAM_ROUTE = "**/_f/v1/o/*/stream";
+
+function attentionFailures(route) {
+  let body = null;
+  try { body = route.request().postDataJSON(); } catch (_error) { body = null; }
+  if (!body || body.stream !== "runs.changes") return route.continue();
+  const grant = "This account is not granted to the component; grant it first.";
+  const events = [
+    ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.1", duration_ms: 100, error: { class: "internal", message: grant } })),
+    { kind: "failed", execution_id: "attention_long", reference: "catalyst:local.openai:1.4.1", duration_ms: 100, error: { class: "unavailable", message: "The model provider answered with an error the runner could not read, so this run stopped before it finished; the provider may be down, or the reply may have been too large to hold at once." } },
+  ];
+  return route.fulfill({
+    status: 200,
+    contentType: "text/event-stream",
+    body: events.map((data, i) => `id: ${i + 1}\nevent: message\ndata: ${JSON.stringify(data)}\n\n`).join(""),
+  });
+}
+
+const sections = (frame) =>
+  frame.evaluate(() => Object.fromEntries([...document.querySelectorAll("section.card")].map((el) => {
+    const b = el.getBoundingClientRect();
+    return [el.querySelector("h2").firstChild.textContent.trim(), { x: b.x, y: b.y, width: b.width, height: b.height }];
+  }))).catch(() => null);
+
+async function stepAttentionMoves(page, name, viewport) {
+  const ctx = page.context();
+  await ctx.route(STREAM_ROUTE, attentionFailures);
+  try {
+    await openShell(page);
+    held.clear();
+    const start = await showCanvas(page, "start");
+    const before = await until(start.frame, sections, (s) => s["Needs attention"] && s["Recent runs"] && s.Apps && s.Schedules, "the shipped canvas's sections with Needs attention");
+    const others = ["Recent runs", "Apps", "Schedules"];
+
+    if (viewport.posture === "hand") {
+      const x = before["Needs attention"].x;
+      note("attention_moves", name, others.every((n) => near(before[n].x, x)), { posture: "hand", sections: before });
+      return;
+    }
+
+    const card = before["Needs attention"];
+    await page.$eval(`iframe[data-frame-id="${start.id}"]`, (el, rect) => el.dispatchEvent(new CustomEvent("cyfr:to-canvas", { detail: { verb: "covered", args: { rects: [rect] } } })), card);
+    const after = await until(start.frame, sections, (s) => s["Needs attention"] && s["Needs attention"].x > card.x + 10, "Needs attention moved out from under the window").catch(() => null);
+    const stayed = after !== null && others.every((n) => after[n] && after[n].x === before[n].x && after[n].y === before[n].y);
+    note("attention_moves", name, stayed, { covered: card, before, after });
+  } finally {
+    await ctx.unroute(STREAM_ROUTE, attentionFailures).catch(() => null);
+    await openShell(page);
+    held.clear();
+  }
 }
 
 // ---- windows ---------------------------------------------------------------------
@@ -1236,6 +1317,7 @@ async function stepValidationFailures(page, name) {
       working: after.working,
       regrant,
       opened: await rootText(shown.frame),
+      fallback_line: await notice(page),
       expected: outcome,
     };
     await showCanvas(page, "start");
@@ -1244,7 +1326,7 @@ async function stepValidationFailures(page, name) {
 
   const quiet = outcomes["broken-quiet"];
   const die = outcomes["broken-die"];
-  const waited = (o) => o.regrant.asked_for && o.regrant.place.refusal === "ungranted" && o.regrant.place.frame === null;
+  const waited = (o) => o.regrant.asked_for && o.regrant.place.refusal === "ungranted" && o.regrant.place.frame === null && o.fallback_line === null;
   note("validation_failures", name,
     start.working === "1.0.0" &&
       quiet.validation.readies === 0 && quiet.validation.failed === 0 && quiet.recorded && quiet.recorded.version === quiet.version && quiet.recorded.outcome === "not_ready" && quiet.working === "1.0.0" && waited(quiet) && quiet.opened === "broken 1.0.0" &&
@@ -1252,25 +1334,33 @@ async function stepValidationFailures(page, name) {
     { first: { working: start.working }, not_ready: quiet, died: die });
 }
 
-// crash_safe_mode: a version that becomes ready is validated and activated,
+// crash_fallback: a version that becomes ready is validated and activated,
 // then its live frame dies after ready(): the page reloads itself, a second
-// load of its frame (desktop.md section 6: a live canvas is crashed when its
-// frame dies, not when its page throws), and safe mode is `crashed`,
-// offering retry, the kept version and the shipped canvas, and the kept
-// version is restored and opens.
-async function stepCrashSafeMode(page, name) {
+// load of its frame (desktop.md section 6: a live canvas falls back when its
+// frame dies, not when its page throws), and no `failed` reaches the shell.
+// The shipped canvas shows in its place, the window over it on the desk
+// stays open, the same frame, and AQUA is as it was; one line offers to try
+// again and the kept version. Restoring the kept version asks its own grant
+// first, with the shipped canvas still in place and nothing restored, and
+// once it is confirmed the kept version is restored, the line goes, and the
+// kept version opens.
+async function stepCrashFallback(page, name, viewport) {
   const written = await ask({ op: "write", canvas: "canvas-broken", kind: "broken-crash", streams: [{ name: "feed.results", subject: "broken-crash" }] });
   if (!OK(written)) throw new Error(`canvas.write refused canvas-broken: ${JSON.stringify(written)}`);
   const before = await versions("canvas-broken");
-  await publish(page, layout([{ id: "crash", tincture: "tincture:local.canvas-broken" }], { without: ["broken"] }));
+  const desk = viewport.posture === "desk";
+  await publish(page, layout([{ id: "crash", tincture: "tincture:local.canvas-broken", postures: { desk: { apps: windowApp }, hand: { apps: [] } } }], { without: ["broken"] }));
   const start = await instrument(page);
   const from = start.receipts.length;
   const loadsFrom = start.loads.length;
   await page.click('#canvas-switcher button[data-canvas="crash"]');
-  const safe = await safeModePrompt(page, 40_000);
+  const windowBefore = desk ? await lib.waitFor(() => shownWindow(page), { timeoutMs: 30_000, what: "the crash canvas's window" }) : null;
+  const aquaBefore = await aquaState(page);
+  const line = await fallbackNotice(page, 40_000);
   const marks = await instrument(page);
   // The loads of each frame since the switch, by place: the validation
-  // frame loads once; the live canvas frame, which reloaded itself, twice.
+  // frame loads once; the live canvas frame, which reloaded itself, twice;
+  // the shipped canvas in its place once.
   const loadsOf = (place) => {
     const by = {};
     for (const l of marks.loads.slice(loadsFrom).filter((l) => l.place === place)) by[l.frame] = (by[l.frame] || 0) + 1;
@@ -1278,31 +1368,39 @@ async function stepCrashSafeMode(page, name) {
   };
   const reloaded = loadsOf("canvas").filter((n) => n >= 2).length;
   const activated = await versions("canvas-broken");
-  const kept = safe.offers.find((o) => o.offer === "kept");
+  const inPlace = await showCanvas(page, "crash");
+  const drawn = await until(inPlace.frame, shippedDrawing, (d) => d.headings.includes("Apps"), "the shipped canvas in the crash canvas's place");
+  const windowAfter = desk ? await shownWindow(page) : null;
+  const aquaAfter = await aquaState(page);
+  const kept = line.offers.find((o) => o.offer === "kept");
   // The kept version reads no stream, the crashed one's grant names one: its
-  // restore waits for its own grant, asked in front of safe mode, and
-  // nothing is restored or opened until the person confirms it.
-  await chooseOffer(page, "kept");
+  // restore waits for its own grant, and nothing is restored until the
+  // person confirms it.
+  await page.click('#system-layer-notice button[phx-value-offer="kept"]');
   const regrant = await confirmRegrant(page, `tincture:local.canvas-broken:${before.working}`, {
     whileOpen: () => versions("canvas-broken"),
   });
+  await lib.waitFor(async () => ((await notice(page)) === null ? true : null), { timeoutMs: 20_000, what: "the fallback's notice gone" });
   const shown = await showCanvas(page, "crash");
   const text = await until(shown.frame, rootText, (t) => t === `broken ${before.working}`, "the kept version opened");
   const restored = await versions("canvas-broken");
   await showCanvas(page, "start");
   await publish(page, layout());
 
-  note("crash_safe_mode", name,
+  const windowKept = !desk || (!!windowBefore && !!windowAfter && windowAfter.id === windowBefore.id && windowAfter.state === "live");
+  note("crash_fallback", name,
     activated.working === written.ok.version && activated.kept === before.working &&
       receiptsOf(marks, from, null, "ready").length >= 1 && reloaded === 1 &&
       receiptsOf(marks, from, null, "failed").length === 0 &&
-      safe.kind === "safe_mode" && !!kept && safe.offers.some((o) => o.offer === "retry") && safe.offers.some((o) => o.offer === "shipped") &&
+      line.text.startsWith("Your canvas stopped. Showing the standard one.") &&
+      !!kept && kept.label === "Restore the last working one" && line.offers.map((o) => o.offer).join(",") === "retry,kept" &&
+      drawn.headings.includes("Apps") && windowKept && JSON.stringify(aquaAfter) === JSON.stringify(aquaBefore) &&
       regrant.asked_for && regrant.meanwhile.working === written.ok.version && regrant.meanwhile.kept === before.working &&
-      regrant.place.frame === null &&
       restored.working === before.working && restored.kept === written.ok.version && text === `broken ${before.working}`,
     {
       activated: { version: written.ok.version, working: activated.working, kept: activated.kept, validation_readies: receiptsOf(marks, from, null, "ready").length },
-      crashed: { canvas_frame_loads: loadsOf("canvas"), validation_frame_loads: loadsOf("validation"), canvas_frames_loaded_twice: reloaded, failed_verbs: receiptsOf(marks, from, null, "failed").length, safe_mode: safe.description, offers: safe.offers.map((o) => o.offer), kept_offer: kept && kept.label },
+      crashed: { canvas_frame_loads: loadsOf("canvas"), validation_frame_loads: loadsOf("validation"), canvas_frames_loaded_twice: reloaded, failed_verbs: receiptsOf(marks, from, null, "failed").length },
+      fallback: { line: line.text, offers: line.offers.map((o) => o.offer), kept_offer: kept && kept.label, in_place: drawn.headings.slice(0, 3), window: desk ? { before: windowBefore, after: windowAfter, kept: windowKept } : "none in the hand", aqua: { before: aquaBefore, after: aquaAfter } },
       regrant: { title: regrant.title, asked_for: regrant.asked_for, place: regrant.place, working: regrant.meanwhile.working, kept: regrant.meanwhile.kept },
       restored: { working: restored.working, kept: restored.kept, opened: text },
     });
@@ -1318,7 +1416,7 @@ async function marketsBound(page) {
   await shown.frame.evaluate(installRecorder);
   const box = async (sel) => shown.frame.locator(sel).boundingBox();
   const centers = {};
-  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"]]) {
+  for (const [key, sel] of [["press", "#press"], ["press3", "#press3"], ["later", "#later"], ["grant", "#grant"]]) {
     const b = await box(sel);
     centers[key] = b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null;
   }
@@ -1416,6 +1514,62 @@ async function stepActivation(page, name) {
       held_8s: { forwarded: held8.forwarded, dropped_delta: heldDropped1 - heldDropped0 },
       scripted_no_input: { forwarded: noInput.forwarded, dropped_delta: noInputDropped1 - noInputDropped0 },
       recorded_residuals: recorded,
+    });
+  await showCanvas(page, "start");
+}
+
+// grant_control: a canvas's request for a component's grant leaves it as
+// a press does: the grant control clicked by the person sends one `grant`,
+// which the shell receives inside the click with its activation and the
+// canvas its active element, and forwards; the same request sent from a
+// timer with no input near it is dropped (the frame's `data-dropped`
+// moves). The forwarded request raises the shell's grant offer for
+// catalyst:local.grant-target, installed, not granted and with no frame
+// (`fixture.exs` `ungranted`), in the system layer of
+// the shell's own page and nowhere in the canvas's document; it is
+// dismissed, and the timer's request raises no offer.
+const offerInCanvas = (frame) =>
+  frame.evaluate(() => document.querySelector('[data-kind="grant"], .consent-sheet, #system-layer-dialog') !== null).catch(() => null);
+
+async function stepGrantControl(page, name) {
+  const { shown, centers } = await marketsBound(page);
+  if (!centers.grant) throw new Error("the markets grant control could not be measured");
+  const classify = (receipts) =>
+    ({ forwarded: receipts.filter((r) => r.dropped === false).length, dropped: receipts.filter((r) => r.dropped === true).length, total: receipts.length, receipts });
+
+  let mark = (await instrument(page)).receipts.length;
+  await personClick(page, shown.id, centers.grant.x, centers.grant.y);
+  const inside = classify(await handled(page, mark, shown.id, "grant", 1));
+
+  // The offer: the shell's system layer, for the component the canvas
+  // named, and nothing of it in the canvas's document.
+  const offered = await lib.waitFor(async () => {
+    const p = await prompt(page);
+    return p && p.kind === "grant" ? p : null;
+  }, { timeoutMs: 20_000, what: "the grant offer in the system layer" }).catch(() => null);
+  const names = offered !== null && /catalyst:local\.grant-target/.test(`${offered.title} ${offered.description} ${await page.$eval("#system-layer-dialog", (d) => d.textContent).catch(() => "")}`);
+  const inCanvas = await offerInCanvas(shown.frame);
+  if (offered) {
+    await page.click('#system-layer-dialog button[phx-click="dismiss"]');
+    await lib.waitFor(async () => ((await prompt(page)) === null ? true : null), { timeoutMs: 15_000, what: "the grant offer dismissed" });
+  }
+
+  const dropped0 = Number((await canvasFrame(page, shown.id)).dropped);
+  mark = (await instrument(page)).receipts.length;
+  await shown.frame.evaluate(() => window.__canvas && window.__canvas.grantAfter(9000));
+  await sleep(9800);
+  const noInput = classify(receiptsOf(await instrument(page), mark, shown.id, "grant"));
+  const dropped1 = Number((await canvasFrame(page, shown.id)).dropped);
+  const offeredAfterTimer = await prompt(page);
+
+  note("grant_control", name,
+    inside.forwarded === 1 && inside.total === 1 && inside.receipts[0].active === true && inside.receipts[0].activeElementIsFrame === true &&
+      noInput.total === 1 && noInput.forwarded === 0 && dropped1 > dropped0 &&
+      offered !== null && names && inCanvas === false && offeredAfterTimer === null,
+    {
+      inside_click: { forwarded: inside.forwarded, total: inside.total, active: inside.receipts[0] && inside.receipts[0].active, active_element_is_frame: inside.receipts[0] && inside.receipts[0].activeElementIsFrame },
+      scripted_no_input: { received: noInput.total, forwarded: noInput.forwarded, dropped_delta: dropped1 - dropped0 },
+      offer: { in_system_layer: offered !== null, names_the_component: names, in_canvas: inCanvas, after_the_timer: offeredAfterTimer },
     });
   await showCanvas(page, "start");
 }
@@ -1868,8 +2022,7 @@ async function measurement(page) {
 
 async function recover(page) {
   await openShell(page).catch(() => null);
-  const p = await prompt(page);
-  if (p && p.kind === "safe_mode") await chooseOffer(page, "retry").catch(() => null);
+  if (await notice(page)) await page.click('#system-layer-notice button[phx-value-offer="retry"]').catch(() => null);
   await publish(page, layout()).catch(() => null);
   held.clear();
 }
@@ -1918,6 +2071,7 @@ async function runBrowser(name, viewport, proxy, receiver, udp, { only, measurin
 
 const STEP_FNS = {
   two_canvases: (page, name, { viewport }) => stepTwoCanvases(page, name, viewport),
+  attention_moves: (page, name, { viewport }) => stepAttentionMoves(page, name, viewport),
   switch: async () => {},
   written_canvas: (page, name) => stepWrittenCanvas(page, name),
   feed_chart: (page, name) => stepFeedChart(page, name),
@@ -1928,11 +2082,12 @@ const STEP_FNS = {
   frame_kept: (page, name, { viewport }) => stepFrameKept(page, name, viewport),
   hidden_canvas: (page, name, { proxy }) => stepHiddenCanvas(page, name, proxy),
   activation: (page, name) => stepActivation(page, name),
+  grant_control: (page, name) => stepGrantControl(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),
   connection_allowlist: (page, name) => stepConnectionAllowlist(page, name),
   policy: (page, name, { proxy, receiver, udp }) => stepPolicy(page, name, proxy, receiver, udp),
   validation_failures: (page, name) => stepValidationFailures(page, name),
-  crash_safe_mode: (page, name) => stepCrashSafeMode(page, name),
+  crash_fallback: (page, name, { viewport }) => stepCrashFallback(page, name, viewport),
   disconnect: (page, name, { proxy, viewport }) => stepDisconnect(page, name, proxy, viewport),
   failed_fire: (page, name) => stepFailedFire(page, name),
 };
@@ -2039,7 +2194,7 @@ async function main() {
   const homes = lib.readHomes();
   HOME = lib.homeOf(homes.homes);
   BASE = HOME.origin;
-  SHELL_URL = `${BASE}/a/${encodeURIComponent(segment)}/tinctures`;
+  SHELL_URL = `${BASE}/a/${encodeURIComponent(segment)}/canvas`;
   const proxy = await lib.startProxy({ ...homes, receiver, bodies: false });
 
   let failure = null;

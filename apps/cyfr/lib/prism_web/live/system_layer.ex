@@ -5,7 +5,8 @@ defmodule PrismWeb.SystemLayer do
   @moduledoc """
   The system layer: what Prism alone draws above every frame — grant,
   unlock, sign-in, credential-entry, pairing and confirmation prompts,
-  safe mode, and the restore checklist. It presents a prompt and never
+  the fallback's notice, and the restore checklist. It presents a prompt
+  and never
   decides one: the operation a confirmation dispatches is decided where
   the change is, in Sanctum, which checks the caller's standing and any
   fresh confirmation the change needs.
@@ -32,8 +33,7 @@ defmodule PrismWeb.SystemLayer do
   live keep their order. An id neither open nor waiting changes nothing.
 
   Each prompt's outcome goes to the parent LiveView as
-  `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`, and
-  safe mode's confirmation as `{:confirmed, offer}`, naming its way out;
+  `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`;
   the view's hook (`PrismWeb.SystemLayer.Hook`) takes it. A
   withdrawn prompt, and a credential entry it raised, report nothing: the
   view that withdrew it has let it go. A
@@ -106,16 +106,11 @@ defmodule PrismWeb.SystemLayer do
       `pairing.begin`, whose answer's `invitation_url` it draws as a QR
       code, `pairing.revoke`, and `session.cli_revoke` of a command line's
       session;
-    * safe mode's kept version — `canvas.restore` of the visible canvas,
+    * the fallback notice's kept version — `canvas.restore` of the canvas,
       under today's grant: a grant that waits for the person raises the
-      grant prompt in front of safe mode, and once that is confirmed the
-      restore is asked again; versions published since safe mode opened
-      are reported and nothing is merged. Trying again and the shipped
-      canvas dispatch nothing. Safe mode has no dismissal; it reports
-      `{:confirmed, offer}`, the way out the person chose (`:retry`,
-      `:kept` once restored, or `:shipped`), and the parent shows the
-      canvas again or the shipped canvas in its place. The layer stops and
-      starts no frame itself;
+      grant prompt, and once that is confirmed the restore is asked again;
+      versions published since the canvas fell back are reported and
+      nothing is merged. Trying again dispatches nothing;
     * a sign-in — nothing: identity is established at the authentication
       boundary, so confirming leaves for the sign-in page;
     * an unlock — no operation unlocks the vault, so an unlock prompt has
@@ -204,20 +199,32 @@ defmodule PrismWeb.SystemLayer do
 
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
-  and returns focus on close; Escape dismisses every prompt but safe mode.
+  and returns focus on close; Escape dismisses every prompt.
   While a modal prompt is open on any layer of the page, every frame is
   hidden and inert, so no frame holds the pointer or the screen over it.
   Every event the layer pushes names it (`layer`, its id), because a page
   can hold two layers and every hook on a page hears every push.
-  Every prompt but safe mode is modal and holds focus. Safe mode is a
-  top-layer popover that leaves the page operable, so the assistant's
-  panel, which Prism draws, is neither covered nor disabled by it.
+  Every prompt is modal and holds focus.
+
+  ## The fallback's notice
+
+  When the person's canvas falls back to the shipped one (`Prism.Fallback`),
+  the view places one line in the shelf's area with `send_update(
+  PrismWeb.SystemLayer, id: id, notice: %{id: id, fallback: fallback})`,
+  and takes it away with `notice: nil`. It is no prompt: it waits in no
+  queue, holds no focus and hides no frame, so the windows, the tiles and
+  the assistant stay usable beside it, and a prompt that arrives meanwhile
+  opens at once. Its offers are the fallback's: trying again reports
+  `{:system_layer, id, {:confirmed, :retry}}` and dispatches nothing; the
+  kept version reports `{:confirmed, :kept}` once `canvas.restore`
+  answers, and a refusal is said on the line. The view opens the canvas
+  again on either; the layer stops and starts no frame itself.
   """
 
   use PrismWeb, :live_component
 
   alias Phoenix.LiveView.JS
-  alias Prism.SafeMode
+  alias Prism.Fallback
   alias PrismWeb.Ops
   alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery, RestoreChecklist}
   alias Sanctum.Context
@@ -748,6 +755,8 @@ defmodule PrismWeb.SystemLayer do
        pairing: nil,
        recovery: nil,
        restoring: %{},
+       notice: nil,
+       notice_error: nil,
        athanor_route: nil,
        athanor_name: nil,
        restore_checklist: :unread,
@@ -821,6 +830,19 @@ defmodule PrismWeb.SystemLayer do
     socket = assign(socket, :listening, nil)
     {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, listen(&1)})
     {:ok, socket}
+  end
+
+  # The fallback's notice placed, replaced or taken away: a restore that
+  # waited on a grant for a notice no longer shown is let go.
+  def update(%{notice: notice}, socket) do
+    case {socket.assigns.notice, notice} do
+      {%{id: id}, %{id: id}} ->
+        {:ok, assign(socket, :notice, notice)}
+
+      {shown, notice} ->
+        socket = if shown, do: drop_restoring(socket, shown.id), else: socket
+        {:ok, assign(socket, notice: notice, notice_error: nil)}
+    end
   end
 
   # The view's own assigns: its context, which may have moved to another
@@ -1383,19 +1405,15 @@ defmodule PrismWeb.SystemLayer do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case socket.assigns.current do
         %{id: ^id} = prompt ->
-          if dismissable?(prompt) do
-            socket = end_own_request(socket, prompt)
-            if reports?(socket, prompt), do: report(id, :dismissed)
+          socket = end_own_request(socket, prompt)
+          if reports?(socket, prompt), do: report(id, :dismissed)
 
-            {:noreply,
-             socket
-             |> drop_prompt_asks(id)
-             |> forget_reenable(id)
-             |> advance()
-             |> restore_after_grant(id, :dismissed)}
-          else
-            {:noreply, socket}
-          end
+          {:noreply,
+           socket
+           |> drop_prompt_asks(id)
+           |> forget_reenable(id)
+           |> advance()
+           |> restore_after_grant(id, :dismissed)}
 
         _other ->
           {:noreply, socket}
@@ -1425,32 +1443,30 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # Trying again and the shipped canvas read nothing and dispatch nothing,
-  # so safe mode's way back works while the store cannot answer; only what
-  # the next prompt reads waits for it.
-  def handle_event("choose", %{"id" => id, "offer" => offer}, socket)
-      when offer in ["retry", "shipped"] do
-    with {:ok, %{subject: safe_mode} = prompt} <- open(socket, id, [:safe_mode]),
-         {:ok, offer} <- offer(offer),
-         ^offer <- SafeMode.choose(safe_mode, offer) do
-      report(prompt.id, {:confirmed, offer})
-      socket = socket |> drop_restoring(prompt.id) |> step()
-      CyfrWeb.ContextGuard.guard(socket, &{:noreply, load_shown(&1)})
-    else
-      _none -> {:noreply, socket}
+  # Trying again reads nothing and dispatches nothing, so the way back
+  # works while the store cannot answer. The event names the notice it was
+  # drawn for, so a late click meant for one already gone acts on nothing.
+  def handle_event("notice_choose", %{"id" => id, "offer" => "retry"}, socket) do
+    case socket.assigns.notice do
+      %{id: ^id, fallback: fallback} ->
+        if Fallback.choose(fallback, :retry) == :retry, do: report(id, {:confirmed, :retry})
+        {:noreply, socket |> drop_restoring(id) |> assign(:notice_error, nil)}
+
+      _gone ->
+        {:noreply, socket}
     end
   end
 
-  def handle_event("choose", %{"id" => id, "offer" => offer}, socket) do
+  def handle_event("notice_choose", %{"id" => id, "offer" => "kept"}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      with {:ok, prompt} <- open(socket, id, [:safe_mode]),
-           {:ok, offer} <- offer(offer) do
-        {:noreply, choose(socket, prompt, offer)}
-      else
-        _none -> {:noreply, socket}
+      case socket.assigns.notice do
+        %{id: ^id} = notice -> {:noreply, restore(socket, notice)}
+        _gone -> {:noreply, socket}
       end
     end)
   end
+
+  def handle_event("notice_choose", _params, socket), do: {:noreply, socket}
 
   # The code the new device shows, typed or pasted with or without the
   # spaces between its groups: the digest of the key it generated, the one
@@ -1610,11 +1626,6 @@ defmodule PrismWeb.SystemLayer do
       _other -> :none
     end
   end
-
-  defp offer("retry"), do: {:ok, :retry}
-  defp offer("kept"), do: {:ok, :kept}
-  defp offer("shipped"), do: {:ok, :shipped}
-  defp offer(_other), do: :error
 
   # ---------------------------------------------------------------------------
   # Confirmations
@@ -1877,57 +1888,57 @@ defmodule PrismWeb.SystemLayer do
 
   defp put_port(map, _port), do: map
 
-  defp choose(socket, %{subject: safe_mode} = prompt, offer) do
-    case SafeMode.choose(safe_mode, offer) do
+  defp restore(socket, %{fallback: fallback} = notice) do
+    case Fallback.choose(fallback, :kept) do
       {:restore, name} ->
-        restored(socket, prompt, Ops.call_tool(socket, "canvas/restore", %{"canvas" => name}))
+        restored(socket, notice, Ops.call_tool(socket, "canvas/restore", %{"canvas" => name}))
 
-      _not_dispatched ->
+      {:error, :not_offered} ->
         socket
     end
   end
 
-  # The kept version restored is safe mode's way out. A grant that waits
-  # for the person comes first, in front of safe mode, and the restore is
-  # asked again once it is confirmed; versions published since safe mode
-  # opened are reported, and nothing is merged.
-  defp restored(socket, prompt, {:ok, _restored}) do
-    report(prompt.id, {:confirmed, :kept})
-    socket |> drop_restoring(prompt.id) |> drop_prompt_asks(prompt.id) |> advance()
+  # The kept version restored is a way back. A grant that waits for the
+  # person comes first, and the restore is asked again once it is
+  # confirmed; versions published since the canvas fell back are reported,
+  # and nothing is merged.
+  defp restored(socket, notice, {:ok, _restored}) do
+    report(notice.id, {:confirmed, :kept})
+    socket |> drop_restoring(notice.id) |> assign(:notice_error, nil)
   end
 
-  defp restored(socket, prompt, {:error, reason}) do
+  defp restored(socket, notice, {:error, reason}) do
     case Prima.Refusal.classify(reason).class do
       :conflict ->
-        refuse(
+        assign(
           socket,
-          prompt,
-          reason,
-          "Your canvas's versions changed since safe mode opened, so nothing was changed. " <>
-            "Try again to load the canvas as it is now."
+          :notice_error,
+          "Your canvas's versions changed since it stopped, so nothing was changed. " <>
+            "Try again to load it as it is now."
         )
 
       :consent_required ->
-        restore_grant(socket, prompt, reason)
+        restore_grant(socket, notice, reason)
 
       _other ->
-        refuse(socket, prompt, reason, Ops.error_message(reason))
+        assign(socket, :notice_error, Ops.error_message(reason))
     end
   end
 
   # The grant is asked for the kept version itself, so the head it writes
   # records what that version reads, whatever the newest reads.
-  defp restore_grant(socket, %{subject: %SafeMode{tincture: ref, kept: kept}} = prompt, reason) do
+  defp restore_grant(socket, %{fallback: %Fallback{tincture: ref, kept: kept}} = notice, reason) do
     grant_id = "restore-grant-#{System.unique_integer([:positive])}"
 
-    with {:ok, grant} <- grant_prompt(socket, grant_id, kept_ref(ref, kept)),
-         {:ok, grant} <- Prompt.validate(grant) do
-      socket
-      |> assign(current: grant, queue: [prompt | socket.assigns.queue], error: nil)
-      |> update(:restoring, &Map.put(&1, grant_id, prompt.id))
-      |> mark_shown()
-    else
-      _unread -> refuse(socket, prompt, reason, Ops.error_message(reason))
+    case grant_prompt(socket, grant_id, kept_ref(ref, kept)) do
+      {:ok, grant} ->
+        socket
+        |> assign(:notice_error, nil)
+        |> update(:restoring, &Map.put(&1, grant_id, notice.id))
+        |> place(grant)
+
+      _unread ->
+        assign(socket, :notice_error, Ops.error_message(reason))
     end
   end
 
@@ -1941,29 +1952,26 @@ defmodule PrismWeb.SystemLayer do
   defp kept_ref(ref, _no_kept), do: ref
 
   # A grant raised for a restore ended: confirmed, the restore is asked
-  # again once safe mode is shown again; dismissed, safe mode is shown as
-  # it was.
+  # again while its notice still stands; dismissed, the notice stays as it
+  # was.
   defp restore_after_grant(socket, grant_id, outcome) do
     case Map.pop(socket.assigns.restoring, grant_id) do
       {nil, _restoring} ->
         socket
 
-      {safe_id, restoring} ->
+      {notice_id, restoring} ->
         socket = assign(socket, :restoring, restoring)
 
-        case {outcome, socket.assigns.current} do
-          {:confirmed, %{id: ^safe_id, kind: :safe_mode} = safe_mode} ->
-            choose(socket, safe_mode, :kept)
-
-          _dismissed_or_gone ->
-            socket
+        case {outcome, socket.assigns.notice} do
+          {:confirmed, %{id: ^notice_id} = notice} -> restore(socket, notice)
+          _dismissed_or_gone -> socket
         end
     end
   end
 
-  defp drop_restoring(socket, safe_id) do
+  defp drop_restoring(socket, notice_id) do
     update(socket, :restoring, fn restoring ->
-      restoring |> Enum.reject(fn {_grant, safe} -> safe == safe_id end) |> Map.new()
+      restoring |> Enum.reject(fn {_grant, notice} -> notice == notice_id end) |> Map.new()
     end)
   end
 
@@ -2625,8 +2633,6 @@ defmodule PrismWeb.SystemLayer do
   # Who can confirm
   # ---------------------------------------------------------------------------
 
-  defp dismissable?(%{kind: kind}), do: kind != :safe_mode
-
   # A display rule: it hides a control and never decides. A prompt that
   # confirms no action offers its control to every client; one that does,
   # to a client with a person behind it who can give a proof.
@@ -2661,7 +2667,6 @@ defmodule PrismWeb.SystemLayer do
         # one with none waits for another client of the person.
         proves: panel != nil and can_prove?(assigns[:context]),
         panel: panel,
-        safe_mode: match?(%{kind: :safe_mode}, assigns.current),
         focus: context_athanor(%{assigns: assigns})
       )
 
@@ -2672,21 +2677,15 @@ defmodule PrismWeb.SystemLayer do
       class="contents"
       data-open={to_string(not is_nil(@current))}
       data-prompt-id={@current && @current.id}
-      data-dismissable={to_string(not is_nil(@current) and dismissable?(@current))}
-      data-mode={if @safe_mode, do: "popover", else: "modal"}
     >
       <dialog
         id={"#{@id}-dialog"}
         phx-mounted={JS.ignore_attributes(["open"])}
-        popover={@safe_mode && "manual"}
-        role={if @safe_mode, do: "alertdialog", else: "dialog"}
-        aria-modal={to_string(not @safe_mode)}
+        role="dialog"
+        aria-modal="true"
         aria-labelledby={"#{@id}-title"}
         aria-describedby={"#{@id}-description"}
-        class={[
-          "m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl",
-          not @safe_mode && "backdrop:bg-black/70"
-        ]}
+        class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@current} class="space-y-4" data-kind={@current.kind}>
           <h2 id={"#{@id}-title"} class="text-lg font-semibold">
@@ -2724,6 +2723,8 @@ defmodule PrismWeb.SystemLayer do
         </div>
       </dialog>
 
+      <.notice :if={@notice} id={@id} notice={@notice} error={@notice_error} myself={@myself} />
+
       <RestoreChecklist.checklist
         :if={is_map(@restore_checklist)}
         id={"#{@id}-restore"}
@@ -2735,6 +2736,67 @@ defmodule PrismWeb.SystemLayer do
         myself={@myself}
         button_class={button_class(false)}
       />
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :notice, :map, required: true
+  attr :error, :string, default: nil
+  attr :myself, :any, required: true
+
+  # The fallback's one line, in the shelf's strip at the shell's chips'
+  # level (z-index 67): it starts after the Devices chip on the shelf's left
+  # end and stops short of the AQUA button's room on its right, and it never
+  # reaches above the shelf into the apps' area, so a full app keeps all of
+  # it. The shelf's stylesheet (`canvas_chrome.css`) centres it in the
+  # strip as it does the chips, sets its width, and widens the chips' room
+  # to hold it while it stands. One line: the sentence, or a refusal in its
+  # place, gives way first, then the offers, each keeping its whole label
+  # as its title.
+  defp notice(assigns) do
+    assigns =
+      assign(assigns,
+        offers: Fallback.offers(assigns.notice.fallback),
+        sentence: "Your canvas stopped. Showing the standard one."
+      )
+
+    ~H"""
+    <div
+      id={"#{@id}-notice"}
+      role="status"
+      data-test="fallback-notice"
+      data-notice-id={@notice.id}
+      class="pointer-events-none absolute bottom-2 left-[4.75rem] z-[67] flex h-[26px] items-center whitespace-nowrap"
+    >
+      <div class="pointer-events-auto flex h-full min-w-0 max-w-full items-center gap-x-1.5 overflow-hidden rounded-md bg-black/70 px-2 text-xs text-white/90">
+        <span :if={is_nil(@error)} title={@sentence} class="min-w-0 shrink-[100] truncate">
+          {@sentence}
+        </span>
+        <span
+          :if={@error}
+          role="alert"
+          title={@error}
+          class="min-w-0 shrink-[100] truncate text-red-300"
+        >
+          {@error}
+        </span>
+        <%= for {offered, index} <- Enum.with_index(@offers) do %>
+          <span :if={index > 0} aria-hidden="true" class="shrink-0">·</span>
+          <button
+            type="button"
+            phx-click="notice_choose"
+            phx-target={@myself}
+            phx-value-id={@notice.id}
+            phx-value-offer={offered.offer}
+            data-offer={offered.offer}
+            title={offer_label(offered)}
+            class="min-w-0 truncate font-medium text-blue-300 underline underline-offset-2 hover:text-blue-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+          >
+            {offer_label(offered)}
+          </button>
+        <% end %>
+      </div>
     </div>
     """
   end
@@ -2950,12 +3012,6 @@ defmodule PrismWeb.SystemLayer do
     """
   end
 
-  defp body(%{prompt: %{kind: :safe_mode}} = assigns) do
-    ~H"""
-    <p class="text-sm">No app runs while safe mode is on. Choose how to go on.</p>
-    """
-  end
-
   defp body(%{prompt: %{kind: :pairing}} = assigns) do
     ~H"""
     <Pairing.devices
@@ -3162,26 +3218,6 @@ defmodule PrismWeb.SystemLayer do
   attr :id, :string, required: true
   attr :panel, :map, default: nil
 
-  defp controls(%{prompt: %{kind: :safe_mode}} = assigns) do
-    assigns = assign(assigns, :offers, SafeMode.offers(assigns.prompt.subject))
-
-    ~H"""
-    <div class="flex flex-wrap justify-end gap-2">
-      <button
-        :for={offered <- @offers}
-        type="button"
-        phx-click="choose"
-        phx-target={@myself}
-        phx-value-id={@prompt.id}
-        phx-value-offer={offered.offer}
-        class={[button_class(offered.offer == :retry)]}
-      >
-        {offer_label(offered)}
-      </button>
-    </div>
-    """
-  end
-
   defp controls(assigns) do
     ~H"""
     <div class="flex flex-wrap justify-end gap-2">
@@ -3256,7 +3292,6 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :credential_entry, subject: %{name: name}}),
     do: "Enter a credential for #{name}"
 
-  defp title(%{kind: :safe_mode}), do: "Safe mode"
   defp title(%{kind: :pairing}), do: "Your devices"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
@@ -3287,18 +3322,6 @@ defmodule PrismWeb.SystemLayer do
       "The value goes straight to your vault, sealed at rest. No app sees it, and it is " <>
         "never shown again."
 
-  defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :not_ready}}),
-    do: "Your canvas did not start."
-
-  defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :crashed}}),
-    do: "Your canvas stopped working."
-
-  defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :not_validated}}),
-    do: "Your canvas's new version did not start, and it has no earlier version to show."
-
-  defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :requested}}),
-    do: "You turned safe mode on."
-
   defp description(%{kind: :pairing}),
     do:
       "Pair a phone or another browser with this CYFR, or revoke a device you paired. " <>
@@ -3327,8 +3350,7 @@ defmodule PrismWeb.SystemLayer do
   defp dismiss_label(_prompt, _panel), do: "Dismiss"
 
   defp offer_label(%{offer: :retry}), do: "Try again"
-  defp offer_label(%{offer: :kept}), do: "Go back to the version before"
-  defp offer_label(%{offer: :shipped}), do: "Use the shipped canvas"
+  defp offer_label(%{offer: :kept}), do: "Restore the last working one"
 
   defp waiting([_one]), do: "One more prompt is waiting."
   defp waiting(queue), do: "#{length(queue)} more prompts are waiting."

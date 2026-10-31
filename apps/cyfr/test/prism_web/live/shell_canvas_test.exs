@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.ShellCanvasTest do
   @moduledoc """
-  The canvases in the shell, and safe mode.
+  The canvases in the shell, and the fallback.
 
   The shell shows the layout's first canvas, its working version opened as
   a canvas frame on the canvas's own page, and draws the picker only
@@ -19,10 +19,10 @@ defmodule PrismWeb.ShellCanvasTest do
   A canvas's `open` places a listed tincture where its arrangement puts
   it, and its `press` reaches `feed.press` only from the visible live
   canvas whose version reads that feed. A canvas shown and not ready
-  within the whole period from its showing, one refused at open, and the
-  person's own ask enter safe mode, which
-  discards every frame with its credential; its kept version restores and
-  opens only that canvas.
+  within the whole period from its showing, one that fails before its
+  ready, one whose frame dies and one refused at open fall back: the
+  shipped canvas in its place, every app kept, one line offering to try
+  again and the kept version, which restores and opens only that canvas.
 
   Takes a slot through `Arca.ControlPlane` in the ownership case, which
   writes the process-wide standing record; that case saves and restores it.
@@ -277,13 +277,13 @@ defmodule PrismWeb.ShellCanvasTest do
   # ---- the shell ------------------------------------------------------------
 
   defp shell!(conn) do
-    {view, _html} = mount_athanor(conn, "/tinctures")
+    {view, _html} = mount_athanor(conn, "/canvas")
     Process.put(:view, view)
     # The canvas's read and the shell's placing are messages to the view;
-    # they end in a canvas decided on, or in safe mode.
+    # they end in a canvas decided on, or in its fallback.
     settle!(view, fn ->
       assigns = assigns(view)
-      assigns.showing != :pending or assigns.safe_mode != nil
+      assigns.showing != :pending or assigns.fallbacks != %{}
     end)
 
     view
@@ -421,6 +421,7 @@ defmodule PrismWeb.ShellCanvasTest do
     seed =
       Path.join(System.tmp_dir!(), "shell_canvas_seed_#{System.unique_integer([:positive])}")
 
+    on_exit(fn -> File.rm_rf(seed) end)
     File.mkdir_p!(Path.join(seed, "components/tinctures/local/canvas"))
 
     File.cp_r!(
@@ -428,13 +429,7 @@ defmodule PrismWeb.ShellCanvasTest do
       Path.join(seed, "components/tinctures/local/canvas/#{Path.basename(seed())}")
     )
 
-    previous = Application.get_env(:arca, :seed_path)
-    Application.put_env(:arca, :seed_path, seed)
-
-    on_exit(fn ->
-      Application.put_env(:arca, :seed_path, previous)
-      File.rm_rf(seed)
-    end)
+    Prima.Test.Env.put_app_env(:arca, :seed_path, seed)
   end
 
   # The person's stored layout no longer holds its digest: every read of
@@ -836,7 +831,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert row(id).state == "active"
     end
 
-    test "a shown full frame takes everything it covers out of reach, and only that",
+    test "a shown full frame takes the canvas under it out of reach, and only that: the top bar stays",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       tincture!(ctx, "app-dash")
 
@@ -846,36 +841,64 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
 
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
-        refute has_element?(view, "#{covered}[inert]"), covered
-      end
+      # The Canvas mode draws no sidebar and no drawer.
+      refute has_element?(view, "#chrome-side")
+
+      refute has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
 
-      # The chrome and every canvas layer under the full frame.
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
-        assert has_element?(view, "#{covered}[inert]"), covered
-      end
+      # Every canvas layer under the full frame.
+      assert has_element?(view, ~s([data-canvas-place="canvas"][inert]))
 
-      assert has_element?(view, "#chrome-top[inert] #topbar")
-
-      # The full frame and its capsule, the shell's own Safe mode control,
-      # the switcher, the system layer and the assistant's panel stay
-      # reachable.
+      # The full frame and its capsule, the top bar with its mode switch,
+      # the shell's own Devices control, the switcher, the system layer and
+      # the assistant's panel stay reachable.
       refute has_element?(view, ~s([data-canvas-place="full"][inert]))
       refute has_element?(view, ~s([inert] button[phx-click="close_active_tincture"]))
 
-      for reachable <- ~w(#shell-safe-mode #canvas-switcher #system-layer #aqua-panel) do
+      for reachable <-
+            ~w(#chrome-top #topbar #shell-devices #canvas-switcher #system-layer #aqua-panel) do
         assert has_element?(view, reachable), reachable
         refute has_element?(view, "[inert] #{reachable}"), reachable
         refute has_element?(view, "#{reachable}[inert]"), reachable
       end
 
       render_click(view, "close_active_tincture", %{})
+      refute has_element?(view, ~s([data-canvas-place="canvas"][inert]))
+    end
 
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
-        refute has_element?(view, "#{covered}[inert]"), covered
+    test "a full app fills the apps' area, from the top bar's bottom edge to the shelf's top edge, its capsule inside",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "full", 0, true)])
+      })
+
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
+      html = render(view)
+
+      classes = fn tag ->
+        tag |> then(&Regex.run(~r/class="([^"]*)"/, &1)) |> List.last() |> String.split()
       end
+
+      # Inside the frames' box, which starts under the top bar and ends at
+      # the shelf's top edge, the shelf's height read from its stylesheet.
+      [frames] = Regex.run(~r/<div[^>]*id="canvas-frames"[^>]*>/, html)
+      assert "bottom-[var(--canvas-shelf-height)]" in classes.(frames)
+      assert "top-0" in classes.(frames)
+
+      [full] = Regex.run(~r/<div[^>]*data-canvas-place="full"[^>]*>/, html)
+      assert ~w(absolute inset-0 z-[64]) -- classes.(full) == []
+      refute "fixed" in classes.(full)
+      assert html =~ ~r/data-canvas-place="full".*role="toolbar" aria-label="Tincture controls"/s
+
+      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
+      assert [_one] = Regex.scan(~r/--canvas-shelf-height: [0-9]+px;/, css)
+      assert css =~ ~r/\.canvas-shelf \{[^}]*height: var\(--canvas-shelf-height\);/
+      assert [_only_the_property] = Regex.scan(~r/52px/, css)
     end
 
     test "a layout published by another session of the same person is read again here; another person's is not",
@@ -966,7 +989,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert validation(view) == nil
       assert %{working: "1.2.0", kept: "1.1.0"} = versions(ctx, "markets")
       assert %{state: :live, visible: true, reference: %{version: "1.2.0"}} = canvas(view)
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
 
     test "a validation that ends with no newer version written opens the working version and starts no trial",
@@ -1157,7 +1180,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert shell_children(view) == without
     end
 
-    test "a tincture installed while the shell is open as anything but a canvas, then named as a canvas, is safe mode not_ready",
+    test "a tincture installed while the shell is open as anything but a canvas, then named as a canvas, falls back not_ready",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
@@ -1177,11 +1200,11 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> Enum.any?(assigns(view).arrangement || [], &(&1.id == "work")) end)
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
 
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      refute render(view) =~ ~s(id="shell-picker")
+      assert %{"work" => %{fallback: %{reason: :not_ready}}} = assigns(view).fallbacks
+      assert has_element?(view, "#system-layer-notice")
     end
 
-    test "the same tincture installed before the shell mounted is safe mode not_ready on the same switch",
+    test "the same tincture installed before the shell mounted falls back not_ready on the same switch",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
@@ -1198,11 +1221,11 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> Enum.any?(assigns(view).arrangement || [], &(&1.id == "work")) end)
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
 
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      refute render(view) =~ ~s(id="shell-picker")
+      assert %{"work" => %{fallback: %{reason: :not_ready}}} = assigns(view).fallbacks
+      assert has_element?(view, "#system-layer-notice")
     end
 
-    test "a tincture listed at mount and removed since, then named as a canvas, draws the picker and is not safe mode",
+    test "a tincture listed at mount and removed since, then named as a canvas, draws the picker and does not fall back",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
@@ -1224,7 +1247,7 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> Enum.any?(assigns(view).arrangement || [], &(&1.id == "work")) end)
       render_hook(view, "switch_canvas", %{"canvas" => "work"})
 
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert assigns(view).showing == :none
       assert render(view) =~ ~s(id="shell-picker")
     end
@@ -1797,7 +1820,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert assigns(view).grant_prompts == %{}
       assert %{state: :refused, refusal: :ungranted} = canvas(view)
       assert validation(view) == nil
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert rows() == []
 
       # Shown anew, it is refused at its open and asks again; confirmed,
@@ -1813,7 +1836,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{state: :live, reference: %{name: "markets"}} = trial = validation(view)
       assert row(trial.id).state == "active"
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
 
     for asked_at <- ["activation", "open"] do
@@ -1871,7 +1894,7 @@ defmodule PrismWeb.ShellCanvasTest do
         assert %{id: ^newer_id, state: :live} = validation(view)
         assert row(newer_id).state == "active"
         assert canvas(view) == nil
-        assert assigns(view).safe_mode == nil
+        assert assigns(view).fallbacks == %{}
         assert %{working: nil, kept: nil, failed: nil} = versions(ctx, "markets")
       end
     end
@@ -1920,11 +1943,11 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert validation(view) == nil
       assert %{state: :refused, refusal: :unavailable} = refused = canvas(view)
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       {view, prompt, refused}
     end
 
-    test "dismissed after a newer trial ended in not_owner, it leaves the canvas's refusal: no safe mode, nothing opened",
+    test "dismissed after a newer trial ended in not_owner, it leaves the canvas's refusal: no fallback, nothing opened",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       {view, _prompt, refused} = decided_since!(conn, ctx, user, athanor)
       held = opened(view)
@@ -1933,7 +1956,7 @@ defmodule PrismWeb.ShellCanvasTest do
       dismiss!(view)
 
       assert assigns(view).grant_prompts == %{}
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert canvas(view) == refused
       assert validation(view) == nil
       assert opened(view) == held
@@ -1952,7 +1975,7 @@ defmodule PrismWeb.ShellCanvasTest do
       _ = render(view)
 
       assert assigns(view).grant_prompts == %{}
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert canvas(view) == refused
       assert validation(view) == nil
       assert opened(view) == held
@@ -1961,7 +1984,7 @@ defmodule PrismWeb.ShellCanvasTest do
   end
 
   describe "the live canvas's grant" do
-    test "a working version whose grant waits shows its refusal and one grant prompt, never safe mode; decided again while it is open, nothing more is asked; dismissed, the refusal stays, and a layout change decides it again",
+    test "a working version whose grant waits shows its refusal and one grant prompt, no fallback; decided again while it is open, nothing more is asked; dismissed, the refusal stays, and a layout change decides it again",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
@@ -1970,7 +1993,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
 
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
 
       assert %{state: :refused, refusal: :ungranted, reference: %{version: "1.0.0"}} =
                first = canvas(view)
@@ -2005,7 +2028,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert assigns(view).grant_prompts == %{}
       assert canvas(view) == refused
       refute render(view) =~ ~s(data-kind="grant")
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
 
       # A layout change decides the canvas again: refused, it asks once more.
       layout!(user, athanor, [entry("home", "tincture:local.markets")])
@@ -2052,7 +2075,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert assigns(view).grant_prompts == %{}
       refute render(view) =~ ~s(data-kind="grant")
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert rows() == []
 
       # A switch back decides the canvas again: its trial is refused and asks once more.
@@ -2097,7 +2120,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{state: :live, reference: %{version: "1.0.0"}} = live = canvas(view)
       assert row(live.id).state == "active"
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
 
     test "confirming a working version's grant prompt opens the working version live",
@@ -2117,7 +2140,7 @@ defmodule PrismWeb.ShellCanvasTest do
       refute live.id == refused.id
       assert row(live.id).state == "active"
       assert validation(view) == nil
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
 
     test "a prompt open for one tincture is withdrawn when the layout gives the canvas another tincture whose grant waits: that tincture is asked for its own grant, and its prompt is the one drawn",
@@ -2164,7 +2187,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert canvas(view) == refused
       assert assigns(view).grant_prompts == %{}
       refute render(view) =~ ~s(data-kind="grant")
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
 
     test "a prompt open for one tincture is withdrawn when the layout gives the canvas another tincture that opens live",
@@ -2191,7 +2214,7 @@ defmodule PrismWeb.ShellCanvasTest do
       html = render(view)
       refute html =~ ~s(data-prompt-id="#{markets}")
       refute html =~ ~s(data-kind="grant")
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
   end
 
@@ -2248,29 +2271,6 @@ defmodule PrismWeb.ShellCanvasTest do
         refute again == markets
         assert render(view) =~ ~s(data-prompt-id="#{again}")
       end
-    end
-
-    test "safe mode withdraws every grant prompt the shell raised, so safe mode's prompt is the one drawn",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      two_canvases!(ctx, user, athanor)
-      owner_head!(ctx, "markets", :needs_consent)
-
-      view = shell!(conn)
-
-      assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
-               Map.to_list(assigns(view).grant_prompts)
-
-      assert render(view) =~ ~s(data-prompt-id="#{markets}")
-
-      render_click(view, "safe_mode", %{})
-      %{id: safe_mode} = assigns(view).safe_mode
-
-      assert assigns(view).grant_prompts == %{}
-      html = render(view)
-      assert html =~ ~s(data-prompt-id="#{safe_mode}")
-      assert html =~ ~s(data-kind="safe_mode")
-      refute html =~ ~s(data-prompt-id="#{markets}")
-      refute html =~ "Grant tincture:local.markets"
     end
   end
 
@@ -2414,8 +2414,278 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert dropped(view) == 3
       assert %{state: :live} = canvas(view)
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       refute Enum.any?(opened(view), &match?(%{key: {:app, _, "tincture:local.loose-dash"}}, &1))
+    end
+  end
+
+  describe "a canvas's grant" do
+    # A catalyst installed in the athanor, which no frame opens, with no
+    # grant of the person's yet, and `manifest`'s declarations. Answers its
+    # versionless reference.
+    defp catalyst!(ctx, manifest \\ %{}) do
+      name = "canvas-grant-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: name,
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A component a canvas asks a grant for",
+          manifest: Jason.encode!(manifest)
+        })
+
+      "catalyst:local.#{name}"
+    end
+
+    # A connection the catalyst needs, which a grant binds to an entry.
+    @needs_account %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "required" => true,
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"],
+          "attach" => %{
+            "in" => "header",
+            "name" => "Authorization",
+            "template" => "Bearer {value}"
+          }
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    setup %{ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor, %{"desk" => posture([]), "hand" => posture([])})
+      {:ok, catalyst: catalyst!(ctx)}
+    end
+
+    test "a grant whose account binding has passed its until is offered again from the canvas, to renew it",
+         %{conn: conn, ctx: ctx} do
+      catalyst = catalyst!(ctx, @needs_account)
+      view = shell!(conn)
+      person = person_of(view)
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(person, %{
+          name: "expiring-canvas-key",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "test-value"},
+          destination: %{"hosts" => ["api.example.com"]}
+        })
+
+      ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      decisions = %{
+        ref: catalyst,
+        bindings: [
+          %{
+            need: "api_key",
+            entry_id: entry.id,
+            lifetime: %{kind: "until", until: DateTime.to_iso8601(ahead)}
+          }
+        ]
+      }
+
+      {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: catalyst})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
+
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(person, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      {:ok, [profile]} = Sanctum.Consent.profiles(person, catalyst)
+      {:ok, head} = Sanctum.Consent.head_consent(person, profile.id)
+      [binding] = head.vault_refs
+      resource = %{binding_key: binding.binding_key}
+      use = %{profile_id: profile.id, consent_id: head.id}
+      assert :ok = Sanctum.Attach.lifetime(person, resource, use)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where:
+              r.athanor_id == ^person.athanor_id and r.consent_id == ^head.id and
+                r.vault_entry_id == ^entry.id
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
+        )
+
+      # Its attach refuses it, and its setup plan says it is not ready.
+      assert {:error, :grant_expired} = Sanctum.Attach.lifetime(person, resource, use)
+
+      assert {:ok, %{consent: %{ready: false}}} =
+               Compendium.Component.setup_plan(person, catalyst)
+
+      canvas_verb!(view, canvas(view).id, :grant, %{"ref" => catalyst})
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert dropped(view) == 0
+    end
+
+    test "confirmed, the grant is made and no frame opens, even after a switch of canvas",
+         %{conn: conn, catalyst: catalyst} do
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :grant, %{"ref" => catalyst})
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      before = Enum.map(opened(view), & &1.id)
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      settle!(view, fn -> assigns(view).grant_prompts == %{} end)
+
+      assert Enum.map(opened(view), & &1.id) == before
+
+      assert {:ok, %{consent: %{ready: true}}} =
+               Compendium.Component.setup_plan(person_of(view), catalyst)
+
+      assert dropped(view) == 0
+    end
+
+    test "a validation frame's grant is dropped", %{conn: conn, ctx: ctx, catalyst: catalyst} do
+      canvas!(ctx, "markets", "1.0.1")
+      view = shell!(conn)
+      assert trial = validation(view)
+
+      canvas_verb!(view, trial.id, :grant, %{"ref" => catalyst})
+
+      assert assigns(view).grant_prompts == %{}
+      assert dropped(view) == 1
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    end
+
+    test "a canvas frozen under a full app cannot ask for a grant",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor, catalyst: catalyst} do
+      view = hidden_canvas!(conn, ctx, user, athanor, :full_frame)
+      assert %{state: :frozen} = home = canvas(view)
+
+      canvas_verb!(view, home.id, :grant, %{"ref" => catalyst})
+
+      assert assigns(view).grant_prompts == %{}
+      assert dropped(view) == 1
+    end
+
+    test "an offer open for an app the canvas opened is the one offer: the canvas's grant for it is dropped",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "grant-app")
+      owner_head!(ctx, "grant-app", :needs_consent)
+      view = shell!(conn)
+      home = canvas(view).id
+
+      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.grant-app"})
+      assert map_size(assigns(view).grant_prompts) == 1
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      canvas_verb!(view, home, :grant, %{"ref" => "tincture:local.grant-app"})
+      assert map_size(assigns(view).grant_prompts) == 1
+      assert dropped(view) == 1
+
+      # Dismissed, no second offer stands behind it.
+      dismiss!(view)
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    end
+
+    test "for an installed catalyst with no frame, the system layer offers the grant, and its outcome opens no frame",
+         %{conn: conn, catalyst: catalyst} do
+      view = shell!(conn)
+      home = canvas(view).id
+      before = Enum.map(opened(view), & &1.id)
+
+      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
+
+      assert [{_prompt, {{:component, ^catalyst}, nil}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert render(view) =~ catalyst
+      assert dropped(view) == 0
+
+      # Dismissed, nothing opens and the canvas stays live; asked again at
+      # an installed version, the same component is offered.
+      dismiss!(view)
+      assert assigns(view).grant_prompts == %{}
+      assert Enum.map(opened(view), & &1.id) == before
+      assert %{state: :live} = canvas(view)
+
+      canvas_verb!(view, home, :grant, %{"ref" => catalyst <> ":0.1.0"})
+
+      assert [{_prompt, {{:component, ^catalyst}, nil}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      assert dropped(view) == 0
+    end
+
+    test "asked again while its offer is open, nothing more is offered", %{
+      conn: conn,
+      catalyst: catalyst
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
+      canvas_verb!(view, home, :grant, %{"ref" => catalyst <> ":0.1.0"})
+
+      assert map_size(assigns(view).grant_prompts) == 1
+      assert dropped(view) == 1
+    end
+
+    test "a reference that names nothing installed, or a component granted with nothing its grant needs missing, is dropped and offers nothing",
+         %{conn: conn, ctx: ctx, catalyst: catalyst} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      canvas_verb!(view, home, :grant, %{"ref" => "catalyst:local.nobody"})
+      canvas_verb!(view, home, :grant, %{"ref" => catalyst <> ":9.9.9"})
+
+      # Granted, and needing nothing more: its setup plan reads ready.
+      _profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, catalyst)
+
+      assert {:ok, %{consent: %{ready: true}}} =
+               Compendium.Component.setup_plan(person_of(view), catalyst)
+
+      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
+
+      assert assigns(view).grant_prompts == %{}
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert dropped(view) == 3
+    end
+
+    test "a component granted with the account it needs missing is offered again, the sheet asking for the account",
+         %{conn: conn, ctx: ctx} do
+      catalyst = catalyst!(ctx, @needs_account)
+      _profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, catalyst)
+
+      view = shell!(conn)
+
+      # Granted, its connection unbound: its setup plan does not read ready.
+      assert {:ok, %{consent: %{ready: false}}} =
+               Compendium.Component.setup_plan(person_of(view), catalyst)
+
+      canvas_verb!(view, canvas(view).id, :grant, %{"ref" => catalyst})
+
+      assert [{_prompt, {{:component, ^catalyst}, nil}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert render(view) =~ "api_key"
+      assert dropped(view) == 0
+    end
+
+    test "from a canvas the glass does not show, it is dropped", %{conn: conn, catalyst: catalyst} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      canvas_verb!(view, home, :grant, %{"ref" => catalyst})
+
+      assert assigns(view).grant_prompts == %{}
+      assert dropped(view) == 1
     end
   end
 
@@ -2524,45 +2794,494 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert dropped(view) == before + 2
       assert pressed(ctx) == []
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert %{state: :live} = canvas(view)
     end
   end
 
-  describe "safe mode" do
-    test "asked for, safe mode revokes every credential the shell minted and draws the prompt",
+  describe "the fallback" do
+    # The install media ships the canvas, laid in the athanor too.
+    # Answers the shipped version.
+    defp seeded!(ctx) do
+      shipped_seed!()
+      shipped!(ctx)
+      Path.basename(seed())
+    end
+
+    defp fallback(view, canvas \\ "home"),
+      do: get_in(assigns(view).fallbacks, [canvas, :fallback])
+
+    defp notice(view, offer),
+      do: element(view, ~s(#system-layer-notice button[phx-value-offer="#{offer}"]))
+
+    # The notice's words, as a person reads them.
+    defp notice_text(view) do
+      view
+      |> element("#system-layer-notice")
+      |> render()
+      |> String.replace(~r/<[^>]*>/, " ")
+      |> String.split()
+      |> Enum.join(" ")
+    end
+
+    test "a canvas that never sends ready falls back at its deadline: the shipped canvas in its place, every app kept, one line",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      shipped = seeded!(ctx)
       tincture!(ctx, "app-dash")
 
       two_canvases!(ctx, user, athanor, %{
-        "desk" => posture([app("tincture:local.app-dash", "full", 0, true)])
+        "desk" => posture([app("tincture:local.app-dash", "window")])
       })
 
       view = shell!(conn)
-      canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
-      minted = Enum.map(opened(view), & &1.id)
-      assert length(minted) == 2
+      home = canvas(view)
+      handshake!(view, home.id)
+      dash = app_frame(view, "app-dash")
+      assert %{state: :live, visible: true} = dash
+      refute has_element?(view, "#system-layer-notice")
 
-      render_click(view, "safe_mode", %{})
+      deadlines_pass!(view)
 
-      assert opened(view) == []
-      for id <- minted, do: assert(row(id).state == "revoked")
+      assert %{reason: :not_ready, canvas: "home", kept: nil} = fallback(view)
+      assert row(home.id).state == "revoked"
+      assert %{reference: %{name: "canvas", version: ^shipped}, state: :live} = canvas(view)
 
-      html = render(view)
-      refute html =~ ~s(id="shell-picker")
-      refute html =~ ~s(id="canvas-switcher")
-      assert html =~ ~s(data-kind="safe_mode")
-      assert html =~ "You turned safe mode on."
+      # The window stands as it stood, the same frame.
+      assert app_frame(view, "app-dash") == dash
+      assert row(dash.id).state == "active"
 
-      # Nothing launches while it is on, and a second ask is the same safe mode.
-      render_click(view, "select_tincture", %{"tincture" => "iframe_app-dash"})
-      render_click(view, "safe_mode", %{})
-      render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert opened(view) == []
-      assert Frames.visible_canvas(frames(view)) == "home"
+      # One line, offering to try again alone: no version is kept.
+      assert has_element?(
+               view,
+               "#system-layer-notice",
+               "Your canvas stopped. Showing the standard one."
+             )
+
+      assert has_element?(
+               view,
+               ~s(#system-layer-notice button[phx-value-offer="retry"]),
+               "Try again"
+             )
+
+      refute has_element?(view, ~s(#system-layer-notice button[phx-value-offer="kept"]))
+      refute has_element?(view, "#system-layer-dialog[open]")
+      refute render(view) =~ ~r/safe mode/i
     end
 
-    test "choosing the kept version restores it and opens only that canvas",
+    test "a canvas ready before its deadline stands; a late ready from one fallen back changes nothing",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      id = canvas(view).id
+      handshake!(view, id)
+
+      # Ready at nine seconds: before the deadline message.
+      canvas_verb!(view, id, :ready)
+      deadlines_pass!(view)
+      assert assigns(view).fallbacks == %{}
+      assert %{id: ^id, state: :live} = canvas(view)
+
+      # Away and back: `work`, never ready, falls back at its deadline, and
+      # its late ready reaches a frame no longer held.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      work = canvas(view, "work")
+      handshake!(view, work.id)
+      deadlines_pass!(view)
+      assert %{reason: :not_ready} = fallback(view, "work")
+
+      canvas_verb!(view, work.id, :ready)
+      assert %{reason: :not_ready} = fallback(view, "work")
+      refute MapSet.member?(assigns(view).canvas_ready, work.id)
+      assert row(work.id).state == "revoked"
+
+      # The line is the shown canvas's: back on `home`, none; on `work`, its.
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      refute has_element?(view, "#system-layer-notice")
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert has_element?(view, "#system-layer-notice")
+    end
+
+    test "a canvas whose frame opens and never handshakes falls back at its deadline",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+
+      # Its deadline is armed at its open, with no handshake: the page never
+      # took its credential.
+      assert %{id: id, state: :live} = canvas(view)
+      assert row(id).state == "active"
+      assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
+      assert is_integer(Process.read_timer(timer))
+      refute MapSet.member?(assigns(view).canvas_ready, id)
+
+      # The deadline fires: its timer's own message reaches the shell.
+      wait_until(fn -> assigns(view).fallbacks != %{} end, 30_000, "the ready deadline")
+      assert Process.read_timer(timer) == false
+      assert %{reason: :not_ready} = fallback(view)
+      assert row(id).state == "revoked"
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+    end
+
+    test "a handshake arms no second deadline", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      id = canvas(view).id
+      assert %{^id => {timer, _token}} = deadlines = assigns(view).canvas_deadlines
+      assert map_size(deadlines) == 1
+
+      handshake!(view, id)
+
+      # The timer armed at the open runs on, the only one.
+      assert assigns(view).canvas_deadlines == deadlines
+      assert is_integer(Process.read_timer(timer))
+    end
+
+    test "a canvas opened hidden runs no deadline; shown, it has the whole period from its showing, and falls back once that passes",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      view = opened_hidden!(conn, ctx, user, athanor)
+      %{id: id} = canvas(view)
+
+      # Opened hidden: the shell runs no ready deadline for it.
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      # Shown, however near the end of a period counted from its open that
+      # is: the whole period runs from its showing.
+      shown_at = System.monotonic_time(:millisecond)
+      render_click(view, "close_active_tincture", %{})
+      assert %{id: ^id, state: :live, visible: true} = canvas(view)
+      assert %{^id => {timer, token}} = assigns(view).canvas_deadlines
+      assert map_size(assigns(view).canvas_deadlines) == 1
+
+      # Its deadline, the only one held, falls due no sooner than the whole
+      # period from its showing, within the clocks' millisecond rounding.
+      assert fires_at(timer) >= shown_at + @ready_ms - 2
+
+      # Before then nothing falls it back: a deadline that is not the one
+      # held changes nothing.
+      send(view.pid, {:canvas_deadline, id, make_ref()})
+      _ = render(view)
+      assert assigns(view).fallbacks == %{}
+      assert %{^id => {^timer, ^token}} = assigns(view).canvas_deadlines
+
+      # The whole period passes, and it is still not ready.
+      deadlines_pass!(view)
+      assert %{reason: :not_ready} = fallback(view)
+      assert row(id).state == "revoked"
+    end
+
+    test "a canvas never shown never falls back",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      view = opened_hidden!(conn, ctx, user, athanor)
+      %{id: id} = canvas(view)
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      # Time passes: every deadline the shell holds falls due.
+      deadlines_pass!(view)
+      assert assigns(view).fallbacks == %{}
+
+      # Away to `work` and back, which shows the full frame over `home`
+      # again: the canvas is never shown, and no deadline is ever its.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :live, visible: true} = canvas(view, "work")
+      assert %{state: :frozen, visible: false} = canvas(view)
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{id: ^id, state: :frozen, visible: false} = canvas(view)
+      assert assigns(view).canvas_deadlines == %{}
+
+      deadlines_pass!(view)
+      assert assigns(view).fallbacks == %{}
+      assert %{id: ^id, state: :frozen} = canvas(view)
+    end
+
+    test "a stale deadline, for a canvas no longer held or a timer cancelled since, changes nothing",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      id = canvas(view).id
+      assert %{^id => held} = assigns(view).canvas_deadlines
+
+      send(view.pid, {:canvas_deadline, "frm_not_this_canvas", make_ref()})
+      # The shown canvas's frame, under a token other than the one held: a
+      # timer cancelled after it fired.
+      send(view.pid, {:canvas_deadline, id, make_ref()})
+      _ = render(view)
+
+      assert assigns(view).fallbacks == %{}
+      assert %{^id => ^held} = assigns(view).canvas_deadlines
+    end
+
+    test "a canvas that fails before its ready falls back, its kept version offered; one that fails after it stands",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      canvas!(ctx, "markets", "1.0.1")
+      versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
+      view = shell!(conn)
+      home = canvas(view)
+
+      # `work` reports ready, then a page error: nothing.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      work = canvas(view, "work")
+      canvas_verb!(view, work.id, :ready)
+      canvas_verb!(view, work.id, :failed, %{"stage" => "runtime"})
+      assert assigns(view).fallbacks == %{}
+      assert %{id: work_id, state: :live} = canvas(view, "work")
+      assert work_id == work.id
+
+      # `home` fails before its ready, at whatever stage it names.
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{id: home_id} = canvas(view)
+      assert home_id == home.id
+      canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
+
+      assert %{reason: :not_ready, kept: "1.0.0"} = fallback(view)
+      assert row(home.id).state == "revoked"
+
+      assert has_element?(
+               view,
+               ~s(#system-layer-notice button[phx-value-offer="retry"]),
+               "Try again"
+             )
+
+      assert has_element?(
+               view,
+               ~s(#system-layer-notice button[phx-value-offer="kept"]),
+               "Restore the last working one"
+             )
+    end
+
+    test "the visible canvas's frame dying falls back gone",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+
+      render_hook(view, "frame_gone", %{"frame" => home.id})
+
+      assert %{reason: :gone} = fallback(view)
+      assert row(home.id).state == "revoked"
+      assert %{reference: %{name: "canvas"}, state: :live} = canvas(view)
+      assert has_element?(view, "#system-layer-notice")
+    end
+
+    test "the shipped canvas dying in turn is torn down with its credential and renewal, its fallback, line and apps standing, and opens again only on trying again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "window")])
+      })
+
+      view = shell!(conn)
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
+      shipped = canvas(view)
+      assert shipped.reference.name == "canvas"
+      bearer = handshake!(view, shipped.id)["credential"]
+      canvas_verb!(view, shipped.id, :ready)
+      kept = assigns(view).fallbacks
+      dash = app_frame(view, "app-dash")
+      assert row(shipped.id).state == "active"
+      assert Map.has_key?(assigns(view).renewals, shipped.id)
+
+      render_hook(view, "frame_gone", %{"frame" => shipped.id})
+
+      assert assigns(view).fallbacks == kept
+      assert app_frame(view, "app-dash") == dash
+      assert has_element?(view, "#system-layer-notice")
+      assert row(shipped.id).state == "revoked"
+      refute Map.has_key?(assigns(view).renewals, shipped.id)
+      assert {:error, _} = verify(bearer)
+
+      # Nothing opens in its place again by itself: not on a switch away
+      # and back, nor when the deadlines pass.
+      assert canvas(view) == nil
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      deadlines_pass!(view)
+      assert canvas(view) == nil
+      assert assigns(view).fallbacks == kept
+
+      # Trying again opens the person's canvas.
+      view |> notice("retry") |> render_click()
+      assert assigns(view).fallbacks == %{}
+      assert %{reference: %{name: "markets"}, state: :live} = canvas(view)
+      refute has_element?(view, "#system-layer-notice")
+    end
+
+    test "a hidden canvas's frame dying is torn down with no call, and showing it again opens it anew",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :frozen} = canvas(view)
+
+      render_hook(view, "frame_gone", %{"frame" => home.id})
+
+      assert canvas(view) == nil
+      assert row(home.id).state == "revoked"
+      assert assigns(view).fallbacks == %{}
+      assert %{state: :live, visible: true} = canvas(view, "work")
+      assert %{working: "1.0.0", failed: nil} = versions(ctx, "markets")
+
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{state: :live, visible: true} = again = canvas(view)
+      refute again.id == home.id
+      assert row(again.id).state == "active"
+    end
+
+    # A canvas hidden by a switch, or frozen under a full frame over it,
+    # and shown again by the switch back or the full frame's close.
+    for hidden_by <- [:switch, :full_frame] do
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} that reports ready is ready: no deadline, hidden or shown again, falls it back",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        assert %{state: :frozen, visible: false} = home
+        before = dropped(view)
+
+        canvas_verb!(view, home.id, :ready)
+
+        assert dropped(view) == before
+        assert MapSet.member?(assigns(view).canvas_ready, home.id)
+
+        # Hidden, it runs no deadline; shown again, ready, it is given none.
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+        show_again!(view, hidden_by)
+        assert %{id: id, state: :live, visible: true} = canvas(view)
+        assert id == home.id
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+
+        deadlines_pass!(view)
+        assert assigns(view).fallbacks == %{}
+      end
+
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} before it is ready runs no deadline while hidden, and shown again has the whole period from its showing",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+
+        # Time passes while it is hidden: whatever the shell holds falls due,
+        # and none of it is this canvas's. The canvas shown meanwhile, if
+        # any, is ready.
+        for %{key: {:canvas, _}, state: :live, id: shown} <- opened(view),
+            do: canvas_verb!(view, shown, :ready)
+
+        deadlines_pass!(view)
+        assert assigns(view).fallbacks == %{}
+        assert %{state: :frozen} = canvas(view)
+
+        shown_at = System.monotonic_time(:millisecond)
+        show_again!(view, hidden_by)
+        assert %{id: id, state: :live, visible: true} = canvas(view)
+        assert id == home.id
+        assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
+
+        # Its deadline falls due no sooner than the whole period from its
+        # showing, within the clocks' millisecond rounding.
+        assert fires_at(timer) >= shown_at + @ready_ms - 2
+
+        deadlines_pass!(view)
+        assert %{reason: :not_ready} = fallback(view)
+      end
+
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} that fails before its ready is died: nothing while hidden, it falls back once shown",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        before = dropped(view)
+
+        canvas_verb!(view, home.id, :failed, %{"stage" => "load"})
+
+        # Hidden, it acts on nothing and is held as it was.
+        assert dropped(view) == before
+        assert assigns(view).fallbacks == %{}
+        assert MapSet.member?(assigns(view).canvas_died, home.id)
+        assert %{id: id, state: :frozen} = canvas(view)
+        assert id == home.id
+
+        # Shown again, it falls back, as a failure while shown does, its
+        # kept version offered.
+        show_again!(view, hidden_by)
+        assert %{reason: :not_ready, kept: "1.0.0"} = fallback(view)
+        assert row(home.id).state == "revoked"
+        assert has_element?(view, ~s(#system-layer-notice button[phx-value-offer="kept"]))
+      end
+    end
+
+    test "a canvas refused at open falls back", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      # Named as the layout's canvas, but not declared as one.
+      tincture!(ctx, "plain-dash")
+      layout!(user, athanor, [entry("home", "tincture:local.plain-dash")])
+      view = shell!(conn)
+
+      assert %{reason: :not_ready} = fallback(view)
+      assert rows() == []
+      assert has_element?(view, "#system-layer-notice")
+    end
+
+    test "a working version refused at its open for anything but its grant falls back", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      # The listed version is a canvas; the working one is not declared as one.
+      lay!(ctx, "markets", "1.0.0", %{"entry" => "index.html"}, [
+        {"index.html", "<html><head></head><body>markets</body></html>"}
+      ])
+
+      canvas!(ctx, "markets", "1.0.1")
+      versions!(ctx, "markets", %{working: "1.0.0", kept: "1.0.1"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+
+      assert %{reason: :not_ready} = fallback(view)
+      assert rows() == []
+      assert assigns(view).grant_prompts == %{}
+      assert has_element?(view, "#system-layer-notice")
+    end
+
+    test "trying again opens the canvas as it stands, and one that dies again falls back with the same line",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      render_hook(view, "frame_gone", %{"frame" => home.id})
+      line = notice_text(view)
+      assert line =~ "Your canvas stopped. Showing the standard one."
+
+      view |> notice("retry") |> render_click()
+
+      assert assigns(view).fallbacks == %{}
+      refute has_element?(view, "#system-layer-notice")
+      assert %{reference: %{name: "markets"}, state: :live} = again = canvas(view)
+      refute again.id == home.id
+
+      render_hook(view, "frame_gone", %{"frame" => again.id})
+      assert %{reason: :gone} = fallback(view)
+      assert notice_text(view) == line
+    end
+
+    test "restoring the last working one restores it and opens only that canvas",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets", "1.0.0")
       canvas!(ctx, "markets", "1.0.1")
@@ -2576,14 +3295,10 @@ defmodule PrismWeb.ShellCanvasTest do
       ])
 
       view = shell!(conn)
-      assert %{reference: %{version: "1.0.1"}} = canvas(view)
+      assert %{reference: %{version: "1.0.1"}} = home = canvas(view)
+      render_hook(view, "frame_gone", %{"frame" => home.id})
 
-      render_click(view, "safe_mode", %{})
-      html = render(view)
-      assert html =~ "Go back to the version before"
-      assert html =~ "Use the shipped canvas"
-
-      view |> element(~s(#system-layer-dialog button[phx-value-offer="kept"])) |> render_click()
+      view |> notice("kept") |> render_click()
       settle!(view, fn -> canvas(view) != nil end)
 
       assert %{working: "1.0.0", kept: "1.0.1"} = versions(ctx, "markets")
@@ -2593,29 +3308,120 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [%{key: {:canvas, "home"}, state: :live, reference: %{version: "1.0.0"}}] =
                opened(view)
 
-      assert assigns(view).safe_mode == nil
-      refute render(view) =~ ~s(id="shell-picker")
+      assert assigns(view).fallbacks == %{}
+      refute has_element?(view, "#system-layer-notice")
+    end
+
+    test "the person goes on arranging: a drag leaves the shipped canvas and the window standing, and its save keeps the fallback",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "window")])
+      })
+
+      actor = Sanctum.Context.actor(person(user, athanor))
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, user.user_id))
+      view = shell!(conn)
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
+      assert %{id: shipped_id, reference: %{name: "canvas"}} = canvas(view)
+      dash = app_frame(view, "app-dash")
+
+      geometry = %{"x" => 500, "y" => 600, "w" => 4000, "h" => 5000}
+      render_hook(view, "frame_move", %{"frame" => dash.id, "geometry" => geometry})
+      assert_reply(view, %{ok: true})
+      revision = assigns(view).layout_base.revision
+      send(view.pid, :write_layout)
+      settle!(view, fn -> assigns(view).layout_base.revision == revision + 1 end)
+      assert_receive %Cyfr.Bus.LayoutPublished{}
+      _ = render(view)
+
+      assert %{id: ^shipped_id, reference: %{name: "canvas"}} = canvas(view)
+      assert %{id: dash_id, placement: {:window, %{x: 500, y: 600}}} = app_frame(view, "app-dash")
+      assert dash_id == dash.id
+      assert %{reason: :gone} = fallback(view)
+      assert has_element?(view, "#system-layer-notice")
+    end
+
+    test "in the hand the same line is drawn",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
+      line = notice_text(view)
+
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+      settle!(view, fn -> assigns(view).posture == "hand" end)
+
+      assert %{reason: :gone} = fallback(view)
+      assert notice_text(view) == line
+    end
+
+    test "the line stands in the shelf's strip at the chips' level, so a full app keeps the whole area above the shelf",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+      settle!(view, fn -> assigns(view).posture == "hand" end)
+      render_hook(view, "app_open", %{"ref" => "tincture:local.app-dash"})
+      assert_reply(view, %{ok: true})
+      assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
+
+      html = render(view)
+      [notice] = Regex.run(~r/<div[^>]*id="system-layer-notice"[^>]*>/, html)
+      [devices] = Regex.run(~r/<button[^>]*id="shell-devices"[^>]*>/, html)
+
+      classes = fn tag ->
+        tag |> then(&Regex.run(~r/class="([^"]*)"/, &1)) |> List.last() |> String.split()
+      end
+
+      # Placed as the Devices chip is, after it on the shelf's left end, at
+      # its z-index, and one line no taller than a chip.
+      for class <- ~w(absolute bottom-2 z-[67] h-[26px] whitespace-nowrap) do
+        assert class in classes.(notice), class
+      end
+
+      assert "z-[67]" in classes.(devices)
+      refute "fixed" in classes.(notice)
+
+      # The apps stand above the shelf, and the shelf's stylesheet centres
+      # the line in its strip with the chips, half the room its 26 pixels
+      # leave on each side.
+      assert has_element?(view, ~s{#canvas-frames[class*="bottom-[var(--canvas-shelf-height)]"]})
+      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
+
+      assert css =~
+               ~r/#shell:has\(#canvas-shelf\) #shell-devices,\s*#shell:has\(#canvas-shelf\) #system-layer-notice \{ bottom: calc\(\(var\(--canvas-shelf-height\) - 26px\) \/ 2\); \}/
+
+      # Its width is the room the chips' spacer widens by while it stands,
+      # so nothing of the shelf is under it.
+      [_, width] = Regex.run(~r/#system-layer-notice \{ width: ([^;]+); \}/, css)
+
+      assert css =~
+               "#shell:has(#system-layer-notice) .canvas-shelf-chips { width: calc(4.75rem + #{width}); }"
+
+      assert "left-[4.75rem]" in classes.(notice)
+
+      [_, full_z] = Regex.run(~r/data-canvas-place="full"[^>]*class="[^"]*z-\[([0-9]+)\]/, html)
+      assert String.to_integer(full_z) < 67
+    end
+
+    test "no safe mode is left to ask for: no chip, and the Devices chip stays",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      refute has_element?(view, "#shell-safe-mode")
+      assert has_element?(view, "#shell-devices", "Devices")
+      refute render(view) =~ ~r/safe mode/i
     end
 
     test "the shipped canvas is shown on this glass alone, nothing is written, and it stays until the layout names another canvas",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      # The install media ships the canvas: a seed tree of this test's own,
-      # restored when it ends.
-      seed =
-        Path.join(System.tmp_dir!(), "shell_canvas_seed_#{System.unique_integer([:positive])}")
-
-      File.mkdir_p!(Path.join(seed, "components/tinctures/local/canvas"))
-      shipped = Path.basename(seed())
-      File.cp_r!(seed(), Path.join(seed, "components/tinctures/local/canvas/#{shipped}"))
-      previous = Application.get_env(:arca, :seed_path)
-      Application.put_env(:arca, :seed_path, seed)
-
-      on_exit(fn ->
-        Application.put_env(:arca, :seed_path, previous)
-        File.rm_rf(seed)
-      end)
-
-      shipped!(ctx)
+      shipped = seeded!(ctx)
       tincture!(ctx, "fallback-app")
       canvas!(ctx, "markets")
       versions!(ctx, "markets", %{working: "1.0.0"})
@@ -2623,12 +3429,7 @@ defmodule PrismWeb.ShellCanvasTest do
       {:ok, %{revision: layout_revision}} = Compendium.layout(person(user, athanor), "desk")
 
       view = shell!(conn)
-      render_click(view, "safe_mode", %{})
-
-      view
-      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
-      |> render_click()
-
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
       settle!(view, fn -> canvas(view) != nil end)
 
       assert %{reference: %{name: "canvas", version: ^shipped}, state: :live} = canvas(view)
@@ -2658,352 +3459,15 @@ defmodule PrismWeb.ShellCanvasTest do
       send(view.pid, :write_layout)
       _ = render(view)
       assert assigns(view).pending == []
-      assert assigns(view).shipped == nil
+      assert assigns(view).fallbacks == %{}
       settle!(view, fn -> match?(%{reference: %{name: "markets-two"}}, canvas(view)) end)
       assert row(shipped_id).state == "revoked"
-    end
-
-    test "a canvas that sends ready before its deadline is not safe mode; one that never does is",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      id = canvas(view).id
-      handshake!(view, id)
-
-      # Ready at nine seconds: before the deadline message.
-      canvas_verb!(view, id, :ready)
-      deadlines_pass!(view)
-      assert assigns(view).safe_mode == nil
-      assert %{id: ^id, state: :live} = canvas(view)
-
-      # A canvas opened again that never says it is ready.
-      render_click(view, "safe_mode", %{})
-      assert assigns(view).canvas_deadlines == %{}
-      view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
-      settle!(view, fn -> canvas(view) != nil end)
-      again = canvas(view).id
-      refute again == id
-      handshake!(view, again)
-
-      deadlines_pass!(view)
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert row(again).state == "revoked"
-      assert render(view) =~ "Your canvas did not start."
-    end
-
-    test "a canvas whose frame opens and never handshakes is safe mode not_ready at its deadline",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      render_click(view, "safe_mode", %{})
-
-      view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
-      settle!(view, fn -> canvas(view) != nil end)
-
-      # Its deadline is armed at its open, with no handshake: the page never
-      # took its credential.
-      assert %{id: id, state: :live} = canvas(view)
-      assert row(id).state == "active"
-      assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
-      assert is_integer(Process.read_timer(timer))
-      refute MapSet.member?(assigns(view).canvas_ready, id)
-
-      # The deadline fires: its timer's own message reaches the shell.
-      wait_until(fn -> assigns(view).safe_mode != nil end, 30_000, "the ready deadline")
-      assert Process.read_timer(timer) == false
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert row(id).state == "revoked"
-      refute Map.has_key?(assigns(view).canvas_deadlines, id)
-    end
-
-    test "a handshake arms no second deadline", %{
-      conn: conn,
-      ctx: ctx,
-      user: user,
-      athanor: athanor
-    } do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      id = canvas(view).id
-      assert %{^id => {timer, _token}} = deadlines = assigns(view).canvas_deadlines
-      assert map_size(deadlines) == 1
-
-      handshake!(view, id)
-
-      # The timer armed at the open runs on, the only one.
-      assert assigns(view).canvas_deadlines == deadlines
-      assert is_integer(Process.read_timer(timer))
-    end
-
-    test "a canvas opened hidden runs no deadline; shown, it has the whole period from its showing, and is safe mode not_ready once that passes",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      view = opened_hidden!(conn, ctx, user, athanor)
-      %{id: id} = canvas(view)
-
-      # Opened hidden: the shell runs no ready deadline for it.
-      refute Map.has_key?(assigns(view).canvas_deadlines, id)
-
-      # Shown, however near the end of a period counted from its open that
-      # is: the whole period runs from its showing.
-      shown_at = System.monotonic_time(:millisecond)
-      render_click(view, "close_active_tincture", %{})
-      assert %{id: ^id, state: :live, visible: true} = canvas(view)
-      assert %{^id => {timer, token}} = assigns(view).canvas_deadlines
-      assert map_size(assigns(view).canvas_deadlines) == 1
-
-      # Its deadline, the only one held, falls due no sooner than the whole
-      # period from its showing, within the clocks' millisecond rounding.
-      assert fires_at(timer) >= shown_at + @ready_ms - 2
-
-      # Before then nothing sends it to safe mode: a deadline that is not
-      # the one held changes nothing.
-      send(view.pid, {:canvas_deadline, id, make_ref()})
-      _ = render(view)
-      assert assigns(view).safe_mode == nil
-      assert %{^id => {^timer, ^token}} = assigns(view).canvas_deadlines
-
-      # The whole period passes, and it is still not ready.
-      deadlines_pass!(view)
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert row(id).state == "revoked"
-    end
-
-    test "a canvas never shown never goes to safe mode not_ready",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      view = opened_hidden!(conn, ctx, user, athanor)
-      %{id: id} = canvas(view)
-      refute Map.has_key?(assigns(view).canvas_deadlines, id)
-
-      # Time passes: every deadline the shell holds falls due.
-      deadlines_pass!(view)
-      assert assigns(view).safe_mode == nil
-
-      # Away to `work` and back, which shows the full frame over `home`
-      # again: the canvas is never shown, and no deadline is ever its.
-      render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert %{state: :live, visible: true} = canvas(view, "work")
-      assert %{state: :frozen, visible: false} = canvas(view)
-      refute Map.has_key?(assigns(view).canvas_deadlines, id)
-
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
-      assert %{id: ^id, state: :frozen, visible: false} = canvas(view)
-      assert assigns(view).canvas_deadlines == %{}
-
-      deadlines_pass!(view)
-      assert assigns(view).safe_mode == nil
-      assert %{id: ^id, state: :frozen} = canvas(view)
-    end
-
-    test "a stale deadline, for a canvas no longer held or a timer cancelled since, changes nothing",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      id = canvas(view).id
-      assert %{^id => held} = assigns(view).canvas_deadlines
-
-      send(view.pid, {:canvas_deadline, "frm_not_this_canvas", make_ref()})
-      # The shown canvas's frame, under a token other than the one held: a
-      # timer cancelled after it fired.
-      send(view.pid, {:canvas_deadline, id, make_ref()})
-      _ = render(view)
-
-      assert assigns(view).safe_mode == nil
-      assert %{^id => ^held} = assigns(view).canvas_deadlines
-    end
-
-    for stage <- ["load", "runtime"] do
-      @tag stage: stage
-      test "a canvas that reports a failure at #{stage} is safe mode crashed, its kept version offered",
-           %{conn: conn, ctx: ctx, user: user, athanor: athanor, stage: stage} do
-        two_canvases!(ctx, user, athanor)
-        canvas!(ctx, "markets", "1.0.1")
-        versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
-        view = shell!(conn)
-        assert %{reference: %{version: "1.0.1"}} = canvas(view)
-
-        canvas_verb!(view, canvas(view).id, :failed, %{"stage" => stage})
-
-        assert %{reason: :crashed} = assigns(view).safe_mode
-        assert opened(view) == []
-        html = render(view)
-        assert html =~ "Your canvas stopped working."
-        assert html =~ ~s(phx-value-offer="kept")
-      end
-    end
-
-    test "the visible canvas's frame dying is safe mode crashed", %{
-      conn: conn,
-      ctx: ctx,
-      user: user,
-      athanor: athanor
-    } do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      home = canvas(view)
-
-      render_hook(view, "frame_gone", %{"frame" => home.id})
-
-      assert %{reason: :crashed} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert row(home.id).state == "revoked"
-      assert render(view) =~ "Your canvas stopped working."
-    end
-
-    test "a hidden canvas's frame dying is torn down with no call, and showing it again opens it anew",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      home = canvas(view)
-      render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      assert %{state: :frozen} = canvas(view)
-
-      render_hook(view, "frame_gone", %{"frame" => home.id})
-
-      assert canvas(view) == nil
-      assert row(home.id).state == "revoked"
-      assert assigns(view).safe_mode == nil
-      assert %{state: :live, visible: true} = canvas(view, "work")
-      assert %{working: "1.0.0", failed: nil} = versions(ctx, "markets")
-
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
-      assert %{state: :live, visible: true} = again = canvas(view)
-      refute again.id == home.id
-      assert row(again.id).state == "active"
-    end
-
-    # A canvas hidden by a switch, or frozen under a full frame over it,
-    # and shown again by the switch back or the full frame's close.
-    for hidden_by <- [:switch, :full_frame] do
-      @tag hidden_by: hidden_by
-      test "a canvas hidden by #{hidden_by} that reports ready is ready: no deadline, hidden or shown again, is safe mode",
-           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
-        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
-        home = canvas(view)
-        assert %{state: :frozen, visible: false} = home
-        before = dropped(view)
-
-        canvas_verb!(view, home.id, :ready)
-
-        assert dropped(view) == before
-        assert MapSet.member?(assigns(view).canvas_ready, home.id)
-
-        # Hidden, it runs no deadline; shown again, ready, it is given none.
-        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
-        show_again!(view, hidden_by)
-        assert %{id: id, state: :live, visible: true} = canvas(view)
-        assert id == home.id
-        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
-
-        deadlines_pass!(view)
-        assert assigns(view).safe_mode == nil
-      end
-
-      @tag hidden_by: hidden_by
-      test "a canvas hidden by #{hidden_by} before it is ready runs no deadline while hidden, and shown again has the whole period from its showing",
-           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
-        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
-        home = canvas(view)
-        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
-
-        # Time passes while it is hidden: whatever the shell holds falls due,
-        # and none of it is this canvas's. The canvas shown meanwhile, if
-        # any, is ready.
-        for %{key: {:canvas, _}, state: :live, id: shown} <- opened(view),
-            do: canvas_verb!(view, shown, :ready)
-
-        deadlines_pass!(view)
-        assert assigns(view).safe_mode == nil
-        assert %{state: :frozen} = canvas(view)
-
-        shown_at = System.monotonic_time(:millisecond)
-        show_again!(view, hidden_by)
-        assert %{id: id, state: :live, visible: true} = canvas(view)
-        assert id == home.id
-        assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
-
-        # Its deadline falls due no sooner than the whole period from its
-        # showing, within the clocks' millisecond rounding.
-        assert fires_at(timer) >= shown_at + @ready_ms - 2
-
-        deadlines_pass!(view)
-        assert %{reason: :not_ready} = assigns(view).safe_mode
-      end
-
-      @tag hidden_by: hidden_by
-      test "a canvas hidden by #{hidden_by} that reports a failure is died: nothing while hidden, safe mode crashed once shown",
-           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
-        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
-        home = canvas(view)
-        before = dropped(view)
-
-        canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
-
-        # Hidden, it acts on nothing and is held as it was.
-        assert dropped(view) == before
-        assert assigns(view).safe_mode == nil
-        assert MapSet.member?(assigns(view).canvas_died, home.id)
-        assert %{id: id, state: :frozen} = canvas(view)
-        assert id == home.id
-
-        # Shown again, it is safe mode crashed, as a failure while shown is,
-        # its kept version offered.
-        show_again!(view, hidden_by)
-        assert %{reason: :crashed} = assigns(view).safe_mode
-        assert opened(view) == []
-        assert row(home.id).state == "revoked"
-        html = render(view)
-        assert html =~ "Your canvas stopped working."
-        assert html =~ ~s(phx-value-offer="kept")
-      end
-    end
-
-    test "a canvas refused at open is safe mode", %{
-      conn: conn,
-      ctx: ctx,
-      user: user,
-      athanor: athanor
-    } do
-      # Named as the layout's canvas, but not declared as one.
-      tincture!(ctx, "plain-dash")
-      layout!(user, athanor, [entry("home", "tincture:local.plain-dash")])
-      view = shell!(conn)
-
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert rows() == []
-      refute render(view) =~ ~s(id="shell-picker")
-      assert render(view) =~ "Your canvas did not start."
-    end
-
-    test "a working version refused at its open for anything but its grant is safe mode", %{
-      conn: conn,
-      ctx: ctx,
-      user: user,
-      athanor: athanor
-    } do
-      # The listed version is a canvas; the working one is not declared as one.
-      lay!(ctx, "markets", "1.0.0", %{"entry" => "index.html"}, [
-        {"index.html", "<html><head></head><body>markets</body></html>"}
-      ])
-
-      canvas!(ctx, "markets", "1.0.1")
-      versions!(ctx, "markets", %{working: "1.0.0", kept: "1.0.1"})
-      layout!(user, athanor, [entry("home", "tincture:local.markets")])
-      view = shell!(conn)
-
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert rows() == []
-      assert assigns(view).grant_prompts == %{}
-      assert render(view) =~ "Your canvas did not start."
+      refute has_element?(view, "#system-layer-notice")
     end
   end
 
   describe "the shipped canvas's grant" do
-    # Safe mode's shipped canvas, chosen while its own grant waits for the
+    # The fallback's shipped canvas, shown while its own grant waits for the
     # person. Answers the view, the layout's revision and the refusal shown.
     defp shipped_ungranted!(conn, ctx, user, athanor) do
       shipped_seed!()
@@ -3014,14 +3478,9 @@ defmodule PrismWeb.ShellCanvasTest do
       {:ok, %{revision: revision}} = Compendium.layout(person(user, athanor), "desk")
 
       view = shell!(conn)
-      assert %{state: :live, reference: %{name: "markets"}} = canvas(view)
-      render_click(view, "safe_mode", %{})
+      assert %{state: :live, reference: %{name: "markets"}} = markets = canvas(view)
       owner_head!(ctx, "canvas", :needs_consent)
-
-      view
-      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
-      |> render_click()
-
+      render_hook(view, "frame_gone", %{"frame" => markets.id})
       settle!(view, fn -> canvas(view) != nil end)
 
       assert %{reference: %{name: "canvas"}, state: :refused, refusal: :ungranted} =
@@ -3047,8 +3506,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{reference: %{name: "canvas"}, state: :live} = live = canvas(view)
       refute live.id == refused.id
       assert row(live.id).state == "active"
-      assert assigns(view).shipped == "home"
-      assert assigns(view).safe_mode == nil
+      assert Map.has_key?(assigns(view).fallbacks, "home")
       assert {:ok, %{revision: ^revision}} = Compendium.layout(person(user, athanor), "desk")
       assert {:error, :not_found} = Arca.CanvasVersions.get(Sanctum.Context.actor(ctx), "canvas")
       assert %{working: "1.0.0"} = versions(ctx, "markets")
@@ -3066,8 +3524,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert assigns(view).grant_prompts == %{}
       assert canvas(view) == refused
-      assert assigns(view).shipped == "home"
-      assert assigns(view).safe_mode == nil
+      assert Map.has_key?(assigns(view).fallbacks, "home")
       refute render(view) =~ ~s(data-kind="grant")
     end
   end
@@ -3091,12 +3548,12 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert canvas(view) == refused
       assert render(view) =~ ~s(data-tincture-state=)
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert assigns(view).grant_prompts == %{}
       refute render(view) =~ ~s(id="shell-picker")
     end
 
-    test "keeps the shipped canvas safe mode chose, and draws the layout note once",
+    test "keeps the shipped canvas a fallback shows, and draws the layout note once",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       shipped_seed!()
       shipped!(ctx)
@@ -3105,12 +3562,7 @@ defmodule PrismWeb.ShellCanvasTest do
       layout!(user, athanor, [entry("home", "tincture:local.markets")])
 
       view = shell!(conn)
-      render_click(view, "safe_mode", %{})
-
-      view
-      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
-      |> render_click()
-
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
       settle!(view, fn -> canvas(view) != nil end)
       assert %{reference: %{name: "canvas"}, state: :live} = shipped = canvas(view)
 
@@ -3120,8 +3572,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert canvas(view) == shipped
       assert row(shipped.id).state == "active"
-      assert assigns(view).shipped == "home"
-      assert assigns(view).safe_mode == nil
+      assert Map.has_key?(assigns(view).fallbacks, "home")
       refute render(view) =~ ~s(id="shell-picker")
     end
 
@@ -3156,7 +3607,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert layout_notes(view) == 1
     end
 
-    test "a change whose read failed before safe mode does not drop the shipped canvas chosen after it",
+    test "a change whose read failed before the fallback does not drop the shipped canvas shown after it",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       shipped_seed!()
       shipped!(ctx)
@@ -3175,18 +3626,17 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{state: :live, reference: %{name: "markets"}} = canvas(view)
       mend_layout!(ctx, user, athanor, digest)
 
-      # Only then the person enters safe mode and chooses the shipped canvas.
-      render_click(view, "safe_mode", %{})
-
-      view
-      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
-      |> render_click()
-
+      # Only then the canvas's frame dies, and the shipped canvas shows.
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
       settle!(view, fn -> canvas(view) != nil end)
+      assert %{reference: %{name: "canvas"}, state: :live} = shipped = canvas(view)
 
-      assert %{reference: %{name: "canvas"}, state: :live} = canvas(view)
-      assert assigns(view).shipped == "home"
-      assert layout_notes(view) == 0
+      # The change still waiting is read at last, keeping the canvas's
+      # tincture: the shipped canvas stays.
+      published!(view, ctx, user)
+      settle!(view, fn -> layout_notes(view) == 0 end)
+      assert canvas(view) == shipped
+      assert Map.has_key?(assigns(view).fallbacks, "home")
     end
   end
 
@@ -3664,6 +4114,72 @@ defmodule PrismWeb.ShellCanvasTest do
       assert app_frame(view, "side-dash") == nil
     end
 
+    test "a window opened just before a switch is saved though another screen published meanwhile",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      assert %{placement: {:window, geometry}} = app_frame(view, "loose-dash")
+      Process.cancel_timer(assigns(view).write_timer)
+      assert assigns(view).pending != []
+      revision = assigns(view).layout_base.revision
+
+      # Another screen publishes before the save: the view still holds the
+      # revision it read.
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets", %{
+          "desk" =>
+            posture([
+              app("tincture:local.app-dash", "window", 0),
+              app("tincture:local.side-dash", "tile", 1)
+            ])
+        }),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      assert stored(user, athanor).revision == revision + 1
+      assert assigns(view).layout_base.revision == revision
+
+      assert {:error, {:live_redirect, %{to: _dashboard}}} =
+               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
+
+      GenServer.stop(view.pid, {:shutdown, :closed})
+
+      # Written once more on the newer layout, the other screen's apps kept.
+      assert %{revision: written} = stored(user, athanor)
+      assert written == revision + 2
+      assert %{placement: :window, geometry: ^geometry} = stored_app(user, athanor, "loose-dash")
+      assert %{placement: :tile} = stored_app(user, athanor, "side-dash")
+    end
+
+    test "a window survives a switch to the Dashboard and back, even inside the write window",
+         %{conn: conn, user: user, athanor: athanor} do
+      view = shell!(conn)
+      assert gesture!(view, "app_open", %{"ref" => "tincture:local.loose-dash"}) == %{ok: true}
+      assert %{placement: {:window, geometry}, id: first_id} = app_frame(view, "loose-dash")
+      assert assigns(view).pending != []
+
+      # The switch is the top bar's link; following it ends the shell's page.
+      assert {:error, {:live_redirect, %{to: dashboard}}} =
+               view |> find_live_child("topbar") |> element("#mode-dashboard") |> render_click()
+
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert row(first_id).state == "revoked"
+      assert %{placement: :window, geometry: ^geometry} = stored_app(user, athanor, "loose-dash")
+
+      {:ok, dash, _html} = live(conn, dashboard)
+
+      assert {:error, {:live_redirect, %{to: back}}} =
+               dash |> find_live_child("topbar") |> element("#mode-canvas") |> render_click()
+
+      assert back =~ "/canvas"
+      again = shell!(conn)
+
+      assert %{placement: {:window, ^geometry}, state: :live, id: id} =
+               app_frame(again, "loose-dash")
+
+      assert id != first_id
+    end
+
     test "in the hand every app shows full in stacking order, and a placement gesture is refused",
          %{conn: conn} do
       view = shell!(conn)
@@ -3695,7 +4211,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
 
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert %{id: id, state: :live} = canvas(view)
       assert id == home.id
     end
@@ -3713,7 +4229,7 @@ defmodule PrismWeb.ShellCanvasTest do
       refute MapSet.member?(assigns(view).canvas_died, home.id)
 
       render_hook(view, "switch_canvas", %{"canvas" => "home"})
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert %{id: id, state: :live} = canvas(view)
       assert id == home.id
     end

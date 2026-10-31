@@ -88,17 +88,22 @@ working, which is kept, and which validation last failed.
 - `cyfr.on(event, handler)` hears `installed` (`[{ref, name, icon,
   open}]`, the person's installed apps, each with its emoji or null and
   whether it is open over the canvas), `posture` (`hand` or `desk`), `covered` (the
-  rectangles the apps over the canvas cover) and `state` (`live` or
-  `frozen`). The latest value, when one came, is handed over first.
-- `cyfr.open(ref)` opens an installed app, and `cyfr.press(binding,
+  rectangles the windows over the canvas cover, in the page's own pixels;
+  a tile beside the canvas narrows the page instead, and a full app hides
+  it) and `state` (`live` or `frozen`). The latest value, when one came, is
+  handed over first.
+- `cyfr.open(ref)` opens an installed app, `cyfr.press(binding,
   action)` presses an action of a feed the page declares, `binding`
-  from that feed's latest `feed.results` event. The browser forwards
-  either only within moments of the person's own input, never from a
-  script on its own.
+  from that feed's latest `feed.results` event, and `cyfr.grant(ref)` asks
+  the person to grant an installed component (`catalyst:local.openai`),
+  which they confirm in CYFR's own prompt, never in the page. The browser
+  forwards each only within moments of the person's own input, never from
+  a script on its own.
 - `cyfr.ready()` tells the browser the page has drawn. Call it once,
   after the streams are open or refused: a version that has not called
-  it ten seconds after it opens is not shown, and an error it does not
-  catch, before or after, takes the screen to safe mode.
+  it ten seconds after it opens, or that hits an error it does not catch
+  before calling it, is replaced on the screen by the standard canvas
+  until the person tries it again. An error after it is not a crash.
 
 Each stream hands its current state first and then its live events, and
 an event that races the current state can arrive twice: keep a run's

@@ -23,13 +23,13 @@ import {
 // What a canvas's frame may send the shell, by its open's mode: a
 // validation frame only whether it came up.
 const FROM_CANVAS = Object.freeze({
-  live: Object.freeze(["ready", "failed", "open", "press"]),
+  live: Object.freeze(["ready", "failed", "open", "press", "grant"]),
   validation: Object.freeze(["ready", "failed"])
 })
 
 // The verbs of a canvas that act for the person, forwarded only within
 // moments of the person's own input, on the shown canvas.
-const PERSON_VERBS = Object.freeze(["open", "press"])
+const PERSON_VERBS = Object.freeze(["open", "press", "grant"])
 
 // What the shell tells a canvas after its open, the latest of each held
 // and posted again after its handshake, in this order.
@@ -59,10 +59,10 @@ const TOLD = Object.freeze(["posture", "covered", "installed", "state"])
  * `covered`, `installed` and `state` the shell told it, and each one
  * after as it comes: the canvas hook's (`cyfr:to-canvas`), and each change
  * of its shell state. A value the wire refuses is never posted. From a
- * canvas only `ready`, `failed`, `open` and `press` reach the view, and
- * from a validation frame only `ready` and `failed`. A canvas's `ready`
- * and `failed` are forwarded whatever its shown state. Its `open` or
- * `press` is forwarded only within moments of the person's own input,
+ * canvas only `ready`, `failed`, `open`, `press` and `grant` reach the
+ * view, and from a validation frame only `ready` and `failed`. A canvas's
+ * `ready` and `failed` are forwarded whatever its shown state. Its `open`,
+ * `press` or `grant` is forwarded only within moments of the person's own input,
  * never from a script on its own: while the shell document holds transient
  * user activation (which only the person's input gives it, never a
  * script), the canvas's frame is its active element, and the frame is
@@ -225,8 +225,8 @@ const IframeBridge = {
   // Whether a verb this frame posted reaches the view, which it can only
   // while the socket is up: every verb of a live tincture's frame; of a
   // canvas's, those its mode sends, `ready` and `failed` whether it is
-  // shown or hidden, and an `open` or a `press` only within moments of the
-  // person's input, on the shown, live canvas.
+  // shown or hidden, and an `open`, a `press` or a `grant` only within
+  // moments of the person's input, on the shown, live canvas.
   _forwards(verb) {
     if (!this._standing.connected) return false
     if (!this._canvas) return acting(this._standing)

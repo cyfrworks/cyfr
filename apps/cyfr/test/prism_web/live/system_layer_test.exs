@@ -18,6 +18,11 @@ defmodule PrismWeb.SystemLayerTest.Relay do
     {:noreply, socket}
   end
 
+  def forward({:notice, notice}, socket) do
+    Phoenix.LiveView.send_update(PrismWeb.SystemLayer, id: "system-layer", notice: notice)
+    {:noreply, socket}
+  end
+
   def forward(message, socket) do
     send(socket.assigns.test, {:host, message})
     {:noreply, socket}
@@ -165,8 +170,8 @@ defmodule PrismWeb.SystemLayerTest do
   the gate, so the operation decides every confirmation that arrives,
   reports each outcome to its parent, a refusal as its sentence, queues
   a second prompt behind the open one, keeps a typed credential out of
-  the page, the socket and the logs, and offers safe mode's ways out with
-  no dismissal.
+  the page, the socket and the logs, and draws the fallback's one line
+  beside the prompts, offering its ways back.
 
   A change that needs a fresh confirmation waits on its record: the
   asking layer keeps the signal's secret in its process and never
@@ -435,7 +440,6 @@ defmodule PrismWeb.SystemLayerTest do
       assert html =~ ~s(id="system-layer-title")
       assert html =~ ~s(id="system-layer-description")
       assert html =~ ~s(data-open="true")
-      assert html =~ ~s(data-dismissable="true")
       assert html =~ "api.example.com"
       assert html =~ "data/probe/"
 
@@ -5317,7 +5321,7 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   describe "while the store cannot answer" do
-    test "a safe-mode prompt is drawn, and trying again is reported", %{conn: conn} do
+    test "the fallback's notice is drawn, and trying again is reported", %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
       athanor = seated_athanor()
@@ -5327,7 +5331,12 @@ defmodule PrismWeb.SystemLayerTest do
       {:ok, ctx} =
         Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
-      safe = %{id: "safe-outage", kind: :safe_mode, action: nil, subject: safe_mode()}
+      fallback =
+        Prism.Fallback.enter(:gone, %{
+          canvas: "home",
+          tincture: "tincture:local.markets",
+          kept: nil
+        })
 
       {:ok, view, _html} =
         live_isolated(conn, BareHost, session: %{"context" => ctx, "test" => self()})
@@ -5340,39 +5349,12 @@ defmodule PrismWeb.SystemLayerTest do
       Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
       assert CyfrWeb.ContextGuard.check(ctx) == {:error, :unavailable}
 
-      html = prompt(view, safe)
-      assert html =~ ~s(data-kind="safe_mode")
-      assert html =~ "Your canvas stopped working."
-      assert open_prompt(view) == "safe-outage"
+      send(view.pid, {:notice, %{id: "fallback-outage", fallback: fallback}})
+      render(view)
+      assert has_element?(view, "#system-layer-notice", "Your canvas stopped.")
 
-      view |> element(~s(button[phx-value-offer="retry"])) |> render_click()
-      assert outcome("safe-outage") == {:confirmed, :retry}
-      assert open_prompt(view) == nil
-    end
-
-    test "the shipped canvas is chosen, and reported, with nothing read", %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      athanor = seated_athanor()
-      built = person_context(user, athanor)
-      {:ok, session} = Sanctum.TestContext.create_session(%{built | provider: "github"})
-
-      {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
-
-      {:ok, view, _html} =
-        live_isolated(conn, BareHost, session: %{"context" => ctx, "test" => self()})
-
-      bound = Application.get_env(:sanctum, :caller_memo_ttl_ms)
-      Application.put_env(:sanctum, :caller_memo_ttl_ms, 0)
-      on_exit(fn -> restore_env(:sanctum, :caller_memo_ttl_ms, bound) end)
-      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
-      assert CyfrWeb.ContextGuard.check(ctx) == {:error, :unavailable}
-
-      prompt(view, %{id: "safe-shipped", kind: :safe_mode, action: nil, subject: safe_mode()})
-      view |> element(~s(button[phx-value-offer="shipped"])) |> render_click()
-      assert outcome("safe-shipped") == {:confirmed, :shipped}
-      assert open_prompt(view) == nil
+      view |> element(~s(#system-layer-notice button[phx-value-offer="retry"])) |> render_click()
+      assert outcome("fallback-outage") == {:confirmed, :retry}
     end
   end
 
@@ -5413,20 +5395,29 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Safe mode
+  # The fallback's notice
   # ---------------------------------------------------------------------------
 
-  describe "safe mode" do
+  describe "the fallback's notice" do
     setup :signed_in
 
-    # The visible canvas `home` on markets, keeping `kept`.
-    defp safe_mode(kept \\ "1.0.0") do
-      Prism.SafeMode.enter(:crashed, %{
+    # The canvas `home` on markets, fallen back, keeping `kept`.
+    defp fallback(kept \\ "1.0.0") do
+      Prism.Fallback.enter(:gone, %{
         canvas: "home",
         tincture: "tincture:local.markets",
         kept: kept
       })
     end
+
+    defp notice(view, notice) do
+      send(view.pid, {:notice, notice})
+      render(view)
+      render(view)
+    end
+
+    defp offer(view, offer),
+      do: element(view, ~s(#system-layer-notice button[phx-value-offer="#{offer}"]))
 
     # Markets installed at `versions`, each reading the streams `streams`
     # names for it (none unless named), granted as the person would grant
@@ -5473,79 +5464,115 @@ defmodule PrismWeb.SystemLayerTest do
       stored
     end
 
-    test "offers trying again, the kept version and the shipped canvas, as a non-modal alert with no dismissal",
-         %{view: view} do
-      html = prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
-
-      assert html =~ ~s(role="alertdialog")
-      assert html =~ ~s(popover="manual")
-      assert html =~ ~s(data-dismissable="false")
-      assert html =~ ~s(data-mode="popover")
-      assert html =~ "Your canvas stopped working."
-      assert html =~ "No app runs while safe mode is on."
-
-      for {offer, label} <- [
-            {"retry", "Try again"},
-            {"kept", "Go back to the version before"},
-            {"shipped", "Use the shipped canvas"}
-          ] do
-        assert has_element?(
-                 view,
-                 ~s(button[phx-click="choose"][phx-value-offer="#{offer}"]),
-                 label
-               )
-      end
-
-      refute has_element?(view, ~s([phx-click="dismiss"]))
-
-      # Escape reaches the layer as a dismissal, which safe mode refuses.
-      view |> layer() |> render_click("dismiss", %{"id" => "safe"})
-      assert open_prompt(view) == "safe"
-      no_outcome("safe")
+    defp needs_consent!(ctx) do
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{
+            id: "prof_markets",
+            kind: :owner,
+            source_ref: "tincture:local.markets",
+            label: "owner",
+            status: :needs_consent
+          },
+          %{
+            id: "cons_markets",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            blob_digest: Prima.Digest.sha256("{}"),
+            resolved_policy: "{}",
+            activation: %{}
+          }
+        )
     end
 
-    test "each reason reads as its own sentence, and the kept version is offered only while there is one",
-         %{view: view} do
-      for {reason, sentence, id} <- [
-            {:not_ready, "Your canvas did not start.", "safe-1"},
-            {:not_validated, "new version did not start, and it has no earlier version to show.",
-             "safe-2"},
-            {:requested, "You turned safe mode on.", "safe-3"}
-          ] do
-        subject = Prism.SafeMode.enter(reason, %{canvas: "home", tincture: nil, kept: nil})
-        html = prompt(view, %{id: id, kind: :safe_mode, action: nil, subject: subject})
-        assert html =~ sentence
-        refute has_element?(view, ~s(button[phx-value-offer="kept"]))
-        assert has_element?(view, ~s(button[phx-value-offer="shipped"]))
+    test "is one line offering to try again and the kept version, beside the prompts and holding no focus",
+         %{view: view, ctx: ctx} do
+      notice(view, %{id: "fallback-1", fallback: fallback()})
 
-        view |> element(~s(button[phx-value-offer="retry"])) |> render_click()
-        assert outcome(id) == {:confirmed, :retry}
-      end
-    end
+      assert has_element?(
+               view,
+               ~s(#system-layer-notice[role="status"][data-notice-id="fallback-1"]),
+               "Your canvas stopped. Showing the standard one."
+             )
 
-    test "choosing the kept version restores it through canvas.restore", %{view: view, ctx: ctx} do
-      markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
-      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
+      assert has_element?(
+               view,
+               ~s(#system-layer-notice button[phx-value-offer="retry"]),
+               "Try again"
+             )
 
-      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+      assert has_element?(
+               view,
+               ~s(#system-layer-notice button[phx-value-offer="kept"]),
+               "Restore the last working one"
+             )
 
-      assert outcome("safe") == {:confirmed, :kept}
+      refute has_element?(view, ~s(#system-layer-notice button[phx-value-offer="shipped"]))
+      refute render(view) =~ ~r/safe mode/i
+
+      # It is no prompt: none is open, and one that arrives opens at once.
       assert open_prompt(view) == nil
+      prompt(view, grant(ctx, "g1"))
+      assert open_prompt(view) == "g1"
+      assert has_element?(view, "#system-layer-notice")
+
+      # Taken away, it is gone.
+      notice(view, nil)
+      refute has_element?(view, "#system-layer-notice")
+    end
+
+    test "with no kept version, or a canvas that is no local one, offers trying again alone",
+         %{view: view} do
+      for {fields, id} <- [{%{kept: nil}, "f-1"}, {%{tincture: "tincture:acme.markets"}, "f-2"}] do
+        fallback =
+          Prism.Fallback.enter(:not_ready, Map.merge(Map.from_struct(fallback()), fields))
+
+        notice(view, %{id: id, fallback: fallback})
+        assert has_element?(view, ~s(#system-layer-notice button[phx-value-offer="retry"]))
+        refute has_element?(view, ~s(#system-layer-notice button[phx-value-offer="kept"]))
+      end
+    end
+
+    test "trying again is reported and reads nothing; a click meant for a notice gone acts on nothing",
+         %{view: view} do
+      notice(view, %{id: "fallback-1", fallback: fallback()})
+      view |> offer("retry") |> render_click()
+      assert outcome("fallback-1") == {:confirmed, :retry}
+
+      notice(view, %{id: "fallback-2", fallback: fallback()})
+
+      view
+      |> with_target("#system-layer")
+      |> render_click("notice_choose", %{"id" => "fallback-1", "offer" => "retry"})
+
+      no_outcome("fallback-1")
+      no_outcome("fallback-2")
+    end
+
+    test "the kept version restores through canvas.restore", %{view: view, ctx: ctx} do
+      markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
+      notice(view, %{id: "fallback-1", fallback: fallback()})
+
+      view |> offer("kept") |> render_click()
+
+      assert outcome("fallback-1") == {:confirmed, :kept}
       assert %{document: %{working: "1.0.0", kept: "1.0.1"}, revision: 2} = versions(ctx)
     end
 
-    test "versions published since safe mode opened are reported, and nothing is merged",
+    test "versions published since the canvas fell back are said on the line, and nothing is merged",
          %{view: view, ctx: ctx} do
       markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
-      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
+      notice(view, %{id: "fallback-1", fallback: fallback()})
       hold_after_read!(view.pid)
 
       # The restore reads the versions; another glass publishes them before
       # it writes.
-      choosing =
-        Task.async(fn ->
-          view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
-        end)
+      choosing = Task.async(fn -> view |> offer("kept") |> render_click() end)
 
       assert_receive {:read_versions, reader}, 5_000
       stored = versions(ctx)
@@ -5562,65 +5589,43 @@ defmodule PrismWeb.SystemLayerTest do
         )
 
       send(reader, :go)
-      html = Task.await(choosing, 10_000)
+      Task.await(choosing, 10_000)
 
-      assert {:refused, _reason} = outcome("safe")
+      no_outcome("fallback-1")
 
-      assert html =~ "Your canvas" and
-               html =~ "versions changed since safe mode opened, so nothing was changed."
+      assert has_element?(
+               view,
+               ~s(#system-layer-notice [role="alert"]),
+               "versions changed since it stopped, so nothing was changed."
+             )
 
-      assert open_prompt(view) == "safe"
       assert %{document: %{working: "1.0.1", kept: "1.0.0"}, revision: 2} = versions(ctx)
 
-      view |> element(~s(button[phx-value-offer="retry"])) |> render_click()
-      assert outcome("safe") == {:confirmed, :retry}
+      view |> offer("retry") |> render_click()
+      assert outcome("fallback-1") == {:confirmed, :retry}
     end
 
-    test "a restore that waits on the grant asks for it in front of safe mode, and asks the restore again once it is confirmed",
+    test "a restore that waits on the grant asks for it, and asks the restore again once it is confirmed",
          %{view: view, ctx: ctx} do
       markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
+      needs_consent!(ctx)
 
-      :ok =
-        Sanctum.Test.ConsentFixtures.seed_head!(
-          ctx,
-          %{
-            id: "prof_markets",
-            kind: :owner,
-            source_ref: "tincture:local.markets",
-            label: "owner",
-            status: :needs_consent
-          },
-          %{
-            id: "cons_markets",
-            revision: 1,
-            scope: :versionless,
-            pinned_version: "",
-            invoke_mode: :open_inert,
-            shape_digest: "sha256:shape",
-            commit_digest: "sha256:commit",
-            blob_digest: Prima.Digest.sha256("{}"),
-            resolved_policy: "{}",
-            activation: %{}
-          }
-        )
+      notice(view, %{id: "fallback-1", fallback: fallback()})
+      view |> offer("kept") |> render_click()
 
-      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
-      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
-
-      # The grant is shown, safe mode waits behind it, and nothing moved.
+      # The grant is shown, and nothing moved.
       html = render(view)
       assert html =~ ~s(data-kind="grant")
       assert html =~ "Grant tincture:local.markets"
-      no_outcome("safe")
+      no_outcome("fallback-1")
       assert %{document: %{working: "1.0.1"}, revision: 1} = versions(ctx)
       grant = open_prompt(view)
-      refute grant == "safe"
 
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
       assert outcome(grant) == :confirmed
 
-      # Confirmed, the restore is asked again, and safe mode ends with it.
-      assert outcome("safe") == {:confirmed, :kept}
+      # Confirmed, the restore is asked again and reported.
+      assert outcome("fallback-1") == {:confirmed, :kept}
       assert %{document: %{working: "1.0.0", kept: "1.0.1"}} = versions(ctx)
       assert open_prompt(view) == nil
     end
@@ -5633,57 +5638,44 @@ defmodule PrismWeb.SystemLayerTest do
 
       # The grant names the newest, 1.0.1; the kept 1.0.0 reads another
       # set of streams.
-      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
-      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+      notice(view, %{id: "fallback-1", fallback: fallback()})
+      view |> offer("kept") |> render_click()
 
       html = render(view)
       assert html =~ ~s(data-kind="grant")
       assert html =~ "Grant tincture:local.markets:1.0.0"
-      no_outcome("safe")
+      no_outcome("fallback-1")
       grant = open_prompt(view)
 
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
       assert outcome(grant) == :confirmed
-      assert outcome("safe") == {:confirmed, :kept}
+      assert outcome("fallback-1") == {:confirmed, :kept}
       assert %{document: %{working: "1.0.0", kept: "1.0.1"}} = versions(ctx)
-      assert open_prompt(view) == nil
     end
 
-    test "a restore that waits on the grant, dismissed, leaves safe mode as it was",
+    test "a restore that waits on the grant, dismissed, leaves the notice as it was; one taken away meanwhile is let go",
          %{view: view, ctx: ctx} do
       markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
+      needs_consent!(ctx)
 
-      :ok =
-        Sanctum.Test.ConsentFixtures.seed_head!(
-          ctx,
-          %{
-            id: "prof_markets",
-            kind: :owner,
-            source_ref: "tincture:local.markets",
-            label: "owner",
-            status: :needs_consent
-          },
-          %{
-            id: "cons_markets",
-            revision: 1,
-            scope: :versionless,
-            pinned_version: "",
-            invoke_mode: :open_inert,
-            shape_digest: "sha256:shape",
-            commit_digest: "sha256:commit",
-            blob_digest: Prima.Digest.sha256("{}"),
-            resolved_policy: "{}",
-            activation: %{}
-          }
-        )
-
-      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
-      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+      notice(view, %{id: "fallback-1", fallback: fallback()})
+      view |> offer("kept") |> render_click()
       grant = open_prompt(view)
 
       view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
       assert outcome(grant) == :dismissed
-      assert open_prompt(view) == "safe"
+      assert open_prompt(view) == nil
+      assert has_element?(view, ~s(#system-layer-notice[data-notice-id="fallback-1"]))
+      assert %{document: %{working: "1.0.1", kept: "1.0.0"}} = versions(ctx)
+
+      # Asked again, then the notice goes before the grant is confirmed:
+      # the confirmation restores nothing.
+      view |> offer("kept") |> render_click()
+      again = open_prompt(view)
+      notice(view, nil)
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      assert outcome(again) == :confirmed
+      no_outcome("fallback-1")
       assert %{document: %{working: "1.0.1", kept: "1.0.0"}} = versions(ctx)
     end
   end
@@ -5953,8 +5945,6 @@ defmodule PrismWeb.SystemLayerTest do
           false
         )
 
-      safe_mode = Prism.SafeMode.enter(:crashed, %{canvas: "home", tincture: nil, kept: nil})
-
       %{
         grant: {grant(ctx, "k-grant"), "Approve what this app may use and reach"},
         unlock:
@@ -5963,9 +5953,6 @@ defmodule PrismWeb.SystemLayerTest do
         sign_in: {sign_in("k-sign-in"), "Sign in to go on."},
         credential_entry:
           {credential("k-credential", "probe"), "The value goes straight to your vault"},
-        safe_mode:
-          {%{id: "k-safe", kind: :safe_mode, action: nil, subject: safe_mode},
-           "Your canvas stopped working."},
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
            "Pair a phone or another browser with this CYFR"},
@@ -5994,12 +5981,7 @@ defmodule PrismWeb.SystemLayerTest do
         text = described(view)
         assert String.starts_with?(text, opening), "#{kind}: #{text}"
 
-        if kind == :safe_mode,
-          do:
-            view
-            |> element(~s(button[phx-click="choose"][phx-value-offer="retry"]))
-            |> render_click(),
-          else: view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+        view |> element(~s(button[phx-click="dismiss"])) |> render_click()
 
         assert open_prompt(view) == nil, inspect(kind)
       end

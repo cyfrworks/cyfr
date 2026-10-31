@@ -47,7 +47,7 @@ const SAVED = "Saved. You can add another recovery code in Settings, and keep it
 // The route segment of A's person's own athanor, read once setup lands.
 let segmentA = null;
 const settingsOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/settings`;
-const shellOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/tinctures`;
+const shellOf = (base, segment) => `${base}/a/${encodeURIComponent(segment)}/canvas`;
 const rows = [];
 const record = {};
 // Every recovery code, its secret and every token the proof handled, so

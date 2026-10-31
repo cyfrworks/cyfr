@@ -702,7 +702,7 @@ export async function signedIn(browser, base, cookie) {
 
 // The shell's picker focused on one tincture, its LiveView connected.
 export async function openShell(page, base, segment, name) {
-  const url = `${base}/a/${encodeURIComponent(segment)}/tinctures?publisher=local&tincture_name=${encodeURIComponent(name)}`;
+  const url = `${base}/a/${encodeURIComponent(segment)}/canvas?publisher=local&tincture_name=${encodeURIComponent(name)}`;
   await page.goto(url);
   await page.waitForSelector(".phx-connected", { timeout: 30_000 });
   await launchButton(page, name).waitFor({ timeout: 30_000 });

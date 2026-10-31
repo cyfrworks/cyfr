@@ -412,6 +412,231 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
+  describe "the shares a revision binds" do
+    setup do
+      terry = Arca.Test.Shares.owner!()
+      entry = Arca.Test.Shares.entry!(terry.actor)
+      share = Arca.Test.Shares.share!(terry.actor, entry.id)
+      alice = Arca.Test.Shares.owner!()
+      {:ok, terry: terry, entry: entry, share: share, alice: alice}
+    end
+
+    defp share_revision(athanor, refs, profile \\ nil) do
+      n = System.unique_integer([:positive])
+
+      profile =
+        profile ||
+          elem(
+            Writers.put_profile(%{
+              id: "prof_sh_#{n}",
+              athanor_id: athanor,
+              source_ref: "reagent:local.share-#{n}",
+              kind: "owner",
+              label: "default",
+              status: "active"
+            }),
+            1
+          )
+
+      {profile, ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), refs, nil)}
+    end
+
+    test "a share-only binding is stored and read back under the share scope",
+         %{share: share, alice: alice} do
+      athanor = alice.athanor.id
+      ref = Arca.Test.Shares.share_ref(share.id)
+      {profile, {:ok, _consent}} = share_revision(athanor, [ref])
+
+      {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile.id)
+
+      assert [
+               %{
+                 scope: "share",
+                 share_id: share_id,
+                 vault_entry_id: nil,
+                 instance_entry_id: nil,
+                 via_label: nil,
+                 binding_digest: "sha256:d0"
+               } = row
+             ] = head.vault_refs
+
+      assert share_id == share.id
+
+      assert ConsentStorage.row_identity(row) ==
+               {:share, "share", ref.binding_key, share.id, "sha256:d0"}
+    end
+
+    test "a binding naming a share beside another identity, under another scope, or with no " <>
+           "digest is refused",
+         %{share: share, entry: entry, alice: alice} do
+      ref = Arca.Test.Shares.share_ref(share.id)
+
+      for bad <- [
+            Map.put(ref, :vault_entry_id, entry.id),
+            Map.put(ref, :instance_entry_id, "ine_x"),
+            Map.put(ref, :via_label, "default"),
+            Map.put(ref, :scope, "athanor"),
+            Map.put(ref, :scope, "instance"),
+            Map.delete(ref, :binding_digest),
+            ref |> Map.delete(:share_id) |> Map.put(:vault_entry_id, entry.id)
+          ] do
+        assert {_profile, {:error, {:invalid, %{vault_refs: [_ | _]}}}} =
+                 share_revision(alice.athanor.id, [bad]),
+               inspect(bad)
+      end
+
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+    end
+
+    test "a revoked share, an unknown one, a stale digest, a source no longer active and a " <>
+           "revision outside a person's own athanor write nothing",
+         %{terry: terry, entry: entry, share: share, alice: alice} do
+      revoked_entry = Arca.Test.Shares.entry!(terry.actor)
+      revoked = Arca.Test.Shares.share!(terry.actor, revoked_entry.id)
+      {:ok, _} = Arca.Shares.revoke(terry.actor, revoked.id, "needs_consent")
+      reauth_entry = Arca.Test.Shares.entry!(terry.actor)
+      reauth = Arca.Test.Shares.share!(terry.actor, reauth_entry.id)
+      :ok = VaultStorage.set_status(terry.actor, reauth_entry.id, "needs_reauth")
+      group = Arca.Test.Shares.group!([alice.user.id])
+
+      for {athanor, ref, refusal} <- [
+            {alice.athanor.id, Arca.Test.Shares.share_ref(revoked.id),
+             {:share_unavailable, "revoked"}},
+            {alice.athanor.id, Arca.Test.Shares.share_ref("shr_none"), :not_found},
+            {alice.athanor.id, Arca.Test.Shares.share_ref(share.id, "sha256:old"),
+             {:binding_went_stale, share.id}},
+            {alice.athanor.id, Arca.Test.Shares.share_ref(reauth.id),
+             {:entry_unavailable, "needs_reauth"}},
+            {group.id, Arca.Test.Shares.share_ref(share.id), :not_own_athanor}
+          ] do
+        assert {_profile, {:error, ^refusal}} = share_revision(athanor, [ref]), inspect(refusal)
+      end
+
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+      assert {:ok, %{binding_digest: "sha256:d0"}} = VaultStorage.get(terry.actor, entry.id)
+    end
+
+    test "an own entry and a share bind together, each locked in its order",
+         %{share: share, alice: alice} do
+      own = Arca.Test.Shares.entry!(alice.actor)
+
+      {profile, {:ok, _}} =
+        share_revision(alice.athanor.id, [
+          ref(own.id, %{binding_key: @second_key, binding_digest: "sha256:d0"}),
+          Arca.Test.Shares.share_ref(share.id)
+        ])
+
+      {:ok, head} = ConsentStorage.head_consent(actor(alice.athanor.id), profile.id)
+
+      assert Enum.sort(Enum.map(head.vault_refs, &(&1.share_id || &1.vault_entry_id))) ==
+               Enum.sort([own.id, share.id])
+    end
+  end
+
+  describe "who a revision binding a share is granted by" do
+    setup do
+      terry = Arca.Test.Shares.owner!()
+      share = Arca.Test.Shares.share!(terry.actor, Arca.Test.Shares.entry!(terry.actor).id)
+      {:ok, share: share, alice: Arca.Test.Shares.owner!(), bob: Arca.Test.Shares.owner!()}
+    end
+
+    defp granted(athanor, granted_by) do
+      n = System.unique_integer([:positive])
+      profile_id = "prof_by_#{n}"
+
+      profile = %{
+        id: profile_id,
+        athanor_id: athanor,
+        source_ref: "reagent:local.by-#{n}",
+        kind: "owner",
+        label: "default",
+        status: "active"
+      }
+
+      {profile, Map.put(consent_attrs(athanor, profile_id, 1), :granted_by, granted_by)}
+    end
+
+    test "a person binds in their own athanor alone, on both writers; a revision with no " <>
+           "person binds by the athanor's kind",
+         %{share: share, alice: alice, bob: bob} do
+      ref = Arca.Test.Shares.share_ref(share.id)
+
+      # Alice's athanor, a grant attributed to Bob.
+      {profile, attrs} = granted(alice.athanor.id, bob.user.id)
+      {:ok, _} = Writers.put_profile(profile)
+
+      assert {:error, :not_own_athanor} = ConsentStorage.insert_revision(attrs, [ref], nil)
+
+      {minted, mint_attrs} = granted(alice.athanor.id, bob.user.id)
+
+      assert {:error, :not_own_athanor} =
+               ConsentStorage.mint_profile_with_revision(minted, mint_attrs, [ref])
+
+      assert {:error, :not_found} = ProfileStorage.get(actor(alice.athanor.id), minted.id)
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+
+      # Alice's own grant, and the bootstrap's with no person, bind.
+      {profile, attrs} = granted(alice.athanor.id, alice.user.id)
+      {:ok, _} = Writers.put_profile(profile)
+      assert {:ok, _} = ConsentStorage.insert_revision(attrs, [ref], nil)
+
+      {minted, mint_attrs} = granted(alice.athanor.id, "system:bootstrap")
+      assert {:ok, _} = ConsentStorage.mint_profile_with_revision(minted, mint_attrs, [ref])
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 2
+    end
+  end
+
+  describe "block_dependents/4 and share_heads/2 answer their caller's own" do
+    setup do
+      terry = Arca.Test.Shares.owner!()
+      entry = Arca.Test.Shares.entry!(terry.actor)
+      share = Arca.Test.Shares.share!(terry.actor, entry.id)
+      alice = Arca.Test.Shares.owner!()
+      profile = Arca.Test.Shares.bound!(alice.athanor.id, share.id)
+      {:ok, terry: terry, entry: entry, share: share, alice: alice, profile: profile}
+    end
+
+    test "another athanor's actor naming the share or the entry is refused and blocks nothing",
+         %{terry: terry, entry: entry, share: share, alice: alice, profile: profile} do
+      stranger = Prima.Actor.in_athanor(alice.athanor.id)
+
+      assert {:error, :cross_tenant} =
+               ConsentStorage.block_dependents(stranger, nil, [share.id], "needs_consent")
+
+      assert {:error, :cross_tenant} =
+               ConsentStorage.block_dependents(
+                 stranger,
+                 {terry.athanor.id, entry.id},
+                 [],
+                 "needs_consent"
+               )
+
+      assert {:error, :cross_tenant} = ConsentStorage.share_heads(stranger, [share.id])
+      assert {:error, :cross_tenant} = ConsentStorage.share_heads(%Prima.Actor{}, [share.id])
+      # Called through apply/3: the type checker refuses the literal call.
+      assert_raise FunctionClauseError, fn ->
+        apply(ConsentStorage, :share_heads, [nil, [share.id]])
+      end
+
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "active"
+
+      # The owner and the platform reach them.
+      pair = {alice.athanor.id, profile.id}
+      assert {:ok, [^pair]} = ConsentStorage.share_heads(terry.actor, [share.id])
+      assert {:ok, [^pair]} = ConsentStorage.share_heads(Prima.Actor.system(), [share.id])
+
+      assert {:ok, [^pair]} =
+               ConsentStorage.block_dependents(
+                 Prima.Actor.in_athanor(terry.athanor.id),
+                 nil,
+                 [share.id],
+                 "needs_consent"
+               )
+
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "needs_consent"
+    end
+  end
+
   describe "a binding key is stored whole on either adapter" do
     # A publisher namespace of 54 characters and names of 64: both refs
     # are valid and the source ref fits `profiles.source_ref`, while the

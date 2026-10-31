@@ -10,20 +10,17 @@
  * for has settled: `ready` for the attempt in flight is the only way from
  * `opening` to `shown`.
  *
- * Modes: a prompt is `modal` (everything else inert, focus trapped in it);
- * safe mode is a `popover`, in the top layer as well but leaving the page
- * operable, so the assistant's panel is neither covered nor disabled.
+ * Every prompt is modal: everything else inert, focus trapped in it.
  *
  * Events:
- *   {type: "sync", open, promptId, dismissable, mode}  what the server renders now
+ *   {type: "sync", open, promptId}               what the server renders now
  *   {type: "ready", attempt}                     the fullscreen exit settled
  *   {type: "cancel"}                             Escape, or the dialog's cancel
  *   {type: "closed"}                             the dialog closed on its own
  *   {type: "escalated"}                          fullscreen or pointer lock was
  *                                                entered while shown
  *
- * Effects (strings the hook performs; `show` shows in the state's mode,
- * `close` closes whatever shows):
+ * Effects (strings the hook performs; `close` closes whatever shows):
  *   remember-focus, exit-pointer-lock, exit-fullscreen, show, focus-first,
  *   close, restore-focus, push-dismiss
  */
@@ -31,8 +28,6 @@
 export const initial = Object.freeze({
   phase: "hidden",
   promptId: null,
-  dismissable: false,
-  mode: "modal",
   attempt: 0
 })
 
@@ -50,8 +45,8 @@ export function transition(state, event) {
       return {state, effects: []}
 
     case "cancel":
-      // Safe mode has no dismissal; the server closes every prompt itself.
-      return {state, effects: state.phase === "shown" && state.dismissable ? ["push-dismiss"] : []}
+      // The server closes every prompt itself, once it hears the dismissal.
+      return {state, effects: state.phase === "shown" ? ["push-dismiss"] : []}
 
     case "closed":
       // Only the server closes a prompt: one the browser closed while it is
@@ -70,7 +65,7 @@ export function transition(state, event) {
   }
 }
 
-function sync(state, {open, promptId, dismissable, mode = "modal"}) {
+function sync(state, {open, promptId}) {
   if (!open) {
     switch (state.phase) {
       case "shown":
@@ -86,22 +81,18 @@ function sync(state, {open, promptId, dismissable, mode = "modal"}) {
     case "hidden": {
       const attempt = state.attempt + 1
       return {
-        state: {phase: "opening", promptId, dismissable, mode, attempt},
+        state: {phase: "opening", promptId, attempt},
         effects: ["remember-focus", ...leave]
       }
     }
 
     case "opening":
-      return {state: {...state, promptId, dismissable, mode}, effects: []}
+      return {state: {...state, promptId}, effects: []}
 
     default:
-      // A prompt in the other mode is closed and shown again in its own.
-      if (mode !== state.mode) {
-        return reopen({...state, promptId, dismissable, mode}, ["close"])
-      }
-      if (promptId === state.promptId) return {state: {...state, dismissable}, effects: []}
+      if (promptId === state.promptId) return {state, effects: []}
       // The next prompt in the queue: focus moves to its first control.
-      return {state: {...state, promptId, dismissable}, effects: ["focus-first"]}
+      return {state: {...state, promptId}, effects: ["focus-first"]}
   }
 }
 

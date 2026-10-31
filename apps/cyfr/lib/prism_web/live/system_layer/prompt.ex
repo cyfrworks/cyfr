@@ -9,8 +9,8 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   `action` names the action the prompt confirms, from Sanctum's action
   table (`Sanctum.Pairing.actions/0`): a grant, an unlock, a credential
-  entry and the pairing prompt each name one; a sign-in and safe mode
-  confirm no action and carry `nil`, as does a confirmation whose record
+  entry and the pairing prompt each name one; a sign-in confirms no
+  action and carries `nil`, as does a confirmation whose record
   this client could not read. Whether the change needs a fresh
   confirmation is decided where the change is, never by the prompt.
   `subject` is what the prompt shows and what its confirmation
@@ -61,9 +61,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `expected_payload_rev` the card read), and none of the prefill keys;
     * `:unlock` — optionally `name`, the vault entry it concerns;
     * `:sign_in` — optionally `message`, a sentence saying why;
-    * `:safe_mode` — a `Prism.SafeMode` value: its reason, and the visible
-      canvas, the tincture it runs and the version its versions document
-      keeps, from which the ways out are offered;
     * `:pairing` — nothing: the prompt reads the person's paired clients
       itself and begins a pairing through `pairing.begin`, whose answer's
       link it draws as a QR code (`PrismWeb.SystemLayer.Pairing`);
@@ -87,7 +84,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
   """
 
   @recovery_kinds [:kit, :holder]
-  @kinds [:grant, :unlock, :sign_in, :credential_entry, :safe_mode, :pairing, :confirmation] ++
+  @kinds [:grant, :unlock, :sign_in, :credential_entry, :pairing, :confirmation] ++
            @recovery_kinds
   @keys [:id, :kind, :action, :subject]
   @max_id_bytes 128
@@ -110,7 +107,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
           | :unlock
           | :sign_in
           | :credential_entry
-          | :safe_mode
           | :pairing
           | :confirmation
           | :kit
@@ -192,7 +188,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp action_named(_name), do: nil
 
-  defp action(kind, nil) when kind in [:sign_in, :safe_mode, :confirmation], do: :ok
+  defp action(kind, nil) when kind in [:sign_in, :confirmation], do: :ok
 
   defp action(kind, action) when kind in [:grant, :unlock, :credential_entry, :confirmation] do
     if action in Sanctum.Pairing.actions(), do: :ok, else: {:error, :invalid_prompt}
@@ -267,10 +263,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp subject(:unlock, subject), do: optional_text(subject, :name)
   defp subject(:sign_in, subject), do: optional_text(subject, :message)
-
-  defp subject(:safe_mode, subject) do
-    if Prism.SafeMode.active?(subject), do: {:ok, subject}, else: {:error, :invalid_prompt}
-  end
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}
 

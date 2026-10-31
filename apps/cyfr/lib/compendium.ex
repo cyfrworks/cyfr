@@ -244,7 +244,7 @@ defmodule Compendium do
   @doc """
   The versions this install's seed bundle ships for the local component
   `name` of `type`, newest first (`Compendium.Provenance.shipped_versions/2`):
-  what safe mode's shipped canvas is read from.
+  what the fallback's shipped canvas is read from.
   """
   @spec shipped_versions(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
   defdelegate shipped_versions(type, name), to: Compendium.Provenance

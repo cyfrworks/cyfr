@@ -53,4 +53,37 @@ defmodule PrismWeb.CommandPaletteTest do
     assert html =~ "catalyst:local.palette-probe:0.1.0"
     assert has_element?(view, ~s(#command-palette [phx-value-to*="palette-probe"]))
   end
+
+  test "a tincture is offered in the Canvas mode, focused, and nothing names /tinctures",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    manifest = %{
+      "name" => "palette-app",
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "tincture" => %{"entry" => "index.html"}
+    }
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "palette-app", "1.0.0",
+      manifest: manifest,
+      files: [{"index.html", "<!doctype html><title>palette-app</title>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+
+    assert has_element?(
+             view,
+             ~s(#command-palette [phx-value-to="/canvas?publisher=local&tincture_name=palette-app"])
+           )
+
+    refute has_element?(view, ~s(#command-palette [phx-value-to*="/tinctures"]))
+  end
 end
