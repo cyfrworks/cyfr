@@ -103,7 +103,7 @@ defmodule Cyfr.TelemetryCatalogTest do
   # the recipients in other athanors: one event per kind, the kinds the
   # emitter's own list, which the bus payload reads too.
   test "every share change is audited and bridged, one event per kind" do
-    kinds = Sanctum.Shares.kinds()
+    kinds = Prima.ShareKinds.all()
 
     assert Enum.sort(kinds) == Enum.sort(~w(created audience caps rebound rotated revoked)a)
     assert Cyfr.Bus.ShareChanged.kinds() == kinds

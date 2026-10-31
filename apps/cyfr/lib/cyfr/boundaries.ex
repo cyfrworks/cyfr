@@ -488,8 +488,7 @@ defmodule Cyfr.Boundaries do
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
           "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
-          "`Sanctum.Shares` is the kinds a share announces, which the telemetry catalog " <>
-          "reads at compile time rather than spell them again (`kinds/0`); " <>
+          "`Sanctum.Shares` is " <>
           "`Cyfr.RetentionScheduler`'s periodic sweep of share usage days (`sweep_usage/0`), " <>
           "which names no share and no person; and the composition root's announcement of " <>
           "the shares a declared restore revoked, from what its transition answered " <>

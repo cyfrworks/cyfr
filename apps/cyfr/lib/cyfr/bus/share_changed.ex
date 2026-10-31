@@ -6,8 +6,7 @@ defmodule Cyfr.Bus.ShareChanged do
   A share changed, on the global `Cyfr.Bus.shares/0`: its recipients live
   in other athanors, and every page that shows what is shared with a
   person, or by them, reads it again. The kind is the durable change the
-  identity domain announced, from its own kinds exactly (the bus names
-  nothing of that domain, so a test holds the two lists equal);
+  identity domain announced, one of `Prima.ShareKinds.all/0`;
   `share_id` names the share and nothing else travels: no owner, entry,
   provider, destination, audience, cap, count, digest or value. A page
   reads the shares again through the operations, under its own context,
@@ -16,12 +15,12 @@ defmodule Cyfr.Bus.ShareChanged do
 
   alias Cyfr.Bus.Payload
 
-  @kinds [:created, :audience, :caps, :rebound, :rotated, :revoked]
+  @kinds Prima.ShareKinds.all()
 
   @enforce_keys [:kind, :share_id]
   defstruct [:kind, :share_id]
 
-  @type kind :: :created | :audience | :caps | :rebound | :rotated | :revoked
+  @type kind :: Prima.ShareKinds.t()
 
   @type t :: %__MODULE__{kind: kind(), share_id: String.t()}
 

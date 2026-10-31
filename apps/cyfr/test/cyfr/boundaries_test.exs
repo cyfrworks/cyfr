@@ -988,8 +988,7 @@ defmodule Cyfr.BoundariesTest do
     # operations and its own attach path: the host reaches it for the
     # retention cycle's usage sweep, which names no share and no person,
     # and for the composition root's announcement of the shares a declared
-    # restore revoked. The kinds the telemetry catalog derives are read at
-    # compile time, so no beam calls `kinds/0`.
+    # restore revoked.
     test "the host reaches the shares for the usage sweep and the restore's announcement alone" do
       assert Boundaries.sanctum_exports()["Sanctum.Shares"] == [announce_each: 3, sweep_usage: 0]
 
@@ -1013,7 +1012,10 @@ defmodule Cyfr.BoundariesTest do
                )
 
       assert "apps/cyfr/lib/cyfr/**/*.ex" in row.from
-      assert row.reason =~ "`Sanctum.Shares` is the kinds a share announces"
+
+      assert row.reason =~
+               "`Sanctum.Shares` is `Cyfr.RetentionScheduler`'s periodic sweep of share usage days"
+
       assert row.reason =~ "sweep of share usage days (`sweep_usage/0`)"
       assert row.reason =~ "a declared restore revoked"
     end

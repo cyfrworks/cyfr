@@ -520,11 +520,11 @@ defmodule Cyfr.Telemetry.Catalog do
 
   # A share's events: one per durable change (`Sanctum.Shares`), with the
   # share id, the kind and the acting person, never an entry, an audience
-  # or a value. One event per kind of `Sanctum.Shares.kinds/0`, the one
+  # or a value. One event per kind of `Prima.ShareKinds.all/0`, the one
   # list, so a kind is spelled where it is emitted and nowhere here. The
   # bridge carries the share id and the kind to `Cyfr.Bus.shares/0`.
   @share_events Map.new(
-                  Sanctum.Shares.kinds(),
+                  Prima.ShareKinds.all(),
                   &{[:cyfr, :sanctum, :share, &1], %{consumers: [:audit, :bridge]}}
                 )
 

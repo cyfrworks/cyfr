@@ -408,14 +408,13 @@ defmodule Cyfr.BusPayloadTest do
       fields = ShareChanged.new(:caps, "shr_1") |> Map.from_struct() |> Map.keys()
       assert Enum.sort(fields) == [:kind, :share_id]
 
-      # The kinds are the identity domain's, exactly: the bus names nothing
-      # of it, so the two lists are held equal here.
-      assert ShareChanged.kinds() == Sanctum.Shares.kinds()
+      # The kinds are the one list the emitter and the catalog read.
+      assert ShareChanged.kinds() == Prima.ShareKinds.all()
 
       assert Enum.sort(ShareChanged.kinds()) ==
                Enum.sort(~w(created audience caps rebound rotated revoked)a)
 
-      for kind <- Sanctum.Shares.kinds() do
+      for kind <- Prima.ShareKinds.all() do
         assert %ShareChanged{kind: ^kind, share_id: "shr_1"} = ShareChanged.new(kind, "shr_1")
       end
 

@@ -4,7 +4,7 @@
 defmodule Sanctum.Test.ShareAnnouncements do
   @moduledoc """
   What a test hears `Sanctum.Shares` announce: every
-  `[:cyfr, :sanctum, :share, kind]` event of `Sanctum.Shares.kinds/0`,
+  `[:cyfr, :sanctum, :share, kind]` event of `Prima.ShareKinds.all/0`,
   sent to the test process as `{:share_announced, kind, metadata}` until
   the test exits. Other tests announce shares of their own beside it, so
   a case matches on the share ids it made.
@@ -17,7 +17,7 @@ defmodule Sanctum.Test.ShareAnnouncements do
   def listen do
     test = self()
     handler = "share-announcements-#{System.unique_integer([:positive])}"
-    events = for kind <- Sanctum.Shares.kinds(), do: [:cyfr, :sanctum, :share, kind]
+    events = for kind <- Prima.ShareKinds.all(), do: [:cyfr, :sanctum, :share, kind]
 
     # The handler is the node's, not the test's: its removal is registered
     # before it is attached, so a test killed at its timeout leaves none.

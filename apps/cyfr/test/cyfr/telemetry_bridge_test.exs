@@ -117,7 +117,7 @@ defmodule Cyfr.TelemetryBridgeTest do
   # A share's durable changes, each on the one global topic as its share
   # id and kind, whatever else the emitter attached.
   defp share_cases do
-    for kind <- Sanctum.Shares.kinds() do
+    for kind <- Prima.ShareKinds.all() do
       {[:cyfr, :sanctum, :share, kind], %{share_id: "shr_1", kind: kind, user_id: @user},
        Bus.shares(), {ShareChanged, %{kind: kind, share_id: "shr_1"}}}
     end
