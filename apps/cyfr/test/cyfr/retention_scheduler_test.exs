@@ -161,6 +161,49 @@ defmodule Cyfr.RetentionSchedulerTest do
 
       assert left == ["usr_kept"]
     end
+
+    # A share's day counts are rows of its owner's athanor, one per person
+    # it reaches and day: the cycle's own step sweeps them by age across
+    # every athanor, after the instance entries' days, keeping the days the
+    # owner's usage view can still ask for.
+    test "the cycle sweeps share usage days past the kept window", %{key: key} do
+      owner = Arca.Test.Shares.owner!()
+      entry = Arca.Test.Shares.entry!(owner.actor)
+      share = Arca.Test.Shares.share!(owner.actor, entry.id)
+
+      today = DateTime.to_date(Arca.ServerMetaStorage.now!())
+      kept = Arca.ShareUsage.kept_days()
+
+      {2, _} =
+        Arca.Repo.insert_all(
+          Arca.Schemas.ShareUsage,
+          for {who, days_ago} <- [{"usr_old", kept + 1}, {"usr_kept", kept}] do
+            %{
+              athanor_id: owner.athanor.id,
+              share_id: share.id,
+              user_id: who,
+              day: Date.add(today, -days_ago),
+              count: 1,
+              updated_at: DateTime.utc_now()
+            }
+          end
+        )
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+
+      assert ["instance_usage", "share_usage"] =
+               Enum.filter(summary.steps, &(&1 in ["instance_usage", "share_usage"]))
+
+      left =
+        Arca.Repo.all(
+          from(u in Arca.Schemas.ShareUsage,
+            where: u.athanor_id == ^owner.athanor.id and u.share_id == ^share.id,
+            select: u.user_id
+          )
+        )
+
+      assert left == ["usr_kept"]
+    end
   end
 
   describe "the host's decisions" do
