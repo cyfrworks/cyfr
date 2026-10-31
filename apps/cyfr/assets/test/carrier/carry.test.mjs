@@ -9,7 +9,9 @@
 // is kept through the sign-in, then taken once; the actions a tab began are
 // remembered with their destination and key_epoch. The fragments and
 // returns of `tests/fixtures/carry.json`, which the homes read too, are
-// held to the hook first.
+// held to the hook first. "Sign in from your CYFR" is filled from a link's
+// `#from` or the one address this browser remembers, on the page alone:
+// nothing of the address reaches the page's server before Continue.
 
 import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
@@ -18,10 +20,14 @@ import {describe, test} from "node:test"
 import {fileURLToPath} from "node:url"
 
 import Carry, {
+  ENTRY_ID,
   EXPECT_KEY,
+  FORM_ID,
   LIFETIME_MS,
   MAX_FRAGMENT_BYTES,
   SOURCE_KEY,
+  YOUR_CYFR_KEY,
+  address,
   classify,
   decodeObject,
   resume,
@@ -56,10 +62,35 @@ function memoryStorage() {
   }
 }
 
-// A window at `pathname` with `hash`, its history and its tab's storage.
-function fakeWindow(pathname, hash = "", storage = memoryStorage()) {
+// The page's document: the field "Sign in from your CYFR" opens, shown
+// once the page has opened it, and the listeners the hook adds.
+function fakeDocument() {
+  const doc = {
+    listeners: [],
+    field: null,
+    addEventListener: (type, listener, capture) => doc.listeners.push({type, listener, capture}),
+    removeEventListener: (type, listener) => {
+      doc.listeners = doc.listeners.filter((l) => !(l.type === type && l.listener === listener))
+    },
+    getElementById: (id) => (id === ENTRY_ID ? doc.field : null),
+    open: () => (doc.field = doc.field || {value: ""}),
+    // The person presses Continue on the form `id` with `value` typed.
+    submit: (id, value) => {
+      const field = {value}
+      const form = {id, querySelector: (selector) => (selector === `#${ENTRY_ID}` ? field : null)}
+      for (const {type, listener} of doc.listeners) if (type === "submit") listener({target: form})
+    }
+  }
+  return doc
+}
+
+// A window at `pathname` with `hash`, its history, its tab's storage, its
+// origin's local storage and its document.
+function fakeWindow(pathname, hash = "", storage = memoryStorage(), local = memoryStorage()) {
   const win = {
     sessionStorage: storage,
+    localStorage: local,
+    document: fakeDocument(),
     assigned: [],
     replaced: [],
     location: {
@@ -80,18 +111,30 @@ function fakeWindow(pathname, hash = "", storage = memoryStorage()) {
 }
 
 // The hook mounted on `win` as `role` ("login" or "source") at `now`.
+// A pushed event's reply runs once the page answered it, as LiveView runs
+// it after the answer's render: `answer()` answers every one pending.
 function mount(win, role, now = 1_000_000) {
   const pushed = []
   const handlers = {}
+  const pending = []
   const hook = Object.assign(Object.create(Carry), {
     win,
     el: {dataset: {carry: role, lifetimeMs: String(LIFETIME_MS), maxFragment: String(MAX_FRAGMENT_BYTES)}},
     now: () => now,
-    pushEvent: (event, payload) => pushed.push({event, payload}),
+    pushEvent: (event, payload, reply) => {
+      pushed.push({event, payload})
+      if (reply) pending.push({event, reply})
+    },
     handleEvent: (event, handler) => (handlers[event] = handler)
   })
   hook.mounted()
-  return {hook, pushed, handlers}
+  const answer = () => {
+    for (const {event, reply} of pending.splice(0)) {
+      if (event === "cyfr_open" || event === "login_invite") win.document.open()
+      reply({})
+    }
+  }
+  return {hook, pushed, handlers, answer}
 }
 
 const events = (pushed) => pushed.map(({event}) => event)
@@ -491,5 +534,120 @@ describe("a device to certify", () => {
     const {pushed} = mount(win, "source")
     assert.deepEqual(events(pushed), ["carry_certify"])
     assert.equal(win.location.hash, "")
+  })
+})
+
+describe("sign in from your CYFR", () => {
+  const remembering = (value) => {
+    const local = memoryStorage()
+    if (value !== undefined) local.setItem(YOUR_CYFR_KEY, JSON.stringify(value))
+    return local
+  }
+
+  test("an address reads as one: a dot, colon or slash, no leading @, no space", () => {
+    for (const entry of ["a.example", "https://a.example", " https://a.example:8443 ", "localhost:4000"]) {
+      assert.equal(address(entry), entry.trim(), entry)
+    }
+    for (const entry of [
+      "@alice", "alice", "", "   ", "a b.example", "@a.example", null, 7,
+      "javascript:alert(1)", "ftp://a.example", "/", ".", "https://u:p@a.example", "https://a..example"
+    ]) {
+      assert.equal(address(entry), null, String(entry))
+    }
+  })
+
+  test("a link's #from opens the field and fills it on the page; the page is sent nothing of it", () => {
+    const win = fakeWindow("/login", "#from=" + encodeURIComponent("https://a.example"))
+    const {pushed, answer} = mount(win, "login")
+
+    assert.deepEqual(pushed, [{event: "cyfr_open", payload: {}}])
+    assert.equal(win.location.hash, "")
+    answer()
+    assert.equal(win.document.field.value, "https://a.example")
+    assert.ok(!JSON.stringify(pushed).includes("a.example"))
+  })
+
+  test("a #from that is not an address leaves the field empty and opens nothing", () => {
+    for (const from of ["@alice", "alice", "", "a%20b.example", "javascript%3Aalert(1)", "ftp%3A%2F%2Fa.example", "%2F", "."]) {
+      const win = fakeWindow("/login", "#from=" + from, memoryStorage(), remembering("https://kept.example"))
+      const {pushed, answer} = mount(win, "login")
+      answer()
+      assert.deepEqual(pushed, [], from)
+      assert.equal(win.document.field, null, from)
+    }
+  })
+
+  test("the address this browser remembers fills the field on the next visit, and is never sent before Continue", () => {
+    const win = fakeWindow("/login", "", memoryStorage(), remembering("https://kept.example"))
+    const {pushed, answer} = mount(win, "login")
+
+    assert.deepEqual(pushed, [{event: "cyfr_open", payload: {}}])
+    answer()
+    assert.equal(win.document.field.value, "https://kept.example")
+    assert.ok(!JSON.stringify(pushed).includes("kept.example"))
+  })
+
+  test("a link's #from comes before the remembered address", () => {
+    const win = fakeWindow("/login", "#from=b.example", memoryStorage(), remembering("https://kept.example"))
+    const {answer} = mount(win, "login")
+    answer()
+    assert.equal(win.document.field.value, "b.example")
+  })
+
+  test("a remembered value that is no address fills nothing", () => {
+    for (const value of ["@alice", 42, {home: "a.example"}]) {
+      const win = fakeWindow("/login", "", memoryStorage(), remembering(value))
+      const {pushed} = mount(win, "login")
+      assert.deepEqual(pushed, [], JSON.stringify(value))
+    }
+  })
+
+  test("Continue remembers the typed address, under the one key, and nothing else", () => {
+    const local = memoryStorage()
+    const win = fakeWindow("/login", "", memoryStorage(), local)
+    mount(win, "login")
+
+    win.document.submit(FORM_ID, " https://mine.example ")
+    assert.deepEqual([...local.items.keys()], [YOUR_CYFR_KEY])
+    assert.equal(JSON.parse(local.getItem(YOUR_CYFR_KEY)), "https://mine.example")
+
+    // An entry that is no address, and another form's submit, change nothing.
+    win.document.submit(FORM_ID, "@alice")
+    win.document.submit("another-form", "https://other.example")
+    assert.equal(JSON.parse(local.getItem(YOUR_CYFR_KEY)), "https://mine.example")
+  })
+
+  test("the listener goes with the hook", () => {
+    const win = fakeWindow("/login")
+    const {hook} = mount(win, "login")
+    assert.equal(win.document.listeners.length, 1)
+    hook.destroyed()
+    assert.equal(win.document.listeners.length, 0)
+  })
+
+  test("an invitation's code is handed to the page, which opens the field; the remembered address fills it", () => {
+    const code = Buffer.alloc(32, 9).toString("base64url")
+    const win = fakeWindow("/login", "#invite=" + code, memoryStorage(), remembering("https://kept.example"))
+    const {pushed, answer} = mount(win, "login")
+
+    assert.deepEqual(pushed, [{event: "login_invite", payload: {code}}])
+    assert.equal(win.location.hash, "")
+    answer()
+    assert.equal(win.document.field.value, "https://kept.example")
+    assert.ok(!JSON.stringify(pushed).includes("kept.example"))
+  })
+
+  test("a carry or an assertion coming back opens nothing, and /carry reads no remembered address", () => {
+    const local = remembering("https://kept.example")
+    const storage = memoryStorage()
+    storage.setItem(EXPECT_KEY, JSON.stringify({home: "https://a.example", at: 1_000_000}))
+    const {pushed} = mount(fakeWindow("/login", "#" + carry, storage, local), "login")
+    assert.deepEqual(events(pushed), ["cyfr_carry"])
+
+    const assertion = mount(fakeWindow("/login", "#cyfr=abc", memoryStorage(), local), "login")
+    assert.deepEqual(events(assertion.pushed), ["cyfr_assertion"])
+
+    const source = mount(fakeWindow("/carry", "", memoryStorage(), local), "source")
+    assert.deepEqual(source.pushed, [])
   })
 })

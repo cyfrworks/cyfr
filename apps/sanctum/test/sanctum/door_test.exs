@@ -191,6 +191,48 @@ defmodule Sanctum.DoorTest do
     end
   end
 
+  describe "an invitation's allow" do
+    test "admits a later sign-in of the remote person, with no invitation" do
+      carol = remote!(40)
+      assert {:error, :not_allowed} = Door.admit_person(carol)
+
+      assert {:ok, %{effect: "allow", status: "allowed", note: "invitation inv_40"}} =
+               Store.allow_unless_denied("identifier", identifier(40), "usr_issuer",
+                 note: "invitation inv_40"
+               )
+
+      assert {:ok, :allowed} = Door.admit_person(carol)
+      assert {:ok, :allowed} = Door.sign_in(carol)
+      assert {:ok, :allowed} = Door.admit_identifier(identifier(40))
+    end
+
+    test "is outranked by a deny written after it, of the person or of the identifier" do
+      carol = remote!(41)
+      dave = remote!(42)
+      {:ok, _} = Store.allow_unless_denied("identifier", identifier(41), "usr_issuer")
+      {:ok, _} = Store.allow_unless_denied("identifier", identifier(42), "usr_issuer")
+
+      {:ok, _} = Store.deny("person", carol.id, "ops")
+      {:ok, %{effect: "deny"}} = Store.deny("identifier", identifier(42), "ops")
+
+      assert {:error, {:door, :denied}} = Door.sign_in(carol)
+      assert {:error, {:door, :denied}} = Door.sign_in(dave)
+    end
+
+    test "over a deny leaves the deny and answers denied" do
+      dave = remote!(43)
+      {:ok, deny} = Store.deny("identifier", identifier(43), "ops", note: "no")
+
+      assert {:error, :denied} =
+               Store.allow_unless_denied("identifier", identifier(43), "usr_issuer",
+                 note: "invitation inv_43"
+               )
+
+      assert [^deny] = Enum.filter(Store.list(), &(&1.value == identifier(43)))
+      assert {:error, :denied} = Door.admit_person(dave)
+    end
+  end
+
   describe "a remote newcomer" do
     test "is admitted by * or an allow of their identifier, and a refusal leaves one request" do
       assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20))

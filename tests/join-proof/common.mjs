@@ -344,14 +344,29 @@ export const flashed = (page, text, timeout = 30_000) =>
 // The sign-in carry, hop by hop
 // ---------------------------------------------------------------------------
 
-// At H's sign-in page, the person names their home: "I run my own CYFR",
-// then its address.
-export async function nameHome(page, home) {
+// At H's sign-in page, the person names their home: "Sign in from your
+// CYFR", then its address, typed over any this browser remembers.
+// `at: null` stays on the page already open, as the invitation's link
+// leaves it.
+export async function nameHome(page, home, { at = `${H}/login` } = {}) {
+  if (at) await page.goto(at);
+  await connected(page);
+  const entry = page.locator("#cyfr-from-entry");
+  if (!(await entry.isVisible())) await page.locator("#cyfr-from-open").click({ timeout: 5_000 }).catch(() => null);
+  await entry.waitFor({ timeout: 30_000 });
+  await entry.fill(home);
+  await page.locator('#cyfr-from button[type="submit"]').click();
+}
+
+// The address H's sign-in page fills "Sign in from your CYFR" with on its
+// own, from a link or this browser's memory, before anything is typed.
+export async function filledAtHub(page) {
   await page.goto(`${H}/login`);
   await connected(page);
-  await page.locator("#cyfr-own-open").click();
-  await page.locator("#cyfr-own-entry").fill(home);
-  await page.locator('#cyfr-own button[type="submit"]').click();
+  const entry = page.locator("#cyfr-from-entry");
+  await entry.waitFor({ timeout: 30_000 }).catch(() => null);
+  await page.waitForFunction(() => document.getElementById("cyfr-from-entry")?.value, null, { timeout: 10_000 }).catch(() => null);
+  return (await entry.count()) ? entry.inputValue() : null;
 }
 
 // At the home's sign-in page the carry's fragment waits for the person:
@@ -551,6 +566,9 @@ export async function signIn(browser, name, proxy, { home, identifier, glass, co
   }, { timeoutMs: 30_000, stepMs: 500, what: "H's receipt" }).catch(() => []);
   const person = await ask({ op: "h_person", identifier });
   const storageH = await storageOf(page);
+  // The second profile, back at H's sign-in page, finds the address it
+  // continued with filled in from this browser's memory there.
+  const filled = step === "second_profile" ? await filledAtHub(page) : null;
   await page.goto(`${home}/`).catch(() => null);
   const storageA = await storageOf(page).catch(() => null);
   const cross = crossSiteHeld(proxy.seen.slice(mark));
@@ -560,13 +578,15 @@ export async function signIn(browser, name, proxy, { home, identifier, glass, co
     landed: flow.landed.replace(/#.*/, ""), code: flow.code, code_named_at_home: codeShownThere, confirmed_on: flow.confirmed.on,
     fragment_kept_through_login: keptDestination, admissions: after.length - before,
     provenance: person.provenance, memberships: person.memberships, cross_site: cross,
-    saved_homes_at_start: startStorage, storage: { h: storageH, a: storageA },
+    saved_homes_at_start: startStorage, storage: { h: storageH, a: storageA }, filled_from_memory: filled,
   };
   return {
     held: row(step, name,
       keptDestination && codeShownThere && after.length - before === 1 && person.provenance === "remote" &&
-        person.memberships.length >= 1 && cross.held,
-      "a fresh profile opens H by its address, names A, the carry begins at A, the fragment survives A's sign-in, the codes match, and H admits once",
+        person.memberships.length >= 1 && cross.held && (step !== "second_profile" || filled === home),
+      step === "second_profile"
+        ? "another fresh profile signs in the same way, importing nothing of the first, and H's sign-in page then fills its field with A from this browser's memory"
+        : "a fresh profile opens H by its address, names A, the carry begins at A, the fragment survives A's sign-in, the codes match, and H admits once",
       record[`${step}_${name}`]),
     page, context,
   };

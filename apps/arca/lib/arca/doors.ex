@@ -179,6 +179,74 @@ defmodule Arca.Doors do
   def insert(%Prima.Actor{}, attrs) when is_map(attrs), do: {:error, :not_platform}
 
   @doc """
+  Write the allow `attrs` describes for `{kind, value}`, unless that row
+  is a deny: one conditional write, an insert that on the `[kind, value]`
+  conflict updates the row only where its effect is not `deny`. It runs
+  in the caller's transaction, after the writes it follows.
+
+  On PostgreSQL the conflict takes the row lock a deny's update of that
+  row takes, so a deny that committed first is the row this write
+  re-reads and leaves, and a deny that comes later waits for this
+  transaction. On SQLite the transaction's write lock orders it against
+  every other write. `{:error, :denied}` when the row is a deny, the
+  caller's to roll its transaction back on.
+  """
+  @spec allow_unless_denied(Prima.Actor.t(), {String.t(), String.t()}, map()) ::
+          {:ok, entry()} | {:error, :denied | {:invalid, map()} | :not_platform}
+  # arca:db-raise-ok a step inside the redemption's transaction, whose caller
+  # rescues around it.
+  def allow_unless_denied(%Prima.Actor{scope: :platform}, {kind, value}, attrs)
+      when is_binary(kind) and is_binary(value) and is_map(attrs) do
+    now = DateTime.utc_now()
+
+    changeset =
+      Entry.changeset(
+        %Entry{},
+        attrs
+        |> Map.take([:added_by, :note, :label])
+        |> Map.merge(%{
+          id: Prima.UUID7.generate_id("door"),
+          kind: kind,
+          value: value,
+          effect: "allow",
+          status: "allowed",
+          created_at: now,
+          updated_at: now
+        })
+      )
+
+    with {:ok, %Entry{} = entry} <- Ecto.Changeset.apply_action(changeset, :insert) do
+      allowed =
+        from(e in Entry,
+          where: e.effect != "deny",
+          update: [
+            set: [
+              status: "allowed",
+              added_by: ^entry.added_by,
+              note: ^entry.note,
+              label: ^entry.label,
+              updated_at: ^now
+            ]
+          ]
+        )
+
+      case Arca.Repo.insert_all(Entry, [Map.take(entry, @columns)],
+             on_conflict: allowed,
+             conflict_target: [:kind, :value],
+             returning: @columns
+           ) do
+        {1, [row]} -> {:ok, row(row)}
+        {0, _none} -> {:error, :denied}
+      end
+    else
+      {:error, %Ecto.Changeset{} = invalid} -> written({:error, invalid})
+    end
+  end
+
+  def allow_unless_denied(%Prima.Actor{}, {_kind, _value}, attrs) when is_map(attrs),
+    do: {:error, :not_platform}
+
+  @doc """
   Change the entry `id` names, stamping `updated_at`.
 
   `{:error, :not_found}` when the row is gone — a caller that read it

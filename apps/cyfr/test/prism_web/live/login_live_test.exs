@@ -3,10 +3,9 @@
 
 defmodule PrismWeb.LoginLiveTest do
   @moduledoc """
-  The sign-in page, top to bottom: a passkey; "Sign in with your CYFR",
-  whose "I run my own CYFR" field takes the address of the person's own
-  CYFR, never a name; "Create
-  your identity here" while the door's `*`
+  The sign-in page, top to bottom: "Sign in with a passkey"; "Sign in
+  from your CYFR", whose one field takes the address of the person's own
+  CYFR, never a name; "Create your identity here" while the door's `*`
   admits; and "Other ways to sign in" when a linked method is configured.
   With no person yet it offers none of them and says the CYFR is not set
   up.
@@ -18,9 +17,14 @@ defmodule PrismWeb.LoginLiveTest do
   the attempt in the browser's session, by the address they typed,
   checks the carry they bring back against that attempt, carries this
   CYFR's challenge through the browser's session and posts
-  their CYFR's assertion to the callback.
+  their CYFR's assertion to the callback. Every start draws a fresh
+  attempt id, and an invitation the page keeps rides in the start as its
+  hash, never its code. No page rendered without a session names the
+  address of the CYFR a carry came from.
   """
   use PrismWeb.ConnCase, async: false
+
+  import PrismWeb.AdmissionScreens, only: [refute_vocabulary: 1]
 
   defmodule FakeDeviceFlow do
     # Records the address it was handed. The `/live` socket passes no
@@ -155,7 +159,7 @@ defmodule PrismWeb.LoginLiveTest do
       positions =
         for text <- [
               "Sign in with a passkey",
-              "Sign in with your CYFR",
+              "Sign in from your CYFR",
               "Create your identity here",
               "Other ways to sign in",
               "Sign in with GitHub"
@@ -169,23 +173,37 @@ defmodule PrismWeb.LoginLiveTest do
       assert has_element?(view, "#other-sign-in button[phx-value-provider=github]")
     end
 
-    test "\"I run my own CYFR\" opens one field for your CYFR's address, and offers no name",
+    test "\"Sign in from your CYFR\" opens one field for your CYFR's address, and offers no name",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/login")
-      refute has_element?(view, "#cyfr-own")
+      refute has_element?(view, "#cyfr-from")
+      assert has_element?(view, "#cyfr-from-open", "Sign in from your CYFR")
 
-      view |> element("#cyfr-own-open") |> render_click()
-      form = view |> element("#cyfr-own") |> render()
+      view |> element("#cyfr-from-open") |> render_click()
+      form = view |> element("#cyfr-from") |> render()
 
       assert has_element?(
                view,
-               ~s(#cyfr-own #cyfr-own-entry[name=entry][placeholder="https://your-cyfr.example"])
+               ~s(#cyfr-from #cyfr-from-entry[name=entry][placeholder="https://your-cyfr.example"])
              )
 
-      assert has_element?(view, ~s(#cyfr-own label[for="cyfr-own-entry"]), "Your CYFR")
+      assert has_element?(view, ~s(#cyfr-from label[for="cyfr-from-entry"]), "Your CYFR")
+      assert has_element?(view, ~s(#cyfr-from button[type=submit]), "Continue")
       assert form =~ "Your CYFR learns this CYFR&#39;s address, and this CYFR learns yours."
       refute form =~ ~r/handle|@name|registry/
-      refute has_element?(view, "#cyfr-own-open")
+      refute has_element?(view, "#cyfr-from-open")
+      refute_vocabulary(render(view))
+    end
+
+    test "the script opens the field with nothing of an address: the page's field stays empty",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/login")
+
+      # What the script sends to open the field for a link's `#from` or the
+      # remembered address: nothing but the event.
+      assert render_hook(view, "cyfr_open", %{}) =~ "Your CYFR"
+      assert has_element?(view, ~s(#cyfr-from-entry[value=""]))
+      refute has_element?(view, "#cyfr-from-open")
     end
 
     test "with no person yet it offers nothing, and says the CYFR is not set up", %{conn: conn} do
@@ -571,17 +589,35 @@ defmodule PrismWeb.LoginLiveTest do
     alias Sanctum.Auth.CyfrDoor
     alias Sanctum.Test.{DirectoryServer, RegistryStub}
 
-    # "I run my own CYFR", then the field's entry.
+    # "Sign in from your CYFR", then the field's entry.
     defp enter(view, entry) do
-      if has_element?(view, "#cyfr-own-open"),
-        do: view |> element("#cyfr-own-open") |> render_click()
+      if has_element?(view, "#cyfr-from-open"),
+        do: view |> element("#cyfr-from-open") |> render_click()
 
-      view |> element("#cyfr-own") |> render_submit(%{"entry" => entry})
+      view |> element("#cyfr-from") |> render_submit(%{"entry" => entry})
     end
 
-    # The request the start keeps in the browser's session.
-    defp request(home \\ "https://a.example", ttl_ms \\ 60_000),
-      do: %{"home" => home, "expires_at" => System.os_time(:millisecond) + ttl_ms}
+    # The request the start keeps in the browser's session, of the
+    # attempt `held` answers when one is given.
+    defp request(home \\ "https://a.example", ttl_ms \\ 60_000, held \\ nil) do
+      %{
+        "home" => home,
+        "expires_at" => System.os_time(:millisecond) + ttl_ms,
+        "attempt" => if(held, do: held["attempt"], else: attempt()),
+        "invitation" => if(held, do: held["invitation"])
+      }
+    end
+
+    defp attempt, do: "att_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+    # The challenge `CyfrDoor` holds for `carry`, under an attempt of its
+    # own carrying `invitation` or none.
+    defp held!(carry, invitation \\ nil) do
+      {:ok, held} =
+        CyfrDoor.challenge(carry, %{"attempt" => attempt(), "invitation" => invitation})
+
+      held
+    end
 
     defp holding(session), do: build_conn() |> Plug.Test.init_test_session(session)
 
@@ -607,8 +643,13 @@ defmodule PrismWeb.LoginLiveTest do
       started
     end
 
-    # The request the start kept, its expiry aside.
-    defp kept(started), do: started |> get_session("cyfr_request") |> Map.delete("expires_at")
+    # The request the start kept, its expiry and its attempt aside; the
+    # attempt is a fresh `att_` id.
+    defp kept(started) do
+      request = get_session(started, "cyfr_request")
+      assert request["attempt"] =~ ~r/\Aatt_[0-9a-f]{32}\z/
+      Map.drop(request, ["expires_at", "attempt"])
+    end
 
     setup do
       tls = DirectoryServer.tls()
@@ -641,14 +682,171 @@ defmodule PrismWeb.LoginLiveTest do
          %{conn: conn} do
       browser = get(conn, ~p"/login")
       {:ok, view, html} = live(browser, ~p"/login")
-      assert html =~ "Sign in with your CYFR"
+      assert html =~ "Sign in from your CYFR"
       assert html =~ ~s(data-carry="login")
       assert html =~ ~s(data-lifetime-ms="#{Arca.CarryActions.lifetime_ms()}")
 
       enter(view, "a.example")
 
       started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
-      assert kept(started) == %{"home" => "https://a.example"}
+      assert kept(started) == %{"home" => "https://a.example", "invitation" => nil}
+    end
+
+    test "every start draws a fresh attempt, and an ordinary one carries no invitation",
+         %{conn: conn} do
+      browser = get(conn, ~p"/login")
+      {:ok, view, _html} = live(browser, ~p"/login")
+
+      attempts =
+        for _ <- 1..2 do
+          enter(view, "a.example")
+
+          started =
+            follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
+
+          assert kept(started) == %{"home" => "https://a.example", "invitation" => nil}
+          assert Map.fetch(get_session(started, "cyfr_request"), "invitation") == {:ok, nil}
+          get_session(started, "cyfr_request")["attempt"]
+        end
+
+      assert length(Enum.uniq(attempts)) == 2
+    end
+
+    defp invitation!(opts \\ []) do
+      {:ok, issuer} =
+        Sanctum.Tenancy.Users.get_by_identity("github|https://github.com|login-installation")
+
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Garden")
+      ctx = Sanctum.TestContext.session!(issuer.id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+      if opts[:revoked], do: {:ok, _} = Sanctum.Invitations.revoke(ctx, invitation.id)
+      {:ok, hash} = Sanctum.Invitations.code_hash(code)
+      %{code: code, hash: hash, issuer: issuer, group: group}
+    end
+
+    test "an invitation link opens the sign-in from your CYFR, says who invited, and its start carries the hash, never the code",
+         %{conn: conn} do
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", nil)
+      %{code: code, hash: hash} = invitation!()
+      browser = get(conn, ~p"/login")
+      {:ok, view, _html} = live(browser, ~p"/login")
+      assert has_element?(view, "#passkey-sign-in")
+      assert has_element?(view, "#create-identity")
+
+      html = render_hook(view, "login_invite", %{"code" => code})
+
+      {:ok, %{inviter: inviter}} = Sanctum.Invitations.lookup(code)
+
+      assert has_element?(
+               view,
+               ~s([data-test="invitation"]),
+               inviter <> " invited you to Garden on this CYFR. Sign in from your CYFR to accept."
+             )
+
+      assert has_element?(view, "#cyfr-from #cyfr-from-entry")
+      refute has_element?(view, "#passkey-sign-in")
+      refute has_element?(view, "#create-identity")
+      refute html =~ code
+      refute html =~ hash
+      refute_vocabulary(html)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.invitation == hash
+      refute inspect(assigns, limit: :infinity, printable_limit: :infinity) =~ code
+
+      enter(view, "a.example")
+      to = expected!(view, "https://a.example")
+      "/auth/cyfr/start?ticket=" <> ticket = to
+      assert {:ok, %{invitation: ^hash} = payload} = Arca.Cache.get({:login_cyfr_start, ticket})
+      refute inspect(payload) =~ code
+
+      started = follow_start(browser, to, "https://a.example")
+      assert kept(started) == %{"home" => "https://a.example", "invitation" => hash}
+      refute inspect(get_session(started)) =~ code
+    end
+
+    test "an invitation that can no longer be used is said, and the plain sign-in page stays",
+         %{conn: conn} do
+      %{code: code} = invitation!(revoked: true)
+      {:ok, view, _html} = live(conn, ~p"/login")
+
+      html = render_hook(view, "login_invite", %{"code" => code})
+
+      assert html =~
+               "This invitation can no longer be used. Ask whoever invited you for a new one."
+
+      assert has_element?(view, "#passkey-sign-in")
+      assert has_element?(view, "#cyfr-from-open")
+      refute has_element?(view, ~s([data-test="invitation"]))
+      assert :sys.get_state(view.pid).socket.assigns.invitation == nil
+
+      html = render_hook(view, "login_invite", %{"code" => "not a code"})
+      assert html =~ "This invitation can no longer be used."
+    end
+
+    test "an earlier attempt's challenge, after a later start with the same invitation and source, is refused at the hop",
+         %{conn: conn, identity: identity} do
+      %{code: code} = invitation!()
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      browser = get(conn, ~p"/login")
+
+      # Attempt A, through to its code.
+      {:ok, view, _} = live(browser, ~p"/login")
+      render_hook(view, "login_invite", %{"code" => code})
+      enter(view, "a.example")
+      started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
+      back = recycle(started)
+      {:ok, first, _} = live(back, ~p"/login")
+
+      render_hook(first, "cyfr_carry", %{
+        "fragment" => carry,
+        "expected_source" => "https://a.example"
+      })
+
+      assert {:error, {:redirect, %{to: hop_a}}} =
+               first |> element("[data-test=cyfr-continue]") |> render_click()
+
+      # Attempt B starts in the same browser, same invitation, same CYFR.
+      {:ok, view, _} = live(back, ~p"/login")
+      render_hook(view, "login_invite", %{"code" => code})
+      enter(view, "a.example")
+      later = follow_start(back, expected!(view, "https://a.example"), "https://a.example")
+
+      # A's ticket now meets B's request, and installs nothing.
+      refused = get(recycle(later), hop_a)
+      assert redirected_to(refused) == "/login"
+      refute get_session(refused, "cyfr_challenge")
+    end
+
+    test "the sessionless rule: no render without a session names the CYFR a carry came from",
+         %{conn: conn, identity: identity} do
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      held = held!(carry)
+      source = held["source"]
+      assert source == "https://a.example"
+
+      # This browser's session holds the request and the challenge naming
+      # that CYFR; the page renders none of it.
+      browser =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "cyfr_challenge" => held,
+          "cyfr_request" => request(source, 60_000, held)
+        })
+        |> get(~p"/login")
+
+      refute html_response(browser, 200) =~ "a.example"
+      {:ok, view, html} = live(browser, ~p"/login")
+      refute html =~ "a.example"
+
+      %{fragment: another} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+
+      html =
+        render_hook(view, "cyfr_carry", %{"fragment" => another, "expected_source" => source})
+
+      assert has_element?(view, "#cyfr-code")
+      refute html =~ "a.example"
+      refute render(view) =~ "a.example"
     end
 
     test "the session's request governs the carry, whatever the browser sends: a live one admits any identity, and with none or a lapsed one the person begins again",
@@ -713,10 +911,10 @@ defmodule PrismWeb.LoginLiveTest do
       # An earlier attempt at the address, whose challenge this browser
       # holds.
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      {:ok, held} = CyfrDoor.challenge(carry, :none)
+      held = held!(carry)
 
       browser =
-        %{"cyfr_challenge" => held, "cyfr_request" => request()}
+        %{"cyfr_challenge" => held, "cyfr_request" => request("https://a.example", 60_000, held)}
         |> holding()
         |> get(~p"/login")
 
@@ -724,7 +922,7 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, view, _html} = live(browser, ~p"/login")
       enter(view, "b.example")
       started = follow_start(browser, expected!(view, "https://b.example"), "https://b.example")
-      assert kept(started) == %{"home" => "https://b.example"}
+      assert kept(started) == %{"home" => "https://b.example", "invitation" => nil}
       refute get_session(started, "cyfr_challenge")
 
       # The earlier exchange's assertion arrives after all.
@@ -742,10 +940,15 @@ defmodule PrismWeb.LoginLiveTest do
     test "naming the home whose challenge this browser holds resumes that exchange: the same challenge goes back, and no expectation is kept",
          %{conn: conn, identity: identity} do
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      {:ok, held} = CyfrDoor.challenge(carry, :none)
+      held = held!(carry)
 
       browser =
-        conn |> Plug.Test.init_test_session(%{"cyfr_challenge" => held}) |> get(~p"/login")
+        conn
+        |> Plug.Test.init_test_session(%{
+          "cyfr_challenge" => held,
+          "cyfr_request" => request("https://a.example", 60_000, held)
+        })
+        |> get(~p"/login")
 
       {:ok, view, _} = live(browser, ~p"/login")
       enter(view, "https://a.example")
@@ -768,14 +971,14 @@ defmodule PrismWeb.LoginLiveTest do
       enter(view, "b.example")
 
       started = follow_start(browser, expected!(view, "https://b.example"), "https://b.example")
-      assert kept(started) == %{"home" => "https://b.example"}
+      assert kept(started) == %{"home" => "https://b.example", "invitation" => nil}
       refute get_session(started, "cyfr_challenge")
     end
 
     test "a held challenge past its expiry resumes nothing: naming its home begins a new exchange there",
          %{conn: conn, identity: identity} do
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      {:ok, held} = CyfrDoor.challenge(carry, :none)
+      held = held!(carry)
       expired = Map.put(held, "expires_at", System.os_time(:millisecond) - 1)
 
       browser =
@@ -794,7 +997,7 @@ defmodule PrismWeb.LoginLiveTest do
     test "the browser secret a held challenge binds is never in what the page's assigns print",
          %{conn: conn, identity: identity} do
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      {:ok, held} = CyfrDoor.challenge(carry, :none)
+      held = held!(carry)
 
       browser =
         conn
@@ -832,7 +1035,7 @@ defmodule PrismWeb.LoginLiveTest do
       for entry <- ["@alice", "alice", "Alice", "not a home", "ftp://a.example", "@-alice", ""] do
         html = enter(view, entry)
         assert html =~ "Type your CYFR&#39;s address, like https://cyfr.example.", entry
-        assert has_element?(view, ~s(#cyfr-own-entry[value="#{entry}"])), entry
+        assert has_element?(view, ~s(#cyfr-from-entry[value="#{entry}"])), entry
       end
 
       html = enter(view, Sanctum.Person.home())
@@ -865,7 +1068,12 @@ defmodule PrismWeb.LoginLiveTest do
       # The code of the challenge this home issued, which the person's
       # home names too; nothing moves until the person continues.
       [_, code] = Regex.run(~r/data-test="code"[^>]*>\s*([0-9A-Z]{4}-[0-9A-Z]{4})/, html)
-      assert html =~ "https://a.example"
+
+      assert html =~
+               "Your CYFR will show this code when it asks you to confirm signing in here:"
+
+      # The sessionless rule: the page names no address it learned.
+      refute html =~ "a.example"
 
       assert {:error, {:redirect, %{to: path}}} =
                view |> element("[data-test=cyfr-continue]") |> render_click()
@@ -901,6 +1109,28 @@ defmodule PrismWeb.LoginLiveTest do
 
       refute get_session(signed_in, "cyfr_challenge")
       refute get_session(signed_in, "cyfr_request")
+    end
+
+    test "the carry refusal when its directory is unavailable keeps the screen vocabulary", %{
+      conn: conn,
+      directory: directory
+    } do
+      identity = DirectoryServer.identity!(directory.dir, "https://dir-b.test:1")
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+
+      browser =
+        conn |> Plug.Test.init_test_session(%{"cyfr_request" => request()}) |> get(~p"/login")
+
+      {:ok, view, _} = live(browser, ~p"/login")
+
+      html =
+        render_hook(view, "cyfr_carry", %{
+          "fragment" => carry,
+          "expected_source" => "https://a.example"
+        })
+
+      assert html =~ "Try again shortly."
+      refute_vocabulary(html)
     end
 
     test "a carry from another home than the one the person named is refused before any directory is read, and nobody is signed in",
@@ -1007,7 +1237,7 @@ defmodule PrismWeb.LoginLiveTest do
 
       view |> element("#cyfr-code button", "Cancel") |> render_click()
       refute has_element?(view, "#cyfr-code")
-      assert render_click(view, "cyfr_continue", %{}) =~ "Sign in with your CYFR"
+      assert render_click(view, "cyfr_continue", %{}) =~ "Sign in from your CYFR"
 
       render_hook(view, "cyfr_carry", %{
         "fragment" => carry,

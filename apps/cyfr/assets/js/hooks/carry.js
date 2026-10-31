@@ -11,8 +11,11 @@
  *
  * The fragments, by where they arrive:
  *
- *   * at B's `/login`, `#carry=<…>`, A's signed carry (`cyfr_carry`), and
- *     `#cyfr=<…>`, A's assertion (`cyfr_assertion`);
+ *   * at B's `/login`, `#carry=<…>`, A's signed carry (`cyfr_carry`),
+ *     `#cyfr=<…>`, A's assertion (`cyfr_assertion`), `#from=<address>`, a
+ *     link naming the person's own CYFR, which only fills the field and
+ *     opens it, and `#invite=<code>`, the invitation page's code
+ *     (`login_invite`);
  *   * at A's `/carry`, `#destination=<B>` (B's entry, which only fills the
  *     form), B's challenge, and B's return (`Prima.Carry.Return`); the
  *     last two are unpadded base64url JSON, told apart by their fields;
@@ -42,11 +45,22 @@
  *     is signed in, and `resume()`, which the bundle runs once at every
  *     page load, goes back to `/carry` while one is held.
  *
- * No list of homes is kept: no saved addresses, no history of visits.
+ * And one value in `localStorage` at B, on B's origin: `cyfr:sign-in:your-cyfr`,
+ * the address the person typed in "Sign in from your CYFR", written when
+ * they press Continue. The next visit fills the field from it when no
+ * `#from` is given. It is read and written only here, and reaches B's
+ * server only when the person presses Continue: the field is filled after
+ * the page opened it, and opening it sends nothing.
+ *
+ * No list of homes is kept: one remembered address, no history of visits.
  */
 
 export const EXPECT_KEY = "cyfr:carry:expect"
 export const SOURCE_KEY = "cyfr:carry:source"
+export const YOUR_CYFR_KEY = "cyfr:sign-in:your-cyfr"
+// The sign-in page's field and its form (`PrismWeb.LoginLive`).
+export const ENTRY_ID = "cyfr-from-entry"
+export const FORM_ID = "cyfr-from"
 export const MAX_FRAGMENT_BYTES = 16384
 export const LIFETIME_MS = 5 * 60 * 1000
 // The most actions one tab remembers beginning, as A holds at most twenty
@@ -95,6 +109,9 @@ export function classify(fragment, max = MAX_FRAGMENT_BYTES) {
   if (fragment.startsWith("cyfr=")) return keyed("assertion", fragment.slice(5))
   if (fragment.startsWith("certify=")) return keyed("certify", fragment.slice(8))
 
+  if (fragment.startsWith("from=")) return {kind: "from", address: address(paramOf(fragment, "from"))}
+  if (fragment.startsWith("invite=")) return keyed("invite", paramOf(fragment, "invite"))
+
   if (fragment.startsWith("destination=")) {
     const destination = new URLSearchParams(fragment).get("destination")
     return destination ? {kind: "destination", destination} : {kind: "unknown"}
@@ -111,6 +128,37 @@ export function classify(fragment, max = MAX_FRAGMENT_BYTES) {
 }
 
 const keyed = (kind, value) => (value ? {kind, value} : {kind: "unknown"})
+
+function paramOf(fragment, key) {
+  try {
+    return new URLSearchParams(fragment).get(key)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The entry as an address, or null: trimmed, with a dot, colon or slash,
+ * no leading `@` and no space, as the sign-in page reads one, and an http
+ * or https URL that parses (`https://` taken when it names no scheme, as
+ * the page takes it), naming a host of non-empty labels and no user part.
+ */
+export function address(entry) {
+  if (typeof entry !== "string") return null
+  const trimmed = entry.trim()
+  if (trimmed === "" || trimmed.startsWith("@") || /\s/.test(trimmed)) return null
+  if (!/[.:/]/.test(trimmed)) return null
+  let url
+  try {
+    url = new URL(trimmed.includes("://") ? trimmed : "https://" + trimmed)
+  } catch {
+    return null
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null
+  if (url.username || url.password) return null
+  const labels = url.hostname.split(".")
+  return url.hostname !== "" && labels.every((label) => label !== "") ? trimmed : null
+}
 
 // What the bound is held against: the encoded carry or assertion after its
 // key, as the homes bound it (`Prima.Carry.bounded/1`), or the whole
@@ -135,6 +183,26 @@ export function sessionStorageOf(win) {
   } catch {
     return null
   }
+}
+
+export function localStorageOf(win) {
+  try {
+    return win && win.localStorage ? win.localStorage : null
+  } catch {
+    return null
+  }
+}
+
+/** The address this browser remembers for this page's field, or null. */
+export function rememberedCyfr(storage) {
+  const held = read(storage, YOUR_CYFR_KEY)
+  return address(held)
+}
+
+/** Remember the address the person continued with, when it is one. */
+export function rememberCyfr(storage, entry) {
+  const typed = address(entry)
+  if (typed) write(storage, YOUR_CYFR_KEY, typed)
 }
 
 function read(storage, key) {
@@ -287,10 +355,19 @@ const Carry = {
     const fragment = takeFragment(this.win)
 
     if (this.el.dataset.carry === "login") {
+      this.local = localStorageOf(this.win)
       this.handleEvent("cyfr:expect", ({home, to}) => this.expect(home, to))
       // A resumed exchange: back to its home, keeping no expectation, since
       // what comes back is its assertion and never a carry.
       this.handleEvent("cyfr:go", ({to}) => this.go(to))
+      // Continue: the typed address is remembered before the form is sent.
+      this.onSubmit = (event) => {
+        const form = event.target
+        if (!form || form.id !== FORM_ID) return
+        const entry = form.querySelector(`#${ENTRY_ID}`)
+        if (entry) rememberCyfr(this.local, entry.value)
+      }
+      this.win.document.addEventListener("submit", this.onSubmit, true)
       this.atLogin(fragment)
     } else if (this.el.dataset.carry === "source") {
       this.handleEvent("carry:begun", (begun) => this.begun(begun))
@@ -298,6 +375,10 @@ const Carry = {
       this.handleEvent("carry:forget", ({action_id}) => forgetAction(this.storage, action_id))
       this.atSource(fragment)
     }
+  },
+
+  destroyed() {
+    if (this.onSubmit) this.win.document.removeEventListener("submit", this.onSubmit, true)
   },
 
   now() {
@@ -328,9 +409,32 @@ const Carry = {
       case "too_large":
         this.pushEvent("cyfr_oversized", {})
         return
-      default:
+      case "from":
+        if (found.address) this.open(found.address)
         return
+      case "invite":
+        this.pushEvent("login_invite", {code: found.value}, () =>
+          this.fill(rememberedCyfr(this.local))
+        )
+        return
+      default: {
+        const remembered = rememberedCyfr(this.local)
+        if (remembered) this.open(remembered)
+        return
+      }
     }
+  },
+
+  // Open the field and fill it with `entry`, on this page alone: opening
+  // sends the page nothing of the address.
+  open(entry) {
+    this.pushEvent("cyfr_open", {}, () => this.fill(entry))
+  },
+
+  fill(entry) {
+    if (!entry) return
+    const field = this.win.document.getElementById(ENTRY_ID)
+    if (field && field.value === "") field.value = entry
   },
 
   // A's `/carry`: the address's fragment, or the one kept through sign-in,

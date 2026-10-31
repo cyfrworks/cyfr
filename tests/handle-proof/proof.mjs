@@ -293,15 +293,17 @@ async function continueToCyfr(page, origin) {
   return url.searchParams.get("a") ?? decodeURIComponent(url.pathname.split("/")[2]);
 }
 
-// "I run my own CYFR" at B with A's address, to A's /carry, signing in at
-// A with the passkey when the browser holds no session there, then Begin,
-// back to B's sign-in page.
+// "Sign in from your CYFR" at B with A's address, to A's /carry, signing
+// in at A with the passkey when the browser holds no session there, then
+// Begin, back to B's sign-in page.
 async function carryFrom(person) {
   await person.goto(`${B}/login`);
   await connected(person);
-  await person.locator("#cyfr-own-open").click();
-  await person.locator("#cyfr-own-entry").fill(A);
-  await person.locator('#cyfr-own button[type="submit"]').click();
+  const entry = person.locator("#cyfr-from-entry");
+  if (!(await entry.isVisible())) await person.locator("#cyfr-from-open").click({ timeout: 5_000 }).catch(() => null);
+  await entry.waitFor({ timeout: 30_000 });
+  await entry.fill(A);
+  await person.locator('#cyfr-from button[type="submit"]').click();
   await person.waitForURL((url) => url.origin === A && ["/carry", "/login"].includes(url.pathname), { timeout: 60_000 });
   await connected(person);
   if (new URL(person.url()).pathname === "/login") {
@@ -415,7 +417,7 @@ async function main(chromium) {
   await claim("allow:b.users", "B's one person, its administrator", cyfrRows("b", "users"), cyfrIo("b", "users"));
   await claim("allow:b.server_allowlist", "B's allowlist: one entry, A's identifier, labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
 
-  // 3. At B, "I run my own CYFR" with A's address, and the carry admits
+  // 3. At B, "Sign in from your CYFR" with A's address, and the carry admits
   // the person as A's identifier.
   const personContext = await freshContext(chromium);
   const person = await personContext.newPage();

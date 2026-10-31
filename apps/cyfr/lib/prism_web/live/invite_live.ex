@@ -29,8 +29,14 @@ defmodule PrismWeb.InviteLive do
   recovery code, and "I saved it" signs them in, landing as any sign-in
   does.
 
+  Someone who already has a CYFR name takes "Already have a CYFR name?
+  Sign in with it.", which goes to `/login#invite=<code>`: the code stays
+  in a fragment, and the sign-in page redeems it through "Sign in from
+  your CYFR" (`PrismWeb.LoginLive`).
+
   Its controls carry `data-test` names: `invite-from`, `invite-athanor`,
-  `invite-expires` and `invite-refused`; the screens carry their own.
+  `invite-expires`, `invite-sign-in` and `invite-refused`; the screens
+  carry their own.
   """
 
   use PrismWeb, :live_view
@@ -219,6 +225,15 @@ defmodule PrismWeb.InviteLive do
                 )}.
               </p>
             </AdmissionCard.name_screen>
+            <p :if={@step == :invited} class="text-sm text-gray-400 text-center">
+              <a
+                href={"/login#invite=" <> @code}
+                data-test="invite-sign-in"
+                class="text-indigo-400 hover:text-indigo-300"
+              >
+                Already have a CYFR name? Sign in with it.
+              </a>
+            </p>
             <AdmissionCard.code_screen
               :if={@step == :admitted}
               state={@admission_state}

@@ -128,7 +128,7 @@ const STEPS = JSON.parse(process.env.JOIN_PROOF_STEPS || "null") || [
   ["home", ["chromium"]], ["hub", ["chromium"]], ["sign_in", BROWSERS], ["resolution", ["chromium"]],
   ["second_profile", BROWSERS],
   ["crafted", ["chromium"]], ["copied_session", ["chromium"]], ["dropped_callback", ["chromium"]],
-  ["closed_hops", ["chromium"]], ["forged_completion", ["chromium"]], ["h_passkey", ["chromium"]],
+  ["closed_hops", ["chromium"]], ["forged_completion", ["chromium"]], ["invited", ["chromium"]], ["h_passkey", ["chromium"]],
   ["a_passkey_at_h", ["chromium"]], ["phone", ["chromium"]], ["renewal", ["chromium"]], ["thread", ["chromium"]],
   ["removal", ["chromium"]], ["rotate", ["chromium"]], ["recertify", ["chromium"]], ["tabs", ["chromium"]],
   ["lost_home", ["chromium"]], ["restore", ["chromium"]], ["retired", ["chromium"]], ["admin_again", ["chromium"]],
