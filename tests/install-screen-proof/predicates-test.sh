@@ -320,6 +320,7 @@ expect fail "a state record lost after the run is no change" packages_changed le
 # KVM's diagnosis, from the preflight's observations.
 preflight() { # NAME SECURITY MODULES ERROR
   put "kvm-$1.txt" "host /dev/kvm: crw-rw---- root:kvm
+host /dev/kvm gid: 992
 host account: uid=1000(x) gid=1000(x) groups=1000(x)
 host kvm modules: $3
 docker context: default, DOCKER_HOST=unset
@@ -332,7 +333,7 @@ preflight noperm '["name=apparmor","name=seccomp,profile=builtin","name=cgroupns
 preflight nomodule '["name=apparmor"]' '' 'qemu-system-x86_64: -accel kvm: Could not access KVM kernel module: No such file or directory'
 preflight remote '["name=apparmor"]' 'kvm kvm_intel ' 'docker: Error response from daemon: error gathering device information while adding custom device "/dev/kvm": no such file or directory.'
 expect pass "rootless Docker is named" says rootless 'Docker runs rootless here'
-expect pass "a denied /dev/kvm names --device and the host's mode" says noperm 'crw-rw---- root:kvm) but QEMU in the container could not open it (permission denied): the daemon must pass --device /dev/kvm read-write'
+expect pass "a denied /dev/kvm names the device's mode and gid, the group the user joins, and --device" says noperm 'crw-rw---- root:kvm, gid 992) but QEMU in the container could not open it (permission denied): the container'"'"'s user joins that gid, so the device'"'"'s mode must give its group read and write, and the daemon must pass --device /dev/kvm read-write'
 expect pass "a missing module names lsmod" says nomodule 'neither kvm_intel nor kvm_amd is loaded (lsmod | grep kvm)'
 expect pass "a daemon that cannot pass the device is named" says remote 'could not pass /dev/kvm into the container'
 

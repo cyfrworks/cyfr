@@ -230,13 +230,13 @@ kvm_diagnosis() {
   if grep -q 'name=rootless' "$file"; then
     echo "Docker runs rootless here, and a rootless daemon's containers cannot open the host's /dev/kvm: run the proof against this machine's rootful daemon (docker context use default)"
   elif grep -q 'name=userns' "$file"; then
-    echo "the Docker daemon remaps its containers' root (userns-remap), so their root cannot open the host's /dev/kvm: run the proof against a daemon without remapping"
+    echo "the Docker daemon remaps its containers' users (userns-remap), so they cannot open the host's /dev/kvm: run the proof against a daemon without remapping"
   elif ! grep -qE '^host kvm modules: .*kvm_(intel|amd)' "$file"; then
     echo "the host has /dev/kvm but neither kvm_intel nor kvm_amd is loaded (lsmod | grep kvm): turn on virtualization in the firmware and load the module"
   elif grep -qiE 'error gathering device information|/dev/kvm.*(no such file|not found)' "$file"; then
     echo "the Docker daemon could not pass /dev/kvm into the container (--device /dev/kvm), so it does not run on this machine (the context or DOCKER_HOST names another): run the proof against this machine's own daemon"
   elif grep -qi 'permission denied' "$file"; then
-    echo "the host's /dev/kvm exists ($(sed -n 's/^host \/dev\/kvm: //p' "$file")) but QEMU in the container could not open it (permission denied): the daemon must pass --device /dev/kvm read-write, with no device rule or security profile that denies it"
+    echo "the host's /dev/kvm exists ($(sed -n 's/^host \/dev\/kvm: //p' "$file"), gid $(sed -n 's/^host \/dev\/kvm gid: //p' "$file")) but QEMU in the container could not open it (permission denied): the container's user joins that gid, so the device's mode must give its group read and write, and the daemon must pass --device /dev/kvm read-write, with no device rule or security profile that denies it"
   else
     echo "QEMU in the container could not start a KVM machine${said:+ (it said: $said)}: check that the daemon may pass --device /dev/kvm (no rootless Docker) and that the kvm module is loaded (lsmod | grep kvm)"
   fi

@@ -101,6 +101,12 @@ proof_image_use() {
   esac
 }
 
+# The gid of the host's /dev/kvm, which the containers' unprivileged user
+# joins to open it.
+kvm_gid() {
+  stat -c %g /dev/kvm
+}
+
 # QEMU in the container creates a KVM machine before any guest is booted.
 # Without it nothing later can run, and the host is left as it is.
 proof_kvm_preflight() {
@@ -109,12 +115,13 @@ proof_kvm_preflight() {
   proof_own container "${PROOF_PREFIX}kvm" || fail "the container ${PROOF_PREFIX}kvm cannot be the run's"
   {
     echo "host /dev/kvm: $(stat -c '%A %U:%G' /dev/kvm)"
+    echo "host /dev/kvm gid: $(kvm_gid)"
     echo "host account: $(id)"
     echo "host kvm modules: $(cd /sys/module 2>/dev/null && ls -d kvm kvm_intel kvm_amd 2>/dev/null | tr '\n' ' ')"
     echo "docker context: $(docker context show 2>&1), DOCKER_HOST=${DOCKER_HOST:-unset}"
     echo "docker security options: $(docker info --format '{{json .SecurityOptions}}' 2>&1)"
   } >"$OUT/kvm-preflight.txt"
-  if ! proof_fg timeout 120 docker run --rm --init --name "${PROOF_PREFIX}kvm" --network none --device /dev/kvm "$IMAGE" \
+  if ! proof_fg timeout 120 docker run --rm --init --name "${PROOF_PREFIX}kvm" --network none --device /dev/kvm --group-add "$(kvm_gid)" "$IMAGE" \
     /proof/kvm-check.sh >>"$OUT/kvm-preflight.txt" 2>&1; then
     cat "$OUT/kvm-preflight.txt" >&2
     why=$(kvm_diagnosis "$OUT/kvm-preflight.txt")
@@ -168,6 +175,9 @@ proof_seed() {
   cp "$WORK/key.pub" "$WORK/seed/authorized_key" || fail "no SSH key"
   od -An -N12 -tx1 /dev/urandom | tr -d ' \n' >"$WORK/password" || fail "no password"
   cp "$WORK/password" "$WORK/seed/password" || fail "no password"
+  # Readable by the container's user, whatever the lane's umask; the
+  # directory holding them on this host stays private.
+  chmod 644 "$WORK/seed/authorized_key" "$WORK/seed/password" || fail "no seed"
 }
 
 guest_running() {
@@ -242,11 +252,15 @@ guest_boot() {
   mkdir "$GUEST_DIR" || fail "the evidence directory $GUEST_DIR exists already"
   step "$part: a fresh guest under KVM ($memory MiB, a $disk disk, 4 vCPUs)"
   proof_own container "$GUEST" "$GUEST_DIR" || fail "the container $GUEST cannot be the run's"
-  docker create --init --name "$GUEST" --device /dev/kvm \
+  docker create --init --name "$GUEST" --device /dev/kvm --group-add "$(kvm_gid)" \
     --volume "$VOLUME:/disk" --volume "$BASE_DIR:/base:ro" "$IMAGE" \
     /proof/guest-boot.sh "$part" "$memory" "$disk" 4 "$CLOUD_IMAGE" >/dev/null ||
     fail "the QEMU container $GUEST was not made"
-  docker cp "$WORK/seed/." "$GUEST:/seed" >/dev/null || fail "the guest's seed was not copied into $GUEST"
+  # docker cp makes them root's and keeps their mode, and names each so
+  # that /seed itself stays the container user's.
+  docker cp "$WORK/seed/authorized_key" "$GUEST:/seed/authorized_key" >/dev/null &&
+    docker cp "$WORK/seed/password" "$GUEST:/seed/password" >/dev/null ||
+    fail "the guest's seed was not copied into $GUEST"
   docker start "$GUEST" >/dev/null || fail "the QEMU container $GUEST did not start"
 
   # A QEMU that cannot open /dev/kvm exits rather than answer QMP.
