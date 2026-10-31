@@ -619,9 +619,7 @@ defmodule Sanctum.ProvisioningTest do
                  consent_id: head.id,
                  athanor_id: athanor_id,
                  binding_key: "#{@foo}|@ingress|default",
-                 scope: "share",
                  vault_entry_id: nil,
-                 instance_entry_id: nil,
                  share_id: share.id,
                  via_label: nil,
                  binding_digest: entry.binding_digest,
@@ -679,14 +677,14 @@ defmodule Sanctum.ProvisioningTest do
     skipped = [
       {"catalyst:local.a", {:corrupt, {:manifest, "catalyst:local.a"}}},
       {"catalyst:local.b", {:corrupt, {:profile, "prof_b"}}},
-      {"catalyst:local.c", {:unavailable, "Instance entries"}},
+      {"catalyst:local.c", {:unavailable, "Shares"}},
       {"reagent:local.d", :shape_moved}
     ]
 
     detail =
       "catalyst:local.a: The stored manifest is damaged.; " <>
         "catalyst:local.b: The stored profile is damaged and cannot be used.; " <>
-        "catalyst:local.c: Instance entries is unavailable — retry shortly; " <>
+        "catalyst:local.c: Shares is unavailable — retry shortly; " <>
         "reagent:local.d: The outcome could not be confirmed."
 
     claim = claimed!(actor, "boot_elsewhere/own_recorded")

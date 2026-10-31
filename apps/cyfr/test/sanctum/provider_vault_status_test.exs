@@ -120,7 +120,6 @@ defmodule Sanctum.ProviderVaultStatusTest do
           %{
             binding_key:
               Prima.Authority.Blob.binding_key("formula:local.status-consumer", "@ingress", nil),
-            scope: "athanor",
             vault_entry_id: bound_view.id,
             binding_digest: digest
           }

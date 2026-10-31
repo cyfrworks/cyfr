@@ -25,8 +25,7 @@ defmodule Arca.TenantTables do
   A file offer is the sender's athanor's row (`file_offers`), so an offer
   not yet accepted dies with it; an accepted transfer is the recipient's
   (`file_receipts`), and lives and completes there whatever happens to
-  the sender. The instance's own credentials are no athanor's rows at
-  all.
+  the sender.
 
   ## What this does NOT promise
 
@@ -179,10 +178,6 @@ defmodule Arca.TenantTables do
   # `cli_sign_ins` are command lines waiting to be approved: no person or
   # athanor owns one until its approval mints a session, which carries
   # both.
-  #
-  # `instance_entries`, `instance_entry_members` and
-  # `instance_entry_usage` are the instance's own credentials, offered to
-  # athanors and deleted with none of them.
   @not_athanor_scoped [
     "registry_tokens",
     "server_meta",
@@ -202,10 +197,7 @@ defmodule Arca.TenantTables do
     "device_certifications",
     "installation_claims",
     "request_rate_windows",
-    "cli_sign_ins",
-    "instance_entries",
-    "instance_entry_members",
-    "instance_entry_usage"
+    "cli_sign_ins"
   ]
 
   @doc "The closed roster, children first."

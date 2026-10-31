@@ -5,18 +5,17 @@ defmodule Arca.StatusTransitions do
   @moduledoc """
   Which statuses a row may move to by a status write, and from which,
   one table per domain: the stored credentials' (`:credentials`), which
-  `Arca.VaultStorage.set_status/3` and `Arca.InstanceEntries.set_status/3`
-  hold their conditional writes to, the profiles' (`:profiles`), which
-  `Arca.ProfileStorage.transition/4` holds its write to, and the shares'
-  (`:shares`), which `Arca.Shares` holds its revocations to. The domains
-  share the words `active` and `revoked` and nothing else: each table
-  answers only for its own rows.
+  `Arca.VaultStorage.set_status/3` holds its conditional write to, the
+  profiles' (`:profiles`), which `Arca.ProfileStorage.transition/4` holds
+  its write to, and the shares' (`:shares`), which `Arca.Shares` holds its
+  revocations to. The domains share the words `active` and `revoked` and
+  nothing else: each table answers only for its own rows.
 
   A credential is `revoked` from `active`, `needs_reauth` or `revoked`,
   and `needs_reauth` or `active` from `active` or `needs_reauth`. Nothing
   leaves `revoked` or `tombstoned` by a status write, so a delete or a
-  revoke is never undone by a later mark; a tombstone is each store's own
-  verb.
+  revoke is never undone by a later mark; a tombstone is the store's own
+  verb (`Arca.VaultStorage.tombstone/2`).
 
   A profile is `revoked` from any status, and blocked at `needs_consent`
   from `active` or `needs_consent`. It is `active` again only from

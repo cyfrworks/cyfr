@@ -48,12 +48,12 @@ defmodule Sanctum.VaultReader do
   held to its disclosure; each refuses before anything is unsealed.
 
   Both read only the athanor's own entries by name
-  (`Arca.VaultStorage.get_by_name/2`), and an instance entry is no
-  athanor's. An instance entry is never named by a definition whose URL a
-  member chose: a name only an instance entry carries is not found, and
-  that entry is neither unsealed nor used. Neither is a share's source:
-  it is another athanor's entry, reached only through the share a
-  consent names, and never by name.
+  (`Arca.VaultStorage.get_by_name/2`): a name resolves an entry of the
+  athanor the definition is in, and no other. A share's source is never
+  named by a definition: it is another athanor's entry, reached only
+  through the share a consent names, so a name only another athanor's
+  entry carries is not found, and that entry is neither unsealed nor
+  used.
 
   ## The payload
 

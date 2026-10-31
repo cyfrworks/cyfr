@@ -25,12 +25,11 @@ defmodule Prima.Destination do
       segment by segment: `/v1/models` admits `/v1/models` and
       `/v1/models/…`, never `/v1/models-x`; absent admits any path.
 
-  `methods` and `paths` are optional on an athanor's entry and required,
-  non-empty, on an instance entry: `new/2`'s second argument says which.
-  An athanor's entry is shared only when its destination names both
-  (`Arca.Shares`): a key that people other than its owner use goes to
-  named methods and paths alone. A present `methods` or `paths` is never
-  empty.
+  `methods` and `paths` are optional on an athanor's entry; `new/2`'s
+  second argument, when true, requires both. An athanor's entry is shared
+  only when its destination names both (`Arca.Shares.eligible/1`): a key
+  that people other than its owner use goes to named methods and paths
+  alone. A present `methods` or `paths` is never empty.
 
   ## Canonical form
 
@@ -113,9 +112,10 @@ defmodule Prima.Destination do
 
   @doc """
   The destination `map` spells, normalized, or why it is refused.
-  `require_methods_and_paths` is true for an instance entry, whose
-  destination names both; a shared entry's must name both too, which the
-  share checks on the stored destination.
+  `require_methods_and_paths` true refuses a destination that names no
+  methods or no paths (`{:required, field}`). A shared entry's destination
+  names both, which the share checks on the stored destination
+  (`Arca.Shares.eligible/1`).
   """
   @spec new(term(), boolean()) :: {:ok, t()} | {:error, error()}
   def new(map, require_methods_and_paths)

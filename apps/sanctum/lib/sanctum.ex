@@ -87,7 +87,6 @@ defmodule Sanctum do
       Gate.Supervisor,
       Handle,
       IdentityFreshness,
-      InstanceEntries,
       Invitations,
       Namespace,
       Network,

@@ -133,7 +133,7 @@ defmodule Arca.SchemaFingerprintTest do
     assert %Arca.Schemas.Turn{}.recovery_limit == nil
   end
 
-  test "the vault, instance-entry and offer tables are the fingerprinted baseline's, rostered" do
+  test "the vault and offer tables are the fingerprinted baseline's, rostered" do
     [baseline] =
       Path.wildcard(Path.expand("../../priv/repo/migrations/*_baseline.exs", __DIR__))
 
@@ -142,12 +142,6 @@ defmodule Arca.SchemaFingerprintTest do
     for table <- ~w(vault_defaults file_offers file_receipts) do
       assert source =~ "create table(:#{table}", "#{table} is not in the baseline"
       assert table in Arca.TenantTables.roster()
-    end
-
-    for table <- ~w(instance_entries instance_entry_members instance_entry_usage) do
-      assert source =~ "create table(:#{table}", "#{table} is not in the baseline"
-      assert table in Arca.TenantTables.not_athanor_scoped()
-      refute table in Arca.TenantTables.roster()
     end
 
     # A default is a child of the entry it names: erased before it.
@@ -294,48 +288,43 @@ defmodule Arca.SchemaFingerprintTest do
       consent_id: "cons_ref_1",
       athanor_id: athanor,
       binding_key: "k1",
-      scope: "share",
       share_id: "shr_elsewhere",
       binding_digest: "sha256:d0"
     }
 
-    # A share-only row stands, and the entry and selection arms still do.
+    # A share-only row stands, and so do an entry's and a selection's, a
+    # selection with no pin among them.
     assert :ok = insert_row("consent_vault_refs", ref)
 
     assert :ok =
              insert_row(
                "consent_vault_refs",
-               %{
-                 ref
-                 | binding_key: "k2",
-                   scope: "athanor",
-                   share_id: nil
-               }
-               |> Map.put(:vault_entry_id, "vlt_ref_1")
+               %{ref | binding_key: "k2", share_id: nil} |> Map.put(:vault_entry_id, "vlt_ref_1")
              )
 
     assert :ok =
              insert_row(
                "consent_vault_refs",
-               %{
-                 ref
-                 | binding_key: "k3",
-                   scope: "athanor",
-                   share_id: nil,
-                   binding_digest: nil
-               }
+               %{ref | binding_key: "k3", share_id: nil} |> Map.put(:via_label, "default")
+             )
+
+    assert :ok =
+             insert_row(
+               "consent_vault_refs",
+               %{ref | binding_key: "k4", share_id: nil, binding_digest: nil}
                |> Map.put(:via_label, "default")
              )
 
+    # Two identities, none, or an entry or a share with no digest.
     for {key, bad} <- [
-          {"k4", Map.put(ref, :vault_entry_id, "vlt_ref_1")},
-          {"k5", Map.put(ref, :via_label, "default")},
-          {"k6", %{ref | scope: "athanor"}},
-          {"k10", Map.put(%{ref | scope: "athanor"}, :vault_entry_id, "vlt_ref_1")},
-          {"k7", %{ref | scope: "instance"}},
+          {"k5", Map.put(ref, :vault_entry_id, "vlt_ref_1")},
+          {"k6", Map.put(ref, :via_label, "default")},
+          {"k7", %{ref | share_id: nil}},
           {"k8", %{ref | binding_digest: nil}},
           {"k9",
-           %{ref | scope: "athanor", share_id: nil}
+           %{ref | share_id: nil, binding_digest: nil} |> Map.put(:vault_entry_id, "vlt_ref_1")},
+          {"k10",
+           %{ref | share_id: nil}
            |> Map.put(:vault_entry_id, "vlt_ref_1")
            |> Map.put(:via_label, "x")}
         ] do

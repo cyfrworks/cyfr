@@ -201,7 +201,7 @@ defmodule Prima.DestinationTest do
       assert length(kept) == 32
     end
 
-    test "an instance destination without methods or paths" do
+    test "a destination required to name methods and paths, without them" do
       host = %{"hosts" => ["a.example.com"]}
       assert refused(host, true) == {:required, "methods"}
       assert refused(Map.put(host, "methods", ["GET"]), true) == {:required, "paths"}

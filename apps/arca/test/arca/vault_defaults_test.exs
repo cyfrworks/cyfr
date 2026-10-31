@@ -15,10 +15,7 @@ defmodule Arca.VaultDefaultsTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
 
-    {:ok,
-     actor: Arca.Test.Actor.local(),
-     other: Prima.Actor.in_athanor("ath_other"),
-     platform: Arca.Test.Actor.platform()}
+    {:ok, actor: Arca.Test.Actor.local(), other: Prima.Actor.in_athanor("ath_other")}
   end
 
   defp entry!(actor, hint \\ "openai.com") do
@@ -29,23 +26,6 @@ defmodule Arca.VaultDefaultsTest do
         provider_hint: hint,
         sealed_payload: "sealed",
         destination: @destination
-      })
-
-    entry
-  end
-
-  defp instance!(platform) do
-    {:ok, entry} =
-      Arca.InstanceEntries.put(platform, %{
-        name: "instance-#{System.unique_integer([:positive])}",
-        kind: "api_key",
-        provider_hint: "openai.com",
-        destination:
-          ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-        sealed_payload: "sealed",
-        binding_digest: "sha256:i0",
-        audience: "everyone",
-        created_by: "usr_admin"
       })
 
     entry
@@ -67,54 +47,29 @@ defmodule Arca.VaultDefaultsTest do
     assert {:ok, %{vault_entry_id: id}} = VaultDefaults.get(actor, "openai.com")
     assert id == first.id
 
-    assert {:ok, %{vault_entry_id: moved, instance_entry_id: nil}} =
+    assert {:ok, default} =
              VaultDefaults.set(actor, "openai.com", %{vault_entry_id: second.id})
 
-    assert moved == second.id
+    assert default == %{provider_hint: "openai.com", vault_entry_id: second.id}
     assert [row] = rows(actor.athanor_id, "openai.com")
     assert row.vault_entry_id == second.id
   end
 
-  test "an instance entry may be a default, and moving back clears it", %{
-    actor: actor,
-    platform: platform
-  } do
-    own = entry!(actor)
-    instance = instance!(platform)
-
-    assert {:ok, %{instance_entry_id: iid, vault_entry_id: nil}} =
-             VaultDefaults.set(actor, "openai.com", %{instance_entry_id: instance.id})
-
-    assert iid == instance.id
-
-    assert {:ok, %{vault_entry_id: vid, instance_entry_id: nil}} =
-             VaultDefaults.set(actor, "openai.com", %{vault_entry_id: own.id})
-
-    assert vid == own.id
-    assert [_one] = rows(actor.athanor_id, "openai.com")
-  end
-
-  test "a default naming both, or neither, or an entry of another athanor, is refused",
-       %{actor: actor, other: other, platform: platform} do
+  test "a default naming anything but one entry, or an entry of another athanor, is refused",
+       %{actor: actor, other: other} do
     own = entry!(actor)
     theirs = entry!(other)
-    instance = instance!(platform)
 
+    # A share is never a provider default, beside an entry or alone.
     QueryCounter.assert_queries(0, fn ->
-      assert {:error, :invalid_target} =
-               VaultDefaults.set(actor, "openai.com", %{
-                 vault_entry_id: own.id,
-                 instance_entry_id: instance.id
-               })
-
-      assert {:error, :invalid_target} = VaultDefaults.set(actor, "openai.com", %{})
+      for target <- [%{vault_entry_id: own.id, share_id: "shr_x"}, %{share_id: "shr_x"}, %{}] do
+        assert {:error, :invalid_target} = VaultDefaults.set(actor, "openai.com", target),
+               inspect(target)
+      end
     end)
 
     assert {:error, :not_found} =
              VaultDefaults.set(actor, "openai.com", %{vault_entry_id: theirs.id})
-
-    assert {:error, :not_found} =
-             VaultDefaults.set(actor, "openai.com", %{instance_entry_id: "ine_missing"})
 
     # The default the athanor had stands.
     assert {:ok, %{vault_entry_id: id}} = VaultDefaults.get(actor, "openai.com")
@@ -131,7 +86,6 @@ defmodule Arca.VaultDefaultsTest do
       athanor_id: actor.athanor_id,
       provider_hint: "openai.com",
       vault_entry_id: theirs.id,
-      instance_entry_id: nil,
       inserted_at: now,
       updated_at: now
     }

@@ -364,6 +364,29 @@ defmodule Arca.SharesTest do
       assert {:ok, [%{id: ^share_id, status: "revoked"}]} = Shares.list(terry.actor)
     end
 
+    test "a repeat blocks again and answers the pairs, so a retry finishes the job",
+         %{terry: terry, entry: entry} do
+      share = share!(terry.actor, entry.id)
+      alice = owner!()
+      profile = bound!(alice.athanor.id, share.id)
+      pair = {alice.athanor.id, profile.id}
+
+      assert {:ok, %{blocked: [^pair]}} = Shares.revoke(terry.actor, share.id, "needs_consent")
+
+      # What an attempt that revoked the share and was stopped before its
+      # dependents were blocked would have left behind.
+      :ok =
+        Arca.ProfileStorage.transition(
+          Prima.Actor.in_athanor(alice.athanor.id),
+          profile.id,
+          :any,
+          "active"
+        )
+
+      assert {:ok, %{blocked: [^pair]}} = Shares.revoke(terry.actor, share.id, "needs_consent")
+      assert profile_status(alice.athanor.id, profile.id) == "needs_consent"
+    end
+
     test "a block that may not land rolls the revocation back", %{terry: terry, entry: entry} do
       share = share!(terry.actor, entry.id)
       alice = owner!()
@@ -677,36 +700,38 @@ defmodule Arca.SharesConcurrencyTest do
              unboxed(fn -> Arca.ShareUsage.usage(terry.actor, share.id, 1) end)
   end
 
-  test "a revision binding a share while its revoke runs: one order or the other", %{made: made} do
+  test "a revision binding a share while its revoke runs: one order or the other, revising a " <>
+         "profile and minting a first one",
+       %{made: made} do
     terry = owned!(made)
     alice = owned!(made)
 
-    for round <- 1..5 do
+    for round <- 1..5, write <- [:revise, :mint] do
       share =
         unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
 
-      profile =
-        unboxed(fn ->
-          {:ok, profile} =
-            Arca.Test.Writers.put_profile(%{
-              athanor_id: alice.athanor.id,
-              source_ref: "formula:local.race-#{round}",
-              kind: "owner",
-              label: "default",
-              status: "active"
-            })
+      profile = %{
+        id: "prof_share_race_#{round}_#{write}_#{System.unique_integer([:positive])}",
+        athanor_id: alice.athanor.id,
+        source_ref: "formula:local.race-#{round}-#{write}",
+        kind: "owner",
+        label: "default",
+        status: "active"
+      }
 
-          profile
-        end)
+      if write == :revise,
+        do: unboxed(fn -> {:ok, _} = Arca.Test.Writers.put_profile(profile) end)
 
       commit =
         Task.async(fn ->
           unboxed(fn ->
-            Arca.ConsentStorage.insert_revision(
-              Fixture.revision_attrs(alice.athanor.id, profile.id, 1),
-              [Fixture.share_ref(share.id)],
-              nil
-            )
+            attrs = Fixture.revision_attrs(alice.athanor.id, profile.id, 1)
+            refs = [Fixture.share_ref(share.id)]
+
+            case write do
+              :revise -> Arca.ConsentStorage.insert_revision(attrs, refs, nil)
+              :mint -> Arca.ConsentStorage.mint_profile_with_revision(profile, attrs, refs)
+            end
           end)
         end)
 
@@ -717,16 +742,25 @@ defmodule Arca.SharesConcurrencyTest do
 
       committed = Task.await(commit, 30_000)
       {:ok, %{blocked: blocked}} = Task.await(revoke, 30_000)
-      status = unboxed(fn -> Fixture.profile_status(alice.athanor.id, profile.id) end)
+
+      status =
+        unboxed(fn ->
+          case Arca.ProfileStorage.get(Prima.Actor.in_athanor(alice.athanor.id), profile.id) do
+            {:ok, row} -> row.status
+            {:error, :not_found} -> nil
+          end
+        end)
 
       case committed do
         {:ok, _consent} ->
+          # The revoke saw the revision and blocked its profile.
           assert {alice.athanor.id, profile.id} in blocked
           assert status == "needs_consent"
 
         {:error, {:share_unavailable, "revoked"}} ->
+          # The revision saw the revoke and wrote nothing.
           assert blocked == []
-          assert status == "active"
+          assert status == if(write == :mint, do: nil, else: "active")
       end
     end
   end

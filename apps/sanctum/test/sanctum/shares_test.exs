@@ -202,7 +202,6 @@ defmodule Sanctum.SharesTest do
           vault_refs: [
             %{
               binding_key: key,
-              scope: "share",
               share_id: share.id,
               binding_digest: digest,
               admitted: %{audience: share.audience, group_id: share.group_id}
@@ -685,6 +684,24 @@ defmodule Sanctum.SharesTest do
       assert {:ok, [Map.put(view, :used_today, 2)]} == Shares.offered_with_use(alice)
       assert {:ok, [Map.put(view, :used_today, 1)]} == Shares.offered_with_use(bob)
     end
+
+    test "an anonymous caller, and one no person row names, is offered nothing and binds and " <>
+           "resolves nothing",
+         %{terry: terry, alice: alice} do
+      entry = key!(terry)
+      share = share!(terry, entry)
+      anonymous = %{alice | anonymous: true}
+      stranger = %{alice | user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix())}
+
+      for {ctx, refusal} <- [{anonymous, :anonymous_denied}, {stranger, :denied}] do
+        assert {:error, ^refusal} = Shares.offered(ctx)
+        assert {:error, ^refusal} = Shares.offered_with_use(ctx)
+        assert {:error, ^refusal} = Shares.binding(ctx, share.id)
+        assert {:error, ^refusal} = resolve(ctx, share, digest!(entry))
+      end
+
+      untouched!(terry, share, entry)
+    end
   end
 
   describe "binding_facts/1" do
@@ -764,6 +781,63 @@ defmodule Sanctum.SharesTest do
 
       assert last_used(terry, entry) == nil
       assert {:ok, @secret} = resolve(alice, share, digest)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A damaged source
+  # ---------------------------------------------------------------------------
+
+  describe "a damaged source" do
+    # No write makes one: a share is made only of an attach-only entry of a
+    # shareable kind, and a shared entry is never rebound disclosed. So the
+    # row is damaged in the store itself.
+    test "of a kind no share offers, or disclosed, is offered to no one and refused where it " <>
+           "would be bound or resolved, with nothing counted or unsealed",
+         %{terry: terry, alice: alice} do
+      for damage <- [[kind: "oauth"], [attach_only: false]] do
+        entry = key!(terry)
+        share = share!(terry, entry)
+        digest = digest!(entry)
+
+        {1, _} =
+          Arca.Repo.update_all(from(v in Arca.Schemas.VaultEntry, where: v.id == ^entry.id),
+            set: damage
+          )
+
+        assert {:ok, []} = Shares.offered(alice), inspect(damage)
+        assert {:error, :corrupt} = Shares.binding(alice, share.id)
+        assert {:error, :corrupt} = Shares.binding_facts(share.id)
+        assert {:error, :corrupt} = resolve(alice, share, digest)
+        untouched!(terry, share, entry)
+      end
+    end
+
+    @tag :capture_log
+    test "a field-name column that does not decode reads as none, and a use under the digest " <>
+           "approved before is stale",
+         %{terry: terry, alice: alice} do
+      entry = key!(terry)
+      share = share!(terry, entry)
+      approved = digest!(entry)
+      assert {:ok, %{field_names: ["KEY"]}} = Shares.binding(alice, share.id)
+
+      for damaged <- ["not json", ~s({"KEY":true}), ~s("KEY")] do
+        {1, _} =
+          Arca.Repo.update_all(from(v in Arca.Schemas.VaultEntry, where: v.id == ^entry.id),
+            set: [field_names: damaged]
+          )
+
+        assert {:ok, %{field_names: [], binding_digest: moved}} = Shares.binding(alice, share.id),
+               damaged
+
+        refute moved == approved
+        assert {:ok, [%{field_names: []}]} = Shares.offered(alice)
+        assert {:ok, %{field_names: []}} = Shares.binding_facts(share.id)
+        assert {:error, :binding_went_stale} = resolve(alice, share, approved)
+      end
+
+      untouched!(terry, share, entry)
     end
   end
 
@@ -919,6 +993,109 @@ defmodule Sanctum.SharesTest do
       assert_received {:share, :audience, %{share_id: ^id}}
       assert {:ok, []} = Shares.offered(bob)
       assert {:ok, [%{id: ^id}]} = Shares.offered(alice)
+    end
+
+    # What a person reads before proving a sharing is the sharing itself,
+    # never a value: the entry it offers or the share it moves, the
+    # audience it becomes and the caps it sets.
+    test "a credential_sharing confirmation's preview names the sharing it confirms, never a " <>
+           "value or a person",
+         %{terry: terry, alice: alice} do
+      traders = group!(terry, [alice])
+      entry = key!(terry)
+      to_traders = %{audience: "group", group_id: traders.id}
+
+      assert {:error, {:confirmation_required, %{id: created}}} =
+               Shares.create(terry, Map.merge(%{entry_id: entry.id, person_daily: 5}, to_traders))
+
+      share = share!(terry, key!(terry), to_traders)
+
+      assert {:error, {:confirmation_required, %{id: widened}}} =
+               Shares.set_audience(terry, %{
+                 share_id: share.id,
+                 audience: "everyone",
+                 group_id: nil,
+                 expected: to_traders
+               })
+
+      for {secret, resource, details} <- [
+            {created, entry.name,
+             %{"audience" => "group", "person_daily" => "5", "total_daily" => "no limit"}},
+            {widened, share.id, %{"audience" => "everyone"}}
+          ] do
+        record = confirmation!(terry, secret)
+        assert record.action == "credential_sharing"
+        preview = Jason.decode!(record.preview)
+        assert {preview["resource"], preview["details"]} == {resource, details}
+        refute record.preview =~ @secret
+        refute record.preview =~ alice.user_id
+      end
+
+      refute_received {:share, _, _}
+    end
+
+    test "a widening proven over one audience is a conflict at its repeat once the audience " <>
+           "moved, with nothing more written and the proof not spent",
+         %{terry: terry, alice: alice} do
+      traders = group!(terry, [alice])
+      desk = group!(terry)
+      to_traders = %{audience: "group", group_id: traders.id}
+      to_desk = %{audience: "group", group_id: desk.id}
+      share = share!(terry, key!(terry), to_traders)
+      widening = %{share_id: share.id, audience: "everyone", group_id: nil, expected: to_traders}
+
+      # Before the proof's repeat, another of the owner's sessions moves the
+      # share to another group. The repeat is the proven request itself,
+      # the audience it was decided against included.
+      answer =
+        TestContext.confirming(terry, fn ctx ->
+          if ctx.confirmation_id do
+            send(self(), {:proof, ctx.confirmation_id})
+
+            {:ok, _moved} =
+              Arca.Shares.set_audience(Context.actor(terry), share.id, to_traders, to_desk)
+          end
+
+          Shares.set_audience(ctx, widening)
+        end)
+
+      assert {:error, {:conflict, _sentence}} = answer
+      assert %{audience: "group", group_id: group_id} = stored_share(terry, share)
+      assert group_id == desk.id
+      refute_received {:share, :audience, _}
+
+      # The conflict came before the proof was asked for: it is not spent on
+      # a change that was not made.
+      assert_received {:proof, secret}
+      assert confirmation!(terry, secret).state == "confirmed"
+    end
+
+    test "set_audience without the audience its caller saw, or with one that does not read, " <>
+           "is refused before the share is read, with nothing written",
+         %{terry: terry} do
+      share = share!(terry, key!(terry))
+      absent = Prima.UUID7.generate_id("shr")
+
+      for id <- [share.id, absent],
+          expected <- [
+            :absent,
+            nil,
+            "everyone",
+            [audience: "everyone", group_id: nil],
+            %{},
+            %{audience: "anyone", group_id: nil},
+            %{audience: "group", group_id: nil},
+            %{audience: "everyone", group_id: "ath_other"}
+          ] do
+        params = %{share_id: id, audience: "everyone", group_id: nil}
+        params = if expected == :absent, do: params, else: Map.put(params, :expected, expected)
+
+        assert {:error, :invalid_expected} = Shares.set_audience(terry, params),
+               inspect({id, expected})
+      end
+
+      assert %{audience: "everyone", group_id: nil} = stored_share(terry, share)
+      refute_received {:share, _, _}
     end
 
     test "set_caps writes both caps together, each absent for no limit",

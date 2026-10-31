@@ -21,7 +21,6 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   @roster ~w(
     athanor.archive
     door.deny
-    instance_entry.revoke
     invitation.revoke
     key.revoke
     member.leave
