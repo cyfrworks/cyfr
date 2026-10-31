@@ -44,7 +44,7 @@ defmodule Sanctum.SharesTest do
     :ok =
       :telemetry.attach_many(
         handler,
-        for(kind <- Shares.kinds(), do: [:cyfr, :sanctum, :share, kind]),
+        for(kind <- Prima.ShareKinds.all(), do: [:cyfr, :sanctum, :share, kind]),
         fn [:cyfr, :sanctum, :share, kind], _measurements, metadata, _config ->
           send(test, {:share, kind, metadata})
         end,
@@ -343,7 +343,7 @@ defmodule Sanctum.SharesTest do
          %{terry: terry, alice: alice} do
       entry = key!(terry)
       share = share!(terry, entry)
-      :ok = Arca.VaultStorage.set_status(Context.actor(terry), entry.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(Context.actor(terry), entry.id, "needs_reauth")
 
       assert {:error, {:entry_unavailable, "needs_reauth"}} =
                resolve(alice, share, digest!(entry))
@@ -411,7 +411,7 @@ defmodule Sanctum.SharesTest do
       assert {:error, :destination_mismatch} = resolve(alice, share, digest!(entry), off)
       assert {:error, :binding_went_stale} = resolve(alice, share, "sha256:elsewhere", off)
 
-      :ok = Arca.VaultStorage.set_status(Context.actor(terry), entry.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(Context.actor(terry), entry.id, "needs_reauth")
 
       assert {:error, {:entry_unavailable, "needs_reauth"}} =
                resolve(alice, share, "sha256:elsewhere", off)
@@ -796,8 +796,8 @@ defmodule Sanctum.SharesTest do
       assert %DateTime{} = listed.created_at
     end
 
-    test "an entry no share may offer, and a second share to one audience, are refused with " <>
-           "nothing written",
+    test "an entry no share may offer, and a second share to one audience, are refused before " <>
+           "any confirmation is asked, with nothing written",
          %{terry: terry, alice: alice} do
       disclosed = key!(terry, %{disclose: true})
 
@@ -823,15 +823,11 @@ defmodule Sanctum.SharesTest do
             {shared, :already_shared}
           ] do
         assert {:error, ^refusal} =
-                 TestContext.confirming(
-                   terry,
-                   &Shares.create(&1, %{entry_id: entry.id, audience: "everyone"})
-                 ),
+                 Shares.create(terry, %{entry_id: entry.id, audience: "everyone"}),
                inspect(refusal)
       end
 
-      # An entry the owner's athanor does not hold is not found, before any
-      # confirmation is asked.
+      # An entry the owner's athanor does not hold is not found, as early.
       for entry_id <- [key!(alice).id, Prima.UUID7.generate_id("vlt")] do
         assert {:error, :not_found} =
                  Shares.create(terry, %{entry_id: entry_id, audience: "everyone"})

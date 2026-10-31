@@ -283,14 +283,28 @@ defmodule Arca.Shares do
     |> eligible()
   end
 
-  defp eligible(nil), do: {:error, :not_found}
+  @doc """
+  Whether `entry`, a vault entry as its store answers it, may be shared:
+  `:ok`, or the refusal `create/3` answers for it (the module doc's).
+  `create/3` holds the row it locks to this; a caller asks it of the row
+  it read to refuse before it asks anything of a person.
+  """
+  @spec eligible(map() | nil) ::
+          :ok
+          | {:error,
+             :not_found
+             | {:entry_unavailable, String.t()}
+             | :disclosed_not_shareable
+             | :kind_not_shareable
+             | :destination_incomplete}
+  def eligible(nil), do: {:error, :not_found}
 
-  defp eligible(%VaultEntry{status: status}) when status != "active",
+  def eligible(%{status: status}) when status != "active",
     do: {:error, {:entry_unavailable, status}}
 
-  defp eligible(%VaultEntry{attach_only: false}), do: {:error, :disclosed_not_shareable}
+  def eligible(%{attach_only: false}), do: {:error, :disclosed_not_shareable}
 
-  defp eligible(%VaultEntry{} = entry) do
+  def eligible(%{kind: _, destination: _} = entry) do
     cond do
       entry.kind not in Prima.CredentialKinds.shareable() -> {:error, :kind_not_shareable}
       not complete_destination?(entry.destination) -> {:error, :destination_incomplete}

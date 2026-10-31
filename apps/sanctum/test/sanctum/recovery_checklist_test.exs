@@ -59,7 +59,7 @@ defmodule Sanctum.RecoveryChecklistTest do
                verify: fn _row -> :ok end
              )
 
-    :ok = Arca.VaultStorage.set_status(actor, entry.id, "active")
+    {:ok, _} = Arca.VaultStorage.set_status(actor, entry.id, "active")
 
     # The share stays revoked until it is shared again, and holds no
     # checklist open.

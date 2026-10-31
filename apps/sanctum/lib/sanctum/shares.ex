@@ -60,7 +60,7 @@ defmodule Sanctum.Shares do
   ## Announcements
 
   Every durable change announces `[:cyfr, :sanctum, :share, kind]` with
-  the share id, the kind (`kinds/0`) and the acting person, never a value
+  the share id, the kind (`Prima.ShareKinds.all/0`) and the acting person, never a value
   or an audience; a refused or unchanged write announces nothing.
   """
 
@@ -70,14 +70,14 @@ defmodule Sanctum.Shares do
   alias Sanctum.Context
   alias Sanctum.VaultReader
 
-  @kinds [:created, :audience, :caps, :rebound, :rotated, :revoked]
+  @kinds Prima.ShareKinds.all()
 
   # What an audience change meets when the stored audience is not the one
   # its caller saw: `Prima.Refusal` keeps the sentence.
   @audience_conflict "The audience changed since it was shown, so nothing was saved."
 
   @typedoc "What a share announces happened to it."
-  @type kind :: :created | :audience | :caps | :rebound | :rotated | :revoked
+  @type kind :: Prima.ShareKinds.t()
 
   @typedoc "A share as its owner sees it, with today's total use. It holds no material."
   @type share_view :: %{
@@ -122,10 +122,6 @@ defmodule Sanctum.Shares do
   @typedoc "An audience as a write names it."
   @type audience :: %{audience: String.t(), group_id: String.t() | nil}
 
-  @doc "The kinds a share announces, the one list the bus payload and the telemetry catalog read."
-  @spec kinds() :: [kind()]
-  def kinds, do: @kinds
-
   # ---------------------------------------------------------------------------
   # The owner's verbs
   # ---------------------------------------------------------------------------
@@ -138,7 +134,10 @@ defmodule Sanctum.Shares do
   limit. The entry is active, attach-only, of a kind in
   `Prima.CredentialKinds.shareable/0` and has a destination naming its
   methods and paths; the store's refusals are `Arca.Shares.create/3`'s,
-  each with nothing written. Confirms `credential_sharing`.
+  each with nothing written. Confirms `credential_sharing`, asked only
+  once the entry read is one the store would share (`Arca.Shares.eligible/1`)
+  and no active share of it holds the audience; the store holds the row it
+  locks to both again.
   """
   @spec create(Context.t(), map()) :: {:ok, share_view()} | {:error, term()}
   def create(%Context{} = ctx, params) when is_map(params) do
@@ -146,7 +145,9 @@ defmodule Sanctum.Shares do
          {:ok, audience} <- audience_param(params),
          {:ok, caps} <- caps_param(params),
          {:ok, entry_id} <- entry_param(params),
-         {:ok, entry} <- own_entry(ctx, entry_id) do
+         {:ok, entry} <- own_entry(ctx, entry_id),
+         :ok <- Store.eligible(entry),
+         :ok <- not_shared(ctx, entry_id, audience) do
       change = %{
         operation: "share.create",
         arguments: Map.merge(%{entry_id: entry_id}, Map.merge(audience, caps)),
@@ -387,7 +388,9 @@ defmodule Sanctum.Shares do
   binding to (`Sanctum.Consent.Bootstrap`): the source's `kind`,
   `provider_hint`, `field_names`, `status` and derived `binding_digest`,
   for any active share. A share absent or revoked is
-  `{:error, :not_offered}`, and a damaged source `{:error, :corrupt}`.
+  `{:error, :not_offered}`, a source no longer active
+  `{:error, {:entry_unavailable, status}}`, and a damaged source
+  `{:error, :corrupt}`.
   Nothing is unsealed and no person is named: whose use it is, the
   attach path decides.
   """
@@ -691,6 +694,26 @@ defmodule Sanctum.Shares do
     end
   end
 
+  # A second active share of one entry to one audience is refused before a
+  # confirmation is asked; the store's natural key refuses one that lands
+  # between this read and its insert.
+  defp not_shared(ctx, entry_id, audience) do
+    case Store.list(Context.actor(ctx)) do
+      {:ok, shares} ->
+        if Enum.any?(shares, &same_share?(&1, entry_id, audience)),
+          do: {:error, :already_shared},
+          else: :ok
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp same_share?(share, entry_id, audience) do
+    share.status == "active" and share.vault_entry_id == entry_id and
+      %{audience: share.audience, group_id: share.group_id} == audience
+  end
+
   defp entry_param(%{entry_id: id}) when is_binary(id) and id != "", do: {:ok, id}
   defp entry_param(_params), do: {:error, :entry_required}
 
@@ -813,7 +836,7 @@ defmodule Sanctum.Shares do
   defp decode_list(_absent), do: []
 
   # One literal event per kind: the telemetry catalog's source scan reads
-  # them from here, and holds them to `kinds/0`.
+  # them from here, and holds them to `Prima.ShareKinds.all/0`.
   defp announce(ctx, :created, id),
     do: emit([:cyfr, :sanctum, :share, :created], ctx, :created, id)
 
