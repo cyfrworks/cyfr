@@ -1118,6 +1118,386 @@ defmodule PrismWeb.VaultLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # ---------------------------------------------------------------------------
+  # Sharing a key
+  # ---------------------------------------------------------------------------
+
+  describe "sharing a key" do
+    @market %{
+      "hosts" => ["api.market.example"],
+      "methods" => ["GET"],
+      "paths" => ["/v1/quotes"]
+    }
+
+    # A person signed in to their own athanor, named as others read them.
+    defp named!(name) do
+      user = test_user()
+      {:ok, _} = Arca.Users.update(Prima.Actor.system(), user.user_id, %{display_name: name})
+      conn = log_in_user(build_conn(), user)
+      {:ok, own} = Sanctum.Tenancy.Athanors.get_by_owner(user.user_id)
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.user_id,
+          athanor_id: own.id,
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      %{user: user, conn: conn, own: own, ctx: Sanctum.TestContext.via(ctx, :prism)}
+    end
+
+    # Terry and Alice, each in their own athanor, seated together in Traders.
+    defp traders! do
+      terry = named!("Terry")
+      alice = named!("Alice")
+      {:ok, traders} = Sanctum.Tenancy.Athanors.create_group(terry.user.user_id, "Traders")
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(alice.user.user_id,
+          scope: "athanor",
+          athanor_id: traders.id
+        )
+
+      %{terry: terry, alice: alice, traders: traders}
+    end
+
+    # An entry of the person's own athanor, made under its confirmation.
+    defp key!(%{ctx: ctx}, name, destination, disclose \\ false) do
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Gate.call_external("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "fields" => %{"MARKET_KEY" => "mk-sentinel-#{name}"},
+            "destination" => destination,
+            "disclose" => disclose
+          })
+        )
+
+      entry
+    end
+
+    defp share!(%{ctx: ctx}, entry, audience) do
+      {:ok, %{share: share}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Gate.call_external(
+            "share",
+            &1,
+            Map.merge(%{"action" => "create", "entry_id" => entry.id}, audience)
+          )
+        )
+
+      share
+    end
+
+    defp vault!(%{conn: conn, own: own}), do: mount_athanor(conn, "/vault", own)
+
+    defp share_button(entry), do: ~s([data-test="entry-share"][phx-value-id="#{entry.id}"])
+    defp by_you(share), do: ~s([data-test="shared-by-you-row"][data-id="#{share.id}"])
+    defp with_you(share), do: ~s([data-test="shared-with-you-row"][data-id="#{share.id}"])
+
+    defp shares_of(%{ctx: ctx}) do
+      {:ok, %{shares: shares}} = Sanctum.Gate.call_external("share", ctx, %{"action" => "list"})
+      shares
+    end
+
+    test "Share opens the system layer's sheet for a shareable key alone, the sheet's own " <>
+           "confirmation makes the share, and Shared by you reads it" do
+      %{terry: terry, traders: traders} = traders!()
+      market = key!(terry, "market key", @market)
+      disclosed = key!(terry, "read key", @market, true)
+      open_ended = key!(terry, "open key", %{"hosts" => ["api.market.example"]})
+
+      {view, _html} = vault!(terry)
+
+      assert has_element?(view, share_button(market), "Share")
+      refute has_element?(view, share_button(disclosed))
+      refute has_element?(view, share_button(open_ended))
+      assert has_element?(view, ~s([data-test="shared-by-you-none"]), "You share no key.")
+
+      view |> element(share_button(market)) |> render_click()
+      render(view)
+
+      sheet = ~s(#system-layer-dialog [data-kind="share"] form#system-layer-share)
+      assert has_element?(view, sheet)
+      assert has_element?(view, "#system-layer-title", "Share market key")
+      assert has_element?(view, sheet <> ~s( input[name="audience"][value="everyone"]))
+
+      assert has_element?(
+               view,
+               sheet <> ~s( input[name="audience"][value="group:#{traders.id}"])
+             )
+
+      assert texts(view, sheet <> " fieldset[data-test=share-audience] label") ==
+               ["Everyone on this CYFR", "Traders"]
+
+      # The caps start empty, and the sheet says what empty, 0 and a number
+      # mean, and what an uncapped share to everyone does.
+      refute view |> element(sheet <> ~s( input[name="person_daily"])) |> render() =~ "value="
+      refute view |> element(sheet <> ~s( input[name="total_daily"])) |> render() =~ "value="
+
+      assert has_element?(
+               view,
+               ~s([data-test="share-caps-meaning"]),
+               "An empty cap is no limit. 0 admits no use. A number is the most requests that day"
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-test="share-uncapped"]),
+               "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
+             )
+
+      # No value of the key is asked for, and no component policy offered.
+      refute has_element?(view, sheet <> ~s( input[type="password"]))
+      refute render(view) =~ "component policy"
+
+      view
+      |> form(sheet, %{
+        "audience" => "group:#{traders.id}",
+        "person_daily" => "",
+        "total_daily" => ""
+      })
+      |> render_submit()
+
+      # The layer asked the share's own confirmation; nothing is shared yet.
+      assert {:ok, [%{ref: ref, operation: "share.create"}]} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(terry.ctx),
+                 terry.user.user_id
+               )
+
+      assert shares_of(terry) == []
+
+      Sanctum.TestContext.prove!(terry.ctx, ref)
+
+      wait_until(fn -> shares_of(terry) != [] end, 2_000, "the share made once confirmed")
+      [share] = shares_of(terry)
+      assert %{audience: "group", group_id: group_id, person_daily: nil, total_daily: nil} = share
+      assert group_id == traders.id
+
+      wait_until(fn -> has_element?(view, by_you(share)) end, 2_000, "the row")
+
+      assert texts(view, by_you(share) <> ~s( [data-test="share-line"])) ==
+               ["market key, shared with Traders, 0 today, no cap"]
+
+      refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+      refute render(view) =~ "mk-sentinel"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a group's vault offers no Share and lists no shares: a key is shared, and a share " <>
+           "granted, from the person's own athanor" do
+      %{terry: terry, traders: traders} = traders!()
+      market = key!(terry, "market key", @market)
+      _share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+
+      group_ctx = %{terry.ctx | athanor_id: traders.id}
+      group_key = key!(%{ctx: group_ctx}, "group key", @market)
+
+      conn = log_in_user(build_conn(), terry.user, athanor_id: traders.id)
+      {view, html} = mount_athanor(conn, "/vault", traders)
+
+      assert html =~ "group key"
+      refute has_element?(view, share_button(group_key))
+      refute has_element?(view, ~s([data-test="shared-by-you"]))
+      refute has_element?(view, ~s([data-test="shared-with-you"]))
+      refute html =~ "could not be read"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a sheet's audience other than everyone or the person's own groups, or a cap that " <>
+           "is no count, dispatches nothing" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      {view, _html} = vault!(terry)
+
+      view |> element(share_button(market)) |> render_click()
+      sheet = "#system-layer-share"
+
+      for {params, sentence} <- [
+            {%{"audience" => "group:ath_elsewhere"}, "Choose who it is shared with"},
+            {%{"audience" => "everyone", "person_daily" => "-1"}, "A cap is a whole number"},
+            {%{"audience" => "everyone", "total_daily" => "1.5"}, "A cap is a whole number"}
+          ] do
+        view |> element(sheet) |> render_submit(params)
+        assert has_element?(view, "#system-layer-dialog [role=alert]", sentence)
+      end
+
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(terry.ctx),
+                 terry.user.user_id
+               )
+
+      assert shares_of(terry) == []
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "Shared with you shows what is offered, by its owner's name and never its value, " <>
+           "and loses it when the person leaves the group" do
+      %{terry: terry, alice: alice, traders: traders} = traders!()
+      market = key!(terry, "market key", @market)
+      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+
+      {view, html} = vault!(alice)
+
+      assert texts(view, with_you(share) <> ~s( [data-test="shared-by"])) == ["Shared by Terry"]
+
+      assert texts(view, with_you(share) <> ~s( [data-test="shared-destination"])) ==
+               ["https://api.market.example · GET · /v1/quotes"]
+
+      assert texts(view, with_you(share) <> ~s( [data-test="shared-use"])) ==
+               ["Your use: none today"]
+
+      refute html =~ "mk-sentinel"
+      refute html =~ "market key"
+
+      # Leaving writes nothing to the share; the seat's change alone is read.
+      :ok = Sanctum.Tenancy.Members.remove_member(traders, user_id: alice.user.user_id)
+
+      wait_until(fn -> not has_element?(view, with_you(share)) end, 2_000, "the row gone")
+      assert has_element?(view, ~s([data-test="shared-with-you-none"]), "No one shares a key")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a share made, changed or revoked elsewhere is read again on both pages without a " <>
+           "reload, and Revoke reads revoked" do
+      %{terry: terry, alice: alice, traders: traders} = traders!()
+      market = key!(terry, "market key", @market)
+
+      {terry_view, _} = vault!(terry)
+      {alice_view, _} = vault!(alice)
+
+      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+
+      wait_until(fn -> has_element?(terry_view, by_you(share)) end, 2_000, "the owner's row")
+      wait_until(fn -> has_element?(alice_view, with_you(share)) end, 2_000, "the offered row")
+
+      {:ok, _} =
+        Sanctum.Gate.call_external("share", terry.ctx, %{
+          "action" => "set_caps",
+          "share_id" => share.id,
+          "person_daily" => 3
+        })
+
+      wait_until(
+        fn ->
+          texts(terry_view, by_you(share) <> ~s( [data-test="share-line"])) ==
+            ["market key, shared with Traders, 0 today, at most 3 a person a day"]
+        end,
+        2_000,
+        "the caps read again"
+      )
+
+      # Revoke is confirmed in the browser and needs the session alone.
+      revoke = by_you(share) <> ~s( [data-test="share-revoke"])
+      assert terry_view |> element(revoke) |> render() =~ "Revoke this share?"
+      terry_view |> element(revoke) |> render_click()
+
+      assert has_element?(terry_view, by_you(share) <> ~s([data-status="revoked"]))
+
+      assert texts(terry_view, by_you(share) <> ~s( [data-test="share-line"])) ==
+               ["market key, shared with Traders, revoked"]
+
+      refute has_element?(terry_view, revoke)
+      wait_until(fn -> not has_element?(alice_view, with_you(share)) end, 2_000, "gone")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the caps are set on the row, and an audience widened asks a fresh confirmation " <>
+           "naming the audience the row showed" do
+      %{terry: terry, traders: traders} = traders!()
+      market = key!(terry, "market key", @market)
+      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+      {view, _} = vault!(terry)
+
+      view
+      |> element(by_you(share) <> ~s( form[data-test="share-caps-form"]))
+      |> render_submit(%{"person_daily" => "0", "total_daily" => "10"})
+
+      assert texts(view, by_you(share) <> ~s( [data-test="share-line"])) ==
+               [
+                 "market key, shared with Traders, 0 today, no use a person, at most 10 in all a day"
+               ]
+
+      view
+      |> element(by_you(share) <> ~s( form[data-test="share-audience-form"]))
+      |> render_submit(%{"audience" => "everyone"})
+
+      assert {:ok, [%{ref: ref, operation: "share.set_audience"}]} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(terry.ctx),
+                 terry.user.user_id
+               )
+
+      Sanctum.TestContext.prove!(terry.ctx, ref)
+
+      wait_until(
+        fn ->
+          texts(view, by_you(share) <> ~s( [data-test="share-line"])) ==
+            [
+              "market key, shared with everyone, 0 today, no use a person, at most 10 in all a day"
+            ]
+        end,
+        2_000,
+        "the widened audience"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "after a declared restore the share reads revoked, and Share is offered again once " <>
+           "the entry is rotated" do
+      %{terry: terry, traders: traders} = traders!()
+      market = key!(terry, "market key", @market)
+      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+
+      {:ok, _marked} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+      {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
+
+      terry = %{terry | conn: log_in_user(build_conn(), terry.user)}
+      {view, _} = vault!(terry)
+
+      assert texts(view, by_you(share) <> ~s( [data-test="share-line"])) ==
+               ["market key, shared with Traders, revoked"]
+
+      refute has_element?(view, share_button(market))
+
+      # The person recovers their passkey, as a recovery re-enables it, and
+      # rotates the key under its confirmation.
+      passkey = Arca.Repo.get_by!(Arca.Schemas.Passkey, user_id: terry.user.user_id)
+
+      {:ok, _} =
+        Arca.Passkeys.reenable(Prima.Actor.system(), terry.user.user_id, passkey.id,
+          verify: fn _passkey -> :ok end
+        )
+
+      {:ok, %{entries: [%{payload_rev: rev}]}} =
+        Sanctum.Gate.call_external("vault", terry.ctx, %{"action" => "list"})
+
+      {:ok, _} =
+        Sanctum.TestContext.confirming(
+          terry.ctx,
+          &Sanctum.Gate.call_external("vault", &1, %{
+            "action" => "rotate",
+            "id" => market.id,
+            "fields" => %{"MARKET_KEY" => "mk-sentinel-rotated"},
+            "expected_payload_rev" => rev
+          })
+        )
+
+      wait_until(fn -> has_element?(view, share_button(market)) end, 2_000, "Share again")
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   describe "a confirmed form sent again that no longer reads" do
     defp seated_ctx(user) do
       Sanctum.Context.build(

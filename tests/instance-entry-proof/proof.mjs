@@ -3,39 +3,46 @@
 //
 // The instance-entry proof, run in the official Playwright image by run.sh
 // against a `cyfr` release behind the harness's HTTPS front (README.md).
-// The platform administrator, in Chromium, offers the instance's own
-// entries from the Settings page; Ana, a member who signs in after, is
-// offered them in her vault; Bea signs in once and is denied. Each step is
-// one row of the record; the proof fails when a row does not hold, and
-// stops at the first row a later one rests on.
+// The platform administrator, in Chromium, makes two keys on the Vault page
+// and shares each with everyone through the system layer's sharing sheet;
+// Ana, a member who signs in after, is offered them in her vault and her
+// first sign-in binds the model key's share; Bea signs in once and is
+// denied. Each step is one row of the record; the proof fails when a row
+// does not hold, and stops at the first row a later one rests on.
 //
-//   create_entry     Company AI (openai.com, a person cap of 3) and Company
-//                    Mail are made on the Settings card, each key typed in
-//                    the system layer's prompt alone and its credential_entry
-//                    confirmation proven with the administrator's passkey
-//   first_sign_in    the administrator shares with everyone a key of their
-//                    own made with Company AI's provider, field and
-//                    destination (fixture.exs `admin_share`); Ana's first
-//                    sign-in provisions her athanor: its bootstrap binds
-//                    that share on the openai catalyst, the real loader
-//                    admits the root with no run started, a claim through
-//                    the share is admitted and counted, its row binding
-//                    reads offered, and her vault offers both entries and
-//                    shows no material
-//   claim_cap        three claims of Company AI under Ana's context are
-//                    admitted, her vault then says her daily limit is
-//                    reached and resets at midnight UTC, and the fourth is
-//                    refused with the database's next UTC midnight
-//   narrow_audience  the administrator narrows Company AI to Bea on the
-//                    card, which sends the audience it showed as expected:
-//                    Ana's claim of it is refused, her consent's row
-//                    binding of the share still reads offered, and her
-//                    vault no longer offers Company AI
-//   revoke           Company Mail, claimed by Ana just before, is revoked
-//                    on the card: her next claim is refused, and her vault
-//                    offers nothing
-//   deny_person      Bea is denied at the door on the Settings page: Company
-//                    AI's card lists no one, and no audience lists her
+//   share_key        Company AI (openai.com, a person cap of 3) and Company
+//                    Mail are made on the Vault page, each key typed in its
+//                    form alone and its credential_entry confirmation proven
+//                    with the administrator's passkey; each is shared with
+//                    everyone through the sharing sheet, which opens with
+//                    its caps empty and says what they mean, its
+//                    credential_sharing confirmation proven with the
+//                    passkey; Shared by you reads both
+//   first_sign_in    Ana's first sign-in provisions her athanor: its
+//                    bootstrap binds Company AI's share on the openai
+//                    catalyst, the real loader admits the root with no run
+//                    started, a claim through the share is admitted and
+//                    counted, its row binding reads offered, and her vault's
+//                    Shared with you offers both, by the administrator's
+//                    name, and shows no material
+//   claim_cap        two more claims through the share are admitted and the
+//                    next is refused with its reset at the database's next
+//                    UTC midnight; her vault's Shared with you, compared
+//                    whole, shows the owner and her use today, 3, and no
+//                    cap, which is the owner's
+//   narrow_audience  the administrator narrows Company AI's share to a group
+//                    holding Bea on Shared by you, which sends the audience
+//                    the row showed as expected: Ana's claim is refused, her
+//                    consent's row binding reads it no longer offered, and
+//                    her vault no longer offers it
+//   revoke           Company Mail's share, claimed by Ana just before, is
+//                    revoked on Shared by you: her next claim is refused,
+//                    and her vault offers nothing
+//   deny_person      Bea, in Traders, is offered Company AI's share and a
+//                    claim through it is admitted and counted; denied at the
+//                    door on the Settings page, she is offered nothing, the
+//                    same claim is refused and counts nothing, and nothing of
+//                    a share changes
 //   admin_focus      the administrator's switcher lists no athanor of Ana's,
 //                    a direct visit is refused, and Sanctum's focus decision
 //                    refuses it
@@ -67,15 +74,15 @@ if (!viewport) {
 }
 mkdirSync(outDir, { recursive: true });
 
-const STEPS = ["create_entry", "first_sign_in", "claim_cap", "narrow_audience", "revoke", "deny_person", "admin_focus"];
+const STEPS = ["share_key", "first_sign_in", "claim_cap", "narrow_audience", "revoke", "deny_person", "admin_focus"];
 const { homes } = readHomes(homesFile);
 const base = homes[0].origin;
 const layer = "#system-layer-dialog";
 const rows = [];
 const record = { viewport: { name: viewportName, ...viewport } };
 
-// The keys are this run's own, typed in the prompt and nowhere else; no
-// page, answer or record may hold either.
+// The keys are this run's own, typed in the Vault page's form and nowhere
+// else; no page, answer or record may hold either.
 const AI = {
   name: "Company AI",
   provider: "openai.com",
@@ -100,15 +107,24 @@ const MAIL = {
 };
 const KEYS = [AI.key, MAIL.key];
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
-// The digest of the payload document an entry's card typed, as its owner
+// The digest of the payload document an entry's form typed, as its owner
 // encodes one (`Sanctum.Vault.Payload`: version 3, the one field, no
 // token bundle) in its canonical text; the fixture compares the stored
 // payload with it. Neither it nor a digest of a key may reach a page, an
 // answer or the record.
 const typedDigest = (spec) => sha256(JSON.stringify(canonical({ v: 3, fields: { [FIELD]: spec.key } })));
-const REACHED = "Your daily limit is reached; it resets at midnight UTC.";
-// The field the key is typed under in the system layer's prompt.
+// The field the key is typed under in the Vault page's form.
 const FIELD = "API_KEY";
+// The administrator's name as others read it: the release fixture's person
+// (tests/release-boot/fixture.exs `person`), as Bea's row below holds it.
+const OWNER = "Release proof";
+// What the sharing sheet says of its caps, and of a share to everyone with
+// none, to the platform administrator.
+const CAPS_MEANING = "An empty cap is no limit. 0 admits no use. A number is the most requests that day; " +
+  "a day ends at midnight UTC.";
+const UNCAPPED = "Shared with everyone and no cap, anyone on this CYFR may use it without limit. You administer " +
+  "this CYFR, so a key you share with everyone is also what each new person's AQUA uses when it fits, with no " +
+  "limit unless you set one.";
 
 // ---------------------------------------------------------------------------
 // Whole objects
@@ -136,7 +152,7 @@ const same = (stored, expected) => JSON.stringify(canonical(stored)) === JSON.st
 // Both sides of a whole-object comparison, for the record of a row.
 const compared = (stored, expected) => ({ stored: canonical(stored), expected: canonical(expected) });
 
-// The destination an entry's card requested: every field it typed, as
+// The destination an entry's form requested: every field it typed, as
 // the destination grammar names them (`hosts`, `scheme`, `port`,
 // `methods`, `paths`). A port left blank is no port.
 function requestedDestination(spec) {
@@ -154,7 +170,7 @@ function requestedDestination(spec) {
 //
 //   exact    compared exactly with the model;
 //   derived  compared with a value derived independently of the row, which
-//            the model holds: what a card's request implies the owner stores
+//            the model holds: what a form's request implies the owner stores
 //            (`requested_digest`), or what the first sign-in's bootstrap
 //            derives from it and the administrator's share (`derived_head`);
 //   bound    a clock or server-minted value, held to the bound the table
@@ -207,34 +223,54 @@ const day = {
   check: (value, read) => (value === read.today ? TODAY : { not_today: value }),
 };
 // The sealed payload, compared inside the fixture: the proof passes the
-// digest of the payload document its card typed, the fixture unseals the
+// digest of the payload document its form typed, the fixture unseals the
 // stored payload as its owner does and answers only the outcome, so neither
 // the material nor anything derived from it reaches the proof. Each outcome
 // but a match is its own sentence.
-const TYPED = "the value its card typed";
+const TYPED = "the value its form typed";
 const PAYLOAD_OUTCOMES = {
   matches: TYPED,
-  differs: "the stored payload unseals to another value than its card typed",
+  differs: "the stored payload unseals to another value than its form typed",
   does_not_unseal: "the stored payload does not unseal",
-  absent: "no payload is stored where its card typed one",
+  absent: "no payload is stored where its form typed one",
 };
 const typedPayload = {
   class: "derived",
-  from: "the digest of the payload document its card typed, compared inside the fixture",
+  from: "the digest of the payload document its form typed, compared inside the fixture",
   check: (value) => PAYLOAD_OUTCOMES[value] || { unexpected_payload_answer: typeof value },
 };
 
-const CARD = "its card on the Settings page shows";
+const ROW = "its row on the Vault page shows";
+const SHARED_ROW = "its row under Shared by you on the Vault page shows";
 const ADMISSION = "the loader's admission of Ana's root named";
 const SIGN_IN = "the person's sign-in named";
 const ADMIN = "the administrator's sign-in named";
-const SHARE = "the administrator's share (fixture.exs admin_share) named";
-const REQUESTED = "requested_digest, from the destination its card requested";
+const REQUESTED = "requested_digest, from the destination its form requested";
 const DERIVED = "derived_head, built by the owner's builders from the installed catalyst, the request and the share";
+const NONE = "no row is expected: nothing in this proof makes one";
 
 const FIELDS = {
+  vault_entries: {
+    id: minted(ROW),
+    athanor_id: minted(ADMIN),
+    name: exact,
+    provider_hint: exact,
+    kind: exact,
+    field_names: exact,
+    binding_digest: derived(REQUESTED),
+    oauth_endpoints: exact,
+    oauth_scopes: exact,
+    destination: derived(REQUESTED),
+    attach_only: exact,
+    status: exact,
+    payload_rev: exact,
+    sealed_payload: typedPayload,
+    last_used_at: clock,
+    inserted_at: clock,
+    updated_at: clock,
+  },
   instance_entries: {
-    id: minted(CARD),
+    id: minted(NONE),
     name: exact,
     kind: exact,
     provider_hint: exact,
@@ -243,7 +279,7 @@ const FIELDS = {
     destination: derived(REQUESTED),
     status: exact,
     payload_rev: exact,
-    sealed_payload: typedPayload,
+    sealed_payload: exact,
     last_used_at: clock,
     audience: exact,
     person_daily: exact,
@@ -254,21 +290,21 @@ const FIELDS = {
     updated_at: clock,
   },
   instance_entry_members: {
-    instance_entry_id: minted(CARD),
+    instance_entry_id: minted(NONE),
     user_id: minted(SIGN_IN),
     inserted_at: clock,
   },
   instance_entry_usage: {
-    instance_entry_id: minted(CARD),
+    instance_entry_id: minted(NONE),
     user_id: minted(`${SIGN_IN}, or the empty id of the entry's own total`),
     day,
     count: exact,
     updated_at: clock,
   },
   shares: {
-    id: minted(SHARE),
+    id: minted(SHARED_ROW),
     athanor_id: minted(ADMIN),
-    vault_entry_id: minted(SHARE),
+    vault_entry_id: minted(ROW),
     audience: exact,
     group_id: exact,
     person_daily: exact,
@@ -280,7 +316,7 @@ const FIELDS = {
   },
   share_usage: {
     athanor_id: minted(ADMIN),
-    share_id: minted(SHARE),
+    share_id: minted(SHARED_ROW),
     user_id: minted(`${SIGN_IN}, or the empty id of the share's own total`),
     day,
     count: exact,
@@ -322,7 +358,7 @@ const FIELDS = {
     scope: exact,
     vault_entry_id: exact,
     instance_entry_id: exact,
-    share_id: minted(SHARE),
+    share_id: minted(SHARED_ROW),
     via_label: exact,
     binding_digest: derived(REQUESTED),
     lifetime_kind: exact,
@@ -370,12 +406,14 @@ function classified(table, row, read, problems) {
 
 // Everything the README names, as the home holds it (`fixture.exs`
 // `state`), every field through its class, shaped for the one comparison:
-// every entry, member and use row of the instance, every share and share
-// use row, Ana's profiles, consents, binding rows and offered entries, and
-// Bea's row.
+// every vault entry, every entry, member and use row of the instance,
+// every share and share use row, Ana's profiles, consents, binding rows,
+// offered instance entries and shares, and Bea's row and the shares
+// offered to her, or the refusal.
 function storedState(state, read, problems) {
   const each = (table, rows) => (rows || []).map((r) => classified(table, r, read, problems));
   return {
+    vault_entries: each("vault_entries", state && state.vault_entries),
     entries: each("instance_entries", state && state.entries),
     members: each("instance_entry_members", state && state.members),
     usage: each("instance_entry_usage", state && state.usage),
@@ -386,36 +424,60 @@ function storedState(state, read, problems) {
       consents: each("consents", state.ana.consents),
       rows: each("consent_vault_refs", state.ana.rows),
       offered: state.ana.offered || [],
+      shared: state.ana.shared || [],
     } : null,
-    bea: (state && state.bea) ? { user: classified("users", state.bea.user, read, problems) } : null,
+    bea: (state && state.bea) ? {
+      user: classified("users", state.bea.user, read, problems),
+      shared: state.bea.shared === undefined ? { missing: true } : state.bea.shared,
+    } : null,
   };
 }
 
-// The whole entry a card's request asks the store to hold: its id as its
-// card shows it, the card's fields, the key's one field, what the request
-// implies the owner stores (`requested_digest`: the destination's canonical
-// text and the binding digest over it), the administrator who made it, the
-// state a new entry starts in, the payload its card typed and its clock's
-// times;
-// `over` is what a later step changed.
-function requestedEntry(spec, id, implied, adminId, over = {}) {
+// The whole entry a form's request asks the store to hold: its id as its
+// row shows it, the administrator's athanor, the form's fields, the key's
+// one field, what the request implies the owner stores
+// (`requested_digest`: the destination's canonical text and the binding
+// digest over it), attach-only as the form leaves it, the state a new
+// entry starts in, the payload its form typed and its clock's times; `over`
+// is what a later step changed.
+function requestedEntry(spec, id, implied, athanorId, over = {}) {
   return {
     id,
+    athanor_id: athanorId,
     name: spec.name,
-    kind: "api_key",
     provider_hint: spec.provider,
+    kind: "api_key",
     field_names: JSON.stringify([FIELD]),
     binding_digest: implied.binding_digest,
+    oauth_endpoints: null,
+    oauth_scopes: null,
     destination: implied.destination,
+    attach_only: true,
     status: "active",
     payload_rev: 0,
     sealed_payload: TYPED,
     last_used_at: null,
+    inserted_at: IN_WINDOW,
+    updated_at: IN_WINDOW,
+    ...over,
+  };
+}
+
+// The whole share the sheet's request asks the store to hold: its id as
+// its row shows it, the entry it names, everyone, the caps typed (an empty
+// one none), active, made by the administrator; `over` is what a later
+// step changed.
+function requestedShare(spec, id, entryId, operator, over = {}) {
+  return {
+    id,
+    athanor_id: operator.athanor_id,
+    vault_entry_id: entryId,
     audience: "everyone",
+    group_id: null,
     person_daily: spec.person_daily === "" ? null : Number(spec.person_daily),
     total_daily: null,
-    component_policy: "any",
-    created_by: adminId,
+    status: "active",
+    created_by: operator.user_id,
     inserted_at: IN_WINDOW,
     updated_at: IN_WINDOW,
     ...over,
@@ -434,6 +496,7 @@ const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 240_000
 const MATERIAL = () => [...KEYS, ...KEYS.map(sha256), typedDigest(AI), typedDigest(MAIL)];
 const holdsKey = (text) => MATERIAL().some((secret) => String(text).includes(secret));
 const pagePath = (segment, suffix) => `${base}/a/${encodeURIComponent(segment)}${suffix}`;
+const words = (text) => String(text || "").replace(/\s+/g, " ").trim();
 
 // A context signed in with the session cookie `cookie`, at the run's
 // viewport.
@@ -454,8 +517,8 @@ async function open(page, url) {
 }
 
 // A flash the page shows, by its words.
-const told = (page, words, timeout = 30_000) =>
-  page.getByText(words, { exact: false }).first().waitFor({ timeout }).then(() => true).catch(() => false);
+const told = (page, text, timeout = 30_000) =>
+  page.getByText(text, { exact: false }).first().waitFor({ timeout }).then(() => true).catch(() => false);
 
 // What a page shows when a step does not hold: a screenshot beside the
 // record, and the text of what it says in alerts and flashes. Neither key
@@ -468,21 +531,59 @@ async function diagnose(page, name) {
     .catch(() => []);
 }
 
-// The rows of Ana's "Provided by this instance", by id, with their text.
-async function offered(page) {
-  await page.waitForSelector('[data-test="instance-offered"]', { timeout: 30_000 });
-  return page.$$eval('[data-test="offered-entry"]', (els) =>
-    els.map((el) => ({ id: el.getAttribute("data-id"), text: el.textContent.replace(/\s+/g, " ").trim() })));
+// The rows of a person's "Shared with you", by share id, each whole: all
+// it says, and its parts by name, the destination, whose it is and the
+// person's own use.
+async function sharedWithYou(page) {
+  await page.waitForSelector('[data-test="shared-with-you"]', { timeout: 30_000 });
+  return page.$$eval('[data-test="shared-with-you-row"]', (els) => els.map((el) => {
+    const text = (sel) => ((el.querySelector(sel) || { textContent: "" }).textContent || "").replace(/\s+/g, " ").trim();
+    return {
+      id: el.getAttribute("data-id"),
+      text: el.textContent.replace(/\s+/g, " ").trim(),
+      destination: text('[data-test="shared-destination"]'),
+      by: text('[data-test="shared-by"]'),
+      use: text('[data-test="shared-use"]'),
+    };
+  }));
 }
 
-// The entry's card on the Settings page.
-const card = (id) => `[data-test="instance-entry"][data-id="${id}"]`;
+// One "Shared with you" row as the person reads it, whole: the source's
+// provider and kind, where it goes (its canonical destination as the
+// request implied it, in one line), the owner, and the person's own use.
+// A share's caps are its owner's, and the row says nothing of them.
+function withYouRow(spec, shareId, implied, use) {
+  const to = JSON.parse(implied.destination);
+  const destination = `${to.scheme}://${to.hosts.join(", ")}` + (to.port ? `:${to.port}` : "") +
+    (to.methods ? ` · ${to.methods.join(" ")}` : "") + (to.paths ? ` · ${to.paths.join(" ")}` : "");
+  const by = `Shared by ${OWNER}`;
+  const useText = `Your use: ${use}`;
+  return {
+    id: shareId, text: `${spec.provider} · api_key ${destination} ${by} ${useText}`, destination, by, use: useText,
+  };
+}
 
-// Each entry's id by its name, as the Settings page shows them on their
-// cards.
-async function cardIds(page, settings) {
-  await open(page, settings);
-  const shown = await page.$$eval('[data-test="instance-entry"]', (els) => els.map((el) => [
+// The rows of the administrator's "Shared by you", by share id, with each
+// row's status and its one line.
+async function sharedByYou(page) {
+  await page.waitForSelector('[data-test="shared-by-you"]', { timeout: 30_000 });
+  return page.$$eval('[data-test="shared-by-you-row"]', (els) => els.map((el) => ({
+    id: el.getAttribute("data-id"),
+    status: el.getAttribute("data-status"),
+    line: ((el.querySelector('[data-test="share-line"]') || { textContent: "" }).textContent || "")
+      .replace(/\s+/g, " ").trim(),
+  })));
+}
+
+const byYouRow = (id) => `[data-test="shared-by-you-row"][data-id="${id}"]`;
+
+// Each entry's id by its name, as the Vault page's rows show them, once
+// `count` rows are drawn.
+async function entryIds(page, vault, count) {
+  await open(page, vault);
+  await page.waitForFunction((n) => document.querySelectorAll('[data-test="entry-name"]').length >= n, count,
+    { timeout: 30_000 }).catch(() => null);
+  const shown = await page.$$eval('[data-test="entry-name"]', (els) => els.map((el) => [
     (el.querySelector("span.font-medium") || { textContent: "" }).textContent.trim(), el.getAttribute("data-id"),
   ]));
   return Object.fromEntries(shown);
@@ -501,67 +602,69 @@ async function registerPasskey(page, settings) {
   return { active, held };
 }
 
-// The new-entry form's change round trip, answered: LiveView marks what a
-// change event is in flight for until the server's reply is applied, and
-// the reply redraws the form from what the server holds (a provider's
-// prefill among it).
-function changeAnswered(page) {
-  return page.waitForFunction(
-    () => !document.querySelector(
-      "#instance-create.phx-change-loading, #instance-create .phx-change-loading, " +
-        "#instance-create[data-phx-ref-loading], #instance-create [data-phx-ref-loading]"),
-    null, { timeout: 10_000 },
-  ).then(() => true).catch(() => false);
-}
-
-// One field of the new-entry form, typed and read back once the change it
-// made is answered.
-async function typeField(page, selector, value) {
-  const field = page.locator(`#instance-create ${selector}`);
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await field.fill(value);
-    await changeAnswered(page);
-    if ((await field.inputValue()) === value) return true;
-  }
-  return false;
-}
-
-// An instance entry made on the Settings card: everything but the key on
-// the card, the key in the system layer's prompt alone, the record proven
-// with the passkey.
-async function createEntry(page, settings, entry) {
-  await open(page, settings);
-  const typed = [];
-  typed.push(await typeField(page, "#instance-name", entry.name));
-  typed.push(await typeField(page, "#instance-provider", entry.provider));
-  typed.push(await typeField(page, 'input[name="destination_hosts"]', entry.hosts));
-  typed.push(await typeField(page, 'input[name="destination_methods"]', entry.methods));
-  typed.push(await typeField(page, 'input[name="destination_paths"]', entry.paths));
-  typed.push(await typeField(page, 'input[name="person_daily"]', entry.person_daily));
-  await page.locator('#instance-create input[name="audience"][value="everyone"]').check();
-  await page.locator('#instance-create input[name="component_policy"][value="any"]').check();
-  const cardFields = await page.$$eval("#instance-create input, #instance-create select", (els) =>
-    els.filter((el) => el.type !== "radio" && el.type !== "checkbox" && el.type !== "hidden")
-      .map((el) => [el.name, el.value]));
-  await page.locator('#instance-create button[type="submit"]').click();
-
-  const prompt = `${layer}[open] form#system-layer-credential[data-target="instance"]`;
-  const asked = await page.waitForSelector(prompt, { timeout: 30_000 }).then(() => true).catch(() => false);
-  if (!asked) return { asked, typed, cardFields };
-  await page.locator(`${layer} #system-layer-secret`).fill(entry.key);
-  await page.locator(`${layer} #system-layer-secret`).press("Enter");
-
+// The page's own request waiting on its record, proven with the passkey.
+async function proveOwn(page) {
   const panel = `${layer} [data-test="confirmation"][data-own="true"]`;
   const confirmation = await page.waitForSelector(panel, { timeout: 30_000 })
     .then((el) => el.innerText()).catch(() => "");
   await page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 });
-  const created = await told(page, "Instance entry created.");
-  const html = await page.content();
+  return words(confirmation).slice(0, 300);
+}
+
+// A key made on the Vault page: its name, kind, label and destination and
+// its one field typed in the create form, which the browser keeps and
+// sends again once its credential_entry record is proven with the passkey.
+// The form's fields but the key's are recorded.
+async function createKey(page, vault, spec) {
+  await open(page, vault);
+  await page.locator('button[phx-click="show_add"][phx-value-mode="fields"]').click();
+  const form = "#vault-create-form";
+  await page.waitForSelector(form, { timeout: 30_000 });
+  await page.locator(`${form} input[name="name"]`).fill(spec.name);
+  await page.locator(`${form} select[name="kind"]`).selectOption("api_key");
+  await page.locator(`${form} input[name="provider_hint"]`).fill(spec.provider);
+  await page.locator(`${form} textarea[name="fields"]`).fill(`${FIELD}=${spec.key}`);
+  await page.locator(`${form} input[name="destination_hosts"]`).fill(spec.hosts);
+  await page.locator(`${form} input[name="destination_methods"]`).fill(spec.methods);
+  await page.locator(`${form} input[name="destination_paths"]`).fill(spec.paths);
+  const formFields = await page.$$eval(`${form} input, ${form} select`, (els) =>
+    els.filter((el) => el.type !== "checkbox" && el.type !== "hidden").map((el) => [el.name, el.value]));
+  const disclosed = await page.locator(`${form} input[name="disclose"]`).isChecked();
+  await page.locator(`${form} button[type="submit"]`).click();
+  const confirmation = await proveOwn(page);
+  const created = await told(page, "Entry created.");
+  const diagnosed = created ? [] : await diagnose(page, `create-${spec.provider}`);
   return {
-    asked, typed, cardFields, created,
-    confirmation: confirmation.replace(/\s+/g, " ").slice(0, 300),
-    key_on_page: holdsKey(html),
+    form: formFields, disclosed, created, confirmation, diagnosed, key_on_page: holdsKey(await page.content()),
   };
+}
+
+// A key shared with everyone through the system layer's sharing sheet: what
+// the sheet offers and says before anything is chosen, then everyone and
+// `spec`'s caps, its credential_sharing record proven with the passkey.
+async function shareKey(page, vault, entryId, spec) {
+  await open(page, vault);
+  await page.locator(`[data-test="entry-share"][phx-value-id="${entryId}"]`).click({ timeout: 30_000 });
+  const sheet = `${layer}[open] form#system-layer-share`;
+  const asked = await page.waitForSelector(sheet, { timeout: 30_000 }).then(() => true).catch(() => false);
+  if (!asked) return { asked, diagnosed: await diagnose(page, `share-${spec.provider}`) };
+  const shown = await page.evaluate((selector) => {
+    const form = document.querySelector(selector);
+    const text = (sel) => [...form.querySelectorAll(sel)].map((el) => el.textContent.replace(/\s+/g, " ").trim());
+    return {
+      audiences: text('[data-test="share-audience"] label'),
+      caps: [...form.querySelectorAll('input[type="number"]')].map((el) => [el.name, el.value]),
+      meaning: text('[data-test="share-caps-meaning"]'),
+      uncapped: text('[data-test="share-uncapped"]'),
+      secret_inputs: form.querySelectorAll('input[type="password"], textarea').length,
+    };
+  }, sheet);
+  await page.locator(`${sheet} input[name="audience"][value="everyone"]`).check();
+  if (spec.person_daily !== "") await page.locator(`${sheet} input[name="person_daily"]`).fill(spec.person_daily);
+  await page.locator(`${layer} [data-test="share-submit"]`).click();
+  const confirmation = await proveOwn(page);
+  const shared = await told(page, "Shared.");
+  return { asked, shown, shared, confirmation, key_on_page: holdsKey(await page.content()) };
 }
 
 // The door's form on the Settings page, its value typed, then `action`
@@ -586,6 +689,7 @@ async function main() {
     ws.on("framesent", (f) => frames.push(String(f.payload).slice(0, 2000)));
   });
   const settings = pagePath(adminSegment, "/settings");
+  const vault = pagePath(adminSegment, "/vault");
   let ai;
   let mail;
   let ana;
@@ -594,27 +698,36 @@ async function main() {
 
   try {
     // The proof's own model of everything the README names, changed at each
-    // step only by what that step did: the instance's entries, their listed
-    // members and their use, the shares and their use, Ana's profiles,
-    // consents, binding rows and offered entries once she has signed in,
-    // and Bea's row once she has. After every step the whole of it is
-    // compared with the whole of what the home holds, in one read, every
-    // field through its class: a change behind the browser to any of it
-    // fails the next step, whichever step that is.
-    const model = { entries: [], members: [], usage: [], shares: [], share_usage: [], ana: null, bea: null };
+    // step only by what that step did: the administrator's vault entries,
+    // the instance's entries, their listed members and their use (none),
+    // the shares and their use, Ana's profiles, consents, binding rows,
+    // offered entries and shares once she has signed in, and Bea's row once
+    // she has. After every step the whole of it is compared with the whole
+    // of what the home holds, in one read, every field through its class: a
+    // change behind the browser to any of it fails the next step, whichever
+    // step that is.
+    const model = {
+      vault_entries: [], entries: [], members: [], usage: [], shares: [], share_usage: [], ana: null, bea: null,
+    };
     // The database's time as the run starts: the window every stored time
     // is held to opens here, before anything the proof names is made.
     const run = { start: (await ask({ op: "clock" })).now };
     record.run_start = run.start;
     let aiOver = {};
     let mailOver = {};
+    let aiShareOver = {};
+    let mailShareOver = {};
     let aiImplied;
     let mailImplied;
     let operator;
-    const setEntries = () => {
-      model.entries = [
-        requestedEntry(AI, ai.id, aiImplied, operator.user_id, aiOver),
-        requestedEntry(MAIL, mail.id, mailImplied, operator.user_id, mailOver),
+    const setModel = () => {
+      model.vault_entries = [
+        requestedEntry(AI, ai.id, aiImplied, operator.athanor_id, aiOver),
+        requestedEntry(MAIL, mail.id, mailImplied, operator.athanor_id, mailOver),
+      ];
+      model.shares = [
+        requestedShare(AI, ai.share, ai.id, operator, aiShareOver),
+        requestedShare(MAIL, mail.share, mail.id, operator, mailShareOver),
       ];
     };
     const stateHolds = async () => {
@@ -630,33 +743,47 @@ async function main() {
         compared: { read, fields: problems, ...compared(stored, model) },
       };
     };
-    // A use row of the entry `entryId` as the model holds it: the person's
-    // count, or the entry's own total under the empty id, on the database's
-    // today.
-    const use = (entryId, userId, count) =>
-      ({ instance_entry_id: entryId, user_id: userId, day: TODAY, count, updated_at: IN_WINDOW });
-    // A use row of the administrator's share, in their athanor, as the
-    // model holds it: the person's count, or the share's own total under
-    // the empty id, on the database's today.
+    // A use row of a share, in the administrator's athanor, as the model
+    // holds it: the person's count, or the share's own total under the
+    // empty id, on the database's today.
     const shareUse = (shareId, userId, count) => ({
       athanor_id: operator.athanor_id, share_id: shareId, user_id: userId, day: TODAY, count, updated_at: IN_WINDOW,
     });
-    // A claim of `spec`'s entry `id` (`source` instance) or of the share
-    // `id` (`source` share) under Ana's context, `count` times.
-    const claimOf = (source, id, spec, count) =>
-      ask({ op: "claim", user_id: ana.user_id, source, id, count, url: spec.url, method: spec.method });
+    // `count` claims under Ana's context: of a share her head binds
+    // (`share`), or of one held to the digest its source's request implies
+    // and its one field, as a grant of it would bind it (`granted`).
+    // `count` claims under the context Bea's request established and still
+    // holds, of a share held to the digest its source's request implies and
+    // its one field: what a deny must refuse though the request is already
+    // in flight.
+    const heldClaimOf = (shareId, spec, count, implied) =>
+      ask({
+        op: "held_claim", user_id: bea.user_id, id: shareId, count, url: spec.url, method: spec.method,
+        digest: implied.binding_digest, field: FIELD,
+      });
+    const claimOf = (source, shareId, spec, count, implied) =>
+      ask({
+        op: "claim", user_id: ana.user_id, source, id: shareId, count, url: spec.url, method: spec.method,
+        digest: implied ? implied.binding_digest : "-", field: implied ? FIELD : "-",
+      });
     // A claim's whole answer: its results, and the database's next UTC
     // midnight, the value a cap's reset is compared with.
     const claimAnswer = (answer, results) =>
       same(answer, { results, next_utc_midnight: answer && answer.next_utc_midnight });
     const ids = (shown) => shown.map((o) => o.id);
+    // What Shared by you reads, by id, as the model's shares and today's
+    // use make it.
+    const byYouLines = (lines) => lines.map(([id, status, line]) => ({ id, status, line }));
 
     // -----------------------------------------------------------------------
-    // create_entry
+    // share_key
     // -----------------------------------------------------------------------
     const passkey = await registerPasskey(admin, settings);
-    const madeAi = await createEntry(admin, settings, AI);
-    const madeMail = await createEntry(admin, settings, MAIL);
+    record.share_key = { passkey };
+    const madeAi = await createKey(admin, vault, AI);
+    record.share_key.ai = madeAi;
+    const madeMail = await createKey(admin, vault, MAIL);
+    record.share_key.mail = madeMail;
     operator = await ask({ op: "admin" });
     // What each request implies the owner stores, from the destination it
     // typed: the destination's canonical text and the digest over it.
@@ -665,43 +792,55 @@ async function main() {
     });
     aiImplied = await impliedBy(AI);
     mailImplied = await impliedBy(MAIL);
-    const cards = await cardIds(admin, settings);
-    ai = { id: cards[AI.name] };
-    mail = { id: cards[MAIL.name] };
-    setEntries();
-    const created = await stateHolds();
-    record.create_entry = { passkey, ai: madeAi, mail: madeMail, cards, state: created.compared };
-    if (!row("create_entry",
-      passkey.active && madeAi.created && madeMail.created && !madeAi.key_on_page && !madeMail.key_on_page &&
-        Object.keys(cards).length === 2 && created.held,
-      "Company AI and Company Mail made on the card, each key typed in the prompt and proven with the passkey; " +
-        "the whole state is the two entries their cards requested",
-      { passkey, cards, state: created.compared, confirmations: [madeAi.confirmation, madeMail.confirmation] })) return;
+    const shownIds = await entryIds(admin, vault, 2);
+    ai = { id: shownIds[AI.name] };
+    mail = { id: shownIds[MAIL.name] };
+    const sharedAi = await shareKey(admin, vault, ai.id, AI);
+    const sharedMail = await shareKey(admin, vault, mail.id, MAIL);
+    await open(admin, vault);
+    const madeShares = await sharedByYou(admin);
+    const shareOf = (name) => (madeShares.find((s) => s.line.startsWith(`${name},`)) || {}).id;
+    ai.share = shareOf(AI.name);
+    mail.share = shareOf(MAIL.name);
+    setModel();
+    const sheetOpened = (made) => made.asked && same(made.shown, {
+      audiences: ["Everyone on this CYFR"],
+      caps: [["person_daily", ""], ["total_daily", ""]],
+      meaning: [CAPS_MEANING],
+      uncapped: [UNCAPPED],
+      secret_inputs: 0,
+    });
+    const linesMade = byYouLines([
+      [ai.share, "active", "Company AI, shared with everyone, 0 today, at most 3 a person a day"],
+      [mail.share, "active", "Company Mail, shared with everyone, 0 today, no cap"],
+    ]);
+    const made = await stateHolds();
+    record.share_key = {
+      passkey, ai: madeAi, mail: madeMail, entries: shownIds, sheets: [sharedAi, sharedMail], shared_by_you: madeShares,
+      state: made.compared,
+    };
+    if (!row("share_key",
+      passkey.active && madeAi.created && madeMail.created && !madeAi.disclosed && !madeMail.disclosed &&
+        !madeAi.key_on_page && !madeMail.key_on_page && Object.keys(shownIds).length === 2 &&
+        sheetOpened(sharedAi) && sheetOpened(sharedMail) && sharedAi.shared && sharedMail.shared &&
+        !sharedAi.key_on_page && !sharedMail.key_on_page && same(madeShares, linesMade) && made.held,
+      "Company AI and Company Mail made on the Vault page, each key typed in its form and proven with the passkey, " +
+        "each shared with everyone through the sheet, which opens with its caps empty and says what they mean, " +
+        "proven with the passkey; Shared by you reads both; the whole state is the two entries and two shares " +
+        "their forms requested",
+      { passkey, entries: shownIds, sheets: [sharedAi.shown, sharedMail.shown], shared_by_you: madeShares,
+        state: made.compared,
+        confirmations: [madeAi.confirmation, madeMail.confirmation, sharedAi.confirmation, sharedMail.confirmation] })) {
+      return;
+    }
 
     // -----------------------------------------------------------------------
     // first_sign_in
     // -----------------------------------------------------------------------
     // The administrator opens the door to newcomers, which admits Ana and
-    // Bea when they are made, and shares with everyone, before Ana signs
-    // in, a key of their own made with Company AI's provider, field and
-    // destination: the share a newcomer's first sign-in binds.
+    // Bea when they are made; Ana's first sign-in binds the share of the
+    // key that fits the openai catalyst's need, Company AI's.
     const allowed = [await door(admin, settings, "*", "allow")];
-    const shared = await ask({
-      op: "admin_share", provider: AI.provider, field: FIELD, destination: requestedDestination(AI),
-    });
-    model.shares = [{
-      id: shared.share_id,
-      athanor_id: operator.athanor_id,
-      vault_entry_id: shared.entry_id,
-      audience: "everyone",
-      group_id: null,
-      person_daily: null,
-      total_daily: null,
-      status: "active",
-      created_by: operator.user_id,
-      inserted_at: IN_WINDOW,
-      updated_at: IN_WINDOW,
-    }];
     ana = await ask({ op: "sign_in", name: "ana", email: "ana@example.com" });
     // The loader's decision on her root names the profile and consent it
     // roots on: the ids the model takes for the profile and head the
@@ -711,14 +850,14 @@ async function main() {
     // policy blob's text, its digest, the activation, the shape and commit
     // digests, built by the owner's own builders, never read back.
     const derived = await ask({
-      op: "derived_head", user_id: ana.user_id, share_id: shared.share_id,
+      op: "derived_head", user_id: ana.user_id, share_id: ai.share,
       provider: AI.provider, field: FIELD, destination: requestedDestination(AI),
     });
     // One claim through the share her head binds, held to the digest and
     // the field it binds, is admitted and counted; the row binding reads
     // the share live as offered.
-    const shareClaim = await claimOf("share", shared.share_id, AI, 1);
-    const shareBinding = await ask({ op: "row_binding", user_id: ana.user_id, share_id: shared.share_id });
+    const shareClaim = await claimOf("share", ai.share, AI, 1);
+    const shareBinding = await ask({ op: "row_binding", user_id: ana.user_id, share_id: ai.share });
     // The admission's whole answer: its profile and consent are the ids the
     // model takes; the node and activation digest it verified for the
     // catalyst are the ones the bootstrap derives (the derived activation's
@@ -731,7 +870,7 @@ async function main() {
     };
     anaPage = await (await signedIn(browser, ana.cookie)).newPage();
     await open(anaPage, pagePath(ana.segment, "/vault"));
-    const shown = await offered(anaPage);
+    const shown = await sharedWithYou(anaPage);
     const anaHtml = await anaPage.content();
     // Her first sign-in mints one profile of the catalyst, Ana's own owner
     // default, active, headed by one consent: the bootstrap's first
@@ -739,11 +878,11 @@ async function main() {
     // two origins a machine-minted revision admits (spelled as the store
     // writes them), with the policy blob, its digest, the activation and
     // the shape and commit digests the bootstrap derives from the request,
-    // compared as stored text. The head holds one binding row, the
-    // administrator's share on the catalyst's own default slot, standing,
-    // at the digest Company AI's request implies, which the share's source
-    // was made with; the share is used once by Ana; her vault offers both
-    // entries.
+    // compared as stored text. The head holds one binding row, Company AI's
+    // share on the catalyst's own default slot, standing, at the digest
+    // Company AI's request implies; the share is used once by Ana, which
+    // its entry's last use says; her vault offers no instance entry and
+    // both shares, each by the administrator's name.
     model.ana = {
       profiles: [{
         id: admitted.profile_id,
@@ -781,84 +920,94 @@ async function main() {
         scope: "share",
         vault_entry_id: null,
         instance_entry_id: null,
-        share_id: shared.share_id,
+        share_id: ai.share,
         via_label: null,
         binding_digest: aiImplied.binding_digest,
         lifetime_kind: "standing",
         expires_at: null,
         consumed_by_root: null,
       }],
-      offered: [ai.id, mail.id],
+      offered: [],
+      shared: [ai.share, mail.share],
     };
-    model.share_usage = [shareUse(shared.share_id, ana.user_id, 1), shareUse(shared.share_id, "", 1)];
+    aiOver = { ...aiOver, last_used_at: IN_WINDOW };
+    setModel();
+    model.share_usage = [shareUse(ai.share, ana.user_id, 1), shareUse(ai.share, "", 1)];
+    const shownFirst = [
+      withYouRow(AI, ai.share, aiImplied, "1 request today"),
+      withYouRow(MAIL, mail.share, mailImplied, "none today"),
+    ];
     const signed = await stateHolds();
     record.first_sign_in = {
-      allowed, shared, ana: { user_id: ana.user_id, segment: ana.segment }, admitted, derived, share_claim: shareClaim,
+      allowed, ana: { user_id: ana.user_id, segment: ana.segment }, admitted, derived, share_claim: shareClaim,
       share_binding: shareBinding, shown, state: signed.compared,
     };
     if (!row("first_sign_in",
       allowed.every(Boolean) && same(admitted, admission) && claimAnswer(shareClaim, [{ admitted: true }]) &&
-        same(shareBinding, { row: true, offered: true }) && same(ids(shown), model.ana.offered) &&
+        same(shareBinding, { row: true, offered: true }) && same(shown, shownFirst) &&
         !holdsKey(anaHtml) && signed.held,
-      "Ana's first sign-in binds the administrator's share at bootstrap, the loader admits the root, a claim through " +
-        "the share is admitted, its row binding reads offered, her vault offers both, no material; the whole state is " +
-        "the model",
-      { shared, admitted, share_claim: shareClaim, share_binding: shareBinding, shown: ids(shown),
-        state: signed.compared })) return;
+      "Ana's first sign-in binds Company AI's share at bootstrap, the loader admits the root, a claim through the " +
+        "share is admitted, its row binding reads offered, her vault's Shared with you offers both by the " +
+        "administrator's name, no material; the whole state is the model",
+      { admitted, share_claim: shareClaim, share_binding: shareBinding, shown, state: signed.compared })) return;
 
     // -----------------------------------------------------------------------
     // claim_cap
     // -----------------------------------------------------------------------
-    const three = await claimOf("instance", ai.id, AI, 3);
+    const two = await claimOf("share", ai.share, AI, 2);
     await open(anaPage, pagePath(ana.segment, "/vault"));
-    const cappedShown = await offered(anaPage);
-    const capped = cappedShown.find((o) => o.id === ai.id);
-    const fourth = await claimOf("instance", ai.id, AI, 1);
+    const cappedShown = await sharedWithYou(anaPage);
+    const fourth = await claimOf("share", ai.share, AI, 1);
     // Each claim's whole answer, the fourth's reset the database's next UTC
-    // midnight; Company AI is used, and its use is Ana's three and the
-    // day's three on the database's today, no one else's and no other day.
-    const threeAdmitted = [{ admitted: true }, { admitted: true }, { admitted: true }];
+    // midnight; the share's use is Ana's three and the day's three on the
+    // database's today, no one else's and no other day. Her Shared with you
+    // is compared whole: the owner and her own use, 3, and nothing of the
+    // cap, which is the owner's (`share.offered` carries no cap).
+    const twoAdmitted = [{ admitted: true }, { admitted: true }];
     const fourthRefused = [{ admitted: false, refusal: "connection_cap", reset_at: fourth.next_utc_midnight }];
-    aiOver = { ...aiOver, last_used_at: IN_WINDOW };
-    setEntries();
-    model.usage = [use(ai.id, ana.user_id, 3), use(ai.id, "", 3)];
+    model.share_usage = [shareUse(ai.share, ana.user_id, 3), shareUse(ai.share, "", 3)];
+    const shownCapped = [
+      withYouRow(AI, ai.share, aiImplied, "3 requests today"),
+      withYouRow(MAIL, mail.share, mailImplied, "none today"),
+    ];
     const claimed = await stateHolds();
-    record.claim_cap = { three, fourth, shown: cappedShown, state: claimed.compared };
+    record.claim_cap = { two, fourth, shown: cappedShown, state: claimed.compared };
     if (!row("claim_cap",
-      claimAnswer(three, threeAdmitted) && claimAnswer(fourth, fourthRefused) &&
-        same(ids(cappedShown), model.ana.offered) &&
-        capped && capped.text.includes("3 requests today") && capped.text.includes(REACHED) && claimed.held,
-      "three claims admitted, her vault says the limit is reached and resets at midnight UTC, the fourth refused at " +
-        "the next UTC midnight; the whole state is the model",
-      { three, fourth, shown: capped && capped.text, state: claimed.compared })) return;
+      claimAnswer(two, twoAdmitted) && claimAnswer(fourth, fourthRefused) && same(cappedShown, shownCapped) &&
+        claimed.held,
+      "two more claims admitted, the next refused with its reset at the next UTC midnight; her Shared with you, " +
+        "compared whole, shows the owner and her use today, 3, and no cap; the whole state is the model",
+      { two, fourth, shown: cappedShown, state: claimed.compared })) return;
 
     // -----------------------------------------------------------------------
     // narrow_audience
     // -----------------------------------------------------------------------
+    // Bea signs in once and is seated with the administrator in a group,
+    // Traders, which the narrowing names.
     bea = await ask({ op: "sign_in", name: "bea", email: "bea@example.com" });
-    await open(admin, settings);
-    const form = `#instance-audience-${ai.id}`;
-    await admin.locator(`${card(ai.id)} details > summary`).click();
-    const picker = admin.locator(`${form} input[name="members[]"][value="${bea.user_id}"]`);
-    const listed = await picker.waitFor({ timeout: 30_000 }).then(() => true).catch(() => false);
-    await admin.locator(`${form} input[name="audience"][value="listed"]`).check();
-    await picker.check();
+    const traders = await ask({ op: "group", member: bea.user_id, name: "Traders" });
+    await open(admin, vault);
+    const audience = admin.locator(`${byYouRow(ai.share)} form[data-test="share-audience-form"]`);
+    const offeredTraders = await audience.locator(`option[value="group:${traders.group_id}"]`)
+      .waitFor({ state: "attached", timeout: 30_000 }).then(() => true).catch(() => false);
+    await audience.locator('select[name="audience"]').selectOption(`group:${traders.group_id}`);
     const mark = frames.length;
-    await admin.locator(`${form} [data-test="instance-audience-save"]`).click();
+    await audience.locator('[data-test="share-audience-save"]').click();
     const saved = await told(admin, "Audience saved.");
-    const sent = frames.slice(mark).filter((f) => f.includes("instance_audience"));
-    const sentExpected = sent.some((f) => f.includes("audience_shown=everyone"));
-    const claim = await claimOf("instance", ai.id, AI, 1);
-    const rowBinding = await ask({ op: "row_binding", user_id: ana.user_id, share_id: shared.share_id });
+    const sent = frames.slice(mark).filter((f) => f.includes("share_audience"));
+    const sentExpected = sent.some((f) => f.includes("expected_audience=everyone"));
+    const narrowedLines = await sharedByYou(admin);
+    const claim = await claimOf("share", ai.share, AI, 1);
+    const rowBinding = await ask({ op: "row_binding", user_id: ana.user_id, share_id: ai.share });
     await open(anaPage, pagePath(ana.segment, "/vault"));
-    const afterNarrow = await offered(anaPage);
+    const afterNarrow = await sharedWithYou(anaPage);
     // Bea's first sign-in leaves her row as the release fixture's person
     // is made and signs in (an open admission, her GitHub email verified,
-    // "Release proof"), active, at security
-    // generation 1, her personal athanor the one her sign-in names. Company
-    // AI is listed for Bea alone; Ana's claim of it is refused as not
-    // offered, the share her head binds stands, as the row binding reads
-    // it, and her vault offers Company Mail alone.
+    // "Release proof"), active, at security generation 1, her personal
+    // athanor the one her sign-in names. Company AI's share is to Traders
+    // alone, which Ana is not in: her claim of it is refused as not
+    // offered, as is the row binding the loader reads, and her vault offers
+    // Company Mail's share alone.
     model.bea = {
       user: {
         id: bea.user_id,
@@ -877,87 +1026,125 @@ async function main() {
         created_at: IN_WINDOW,
         updated_at: IN_WINDOW,
       },
+      // Seated in Traders, she is offered Company AI's share, and Company
+      // Mail's, which is to everyone.
+      shared: [ai.share, mail.share],
     };
-    aiOver = { ...aiOver, audience: "listed" };
-    setEntries();
-    model.members = [{ instance_entry_id: ai.id, user_id: bea.user_id, inserted_at: IN_WINDOW }];
-    model.ana.offered = [mail.id];
+    aiShareOver = { ...aiShareOver, audience: "group", group_id: traders.group_id };
+    setModel();
+    model.ana.shared = [mail.share];
     const notOffered = [{ admitted: false, refusal: "not_offered" }];
-    const rowStands = { row: true, offered: true };
+    const rowNotOffered = { row: true, offered: false, refusal: "not_offered" };
+    const linesNarrowed = byYouLines([
+      [ai.share, "active", "Company AI, shared with Traders, 3 today, at most 3 a person a day"],
+      [mail.share, "active", "Company Mail, shared with everyone, 0 today, no cap"],
+    ]);
     const narrowedState = await stateHolds();
     record.narrow_audience = {
-      listed, saved, sent, claim, rowBinding, shown: afterNarrow, state: narrowedState.compared,
+      traders, offered_traders: offeredTraders, saved, sent, shared_by_you: narrowedLines, claim, rowBinding,
+      shown: afterNarrow, state: narrowedState.compared,
     };
     if (!row("narrow_audience",
-      listed && saved && sentExpected && claimAnswer(claim, notOffered) && same(rowBinding, rowStands) &&
-        same(ids(afterNarrow), model.ana.offered) && narrowedState.held,
-      "Company AI narrowed to Bea on the card, sent with the audience it showed: Ana's claim of it refused, her share " +
-        "binding still offered, her vault drops it; the whole state is the model",
-      { sent_expected: sentExpected, claim, row_binding: rowBinding, shown: ids(afterNarrow),
-        state: narrowedState.compared })) return;
+      offeredTraders && saved && sentExpected && same(narrowedLines, linesNarrowed) && claimAnswer(claim, notOffered) &&
+        same(rowBinding, rowNotOffered) && same(ids(afterNarrow), model.ana.shared) && narrowedState.held,
+      "Company AI's share narrowed to Traders on Shared by you, sent with the audience the row showed: Ana's claim " +
+        "refused, her row binding reads it not offered, her vault drops it; the whole state is the model",
+      { sent_expected: sentExpected, shared_by_you: narrowedLines, claim, row_binding: rowBinding,
+        shown: ids(afterNarrow), state: narrowedState.compared })) return;
 
     // -----------------------------------------------------------------------
     // revoke
     // -----------------------------------------------------------------------
-    const before = await claimOf("instance", mail.id, MAIL, 1);
-    await open(admin, settings);
-    const revoke = admin.locator(`${card(mail.id)} button[phx-click="instance_revoke"]`);
+    const before = await claimOf("granted", mail.share, MAIL, 1, mailImplied);
+    await open(admin, vault);
+    const revoke = admin.locator(`${byYouRow(mail.share)} [data-test="share-revoke"]`);
     await revoke.scrollIntoViewIfNeeded();
     const revokeMark = frames.length;
     await revoke.click();
-    const revoked = await told(admin, "Entry revoked.");
+    const revoked = await told(admin, "Share revoked.");
     const revokeShown = revoked ? [] :
-      [...await diagnose(admin, "revoke"), { sent: frames.slice(revokeMark).filter((f) => f.includes("instance_revoke")) }];
-    const after = await claimOf("instance", mail.id, MAIL, 1);
+      [...await diagnose(admin, "revoke"), { sent: frames.slice(revokeMark).filter((f) => f.includes("share_revoke")) }];
+    const revokedLines = await sharedByYou(admin);
+    const after = await claimOf("granted", mail.share, MAIL, 1, mailImplied);
     await open(anaPage, pagePath(ana.segment, "/vault"));
-    const afterRevoke = await offered(anaPage);
-    const nothing = await told(anaPage, "This instance offers you no entry.", 10_000);
-    // The claim before is admitted and the one after refused as revoked;
-    // Company Mail is used once by Ana and revoked, and her vault offers
-    // nothing.
+    const afterRevoke = await sharedWithYou(anaPage);
+    const nothing = await told(anaPage, "No one shares a key with you.", 10_000);
+    // The claim before is admitted and the one after refused as not
+    // offered; Company Mail is used once by Ana, its share revoked, and her
+    // vault offers nothing.
     const admittedOnce = [{ admitted: true }];
-    const refusedRevoked = [{ admitted: false, refusal: "entry_unavailable", status: "revoked" }];
-    mailOver = { ...mailOver, status: "revoked", last_used_at: IN_WINDOW };
-    setEntries();
-    model.usage = [...model.usage, use(mail.id, ana.user_id, 1), use(mail.id, "", 1)];
-    model.ana.offered = [];
+    mailOver = { ...mailOver, last_used_at: IN_WINDOW };
+    mailShareOver = { ...mailShareOver, status: "revoked" };
+    setModel();
+    model.share_usage = [...model.share_usage, shareUse(mail.share, ana.user_id, 1), shareUse(mail.share, "", 1)];
+    model.ana.shared = [];
+    model.bea.shared = [ai.share];
+    const linesRevoked = byYouLines([
+      [ai.share, "active", "Company AI, shared with Traders, 3 today, at most 3 a person a day"],
+      [mail.share, "revoked", "Company Mail, shared with everyone, revoked"],
+    ]);
     const revokedState = await stateHolds();
     record.revoke = {
-      before, revoked, revoke_page: revokeShown, after, shown: afterRevoke, nothing, state: revokedState.compared,
+      before, revoked, revoke_page: revokeShown, shared_by_you: revokedLines, after, shown: afterRevoke, nothing,
+      state: revokedState.compared,
     };
     if (!row("revoke",
-      claimAnswer(before, admittedOnce) && revoked && claimAnswer(after, refusedRevoked) &&
-        same(ids(afterRevoke), model.ana.offered) && nothing && revokedState.held,
-      "Company Mail, claimed just before, is revoked on the card: Ana's next claim is refused and her vault offers " +
-        "nothing; the whole state is the model",
-      { before, after, shown: ids(afterRevoke), state: revokedState.compared })) return;
+      claimAnswer(before, admittedOnce) && revoked && same(revokedLines, linesRevoked) &&
+        claimAnswer(after, notOffered) && same(ids(afterRevoke), model.ana.shared) && nothing && revokedState.held,
+      "Company Mail's share, claimed just before, is revoked on Shared by you, which reads it revoked: Ana's next " +
+        "claim is refused and her vault offers nothing; the whole state is the model",
+      { before, after, shared_by_you: revokedLines, shown: ids(afterRevoke), state: revokedState.compared })) return;
 
     // -----------------------------------------------------------------------
     // deny_person
     // -----------------------------------------------------------------------
+    // The control first: Bea, in Traders, is offered Company AI's share, and
+    // a claim through it under the context her request holds is admitted
+    // and counted, Bea's 1 beside Ana's 3, the day's 4.
+    const beaBefore = await heldClaimOf(ai.share, AI, 1, aiImplied);
+    model.share_usage = [
+      shareUse(ai.share, ana.user_id, 3), shareUse(ai.share, bea.user_id, 1), shareUse(ai.share, "", 4),
+      shareUse(mail.share, ana.user_id, 1), shareUse(mail.share, "", 1),
+    ];
+    const offeredState = await stateHolds();
     // A deny names the person, by her user id.
     const denied = await door(admin, settings, bea.user_id, "deny");
-    await open(admin, settings);
-    const audienceShown = await admin.locator(`${card(ai.id)} [data-test="instance-audience"]`).innerText()
-      .catch(() => "");
+    // The same claim under the same held context is refused as hers, a
+    // person who no longer stands, and counts nothing.
+    const beaAfter = await heldClaimOf(ai.share, AI, 1, aiImplied);
+    await open(admin, vault);
+    const deniedLines = await sharedByYou(admin);
     // A deny commits three columns of her row together
     // (`Sanctum.Tenancy.Users`): denied, a denial time, and her security
-    // generation one above the model's; and it takes her out of Company
-    // AI's audience, which then lists no one.
+    // generation one above the model's. A share's audience is read at use,
+    // so nothing of a share is written; what she is offered is now the
+    // refusal of a person who does not stand, and the use rows stand as
+    // they were. Shared by you reads Company AI's use with hers.
     model.bea.user = {
       ...model.bea.user,
       status: "denied",
       denied_at: IN_WINDOW,
       security_generation: model.bea.user.security_generation + 1,
     };
-    model.members = [];
+    model.bea.shared = { refused: "denied" };
+    const linesDenied = byYouLines([
+      [ai.share, "active", "Company AI, shared with Traders, 4 today, at most 3 a person a day"],
+      [mail.share, "revoked", "Company Mail, shared with everyone, revoked"],
+    ]);
     const deniedState = await stateHolds();
-    record.deny_person = { denied, card: audienceShown, state: deniedState.compared };
+    record.deny_person = {
+      bea_before: beaBefore, offered_state: offeredState.compared, denied, bea_after: beaAfter,
+      shared_by_you: deniedLines, state: deniedState.compared,
+    };
     if (!row("deny_person",
-      denied && /nobody listed/.test(audienceShown) && deniedState.held,
-      "Bea denied at the door on the Settings page: Company AI's card lists no one, and no audience lists her; " +
-        "the whole state is the model",
-      { card: audienceShown, state: deniedState.compared })) return;
+      claimAnswer(beaBefore, [{ admitted: true }]) && offeredState.held && denied &&
+        claimAnswer(beaAfter, [{ admitted: false, refusal: "denied" }]) && same(deniedLines, linesDenied) &&
+        deniedState.held,
+      "Bea, in Traders, is offered Company AI's share and her claim through it is admitted and counted; denied at " +
+        "the door on the Settings page, she is offered nothing, the same claim is refused as denied and counts " +
+        "nothing, and no share changes; the whole state is the model before and after",
+      { bea_before: beaBefore, bea_after: beaAfter, shared_by_you: deniedLines, offered_state: offeredState.compared,
+        state: deniedState.compared })) return;
 
     // -----------------------------------------------------------------------
     // admin_focus

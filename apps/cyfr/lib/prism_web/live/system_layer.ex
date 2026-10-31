@@ -4,7 +4,7 @@
 defmodule PrismWeb.SystemLayer do
   @moduledoc """
   The system layer: what Prism alone draws above every frame — grant,
-  unlock, sign-in, credential-entry, pairing and confirmation prompts,
+  unlock, sign-in, credential-entry, sharing, pairing and confirmation prompts,
   the fallback's notice, and the restore checklist. It presents a prompt
   and never
   decides one: the operation a confirmation dispatches is decided where
@@ -97,11 +97,13 @@ defmodule PrismWeb.SystemLayer do
       `provider_hint`. Any other prompt prefills nothing, and disclosure is
       off until the person turns it on. A value left undisclosed is never
       handed to the app: CYFR attaches it to the requests bound for the
-      entry's destination. A prompt whose `target` is `:instance` is the
-      platform administrator's card asking for an instance entry's value
-      alone: `instance_entry.create` with the arguments the card
-      collected, or `instance_entry.rotate` of the entry the card names,
-      the one value typed under the subject's field;
+      entry's destination;
+    * a share — `share.create` of the entry the sharing sheet names
+      (`PrismWeb.SystemLayer.Share`), with the audience and the caps
+      chosen there, a sensitive change the layer confirms like any other
+      (`credential_sharing`); the prompt reports `:confirmed` once the
+      share is made, and shows a refusal's sentence and stays open
+      otherwise;
     * pairing — `pairing.list` and `session.cli_list` when it opens,
       `pairing.begin`, whose answer's `invitation_url` it draws as a QR
       code, `pairing.revoke`, and `session.cli_revoke` of a command line's
@@ -226,7 +228,7 @@ defmodule PrismWeb.SystemLayer do
   alias Phoenix.LiveView.JS
   alias Prism.Fallback
   alias PrismWeb.Ops
-  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery, RestoreChecklist}
+  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery, RestoreChecklist, Share}
   alias Sanctum.Context
 
   @layer_id "system-layer"
@@ -1494,6 +1496,23 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
+  # The sheet's audience and caps, held to `share.create`'s arguments
+  # before anything is dispatched; the operation decides the rest.
+  def handle_event("share_create", %{"prompt_id" => id} = params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open(socket, id, [:share]) do
+        {:ok, prompt} ->
+          case Share.args(prompt.subject, params) do
+            {:ok, args} -> {:noreply, share_create(socket, prompt, args)}
+            {:error, sentence} -> {:noreply, assign(socket, :error, sentence)}
+          end
+
+        :none ->
+          {:noreply, socket}
+      end
+    end)
+  end
+
   def handle_event("pairing_revoke", %{"id" => id, "client" => client_id}, socket)
       when is_binary(client_id) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -1687,24 +1706,6 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  # An instance entry's value: the operation the card named, with the
-  # card's arguments and the one value typed. The page that asked never
-  # holds the value; the layer hands it to the dispatch alone.
-  defp enter_credential(socket, %{subject: %{target: :instance} = subject} = prompt, params) do
-    secret = Map.get(params, "secret")
-
-    if present(secret) == :blank do
-      assign(socket, :error, "Enter the credential to save it.")
-    else
-      {tool, args} = instance_call(subject, secret)
-
-      case layer_call(socket, prompt, :resubmit, tool, args) do
-        {:asked, socket} -> socket
-        {:done, result, socket} -> dispatched(socket, prompt, result)
-      end
-    end
-  end
-
   defp enter_credential(socket, %{subject: subject} = prompt, params) do
     secret = Map.get(params, "secret")
     destination = destination_params(params)
@@ -1740,12 +1741,6 @@ defmodule PrismWeb.SystemLayer do
         end
     end
   end
-
-  defp instance_call(%{operation: :create, arguments: arguments, field: field}, secret),
-    do: {"instance_entry/create", Map.put(arguments, "fields", %{field => secret})}
-
-  defp instance_call(%{operation: :rotate, arguments: arguments, field: field}, secret),
-    do: {"instance_entry/rotate", Map.put(arguments, "fields", %{field => secret})}
 
   # The name an entry is saved under: the subject's, or, for an entry a
   # grant asked for, the one the person left in the form's name field.
@@ -2184,6 +2179,10 @@ defmodule PrismWeb.SystemLayer do
               {:pairing_revoke, client_id} -> pairing_revoke(socket, prompt, client_id)
             end
 
+          %{id: ^prompt_id, kind: :share} = prompt ->
+            {:share_create, args} = repeat
+            share_create(socket, prompt, args)
+
           %{id: ^prompt_id, kind: :kit} = prompt ->
             recovery_submit(socket, prompt, %{})
 
@@ -2301,6 +2300,18 @@ defmodule PrismWeb.SystemLayer do
     case Ops.call_tool(socket, "confirmation/cancel", %{"ref" => ref}) do
       {:ok, _cancelled} -> assign(socket, :error, nil)
       {:error, reason} -> assign(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Sharing
+  # ---------------------------------------------------------------------------
+
+  # A share made ends the sheet confirmed; a refusal stays on it, said.
+  defp share_create(socket, prompt, args) do
+    case layer_call(socket, prompt, {:share_create, args}, "share/create", args) do
+      {:asked, socket} -> socket
+      {:done, result, socket} -> dispatched(socket, prompt, result)
     end
   end
 
@@ -2848,40 +2859,6 @@ defmodule PrismWeb.SystemLayer do
     """
   end
 
-  # An instance entry's value is all the prompt asks: the card collected
-  # the rest. The form is the browser's, as below.
-  defp body(%{prompt: %{kind: :credential_entry, subject: %{target: :instance}}} = assigns) do
-    ~H"""
-    <div id={"#{@id}-credential-#{@prompt.id}"} phx-update="ignore">
-      <form
-        id={"#{@id}-credential"}
-        phx-submit="enter_credential"
-        phx-target={@myself}
-        class="space-y-2"
-        data-target="instance"
-      >
-        <input type="hidden" name="prompt_id" value={@prompt.id} />
-        <label for={"#{@id}-secret"} class="block text-sm font-medium">
-          {@prompt.subject.field} for the instance entry {@prompt.subject.name}
-        </label>
-        <input
-          id={"#{@id}-secret"}
-          name="secret"
-          type="password"
-          autocomplete="off"
-          required
-          data-test="credential-secret"
-          class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-        />
-        <p class="text-sm text-gray-300" data-test="credential-attach">
-          An instance entry's value is never handed to a component: CYFR attaches it to
-          requests bound for the entry's destination, for the people it is offered to.
-        </p>
-      </form>
-    </div>
-    """
-  end
-
   # The form is the browser's: kept as typed across every update, so the
   # value can be submitted again once its record is confirmed, and gone
   # with the prompt.
@@ -3009,6 +2986,17 @@ defmodule PrismWeb.SystemLayer do
         </label>
       </form>
     </div>
+    """
+  end
+
+  defp body(%{prompt: %{kind: :share}} = assigns) do
+    ~H"""
+    <Share.sheet
+      id={@id}
+      prompt={@prompt}
+      administrator={match?(%Context{platform_admin: true}, @context)}
+      myself={@myself}
+    />
     """
   end
 
@@ -3250,11 +3238,16 @@ defmodule PrismWeb.SystemLayer do
         data-test="credential-submit"
         class={button_class(true)}
       >
-        {cond do
-          not @may -> "Request confirmation"
-          @prompt.subject[:target] == :instance -> "Save to this instance"
-          true -> "Save to vault"
-        end}
+        {if @may, do: "Save to vault", else: "Request confirmation"}
+      </button>
+      <button
+        :if={@prompt.kind == :share}
+        type="submit"
+        form={"#{@id}-share"}
+        data-test="share-submit"
+        class={button_class(true)}
+      >
+        {if @may, do: "Share", else: "Request confirmation"}
       </button>
     </div>
     """
@@ -3280,18 +3273,13 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :unlock}), do: "Unlock the vault"
   defp title(%{kind: :sign_in}), do: "Sign in"
 
-  defp title(%{kind: :credential_entry, subject: %{target: :instance, operation: :rotate} = s}),
-    do: "Rotate the instance entry #{s.name}"
-
-  defp title(%{kind: :credential_entry, subject: %{target: :instance, name: name}}),
-    do: "Enter the key for the instance entry #{name}"
-
   defp title(%{kind: :credential_entry, subject: %{return: _return, provider: provider}}),
     do: "Connect your #{provider} account"
 
   defp title(%{kind: :credential_entry, subject: %{name: name}}),
     do: "Enter a credential for #{name}"
 
+  defp title(%{kind: :share, subject: %{name: name}}), do: "Share #{name}"
   defp title(%{kind: :pairing}), do: "Your devices"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
@@ -3312,15 +3300,15 @@ defmodule PrismWeb.SystemLayer do
   defp description(%{kind: :sign_in, subject: subject}),
     do: subject[:message] || "Sign in to go on. You leave this page to do it."
 
-  defp description(%{kind: :credential_entry, subject: %{target: :instance}}),
-    do:
-      "The value goes straight to this instance's own entries, sealed at rest. No app " <>
-        "sees it, and it is never shown again."
-
   defp description(%{kind: :credential_entry}),
     do:
       "The value goes straight to your vault, sealed at rest. No app sees it, and it is " <>
         "never shown again."
+
+  defp description(%{kind: :share}),
+    do:
+      "Offer this key to everyone on this CYFR or to one of your groups. They grant it to " <>
+        "their own apps, and confirming it here is a fresh confirmation."
 
   defp description(%{kind: :pairing}),
     do:

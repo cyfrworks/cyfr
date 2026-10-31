@@ -399,7 +399,7 @@ defmodule Cyfr.BusPayloadTest do
 
       assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
                {:global, "sanctum:instance_entries", InstanceEntryChanged,
-                ["Cyfr.TelemetryBridge"], ["PrismWeb.SettingsLive", "PrismWeb.VaultLive"]}
+                ["Cyfr.TelemetryBridge"], ["PrismWeb.VaultLive"]}
     end
   end
 

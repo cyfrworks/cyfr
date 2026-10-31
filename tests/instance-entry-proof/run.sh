@@ -5,20 +5,20 @@
 # The instance-entry proof (README.md): a `cyfr` release started as the
 # browser harness starts a home (tests/browser/harness.sh), home.test behind
 # the harness's HTTPS front, its platform administrator signed in. In
-# Chromium (proof.mjs) the administrator offers the instance's own entries
-# from the Settings page, shares a key of their own with everyone, Ana
-# signs in for the first time, her first sign-in binds that share and she
-# is offered the entries, her claims meet the person cap, a narrowing and
-# a revocation refuse her, Bea is denied at the door, and the
-# administrator cannot enter Ana's athanor.
+# Chromium (proof.mjs) the administrator makes two keys on the Vault page
+# and shares each with everyone through the system layer's sharing sheet,
+# Ana signs in for the first time, her first sign-in binds the model key's
+# share and she is offered both, her claims meet the person cap, a
+# narrowing to a group and a revocation refuse her, Bea is denied at the
+# door, and the administrator cannot enter Ana's athanor.
 #
 # The proof asks the server for its part through the output directory
 # (`ask-N.json`), and this script answers each (`answer-N.json`): a
 # person's sign-in through the release fixture's door
 # (tests/release-boot/fixture.exs `person`), and the claims and reads of
 # the proof's own fixture (tests/instance-entry-proof/fixture.exs), which
-# answers bounded facts and never material, and seeds the administrator's
-# share, which no page of the release makes.
+# answers bounded facts and never material, and seeds the group the
+# narrowing names.
 #
 # The harness runs no execution engine and no model, so no run is started:
 # an admission is the loader's answer, and a claim is the resolver's, not
@@ -139,7 +139,7 @@ admin_cookie="$(browser_cookie "$CELL" "$admin_token")"
 
 # Each step the proof asks for (harness.sh `answer_asks`, which removes an
 # ask once answered, before its answer appears: a state ask carries the
-# digests of the payloads the cards typed, and none may outlive the read it
+# digests of the payloads the forms typed, and none may outlive the read it
 # was for).
 answer_ask() {
   local ask="$1" op ana_token ana_id bea_id
@@ -164,9 +164,8 @@ answer_ask() {
       ANSWER="$(entry_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
         "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
       ;;
-    admin_share)
-      ANSWER="$(entry_fixture admin_share "$admin_token" "$(asked "$ask" provider)" "$(asked "$ask" field)" \
-        "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
+    group)
+      ANSWER="$(entry_fixture group "$admin_token" "$(asked "$ask" member)" "$(asked "$ask" name)")"
       ;;
     derived_head)
       ANSWER="$(entry_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" share_id)" \
@@ -176,7 +175,12 @@ answer_ask() {
     admit) ANSWER="$(entry_fixture admit "$(token_of "$ask")")" ;;
     claim)
       ANSWER="$(entry_fixture claim "$(token_of "$ask")" "$(asked "$ask" source)" "$(asked "$ask" id)" \
-        "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)")"
+        "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)" \
+        "$(asked "$ask" digest)" "$(asked "$ask" field)")"
+      ;;
+    held_claim)
+      ANSWER="$(entry_fixture held_claim "$(asked "$ask" user_id)" "$(asked "$ask" id)" "$(asked "$ask" count)" \
+        "$(asked "$ask" url)" "$(asked "$ask" method)" "$(asked "$ask" digest)" "$(asked "$ask" field)")"
       ;;
     row_binding) ANSWER="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" share_id)")" ;;
     focus) ANSWER="$(entry_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
