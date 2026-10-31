@@ -696,12 +696,16 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_living(ctx, id),
          {:ok, %{revoked_share_ids: share_ids}} <-
-           Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked"),
-         {:ok, affected} <-
-           Arca.ConsentStorage.head_profiles_referencing(Context.actor(ctx), id) do
-      broadcast(ctx, id, :revoke, %{name: entry.name})
+           Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked") do
+      # The revocation committed: its shares are announced whatever the
+      # read of the profiles after it answers.
       Sanctum.Shares.announce_each(ctx, :revoked, share_ids)
-      {:ok, %{affected: Enum.sort(affected)}}
+
+      with {:ok, affected} <-
+             Arca.ConsentStorage.head_profiles_referencing(Context.actor(ctx), id) do
+        broadcast(ctx, id, :revoke, %{name: entry.name})
+        {:ok, %{affected: Enum.sort(affected)}}
+      end
     end
   end
 
