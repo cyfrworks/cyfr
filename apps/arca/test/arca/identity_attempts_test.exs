@@ -1374,4 +1374,68 @@ defmodule Arca.IdentityAttemptsRaceTest do
     assert {:ok, %{enrollment: "none"}} =
              unboxed(fn -> PersonIdentities.get(server(), user_id) end)
   end
+
+  @tag :postgres
+  test "a follower re-reads the attempt after the rename and record ahead of its person lock", %{
+    user_id: user_id
+  } do
+    test = self()
+    as = %Prima.Actor{user_id: user_id}
+
+    {:ok, attempt} =
+      unboxed(fn ->
+        IdentityAttempts.open(
+          as,
+          Map.put(enrollment(user_id, "follow-race-#{System.unique_integer()}"), :name, "mira")
+        )
+      end)
+
+    renamer =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            assert {:ok, %{name: "nova"}} = IdentityAttempts.rename(as, attempt.id, "nova")
+            send(test, :rename_written)
+
+            receive do
+              :commit -> :ok
+            after
+              10_000 -> flunk("rename release missing")
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :rename_written, 5_000
+
+    recorder =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:recorder, backend()})
+          Users.set_namespace(server(), user_id, "mira")
+        end)
+      end)
+
+    assert_receive {:recorder, record_pid}, 5_000
+    LockWait.await_lock_wait!(record_pid, [~s(UPDATE "users")])
+
+    follower =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:follower, backend()})
+          IdentityAttempts.follow_name(as, attempt.id)
+        end)
+      end)
+
+    assert_receive {:follower, follow_pid}, 5_000
+    LockWait.await_lock_wait!(follow_pid, [~s(FROM "users"), "FOR UPDATE"])
+    send(renamer.pid, :commit)
+    assert {:ok, :ok} = Task.await(renamer, 15_000)
+    assert {:ok, %{namespace: "mira"}} = Task.await(recorder, 15_000)
+    assert {:ok, %{name: "mira"}} = Task.await(follower, 15_000)
+    actual = unboxed(fn -> Arca.Repo.get!(IdentityAttempt, attempt.id) end)
+
+    assert actual.name == "mira",
+           "follow_name returned mira but left persisted attempt #{actual.name}"
+  end
 end

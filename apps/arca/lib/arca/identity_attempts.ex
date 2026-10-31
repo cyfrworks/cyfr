@@ -278,9 +278,14 @@ defmodule Arca.IdentityAttempts do
           {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
   def follow_name(%Prima.Actor{} = actor, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.follow_name", fn ->
+      # The attempt is read again once the person's lock is held: a rename
+      # that held the lock first, and committed while this waited, is what
+      # the comparison and the write must see.
       Arca.Repo.locking_transaction(fn ->
-        with {:ok, attempt} <- held(actor, id) do
-          followed(attempt, recorded_name!(attempt.user_id))
+        with {:ok, %{user_id: user_id}} <- held(actor, id),
+             recorded = recorded_name!(user_id),
+             {:ok, attempt} <- held(actor, id) do
+          followed(attempt, recorded)
         end
         |> Arca.Repo.committed()
       end)
