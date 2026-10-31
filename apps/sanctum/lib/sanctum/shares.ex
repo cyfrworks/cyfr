@@ -659,19 +659,17 @@ defmodule Sanctum.Shares do
   end
 
   # The request inside the source's destination, its stored text read back
-  # through the grammar: a row whose destination does not read admits
-  # nothing.
-  defp inside(text, %{uri: uri, method: method}) when is_binary(text) do
+  # through the grammar: a row whose destination is absent or does not
+  # read admits nothing.
+  defp inside(text, %{uri: uri, method: method}) do
     with {:ok, %{} = map} <- Prima.Json.decode(text),
          {:ok, destination} <- Prima.Destination.from_map(map),
          true <- Prima.Destination.matches?(destination, uri, method) do
       :ok
     else
-      _outside_or_unreadable -> {:error, :destination_mismatch}
+      _outside_absent_or_unreadable -> {:error, :destination_mismatch}
     end
   end
-
-  defp inside(_absent, _request), do: {:error, :destination_mismatch}
 
   defp field_value(%{"fields" => fields}, {:field, need_field, entry_field}) do
     case Map.fetch(fields, entry_field) do
