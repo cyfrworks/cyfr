@@ -39,7 +39,7 @@ defmodule Cyfr.Telemetry.Catalog do
   guest refused one is audited when its runner reports the refusal.
   """
 
-  @catalog %{
+  @listed %{
     # ——— audit plane ———
     [:cyfr, :audit, :recorded] => %{
       consumers: [:operator],
@@ -517,6 +517,18 @@ defmodule Cyfr.Telemetry.Catalog do
           "still failing after a batch-rollback retry; the drop is counted, not hidden"
     }
   }
+
+  # A share's events: one per durable change (`Sanctum.Shares`), with the
+  # share id, the kind and the acting person, never an entry, an audience
+  # or a value. One event per kind of `Sanctum.Shares.kinds/0`, the one
+  # list, so a kind is spelled where it is emitted and nowhere here. The
+  # bridge carries the share id and the kind to `Cyfr.Bus.shares/0`.
+  @share_events Map.new(
+                  Sanctum.Shares.kinds(),
+                  &{[:cyfr, :sanctum, :share, &1], %{consumers: [:audit, :bridge]}}
+                )
+
+  @catalog Map.merge(@listed, @share_events)
 
   @doc "The full catalog: event name → %{consumers: [...], note: ...}."
   @spec all() :: %{[atom(), ...] => map()}

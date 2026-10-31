@@ -452,7 +452,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
-        Sanctum.Session Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
+        Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -488,6 +488,8 @@ defmodule Cyfr.Boundaries do
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
           "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
+          "`Sanctum.Shares` is the kinds a share announces, which the telemetry catalog " <>
+          "reads at compile time rather than spell them again (`kinds/0`). " <>
           "`Sanctum.Decisions` is `Cyfr.RetentionScheduler`'s purge of the host's own " <>
           "decisions, the rows without a tenant, under the platform's system actor " <>
           "(`purge_global/2`), which reaches no athanor's row, and the decision an entry " <>

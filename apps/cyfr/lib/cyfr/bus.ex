@@ -69,6 +69,7 @@ defmodule Cyfr.Bus do
     Schedules,
     Session,
     SettingsChanged,
+    ShareChanged,
     ThreadEvent,
     Tinctures,
     VaultEntryChanged,
@@ -451,6 +452,19 @@ defmodule Cyfr.Bus do
           "to the operations, which answer each under its own context"
     },
     %{
+      key: :shares,
+      scope: :global,
+      struct: ShareChanged,
+      match: {:exact, "sanctum:shares"},
+      template: "sanctum:shares",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["PrismWeb.VaultLive"],
+      reason:
+        "a share's recipients live in other athanors and must read again what they are " <>
+          "offered: a change, by share id and kind alone, sends every page that shows a " <>
+          "share back to the operations, which answer each under its own context"
+    },
+    %{
       key: :file_offers,
       scope: :global,
       struct: FileOffer,
@@ -743,6 +757,10 @@ defmodule Cyfr.Bus do
   @doc "An instance entry changed (`Cyfr.Bus.InstanceEntryChanged`)."
   @spec instance_entries() :: String.t()
   def instance_entries, do: "sanctum:instance_entries"
+
+  @doc "A share changed (`Cyfr.Bus.ShareChanged`)."
+  @spec shares() :: String.t()
+  def shares, do: "sanctum:shares"
 
   @doc """
   One person's file offers (`Cyfr.Bus.FileOffer`): `user_id` is a person

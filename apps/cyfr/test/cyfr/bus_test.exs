@@ -101,6 +101,7 @@ defmodule Cyfr.BusTest do
             Bus.health_check(7),
             Bus.schedule_completions(),
             Bus.instance_entries(),
+            Bus.shares(),
             Bus.file_offers("user_1")
           ] do
         refute String.starts_with?(topic, "tenant:"), "#{topic} should be global"
@@ -122,6 +123,7 @@ defmodule Cyfr.BusTest do
                "cyfr:schedule_completions",
                "cyfr:settings_changed",
                "sanctum:instance_entries",
+               "sanctum:shares",
                "arca:file_offers:<user_id>"
              ]
 

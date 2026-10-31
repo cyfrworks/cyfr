@@ -99,6 +99,27 @@ defmodule Cyfr.TelemetryCatalogTest do
     end
   end
 
+  # A share's durable changes are audited, and the bridge carries each to
+  # the recipients in other athanors: one event per kind, the kinds the
+  # emitter's own list, which the bus payload reads too.
+  test "every share change is audited and bridged, one event per kind" do
+    kinds = Sanctum.Shares.kinds()
+
+    assert Enum.sort(kinds) == Enum.sort(~w(created audience caps rebound rotated revoked)a)
+    assert Cyfr.Bus.ShareChanged.kinds() == kinds
+
+    events = for kind <- kinds, do: [:cyfr, :sanctum, :share, kind]
+
+    assert Enum.filter(Catalog.events(), &match?([:cyfr, :sanctum, :share | _], &1)) ==
+             Enum.sort(events)
+
+    for event <- events do
+      assert Catalog.all()[event] == %{consumers: [:audit, :bridge]}, inspect(event)
+      assert event in Catalog.consumed_by(:audit)
+      assert event in Catalog.consumed_by(:bridge)
+    end
+  end
+
   # Sending a copy is audited at each durable transition, a receipt that
   # lands or that the sweep fails among them, and the bridge carries each
   # to the people it concerns on their own topics.

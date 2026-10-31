@@ -40,6 +40,7 @@ defmodule Cyfr.BusPayloadTest do
     Schedules,
     Session,
     SettingsChanged,
+    ShareChanged,
     ThreadEvent,
     Tinctures,
     VaultEntryChanged,
@@ -106,6 +107,7 @@ defmodule Cyfr.BusPayloadTest do
       CallerInvalidated.new(:crypto.hash(:sha256, "session")),
       AthanorArchived.new("ath_payload"),
       InstanceEntryChanged.new(:policy, "ine_payload"),
+      ShareChanged.new(:revoked, "shr_payload"),
       FileOffer.new(:offered, "ofr_payload", "usr_sender", "q3.csv"),
       FrameCredential.new(:revoked, "usr_payload", "fcr_payload"),
       Notify.new(@actor, :approval_pending, %{thread_id: "t", approval_id: "a"}),
@@ -257,6 +259,9 @@ defmodule Cyfr.BusPayloadTest do
             fn -> InstanceEntryChanged.new(:renamed, "ine_1") end,
             fn -> InstanceEntryChanged.new(:policy, "") end,
             fn -> InstanceEntryChanged.new(:policy, nil) end,
+            fn -> ShareChanged.new(:policy, "shr_1") end,
+            fn -> ShareChanged.new(:revoked, "") end,
+            fn -> ShareChanged.new(:revoked, nil) end,
             fn -> FileOffer.new(:lost, "ofr_1", "usr_1", "a.txt") end,
             fn -> FileOffer.new(:offered, "", "usr_1", "a.txt") end,
             fn -> FileOffer.new(:offered, "ofr_1", nil, "a.txt") end,
@@ -395,6 +400,34 @@ defmodule Cyfr.BusPayloadTest do
       assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
                {:global, "sanctum:instance_entries", InstanceEntryChanged,
                 ["Cyfr.TelemetryBridge"], ["PrismWeb.SettingsLive", "PrismWeb.VaultLive"]}
+    end
+  end
+
+  describe "a share's change" do
+    test "is its share id and kind, and nothing a page could read a share from" do
+      fields = ShareChanged.new(:caps, "shr_1") |> Map.from_struct() |> Map.keys()
+      assert Enum.sort(fields) == [:kind, :share_id]
+
+      # The kinds are the identity domain's, exactly: the bus names nothing
+      # of it, so the two lists are held equal here.
+      assert ShareChanged.kinds() == Sanctum.Shares.kinds()
+
+      assert Enum.sort(ShareChanged.kinds()) ==
+               Enum.sort(~w(created audience caps rebound rotated revoked)a)
+
+      for kind <- Sanctum.Shares.kinds() do
+        assert %ShareChanged{kind: ^kind, share_id: "shr_1"} = ShareChanged.new(kind, "shr_1")
+      end
+
+      row = Enum.find(Bus.topics(), &(&1.key == :shares))
+
+      assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
+               {:global, "sanctum:shares", ShareChanged, ["Cyfr.TelemetryBridge"],
+                ["PrismWeb.VaultLive"]}
+
+      assert Bus.shares() == "sanctum:shares"
+      assert row.reason =~ "recipients live in other athanors"
+      assert row.reason =~ "under its own context"
     end
   end
 

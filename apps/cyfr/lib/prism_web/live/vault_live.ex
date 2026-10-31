@@ -81,6 +81,7 @@ defmodule PrismWeb.VaultLive do
       actor = Sanctum.Context.actor(socket.assigns[:context])
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.vault_changed(actor))
       Cyfr.Bus.subscribe_global(Cyfr.Bus.instance_entries())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.shares())
     end
 
     socket =
@@ -352,6 +353,12 @@ defmodule PrismWeb.VaultLive do
   # defaults with it, since a deleted entry is no athanor's default.
   def handle_info(%Cyfr.Bus.InstanceEntryChanged{}, socket) do
     {:noreply, socket |> fetch_offered() |> fetch_entries()}
+  end
+
+  # A share changed somewhere on this instance: the page reads what it
+  # shows again, under this person's own context.
+  def handle_info(%Cyfr.Bus.ShareChanged{}, socket) do
+    {:noreply, fetch_entries(socket)}
   end
 
   def handle_info(msg, socket) do
