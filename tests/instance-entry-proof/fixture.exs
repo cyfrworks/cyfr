@@ -6,12 +6,10 @@
 # The file evaluates to a function of the argument list; each command
 # answers one line, `ENTRY=` and a JSON object of bounded, non-secret
 # facts. It calls the real paths named below and reads back what they
-# decided, and seeds one thing, the administrator's share to everyone
-# (`admin_share`), which the browser cannot make: no page of the release
-# offers a Share action, and the confirmations a key and a share ask are
-# proven only with the administrator's passkey, which lives in the
-# browser's authenticator. Material an instance entry or a share unseals
-# is discarded here and never serialized.
+# decided, and seeds one thing, a group of the administrator's holding
+# Bea (`group`), which the narrowing names. The administrator's keys and
+# their shares are made on the Vault page, in the browser. Material a
+# share unseals is discarded here and never serialized.
 #
 #   clock
 #       The database's time (`Arca.ServerMetaStorage.now!/0`): the start of
@@ -20,26 +18,26 @@
 #   state ANA_SESSION_TOKEN|- BEA_USER_ID|- PAYLOAD_DIGESTS_JSON
 #       In one read, everything the proof's README names, every row whole,
 #       every column as its schema reads it, for the proof to compare with
-#       its own model after every step: every row of `instance_entries`
+#       its own model after every step: every row of `vault_entries`
 #       (tombstoned ones too), its sealed payload replaced by the outcome of
 #       comparing it with the digest PAYLOAD_DIGESTS_JSON names for the
 #       entry's id (`sealed_payload` below); every row of
-#       `instance_entry_members` and of
-#       `instance_entry_usage`; every row of `shares` and of
-#       `share_usage`; once Ana has signed in, every profile of
-#       catalyst:local.openai in her athanor, every consent of those
-#       profiles, every binding row of those consents, and the entries
-#       offered to her (`Sanctum.InstanceEntries.offered/1`); once Bea has
-#       signed in, her row (`users`); and, once every row is read, the
-#       database's time and its UTC date, the end of the window and the
-#       today a use row's day is held to. It picks no row out of a set and
-#       leaves no column out.
+#       `instance_entries`, `instance_entry_members` and
+#       `instance_entry_usage`, which nothing here makes; every row of
+#       `shares` and of `share_usage`; once Ana has signed in, every
+#       profile of catalyst:local.openai in her athanor, every consent of
+#       those profiles, every binding row of those consents, the instance
+#       entries offered to her (`Sanctum.InstanceEntries.offered/1`) and the
+#       shares (`Sanctum.Shares.offered/1`); once Bea has signed in, her row
+#       (`users`); and, once every row is read, the database's time and its
+#       UTC date, the end of the window and the today a use row's day is
+#       held to. It picks no row out of a set and leaves no column out.
 #
 #       An entry's sealed payload is unsealed here as its owner unseals it
-#       (`Sanctum.InstanceEntries`' `unseal/1`, which is private: the same
-#       AAD, `Sanctum.Cipher.decrypt/2` and `Sanctum.Vault.Payload.decode/1`),
+#       (`Sanctum.VaultReader`: the vault entry's AAD,
+#       `Sanctum.Cipher.decrypt/2` and `Sanctum.Vault.Payload.decode/1`),
 #       its decoded document hashed in its canonical text (`Prima.JCS`), and
-#       the hash compared with the proof's digest of the document its card
+#       the hash compared with the proof's digest of the document its form
 #       typed. The answer is one of `matches`, `differs`, `does_not_unseal`
 #       or `absent`; the material and its hash never leave this function.
 #
@@ -56,16 +54,11 @@
 #   under the context it establishes as a request establishes it
 #   (`Sanctum.Caller.establish/2`), at Prism (origin interactive).
 #
-#   admin_share SESSION_TOKEN PROVIDER FIELD DESTINATION_JSON
-#       The administrator, by their session, shares with everyone an
-#       attach-only `api_key` of their own athanor of PROVIDER, holding the
-#       one field FIELD, bound to DESTINATION_JSON's canonical text. The
-#       entry's row is written sealed as `Sanctum.Vault` writes one (the
-#       same payload, AAD, cipher and binding digest), its value made here
-#       and never serialized, and the share by `Arca.Shares.create/3` under
-#       the administrator's own actor, which holds it to every rule of a
-#       share but the confirmation (see above). Answers the entry's id and
-#       the share's.
+#   group SESSION_TOKEN MEMBER_USER_ID NAME
+#       The administrator, by their session, makes the group NAME
+#       (`Sanctum.Tenancy.Athanors.create_group/3`, which seats them) and
+#       seats the person MEMBER_USER_ID in it
+#       (`Sanctum.Tenancy.Members.ensure/2`). Answers the group's id.
 #
 #   derived_head SESSION_TOKEN SHARE_ID PROVIDER FIELD DESTINATION_JSON
 #       What the first sign-in's bootstrap derives for the person's head of
@@ -88,17 +81,18 @@
 #       consent bootstrap before it marks the athanor filled. An athanor
 #       not filled within the bound answers the refusal `not_provisioned`.
 #
-#   claim SESSION_TOKEN SOURCE ID COUNT URL METHOD
-#       COUNT claims under the person's context, for a request of METHOD
-#       to URL: for SOURCE `instance`, of the instance entry ID through
-#       `Sanctum.InstanceEntries.resolve/4`, with the node facts of the
-#       root the loader admits for catalyst:local.openai; for SOURCE
-#       `share`, of the share ID through `Sanctum.Shares.resolve/5`, held
-#       to the digest and the field the person's openai head binds it at,
-#       as `Sanctum.Attach` holds a request. Each answers admitted, or the
-#       refusal with a cap's reset, and the database's next UTC midnight,
-#       computed here from its clock. The material resolved is dropped
-#       here.
+#   claim SESSION_TOKEN SOURCE ID COUNT URL METHOD DIGEST FIELD
+#       COUNT claims of the share ID under the person's context, through
+#       `Sanctum.Shares.resolve/5`, for a request of METHOD to URL: for
+#       SOURCE `share`, held to the digest and the field the person's
+#       openai head binds it at, as `Sanctum.Attach` holds a request
+#       (DIGEST and FIELD are `-`); for SOURCE `granted`, a share no head of
+#       theirs binds, held to DIGEST, the digest its source's request
+#       implies, and its one field FIELD, as a grant of it would bind it.
+#       Each answers
+#       admitted, or the refusal with a cap's reset, and the database's
+#       next UTC midnight, computed here from its clock. The material
+#       resolved is dropped here.
 #
 #   row_binding SESSION_TOKEN SHARE_ID
 #       The person's openai head's share row naming SHARE_ID, read live by
@@ -227,19 +221,18 @@ fn args ->
       answer.(%{now: DateTime.to_iso8601(Arca.ServerMetaStorage.now!())})
 
     ["state", ana_token, bea_id, payload_digests] ->
-      # Every row of the instance's tables, whole, none picked out. The
-      # owner's reads would drop rows or columns: `Arca.InstanceEntries.list/2`
-      # leaves out tombstoned rows and reads members as ids, and
-      # `Arca.InstanceEntryUsage.usage/3` leaves out `updated_at` and reads
-      # every day from today on. The sealed payload is replaced here, before
-      # anything is serialized, by the outcome of comparing it with what its
-      # card typed.
+      # Every row of each table, whole, none picked out. The owner's reads
+      # would drop rows or columns: `Arca.VaultStorage.list/1` leaves out
+      # tombstoned rows, and `Arca.ShareUsage.usage/3` leaves out
+      # `updated_at`. The sealed payload is replaced here, before anything
+      # is serialized, by the outcome of comparing it with what its form
+      # typed.
       typed = Jason.decode!(payload_digests)
 
-      # The stored payload against the digest of what its card typed: the
+      # The stored payload against the digest of what its form typed: the
       # one fact that leaves here.
       payload = fn entry ->
-        aad = Sanctum.CipherAAD.instance_entry(entry.id, entry.provider_hint)
+        aad = Sanctum.CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
         with sealed when is_binary(sealed) and sealed != "" <- entry.sealed_payload,
              {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad),
@@ -253,9 +246,17 @@ fn args ->
         end
       end
 
+      vault_entries =
+        for entry <- rows_of.(Arca.Schemas.VaultEntry) do
+          Map.put(entry, :sealed_payload, payload.(entry))
+        end
+
+      # No instance entry is made here; one that is would be read whole but
+      # for its sealed payload, which only says whether it holds one.
       entries =
         for entry <- rows_of.(Arca.Schemas.InstanceEntry) do
-          Map.put(entry, :sealed_payload, payload.(entry))
+          held = if entry.sealed_payload in [nil, ""], do: "absent", else: "present"
+          Map.put(entry, :sealed_payload, held)
         end
 
       members = rows_of.(Arca.Schemas.InstanceEntryMember)
@@ -297,12 +298,14 @@ fn args ->
             )
 
           {:ok, offered} = Sanctum.InstanceEntries.offered(ctx)
+          {:ok, shared} = Sanctum.Shares.offered(ctx)
 
           %{
             profiles: profiles,
             consents: consents,
             rows: rows,
-            offered: Enum.map(offered, & &1.id)
+            offered: Enum.map(offered, & &1.id),
+            shared: Enum.map(shared, & &1.id)
           }
         end
 
@@ -315,6 +318,7 @@ fn args ->
       answer.(%{
         now: DateTime.to_iso8601(now),
         today: Date.to_iso8601(DateTime.to_date(now)),
+        vault_entries: vault_entries,
         entries: entries,
         members: members,
         usage: usage,
@@ -340,44 +344,14 @@ fn args ->
 
       answer.(%{destination: canonical, binding_digest: digest})
 
-    ["admin_share", token, provider, field, destination] ->
+    ["group", token, member_id, name] ->
       admin = person_ctx.(token)
-      actor = Sanctum.Context.actor(admin)
-      id = Prima.UUID7.generate_id("vlt")
-      {:ok, parsed} = Prima.Destination.new(Jason.decode!(destination), true)
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(admin.user_id, name)
 
-      # The key's value, made here and dropped with this call.
-      value = "sk-shared-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
-      {:ok, json} = Sanctum.Vault.Payload.encode_material(%{field => value})
-      aad = Sanctum.CipherAAD.vault_entry(Sanctum.Context.athanor!(admin), id, provider)
-      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+      {:ok, _seat} =
+        Sanctum.Tenancy.Members.ensure(member_id, scope: "athanor", athanor_id: group.id)
 
-      binding = %{
-        provider_hint: provider,
-        field_names: Jason.encode!([field]),
-        oauth_endpoints: nil,
-        oauth_scopes: nil,
-        destination: Prima.Destination.canonical(parsed),
-        attach_only: true
-      }
-
-      {:ok, digest} = Sanctum.VaultReader.binding_digest(binding)
-
-      {:ok, entry} =
-        Arca.VaultStorage.put(
-          actor,
-          Map.merge(binding, %{
-            id: id,
-            name: "Company AI, shared",
-            kind: "api_key",
-            status: "active",
-            sealed_payload: sealed,
-            binding_digest: digest
-          })
-        )
-
-      {:ok, share} = Arca.Shares.create(actor, %{entry_id: entry.id, audience: "everyone"})
-      answer.(%{entry_id: entry.id, share_id: share.id})
+      answer.(%{group_id: group.id})
 
     ["derived_head", token, share_id, provider, field, destination] ->
       ctx = person_ctx.(token)
@@ -483,28 +457,18 @@ fn args ->
           answer.(%{admitted: false, refusal: tag.(reason)})
       end
 
-    ["claim", token, source, id, count, url, method] ->
+    ["claim", token, source, id, count, url, method, digest, field] ->
       ctx = person_ctx.(token)
       request = %{uri: URI.parse(url), method: method}
 
       # One claim of the source, its material dropped here, unread.
       resolve =
         case source do
-          "instance" ->
-            facts =
-              case admitted.(ctx) do
-                {:ok, _authority, facts} ->
-                  facts
-
-                {:error, _refused} ->
-                  %{node_ref: openai <> ":0.0.0", activation_digest: "unadmitted"}
-              end
-
+          "granted" ->
             fn ->
-              case Sanctum.InstanceEntries.resolve(ctx, id, request, facts) do
-                {:ok, %{id: ^id}, _material} -> :admitted
-                refused -> refused
-              end
+              with {:ok, _value} <-
+                     Sanctum.Shares.resolve(ctx, id, digest, request, {:field, field, field}),
+                   do: :admitted
             end
 
           "share" ->

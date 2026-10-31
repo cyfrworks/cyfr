@@ -1,10 +1,12 @@
 # The instance-entry proof
 
-`run.sh` proves, on the browser harness (`tests/browser/`), that an
-instance entry is offered, capped, narrowed, revoked and denied as the
-platform administrator sets it in Prism, that a newcomer's first sign-in
-binds the administrator's share to everyone, and that the administrator
-enters no athanor they hold no seat in.
+`run.sh` proves, on the browser harness (`tests/browser/`), that a key
+the platform administrator makes on the Vault page and shares with
+everyone through the system layer's sharing sheet is offered, capped,
+narrowed and revoked as they set it there, that a newcomer's first
+sign-in binds the administrator's share to everyone, that a person's
+denial writes nothing to a share, and that the administrator enters no
+athanor they hold no seat in.
 The home is one `cyfr` release on a SQLite cell, `home.test`, behind the
 harness's HTTPS front (`browser_home`). The platform administrator
 (`operator@example.com`), the installation's first person and so made by
@@ -15,31 +17,29 @@ to newcomers on the Settings page (`door.allow` of `*`). `proof.mjs` drives the 
 in Chromium's full build, the administrator's confirmations proven with the
 passkey Chromium's virtual authenticator makes and registers first, as
 `tests/approval-proof/` proves its vault entries'. It asks `run.sh` for the
-home's part of a step through its output directory (`ask-N.json`, answered
-`answer-N.json`): a sign-in, and the reads and claims of `fixture.exs`,
-which calls the real paths and answers bounded facts. The material an
-entry or a share unseals is discarded inside the fixture and never
-serialized, and the proof fails if either key, or a digest of one, reaches
-a page, an answer or the record.
+home's part of a step through its output directory (`ask-N.json`,
+answered `answer-N.json`): a sign-in, and the reads and claims of `fixture.exs`,
+which calls the real paths and answers bounded facts. The material a
+share unseals is discarded inside the fixture and never serialized, and
+the proof fails if either key, or a digest of one, reaches a page, an
+answer or the record.
 
-The administrator's share is the one thing the fixture seeds
-(`admin_share`): an attach-only key of the administrator's own athanor
-made with Company AI's provider, field and destination, its value made and
-dropped inside the fixture, shared with everyone by `Arca.Shares.create/3`
-under the administrator's own actor. No page of the release offers a Share
-action, and the confirmations a key and a share ask are proven only with
-the administrator's passkey, which lives in the browser's authenticator.
+The fixture seeds one thing (`group`): a group of the administrator's,
+Traders, holding Bea, which the narrowing names. The keys and their shares
+are made in the browser, on the Vault page, each under the confirmation
+the administrator's passkey proves.
 
 The harness runs no execution engine and no model, so `run.sh` never starts
 a run: an admission is the loader's answer (`Opus.authority_for/3`'s
 path), asked once the person's athanor is filled, as a turn is admitted
 only then (`Sanctum.Provisioning.ready/1`), since a sign-in answers before
 the fill that mints its consent bootstrap; and a claim is
-`Sanctum.InstanceEntries.resolve/4`'s under the member's established
-context and the admitted root's node facts, or, through the share her head
-binds, `Sanctum.Shares.resolve/5`'s held to the digest and the field the
-head binds it at, never a request sent to a provider. Claims count
-resolver uses, not dispatched HTTP requests.
+`Sanctum.Shares.resolve/5`'s under the member's established context, held,
+through the share her head binds, to the digest and the field the head
+binds it at, or, through a share no head of hers binds, to the digest its
+source's request implies and its one field, as a grant of it would bind
+it, never a request sent to a provider. Claims count resolver uses, not
+dispatched HTTP requests.
 
 `VAULT_PROOF_VIEWPORT` is `desktop` (1280×900, the default) or `720x720`;
 every step runs at either, and the record names the one it ran at.
@@ -63,16 +63,19 @@ same canonical ordering on both sides (members by name, the items of a list
 by their own canonical text). The home's side is one read (`fixture.exs`
 `state`), which picks no row out of a set:
 
-- every row of the instance's entries (tombstoned ones too), of their listed
-  members and of their use, read from the tables whole;
+- every row of the vault entries (tombstoned ones too), read from the table
+  whole;
+- every row of the instance's entries, of their listed members and of their
+  use, which nothing in this proof makes, read from the tables whole;
 - every row of the shares and of their use, read from the tables whole;
 - once Ana has signed in, every profile of `catalyst:local.openai` in her
   athanor, every consent of those profiles, every binding row of those
-  consents, and the entries offered to her;
+  consents, and the instance entries and the shares offered to her;
 - once Bea has signed in, her row.
 
-The model changes at each step only by what that step did: an entry made,
-narrowed, used, revoked; a share made; a sign-in; a claim counted; a deny.
+The model changes at each step only by what that step did: an entry made
+or used; a share made, narrowed or revoked; a sign-in; a claim counted; a
+deny.
 So a change
 made behind the browser to any of these, at any time, fails the next
 step, whichever step that is. A step about one object says so in its row,
@@ -83,9 +86,11 @@ in one of the three classes below.
 The model takes only these values from the home, each the decision or
 identity it names, never a read of what it is compared with:
 
-- each entry's id, as its card on the Settings page shows it;
-- the administrator's share's id and its source entry's id, as the fixture
-  that made them answers (`admin_share`);
+- each entry's id, as its row on the Vault page shows it;
+- each share's id, as its row under Shared by you on the Vault page shows
+  it;
+- the group the narrowing names, as the fixture that made it answers
+  (`group`);
 - each person's id, athanor and segment, the administrator's included, from
   their sign-in;
 - the profile and consent the loader roots Ana's run on (`fixture.exs`
@@ -114,20 +119,21 @@ unchecked.
 
 | Table | Exact | Derived | Bound |
 |---|---|---|---|
-| `instance_entries` | `name`, `kind`, `provider_hint`, `field_names`, `status`, `payload_rev`, `audience`, `person_daily`, `total_daily`, `component_policy` | `destination`, `binding_digest`: what the card's request implies (`requested_digest`); `sealed_payload`: the payload its card typed, compared inside the fixture | `id`: the card's; `created_by`: the administrator's sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
-| `instance_entry_members` | | | `instance_entry_id`: the card's; `user_id`: the sign-in's; `inserted_at`: a time |
-| `instance_entry_usage` | `count` | | `instance_entry_id`: the card's; `user_id`: the sign-in's, or the empty id of the entry's own total; `day`: today; `updated_at`: a time |
-| `shares` | `audience`, `group_id`, `person_daily`, `total_daily`, `status` | | `id`, `vault_entry_id`: the fixture's `admin_share`; `athanor_id`, `created_by`: the administrator's sign-in's; `inserted_at`, `updated_at`: times |
-| `share_usage` | `count` | | `athanor_id`: the administrator's sign-in's; `share_id`: the fixture's `admin_share`; `user_id`: the sign-in's, or the empty id of the share's own total; `day`: today; `updated_at`: a time |
+| `vault_entries` | `name`, `provider_hint`, `kind`, `field_names`, `oauth_endpoints`, `oauth_scopes`, `attach_only`, `status`, `payload_rev` | `destination`, `binding_digest`: what the form's request implies (`requested_digest`); `sealed_payload`: the payload its form typed, compared inside the fixture | `id`: its row's; `athanor_id`: the administrator's sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
+| `instance_entries` | `name`, `kind`, `provider_hint`, `field_names`, `status`, `payload_rev`, `sealed_payload` (whether one is held), `audience`, `person_daily`, `total_daily`, `component_policy` | `destination`, `binding_digest` | `id`; `created_by`; `last_used_at`, `inserted_at`, `updated_at`: times (no row is expected) |
+| `instance_entry_members` | | | `instance_entry_id`; `user_id`; `inserted_at`: a time (no row is expected) |
+| `instance_entry_usage` | `count` | | `instance_entry_id`; `user_id`; `day`: today; `updated_at`: a time (no row is expected) |
+| `shares` | `audience`, `group_id`, `person_daily`, `total_daily`, `status` | | `id`: its row's under Shared by you; `vault_entry_id`: its entry's row's; `athanor_id`, `created_by`: the administrator's sign-in's; `inserted_at`, `updated_at`: times |
+| `share_usage` | `count` | | `athanor_id`: the administrator's sign-in's; `share_id`: its row's under Shared by you; `user_id`: the sign-in's, or the empty id of the share's own total; `day`: today; `updated_at`: a time |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
 | `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `resolved_policy`, `blob_digest`, `activation`, `shape_digest`, `commit_digest`: what the bootstrap derives (`derived_head`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
-| `consent_vault_refs` | `binding_key`, `scope`, `vault_entry_id`, `instance_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `share_id`: the fixture's `admin_share` |
+| `consent_vault_refs` | `binding_key`, `scope`, `vault_entry_id`, `instance_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `share_id`: its row's under Shared by you |
 | `users` | `email`, `email_verified`, `admission`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`, `personal_athanor_id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `created_at`, `updated_at`: times |
 
 The bounds:
 
-- **An id** equals the one its source showed: the entry's card on the
-  Settings page, the fixture's `admin_share`, the person's sign-in, or the
+- **An id** equals the one its source showed: the entry's row on the Vault
+  page, the share's row under Shared by you, the person's sign-in, or the
   loader's admission of Ana's root.
 - **A time** is none where the model holds none (an entry never used, a
   person not denied). Otherwise it lies inside the run's window: from the
@@ -137,21 +143,21 @@ The bounds:
   A row on any other day, earlier or later, fails.
 
 **The sealed payload** is derived. The proof passes the fixture the digest
-of the payload document each card typed (`Sanctum.Vault.Payload`'s version
+of the payload document each form typed (`Sanctum.Vault.Payload`'s version
 3, its one field, no token bundle, in canonical text). The fixture unseals
-the stored payload as its owner does (`Sanctum.InstanceEntries`' private
-`unseal/1`: the same AAD, `Sanctum.Cipher.decrypt/2` and
-`Sanctum.Vault.Payload.decode/1`), hashes the decoded document's canonical
-text, and answers only the outcome. So a payload replaced by another validly
-sealed value fails as one that unseals to another value than its card typed.
-A payload that does not unseal fails with its own sentence, and so does no
-payload where the card typed one. Neither the material nor anything derived
+the stored payload as its owner does (the vault entry's AAD,
+`Sanctum.Cipher.decrypt/2` and `Sanctum.Vault.Payload.decode/1`), hashes the
+decoded document's canonical text, and answers only the outcome. So a
+payload replaced by another validly sealed value fails as one that unseals
+to another value than its form typed. A payload that does not unseal fails
+with its own sentence, and so does no payload where the form typed one. Neither the material nor anything derived
 from it leaves the fixture. `run.sh` removes each question once it is
 answered, so the digests the proof passes never outlive the read. The proof
 fails if a key, a digest of a key or a typed payload's digest reaches an
 answer, the record or a question left behind.
 
-Ana's offered entries are the owner's decision (`Sanctum.InstanceEntries.offered/1`),
+Ana's offered instance entries and shares are the owners' decisions
+(`Sanctum.InstanceEntries.offered/1`, `Sanctum.Shares.offered/1`), each
 compared exactly as the set of ids the model holds.
 
 **Stored text, byte for byte.** A stored JSON text (an entry's destination and
@@ -160,18 +166,16 @@ compared as the text it is, and never parsed first: its owner reads it with
 the first of two duplicate members, and a parse here would keep the last.
 
 - **An entry's destination** is compared with the canonical text of the
-  destination its card requested (`Prima.Destination.canonical/1`), and its
+  destination its form requested (`Prima.Destination.canonical/1`), and its
   binding digest with the digest over that text.
 - **The head's policy blob, its digest, its activation and its shape and
   commit digests** are compared with what the first sign-in's bootstrap
   derives from the request alone. They are built by the owner's own builders
-  over the installed catalyst and the administrator's share of a key made
-  with Company AI's provider, field and destination, never read back from
+  over the installed catalyst and Company AI's share, never read back from
   the head. The loader checks the blob only against the digest in the same
   row, so a widened blob stored with its own digest would otherwise be
   admitted. The binding row's digest is the one Company AI's request
-  implies (`requested_digest`), since the share's source was made with the
-  same binding fields.
+  implies (`requested_digest`).
 
 **Decisions.** Each answer is compared whole with the decision the step
 expects, every field in one of the same three classes:
@@ -187,17 +191,21 @@ expects, every field in one of the same three classes:
   and each refusal, exact; the athanor the session is in, the
   administrator's own, as their sign-in named it.
 
-The pages are read for what each person sees: the vault's offered entries,
-as the exact set the model holds.
+The pages are read for what each person sees, each whole: what the
+sharing sheet offers and says before anything is chosen (the audiences,
+the caps empty, what an empty cap, 0 and a number mean, and what an
+uncapped share to everyone means to the platform administrator); the
+administrator's Shared by you, each row's id, status and line; and Ana's
+Shared with you, each row's id, owner and use.
 
 | Step | What holds |
 |---|---|
-| `create_entry` | the administrator makes Company AI (provider `openai.com`, the provider of the shipped model catalyst `catalyst:local.openai`; destination `https` `api.openai.com`, `POST` and `GET`, `/v1/chat/completions` and `/v1/models`, no port; audience everyone; component policy any; a person cap of 3) and Company Mail (provider `mail.example`, whose destination no shipped catalyst's need calls; destination `https` `api.mail.example`, `POST`, `/v1/send`; audience everyone; no caps) on the Settings card; each key is typed in the system layer's prompt alone, and each `credential_entry` confirmation is proven with the administrator's passkey; the store holds those two entries alone, each whole stored entry the one its card requested, and no page shows a key |
-| `first_sign_in` | the administrator opens the door to newcomers on the Settings page (`*`) and shares with everyone a key of their own made with Company AI's provider, field and destination (`admin_share`): the whole stored share is that entry's, to everyone, uncapped and active; Ana's first sign-in provisions her athanor, whose bootstrap commits her `catalyst:local.openai` default profile: the whole stored profile is her active owner profile labelled `default`, sourced from the catalyst, headed by the bootstrap's consent; the whole stored head is revision 1, versionless, `open_inert`, admitting the interactive and programmatic origins, granted by Ana via `bootstrap`, superseding nothing; its stored binding rows are exactly one, whole: the administrator's share on the catalyst's default slot, scope `share`, standing, at the digest Company AI's request implies; the real loader admits that root under her interactive context, on that head, with no run started; one `resolve/5` claim through the share under her context is admitted, and the whole state holds its use as two rows, Ana's 1 and the day's 1, on the database's today; her consent's row binding of the share (`Sanctum.Consent.row_binding/3`) reads it offered, whole; her vault's "Provided by this instance" offers exactly both entries and shows no material |
-| `claim_cap` | three `resolve/4` claims of Company AI under Ana's context are admitted, each whole answer an admission; her vault then reads "3 requests today" and "Your daily limit is reached; it resets at midnight UTC."; the fourth claim's whole answer is the refusal `connection_cap` with a reset at the database's next UTC midnight; the whole state read after the step holds Company AI's use as two rows, Ana's 3 and the day's 3, each on the database's today, and no other use row |
-| `narrow_audience` | Bea signs in once, so the card's people picker lists her; the administrator narrows Company AI from everyone to Bea on the card, whose save sends the audience the card showed (`audience_shown`, the `expected` audience) and needs no prompt; the whole stored entry is the one requested, listed for Bea alone and used; the whole answer of Ana's next claim of it is `not_offered`, her consent's row binding of the administrator's share still reads it offered, whole, and her vault no longer offers Company AI |
-| `revoke` | Ana's claim of Company Mail is admitted; the administrator revokes Company Mail on the card; Ana's next claim's whole answer is `entry_unavailable` (revoked); the whole stored entry is the one requested, used and revoked; her vault offers nothing |
-| `deny_person` | the administrator denies Bea by her user id at the door on the Settings page (`door.deny`): the whole stored Company AI is the one requested, listed for no one; Bea's whole stored row is the active one read just before the deny with the three columns a deny commits together (`Sanctum.Tenancy.Users`): denied, a denial time set, and her security generation one above; no stored audience lists her; Company AI's card reads "nobody listed" |
+| `share_key` | the administrator makes Company AI (provider `openai.com`, the provider of the shipped model catalyst `catalyst:local.openai`; destination `https` `api.openai.com`, `POST` and `GET`, `/v1/chat/completions` and `/v1/models`, no port) and Company Mail (provider `mail.example`, whose destination no shipped catalyst's need calls; destination `https` `api.mail.example`, `POST`, `/v1/send`) on the Vault page, attach-only, each key typed in its form alone and each `credential_entry` confirmation proven with the administrator's passkey; each is shared with everyone through the system layer's sharing sheet, which offers everyone alone, opens with both caps empty and says what they mean and what an uncapped share to everyone means to the administrator, Company AI with a person cap of 3 and Company Mail with none, each `credential_sharing` confirmation proven with the passkey; Shared by you reads "Company AI, shared with everyone, 0 today, at most 3 a person a day" and "Company Mail, shared with everyone, 0 today, no cap"; the store holds those two entries and two shares alone, each whole stored row the one its form requested, and no page shows a key |
+| `first_sign_in` | the administrator opens the door to newcomers on the Settings page (`*`); Ana's first sign-in provisions her athanor, whose bootstrap commits her `catalyst:local.openai` default profile: the whole stored profile is her active owner profile labelled `default`, sourced from the catalyst, headed by the bootstrap's consent; the whole stored head is revision 1, versionless, `open_inert`, admitting the interactive and programmatic origins, granted by Ana via `bootstrap`, superseding nothing; its stored binding rows are exactly one, whole: Company AI's share on the catalyst's default slot, scope `share`, standing, at the digest Company AI's request implies; the real loader admits that root under her interactive context, on that head, with no run started; one `resolve/5` claim through the share under her context is admitted, and the whole state holds its use as two rows, Ana's 1 and the day's 1, on the database's today, and Company AI's last use; her consent's row binding of the share (`Sanctum.Consent.row_binding/3`) reads it offered, whole; her vault's Shared with you offers exactly both shares, each "Shared by Release proof", Company AI's with her use "1 request today", and shows no material |
+| `claim_cap` | two more claims through Company AI's share under Ana's context are admitted, each whole answer an admission; her vault then reads "Your use: 3 requests today"; the next claim's whole answer is the refusal `connection_cap` with a reset at the database's next UTC midnight; the whole state read after the step holds the share's use as two rows, Ana's 3 and the day's 3, each on the database's today, and no other use row |
+| `narrow_audience` | Bea signs in once and is seated with the administrator in Traders (`group`); the administrator narrows Company AI's share from everyone to Traders on its Shared by you row, whose save sends the audience the row showed (`expected_audience`) and needs no prompt, and the row then reads "Company AI, shared with Traders, 3 today, at most 3 a person a day"; the whole stored share is the one requested, to Traders; the whole answer of Ana's next claim of it is `not_offered`, her consent's row binding of it reads `not_offered`, and her vault no longer offers it |
+| `revoke` | Ana's claim of Company Mail's share, held to the digest its request implies and its one field, is admitted; the administrator revokes it on its Shared by you row, which then reads "Company Mail, shared with everyone, revoked"; Ana's next claim's whole answer is `not_offered`; the whole stored share is the one requested, revoked, its entry used once; her vault reads "No one shares a key with you." |
+| `deny_person` | the administrator denies Bea by her user id at the door on the Settings page (`door.deny`): Bea's whole stored row is the active one read just before the deny with the three columns a deny commits together (`Sanctum.Tenancy.Users`): denied, a denial time set, and her security generation one above; no share changes, since an audience is read at use; Shared by you reads as it did |
 | `admin_focus` | the administrator's athanor switcher, its popover waited for until drawn, links to no athanor of Ana's (no path under her segment, no page naming her athanor as its `a`), nor does the page; a direct visit to Ana's vault lands elsewhere with "There is no athanor at <her segment>.", what a missing athanor's address says; Sanctum's focus and refocus of the administrator's session onto Ana's athanor (`Sanctum.Context.focus/2`, `refocus/2`) refuse `not_found` |
 
 ## Shown elsewhere
