@@ -19,6 +19,14 @@ defmodule Cyfr.TelemetryCatalogTest do
   # An event literal: [:cyfr, :a, :b, ...] with at least two segments.
   @event_re ~r/\[:cyfr(?:,\s*:[a-z_0-9]+)+\]/
 
+  # A family its producer emits with the kind as a variable, held there to
+  # the one list of its kinds: the producer's file, the event's prefix, and
+  # that list. The scan reads the family from that file alone, so a
+  # consumer naming the same prefix is no producer.
+  @families [
+    {"apps/sanctum/lib/sanctum/shares.ex", ~w(cyfr sanctum share), &Prima.ShareKinds.all/0}
+  ]
+
   defp source_events do
     Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
     |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
@@ -34,8 +42,24 @@ defmodule Cyfr.TelemetryCatalogTest do
         |> String.split(~r/,\s*/)
         |> Enum.map(&String.trim_leading(&1, ":"))
       end)
+      |> Kernel.++(family_events(path, source))
     end)
     |> MapSet.new()
+  end
+
+  # The family's events where its producer executes `[:cyfr, ..., kind]`:
+  # the call itself, so a doc naming the family is no producer either.
+  defp family_events(path, source) do
+    for {file, prefix, kinds} <- @families,
+        String.ends_with?(path, file),
+        source =~ family_literal(prefix),
+        kind <- kinds.(),
+        do: prefix ++ [Atom.to_string(kind)]
+  end
+
+  defp family_literal(prefix) do
+    atoms = Enum.map_join(prefix, ",\\s*", &(":" <> &1))
+    Regex.compile!(":telemetry\\.execute\\(\\s*\\[" <> atoms <> ",\\s*kind\\]")
   end
 
   # Compared as segment strings, so a source event the catalog lacks is

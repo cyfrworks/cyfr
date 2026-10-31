@@ -879,29 +879,17 @@ defmodule Sanctum.Shares do
 
   defp decode_list(_absent), do: []
 
-  # One literal event per kind: the telemetry catalog's source scan reads
-  # them from here, and holds them to `Prima.ShareKinds.all/0`.
-  defp announce(ctx, :created, id),
-    do: emit([:cyfr, :sanctum, :share, :created], ctx, :created, id)
-
-  defp announce(ctx, :audience, id),
-    do: emit([:cyfr, :sanctum, :share, :audience], ctx, :audience, id)
-
-  defp announce(ctx, :caps, id), do: emit([:cyfr, :sanctum, :share, :caps], ctx, :caps, id)
-
-  defp announce(ctx, :rebound, id),
-    do: emit([:cyfr, :sanctum, :share, :rebound], ctx, :rebound, id)
-
-  defp announce(ctx, :rotated, id),
-    do: emit([:cyfr, :sanctum, :share, :rotated], ctx, :rotated, id)
-
-  defp announce(ctx, :revoked, id),
-    do: emit([:cyfr, :sanctum, :share, :revoked], ctx, :revoked, id)
-
-  # The share, the kind and who acted: never an entry, an audience or a value.
-  defp emit(event, ctx, kind, id),
-    do:
-      :telemetry.execute(event, %{count: 1}, %{share_id: id, kind: kind, user_id: actor_id(ctx)})
+  # One event per kind, the kinds `Prima.ShareKinds.all/0`'s and no other:
+  # the telemetry catalog's source scan finds the family here and reads its
+  # kinds from that list. The share, the kind and who acted travel; never
+  # an entry, an audience or a value.
+  defp announce(ctx, kind, id) when kind in @kinds do
+    :telemetry.execute(
+      [:cyfr, :sanctum, :share, kind],
+      %{count: 1},
+      %{share_id: id, kind: kind, user_id: actor_id(ctx)}
+    )
+  end
 
   defp actor_id(%Context{user_id: user_id}), do: user_id
   defp actor_id(nil), do: nil
