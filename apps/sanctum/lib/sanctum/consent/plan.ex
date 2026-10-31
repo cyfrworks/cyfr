@@ -191,8 +191,8 @@ defmodule Sanctum.Consent.Plan do
   One binding of the profile's head, as its `consent_vault_refs` row holds
   it, and, where its key and binding can be read, placed as the commit
   reads it (`Sanctum.Consent.Commit.head_place/2`): `source`, which of
-  `entry_id`, `instance_entry_id`, `share_id` and `label` it binds; the `node` and
-  `edge` its key names, the dependency the edge reaches (`dep`) and its
+  `entry_id`, `instance_entry_id`, `share_id` and `label` it binds; the
+  `node` and `edge` its key names, the dependency the edge reaches (`dep`) and its
   account's name (`connection`); and the `need` it was bound for, absent
   when that cannot be told.
   """

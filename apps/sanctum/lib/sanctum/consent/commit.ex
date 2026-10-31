@@ -1493,9 +1493,9 @@ defmodule Sanctum.Consent.Commit do
 
   # A public profile's callers are anonymous, so it keeps of a binding
   # only what it can carry without widening: an athanor's entry bound
-  # standing. A kept edge whose binding is an instance entry or a share, carries
-  # named accounts, or lives `until` a time or `once` is refused, never
-  # dropped in silence.
+  # standing. A kept edge whose binding is an instance entry or a share,
+  # carries named accounts, or lives `until` a time or `once` is refused,
+  # never dropped in silence.
   defp publishable(nodes, need_ids, lifetimes) do
     Enum.find_value(Enum.sort(nodes), :ok, fn {_node_key, node} ->
       Enum.find_value(Enum.sort(node["edges"] || %{}), fn {edge_key, edge} ->
@@ -2250,8 +2250,8 @@ defmodule Sanctum.Consent.Commit do
        origins: origins,
        # A binding's scope, destination and attach rule are the blob's,
        # which the blob digest above covers; the decision is what the
-       # person chose: the entry, instance entry or share, the account it rides
-       # under, its projection, its lifetime and whether it renews.
+       # person chose: the entry, instance entry or share, the account it
+       # rides under, its projection, its lifetime and whether it renews.
        bindings: Enum.map(bindings, &digest_binding/1),
        selections: Enum.map(selections, &digest_selection/1),
        tool_servers:
@@ -3029,13 +3029,13 @@ defmodule Sanctum.Consent.Commit do
   # dependency, with the edge's key and the binding's own key, so one
   # entry lent on two edges, or bound under two names, is two rows. A
   # bound entry is named by the entry, the athanor's own, an instance
-  # entry or a share, its named accounts each a row naming its `connection`; a
-  # selection by the lender's entry and the label of the profile lending
-  # it; provided configuration by the need it fills. Each row says the
-  # lifetime its binding was decided with, and whether the plan suggests
-  # its entry for that need and whether the need asks the person to
-  # choose, by the plan's own rule (`Plan.need_choice/4`); destination and
-  # disclosure are the entry's, read from its row.
+  # entry or a share, its named accounts each a row naming its
+  # `connection`; a selection by the lender's entry and the label of the
+  # profile lending it; provided configuration by the need it fills. Each
+  # row says the lifetime its binding was decided with, and whether the
+  # plan suggests its entry for that need and whether the need asks the
+  # person to choose, by the plan's own rule (`Plan.need_choice/4`);
+  # destination and disclosure are the entry's, read from its row.
   defp credential_rows(reads, prep, nodes) do
     carried =
       for {from, node} <- Enum.sort(nodes),
