@@ -382,6 +382,11 @@ defmodule Sanctum.Shares do
   answers each for the context's person: what a new person's first
   sign-in binds from (`Sanctum.Consent.Bootstrap`), which picks by fit.
   A share of the person's own is not among them.
+
+  The person's own standing is not read here: the caller is a first
+  sign-in's walk, whose person stands by the sign-in that admitted it.
+  A caller without that precondition reads `offered/1`, which holds the
+  person to `Sanctum.Caller.stands?/1` first.
   """
   @spec administrator_shares(Context.t()) :: {:ok, [binding_view()]} | {:error, term()}
   def administrator_shares(%Context{} = ctx) do
