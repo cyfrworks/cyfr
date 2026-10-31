@@ -548,7 +548,10 @@ describe("sign in from your CYFR", () => {
     for (const entry of ["a.example", "https://a.example", " https://a.example:8443 ", "localhost:4000"]) {
       assert.equal(address(entry), entry.trim(), entry)
     }
-    for (const entry of ["@alice", "alice", "", "   ", "a b.example", "@a.example", null, 7]) {
+    for (const entry of [
+      "@alice", "alice", "", "   ", "a b.example", "@a.example", null, 7,
+      "javascript:alert(1)", "ftp://a.example", "/", ".", "https://u:p@a.example", "https://a..example"
+    ]) {
       assert.equal(address(entry), null, String(entry))
     }
   })
@@ -565,7 +568,7 @@ describe("sign in from your CYFR", () => {
   })
 
   test("a #from that is not an address leaves the field empty and opens nothing", () => {
-    for (const from of ["@alice", "alice", "", "a%20b.example"]) {
+    for (const from of ["@alice", "alice", "", "a%20b.example", "javascript%3Aalert(1)", "ftp%3A%2F%2Fa.example", "%2F", "."]) {
       const win = fakeWindow("/login", "#from=" + from, memoryStorage(), remembering("https://kept.example"))
       const {pushed, answer} = mount(win, "login")
       answer()

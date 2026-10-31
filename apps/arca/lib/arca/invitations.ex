@@ -220,28 +220,25 @@ defmodule Arca.Invitations do
   def redeem(%Prima.Actor{}, _code_hash, _user_id), do: {:error, :cross_tenant}
 
   @doc """
-  `redeem/3` for a person who already exists, in one locking transaction
-  of its own: the conditional write, then `opts[:also]`, the higher
+  `redeem/3` for a person who already exists, in one transaction of its
+  own under this member's slot (`Arca.Repo.owned/2`, `:not_owner` once
+  another member holds it): the conditional write, then `opts[:also]`, the higher
   owner's closure (`ARCHITECTURE.md` §4.4), handed the redeemed row. It
   answers `:ok` or `{:error, reason}`, which rolls the redemption back
   with that reason, leaving the invitation open. `:not_found` when the
   write marked no row.
   """
   @spec redeem_for(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
-          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error | term()}
+          {:ok, row()}
+          | {:error, :not_found | :not_owner | :cross_tenant | :database_error | term()}
   def redeem_for(%Prima.Actor{scope: :platform} = actor, code_hash, user_id, opts)
       when is_binary(code_hash) and is_binary(user_id) and is_list(opts) do
     also = Keyword.fetch!(Keyword.validate!(opts, [:also]), :also)
 
-    Arca.Repo.Errors.with_db_rescue("Arca.Invitations.redeem_for", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        with {:ok, row} <- redeem(actor, code_hash, user_id),
-             :ok <- also.(row) do
-          row
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
+    Arca.Repo.owned("Arca.Invitations.redeem_for", fn ->
+      with {:ok, row} <- redeem(actor, code_hash, user_id),
+           :ok <- also.(row),
+           do: {:ok, row}
     end)
   end
 

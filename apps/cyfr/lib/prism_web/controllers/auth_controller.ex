@@ -443,7 +443,7 @@ defmodule PrismWeb.AuthController do
           conn,
           503,
           "Try again shortly",
-          "<p>Your identity could not be confirmed with its directory just now. " <>
+          "<p>Your identity could not be confirmed just now. " <>
             "Try again in a moment.</p><p><a href=\"/login\">Back to sign-in</a></p>"
         )
 

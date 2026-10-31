@@ -61,6 +61,12 @@ defmodule Arca.InvitationsTest do
     {row, hash}
   end
 
+  # An also: closure that says it ran.
+  defp ran(test) do
+    send(test, :also_ran)
+    :ok
+  end
+
   defp expire!(id) do
     past = DateTime.add(DateTime.utc_now(), -1, :second)
 
@@ -247,6 +253,69 @@ defmodule Arca.InvitationsTest do
     end
   end
 
+  describe "redeem_for/4" do
+    test "redeems in a transaction of its own and hands also: the redeemed row", %{actor: actor} do
+      {row, hash} = issued!(actor)
+      redeemer = person()
+      test = self()
+
+      assert {:ok, %{id: id, redeemed_by: ^redeemer} = redeemed} =
+               Invitations.redeem_for(server(), hash, redeemer,
+                 also: fn handed ->
+                   send(test, {:handed, handed, Arca.in_transaction?()})
+                   :ok
+                 end
+               )
+
+      assert id == row.id
+      assert_received {:handed, ^redeemed, true}
+      assert %Invitation{redeemed_by: ^redeemer} = Arca.Repo.get!(Invitation, row.id)
+    end
+
+    test "an also: refusal rolls the redemption back, leaving the invitation open", %{
+      actor: actor
+    } do
+      {row, hash} = issued!(actor)
+
+      assert {:error, :refused_above} =
+               Invitations.redeem_for(server(), hash, person(),
+                 also: fn _row -> {:error, :refused_above} end
+               )
+
+      assert %Invitation{redeemed_by: nil, redeemed_at: nil} = Arca.Repo.get!(Invitation, row.id)
+    end
+
+    test "marks no revoked, expired, redeemed or unknown invitation, and runs no also:", %{
+      actor: actor
+    } do
+      {revoked, revoked_hash} = issued!(actor)
+      {:ok, _} = Invitations.revoke(server(), revoked.id)
+      {expired, expired_hash} = issued!(actor)
+      expire!(expired.id)
+      {_redeemed, redeemed_hash} = issued!(actor)
+      {:ok, _} = Invitations.redeem(server(), redeemed_hash, person())
+      test = self()
+      also = fn _row -> ran(test) end
+
+      for hash <- [revoked_hash, expired_hash, redeemed_hash, code_hash()] do
+        assert {:error, :not_found} = Invitations.redeem_for(server(), hash, person(), also: also)
+      end
+
+      refute_received :also_ran
+    end
+
+    test "an athanor-scoped actor is refused before anything runs", %{actor: actor} do
+      {row, hash} = issued!(actor)
+      test = self()
+
+      assert {:error, :cross_tenant} =
+               Invitations.redeem_for(actor, hash, person(), also: fn _row -> ran(test) end)
+
+      refute_received :also_ran
+      assert %Invitation{redeemed_by: nil} = Arca.Repo.get!(Invitation, row.id)
+    end
+  end
+
   test "an athanor's erasure takes the invitations naming it and leaves the instance's own", %{
     actor: actor
   } do
@@ -256,5 +325,88 @@ defmodule Arca.InvitationsTest do
     assert {:ok, %{"invitations" => 1}} = Arca.TenantTables.delete_all_for(actor)
     assert {:error, :not_found} = Invitations.get(server(), named.id)
     assert {:ok, _} = Invitations.get(server(), own.id)
+  end
+end
+
+defmodule Arca.InvitationsOwnerTest do
+  @moduledoc """
+  A redemption for a person who already exists writes only while this
+  member holds its slot: once another member has taken it, `redeem_for/4`
+  is refused `:not_owner`, runs no `also:`, and the invitation stays open.
+  """
+
+  # Takes the cell's slot, which is process-wide; the case restores it.
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.{ControlPlane, Invitations}
+  alias Arca.Schemas.{CellLease, Invitation}
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+
+    for key <- [
+          {Arca.ControlPlane, :standing},
+          {Arca.ControlPlane, :generation},
+          {Arca.ControlPlane, :slot}
+        ],
+        do: Prima.Test.Env.erase_persistent_term(key)
+
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+    node = "invitations-owner-#{System.unique_integer([:positive])}"
+    {:ok, slot} = ControlPlane.take(node, node <> "#boot", 60_000)
+    {:ok, slot: slot}
+  end
+
+  defp server, do: Prima.Actor.system()
+
+  defp ran(test) do
+    send(test, :also_ran)
+    :ok
+  end
+
+  defp issued! do
+    now = DateTime.utc_now()
+
+    {:ok, issuer} =
+      Arca.Test.People.mint(
+        server(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        nil
+      )
+
+    hash = Prima.Digest.sha256_hex(:crypto.strong_rand_bytes(32))
+
+    {:ok, row} =
+      Invitations.insert(server(), %{
+        code_hash: hash,
+        issued_by: issuer.id,
+        lifetime_ms: 24 * 60 * 60 * 1000
+      })
+
+    {row, hash}
+  end
+
+  test "a member whose slot another took redeems nothing and runs no also:", %{slot: slot} do
+    {row, hash} = issued!()
+    test = self()
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+        set: [owner: "someone-else", generation: slot.generation + 1]
+      )
+
+    assert {:error, :not_owner} =
+             Invitations.redeem_for(server(), hash, "usr_stale", also: fn _row -> ran(test) end)
+
+    refute_received :also_ran
+    assert %Invitation{redeemed_by: nil, redeemed_at: nil} = Arca.Repo.get!(Invitation, row.id)
   end
 end

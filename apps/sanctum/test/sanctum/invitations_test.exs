@@ -412,6 +412,41 @@ defmodule Sanctum.InvitationsTest do
   end
 
   describe "redeem_for/2" do
+    test "a known person's redemption writes nothing after this member loses its slot" do
+      alice = person!()
+      group = group!(alice)
+      carol = remote!()
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+
+      keys = [
+        {Arca.ControlPlane, :standing},
+        {Arca.ControlPlane, :generation},
+        {Arca.ControlPlane, :slot}
+      ]
+
+      for key <- keys, do: Prima.Test.Env.erase_persistent_term(key)
+      Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+      node = "invitation-stale-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [owner: "successor", generation: slot.generation + 1]
+        )
+
+      assert :lost = Arca.ControlPlane.check_held(slot)
+      answer = Invitations.redeem_for(hash(code), carol.id)
+
+      actual = %{
+        redeemed_by: row(invitation.id).redeemed_by,
+        seated: seated?(carol, group),
+        door: Enum.map(door(carol.identifier), & &1.effect)
+      }
+
+      assert actual == %{redeemed_by: nil, seated: false, door: []},
+             "a stale owner changed admission state: #{inspect(actual)}; answer=#{inspect(answer)}"
+    end
+
     test "redeems once for a person known here, writing their seat and their identifier's allow" do
       alice = person!()
       group = group!(alice)

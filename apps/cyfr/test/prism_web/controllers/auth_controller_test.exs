@@ -1075,6 +1075,7 @@ defmodule PrismWeb.AuthControllerTest do
       paused = callback(conn, held, fragment)
       body = html_response(paused, 503)
       assert body =~ "Try again shortly"
+      PrismWeb.AdmissionScreens.refute_vocabulary(body)
       refute body =~ "/carry"
       refute get_session(paused, :sanctum_session_token)
     end

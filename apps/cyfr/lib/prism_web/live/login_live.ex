@@ -638,7 +638,7 @@ defmodule PrismWeb.LoginLive do
     do: "#{inviter} invited you to this CYFR. Sign in from your CYFR to accept."
 
   defp cyfr_refused(reason) when reason in [:identity_stale, :unavailable],
-    do: "Your identity could not be confirmed with its directory just now. Try again shortly."
+    do: "Your identity could not be confirmed just now. Try again shortly."
 
   defp cyfr_refused(:wrong_destination),
     do: "That sign-in was begun for another CYFR. Begin it again for this one."

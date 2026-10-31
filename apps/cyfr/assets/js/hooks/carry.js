@@ -139,13 +139,25 @@ function paramOf(fragment, key) {
 
 /**
  * The entry as an address, or null: trimmed, with a dot, colon or slash,
- * no leading `@` and no space, the shape the sign-in page reads as one.
+ * no leading `@` and no space, as the sign-in page reads one, and an http
+ * or https URL that parses (`https://` taken when it names no scheme, as
+ * the page takes it), naming a host of non-empty labels and no user part.
  */
 export function address(entry) {
   if (typeof entry !== "string") return null
   const trimmed = entry.trim()
   if (trimmed === "" || trimmed.startsWith("@") || /\s/.test(trimmed)) return null
-  return /[.:/]/.test(trimmed) ? trimmed : null
+  if (!/[.:/]/.test(trimmed)) return null
+  let url
+  try {
+    url = new URL(trimmed.includes("://") ? trimmed : "https://" + trimmed)
+  } catch {
+    return null
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null
+  if (url.username || url.password) return null
+  const labels = url.hostname.split(".")
+  return url.hostname !== "" && labels.every((label) => label !== "") ? trimmed : null
 }
 
 // What the bound is held against: the encoded carry or assertion after its

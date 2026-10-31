@@ -1111,6 +1111,28 @@ defmodule PrismWeb.LoginLiveTest do
       refute get_session(signed_in, "cyfr_request")
     end
 
+    test "the carry refusal when its directory is unavailable keeps the screen vocabulary", %{
+      conn: conn,
+      directory: directory
+    } do
+      identity = DirectoryServer.identity!(directory.dir, "https://dir-b.test:1")
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+
+      browser =
+        conn |> Plug.Test.init_test_session(%{"cyfr_request" => request()}) |> get(~p"/login")
+
+      {:ok, view, _} = live(browser, ~p"/login")
+
+      html =
+        render_hook(view, "cyfr_carry", %{
+          "fragment" => carry,
+          "expected_source" => "https://a.example"
+        })
+
+      assert html =~ "Try again shortly."
+      refute_vocabulary(html)
+    end
+
     test "a carry from another home than the one the person named is refused before any directory is read, and nobody is signed in",
          %{conn: conn, identity: identity} do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
