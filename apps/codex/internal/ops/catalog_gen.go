@@ -45,6 +45,7 @@ const (
 	Schedule           = "schedule"
 	Session            = "session"
 	Settings           = "settings"
+	Share              = "share"
 	System             = "system"
 	Thread             = "thread"
 	Tincture           = "tincture"
@@ -287,6 +288,13 @@ const (
 	SettingsList                    = "list"
 	SettingsReset                   = "reset"
 	SettingsSet                     = "set"
+	ShareCreate                     = "create"
+	ShareList                       = "list"
+	ShareOffered                    = "offered"
+	ShareRevoke                     = "revoke"
+	ShareSetAudience                = "set_audience"
+	ShareSetCaps                    = "set_caps"
+	ShareUsage                      = "usage"
 	SystemNotify                    = "notify"
 	SystemStatus                    = "status"
 	ThreadAloud                     = "aloud"
@@ -365,6 +373,7 @@ var Actions = map[string][]string{
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
 	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "setup", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
+	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
 	"tincture":            {"invoke_protected", "invoke_public"},
@@ -3579,7 +3588,7 @@ func (args PolicyLogListArgs) MarshalJSON() ([]byte, error) {
 
 // ProfileCommitArgs carries arguments for profile.commit.
 type ProfileCommitArgs struct {
-	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}], selections, override
+	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}], selections, override
 	Decisions ProfileCommitArgsDecisions `json:"decisions"`
 	// From plan
 	PlanToken string `json:"plan_token"`
@@ -3606,7 +3615,7 @@ type ProfileCommitArgsDecisions struct {
 	Label      Field[string] `json:"label,omitzero"`
 	Scope      Field[string] `json:"scope,omitzero"`
 	InvokeMode Field[string] `json:"invoke_mode,omitzero"`
-	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}]
 	Bindings       Field[[]ProfileCommitArgsDecisionsBindingsItem]    `json:"bindings,omitzero"`
 	Selections     Field[[]ProfileCommitArgsDecisionsSelectionsItem]  `json:"selections,omitzero"`
 	ToolServers    Field[[]ProfileCommitArgsDecisionsToolServersItem] `json:"tool_servers,omitzero"`
@@ -3633,10 +3642,12 @@ func (args *ProfileCommitArgsDecisions) UnmarshalJSON(data []byte) error {
 
 type ProfileCommitArgsDecisionsBindingsItem struct {
 	Need Field[string] `json:"need,omitzero"`
-	// An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id
+	// An entry of the athanor (vlt_…); exactly one of entry_id, instance_entry_id and share_id
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you (ine_…); exactly one of entry_id and instance_entry_id
+	// An instance entry offered to you (ine_…); exactly one of entry_id, instance_entry_id and share_id
 	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id, instance_entry_id and share_id
+	ShareId Field[string] `json:"share_id,omitzero"`
 	// The account name of a named binding beside the need's default; absent for the default
 	Name Field[string] `json:"name,omitzero"`
 	// How long the binding lives; standing when absent
@@ -3679,12 +3690,14 @@ func (args *ProfileCommitArgsDecisionsBindingsItemLifetime) UnmarshalJSON(data [
 
 type ProfileCommitArgsDecisionsSelectionsItem struct {
 	Dep string `json:"dep"`
-	// The dependency's profile that lends its key; at most one of label, entry_id and instance_entry_id, label 'default' when none
+	// The dependency's profile that lends its key; at most one of label, entry_id, instance_entry_id and share_id, label 'default' when none
 	Label Field[string] `json:"label,omitzero"`
 	// An entry of the athanor bound on the dependency's edge
 	EntryId Field[string] `json:"entry_id,omitzero"`
 	// An instance entry offered to you, bound on the edge
 	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// A key shared with you, bound on the edge
+	ShareId Field[string] `json:"share_id,omitzero"`
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
 	Need Field[string] `json:"need,omitzero"`
 	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
@@ -3853,7 +3866,7 @@ func (args *ProfileCommitArgsDecisionsSubsetItemExitsItem) UnmarshalJSON(data []
 type ProfileGrantArgs struct {
 	// Profile id (grant/list/revoke)
 	ProfileId string `json:"profile_id"`
-	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}]
 	Bindings Field[[]ProfileGrantArgsBindingsItem] `json:"bindings,omitzero"`
 	// The revision plan reported
 	ExpectedConsentRevision *int `json:"expected_consent_revision"`
@@ -3870,10 +3883,12 @@ func (args ProfileGrantArgs) MarshalJSON() ([]byte, error) {
 
 type ProfileGrantArgsBindingsItem struct {
 	Need Field[string] `json:"need,omitzero"`
-	// An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id
+	// An entry of the athanor (vlt_…); exactly one of entry_id, instance_entry_id and share_id
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you (ine_…); exactly one of entry_id and instance_entry_id
+	// An instance entry offered to you (ine_…); exactly one of entry_id, instance_entry_id and share_id
 	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id, instance_entry_id and share_id
+	ShareId Field[string] `json:"share_id,omitzero"`
 	// The account name of a named binding beside the need's default; absent for the default
 	Name Field[string] `json:"name,omitzero"`
 	// How long the binding lives; standing when absent
@@ -3968,7 +3983,7 @@ func (args ProfilePlanArgs) MarshalJSON() ([]byte, error) {
 
 // ProfilePreviewArgs carries arguments for profile.preview.
 type ProfilePreviewArgs struct {
-	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}], selections, override
+	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}], selections, override
 	Decisions ProfilePreviewArgsDecisions `json:"decisions"`
 }
 
@@ -3987,7 +4002,7 @@ type ProfilePreviewArgsDecisions struct {
 	Label      Field[string] `json:"label,omitzero"`
 	Scope      Field[string] `json:"scope,omitzero"`
 	InvokeMode Field[string] `json:"invoke_mode,omitzero"`
-	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}]
 	Bindings       Field[[]ProfilePreviewArgsDecisionsBindingsItem]    `json:"bindings,omitzero"`
 	Selections     Field[[]ProfilePreviewArgsDecisionsSelectionsItem]  `json:"selections,omitzero"`
 	ToolServers    Field[[]ProfilePreviewArgsDecisionsToolServersItem] `json:"tool_servers,omitzero"`
@@ -4014,10 +4029,12 @@ func (args *ProfilePreviewArgsDecisions) UnmarshalJSON(data []byte) error {
 
 type ProfilePreviewArgsDecisionsBindingsItem struct {
 	Need Field[string] `json:"need,omitzero"`
-	// An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id
+	// An entry of the athanor (vlt_…); exactly one of entry_id, instance_entry_id and share_id
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you (ine_…); exactly one of entry_id and instance_entry_id
+	// An instance entry offered to you (ine_…); exactly one of entry_id, instance_entry_id and share_id
 	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id, instance_entry_id and share_id
+	ShareId Field[string] `json:"share_id,omitzero"`
 	// The account name of a named binding beside the need's default; absent for the default
 	Name Field[string] `json:"name,omitzero"`
 	// How long the binding lives; standing when absent
@@ -4060,12 +4077,14 @@ func (args *ProfilePreviewArgsDecisionsBindingsItemLifetime) UnmarshalJSON(data 
 
 type ProfilePreviewArgsDecisionsSelectionsItem struct {
 	Dep string `json:"dep"`
-	// The dependency's profile that lends its key; at most one of label, entry_id and instance_entry_id, label 'default' when none
+	// The dependency's profile that lends its key; at most one of label, entry_id, instance_entry_id and share_id, label 'default' when none
 	Label Field[string] `json:"label,omitzero"`
 	// An entry of the athanor bound on the dependency's edge
 	EntryId Field[string] `json:"entry_id,omitzero"`
 	// An instance entry offered to you, bound on the edge
 	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// A key shared with you, bound on the edge
+	ShareId Field[string] `json:"share_id,omitzero"`
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
 	Need Field[string] `json:"need,omitzero"`
 	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
@@ -5134,6 +5153,145 @@ func (args SettingsSetArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SettingsSet, fields: fields(args)})
+}
+
+// ShareCreateArgs carries arguments for share.create.
+type ShareCreateArgs struct {
+	// Vault entry id (vlt_…) of your own athanor
+	EntryId string `json:"entry_id"`
+	// Who it is offered to: everyone on this CYFR, or the active members of one group
+	Audience string `json:"audience"`
+	// The group a group audience names, one you are an active member of; none for everyone
+	GroupId Field[string] `json:"group_id,omitzero"`
+	// Requests one person may make through it each day; 0 admits none; omitted or null is no limit
+	PersonDaily Field[*int] `json:"person_daily,omitzero"`
+	// Requests everyone together may make through it each day; 0 admits none; omitted or null is no limit
+	TotalDaily Field[*int] `json:"total_daily,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ShareCreateArgs) MarshalJSON() ([]byte, error) {
+	type fields ShareCreateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ShareCreate, fields: fields(args)})
+}
+
+// ShareListArgs carries arguments for share.list.
+type ShareListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ShareListArgs) MarshalJSON() ([]byte, error) {
+	type fields ShareListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ShareList, fields: fields(args)})
+}
+
+// ShareOfferedArgs carries arguments for share.offered.
+type ShareOfferedArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ShareOfferedArgs) MarshalJSON() ([]byte, error) {
+	type fields ShareOfferedArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ShareOffered, fields: fields(args)})
+}
+
+// ShareRevokeArgs carries arguments for share.revoke.
+type ShareRevokeArgs struct {
+	// Share id (shr_…)
+	ShareId string `json:"share_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ShareRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields ShareRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ShareRevoke, fields: fields(args)})
+}
+
+// ShareSetAudienceArgs carries arguments for share.set_audience.
+type ShareSetAudienceArgs struct {
+	// Share id (shr_…)
+	ShareId string `json:"share_id"`
+	// Who it is offered to: everyone on this CYFR, or the active members of one group
+	Audience string `json:"audience"`
+	// The group a group audience names, one you are an active member of; none for everyone
+	GroupId Field[string] `json:"group_id,omitzero"`
+	// The audience the change was decided against, as the caller saw it; a stored audience that differs is a conflict and nothing is saved
+	Expected ShareSetAudienceArgsExpected `json:"expected"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ShareSetAudienceArgs) MarshalJSON() ([]byte, error) {
+	type fields ShareSetAudienceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ShareSetAudience, fields: fields(args)})
+}
+
+type ShareSetAudienceArgsExpected struct {
+	// The audience as the caller saw it: everyone, or a group
+	Audience string `json:"audience"`
+	// The group as the caller saw it; none for everyone
+	GroupId Field[string] `json:"group_id,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ShareSetAudienceArgsExpected) UnmarshalJSON(data []byte) error {
+	type fields ShareSetAudienceArgsExpected
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ShareSetAudienceArgsExpected(value)
+	return nil
+}
+
+// ShareSetCapsArgs carries arguments for share.set_caps.
+type ShareSetCapsArgs struct {
+	// Share id (shr_…)
+	ShareId string `json:"share_id"`
+	// Requests one person may make through it each day; 0 admits none; omitted or null is no limit
+	PersonDaily Field[*int] `json:"person_daily,omitzero"`
+	// Requests everyone together may make through it each day; 0 admits none; omitted or null is no limit
+	TotalDaily Field[*int] `json:"total_daily,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ShareSetCapsArgs) MarshalJSON() ([]byte, error) {
+	type fields ShareSetCapsArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ShareSetCaps, fields: fields(args)})
+}
+
+// ShareUsageArgs carries arguments for share.usage.
+type ShareUsageArgs struct {
+	// Share id (shr_…)
+	ShareId string `json:"share_id"`
+	// Days of use to read, today included
+	Days int `json:"days"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ShareUsageArgs) MarshalJSON() ([]byte, error) {
+	type fields ShareUsageArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ShareUsage, fields: fields(args)})
 }
 
 // SystemNotifyArgs carries arguments for system.notify.
