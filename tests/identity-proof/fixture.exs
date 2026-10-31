@@ -6,14 +6,14 @@
 # function of the argument list; each command prints nothing and answers
 # one line, `FIXTURE=` and a JSON object. An argument spelled `@PATH` is
 # read from that file, so a credential never rides a command line. No
-# command answers a seed, a kit line, a token or a private key.
+# command answers a seed, a recovery code, a token or a private key.
 #
 #   setup
 #       The installation's setup admission (`Sanctum.Newcomer.admit/2`),
 #       the one admission besides a restore that makes a first person,
 #       under a setup token put for the call and taken away after, with
 #       the identity a command line draws, named `identity-proof`, which
-#       opens their enrollment: `{admitted: user_id}` or `{refused:
+#       opens their registration: `{admitted: user_id}` or `{refused:
 #       reason}`. On a restore-reserved installation it is refused.
 #
 #   genesis USER_ID

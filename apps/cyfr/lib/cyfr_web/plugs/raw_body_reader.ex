@@ -37,7 +37,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   (`Prima.Identity.max_entry_bytes/0`, 16 KiB) here, before any byte of
   them is decoded: a larger body is refused 413 the same way. Their raw
   bytes are not cached. The restore ingress (`/restore…`), which takes a
-  printed kit before any person exists, is bounded the same way, and so
+  recovery code before any person exists, is bounded the same way, and so
   is a certified device's renewal (`/certify…`), which a device sends
   holding no session.
 
