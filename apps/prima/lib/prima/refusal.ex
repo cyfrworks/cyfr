@@ -155,7 +155,9 @@ defmodule Prima.Refusal do
     disclosure_refused:
       {:forbidden, "This credential is attached by CYFR and never disclosed to a component."},
     not_offered: {:forbidden, "This key is not offered to you."},
-    owner_not_standing: {:forbidden, "The person who shared this key cannot lend it right now."},
+    # A share whose owner does not stand: the recipient learns nothing of
+    # another person's account, only that the key is not there for them.
+    owner_not_standing: {:forbidden, "This key is not available."},
     component_not_admitted:
       {:forbidden, "This instance entry requires an unmodified shipped component."},
     provider_mismatch: {:invalid_argument, "The entry is for another provider."},

@@ -672,6 +672,13 @@
           "answer_sealed": "oaKjpKWmp6ipqqsFrKcrkGrzuhu9s5JX_zJJ3qFkKCkdHN4JO8942ZTemGkDG-A219re1AjCpeacZRcV_n-hfQqmFesZIrwRMIR02NYZMqaYktCB5El2c20kSVf_lno1YwRMnHR53tGfe2p4_MpD1BC35hqiRBzhhsua-TsIufdmNy2U3acAl1FnArIDvHT2REEBNCkVLcihcLWZ3NCHsXr5G3FhlOaocr49zWtrmv7cV-WYn1YcahMWyfq0UqocRtk",
           "call_id": "EBESExQVFhcYGRobHB0eHw",
           "why": "the URL's host is outside the grant's egress domains: the denial a guest's own fetch would get, recorded, before the pin"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This key is not available.\",\"type\":\"owner_not_standing\"}",
+          "answer_iv_hex": "a1a2a3a4a5a6a7a8a9aaab06",
+          "answer_sealed": "oaKjpKWmp6ipqqsGdoKvYXIQ683f1qo9TaDNwwaUVHF7VpdhNz7X9f1OCIvKM5Ox8RF2wVB2ZniTOccQCljTsqmjs5hv94CGVKss69XatrfgIf06tqarbF8pcpeQNHQAkSYjtjRxcjM8yzBBtUEh1AibJoONp4WIzLtzr0qn9Y7kzHCP4OqBpWkVsCjl_n2Jk2ogkCXLSY4zQOxJY_MC",
+          "call_id": "EBESExQVFhcYGRobHB0eHw",
+          "why": "the share's owner does not stand: the recipient reads that the key is not available, nothing of the owner's account"
         }
       ]
     }

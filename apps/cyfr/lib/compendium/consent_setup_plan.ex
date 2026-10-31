@@ -319,7 +319,7 @@ defmodule Compendium.ConsentSetupPlan do
     do: {id, false, "the shared key is no longer offered to you"}
 
   defp check_ref(_ctx, {:share, id, {:error, :owner_not_standing}}),
-    do: {id, false, "the person who shared this key cannot lend it right now"}
+    do: {id, false, "the shared key is not available"}
 
   defp check_ref(_ctx, {:share, id, {:error, {:entry_unavailable, status}}}),
     do: {id, false, "the shared key is #{status}"}
@@ -418,7 +418,7 @@ defmodule Compendium.ConsentSetupPlan do
     do: "the shared key the #{label} profile lends was rebound since — re-approve to continue"
 
   defp unresolved(label, {:share, :owner_not_standing}),
-    do: "the person who shared the key the #{label} profile lends cannot lend it right now"
+    do: "the shared key the #{label} profile lends is not available"
 
   defp unresolved(label, {:share, {:entry_unavailable, status}}),
     do: "the shared key the #{label} profile lends is #{status}"

@@ -1141,10 +1141,10 @@ defmodule Sanctum.Providers.Profile do
   defp fmt({:share_not_offered, need}) when is_binary(need),
     do: "share_not_offered: the key shared for #{inspect(need)} is not offered to you"
 
+  # The recipient reads that the key is not there for them, never why the
+  # person who shared it does not stand.
   defp fmt({:owner_not_standing, need}) when is_binary(need),
-    do:
-      "owner_not_standing: the person who shared the key for #{inspect(need)} cannot lend " <>
-        "it right now"
+    do: "owner_not_standing: the key shared for #{inspect(need)} is not available"
 
   # The revision's own lock found a share it binds revoked since it was
   # read (`Arca.ConsentStorage`): which one, the store does not say.
