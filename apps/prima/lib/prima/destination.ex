@@ -27,9 +27,9 @@ defmodule Prima.Destination do
 
   `methods` and `paths` are optional on an athanor's entry and required,
   non-empty, on an instance entry: `new/2`'s second argument says which.
-  An athanor's entry is shared only once its destination names both
-  (`Arca.Shares`), so a key reaches no one but its owner on a destination
-  that admits any method or path. A present `methods` or `paths` is never
+  An athanor's entry is shared only when its destination names both
+  (`Arca.Shares`): a key that people other than its owner use goes to
+  named methods and paths alone. A present `methods` or `paths` is never
   empty.
 
   ## Canonical form
