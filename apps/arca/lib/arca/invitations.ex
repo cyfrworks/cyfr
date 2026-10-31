@@ -229,8 +229,6 @@ defmodule Arca.Invitations do
   """
   @spec redeem_for(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
           {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error | term()}
-  # arca:unscoped-ok redeemed by a person this server knows, by the hash of
-  # the bearer code they present, as `redeem/3` is.
   def redeem_for(%Prima.Actor{scope: :platform} = actor, code_hash, user_id, opts)
       when is_binary(code_hash) and is_binary(user_id) and is_list(opts) do
     also = Keyword.fetch!(Keyword.validate!(opts, [:also]), :also)

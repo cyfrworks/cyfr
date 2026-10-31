@@ -20,6 +20,7 @@ function fakeWindow(pathname, hash = "") {
   const win = {
     replaced: [],
     sessionStorage: null,
+    document: {addEventListener: () => {}, removeEventListener: () => {}},
     location: {pathname, search: "", hash, assign: () => {}},
     history: {
       state: {live: true},
