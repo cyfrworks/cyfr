@@ -120,7 +120,6 @@ defmodule Compendium.ConsentSetupPlanTest do
     seed!(ctx, ref, %{@dep => %{"vault" => %{"via" => via}}}, [
       %{
         binding_key: Prima.Authority.Blob.binding_key(ref, @dep, nil),
-        scope: "athanor",
         via_label: via["label"],
         binding_digest: via["binding_digest"]
       }
@@ -500,130 +499,6 @@ defmodule Compendium.ConsentSetupPlanTest do
     refute plan.ready
   end
 
-  @tag :capture_log
-  test "an instance entry the store cannot answer is said as one to read again", %{ctx: ctx} do
-    ref = "reagent:local.plan-instance-unread"
-    publish!(ctx, "plan-instance-unread")
-    {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-    {:ok, instance} =
-      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-        name: "instance-#{System.unique_integer([:positive])}",
-        kind: "api_key",
-        provider_hint: "example.com",
-        field_names: ~s(["KEY"]),
-        destination:
-          ~s({"hosts":["api.example.com"],"methods":["GET"],"paths":["/v1/"],"scheme":"https"}),
-        sealed_payload: "sealed",
-        binding_digest: "sha256:instance",
-        audience: "everyone",
-        created_by: "usr_admin"
-      })
-
-    seed!(ctx, ref, %{}, [
-      %{
-        binding_key: Prima.Authority.Blob.binding_key(ref, "@ingress", nil),
-        scope: "instance",
-        instance_entry_id: instance.id,
-        binding_digest: "sha256:instance"
-      }
-    ])
-
-    assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
-
-    Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
-
-    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
-    instance_id = instance.id
-
-    assert [%{entry_id: ^instance_id, satisfied: false, detail: @entry_unread}] =
-             plan.consent.needs
-
-    refute plan.ready
-  end
-
-  # A selection whose lender lends an instance entry the store cannot
-  # answer is read again, never a selection that resolves to nothing; one
-  # that does resolve to nothing still says so.
-  @tag :capture_log
-  test "a lent instance entry the store cannot answer is said as one to read again",
-       %{ctx: ctx} do
-    dep = "reagent:local.plan-lent-instance-dep"
-    app = "reagent:local.plan-lent-instance-app"
-
-    publish_manifest!(ctx, "plan-lent-instance-dep", %{
-      "needs" => %{
-        "api_key" => %{
-          "type" => "api_key:example.com",
-          "reason" => "to call the example API",
-          "required" => true,
-          "fields" => ["KEY"],
-          "hosts" => ["api.example.com"],
-          "attach" => %{
-            "in" => "header",
-            "name" => "Authorization",
-            "template" => "Bearer {value}"
-          }
-        }
-      },
-      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
-    })
-
-    publish_manifest!(ctx, "plan-lent-instance-app", %{
-      "dependencies" => %{"static" => [%{"ref" => dep}]}
-    })
-
-    # An instance entry is bound, and offered, to a person active here; a
-    # selection resolves under the console's `interactive`.
-    {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.via(ctx, :prism))
-
-    {:ok, instance} =
-      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-        name: "instance-#{System.unique_integer([:positive])}",
-        kind: "api_key",
-        provider_hint: "example.com",
-        field_names: ~s(["KEY"]),
-        destination:
-          ~s({"hosts":["api.example.com"],"methods":["GET"],"paths":["/v1/"],"scheme":"https"}),
-        sealed_payload: "sealed",
-        binding_digest: "sha256:instance",
-        audience: "everyone",
-        created_by: "usr_admin"
-      })
-
-    walk!(person, %{ref: dep, bindings: [%{need: "api_key", instance_entry_id: instance.id}]})
-    walk!(person, %{ref: app, selections: [%{dep: dep, label: "default"}]})
-
-    assert [
-             %{
-               satisfied: true,
-               detail: "bound to an instance entry (lent by its default profile)"
-             }
-           ] =
-             detail_rows!(person, app)
-
-    Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
-    assert [%{entry_id: nil, satisfied: false, detail: @entry_unread}] = detail_rows!(person, app)
-    Arca.Repo.query!("ALTER TABLE instance_entries_unavailable RENAME TO instance_entries")
-
-    # A selection the borrower's own head no longer holds as approved
-    # resolves to nothing, and says so as before.
-    {:ok, [%{id: borrower}]} = Sanctum.Consent.profiles(person, app)
-
-    :ok =
-      Sanctum.Test.ConsentFixtures.hand_edit_head!(person, borrower,
-        blob_digest: "sha256:" <> String.duplicate("0", 64)
-      )
-
-    assert [
-             %{
-               entry_id: nil,
-               satisfied: false,
-               detail: "the selection of the default profile resolves to nothing"
-             }
-           ] = detail_rows!(person, app)
-  end
-
   defp detail_rows!(ctx, ref) do
     {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
     plan.consent.needs
@@ -719,6 +594,74 @@ defmodule Compendium.ConsentSetupPlanTest do
                  entry_id: nil,
                  satisfied: false,
                  detail: "the shared key the default profile lends is no longer offered to you"
+               }
+             ] = detail_rows!(alice.ctx, app)
+    end
+
+    @tag :capture_log
+    test "a shared key the store cannot answer is said as one to read again",
+         %{alice: alice, share: share} do
+      ref = "reagent:local.plan-shared-unread"
+      publish_manifest!(alice.ctx, "plan-shared-unread", @shared_need)
+      walk!(alice.ctx, %{ref: ref, bindings: [%{need: "api_key", share_id: share.id}]})
+      assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(alice.ctx, ref)
+
+      Arca.Repo.query!("ALTER TABLE shares RENAME TO shares_unavailable")
+
+      {:ok, plan} = Compendium.Component.setup_plan(alice.ctx, ref)
+      share_id = share.id
+
+      assert [
+               %{
+                 entry_id: ^share_id,
+                 satisfied: false,
+                 detail: "the shared key cannot be read right now — try again"
+               }
+             ] = plan.consent.needs
+
+      refute plan.ready
+    end
+
+    # A selection whose lender lends a share the store cannot answer is
+    # read again, never a selection that resolves to nothing; one that
+    # does resolve to nothing still says so.
+    @tag :capture_log
+    test "a key a dependency's profile lends that the store cannot answer is said as one to " <>
+           "read again",
+         %{alice: alice, share: share} do
+      dep = "reagent:local.plan-shared-unread-dep"
+      app = "reagent:local.plan-shared-unread-app"
+      unread = "the shared key the default profile lends cannot be read right now — try again"
+      publish_manifest!(alice.ctx, "plan-shared-unread-dep", @shared_need)
+
+      publish_manifest!(alice.ctx, "plan-shared-unread-app", %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      walk!(alice.ctx, %{ref: dep, bindings: [%{need: "api_key", share_id: share.id}]})
+      walk!(alice.ctx, %{ref: app, selections: [%{dep: dep, label: "default"}]})
+
+      assert [%{satisfied: true, detail: "bound to a shared key (lent by its default profile)"}] =
+               detail_rows!(alice.ctx, app)
+
+      Arca.Repo.query!("ALTER TABLE shares RENAME TO shares_unavailable")
+      assert [%{entry_id: nil, satisfied: false, detail: ^unread}] = detail_rows!(alice.ctx, app)
+      Arca.Repo.query!("ALTER TABLE shares_unavailable RENAME TO shares")
+
+      # A selection the borrower's own head no longer holds as approved
+      # resolves to nothing, and says so as before.
+      {:ok, [%{id: borrower}]} = Sanctum.Consent.profiles(alice.ctx, app)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(alice.ctx, borrower,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert [
+               %{
+                 entry_id: nil,
+                 satisfied: false,
+                 detail: "the selection of the default profile resolves to nothing"
                }
              ] = detail_rows!(alice.ctx, app)
     end
@@ -980,69 +923,6 @@ defmodule Compendium.ConsentSetupPlanTest do
         Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
       end
     end
-
-    test "a row naming an instance entry is read as the person is offered it, at its digest",
-         %{ctx: ctx} do
-      ref = "reagent:local.plan-loose"
-      {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-      {:ok, instance} =
-        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-          name: "instance-#{System.unique_integer([:positive])}",
-          kind: "api_key",
-          provider_hint: "example.com",
-          field_names: ~s(["KEY"]),
-          destination:
-            ~s({"hosts":["api.example.com"],"methods":["GET"],"paths":["/v1/"],"scheme":"https"}),
-          sealed_payload: "sealed",
-          binding_digest: "sha256:instance",
-          audience: "everyone",
-          created_by: "usr_admin"
-        })
-
-      seed!(ctx, ref, %{}, [
-        %{
-          binding_key: Prima.Authority.Blob.binding_key(ref, "@ingress", nil),
-          scope: "instance",
-          instance_entry_id: instance.id,
-          binding_digest: "sha256:instance"
-        }
-      ])
-
-      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
-
-      instance_id = instance.id
-      assert [%{entry_id: ^instance_id, satisfied: true, detail: detail}] = plan.consent.needs
-      assert detail =~ instance.name and detail =~ "instance entry"
-      assert plan.ready
-
-      # Rebound since the person approved it: not ready, said as such.
-      {:ok, _} =
-        Arca.InstanceEntries.move_binding(
-          Arca.Test.Actor.platform(),
-          instance.id,
-          "sha256:instance",
-          %{
-            destination:
-              ~s({"hosts":["api.example.com"],"methods":["GET"],"paths":["/v2/"],"scheme":"https"}),
-            binding_digest: "sha256:moved"
-          },
-          "needs_consent"
-        )
-
-      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
-      assert [%{entry_id: ^instance_id, satisfied: false, detail: detail}] = plan.consent.needs
-      assert detail =~ "rebound"
-      refute plan.ready
-
-      # Revoked: not ready, said as such.
-      {:ok, _} =
-        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), instance.id, "needs_consent")
-
-      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
-      assert [%{satisfied: false, detail: detail}] = plan.consent.needs
-      assert detail =~ "revoked"
-    end
   end
 
   test "an attach-only entry the component would read itself is not ready, and the remedy " <>
@@ -1096,7 +976,6 @@ defmodule Compendium.ConsentSetupPlanTest do
           vault_refs: [
             %{
               binding_key: key,
-              scope: "athanor",
               vault_entry_id: view.id,
               binding_digest: digest
             }

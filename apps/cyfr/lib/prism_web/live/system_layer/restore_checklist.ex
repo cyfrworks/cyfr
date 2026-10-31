@@ -16,9 +16,8 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
     * Profiles to consent to again, each naming its component and label,
       with a link to the athanor's Components page, which opens the
       default profile's grant.
-    * Entries to rotate at their destination and enter again: the vault
-      entries of the athanors the person sits in, and the instance
-      entries for a platform administrator.
+    * Vault entries to rotate at their destination and enter again: those
+      of the athanors the person sits in.
 
   Each re-enable is the operation `key.reenable`, `webhook.reenable`,
   `pairing.reenable` or `passkey.reenable` (`request/4`). The layer
@@ -120,8 +119,7 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
             Enum.map(checklist.paired_clients, &{"pairing.reenable", &1}),
         credentials:
           Enum.map(checklist.api_keys, &{"key.reenable", &1}) ++
-            Enum.map(checklist.webhooks, &{"webhook.reenable", &1}),
-        here: Map.get(assigns.places, assigns.athanor_id)
+            Enum.map(checklist.webhooks, &{"webhook.reenable", &1})
       )
 
     ~H"""
@@ -231,7 +229,7 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
           </section>
 
           <section
-            :if={@checklist.vault_entries != [] or @checklist.instance_entries != []}
+            :if={@checklist.vault_entries != []}
             aria-labelledby={"#{@id}-entries"}
             class="space-y-1"
           >
@@ -257,23 +255,6 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
                   class="text-blue-300 underline"
                 >
                   Open the vault
-                </.link>
-              </li>
-              <li
-                :for={entry <- @checklist.instance_entries}
-                class="space-y-1 py-2"
-                data-test="restore-checklist-entry"
-                data-kind="instance"
-                data-id={entry.id}
-              >
-                <p class="font-medium">{entry.name}</p>
-                <p class="text-xs text-gray-400">An instance entry.</p>
-                <.link
-                  :if={@here}
-                  navigate={PrismWeb.Focus.path(@here.route, "/settings")}
-                  class="text-blue-300 underline"
-                >
-                  Open the instance entries
                 </.link>
               </li>
             </ul>

@@ -14,13 +14,11 @@ defmodule Compendium.ConsentSetupPlan do
   to the digest the person approved; a selection of another profile's
   key, resolved as a run resolves it and its lender's entry held to the
   same check, or reported not ready with the reason it resolves to
-  nothing; an instance entry, read as the person is offered it and
-  held to the digest the person approved; and a share, read as the
-  person is offered it, its owner standing and its source entry held to
-  the digest the person approved. A bound entry the store could not
-  answer, the athanor's own, an instance entry or a share, is said as one
-  to read again, never as an entry that no longer exists or one the
-  person cannot use.
+  nothing; and a share, read as the person is offered it, its owner
+  standing and its source entry held to the digest the person approved.
+  A bound entry the store could not answer, the athanor's own or one
+  reached through a share, is said as one to read again, never as an
+  entry that no longer exists or one the person cannot use.
 
   An attach-only entry bound where the component reads the value itself
   (its edge carries no attach rule: a need of a version published before
@@ -272,11 +270,6 @@ defmodule Compendium.ConsentSetupPlan do
   defp check_ref(ctx, {:selection, label, {:ok, %{scope: "athanor"} = vault}}),
     do: usable(ctx, vault.entry_id, vault.binding_digest, " (lent by its #{label} profile)", nil)
 
-  # A lent instance entry, read live as the person is offered it at the
-  # digest the lender bound (`Sanctum.Consent.row_binding/3`).
-  defp check_ref(_ctx, {:selection, label, {:ok, %{scope: "instance"} = vault}}),
-    do: {vault.entry_id, true, "bound to an instance entry (lent by its #{label} profile)"}
-
   # A lent share, read live as the person is offered it at the digest the
   # lender bound (`Sanctum.Consent.row_binding/3`).
   defp check_ref(_ctx, {:selection, label, {:ok, %{scope: "share"} = vault}}),
@@ -284,29 +277,6 @@ defmodule Compendium.ConsentSetupPlan do
 
   defp check_ref(_ctx, {:selection, label, {:error, reason}}),
     do: {nil, false, unresolved(label, reason)}
-
-  # An instance entry, as the person is offered it, at the digest approved.
-  defp check_ref(_ctx, {:instance, id, {:ok, view}}),
-    do: {id, true, "bound to #{view.name}, an instance entry"}
-
-  defp check_ref(_ctx, {:instance, id, {:error, :binding_went_stale}}),
-    do: {id, false, "the instance entry was rebound since this consent — re-approve to continue"}
-
-  defp check_ref(_ctx, {:instance, id, {:error, :not_offered}}),
-    do: {id, false, "the instance entry is no longer offered to you"}
-
-  defp check_ref(_ctx, {:instance, id, {:error, {:entry_unavailable, status}}}),
-    do: {id, false, "the instance entry is #{status}"}
-
-  defp check_ref(_ctx, {:instance, id, {:error, refused}})
-       when refused in [:denied, :anonymous_denied, :no_person, :component_not_admitted],
-       do: {id, false, "the instance entry cannot be used by you"}
-
-  # Any other refusal is a read that failed (`Sanctum.InstanceEntries.binding/2`
-  # answers the entry and the person in the words above), never an entry
-  # this person cannot use.
-  defp check_ref(_ctx, {:instance, id, {:error, _unread}}),
-    do: {id, false, @entry_unread}
 
   # A share, as the person is offered it, its source at the digest approved.
   defp check_ref(_ctx, {:share, id, {:ok, view}}),
@@ -400,15 +370,6 @@ defmodule Compendium.ConsentSetupPlan do
   defp unresolved(label, {:consent_required, _payload}),
     do: "the #{label} profile's grant does not admit this origin"
 
-  defp unresolved(label, :not_offered),
-    do: "the instance entry the #{label} profile lends is no longer offered to you"
-
-  defp unresolved(label, :binding_went_stale),
-    do: "the instance entry the #{label} profile lends was rebound since — re-approve to continue"
-
-  defp unresolved(label, {:entry_unavailable, status}),
-    do: "the instance entry the #{label} profile lends is #{status}"
-
   # A lent share's answers (`Sanctum.Consent.row_binding/3` tags them), as a
   # share row's are said.
   defp unresolved(label, {:share, :not_offered}),
@@ -428,16 +389,6 @@ defmodule Compendium.ConsentSetupPlan do
 
   defp unresolved(label, {:share, _unread}),
     do: "the shared key the #{label} profile lends cannot be read right now — try again"
-
-  # A lent entry its reader could not read: `Sanctum.InstanceEntries.binding/2`'s
-  # refusals outside its answers about the entry and the person (the
-  # person's standing or the offer the store could not answer), and
-  # `Sanctum.VaultReader.usable/3`'s outage. No other refusal of a
-  # selection is spelled with these terms.
-  defp unresolved(_label, reason) when reason in [:unavailable, :database_error],
-    do: @entry_unread
-
-  defp unresolved(_label, {:unavailable, _what}), do: @entry_unread
 
   defp unresolved(label, _reason), do: "the selection of the #{label} profile resolves to nothing"
 end
