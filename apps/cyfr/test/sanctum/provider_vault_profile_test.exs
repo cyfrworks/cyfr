@@ -675,7 +675,7 @@ defmodule Sanctum.ProviderVaultProfileTest do
       })
 
     :telemetry.detach(handler)
-    assert Process.get(:revoked) == :ok
+    assert Process.get(:revoked) == {:ok, %{revoked_share_ids: []}}
 
     # The store's refusal names no entry; the tool says what it means.
     assert result ==

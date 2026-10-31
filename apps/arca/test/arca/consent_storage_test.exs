@@ -363,11 +363,11 @@ defmodule Arca.ConsentStorageTest do
       {:ok, head, _refs} = ConsentStorage.get_head(actor, profile.id)
 
       revoked = entry!(athanor)
-      :ok = VaultStorage.set_status(actor, revoked.id, "revoked")
+      {:ok, _} = VaultStorage.set_status(actor, revoked.id, "revoked")
       reauth = entry!(athanor)
-      :ok = VaultStorage.set_status(actor, reauth.id, "needs_reauth")
+      {:ok, _} = VaultStorage.set_status(actor, reauth.id, "needs_reauth")
       gone = entry!(athanor)
-      :ok = VaultStorage.tombstone(actor, gone.id)
+      {:ok, _} = VaultStorage.tombstone(actor, gone.id)
       elsewhere = entry!("ath_other")
 
       for {id, refusal} <- [
@@ -496,7 +496,7 @@ defmodule Arca.ConsentStorageTest do
       {:ok, _} = Arca.Shares.revoke(terry.actor, revoked.id, "needs_consent")
       reauth_entry = Arca.Test.Shares.entry!(terry.actor)
       reauth = Arca.Test.Shares.share!(terry.actor, reauth_entry.id)
-      :ok = VaultStorage.set_status(terry.actor, reauth_entry.id, "needs_reauth")
+      {:ok, _} = VaultStorage.set_status(terry.actor, reauth_entry.id, "needs_reauth")
       group = Arca.Test.Shares.group!([alice.user.id])
 
       for {athanor, ref, refusal} <- [

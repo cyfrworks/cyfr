@@ -45,7 +45,7 @@ defmodule Arca.VaultStorageTest do
   defp dependent_profile!(actor, entry_id, source_ref \\ nil) do
     athanor = actor.athanor_id
     reauth? = status_of(actor, entry_id).status == "needs_reauth"
-    if reauth?, do: :ok = VaultStorage.set_status(actor, entry_id, "active")
+    if reauth?, do: {:ok, _} = VaultStorage.set_status(actor, entry_id, "active")
 
     {:ok, profile} =
       Arca.Test.Writers.put_profile(%{
@@ -85,7 +85,7 @@ defmodule Arca.VaultStorageTest do
         nil
       )
 
-    if reauth?, do: :ok = VaultStorage.set_status(actor, entry_id, "needs_reauth")
+    if reauth?, do: {:ok, _} = VaultStorage.set_status(actor, entry_id, "needs_reauth")
     profile
   end
 
@@ -355,7 +355,7 @@ defmodule Arca.VaultStorageTest do
     test "excludes tombstoned rows unless widened", %{actor: actor} do
       live = put!(actor)
       dead = put!(actor)
-      :ok = VaultStorage.tombstone(actor, dead.id)
+      {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, dead.id)
 
       {:ok, rows} = VaultStorage.list(actor)
       ids = Enum.map(rows, & &1.id)
@@ -382,7 +382,7 @@ defmodule Arca.VaultStorageTest do
     test "flips status and erases the sealed payload in one update", %{actor: actor} do
       entry = put!(actor)
 
-      assert :ok = VaultStorage.tombstone(actor, entry.id)
+      assert {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, entry.id)
 
       row = status_of(actor, entry.id)
       assert row.status == "tombstoned"
@@ -394,13 +394,13 @@ defmodule Arca.VaultStorageTest do
       assert {:ok, %{vault_entry_id: id}} = Arca.VaultDefaults.get(actor, "anthropic.com")
       assert id == entry.id
 
-      assert :ok = VaultStorage.tombstone(actor, entry.id)
+      assert {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, entry.id)
       assert {:error, :not_found} = Arca.VaultDefaults.get(actor, "anthropic.com")
     end
 
     test "frees the living-name slot", %{actor: actor} do
       entry = put!(actor, %{name: "unique-name"})
-      :ok = VaultStorage.tombstone(actor, entry.id)
+      {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, entry.id)
 
       assert {:ok, _} =
                VaultStorage.put(actor, %{
@@ -418,7 +418,7 @@ defmodule Arca.VaultStorageTest do
       entry = put!(actor, %{binding_digest: "sha256:d0"})
       profile = dependent_profile!(actor, entry.id)
 
-      assert {:ok, [affected]} =
+      assert {:ok, %{affected: [affected], rebound_share_ids: []}} =
                VaultStorage.move_binding(
                  actor,
                  entry.id,
@@ -443,7 +443,7 @@ defmodule Arca.VaultStorageTest do
       profile = dependent_profile!(actor, entry.id)
 
       for {from, to} <- [{"sha256:d0", "sha256:d1"}, {"sha256:d1", "sha256:d2"}] do
-        assert {:ok, [affected]} =
+        assert {:ok, %{affected: [affected], rebound_share_ids: []}} =
                  VaultStorage.move_binding(actor, entry.id, from, %{binding_digest: to}, @blocked)
 
         assert affected == profile.id
@@ -460,7 +460,7 @@ defmodule Arca.VaultStorageTest do
       # Both readers hold "sha256:d0" — what a concurrent pair would.
       read_by_both = entry.binding_digest
 
-      assert {:ok, [_]} =
+      assert {:ok, %{affected: [_], rebound_share_ids: []}} =
                VaultStorage.move_binding(
                  actor,
                  entry.id,
@@ -500,7 +500,7 @@ defmodule Arca.VaultStorageTest do
       entry = put!(actor, %{binding_digest: "sha256:d0"})
       profile = dependent_profile!(actor, entry.id)
 
-      assert {:ok, [_]} =
+      assert {:ok, %{affected: [_], rebound_share_ids: []}} =
                VaultStorage.move_binding(
                  actor,
                  entry.id,
@@ -572,7 +572,7 @@ defmodule Arca.VaultStorageTest do
       :ok = Arca.ProfileStorage.transition(actor, old.id, :any, "revoked")
       live = dependent_profile!(actor, entry.id, source)
 
-      assert {:ok, [affected]} =
+      assert {:ok, %{affected: [affected], rebound_share_ids: []}} =
                VaultStorage.move_binding(
                  actor,
                  entry.id,
@@ -591,7 +591,7 @@ defmodule Arca.VaultStorageTest do
 
     test "a tombstoned entry has no binding to move", %{actor: actor} do
       entry = put!(actor, %{binding_digest: "sha256:d0"})
-      :ok = VaultStorage.tombstone(actor, entry.id)
+      {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, entry.id)
 
       assert {:error, :binding_moved} =
                VaultStorage.move_binding(actor, entry.id, "sha256:d0", %{}, @blocked)
@@ -607,7 +607,7 @@ defmodule Arca.VaultStorageTest do
           target <- targets do
         entry = put!(actor)
 
-        :ok =
+        {:ok, %{revoked_share_ids: []}} =
           if ended == "tombstoned",
             do: VaultStorage.tombstone(actor, entry.id),
             else: VaultStorage.set_status(actor, entry.id, "revoked")
@@ -622,10 +622,13 @@ defmodule Arca.VaultStorageTest do
     test "the transitions it admits, a status it does not know and a missing row",
          %{actor: actor} do
       entry = put!(actor)
-      assert :ok = VaultStorage.set_status(actor, entry.id, "needs_reauth")
-      assert :ok = VaultStorage.set_status(actor, entry.id, "active")
-      assert :ok = VaultStorage.set_status(actor, entry.id, "revoked")
-      assert :ok = VaultStorage.set_status(actor, entry.id, "revoked")
+
+      assert {:ok, %{revoked_share_ids: []}} =
+               VaultStorage.set_status(actor, entry.id, "needs_reauth")
+
+      assert {:ok, %{revoked_share_ids: []}} = VaultStorage.set_status(actor, entry.id, "active")
+      assert {:ok, %{revoked_share_ids: []}} = VaultStorage.set_status(actor, entry.id, "revoked")
+      assert {:ok, %{revoked_share_ids: []}} = VaultStorage.set_status(actor, entry.id, "revoked")
 
       for status <- ["tombstoned", "whatever"] do
         assert {:error, {:invalid_status, ^status}} =
@@ -641,7 +644,7 @@ defmodule Arca.VaultStorageTest do
       entry = put!(actor, %{binding_digest: "sha256:d0", status: "needs_reauth"})
       profile = dependent_profile!(actor, entry.id)
 
-      assert {:ok, %{payload_rev: 1, affected: [affected]}} =
+      assert {:ok, %{payload_rev: 1, affected: [affected], rebound_share_ids: []}} =
                VaultStorage.commit_payload(actor, entry.id, %{
                  expected_rev: 0,
                  sealed_payload: "sealed-next",
@@ -672,7 +675,7 @@ defmodule Arca.VaultStorageTest do
         entry = put!(actor, %{status: "needs_reauth", binding_digest: "sha256:d0"})
         profile = dependent_profile!(actor, entry.id)
 
-        :ok =
+        {:ok, %{revoked_share_ids: []}} =
           if ended == "tombstoned",
             do: VaultStorage.tombstone(actor, entry.id),
             else: VaultStorage.set_status(actor, entry.id, "revoked")
@@ -734,7 +737,7 @@ defmodule Arca.VaultStorageTest do
          %{actor: actor} do
       entry = put!(actor, %{status: "needs_reauth"})
 
-      assert {:ok, %{payload_rev: 1, affected: []}} =
+      assert {:ok, %{payload_rev: 1, affected: [], rebound_share_ids: []}} =
                VaultStorage.commit_payload(actor, entry.id, %{
                  expected_rev: 0,
                  sealed_payload: "sealed-next",
@@ -849,7 +852,7 @@ defmodule Arca.VaultStorageTest do
     # when the owner deletes the entry: its write-back lands on nothing.
     test "a write-back after tombstone/2 leaves sealed_payload nil", %{actor: actor} do
       entry = put!(actor)
-      :ok = VaultStorage.tombstone(actor, entry.id)
+      {:ok, %{revoked_share_ids: []}} = VaultStorage.tombstone(actor, entry.id)
 
       assert {:error, {:entry_unavailable, "tombstoned"}} =
                VaultStorage.rotate_payload(actor, entry.id, 0, "sealed-late")
@@ -861,7 +864,7 @@ defmodule Arca.VaultStorageTest do
 
     test "a write-back after a revoke writes nothing either", %{actor: actor} do
       entry = put!(actor)
-      :ok = VaultStorage.set_status(actor, entry.id, "revoked")
+      {:ok, %{revoked_share_ids: []}} = VaultStorage.set_status(actor, entry.id, "revoked")
 
       assert {:error, {:entry_unavailable, "revoked"}} =
                VaultStorage.rotate_payload(actor, entry.id, 0, "sealed-late")
@@ -899,8 +902,14 @@ defmodule Arca.VaultStorageTest do
            "and leaves the shares as they are",
          %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
       own = dependent_profile!(terry.actor, entry.id)
+      traders = Arca.Test.Shares.group!([terry.user.id])
 
-      assert {:ok, affected} =
+      revoked =
+        Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+
+      {:ok, _} = Arca.Shares.revoke(terry.actor, revoked.id, @blocked)
+
+      assert {:ok, %{affected: affected, rebound_share_ids: rebound}} =
                VaultStorage.move_binding(
                  terry.actor,
                  entry.id,
@@ -912,8 +921,11 @@ defmodule Arca.VaultStorageTest do
                  @blocked
                )
 
-      # The owner hears of their own profiles alone.
+      # The owner hears of their own profiles alone, and of the active
+      # shares the move carried, which it announces; a revoked share is
+      # carried by nothing.
       assert affected == [own.id]
+      assert rebound == [share.id]
       assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == @blocked
       assert Arca.Test.Shares.profile_status(terry.athanor.id, own.id) == @blocked
       assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
@@ -957,7 +969,7 @@ defmodule Arca.VaultStorageTest do
 
       {:ok, _} = Arca.Shares.revoke(terry.actor, share.id, @blocked)
 
-      assert {:ok, _} =
+      assert {:ok, %{rebound_share_ids: []}} =
                VaultStorage.move_binding(
                  terry.actor,
                  entry.id,
@@ -975,21 +987,35 @@ defmodule Arca.VaultStorageTest do
       other = Arca.Test.Shares.entry!(terry.actor)
       kept = Arca.Test.Shares.share!(terry.actor, other.id)
 
-      assert :ok = VaultStorage.set_status(terry.actor, entry.id, "revoked")
+      assert {:ok, %{revoked_share_ids: revoked}} =
+               VaultStorage.set_status(terry.actor, entry.id, "revoked")
+
+      # The shares it revoked, for the caller to announce: this entry's
+      # alone.
+      assert revoked == [share.id]
       assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
       assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == @blocked
       assert Arca.Test.Shares.share_status(terry.actor, kept.id) == "active"
 
-      assert :ok = VaultStorage.tombstone(terry.actor, other.id)
+      # A revoke again finds no active share, and revokes and answers none.
+      assert {:ok, %{revoked_share_ids: []}} =
+               VaultStorage.set_status(terry.actor, entry.id, "revoked")
+
+      assert {:ok, %{revoked_share_ids: [kept_id]}} =
+               VaultStorage.tombstone(terry.actor, other.id)
+
+      assert kept_id == kept.id
       assert Arca.Test.Shares.share_status(terry.actor, kept.id) == "revoked"
     end
 
     test "needs_reauth leaves the shares, and a rotation leaves shares and consents as they are",
          %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
-      :ok = VaultStorage.set_status(terry.actor, entry.id, "needs_reauth")
+      assert {:ok, %{revoked_share_ids: []}} =
+               VaultStorage.set_status(terry.actor, entry.id, "needs_reauth")
+
       assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
 
-      assert {:ok, %{payload_rev: 1, affected: []}} =
+      assert {:ok, %{payload_rev: 1, affected: [], rebound_share_ids: []}} =
                VaultStorage.commit_payload(terry.actor, entry.id, %{
                  expected_rev: 0,
                  sealed_payload: "rotated",
@@ -1000,6 +1026,25 @@ defmodule Arca.VaultStorageTest do
       assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
       assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == "active"
       assert status_of(terry.actor, entry.id).binding_digest == "sha256:d0"
+    end
+
+    test "a material write that moves the binding answers the shares it carried",
+         %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
+      assert {:ok, %{payload_rev: 1, affected: [], rebound_share_ids: rebound}} =
+               VaultStorage.commit_payload(terry.actor, entry.id, %{
+                 expected_rev: 0,
+                 sealed_payload: "rotated",
+                 status: nil,
+                 rebind: %{
+                   from_digest: "sha256:d0",
+                   changes: %{binding_digest: "sha256:d1"},
+                   blocked_status: @blocked
+                 }
+               })
+
+      assert rebound == [share.id]
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, alices.id) == @blocked
     end
   end
 end

@@ -537,7 +537,7 @@ defmodule Sanctum.Vault do
     with {:ok, digest} <- VaultReader.binding_digest(rebound),
          {:ok, confirmation} <-
            rebind_confirmation(ctx, "vault.rebind", entry, rebound, digest),
-         {:ok, affected} <-
+         {:ok, %{affected: affected}} <-
            Arca.VaultStorage.move_binding(
              Context.actor(ctx),
              entry.id,
@@ -687,7 +687,7 @@ defmodule Sanctum.Vault do
   def revoke(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_living(ctx, id),
-         :ok <- Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked"),
+         {:ok, _ended} <- Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked"),
          {:ok, affected} <-
            Arca.ConsentStorage.head_profiles_referencing(Context.actor(ctx), id) do
       broadcast(ctx, id, :revoke, %{name: entry.name})
@@ -700,7 +700,7 @@ defmodule Sanctum.Vault do
   def delete(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_any(ctx, id),
-         :ok <- Arca.VaultStorage.tombstone(Context.actor(ctx), id) do
+         {:ok, _ended} <- Arca.VaultStorage.tombstone(Context.actor(ctx), id) do
       broadcast(ctx, id, :delete, %{name: entry.name})
       :ok
     end

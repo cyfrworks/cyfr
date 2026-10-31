@@ -688,7 +688,7 @@ defmodule Sanctum.VaultTest do
 
     test "rotating a needs_reauth entry reactivates it", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "v"}})
-      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
 
       assert {:ok, 1} =
                rotate(ctx, %{
@@ -704,7 +704,7 @@ defmodule Sanctum.VaultTest do
     test "a rotate that loses its compare-and-set leaves the entry whole", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "before"}})
       resource = resource_for(ctx, view.id)
-      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
 
       # The material write and the reactivation that goes with it are one
       # transaction: a lost race leaves neither, so the entry is still
@@ -720,7 +720,7 @@ defmodule Sanctum.VaultTest do
       assert entry.status == "needs_reauth"
       assert entry.payload_rev == 0
 
-      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "active")
+      {:ok, _} = Arca.VaultStorage.set_status(actor(ctx), view.id, "active")
       assert {:ok, %{"key" => "before"}} = VaultReader.fetch(ctx, resource, @dispense)
     end
   end
