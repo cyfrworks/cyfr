@@ -15,7 +15,7 @@
 # of the run's process group; and it must leave the shared proof image,
 # every other run's names and every unrelated name alone, including those
 # the driver asks to own. TERM while a long docker command runs that TERM
-# does not end, as a foreground `docker run` of a container whose first
+# does not end, as a foreground docker client of a container whose first
 # process ignores it, still tears the run down at once. A removal that
 # keeps failing fails a passed run, naming what it leaves; one that
 # succeeds within three attempts does not. run.sh refuses an empty or
@@ -154,7 +154,7 @@ case $sub in
   logs) echo "QEMU's log of $1" ;;
   run)
     # A client whose container's first process ignores TERM: TERM does not
-    # end it, as a foreground `docker run` of the stuck download was not.
+    # end it, as the stuck download's foreground docker client was not.
     # The ignored TERM outlives the exec, and the pid stays the client's.
     trap '' TERM
     echo $$ >>"$SCRATCH/watchers"

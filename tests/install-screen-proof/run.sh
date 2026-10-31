@@ -490,15 +490,15 @@ guest_state() {
     echo "audit:"; dpkg --audit' >"$GUEST_DIR/$1" 2>&1
 }
 
-# Run inside the guest as `sh interrupt-when.sh PATTERN SECONDS`: as soon
-# as a process whose command line matches the extended regex PATTERN
-# runs, within SECONDS, it types Ctrl-C into the pane and names the
-# process; past SECONDS it types Ctrl-C all the same, saying that nothing
+# Run inside the guest as `sh interrupt-when.sh PATTERN SECONDS [COND]`:
+# as soon as a process whose command line matches the extended regex
+# PATTERN runs, and the shell condition COND holds (default true), within
+# SECONDS, it types Ctrl-C into the pane and names the process; past SECONDS it types Ctrl-C all the same, saying that nothing
 # matched, so the run still ends. It polls ten times a second.
-INTERRUPT_WHEN='pattern=$1 n=0
+INTERRUPT_WHEN='pattern=$1 n=0 cond=${3:-true}
 while [ "$n" -lt "$(($2 * 10))" ]; do
   line=$(pgrep -a -f -- "$pattern" | head -n 1)
-  if [ -n "$line" ]; then
+  if [ -n "$line" ] && sh -c "$cond"; then
     tmux send-keys -t proof C-c
     echo "interrupted while: $line"
     ps -eo pid,ppid,pgid,stat,etimes,args
@@ -512,18 +512,19 @@ echo "interrupted late: no process matched $pattern within $2 s"
 ps -eo pid,ppid,pgid,stat,etimes,args
 exit 1'
 
-# c3_interrupted NAME MARK PATTERN SECONDS LATER: `cyfr init --no-pull`
+# c3_interrupted NAME MARK PATTERN SECONDS LATER [COND]: `cyfr init --no-pull`
 # typed into the pane and agreed as INIT_ANSWERS agree it until the pane
 # shows a line matching MARK, the action's `→ <command>` line, which the
 # parent prints as the action starts; then Ctrl-C, typed from inside the
-# guest within 0.1 s of a process matching PATTERN running, waited for up
-# to SECONDS (INTERRUPT_WHEN); then the run's end. LATER matches the line
+# guest within 0.1 s of a process matching PATTERN running and the shell
+# condition COND holding, waited for up to SECONDS (INTERRUPT_WHEN); then
+# the run's end. LATER matches the line
 # of the action after it, which a run interrupted in time never shows.
 # Its evidence: transcript-NAME.txt, interrupt-NAME.txt and the machine's
 # state before and after the run (state-before-NAME.txt,
 # state-after-NAME.txt).
 c3_interrupted() {
-  local name=$1 mark=$2 pattern=$3 seconds=$4 later=$5 asked
+  local name=$1 mark=$2 pattern=$3 seconds=$4 later=$5 cond=${6:-true} asked
   step "c3: $name, interrupted while $pattern runs"
   guest_state "state-before-$name.txt"
   pane_type "cd ~/c3 && cyfr init --no-pull; echo \"$name exit status \$?\"" || fail "$name: the line was not typed"
@@ -533,7 +534,7 @@ c3_interrupted() {
     fail "$name: no line matching $mark within $PANE_BUDGET s ($GUEST_DIR/transcript-$name.txt)"
   fi
   asked="${PANE_ANSWERED[0]}/${PANE_ANSWERED[1]}"
-  GUEST_SSH_TIMEOUT=$((seconds + 30)) guest_ssh "sh interrupt-when.sh $(printf '%q' "$pattern") $seconds" \
+  GUEST_SSH_TIMEOUT=$((seconds + 30)) guest_ssh "sh interrupt-when.sh $(printf '%q' "$pattern") $seconds $(printf '%q' "$cond")" \
     >"$GUEST_DIR/interrupt-$name.txt" 2>&1
   if ! pane_converse 300 "^$name exit status [0-9]+"; then
     pane_save "transcript-$name.txt"
@@ -650,7 +651,10 @@ case_3() {
   guest_root "$SLOW_START_ON" || fail "the service's slow start was not set up ($GUEST_DIR/root.txt)"
   guest_root 'find /var/lib/apt/lists -maxdepth 1 -type f ! -name lock -delete' || fail "the package lists were not removed"
   c3_interrupted c3-update '^→ apt-get update' '^/usr/bin/apt-get update$' 60 '^→ apt-get -o '
-  c3_interrupted c3-unpack '^→ apt-get -o DPkg::Lock::Timeout=60 install' '^/usr/bin/dpkg .*--unpack' 600 '^→ systemctl '
+  # dpkg changes its database as it unpacks its first package, runc: the
+  # interrupt waits for that, so it lands on an unpack under way.
+  c3_interrupted c3-unpack '^→ apt-get -o DPkg::Lock::Timeout=60 install' '^/usr/bin/dpkg .*--unpack' 600 '^→ systemctl ' \
+    'dpkg-query -W -f "\${db:Status-Abbrev}" runc 2>/dev/null | grep -qv "^un"'
   check "c3: c3-unpack: dpkg's packages changed, so its sentence cannot say that nothing was installed" \
     packages_changed c3-unpack
   c3_interrupted c3-enable '^→ systemctl enable --now docker\.service' '^/usr/bin/systemctl enable --now docker\.service$' 30 '^→ usermod '
