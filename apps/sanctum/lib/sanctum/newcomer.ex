@@ -52,24 +52,45 @@ defmodule Sanctum.Newcomer do
 
   ## The credential
 
-  A local admission brings its credential:
+  A local admission brings its credential: its first proof, and the new
+  person's identity (`t:identity/0`, parsed from a surface's fields by
+  `identity/1`) — the name they take, a recovery secret the trusted form
+  or the command line drew, and the enrollment's request id.
 
-    * `{:passkey, registration}`, for setup, an invitation and an open
-      admission — the browser's answer to
+    * `{:passkey, registration, identity}`, for setup, an invitation and
+      an open admission — the browser's answer to
       `Sanctum.Passkeys.newcomer_options/0`, verified with no transaction
       open (`Sanctum.Passkeys.verify_newcomer/1`) and written, active,
       inside the admission's transaction (`Sanctum.Passkeys.write_newcomer/2`),
       so a failed admission leaves neither a person nor a passkey. The
       person's id is the one the registration was drawn for. A session
       with provider `passkey` follows the commit.
-    * `{:command_line, machine}`, for setup alone — a command-line session
-      for `machine` (`Sanctum.CliSignIn.machine/1`), provider `setup`,
-      minted after the commit.
+    * `{:command_line, machine, identity}`, for setup alone — a
+      command-line session for `machine` (`Sanctum.CliSignIn.machine/1`),
+      provider `setup`, minted after the commit.
 
-  A remote person and a restored person bring none: the CYFR sign-in and
-  the restore mint their own sessions. A session that cannot be minted
-  after the commit leaves the person, whom setup answers again while they
-  hold no credential.
+  A remote person and a restored person bring none (`:none`): the CYFR
+  sign-in and the restore mint their own sessions. A session that cannot
+  be minted after the commit leaves the person, whom setup answers again
+  while they hold no credential.
+
+  ## Enrollment at admission
+
+  The first proof is the one proof. A local admission enrolls its person
+  in its own transaction, last, after their keys, athanor and passkey
+  (`Sanctum.Recovery.open_at_admission/3`): the genesis over the keys just
+  minted and the secret's recovery key, naming the directory this
+  deployment pins (`Sanctum.directory_url/0`), the secret sealed, and the
+  enrollment attempt opened at `staged` with the name. A deployment that
+  pins no directory admits no local person, refused before the passkey is
+  verified. Registering at the directory and claiming the name follow the
+  commit (`registry.register`).
+
+  The admission answers `recovery`: the attempt's id, the identifier, the
+  name and the recovery code (`Prima.RecoveryCode`), composed from the
+  sealed secret until the person says it is saved. A re-admission answers
+  the attempt that stands, so the identity its credential brings is not
+  used.
 
   ## One transaction
 
@@ -84,13 +105,14 @@ defmodule Sanctum.Newcomer do
   once the head still names the restored keys.
 
   Refusals: `:setup_closed`, `:not_set_up`, `:restore_reserved`,
-  `:invitation_invalid`, `{:door, reason}`, `:identity_stale`,
+  `:invitation_invalid`, `:no_directory`, `{:door, reason}`, `:identity_stale`,
   `:registration_refused`, a cap's `{:limit_reached, key, cap}` or
   `{:cap_unverifiable, key}`, the invited seat's own refusals
   (`:recovering_from_restore` among them), `:not_owner`
   (this member no longer holds its slot), `:unavailable`,
   `{:invalid_argument, sentence}` for a credential the admission does not
-  take, and the restore's own refusals.
+  take, one without an identity among them, and the restore's own
+  refusals.
   """
 
   require Logger
@@ -122,16 +144,39 @@ defmodule Sanctum.Newcomer do
           | :open
           | {:remote, remote()}
           | {:restore, restore()}
-  @type credential :: {:passkey, map()} | {:command_line, String.t()} | :none
 
   @typedoc """
-  The admitted person, whether setup answered them again, and the session
-  token a local admission's credential minted, when it minted one.
+  A new local person's identity: the name they take, the recovery secret
+  drawn for them (32 bytes) and the enrollment's request id.
+  """
+  @type identity :: %{name: String.t(), recovery_secret: <<_::256>>, request_id: String.t()}
+
+  @type credential ::
+          {:passkey, registration :: map(), identity()}
+          | {:command_line, machine :: String.t(), identity()}
+          | :none
+
+  @typedoc """
+  The person's enrollment as a local admission answers it: `code` while
+  its secret is sealed, absent once the person said it is saved.
+  """
+  @type recovery :: %{
+          required(:attempt_id) => String.t(),
+          required(:identifier) => String.t(),
+          required(:name) => String.t() | nil,
+          optional(:code) => String.t()
+        }
+
+  @typedoc """
+  The admitted person, whether setup answered them again, the session
+  token a local admission's credential minted, when it minted one, and a
+  local person's enrollment.
   """
   @type admitted :: %{
           required(:person) => Users.user(),
           required(:readmitted) => boolean(),
-          optional(:session_token) => String.t()
+          optional(:session_token) => String.t(),
+          optional(:recovery) => recovery()
         }
 
   @doc "Make a person by `admission`, with `credential` (the module doc)."
@@ -139,11 +184,47 @@ defmodule Sanctum.Newcomer do
   def admit(admission, credential) do
     with {:ok, credential} <- taken(admission, credential),
          :ok <- admissible(admission),
+         {:ok, directory} <- directory(credential),
          {:ok, person_id, verified} <- verified(credential),
-         {:ok, person} <- mint(admission, person_id, credential, verified) do
+         {:ok, person} <- mint(admission, person_id, {credential, directory}, verified) do
       readmitted = person.id != person_id
       committed(admission, person, readmitted, credential)
     end
+  end
+
+  @doc """
+  Parse a surface's `%{"name", "recovery_secret", "request_id"}` into the
+  identity a local admission's credential carries: the name by `name/1`,
+  the secret 32 bytes of unpadded base64url (`Sanctum.Recovery.secret/1`),
+  the request id by `Prima.Identity.Encoding.id?/1`. Refused
+  `{:invalid_argument, sentence}`.
+  """
+  @spec identity(term()) :: {:ok, identity()} | {:error, {:invalid_argument, String.t()}}
+  def identity(%{"name" => name, "recovery_secret" => secret, "request_id" => request_id}) do
+    with :ok <- name(name),
+         {:ok, secret} <- Sanctum.Recovery.secret(secret),
+         :ok <- request_id(request_id),
+         do: {:ok, %{name: name, recovery_secret: secret, request_id: request_id}}
+  end
+
+  def identity(_fields),
+    do:
+      {:error,
+       {:invalid_argument, "A new person brings their name, a recovery_secret and a request_id"}}
+
+  @doc """
+  Whether `value` is a name a person may take: `Prima.ComponentRef`'s
+  personal grammar, refused with the sentence a person reads.
+  """
+  @spec name(term()) :: :ok | {:error, {:invalid_argument, String.t()}}
+  def name(value) do
+    if Prima.ComponentRef.valid_personal_slug?(value),
+      do: :ok,
+      else:
+        {:error,
+         {:invalid_argument,
+          "A name is lowercase letters and digits joined by single hyphens, at most 39 " <>
+            "characters."}}
   end
 
   @doc """
@@ -173,23 +254,24 @@ defmodule Sanctum.Newcomer do
   defp taken({:setup, token}, _credential) when not is_binary(token),
     do: {:error, :setup_closed}
 
-  defp taken({:setup, token}, {:passkey, registration} = credential)
-       when is_binary(token) and is_map(registration),
-       do: {:ok, credential}
-
-  defp taken({:setup, token}, {:command_line, machine}) when is_binary(token) do
-    with {:ok, machine} <- Sanctum.CliSignIn.machine(machine), do: {:ok, {:command_line, machine}}
+  defp taken({:setup, _token}, {:command_line, machine, identity}) do
+    with {:ok, machine} <- Sanctum.CliSignIn.machine(machine),
+         :ok <- identified(identity),
+         do: {:ok, {:command_line, machine, identity}}
   end
 
   defp taken({:invitation, code}, _credential) when not is_binary(code),
     do: {:error, :invitation_invalid}
 
-  defp taken({:invitation, _code}, {:passkey, registration} = credential)
-       when is_map(registration),
-       do: {:ok, credential}
+  defp taken(:open, {:passkey, registration, identity} = credential)
+       when is_map(registration) do
+    with :ok <- identified(identity), do: {:ok, credential}
+  end
 
-  defp taken(:open, {:passkey, registration} = credential) when is_map(registration),
-    do: {:ok, credential}
+  defp taken({kind, _secret}, {:passkey, registration, identity} = credential)
+       when kind in [:setup, :invitation] and is_map(registration) do
+    with :ok <- identified(identity), do: {:ok, credential}
+  end
 
   defp taken({:remote, %{identifier: id, directory_url: dir}}, :none)
        when is_binary(id) and is_binary(dir),
@@ -203,7 +285,36 @@ defmodule Sanctum.Newcomer do
       {:error,
        {:invalid_argument,
         "This admission does not take that credential: setup takes a passkey or the command " <>
-          "line, an invitation and an open admission a passkey"}}
+          "line, an invitation and an open admission a passkey, each with the new person's " <>
+          "identity"}}
+
+  # The identity a local credential carries, as `identity/1` parses it.
+  defp identified(%{name: name, recovery_secret: <<_::256>>, request_id: request_id}) do
+    with :ok <- name(name), do: request_id(request_id)
+  end
+
+  defp identified(_identity),
+    do:
+      {:error,
+       {:invalid_argument, "A new person brings their name, a recovery_secret and a request_id"}}
+
+  defp request_id(value) do
+    if Prima.Identity.Encoding.id?(value),
+      do: :ok,
+      else: {:error, {:invalid_argument, "The request_id is not a valid request id"}}
+  end
+
+  # The directory a local person's genesis names: the one this deployment
+  # pins. With none pinned no local person is admitted, before the
+  # passkey is verified.
+  defp directory(:none), do: {:ok, nil}
+
+  defp directory(_local) do
+    case Sanctum.directory_url() do
+      url when is_binary(url) and url != "" -> {:ok, url}
+      _none -> {:error, :no_directory}
+    end
+  end
 
   defp admissible({:setup, token}) do
     case Application.get_env(:sanctum, :setup_token) do
@@ -245,7 +356,7 @@ defmodule Sanctum.Newcomer do
 
   # The person's id: the one a passkey registration was drawn for, or a
   # new one.
-  defp verified({:passkey, registration}) do
+  defp verified({:passkey, registration, _identity}) do
     with {:ok, %{user_id: user_id, verified: verified}} <-
            Sanctum.Passkeys.verify_newcomer(registration),
          do: {:ok, user_id, verified}
@@ -256,7 +367,7 @@ defmodule Sanctum.Newcomer do
 
   # ---- the transaction ------------------------------------------------------
 
-  defp mint(admission, person_id, credential, verified) do
+  defp mint(admission, person_id, {credential, directory}, verified) do
     now = DateTime.utc_now()
 
     user_attrs = %{
@@ -269,12 +380,13 @@ defmodule Sanctum.Newcomer do
     }
 
     write = fn person -> written(person, credential, verified) end
+    enroll = fn person -> enrolled(person, credential, directory) end
 
     Arca.Users.mint(
       Prima.Actor.system(),
       user_attrs,
       identity(admission, now),
-      [admission: kind(admission), also: &also(admission, write, &1)] ++
+      [admission: kind(admission), also: &also(admission, {write, enroll}, &1)] ++
         verify(admission) ++ restore_claim(admission)
     )
     |> case do
@@ -286,7 +398,8 @@ defmodule Sanctum.Newcomer do
   end
 
   # The person setup made, admitted again while they hold no sign-in
-  # method: only the credential this admission brings is written.
+  # method: only the credential this admission brings is written, and
+  # the enrollment their first admission opened stands.
   defp readmit(user_id, write) do
     case Arca.Users.readmit(Prima.Actor.system(), user_id, also: write) do
       {:ok, person} -> {:ok, person}
@@ -297,7 +410,9 @@ defmodule Sanctum.Newcomer do
 
   # A passkey registration names the person it was drawn for: a person of
   # that id already made means the registration was presented before.
-  defp refused({:passkey, _registration}, :conflict), do: {:error, :registration_refused}
+  defp refused({:passkey, _registration, _identity}, :conflict),
+    do: {:error, :registration_refused}
+
   defp refused(_credential, reason), do: {:error, reason}
 
   defp kind({:setup, _token}), do: "setup"
@@ -341,12 +456,12 @@ defmodule Sanctum.Newcomer do
 
   # Inside the mint's transaction, after the person's row and the first
   # person's grant.
-  defp also({:setup, _token}, write, person), do: local(person, write)
-  defp also(:open, write, person), do: local(person, write)
+  defp also({:setup, _token}, steps, person), do: local(person, steps)
+  defp also(:open, steps, person), do: local(person, steps)
 
-  defp also({:invitation, code}, write, person) do
+  defp also({:invitation, code}, steps, person) do
     with {:ok, invitation} <- Sanctum.Invitations.redeem(code, person.id),
-         :ok <- local(person, write),
+         :ok <- local(person, steps),
          do: seated(invitation, person)
   end
 
@@ -368,10 +483,12 @@ defmodule Sanctum.Newcomer do
     with :ok <- restored.(person), do: athanor(person)
   end
 
-  defp local(person, write) do
+  # The person's keys, athanor and passkey, then their enrollment, last.
+  defp local(person, {write, enroll}) do
     with :ok <- Sanctum.Person.mint_keys(person),
          :ok <- athanor(person),
-         do: write.(person)
+         :ok <- write.(person),
+         do: enroll.(person)
   end
 
   defp athanor(person) do
@@ -401,10 +518,13 @@ defmodule Sanctum.Newcomer do
 
   # The credential written in the transaction: a passkey. A session needs
   # the committed person, so it follows the commit.
-  defp written(%{id: user_id}, {:passkey, _registration}, verified),
+  defp written(%{id: user_id}, {:passkey, _registration, _identity}, verified),
     do: Sanctum.Passkeys.write_newcomer(user_id, verified)
 
   defp written(_person, _credential, _verified), do: :ok
+
+  defp enrolled(%{id: user_id}, {_kind, _proof, identity}, directory),
+    do: Sanctum.Recovery.open_at_admission(user_id, identity, directory)
 
   # ---- after the commit -----------------------------------------------------
 
@@ -427,7 +547,8 @@ defmodule Sanctum.Newcomer do
     joined(admission, person)
     filled(admission, person)
 
-    with {:ok, admitted} <- answered(person, readmitted) do
+    with {:ok, admitted} <- answered(person, readmitted),
+         {:ok, admitted} <- recovery(admission, admitted, person) do
       case session(person, credential) do
         {:ok, token} -> {:ok, Map.put(admitted, :session_token, token)}
         :none -> {:ok, admitted}
@@ -473,9 +594,22 @@ defmodule Sanctum.Newcomer do
     end
   end
 
-  defp session(person, {:passkey, _registration}), do: minted(person, "passkey", [])
+  # A local person's enrollment: the one the admission opened, or the one a
+  # re-admission finds standing. A restored person's identity is the
+  # restore's, which opens no enrollment.
+  defp recovery({:restore, _restore}, admitted, _person), do: {:ok, admitted}
 
-  defp session(person, {:command_line, machine}),
+  defp recovery(_local, admitted, %{id: user_id}) do
+    case Sanctum.Recovery.admission_recovery(user_id) do
+      {:ok, nil} -> {:ok, admitted}
+      {:ok, recovery} -> {:ok, Map.put(admitted, :recovery, recovery)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp session(person, {:passkey, _registration, _identity}), do: minted(person, "passkey", [])
+
+  defp session(person, {:command_line, machine, _identity}),
     do: minted(person, "setup", command_line: machine)
 
   defp session(_person, :none), do: :none

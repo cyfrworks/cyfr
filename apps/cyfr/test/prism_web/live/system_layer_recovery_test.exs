@@ -39,8 +39,8 @@ end
 
 defmodule PrismWeb.SystemLayerRecoveryTest do
   @moduledoc """
-  The system layer's recovery prompts: enrollment, a recovery code shown
-  again, and another recovery code, each drawn only in the layer and each
+  The system layer's recovery prompts: a recovery code shown again, and
+  another recovery code, each drawn only in the layer and each
   change confirmed fresh where Sanctum decides it.
 
   The material never rests on the server: the browser submits a secret it
@@ -67,7 +67,6 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
-  import ExUnit.CaptureLog
   import Prima.Test.Wait
 
   alias Arca.Schemas.IdentityAttempt
@@ -209,40 +208,32 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
     Arca.Repo.all(from(a in IdentityAttempt, where: a.user_id == ^user_id and a.kind == ^kind))
   end
 
-  defp debug_logs do
-    previous = Logger.level()
-    Logger.configure(level: :debug)
-    on_exit(fn -> Logger.configure(level: previous) end)
-  end
-
-  # An enrollment the directory accepted, made as the operation makes it.
+  # An enrollment the directory accepted, opened as an admission opens it
+  # and registered at the pinned directory as `registry.register` does.
   defp enrolled!(ctx) do
-    seed = seed()
-    args = %{"recovery_secret" => seed, "request_id" => request_id()}
+    identity = Sanctum.Test.Newcomers.identity()
+    :ok = Sanctum.Recovery.open_at_admission(ctx.user_id, identity, Sanctum.directory_url())
 
     {:ok, %{phase: "accepted", attempt_id: attempt_id, identifier: identifier}} =
-      Sanctum.TestContext.confirming(ctx, &Sanctum.Recovery.enroll(&1, args))
+      Sanctum.Recovery.advance(ctx)
 
-    %{seed: seed, attempt_id: attempt_id, identifier: identifier}
+    %{
+      seed: Encoding.b64(identity.recovery_secret),
+      attempt_id: attempt_id,
+      identifier: identifier
+    }
   end
 
   # ---- the prompts' shape --------------------------------------------------------
 
   describe "a recovery prompt" do
-    test "names no secret: enrollment the pinned https directory, a recovery code its attempt" do
-      assert {:ok, %{kind: :enrollment, action: :recovery_material}} =
-               Recovery.enrollment("r1", "https://dir.example")
-
-      assert {:error, :invalid_prompt} = Recovery.enrollment("r1", "http://dir.example")
-      assert {:error, :invalid_prompt} = Recovery.enrollment("r1", "https://dir.example?x=1")
-
+    test "names no secret: a recovery code its attempt, another code nothing" do
       assert {:ok, %{kind: :kit, subject: %{attempt_id: "att_1"}}} =
                Recovery.recovery_code("r2", "att_1")
 
       assert {:ok, %{kind: :holder, subject: %{}}} = Recovery.holder("r3")
 
       for {kind, subject} <- [
-            {:enrollment, %{directory_url: "https://dir.example", recovery_secret: seed()}},
             {:kit, %{attempt_id: "att_1", code: any_code()}},
             {:holder, %{recovery_code: any_code()}}
           ] do
@@ -264,7 +255,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
                  subject: %{attempt_id: "a"}
                })
 
-      assert Prompt.recovery_kinds() == [:enrollment, :kit, :holder]
+      assert Prompt.recovery_kinds() == [:kit, :holder]
     end
 
     test "dispatches the code's operations: a code again by its attempt, another signed by a typed code" do
@@ -365,6 +356,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       assert has_element?(view, ~s([data-recovery-code="k1"][hidden]))
       refute has_element?(view, ~s([data-test="recovery-saved"]))
       refute has_element?(view, "#system-layer", ~r/\bkits?\b|printed|Print/)
+      PrismWeb.AdmissionScreens.refute_vocabulary(view |> element("#system-layer") |> render())
       view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
 
       {:ok, holder} = Recovery.holder("h1")
@@ -404,181 +396,9 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       assert has_element?(view, ~s([data-test="recovery-submit"]), "Continue")
       assert has_element?(view, ~s([data-recovery-code="h1"][hidden]))
       refute has_element?(view, "#system-layer", ~r/\bkits?\b|printed|Print/)
+      PrismWeb.AdmissionScreens.refute_vocabulary(view |> element("#system-layer") |> render())
     end
   end
-
-  # ---- enrollment ----------------------------------------------------------------
-
-  describe "enrollment" do
-    setup :signed_in
-
-    test "its form says what enrolling commits to, at the pinned directory, before anything is asked",
-         %{view: view, ctx: ctx, user: user, directory: directory} do
-      {:ok, enrollment} = Recovery.enrollment("r1", directory.url)
-      html = prompt(view, enrollment)
-
-      assert has_element?(view, ~s([data-test="recovery"][data-kind="enrollment"]))
-      assert has_element?(view, ~s([data-test="recovery-directory"]), directory.url)
-      assert html =~ "cannot be reached"
-      assert html =~ "If every kit is lost, nothing can add one"
-      assert html =~ "never your private data or the CYFR addresses your devices saved"
-      assert html =~ "no device holds recovery material"
-
-      # The form is the browser's: no input it could submit by itself, and
-      # the code's place empty.
-      assert has_element?(view, ~s(form#system-layer-recovery[data-recovery="enrollment"]))
-      refute has_element?(view, ~s(form#system-layer-recovery input[name]))
-      assert has_element?(view, ~s([data-recovery-code="r1"][hidden]))
-
-      # Nothing is asked until the browser submits.
-      assert attempts(user.user_id, "enrollment") == []
-      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), user.user_id)
-    end
-
-    test "the browser's seed waits on its record, is sent again once confirmed, and its recovery code goes to the browser alone",
-         %{view: view, ctx: ctx, user: user, directory: directory, authenticator: authenticator} do
-      debug_logs()
-      {:ok, enrollment} = Recovery.enrollment("r1", directory.url)
-      prompt(view, enrollment)
-      seed = seed()
-      params = %{"prompt_id" => "r1", "recovery_secret" => seed, "request_id" => request_id()}
-
-      log =
-        capture_log([level: :debug], fn ->
-          view |> layer() |> render_hook("recovery_submit", params)
-        end)
-
-      # Waiting on its record, with nothing opened and nothing sent.
-      assert render(view) =~ ~s(data-status="waiting")
-      assert open_prompt(view) == "r1"
-      assert attempts(user.user_id, "enrollment") == []
-      assert Directory.requests() |> Enum.filter(&(&1.method == "POST")) == []
-      ref = Prima.Confirmation.ref(held_secret(view))
-      refute state_of(view) =~ seed
-      refute log =~ seed
-      assert log =~ ~s("recovery_secret" => "[FILTERED]")
-
-      # The preview the record stores says what the form said (the
-      # enrollment's record; the person's passkey registration was confirmed
-      # by one of its own).
-      [%{preview: preview}] =
-        Arca.Repo.all(
-          from(c in "pending_confirmations",
-            where: c.user_id == ^user.user_id and c.action == "recovery_material",
-            select: %{preview: c.preview}
-          )
-        )
-
-      assert Jason.decode!(preview)["details"]["effect"] =~ directory.url
-
-      prove_here!(view, ref, authenticator)
-
-      # Confirmed: the browser is asked to send the same material again.
-      assert_push_event(view, "recovery:resubmit", %{layer: "system-layer", prompt: "r1"}, 2_000)
-
-      log =
-        capture_log([level: :debug], fn ->
-          view |> layer() |> render_hook("recovery_submit", params)
-        end)
-
-      assert_push_event(view, "recovery:code", %{layer: "system-layer", prompt: "r1", code: code})
-
-      # The code is the attempt's identifier and the secret the browser drew.
-      assert [%{phase: "accepted", identifier: identifier}] =
-               attempts(user.user_id, "enrollment")
-
-      assert code == code_of(identifier, seed)
-
-      # The code is the browser's alone: not in the page, the layer's state,
-      # a log or the request log.
-      html = render(view)
-
-      for secret <- [seed, code] do
-        refute html =~ secret
-        refute state_of(view) =~ secret
-        refute log =~ secret
-        refute logged() =~ secret
-      end
-
-      # The saved block offers "I saved it" alone.
-      assert has_element?(view, ~s([data-test="recovery"][data-phase="kit"]))
-      assert has_element?(view, ~s([data-test="recovery-saved"]), "or print this page")
-      assert has_element?(view, ~s([data-test="recovery-ack"]), "I saved it")
-      refute has_element?(view, ~s([data-test="recovery-print"]))
-
-      # Saved: the secret is erased at the home, and the browser forgets the code.
-      view |> element(~s([data-test="recovery-ack"])) |> render_click()
-      assert outcome("r1") == :confirmed
-      assert_push_event(view, "recovery:clear", %{layer: "system-layer", prompt: "r1"})
-      assert open_prompt(view) == nil
-
-      assert [%{phase: "completed", kit_seed_sealed: nil}] =
-               attempts(user.user_id, "enrollment")
-
-      assert {:ok, identifier} == Sanctum.Tenancy.Users.identifier(ctx.user_id)
-    end
-
-    test "with no directory pinned, enrollment names the setting and opens nothing",
-         %{view: view, user: user} do
-      {:ok, enrollment} = Recovery.enrollment("r1", "https://dir.example")
-      prompt(view, enrollment)
-      Application.delete_env(:sanctum, :directory_url)
-
-      view
-      |> layer()
-      |> render_hook("recovery_submit", %{
-        "prompt_id" => "r1",
-        "recovery_secret" => seed(),
-        "request_id" => request_id()
-      })
-
-      assert {:refused, _reason} = outcome("r1")
-      assert render(view) =~ "CYFR_DIRECTORY_URL"
-      assert open_prompt(view) == "r1"
-      assert attempts(user.user_id, "enrollment") == []
-    end
-
-    test "a submission with no seed the browser drew asks for nothing",
-         %{view: view, ctx: ctx, user: user} do
-      {:ok, enrollment} = Recovery.enrollment("r1", "https://dir.example")
-      prompt(view, enrollment)
-
-      view |> layer() |> render_hook("recovery_submit", %{"prompt_id" => "r1"})
-
-      assert has_element?(
-               view,
-               "#system-layer",
-               "This browser could not draw the recovery code's secret. Nothing was sent."
-             )
-
-      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), user.user_id)
-    end
-
-    test "dismissed while it waits, its request is cancelled and the browser forgets the material",
-         %{view: view, ctx: ctx, directory: directory} do
-      {:ok, enrollment} = Recovery.enrollment("r1", directory.url)
-      prompt(view, enrollment)
-
-      view
-      |> layer()
-      |> render_hook("recovery_submit", %{
-        "prompt_id" => "r1",
-        "recovery_secret" => seed(),
-        "request_id" => request_id()
-      })
-
-      ref = Prima.Confirmation.ref(held_secret(view))
-
-      view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
-      assert outcome("r1") == :dismissed
-      assert_push_event(view, "recovery:clear", %{layer: "system-layer", prompt: "r1"})
-
-      assert {:ok, %{state: "cancelled"}} =
-               Arca.PendingConfirmations.get(Context.actor(ctx), ref)
-    end
-  end
-
-  # ---- a code again, and another code ---------------------------------------------
 
   describe "a recovery code not yet saved" do
     setup :signed_in
@@ -1122,8 +942,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
               "recovery_code" => code,
               "holder" => %{"recovery_secret" => seed()},
               "request_id" => request_id()
-            },
-            %{"action" => "enroll", "recovery_secret" => seed(), "request_id" => request_id()}
+            }
           ] do
         assert {:error, reason} = Sanctum.Gate.call_external("person", frame, args)
         refute match?({:ok, _}, reason)

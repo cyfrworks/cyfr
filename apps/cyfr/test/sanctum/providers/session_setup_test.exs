@@ -4,11 +4,14 @@
 defmodule Sanctum.Providers.SessionSetupTest do
   @moduledoc """
   `session.setup` through the gate as the command line reaches it
-  (`cyfr login --setup`): anonymous, the installation's setup token its
-  argument. It makes the first person, their administrator grant and a
-  command-line session for the machine; it signs the same person in again
-  while they hold no sign-in method; and from their first passkey on, and
-  for any token that is not this CYFR's, it answers `setup_closed`.
+  (`cyfr login --setup`): anonymous, the installation's setup token, the
+  new person's name, the recovery secret and the request id the command
+  line drew its arguments. It makes the first person, their administrator
+  grant, their enrollment and a command-line session for the machine, and
+  answers their recovery code; it signs the same person in again while
+  they hold no sign-in method, answering the enrollment that stands; from
+  their first passkey on, and for any token that is not this CYFR's, it
+  answers `setup_closed`; and a CYFR that pins no directory makes no one.
   """
 
   # The setup token is process-wide configuration.
@@ -16,8 +19,9 @@ defmodule Sanctum.Providers.SessionSetupTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{Membership, User}
+  alias Arca.Schemas.{IdentityAttempt, Membership, User}
   alias Sanctum.Context
+  alias Sanctum.Test.Newcomers
   alias Sanctum.TestContext.Authenticator
 
   @token String.duplicate("5e", 32)
@@ -34,14 +38,18 @@ defmodule Sanctum.Providers.SessionSetupTest do
     end)
 
     Application.put_env(:sanctum, :setup_token, @token)
+    Newcomers.directory!()
     Arca.Repo.delete_all(User)
     :ok
   end
 
   defp command_line, do: Context.build(%{authenticated: false, client_ip: "198.51.100.62"})
 
-  defp set_up(args),
-    do: Sanctum.Gate.call_external("session", command_line(), Map.put(args, "action", "setup"))
+  # The call the command line makes: `args` over a fresh identity's fields.
+  defp set_up(args, identity \\ Newcomers.identity()) do
+    args = Map.merge(Newcomers.fields(identity), Map.put(args, "action", "setup"))
+    Sanctum.Gate.call_external("session", command_line(), args)
+  end
 
   defp grants,
     do: Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
@@ -50,19 +58,80 @@ defmodule Sanctum.Providers.SessionSetupTest do
   defp refused_reason({:error, reason}) when is_atom(reason), do: reason
 
   test "the first call makes the first person with a command-line session, and a repeat signs them in again" do
-    assert {:ok, first} = set_up(%{"setup_token" => @token, "machine" => "laptop"})
+    identity = Newcomers.identity("mira")
+    assert {:ok, first} = set_up(%{"setup_token" => @token, "machine" => "laptop"}, identity)
     assert %{readmitted: false, user_id: user_id, session_token: token} = first
     assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.load(token)
     assert [%{id: ^user_id, admission: "setup"}] = Arca.Repo.all(User)
     assert grants() == 1
 
-    assert {:ok, %{readmitted: true, user_id: ^user_id, session_token: again}} =
-             set_up(%{"setup_token" => @token, "machine" => "laptop"})
+    attempt = Arca.Repo.get_by!(IdentityAttempt, user_id: user_id, kind: "enrollment")
+    assert %{phase: "staged", name: "mira"} = attempt
+    assert Map.keys(first) |> Enum.sort() == [:readmitted, :recovery, :session_token, :user_id]
 
+    assert first.recovery == %{
+             attempt_id: attempt.id,
+             identifier: attempt.identifier,
+             name: "mira",
+             code: Prima.RecoveryCode.encode(attempt.identifier, identity.recovery_secret)
+           }
+
+    # Another secret on the repeat is not used: the attempt that stands is
+    # answered, with its code.
+    assert {:ok, %{readmitted: true, user_id: ^user_id, session_token: again} = second} =
+             set_up(%{"setup_token" => @token, "machine" => "laptop"}, Newcomers.identity("x"))
+
+    assert second.recovery == first.recovery
     assert again != token
     assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.load(again)
     assert Arca.Repo.aggregate(User, :count) == 1
+    assert Arca.Repo.aggregate(IdentityAttempt, :count) == 1
     assert grants() == 1
+  end
+
+  test "an identity that does not read is refused before any row" do
+    for {field, value} <- [
+          {"name", "Not A Name"},
+          {"recovery_secret", "short"},
+          {"request_id", "no spaces allowed"}
+        ] do
+      args = Map.merge(Newcomers.fields(), %{"setup_token" => @token, "machine" => "laptop"})
+
+      assert {:error, reason} =
+               Sanctum.Gate.call_external(
+                 "session",
+                 command_line(),
+                 Map.merge(args, %{"action" => "setup", field => value})
+               )
+
+      assert %Prima.Refusal{class: :invalid_argument} = Sanctum.Refusals.classify(reason), field
+    end
+
+    for field <- ~w(name recovery_secret request_id) do
+      args =
+        Newcomers.fields()
+        |> Map.merge(%{"setup_token" => @token, "machine" => "laptop", "action" => "setup"})
+        |> Map.delete(field)
+
+      assert {:error, %Prima.Refusal{class: :invalid_argument}} =
+               Sanctum.Gate.call_external("session", command_line(), args),
+             field
+    end
+
+    assert Arca.Repo.aggregate(User, :count) == 0
+  end
+
+  test "a CYFR that pins no directory makes no first person, in words its operator reads" do
+    Prima.Test.Env.delete_app_env(:sanctum, :directory_url)
+
+    assert {:error, %Prima.Refusal{class: :setup_required, reason: :no_directory, message: m}} =
+             set_up(%{"setup_token" => @token, "machine" => "laptop"})
+
+    assert m ==
+             "This CYFR does not reach cyfr.run, so it cannot make your name. Ask whoever " <>
+               "runs this CYFR."
+
+    assert Arca.Repo.aggregate(User, :count) == 0
   end
 
   test "a wrong token and a CYFR with no setup token answer setup_closed, writing nothing" do
@@ -90,7 +159,10 @@ defmodule Sanctum.Providers.SessionSetupTest do
     registration = Authenticator.registration(Authenticator.new("cli|#{user_id}"), options)
 
     assert {:ok, %{person: %{id: ^user_id}, readmitted: true}} =
-             Sanctum.Newcomer.admit({:setup, @token}, {:passkey, registration})
+             Sanctum.Newcomer.admit(
+               {:setup, @token},
+               {:passkey, registration, Newcomers.identity()}
+             )
 
     assert refused_reason(set_up(%{"setup_token" => @token, "machine" => "laptop"})) ==
              :setup_closed

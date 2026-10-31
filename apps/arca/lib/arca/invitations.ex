@@ -6,7 +6,8 @@ defmodule Arca.Invitations do
   Invitations to become a person here (`Arca.Schemas.Invitation`): each
   stored by the hash of its code (`code_hash`, the lowercase hex SHA-256
   of the code's 32 bytes) and never the code, with the person who issued
-  it, the group athanor it seats its newcomer in or none, and its expiry.
+  it, the group athanor it seats its newcomer in or none, the name it
+  offers its newcomer or none, and its expiry.
   Who may issue, revoke or redeem one is `Sanctum.Invitations`'.
 
   An invitation is bound to its issuer's standing when it was issued:
@@ -55,9 +56,10 @@ defmodule Arca.Invitations do
 
   @doc """
   Write an invitation in the actor's athanor (the module doc): `attrs`
-  names its `:code_hash`, the person it is `:issued_by` and its
-  `:lifetime_ms`, from which its expiry is set on the database's clock.
-  The issuer's generation is read from their row (the module doc).
+  names its `:code_hash`, the person it is `:issued_by`, its
+  `:lifetime_ms`, from which its expiry is set on the database's clock,
+  and optionally the `:name` it offers its newcomer. The issuer's
+  generation is read from their row (the module doc).
 
   An invitation widens who reaches this CYFR, so it is written only by
   the member holding the control plane's slot (`Arca.Repo.owned/2`).
@@ -78,6 +80,7 @@ defmodule Arca.Invitations do
             issued_by: fields.issued_by,
             issuer_generation: generation,
             athanor_id: athanor_id,
+            name: Map.get(fields, :name),
             expires_at: DateTime.add(now, fields.lifetime_ms, :millisecond),
             inserted_at: now,
             updated_at: now
@@ -265,13 +268,14 @@ defmodule Arca.Invitations do
       [
         {:code_hash, is_binary(attrs[:code_hash]) and attrs[:code_hash] =~ ~r/\A[0-9a-f]{64}\z/},
         {:issued_by, Prima.PersonId.person?(attrs[:issued_by])},
-        {:lifetime_ms, is_integer(lifetime) and lifetime > 0}
+        {:lifetime_ms, is_integer(lifetime) and lifetime > 0},
+        {:name, is_nil(attrs[:name]) or (is_binary(attrs[:name]) and attrs[:name] != "")}
       ]
       |> Enum.reject(&elem(&1, 1))
       |> Map.new(fn {field, _ok} -> {field, ["is required or malformed"]} end)
 
     if errors == %{},
-      do: {:ok, Map.take(attrs, [:code_hash, :issued_by, :lifetime_ms])},
+      do: {:ok, Map.take(attrs, [:code_hash, :issued_by, :lifetime_ms, :name])},
       else: {:error, {:invalid, errors}}
   end
 

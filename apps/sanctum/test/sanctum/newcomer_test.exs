@@ -8,9 +8,12 @@ defmodule Sanctum.NewcomerTest do
   (`Sanctum.SignIn.unlock/1`).
 
   Setup makes the installation's first person, their keys, their athanor,
-  their credential and the platform grant in one transaction, and answers
-  that person again while they hold no sign-in method; from the commit
-  that gives them one, the token opens nothing. An open admission needs
+  their credential, their enrollment and the platform grant in one
+  transaction, and answers that person again while they hold no sign-in
+  method, with the enrollment that stands; from the commit that gives
+  them one, the token opens nothing. Every local admission brings the new
+  person's identity, enrolls them with it in its transaction, answers
+  their recovery code, and admits no one where no directory is pinned. An open admission needs
   the door's `*` and passes the athanor caps, and a refusal anywhere in
   its transaction leaves no person, no athanor and no passkey. An
   invitation admits without the door, under its own checks and the same
@@ -29,9 +32,11 @@ defmodule Sanctum.NewcomerTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Sanctum.Test.Newcomers, only: [identity: 0, identity: 1]
 
   alias Arca.Schemas.{
     ExternalIdentity,
+    IdentityAttempt,
     Invitation,
     Membership,
     Passkey,
@@ -43,7 +48,7 @@ defmodule Sanctum.NewcomerTest do
   alias Sanctum.Door.Store
   alias Sanctum.Newcomer
   alias Sanctum.Tenancy.{Athanors, Members}
-  alias Sanctum.Test.{DirectoryServer, Settings}
+  alias Sanctum.Test.{DirectoryServer, Newcomers, Settings}
   alias Sanctum.TestContext.Authenticator
 
   @token String.duplicate("5e", 32)
@@ -65,6 +70,7 @@ defmodule Sanctum.NewcomerTest do
     end)
 
     Application.put_env(:sanctum, :setup_token, @token)
+    Newcomers.directory!()
 
     # The installation holds no person inside this test's transaction,
     # whatever the suite committed: the first person is the question.
@@ -95,7 +101,12 @@ defmodule Sanctum.NewcomerTest do
 
   defp sessions(user_id), do: Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id))
 
-  defp setup!(credential \\ {:command_line, "laptop"}) do
+  defp attempts, do: Arca.Repo.aggregate(IdentityAttempt, :count)
+
+  defp enrollment(user_id),
+    do: Arca.Repo.get_by!(IdentityAttempt, user_id: user_id, kind: "enrollment")
+
+  defp setup!(credential \\ {:command_line, "laptop", identity()}) do
     {:ok, admitted} = Newcomer.admit({:setup, @token}, credential)
     admitted
   end
@@ -126,7 +137,7 @@ defmodule Sanctum.NewcomerTest do
   describe "setup" do
     test "makes the first person with their keys, athanor and passkey, signs them in, and grants the platform role" do
       assert {:ok, %{person: person, readmitted: false, session_token: token}} =
-               Newcomer.admit({:setup, @token}, {:passkey, registration()})
+               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert person.admission == "setup"
       assert people() == 1
@@ -149,12 +160,155 @@ defmodule Sanctum.NewcomerTest do
       assert user_id == person.id
     end
 
+    test "enrolls the person in its transaction with the identity it brings, and answers their recovery code" do
+      identity = identity("mira")
+
+      assert {:ok, %{person: person, recovery: recovery}} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity})
+
+      attempt = enrollment(person.id)
+
+      assert %{
+               phase: "staged",
+               name: "mira",
+               request_id: request_id,
+               directory_url: directory,
+               kit_seed_sealed: <<_::binary>>
+             } = attempt
+
+      assert request_id == identity.request_id
+      assert directory == Newcomers.directory()
+
+      assert %{"directory" => ^directory, "recovery_keys" => [recovery_key]} =
+               Jason.decode!(attempt.genesis)
+
+      {:ok, {public, _private}} = Prima.Identity.derive_recovery_key(identity.recovery_secret)
+      assert recovery_key == Prima.Identity.Encoding.b64(public)
+
+      assert recovery == %{
+               attempt_id: attempt.id,
+               identifier: attempt.identifier,
+               name: "mira",
+               code: Prima.RecoveryCode.encode(attempt.identifier, identity.recovery_secret)
+             }
+
+      assert %PersonIdentity{enrollment: "pending", identifier: nil} =
+               Arca.Repo.get_by(PersonIdentity, user_id: person.id)
+
+      # The stored row holds the secret sealed, never in the clear.
+      refute attempt.kit_seed_sealed =~ identity.recovery_secret
+      refute inspect(Map.from_struct(attempt)) =~ recovery.code
+    end
+
+    test "a re-admission with another secret answers the first attempt and its code" do
+      first = identity("first")
+      %{person: person, recovery: recovery} = setup!({:command_line, "laptop", first})
+
+      assert {:ok, %{person: %{id: same}, readmitted: true, recovery: ^recovery}} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity("second")})
+
+      assert same == person.id
+
+      assert recovery.code ==
+               Prima.RecoveryCode.encode(recovery.identifier, first.recovery_secret)
+
+      assert attempts() == 1
+      assert %{name: "first"} = enrollment(person.id)
+
+      # Once the code is saved the re-admission answers the attempt and no code.
+      {1, _} =
+        Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^recovery.attempt_id),
+          set: [phase: "completed", kit_seed_sealed: nil]
+        )
+
+      assert {:ok, %{recovery: saved}} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
+      assert saved == Map.delete(recovery, :code)
+    end
+
+    test "a credential without the new person's identity is refused, and nothing is written" do
+      %{recovery_secret: secret} = valid = identity()
+      registration = registration()
+
+      for credential <- [
+            {:command_line, "laptop"},
+            {:passkey, registration},
+            {:command_line, "laptop", nil},
+            {:passkey, registration, %{}},
+            {:command_line, "laptop", %{valid | name: "Not A Name"}},
+            {:command_line, "laptop", %{valid | recovery_secret: binary_part(secret, 0, 31)}},
+            {:command_line, "laptop", %{valid | request_id: "no spaces allowed"}}
+          ] do
+        assert {:error, {:invalid_argument, sentence}} =
+                 Newcomer.admit({:setup, @token}, credential),
+               inspect(credential)
+
+        assert is_binary(sentence)
+      end
+
+      assert people() == 0
+      assert passkeys() == 0
+      assert attempts() == 0
+    end
+
+    test "with no directory pinned, no local person is admitted, refused before the passkey is verified" do
+      Prima.Test.Env.delete_app_env(:sanctum, :directory_url)
+      watch_person_inserts!()
+
+      # A registration that would not verify: the refusal comes first.
+      assert {:error, :no_directory} =
+               Newcomer.admit({:setup, @token}, {:passkey, %{"not" => "verified"}, identity()})
+
+      assert {:error, :no_directory} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
+      Prima.Test.Env.put_app_env(:sanctum, :directory_url, "")
+
+      assert {:error, :no_directory} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
+      refute_received :person_inserted
+      assert people() == 0
+      assert attempts() == 0
+    end
+
+    test "the person and their enrollment commit together or not at all" do
+      %{recovery: %{attempt_id: attempt_id}} = setup!()
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      taken = Arca.Repo.get!(IdentityAttempt, attempt_id).request_id
+
+      written = fn ->
+        {people(), passkeys(), attempts(), Arca.Repo.aggregate(PersonIdentity, :count),
+         Arca.Repo.aggregate(Arca.Schemas.Athanor, :count)}
+      end
+
+      before = written.()
+
+      # An enrollment that cannot be opened, its request id taken, rolls the
+      # person, their keys, athanor and passkey back with it.
+      assert {:error, {:invalid_argument, _}} =
+               Newcomer.admit(
+                 :open,
+                 {:passkey, registration(), %{identity() | request_id: taken}}
+               )
+
+      assert written.() == before
+
+      # Admitted, each person holds exactly the enrollment their admission opened.
+      assert {:ok, %{person: second, recovery: %{attempt_id: opened}}} =
+               Newcomer.admit(:open, {:passkey, registration(), identity()})
+
+      assert enrollment(second.id).id == opened
+      assert attempts() == 2
+    end
+
     test "answers the same person again, with a new command-line session, while they hold no sign-in method" do
       first = setup!()
       assert %{readmitted: false, session_token: token} = first
 
       assert {:ok, %{person: again, readmitted: true, session_token: second}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
 
       assert again.id == first.person.id
       refute second == token
@@ -170,17 +324,18 @@ defmodule Sanctum.NewcomerTest do
       %{person: first} = setup!()
 
       assert {:ok, %{person: %{id: same}, readmitted: true}} =
-               Newcomer.admit({:setup, @token}, {:passkey, registration()})
+               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert same == first.id
 
       assert [%Passkey{state: "active"}] =
                Arca.Repo.all(from(p in Passkey, where: p.user_id == ^first.id))
 
-      assert {:error, :setup_closed} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+      assert {:error, :setup_closed} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
 
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, @token}, {:passkey, registration()})
+               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert people() == 1
       assert passkeys() == 1
@@ -198,7 +353,9 @@ defmodule Sanctum.NewcomerTest do
           subject: "setup-link"
         })
 
-      assert {:error, :setup_closed} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+      assert {:error, :setup_closed} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
       assert length(sessions(first.id)) == 1
     end
 
@@ -210,22 +367,33 @@ defmodule Sanctum.NewcomerTest do
       {:ok, :marked} =
         Arca.Repo.transaction(fn -> Arca.PersonIdentities.first_method!(first.id) end)
 
-      assert {:error, :setup_closed} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+      assert {:error, :setup_closed} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
     end
 
     test "a token that is not the configured one, a missing one, or none configured, opens nothing and writes nothing" do
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, String.duplicate("0", 64)}, {:command_line, "laptop"})
+               Newcomer.admit(
+                 {:setup, String.duplicate("0", 64)},
+                 {:command_line, "laptop", identity()}
+               )
 
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, "short"}, {:command_line, "laptop"})
+               Newcomer.admit({:setup, "short"}, {:command_line, "laptop", identity()})
 
-      for credential <- [{:command_line, "laptop"}, {:passkey, registration()}, :none] do
+      for credential <- [
+            {:command_line, "laptop", identity()},
+            {:passkey, registration(), identity()},
+            :none
+          ] do
         assert {:error, :setup_closed} = Newcomer.admit({:setup, nil}, credential)
       end
 
       Application.delete_env(:sanctum, :setup_token)
-      assert {:error, :setup_closed} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+
+      assert {:error, :setup_closed} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
       assert people() == 0
     end
 
@@ -235,12 +403,12 @@ defmodule Sanctum.NewcomerTest do
       assert {:error, :setup_closed} = Newcomer.setup_open(nil)
 
       # The person setup made, with no sign-in method yet, is answered again.
-      {:ok, _admitted} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+      {:ok, _admitted} = Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
       assert :ok = Newcomer.setup_open(@token)
 
       # Their first passkey closes it.
       assert {:ok, %{readmitted: true}} =
-               Newcomer.admit({:setup, @token}, {:passkey, registration()})
+               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert {:error, :setup_closed} = Newcomer.setup_open(@token)
 
@@ -268,7 +436,7 @@ defmodule Sanctum.NewcomerTest do
       {:ok, attempt} = Arca.IdentityAttempts.open(Prima.Actor.system(), restore)
 
       assert {:error, :restore_reserved} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
 
       assert people() == 0
 
@@ -319,7 +487,9 @@ defmodule Sanctum.NewcomerTest do
           set: [owner: "successor", generation: slot.generation + 1]
         )
 
-      assert {:error, :not_owner} = Newcomer.admit({:setup, @token}, {:passkey, registration()})
+      assert {:error, :not_owner} =
+               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
+
       assert people() == 0
       assert grants() == 0
       assert passkeys() == 0
@@ -330,7 +500,9 @@ defmodule Sanctum.NewcomerTest do
     test "needs the door's *, and writes nothing and leaves no request without it" do
       %{person: _first} = setup!()
 
-      assert {:error, {:door, :not_allowed}} = Newcomer.admit(:open, {:passkey, registration()})
+      assert {:error, {:door, :not_allowed}} =
+               Newcomer.admit(:open, {:passkey, registration(), identity()})
+
       assert people() == 1
       assert Store.requests() == []
     end
@@ -338,7 +510,7 @@ defmodule Sanctum.NewcomerTest do
     test "is not the first person: onto an empty installation it is not set up" do
       {:ok, _} = Store.allow("wildcard", "*", "ops")
 
-      assert {:error, :not_set_up} = Newcomer.admit(:open, {:passkey, registration()})
+      assert {:error, :not_set_up} = Newcomer.admit(:open, {:passkey, registration(), identity()})
       assert people() == 0
       assert passkeys() == 0
     end
@@ -347,9 +519,15 @@ defmodule Sanctum.NewcomerTest do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
 
-      assert {:ok, %{person: person, readmitted: false, session_token: token}} =
-               Newcomer.admit(:open, {:passkey, registration()})
+      assert {:ok,
+              %{
+                person: person,
+                readmitted: false,
+                session_token: token,
+                recovery: %{name: "opened", code: "CYFR-" <> _, attempt_id: attempt_id}
+              }} = Newcomer.admit(:open, {:passkey, registration(), identity("opened")})
 
+      assert %{id: ^attempt_id, phase: "staged", name: "opened"} = enrollment(person.id)
       assert person.admission == "open"
       refute Sanctum.Tenancy.platform_admin?(person.id)
       assert grants() == 1
@@ -369,7 +547,7 @@ defmodule Sanctum.NewcomerTest do
       watch_person_inserts!()
 
       assert {:error, {:limit_reached, :max_athanors, 1}} =
-               Newcomer.admit(:open, {:passkey, credential})
+               Newcomer.admit(:open, {:passkey, credential, identity()})
 
       refute_received :person_inserted
       assert people() == 1
@@ -379,13 +557,13 @@ defmodule Sanctum.NewcomerTest do
     test "past the mint rate is refused before the person's row" do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
-      {:ok, %{person: _second}} = Newcomer.admit(:open, {:passkey, registration()})
+      {:ok, %{person: _second}} = Newcomer.admit(:open, {:passkey, registration(), identity()})
       Settings.put("mint_per_hour", 1)
       credential = registration()
       watch_person_inserts!()
 
       assert {:error, {:limit_reached, :mint_per_hour, 1}} =
-               Newcomer.admit(:open, {:passkey, credential})
+               Newcomer.admit(:open, {:passkey, credential, identity()})
 
       refute_received :person_inserted
       assert people() == 2
@@ -404,7 +582,7 @@ defmodule Sanctum.NewcomerTest do
         Authenticator.registration(Authenticator.new(seed), options)
       end
 
-      {:ok, %{person: _admitted}} = Newcomer.admit(:open, {:passkey, registered.()})
+      {:ok, %{person: _admitted}} = Newcomer.admit(:open, {:passkey, registered.(), identity()})
 
       person_athanors = fn ->
         Arca.Repo.aggregate(from(a in Arca.Schemas.Athanor, where: a.kind == "person"), :count)
@@ -415,7 +593,9 @@ defmodule Sanctum.NewcomerTest do
       # The second verifies; its transaction writes the person, their keys
       # and their athanor, and the credential's write is refused there, so
       # all of it rolls back.
-      assert {:error, {:conflict, _}} = Newcomer.admit(:open, {:passkey, registered.()})
+      assert {:error, {:conflict, _}} =
+               Newcomer.admit(:open, {:passkey, registered.(), identity()})
+
       assert {people(), person_athanors.(), Arca.Repo.aggregate(PersonIdentity, :count)} == before
       assert passkeys() == 1
     end
@@ -424,9 +604,11 @@ defmodule Sanctum.NewcomerTest do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
       credential = registration()
-      {:ok, _} = Newcomer.admit(:open, {:passkey, credential})
+      {:ok, _} = Newcomer.admit(:open, {:passkey, credential, identity()})
 
-      assert {:error, :registration_refused} = Newcomer.admit(:open, {:passkey, credential})
+      assert {:error, :registration_refused} =
+               Newcomer.admit(:open, {:passkey, credential, identity()})
+
       assert people() == 2
       assert passkeys() == 1
     end
@@ -435,7 +617,7 @@ defmodule Sanctum.NewcomerTest do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
 
-      for credential <- [{:command_line, "laptop"}, :none] do
+      for credential <- [{:command_line, "laptop", identity()}, :none] do
         assert {:error, {:invalid_argument, _}} = Newcomer.admit(:open, credential)
       end
 
@@ -490,9 +672,19 @@ defmodule Sanctum.NewcomerTest do
          %{issuer: issuer, group: group} do
       {id, code} = invite!(issuer, group.id)
 
-      assert {:ok, %{person: person, readmitted: false, session_token: token}} =
-               Newcomer.admit({:invitation, code}, {:passkey, registration()})
+      assert {:ok,
+              %{
+                person: person,
+                readmitted: false,
+                session_token: token,
+                recovery: %{name: "invited", code: "CYFR-" <> _, attempt_id: attempt_id}
+              }} =
+               Newcomer.admit(
+                 {:invitation, code},
+                 {:passkey, registration(), identity("invited")}
+               )
 
+      assert %{id: ^attempt_id, phase: "staged", name: "invited"} = enrollment(person.id)
       assert person.admission == "invitation"
       refute Sanctum.Tenancy.platform_admin?(person.id)
       assert {:ok, _own} = Athanors.get_by_owner(person.id)
@@ -512,14 +704,14 @@ defmodule Sanctum.NewcomerTest do
 
       # The code admits once.
       assert {:error, :invitation_invalid} =
-               Newcomer.admit({:invitation, code}, {:passkey, registration()})
+               Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
     end
 
     test "one naming no athanor seats its person in no group", %{admin: admin} do
       {_id, code} = invite!(admin, nil)
 
       assert {:ok, %{person: person}} =
-               Newcomer.admit({:invitation, code}, {:passkey, registration()})
+               Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
 
       own = Sanctum.Test.People.athanor!(person)
       assert {:ok, [%{athanor_id: athanor_id}]} = Members.list_by_user(person.id)
@@ -536,7 +728,10 @@ defmodule Sanctum.NewcomerTest do
         )
 
       {_redeemed, redeemed_code} = invite!(issuer, group.id)
-      {:ok, _} = Newcomer.admit({:invitation, redeemed_code}, {:passkey, registration()})
+
+      {:ok, _} =
+        Newcomer.admit({:invitation, redeemed_code}, {:passkey, registration(), identity()})
+
       {revoked, revoked_code} = invite!(issuer, group.id)
       {:ok, _} = Sanctum.Invitations.revoke(Sanctum.TestContext.session!(issuer.id), revoked)
       before = {people(), passkeys(), Members.count_by_athanor(group.id)}
@@ -544,7 +739,7 @@ defmodule Sanctum.NewcomerTest do
 
       for code <- [expired_code, redeemed_code, revoked_code] do
         assert {:error, :invitation_invalid} =
-                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+                 Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
       end
 
       refute_received :person_inserted
@@ -567,7 +762,7 @@ defmodule Sanctum.NewcomerTest do
 
       for code <- [left_code, denied_code] do
         assert {:error, :invitation_invalid} =
-                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+                 Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
       end
 
       assert {people(), passkeys()} == before
@@ -588,7 +783,7 @@ defmodule Sanctum.NewcomerTest do
 
       for code <- [admin_code, group_code] do
         assert {:error, :invitation_invalid} =
-                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+                 Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
       end
 
       # A row the restore's revocation missed is retired still: the
@@ -600,7 +795,7 @@ defmodule Sanctum.NewcomerTest do
         assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
 
         assert {:error, :invitation_invalid} =
-                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+                 Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
       end
 
       refute_received :person_inserted
@@ -626,7 +821,7 @@ defmodule Sanctum.NewcomerTest do
         assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
 
         assert {:error, :invitation_invalid} =
-                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+                 Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
       end
 
       refute_received :person_inserted
@@ -637,7 +832,9 @@ defmodule Sanctum.NewcomerTest do
 
       # One issued at the standing they hold now admits.
       {_id, code} = invite!(issuer, group.id)
-      assert {:ok, _} = Newcomer.admit({:invitation, code}, {:passkey, registration()})
+
+      assert {:ok, _} =
+               Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
     end
 
     test "the group's member cap refused leaves no person, no passkey and the code unredeemed",
@@ -647,7 +844,7 @@ defmodule Sanctum.NewcomerTest do
       before = {people(), passkeys()}
 
       assert {:error, {:limit_reached, :max_members_per_group, 1}} =
-               Newcomer.admit({:invitation, code}, {:passkey, registration()})
+               Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
 
       assert {people(), passkeys()} == before
       assert %{redeemed_by: nil, redeemed_at: nil} = invitation_row(id)
@@ -662,7 +859,7 @@ defmodule Sanctum.NewcomerTest do
       watch_person_inserts!()
 
       assert {:error, {:limit_reached, :max_athanors, ^athanors}} =
-               Newcomer.admit({:invitation, code}, {:passkey, registration()})
+               Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
 
       refute_received :person_inserted
       assert %{redeemed_by: nil} = invitation_row(id)
@@ -674,12 +871,12 @@ defmodule Sanctum.NewcomerTest do
     } do
       {_id, code} = invite!(issuer, group.id)
 
-      for credential <- [{:command_line, "laptop"}, :none] do
+      for credential <- [{:command_line, "laptop", identity()}, :none] do
         assert {:error, {:invalid_argument, _}} = Newcomer.admit({:invitation, code}, credential)
       end
 
       assert {:error, :invitation_invalid} =
-               Newcomer.admit({:invitation, nil}, {:passkey, registration()})
+               Newcomer.admit({:invitation, nil}, {:passkey, registration(), identity()})
     end
   end
 
@@ -825,8 +1022,9 @@ defmodule Sanctum.NewcomerKilledTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Sanctum.Test.Newcomers, only: [identity: 0]
 
-  alias Arca.Schemas.{Membership, PersonIdentity, User}
+  alias Arca.Schemas.{IdentityAttempt, Membership, PersonIdentity, User}
   alias Ecto.Adapters.SQL.Sandbox
 
   @token String.duplicate("7a", 32)
@@ -844,6 +1042,7 @@ defmodule Sanctum.NewcomerKilledTest do
     end)
 
     Application.put_env(:sanctum, :setup_token, @token)
+    Sanctum.Test.Newcomers.directory!()
 
     # The admission is over an empty installation: nothing committed may
     # hold a person when it starts.
@@ -851,7 +1050,7 @@ defmodule Sanctum.NewcomerKilledTest do
     :ok
   end
 
-  test "an admission killed before its commit leaves no person, no keys and no grant" do
+  test "an admission killed before its commit leaves no person, no keys, no grant and no enrollment" do
     test = self()
     handler = "newcomer-killed-#{System.unique_integer([:positive])}"
 
@@ -881,7 +1080,7 @@ defmodule Sanctum.NewcomerKilledTest do
       spawn(fn ->
         unboxed(fn ->
           Process.put(:newcomer_admitting, true)
-          Sanctum.Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+          Sanctum.Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
         end)
       end)
 
@@ -890,10 +1089,11 @@ defmodule Sanctum.NewcomerKilledTest do
     Process.exit(admitting, :kill)
     assert_receive {:DOWN, ^ref, :process, ^admitting, :killed}, 5_000
 
-    assert {0, 0, 0} ==
+    assert {0, 0, 0, 0} ==
              unboxed(fn ->
                {Arca.Repo.aggregate(User, :count), Arca.Repo.aggregate(PersonIdentity, :count),
-                Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)}
+                Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count),
+                Arca.Repo.aggregate(IdentityAttempt, :count)}
              end)
   end
 end
@@ -923,10 +1123,12 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
 
   import Ecto.Query, only: [from: 2]
   import Arca.Test.Adapter, only: [postgres?: 0]
+  import Sanctum.Test.Newcomers, only: [identity: 0]
 
   alias Arca.Schemas.{
     Athanor,
     ExternalIdentity,
+    IdentityAttempt,
     Invitation,
     Membership,
     Passkey,
@@ -944,6 +1146,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 
   setup do
+    Sanctum.Test.Newcomers.directory!()
     previous = Sanctum.Consent.Components.impl!()
     on_exit(fn -> Sanctum.Consent.Components.install!(previous) end)
     Sanctum.Consent.Components.install!(Sanctum.Test.Components)
@@ -1005,7 +1208,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
       Task.async(fn ->
         unboxed(fn ->
           Process.put(:invitation_admitting, true)
-          Newcomer.admit({:invitation, code}, {:passkey, credential})
+          Newcomer.admit({:invitation, code}, {:passkey, credential, identity()})
         end)
       end)
 
@@ -1082,7 +1285,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
         Task.async(fn ->
           unboxed(fn ->
             send(test, {:racer, backend()})
-            Newcomer.admit({:invitation, code}, {:passkey, credential})
+            Newcomer.admit({:invitation, code}, {:passkey, credential, identity()})
           end)
         end)
       end
@@ -1188,6 +1391,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     Arca.Repo.delete_all(from(i in Invitation, where: i.issued_by in ^issuers))
     Arca.Repo.delete_all(from(s in Session, where: s.user_id in ^people))
     Arca.Repo.delete_all(from(p in Passkey, where: p.user_id in ^people))
+    Arca.Repo.delete_all(from(a in IdentityAttempt, where: a.user_id in ^people))
     Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id in ^people))
 
     Arca.Repo.delete_all(

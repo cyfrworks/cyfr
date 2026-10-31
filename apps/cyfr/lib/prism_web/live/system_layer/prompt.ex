@@ -72,19 +72,18 @@ defmodule PrismWeb.SystemLayer.Prompt do
       asked for it. A client that asked but cannot read the list carries
       the ref, operation and expiry alone, the rest `nil`. The secret the
       asking request was answered never enters a prompt;
-    * `:enrollment`, `:kit` and `:holder` — recovery material, each under
-      the action `:recovery_material` (`PrismWeb.SystemLayer.Recovery`
-      builds them): enrollment names the `directory_url` this home pins,
-      which its form shows before anything is asked; a kit names the
-      `attempt_id` of the enrollment or added kit whose kit is delivered
-      again; another kit names nothing. No seed, kit line or installation
-      token is ever a prompt's subject: the browser draws and holds the
-      seed, and a kit's lines go to the browser alone.
+    * `:kit` and `:holder` — recovery material, each under the action
+      `:recovery_material` (`PrismWeb.SystemLayer.Recovery` builds them): a
+      kit names the `attempt_id` of the enrollment or added code whose
+      recovery code is shown again; another code names nothing. No secret,
+      recovery code or installation token is ever a prompt's subject: the
+      browser draws and holds the secret, and a recovery code goes to the
+      browser alone.
 
   Anything else is refused as `:invalid_prompt`: nothing is drawn.
   """
 
-  @recovery_kinds [:enrollment, :kit, :holder]
+  @recovery_kinds [:kit, :holder]
   @kinds [:grant, :unlock, :sign_in, :credential_entry, :pairing, :confirmation] ++
            @recovery_kinds
   @keys [:id, :kind, :action, :subject]
@@ -110,7 +109,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
           | :credential_entry
           | :pairing
           | :confirmation
-          | :enrollment
           | :kit
           | :holder
 
@@ -268,16 +266,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}
 
-  # The directory the form names is this home's pinned one, an https
-  # directory URL; a kit is named by its attempt's id; neither carries a
-  # seed.
-  defp subject(:enrollment, %{directory_url: url} = subject)
-       when map_size(subject) == 1 and is_binary(url) do
-    if Prima.Identity.Encoding.directory_url?(url) and String.starts_with?(url, "https://"),
-      do: {:ok, %{directory_url: url}},
-      else: {:error, :invalid_prompt}
-  end
-
+  # A kit is named by its attempt's id, and carries no secret.
   defp subject(:kit, %{attempt_id: id} = subject)
        when map_size(subject) == 1 and is_binary(id) and id != "" and byte_size(id) <= 128,
        do: {:ok, %{attempt_id: id}}

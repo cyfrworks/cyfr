@@ -5,8 +5,8 @@ defmodule Arca.InvitationsTest do
   @moduledoc """
   Invitations to become a person here: written in the actor's athanor, or
   in none under the platform scope, by the hash of their code with an
-  expiry on the database's clock and the issuer's generation as their row
-  stands; found by that hash and listed across
+  expiry on the database's clock, the issuer's generation as their row
+  stands and the name offered, if any; found by that hash and listed across
   athanors only under the platform scope; ended once, revoked while open
   or redeemed while open and unexpired, each by one conditional write. An
   athanor's erasure takes the invitations that name it and leaves the
@@ -80,6 +80,7 @@ defmodule Arca.InvitationsTest do
                code_hash: ^hash,
                issued_by: ^issuer,
                athanor_id: ^athanor,
+               name: nil,
                redeemed_by: nil,
                redeemed_at: nil,
                revoked_at: nil
@@ -112,15 +113,24 @@ defmodule Arca.InvitationsTest do
                })
     end
 
+    test "keeps the name it offers its newcomer", %{actor: actor} do
+      attrs = %{code_hash: code_hash(), issued_by: issuer!(), lifetime_ms: @day_ms, name: "mira"}
+      {:ok, row} = Invitations.insert(actor, attrs)
+
+      assert row.name == "mira"
+      assert {:ok, %{name: "mira"}} = Invitations.by_code_hash(server(), attrs.code_hash)
+    end
+
     test "refuses a malformed row and a code hash already taken", %{actor: actor} do
       assert {:error, {:invalid, errors}} =
                Invitations.insert(actor, %{
                  code_hash: "NOT-HEX",
                  issued_by: "system",
-                 lifetime_ms: 0
+                 lifetime_ms: 0,
+                 name: ""
                })
 
-      assert Map.keys(errors) |> Enum.sort() == [:code_hash, :issued_by, :lifetime_ms]
+      assert Map.keys(errors) |> Enum.sort() == [:code_hash, :issued_by, :lifetime_ms, :name]
 
       {_row, hash} = issued!(actor)
 

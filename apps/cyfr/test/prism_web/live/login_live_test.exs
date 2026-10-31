@@ -219,23 +219,22 @@ defmodule PrismWeb.LoginLiveTest do
   end
 
   describe "create your identity here" do
-    alias Sanctum.TestContext.Authenticator
+    import Ecto.Query, only: [from: 2]
+    import PrismWeb.AdmissionScreens
 
-    # The browser's ceremony under the options the page answered.
-    defp ceremony(view) do
-      render_hook(view, "create_start", %{})
-      assert_reply(view, %{public_key: public_key, registration: registration})
-
-      Authenticator.registration(
-        Authenticator.new("open|#{System.unique_integer([:positive])}"),
-        %{public_key: public_key, registration: registration}
-      )
+    setup do
+      directory!()
+      :ok
     end
 
+    @saved "Saved. You can add another recovery code in Settings, and keep it apart from this one."
+
     test "is offered only while the door's * admits", %{conn: conn} do
+      registry!()
       {:ok, view, html} = live(conn, ~p"/login")
       refute has_element?(view, "#create-identity")
       refute html =~ "Create your identity here"
+      refute_vocabulary(render(view))
 
       render_hook(view, "create_start", %{})
       assert_reply(view, %{error: true})
@@ -243,49 +242,143 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", nil)
       {:ok, view, html} = live(build_conn(), ~p"/login")
       assert html =~ "Create your identity here"
+      assert has_element?(view, "#create-identity p", "This CYFR keeps your identity.")
 
       assert has_element?(
                view,
-               ~s(#create-identity [data-webauthn="create"] [data-webauthn-start])
+               ~s(#create-identity label[for="admission-name-input"]),
+               "Your name"
              )
+
+      assert has_element?(
+               view,
+               ~s(#create-identity [data-webauthn="create"] [data-test="admission-create"][data-webauthn-start][disabled])
+             )
+
+      refute_vocabulary(render(view))
+
+      name!(view, "mira")
+      refute has_element?(view, ~s([data-test="admission-create"][disabled]))
+      refute_vocabulary(render(view))
     end
 
-    test "its passkey makes a person by an open admission and signs them in", %{conn: conn} do
+    test "its passkey makes a person by an open admission; screen 2 registers them, and I saved it signs them in",
+         %{conn: conn} do
+      registry!()
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", nil)
       people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
 
       browser = get(conn, ~p"/login")
       {:ok, view, _html} = live(browser, ~p"/login")
+      name!(view, "mira")
+      identity = admit!(view, "create")
 
-      render_hook(view, "create_passkey", %{"credential" => ceremony(view)})
+      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people + 1
+
+      [%{id: user_id, admission: "open"}] =
+        Arca.Repo.all(from(u in Arca.Schemas.User, where: u.namespace == "mira"))
+
+      attempt =
+        Arca.Repo.get_by!(Arca.Schemas.IdentityAttempt, user_id: user_id, kind: "enrollment")
+
+      # Screen 2 alone: the page's other ways in step aside.
+      assert screen_2?(view, :code)
+      code = code!(view)
+      assert code == Prima.RecoveryCode.encode(attempt.identifier, identity.recovery_secret)
+      refute render(view) =~ code
+
+      for selector <- ["#passkey-sign-in", "#sign-in-cyfr", ~s([data-test="admission-name"])] do
+        refute has_element?(view, selector), selector
+      end
+
+      refute_vocabulary(render(view))
+      assert get_session(browser, :sanctum_session_token) == nil
+
+      view |> element(~s([data-test="admission-saved"])) |> render_click()
       {path, _flash} = assert_redirect(view)
       assert String.starts_with?(path, "/auth/passkey/complete/")
 
       landed = get(browser, path)
       assert redirected_to(landed) == "/"
+      assert Phoenix.Flash.get(landed.assigns.flash, :info) == @saved
       token = get_session(landed, :sanctum_session_token)
-      assert {:ok, %{user_id: user_id}} = Sanctum.Session.load(token)
+      assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.load(token)
+    end
 
-      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people + 1
-      assert %{admission: "open"} = Arca.Repo.get!(Arca.Schemas.User, user_id)
+    @tag :capture_log
+    test "each answer of cyfr.run leaves screen 2 in its state", %{conn: conn} do
+      directory = directory!()
+      registry = registry!()
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", nil)
+
+      for {script, state} <- [
+            {fn -> next_genesis(directory, :drop) end, :silent},
+            {fn -> next_genesis(directory, :refuse) end, :refused},
+            {fn -> script(registry, version: :close) end, :silent},
+            {fn -> script(registry, claims: [:taken]) end, :taken},
+            {fn -> script(registry, claims: [:reserved]) end, :reserved}
+          ] do
+        script(registry, version: :answer, claims: [])
+        Prima.Test.RateLimiter.reset!()
+        {:ok, view, _html} = live(conn, ~p"/login")
+        name!(view, "n#{System.unique_integer([:positive])}")
+        script.()
+        admit!(view, "create")
+
+        assert screen_2?(view, state), "#{state}: #{render(view)}"
+        refute has_element?(view, ~s([data-test="admission-saved"]))
+        refute_push_event(view, "admission_code", %{})
+        refute_vocabulary(render(view))
+      end
+
+      script(registry, version: :answer, claims: [])
+      for app <- [:sanctum, :cyfr], do: Prima.Test.Env.put_app_env(app, :registry_url, "none")
+      {:ok, view, _html} = live(conn, ~p"/login")
+      name!(view, "last")
+      admit!(view, "create")
+      assert screen_2?(view, :no_registry)
+      refute_vocabulary(render(view))
+    end
+
+    test "the name is asked of cyfr.run under a bound per address, and past it is checked at the claim",
+         %{conn: conn} do
+      registry!()
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", nil)
+      {:ok, view, _html} = live(conn, ~p"/login")
+
+      for n <- 1..30 do
+        name!(view, "n#{n}")
+        assert has_element?(view, ~s([data-check="free"]))
+        assert_received {:registry_request, %{path: "/v1/handles/n" <> _}}
+      end
+
+      name!(view, "past")
+
+      assert has_element?(
+               view,
+               ~s([data-check="unavailable"]),
+               "cyfr.run did not answer, so your name is checked again when you create it."
+             )
+
+      refute_received {:registry_request, %{path: "/v1/handles/past"}}
+      refute has_element?(view, ~s([data-test="admission-create"][disabled]))
     end
 
     test "a door that closed since the page opened creates nothing, and the offer goes",
          %{conn: conn} do
+      registry!()
       {:ok, entry} = Sanctum.Door.Store.allow("wildcard", "*", nil)
       people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
       {:ok, view, _html} = live(conn, ~p"/login")
-      credential = ceremony(view)
+      name!(view, "mira")
+      credential = ceremony(view, "create")
 
       :ok = Sanctum.Door.Store.remove(entry.id)
 
-      html = render_hook(view, "create_passkey", %{"credential" => credential})
-      assert html =~ "not taking new identities"
+      admit!(view, "create", credential)
+      assert render(view) =~ "not taking new identities"
       refute has_element?(view, "#create-identity")
       assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
-
-      render_hook(view, "create_error", %{})
-      assert render(view) =~ "nothing was saved"
     end
   end
 

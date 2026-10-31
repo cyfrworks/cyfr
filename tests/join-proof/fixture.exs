@@ -63,6 +63,13 @@
 #
 #   paired IDENTIFIER
 #       The person's paired clients here, each its athanor and standing.
+#
+#   door USER_ID SUB
+#       The GitHub identity SUB linked to the person USER_ID, as a
+#       completed GitHub sign-in links one (`Arca.Users.link_identity/3`),
+#       so the release fixture's `person` command signs that person in by
+#       it (tests/release-boot/fixture.exs): `{linked}`, false when the
+#       identity was already theirs.
 
 fn args ->
   import Ecto.Query, only: [from: 2]
@@ -292,5 +299,21 @@ fn args ->
         )
 
       answer.(%{paired: rows})
+
+    ["door", user_id, sub] ->
+      key = Sanctum.Auth.Identity.builtin_key(:github, sub)
+
+      {:ok, %{provider: provider, issuer: issuer, subject: subject}} =
+        Sanctum.Auth.Identity.parse(key)
+
+      {:ok, %{linked: linked}} =
+        Arca.Users.link_identity(system, user_id, %{
+          key: key,
+          provider: provider,
+          issuer: issuer,
+          subject: subject
+        })
+
+      answer.(%{linked: linked})
   end
 end

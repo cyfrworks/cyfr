@@ -32,8 +32,8 @@ var memberCmd = &cobra.Command{
 	Long: "Every member is the athanor's admin: anyone may add or remove someone, " +
 		"named by user id (usr_…) or person identifier (per_…), or leave. Adding an " +
 		"identifier the server has not seen leaves an invitation that activates on " +
-		"that person's first sign-in here. Someone is also added by their handle " +
-		"(@name): the registry is asked which identifier it names, and that " +
+		"that person's first sign-in here. Someone is also added by their name " +
+		"(@name): cyfr.run is asked which identifier the name belongs to, and that " +
 		"identifier is added.",
 }
 
@@ -73,8 +73,8 @@ var memberListCmd = &cobra.Command{
 }
 
 var memberAddCmd = &cobra.Command{
-	Use:   "add <user_id|identifier|@handle>",
-	Short: "Add someone, by user id, person identifier (per_…) or handle (@name)",
+	Use:   "add <@name|identifier|user_id>",
+	Short: "Add someone, by name (@name), person identifier (per_…) or user id.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		result, err := newClient().CallTool(cmd.Context(), ops.Member, memberAddArgs(memberAthanor(cmd), args[0]))

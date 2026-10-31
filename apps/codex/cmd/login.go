@@ -5,8 +5,12 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -25,6 +29,7 @@ import (
 var (
 	flagLoginProvider string
 	flagLoginSetup    bool
+	flagLoginName     string
 )
 
 func init() {
@@ -33,6 +38,8 @@ func init() {
 			strings.Join(ops.DeviceFlowProviders, " or ")+")")
 	loginCmd.Flags().BoolVar(&flagLoginSetup, "setup", false,
 		"Sign in as this CYFR's first person with CYFR_SETUP_TOKEN from .env in this directory, setting them up the first time (a headless CYFR)")
+	loginCmd.Flags().StringVar(&flagLoginName, "name", "",
+		"With --setup: the first person's name, theirs for life (asked for on a terminal when not given)")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
@@ -57,13 +64,17 @@ On a machine where no one can approve it in Prism, --provider signs in with
 GitHub or Google instead: the command line prints the provider's address and
 a code, and receives its session once you enter the code there.
 
-A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so --setup sets up
-its first person, who administers it: run in the directory cyfr init set
-up, it reads CYFR_SETUP_TOKEN from .env there and signs the command line in
-as that person. Run again, it signs the same person in again, until they
-have a passkey, a device they connected or a sign-in method they linked;
-from then on the token opens nothing, and the command line signs in with
-cyfr login.
+A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so --setup makes
+its first person, who administers it. Run in the directory cyfr init set
+up, it reads CYFR_SETUP_TOKEN from .env there and the person's name from
+--name, or asks for it on a terminal: the name is theirs for life. It takes
+the name at cyfr.run and prints the person's recovery code, and once they
+press Enter to say they saved it, signs the command line in as that person.
+When cyfr.run does not answer, nothing is saved: run it again to finish.
+Run again, it signs the same person in again, with the same recovery code
+until it is saved, until they have a passkey, a device they connected or a
+sign-in method they linked; from then on the token opens nothing, and the
+command line signs in with cyfr login.
 
 The session is saved under the context the command used: --context, or the
 current one. A --url that is not that context's address saves nothing; add a
@@ -73,10 +84,13 @@ withdrawn.`,
 	Example: `  cyfr login
   cyfr login --context work
   cyfr login --provider google
-  cyfr login --setup`,
+  cyfr login --setup --name mira`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if flagLoginSetup && cmd.Flags().Changed("provider") {
 			return errors.New("--setup signs in with this CYFR's setup token and --provider with a provider: use one of them.")
+		}
+		if !flagLoginSetup && cmd.Flags().Changed("name") {
+			return errors.New("--name names the first person --setup makes: use it with --setup.")
 		}
 		target, err := sessionContext("save the session under")
 		if err != nil {
@@ -88,9 +102,12 @@ withdrawn.`,
 				strings.Join(ops.DeviceFlowProviders, "' or '"))
 		}
 
-		var setupToken string
+		var setupToken, name string
 		if flagLoginSetup {
 			if setupToken, err = setupTokenHere(); err != nil {
+				return err
+			}
+			if name, err = setupName(cmd.Context(), setupOutput(), cmd.Flags().Changed("name")); err != nil {
 				return err
 			}
 		}
@@ -108,7 +125,7 @@ withdrawn.`,
 		}
 
 		if flagLoginSetup {
-			return loginWithSetup(cmd.Context(), client, target, setupToken, machineName())
+			return loginWithSetup(cmd.Context(), client, target, setupToken, machineName(), name)
 		}
 		if !cmd.Flags().Changed("provider") {
 			return loginInPrism(cmd.Context(), client, target, machineName())
@@ -217,13 +234,20 @@ func setupTokenHere() (string, error) {
 	return token, nil
 }
 
-// loginWithSetup signs the command line in as this CYFR's first person
-// with its setup token (session.setup): the person is made by the first
-// call, and signed in again by each later one while they hold no passkey,
-// no device they connected and no sign-in method they linked. The session
-// is kept as the device flow keeps one.
-func loginWithSetup(ctx context.Context, client *mcp.Client, target storedContext, token, machine string) error {
-	answer, err := client.CallTool(ctx, ops.Session, ops.SessionSetupArgs{SetupToken: &token, Machine: machine})
+// loginWithSetup makes this CYFR's first person with its setup token
+// (session.setup), the name given and a recovery secret drawn here, takes
+// the name at cyfr.run (registry.register), prints the recovery code and,
+// once the person presses Enter to say they saved it
+// (person.recovery_code_saved), keeps the session as the device flow keeps
+// one. Each later call signs the same person in again while they hold no
+// passkey, no device they connected and no sign-in method they linked, and
+// CYFR answers the same attempt and code until the code is saved, and no
+// code after. Every way out before the session is kept ends the session
+// CYFR answered (endSession), so no credential outlives a run that saved
+// none.
+func loginWithSetup(ctx context.Context, client *mcp.Client, target storedContext, token, machine, name string) error {
+	answer, err := client.CallTool(ctx, ops.Session, ops.SessionSetupArgs{SetupToken: &token, Machine: machine,
+		Name: name, RecoverySecret: drawRecoverySecret(), RequestId: drawRequestID()})
 	switch {
 	case errors.Is(err, context.Canceled):
 		return interrupted("Stopped before CYFR answered.")
@@ -240,22 +264,231 @@ func loginWithSetup(ctx context.Context, client *mcp.Client, target storedContex
 	if sessionID == "" {
 		return errors.New("CYFR answered no session, so nothing was saved. Run cyfr login --setup again.")
 	}
+	client.SessionID = sessionID
+
+	named, err := finishSetup(ctx, client, answer, name)
+	if err != nil {
+		endSession(ctx, client)
+		return err
+	}
 	if err := keepSession(ctx, client, target, sessionID); err != nil {
 		return err
 	}
 
-	readmitted, _ := answer["readmitted"].(bool)
 	if flagJSON {
-		output.JSON(map[string]any{"status": "signed_in", "context": target.name,
-			"user_id": answer["user_id"], "readmitted": readmitted})
+		readmitted, _ := answer["readmitted"].(bool)
+		recovery, _ := answer["recovery"].(map[string]any)
+		output.JSON(map[string]any{"status": "signed_in", "context": target.name, "user_id": answer["user_id"],
+			"readmitted": readmitted, "name": named, "identifier": recovery["identifier"]})
 		return nil
 	}
-	if readmitted {
-		fmt.Println("Signed in again as this CYFR's first person.")
-	} else {
-		fmt.Println("Signed in as this CYFR's first person.")
-	}
+	fmt.Printf("Signed in as @%s. Add another recovery code in Settings.\n", named)
 	return nil
+}
+
+// finishSetup takes the person's name at cyfr.run and, while session.setup
+// answered a recovery code, prints it and records it saved once the person
+// presses Enter. It answers the name the person holds.
+func finishSetup(ctx context.Context, client *mcp.Client, answer map[string]any, wanted string) (string, error) {
+	recovery, _ := answer["recovery"].(map[string]any)
+	attemptID, _ := recovery["attempt_id"].(string)
+	held, _ := recovery["name"].(string)
+	code, _ := recovery["code"].(string)
+	if attemptID == "" || held == "" {
+		return "", errors.New("CYFR answered no name and recovery code, so nothing was saved. Run cyfr login --setup again.")
+	}
+
+	out := setupOutput()
+	named, err := registerName(ctx, client, out, wanted, held)
+	if err != nil || code == "" {
+		return named, err
+	}
+
+	fmt.Fprintf(out, "Your name is @%s.\n", named)
+	fmt.Fprintln(out, "Your recovery code:")
+	fmt.Fprintln(out, code)
+	fmt.Fprintln(out, "If this CYFR is ever lost, this is the one thing that brings you back. "+
+		"Save it in your password manager. Press Enter once you saved it.")
+	if err := awaitEnter(ctx); err != nil {
+		return "", err
+	}
+	if _, err := client.CallTool(ctx, ops.Person, ops.PersonRecoveryCodeSavedArgs{AttemptId: attemptID}); err != nil {
+		return "", setupCallFailure(err)
+	}
+	return named, nil
+}
+
+// registerName takes the name at cyfr.run (registry.register), first the
+// one the attempt holds, and answers the name taken. A name cyfr.run holds
+// for someone else or keeps for itself is followed by the name this run
+// was given, when the attempt held another (a readmission keeps the name
+// of the run that made the person), and then by the one the person types
+// on a terminal; off a terminal the refusal ends the run. A silent cyfr.run
+// ends it as a run to repeat.
+func registerName(ctx context.Context, client *mcp.Client, out io.Writer, wanted, held string) (string, error) {
+	args, tried := ops.RegistryRegisterArgs{}, held
+	for {
+		answer, err := client.CallTool(ctx, ops.Registry, args)
+		switch {
+		case err == nil:
+			if named, _ := answer["name"].(string); named != "" {
+				return named, nil
+			}
+			return tried, nil
+		case refusedAs(err, "directory_unavailable", "registry_unavailable"):
+			return "", errors.New("cyfr.run did not answer. Run cyfr login --setup again to finish.")
+		case !refusedAs(err, "name_taken", "name_reserved"):
+			return "", setupCallFailure(err)
+		case wanted != tried:
+			// The attempt held another run's name: this run's is next.
+		case !confirmationTerminal():
+			return "", fmt.Errorf("%w\nRun cyfr login --setup --name NAME with another name to finish.", err)
+		default:
+			fmt.Fprintln(out, err)
+			var asked error
+			switch wanted, asked = askName(ctx, out); {
+			case errors.Is(asked, io.EOF):
+				return "", fmt.Errorf("%w\nRun cyfr login --setup --name NAME with another name to finish.", err)
+			case asked != nil:
+				return "", interrupted("Stopped before your name was taken. Run cyfr login --setup again to finish.")
+			}
+		}
+		args, tried = ops.RegistryRegisterArgs{Name: ops.Value(wanted)}, wanted
+	}
+}
+
+// registerRefusals are the sentences Prima.Refusal answers the refusals of
+// registry.register the command line acts on, which reach it as a tool
+// error's text alone. login_test.go holds them to
+// apps/prima/lib/prima/refusal.ex.
+var registerRefusals = map[string]string{
+	"name_taken":            "Someone holds that name. Choose another.",
+	"name_reserved":         "cyfr.run keeps that name for itself. Choose another.",
+	"directory_unavailable": "cyfr.run did not answer. Try again.",
+	"registry_unavailable":  "The registry could not be reached just now; try again shortly.",
+}
+
+// refusedAs is whether err is CYFR's refusal for one of reasons.
+func refusedAs(err error, reasons ...string) bool {
+	for _, reason := range reasons {
+		if err.Error() == registerRefusals[reason] {
+			return true
+		}
+	}
+	return false
+}
+
+// setupCallFailure is a call after session.setup that failed: an
+// interruption, CYFR not answering, or CYFR's refusal as it answered it.
+func setupCallFailure(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return interrupted("Stopped before CYFR answered. Run cyfr login --setup again to finish.")
+	case errors.As(err, new(*url.Error)):
+		return fmt.Errorf("Failed to set up: %w", err)
+	default:
+		return err
+	}
+}
+
+// endSession ends the session session.setup answered, for a run that keeps
+// none. It is asked after an interruption too, for a few seconds, and its
+// failure leaves the run's own report standing: the session also expires.
+func endSession(ctx context.Context, client *mcp.Client) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, _ = client.CallTool(ctx, ops.Session, ops.SessionLogoutArgs{})
+}
+
+// setupOutput is where --setup speaks to the person: standard output, or
+// standard error under --json, whose standard output is the answer alone.
+func setupOutput() io.Writer {
+	if flagJSON {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+// setupName is the name --setup gives the first person: --name, else the
+// one they type on a terminal. With neither it is refused before anything
+// reaches CYFR.
+func setupName(ctx context.Context, out io.Writer, given bool) (string, error) {
+	if name := typedName(flagLoginName); given && name != "" {
+		return name, nil
+	}
+	errNoName := errors.New("Give your name with --name. It is yours for life.")
+	if !confirmationTerminal() {
+		return "", errNoName
+	}
+	switch name, err := askName(ctx, out); {
+	case errors.Is(err, io.EOF):
+		return "", errNoName
+	case err != nil:
+		return "", interruption{errQuestionInterrupted}
+	default:
+		return name, nil
+	}
+}
+
+// askName asks for a name on the terminal until one is typed, answering
+// io.EOF when the input ends first and the context's error when the person
+// leaves the question.
+func askName(ctx context.Context, out io.Writer) (string, error) {
+	for {
+		fmt.Fprint(out, "Your name: @")
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(out)
+			return "", ctx.Err()
+		case line, open := <-confirmationInput():
+			if !open {
+				fmt.Fprintln(out)
+				return "", io.EOF
+			}
+			if name := typedName(line); name != "" {
+				return name, nil
+			}
+		}
+	}
+}
+
+// typedName is a name as typed, without the @ that is written before it
+// and the spaces around it; CYFR checks its spelling.
+func typedName(typed string) string {
+	return strings.TrimPrefix(strings.TrimSpace(typed), "@")
+}
+
+// awaitEnter waits for the person to press Enter, read from standard input
+// whether or not it is a terminal, so a script that saved the code answers
+// it too. Input that ends first saves nothing.
+func awaitEnter(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return interrupted("Stopped before you saved your recovery code. Run cyfr login --setup again to finish.")
+	case _, open := <-confirmationInput():
+		if !open {
+			return errors.New("The input ended before you saved your recovery code, so nothing was saved. " +
+				"Run cyfr login --setup again to finish.")
+		}
+		return nil
+	}
+}
+
+// drawRecoverySecret is a new recovery code's secret: 32 bytes from
+// crypto/rand as unpadded base64url, the browser's form. crypto/rand.Read
+// fails only by ending the process.
+func drawRecoverySecret() string {
+	secret := make([]byte, 32)
+	_, _ = rand.Read(secret)
+	return base64.RawURLEncoding.EncodeToString(secret)
+}
+
+// drawRequestID is the request id of the attempt the admission opens: req_
+// and 32 hexadecimal digits, the browser's form.
+func drawRequestID() string {
+	id := make([]byte, 16)
+	_, _ = rand.Read(id)
+	return "req_" + hex.EncodeToString(id)
 }
 
 // pollDeviceAuth polls until completion, expiry, denial, deadline or

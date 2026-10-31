@@ -17,11 +17,18 @@ defmodule PrismWeb.LoginLive do
     2. **Your CYFR.** "I run my own CYFR", which opens a field taking the
        address of the person's own CYFR (the carry below).
     3. **Create your identity here**, only while the door's `*` admits
-       (`Sanctum.Door.Store.wildcard/0`): a passkey registration
+       (`Sanctum.Door.Store.wildcard/0`): the two screens
+       (`PrismWeb.AdmissionCard`). The name is checked against cyfr.run
+       under a per-address bound, since the page holds no token or code
+       to check it under. The passkey registration
        (`Sanctum.Passkeys.newcomer_options/0`, the `SystemLayer` hook in
-       its `create` mode) presented to `Sanctum.Newcomer.admit/2` as an
-       open admission, which makes the person, their keys, their athanor
-       and the passkey in one transaction and asks the door again.
+       its `create` mode), with the name and the recovery secret and
+       request id the browser drew, is presented to
+       `Sanctum.Newcomer.admit/2` as an open admission, which makes the
+       person, their keys, their athanor, the passkey and their
+       enrollment in one transaction and asks the door again. Screen 2
+       then registers them at cyfr.run, shows their recovery code, and
+       "I saved it" signs them in.
     4. **Other ways to sign in**, only when a linked sign-in method is
        configured: GitHub and Google by device flow on this page
        (`Sanctum.Auth.DeviceFlow`), and a configured OIDC issuer through
@@ -103,6 +110,7 @@ defmodule PrismWeb.LoginLive do
 
   use PrismWeb, :live_view
 
+  alias PrismWeb.AdmissionCard
   alias PrismWeb.LoginLive.Held
   alias Sanctum.Auth.{CyfrDoor, DeviceFlow}
   require Logger
@@ -118,7 +126,8 @@ defmodule PrismWeb.LoginLive do
   # A `cyfr` sign-in's carry reads the person's directory before anything
   # else answers, so each address has its own bound on it here, per node;
   # the installation's bound across every address is the door's
-  # (`Sanctum.Auth.CyfrDoor`), and both answer the same sentence.
+  # (`Sanctum.Auth.CyfrDoor`), and both answer the same sentence. A new
+  # person's name is asked of cyfr.run under the same bound per address.
   @cyfr_starts 30
   @cyfr_window_ms 60_000
   @cyfr_rate_limited "Too many sign-ins from here. Try again in a minute."
@@ -179,7 +188,8 @@ defmodule PrismWeb.LoginLive do
      |> assign(:cyfr_request, held_request(session))
      # A verified carry's challenge, waiting for the person's Continue.
      |> assign(:cyfr_pending, nil)
-     |> assign(:error, error_from_params(params)), layout: false}
+     |> assign(:error, error_from_params(params))
+     |> AdmissionCard.mount(), layout: false}
   end
 
   @impl true
@@ -268,12 +278,24 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # "Create your identity here": the creation options for a newcomer's
-  # passkey, only while the door's `*` admits.
+  # "Create your identity here": the name typed, asked of cyfr.run under
+  # this address's bound, while the door's `*` admits.
+  def handle_event("admission_check", params, %{assigns: %{open_door: true}} = socket) do
+    limit = {{:name_check, socket.assigns.client_ip}, @cyfr_starts, @cyfr_window_ms}
+    {:noreply, AdmissionCard.check(socket, params, limit: limit)}
+  end
+
+  def handle_event("admission_check", _params, socket), do: {:noreply, socket}
+
+  # The creation options for a newcomer's passkey, only for a name that
+  # may go on and while the door's `*` admits.
   def handle_event("create_start", _params, socket) do
     cond do
+      not AdmissionCard.startable?(socket) ->
+        {:reply, %{error: true}, socket}
+
       not Arca.ControlPlane.held?() ->
-        {:reply, %{error: true}, assign(socket, :error, @not_owner)}
+        {:reply, %{error: true}, assign(socket, :admission_error, @not_owner)}
 
       Prima.RateLimiter.check(
         {:open_passkey, socket.assigns.client_ip},
@@ -281,14 +303,14 @@ defmodule PrismWeb.LoginLive do
         @passkey_window_ms
       ) != :ok ->
         message = "Too many identities created from here. Try again in a minute."
-        {:reply, %{error: true}, assign(socket, :error, message)}
+        {:reply, %{error: true}, assign(socket, :admission_error, message)}
 
       true ->
         with {:ok, true} <- Sanctum.Door.Store.wildcard(),
              {:ok, %{public_key: public_key, registration: registration}} <-
                Sanctum.Passkeys.newcomer_options() do
           {:reply, %{public_key: public_key, registration: registration},
-           assign(socket, :error, nil)}
+           assign(socket, :admission_error, nil)}
         else
           {:ok, false} ->
             {:reply, %{error: true}, created(socket, {:error, {:door, :not_allowed}})}
@@ -299,20 +321,40 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # The registration is the open admission's credential: the person, their
-  # keys, their athanor and the passkey in one transaction, then the
-  # passkey sign-in's ticket.
-  def handle_event("create_passkey", %{"credential" => credential}, socket)
+  # The registration, with the name and the browser's recovery secret and
+  # request id, is the open admission's credential: the person, their
+  # keys, their athanor, the passkey and their enrollment in one
+  # transaction, then screen 2.
+  def handle_event(
+        "create_passkey",
+        %{"credential" => credential} = params,
+        %{assigns: %{admission_state: nil}} = socket
+      )
       when is_map(credential) do
-    {:noreply, created(socket, Sanctum.Newcomer.admit(:open, {:passkey, credential}))}
+    admitted =
+      with {:ok, identity} <- AdmissionCard.identity(socket, params),
+           do: Sanctum.Newcomer.admit(:open, {:passkey, credential, identity})
+
+    {:noreply, created(socket, admitted)}
   end
 
   def handle_event("create_passkey", _params, socket), do: {:noreply, socket}
 
-  def handle_event("create_error", _params, socket) do
-    {:noreply,
-     assign(socket, :error, "The passkey was not created, so nothing was saved. Try again.")}
-  end
+  def handle_event("create_error", _params, %{assigns: %{admission_state: nil}} = socket),
+    do: {:noreply, assign(socket, :admission_error, AdmissionCard.ceremony_failed())}
+
+  def handle_event("create_error", _params, socket), do: {:noreply, socket}
+
+  # Screen 2's events, once the person is admitted.
+  def handle_event(
+        "admission_" <> _ = event,
+        params,
+        %{assigns: %{admission_state: state}} = socket
+      )
+      when not is_nil(state),
+      do: {:noreply, AdmissionCard.event(event, params, socket)}
+
+  def handle_event("admission_" <> _, _params, socket), do: {:noreply, socket}
 
   def handle_event("passkey_start", _params, socket) do
     cond do
@@ -436,8 +478,14 @@ defmodule PrismWeb.LoginLive do
   end
 
   def handle_info(msg, socket) do
-    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
-    {:noreply, socket}
+    case AdmissionCard.handle_info(msg, socket) do
+      :pass ->
+        Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
+        {:noreply, socket}
+
+      handled ->
+        handled
+    end
   end
 
   defp poll(socket) do
@@ -759,21 +807,14 @@ defmodule PrismWeb.LoginLive do
     Process.send_after(self(), :login_poll, ms)
   end
 
-  # An open admission's outcome: the person signed in by the passkey
-  # sign-in's ticket, or told why not. A door that no longer admits hides
-  # the offer.
-  defp created(socket, {:ok, %{session_token: token}}) when is_binary(token) do
-    ticket =
-      mint_ticket(
-        {:login_passkey_ticket, %{session_token: token}},
-        socket.assigns.browser_binding
-      )
-
-    redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
-  end
+  # An open admission's outcome: screen 2 for the person it made, or why
+  # not. A door that no longer admits hides the offer.
+  defp created(socket, {:ok, %{session_token: token, recovery: %{}} = admitted})
+       when is_binary(token),
+       do: AdmissionCard.admitted(socket, admitted)
 
   defp created(socket, {:ok, _admitted}),
-    do: assign(socket, :error, "The server could not sign you in just now. Try again.")
+    do: assign(socket, :admission_error, "The server could not sign you in just now. Try again.")
 
   defp created(socket, {:error, {:door, _reason}}),
     do:
@@ -782,13 +823,10 @@ defmodule PrismWeb.LoginLive do
         error: "This CYFR is not taking new identities right now."
       )
 
-  defp created(socket, {:error, :registration_refused}),
-    do: assign(socket, :error, "That passkey could not be registered here. Try again.")
-
-  defp created(socket, {:error, :not_owner}), do: assign(socket, :error, @not_owner)
+  defp created(socket, {:error, :not_owner}), do: assign(socket, :admission_error, @not_owner)
 
   defp created(socket, {:error, reason}),
-    do: assign(socket, :error, PrismWeb.Ops.error_message(reason))
+    do: assign(socket, :admission_error, AdmissionCard.refusal(reason))
 
   # Whether anyone is here yet: a CYFR with no person is set up by its
   # first person, through the setup link. A store that cannot answer shows
@@ -877,7 +915,7 @@ defmodule PrismWeb.LoginLive do
 
           <div :if={@set_up} class="space-y-4">
             <div
-              :if={@error}
+              :if={@error && is_nil(@admission_state)}
               role="alert"
               data-test="sign-in-error"
               class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300"
@@ -885,10 +923,12 @@ defmodule PrismWeb.LoginLive do
               {@error}
             </div>
 
-            <h2 class="text-lg font-medium text-white text-center">Sign in to continue</h2>
+            <h2 :if={is_nil(@admission_state)} class="text-lg font-medium text-white text-center">
+              Sign in to continue
+            </h2>
 
             <div
-              :if={@cyfr_pending}
+              :if={@cyfr_pending && is_nil(@admission_state)}
               id="cyfr-code"
               data-test="cyfr-code"
               class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 space-y-3"
@@ -950,6 +990,7 @@ defmodule PrismWeb.LoginLive do
 
             <div :if={@login_state == :idle} class="space-y-6">
               <div
+                :if={is_nil(@admission_state)}
                 id="passkey-sign-in"
                 phx-hook="SystemLayer"
                 data-webauthn="sign-in"
@@ -965,6 +1006,7 @@ defmodule PrismWeb.LoginLive do
               </div>
 
               <section
+                :if={is_nil(@admission_state)}
                 id="sign-in-cyfr"
                 class="flex flex-col gap-3 pt-4 border-t border-gray-800"
               >
@@ -1017,24 +1059,29 @@ defmodule PrismWeb.LoginLive do
                 id="create-identity"
                 class="flex flex-col gap-3 pt-4 border-t border-gray-800"
               >
-                <h3 class="text-sm font-medium text-gray-300">Create your identity here</h3>
-                <p class="text-sm text-gray-400">
-                  Create a passkey on this device. It signs you in here, with no network needed.
-                </p>
+                <h3 :if={is_nil(@admission_state)} class="text-sm font-medium text-gray-300">
+                  Create your identity here
+                </h3>
                 <div id="create-identity-passkey" phx-hook="SystemLayer" data-webauthn="create">
-                  <button
-                    type="button"
-                    data-webauthn-start
-                    data-test="create-identity"
-                    class="w-full px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition-colors cursor-pointer"
+                  <AdmissionCard.name_screen
+                    :if={is_nil(@admission_state)}
+                    name={@admission_name}
+                    check={@admission_check}
+                    error={@admission_error}
                   >
-                    Create a passkey
-                  </button>
+                    <p class="text-sm text-gray-400">This CYFR keeps your identity.</p>
+                  </AdmissionCard.name_screen>
+                  <AdmissionCard.code_screen
+                    :if={@admission_state}
+                    state={@admission_state}
+                    name={@admission_name}
+                    error={@admission_error}
+                  />
                 </div>
               </section>
 
               <section
-                :if={@providers != []}
+                :if={@providers != [] && is_nil(@admission_state)}
                 id="other-sign-in"
                 class="flex flex-col gap-3 pt-4 border-t border-gray-800"
               >

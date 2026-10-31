@@ -6,8 +6,9 @@
 // browsers launched to trust the run's authority, the attacker's receiver,
 // the signed-in shell, the harness's own pages and the checks made with
 // them, Chromium's virtual WebAuthn authenticator, the percentiles of a
-// measurement, the recovery code the system layer shows, and a proof's
-// asks of its run.sh and the redaction of what it writes.
+// measurement, the recovery code the system layer shows, the two screens
+// of an admission, and a proof's asks of its run.sh and the redaction of
+// what it writes.
 //
 // Every cell of a run is a home (tests/browser/harness.sh `browser_home`):
 // a public home of a `.test` hostname of its own, reached at https://HOST,
@@ -832,11 +833,16 @@ function recoveryCodeReader() {
 export async function readCode(page, secrets) {
   const shown = '#system-layer-dialog [data-recovery-code]:not([hidden]) [data-test="recovery-code"]';
   await page.waitForSelector(shown, { timeout: 60_000 });
-  const code = (await page.locator(shown).textContent()).trim();
+  return decodeShown((await page.locator(shown).textContent()).trim(), secrets, "the system layer");
+}
+
+// The code `code` that `where` shows, joined to `secrets` before it is
+// decoded and its secret once decoded: `{code, identifier, secret}`.
+async function decodeShown(code, secrets, where) {
   secrets.push(code);
   const { decodeRecoveryCode } = await recoveryCodeReader();
   const read = await decodeRecoveryCode(code);
-  if (read.error) throw new Error(`the recovery code the system layer shows does not read: ${read.error}`);
+  if (read.error) throw new Error(`the recovery code ${where} shows does not read: ${read.error}`);
   secrets.push(read.secret);
   return { code, identifier: read.identifier, secret: read.secret };
 }
@@ -846,6 +852,74 @@ export async function readCode(page, secrets) {
 export async function saveCode(page) {
   await page.locator('#system-layer-dialog [data-test="recovery-ack"]').click();
   await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
+}
+
+// ---------------------------------------------------------------------------
+// The two screens of an admission
+// ---------------------------------------------------------------------------
+
+// Screen 2's states once its registration has answered (`data-state` of
+// `[data-test="admission-code"]`; `registering` while it runs).
+export const ADMISSION_SETTLED = ["code", "silent", "taken", "reserved", "refused", "no_registry"];
+
+// Screen 1 of an admission, at setup, an invitation or the open sign-in
+// (PrismWeb.AdmissionCard): `name` typed into its field, without the `@`
+// the page draws before it, and the check under it awaited until it says
+// `check` (`data-check`: free, taken, invalid or unavailable). Answers the
+// sentence the check shows.
+export async function typeName(page, name, { check = "free", timeoutMs = 60_000 } = {}) {
+  await page.locator('[data-test="admission-name-input"]').fill(name);
+  const sentence = `[data-test="admission-name-check"][data-check="${check}"]`;
+  await page.waitForSelector(sentence, { timeout: timeoutMs });
+  return (await page.locator(sentence).innerText()).trim();
+}
+
+// Screen 2's state once it is one of `states`.
+export async function admissionState(page, states = ADMISSION_SETTLED, { timeoutMs = 120_000 } = {}) {
+  const handle = await page.waitForFunction((wanted) => {
+    const state = document.querySelector('[data-test="admission-code"]')?.getAttribute("data-state");
+    return wanted.includes(state) ? state : null;
+  }, states, { timeout: timeoutMs });
+  return handle.jsonValue();
+}
+
+// The recovery code screen 2 shows once its registration has answered,
+// read as the person reads it once the hook has drawn it, and decoded as
+// `readCode` decodes the system layer's. A screen 2 that settles in
+// another state throws, naming the state and what the screen says.
+export async function readAdmissionCode(page, secrets, { timeoutMs = 120_000 } = {}) {
+  const state = await admissionState(page, ADMISSION_SETTLED, { timeoutMs });
+  if (state !== "code") {
+    const says = await page.locator('[data-test="admission-code"]').innerText().catch(() => "unread");
+    throw new Error(`screen 2 shows ${state}, not the recovery code: ${JSON.stringify(says)}`);
+  }
+  const shown = '[data-test="admission-code"][data-state="code"] [data-test="recovery-code"]';
+  await page.waitForFunction((selector) => (document.querySelector(selector)?.textContent ?? "").trim() !== "",
+    shown, { timeout: 30_000 });
+  return decodeShown((await page.locator(shown).textContent()).trim(), secrets, "screen 2");
+}
+
+// The two screens up to the recovery code: `name` typed on screen 1 and
+// found free (`typeName`), "Create a passkey" tapped, with `before` run
+// just before (a proof that copies passkeys between authenticators brings
+// their counts up there), and screen 2's code read (`readAdmissionCode`).
+// Answers the code and the clock reading at the tap.
+export async function admit(page, name, secrets, { before = null, timeoutMs = 120_000 } = {}) {
+  await typeName(page, name);
+  if (before) await before();
+  const created = Date.now();
+  await page.locator('[data-test="admission-create"]').click();
+  return { recovery: await readAdmissionCode(page, secrets, { timeoutMs }), created };
+}
+
+// "I saved it" on screen 2, and the landing it leads to: the page signs
+// the browser in and leaves the admission's page for CYFR, off `/` and
+// `/auth/`. Answers the address it landed at.
+export async function saveAdmissionCode(page, { timeoutMs = 60_000 } = {}) {
+  const from = new URL(page.url()).pathname;
+  await page.locator('[data-test="admission-saved"]').click();
+  await page.waitForURL((url) => ![from, "/"].includes(url.pathname) && !url.pathname.startsWith("/auth/"), { timeout: timeoutMs });
+  return page.url();
 }
 
 // ---------------------------------------------------------------------------

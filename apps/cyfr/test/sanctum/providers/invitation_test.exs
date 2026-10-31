@@ -4,7 +4,8 @@
 defmodule Sanctum.Providers.InvitationTest do
   @moduledoc """
   The `invitation` tool through the gate: `create` answers the code once,
-  with the link that opens it, under keys the request log redacts; `list`
+  with the link that opens it, under keys the request log redacts, and
+  keeps the name it offers its newcomer for the invitation page; `list`
   and `revoke` answer the invitation without it; no answer carries a
   null; and each is a person's act, which an API key is refused.
   """
@@ -79,6 +80,25 @@ defmodule Sanctum.Providers.InvitationTest do
              call(ctx(alice), %{"action" => "revoke", "invitation_id" => invitation.id})
 
     refute Map.has_key?(revoked, :code)
+  end
+
+  test "create keeps the name it offers, which the invitation page reads, and refuses one that is no name",
+       %{alice: alice, group: group} do
+    assert {:ok, %{invitation: invitation, code: code}} =
+             call(ctx(alice), %{"action" => "create", "athanor_id" => group.id, "name" => "mira"})
+
+    assert Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).name == "mira"
+    assert {:ok, %{name: "mira"}} = Sanctum.Invitations.lookup(code)
+
+    assert {:error, reason} =
+             call(ctx(alice), %{
+               "action" => "create",
+               "athanor_id" => group.id,
+               "name" => "Not A Name"
+             })
+
+    assert %Prima.Refusal{class: :invalid_argument} = Sanctum.Refusals.classify(reason)
+    assert Arca.Repo.aggregate(Arca.Schemas.Invitation, :count) == 1
   end
 
   test "an invitation naming no athanor carries no athanor keys and no null", %{ops: ops} do

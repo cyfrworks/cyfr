@@ -207,6 +207,10 @@ defmodule Prima.RefusalTest do
     {:wrong_directory, :forbidden},
     {:unknown_identity, :not_found},
     {:directory_unavailable, :unavailable},
+    {:name_taken, :conflict},
+    {:name_reserved, :invalid_argument},
+    {:directory_refused, :forbidden},
+    {:no_attempt, :not_found},
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
@@ -647,6 +651,20 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message({:policy_required, nil}) ==
                "Accept the registry's current policy first."
+    end
+
+    test "the registration's refusals read as the sentences a person is shown" do
+      assert Refusal.message(:directory_unavailable) == "cyfr.run did not answer. Try again."
+      assert Refusal.message(:name_taken) == "Someone holds that name. Choose another."
+
+      assert Refusal.message(:name_reserved) ==
+               "cyfr.run keeps that name for itself. Choose another."
+
+      assert Refusal.message(:directory_refused) ==
+               "cyfr.run refused this identity. Ask whoever runs this CYFR."
+
+      assert Refusal.message(:no_attempt) ==
+               "There is no unfinished name and recovery code to finish here."
     end
 
     test "a push with no usable token names the sync that mints one" do

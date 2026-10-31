@@ -62,12 +62,8 @@ defmodule Cyfr.DeclaredOperationsTest do
       end
 
       # A carry is cancelled and listed as it is completed: on the same
-      # plane and consent class, the list a read. Abandoning an unfinished
-      # enrollment is a write that takes no arguments.
-      assert operation("person", "enroll_abandon").args == []
-
-      for action <-
-            ~w(carry_cancel carry_complete enroll_abandon recovery_code_saved recovery_code_add) do
+      # plane and consent class, the list a read.
+      for action <- ~w(carry_cancel carry_complete recovery_code_saved recovery_code_add) do
         assert operation("person", action).kind == :write, "person.#{action}"
       end
 
@@ -93,14 +89,16 @@ defmodule Cyfr.DeclaredOperationsTest do
       code =
         Prima.RecoveryCode.encode("per_" <> String.duplicate("c", 64), :binary.copy(<<7>>, 32))
 
-      # Every field `person.enroll` and `person.recovery_code_add` take,
-      # and every answer's `code` (`person.enroll`, `person.recovery_code`).
+      # Every field `session.setup` and `person.recovery_code_add` take, and
+      # every answer's `code` (`session.setup`'s `recovery`,
+      # `person.recovery_code`).
       sanitized =
         Prima.Sanitizer.sanitize(%{
           "recovery_secret" => @seed,
           "recovery_code" => code,
           "holder" => %{"recovery_secret" => @seed},
-          "answer" => %{"code" => code}
+          "answer" => %{"code" => code},
+          "setup" => %{"recovery" => %{"code" => code}}
         })
 
       refute inspect(sanitized) =~ @seed

@@ -44,13 +44,14 @@ defmodule Sanctum.RecoveryTest do
   Recovery material and restore, against a scripted directory that speaks
   HTTPS under a test authority on loopback (`Sanctum.Test.DirectoryServer`).
 
-  Enrollment is asked for its `recovery_material` proof before anything is
-  opened, consumes it with its one durable attempt, registers the same
-  genesis bytes however often its reply is lost, and answers the recovery
-  code (`Prima.RecoveryCode`) until the person says it is saved, which
-  erases the secret. One the directory has not accepted is abandoned, and
-  a retry under its request id then registers nothing; an accepted one is
-  not. Another recovery code is a `recover` one the person holds signs,
+  Enrollment opens at admission, staged with the genesis over the
+  person's keys at the pinned directory and sending nothing; `advance/2`
+  registers the same genesis bytes however often its reply is lost, and
+  the name it wants is replaced only until the person's name is recorded.
+  The recovery code (`Prima.RecoveryCode`) is shown under a fresh proof
+  until the person says it is saved, which erases the secret and is
+  refused before their name is recorded. Another recovery code is a
+  `recover` one the person holds signs,
   keeping the online keys and moving the head. A code that does not read
   is refused before anything is read, asked or sent.
 
@@ -78,6 +79,7 @@ defmodule Sanctum.RecoveryTest do
   alias Sanctum.{Caller, Context, Passkeys, Recovery, SignIn, TestContext}
   alias Sanctum.Tenancy.{Athanors, Members, Users}
   alias Sanctum.Test.DirectoryServer, as: Directory
+  alias Sanctum.Test.Newcomers
   alias Sanctum.TestContext.Authenticator
 
   @token String.duplicate("5a", 32)
@@ -127,8 +129,6 @@ defmodule Sanctum.RecoveryTest do
     {:ok, {public, _private}} = Identity.derive_recovery_key(seed)
     public
   end
-
-  defp args(seed, id), do: %{"recovery_secret" => b64(seed), "request_id" => id}
 
   defp holder_args(signer, added, id) do
     %{
@@ -211,15 +211,32 @@ defmodule Sanctum.RecoveryTest do
 
   defp confirmed(person, fun), do: TestContext.confirming(person.ctx, fun)
 
+  # The enrollment the person's admission opens, as it opens it: at the
+  # pinned directory, with a fresh identity, nothing sent.
+  defp opened!(context, person \\ seated!()) do
+    identity = Newcomers.identity()
+    :ok = Recovery.open_at_admission(person.user.id, identity, context.directory.url)
+    Map.merge(person, %{identity: identity, seed: identity.recovery_secret})
+  end
+
+  # An admitted person whose identity the directory accepted and whose
+  # name is recorded, as `registry.register` leaves them.
   defp enrolled!(context) do
-    person = seated!()
-    seed = seed()
-    args = args(seed, request_id())
+    person = opened!(context)
+    {:ok, %{phase: "accepted"} = enrolled} = Recovery.advance(person.ctx, context.opts)
+    named!(person)
+    request_id = Arca.Repo.get!(IdentityAttempt, enrolled.attempt_id).request_id
 
-    {:ok, %{phase: "accepted", code: code} = enrolled} =
-      confirmed(person, &Recovery.enroll(&1, args, context.opts))
+    Map.merge(person, %{
+      code: code(enrolled.identifier, person.seed),
+      enrolled: Map.put(enrolled, :request_id, request_id)
+    })
+  end
 
-    Map.merge(person, %{seed: seed, code: code, enrolled: enrolled})
+  defp named!(person) do
+    {:ok, user} = Users.get(person.user.id)
+    {:ok, _named} = Users.set_namespace(user, person.identity.name)
+    :ok
   end
 
   defp row(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
@@ -457,307 +474,149 @@ defmodule Sanctum.RecoveryTest do
 
   # ---- enrollment ----------------------------------------------------------------
 
-  describe "enrollment" do
-    test "with no seed, or a malformed one, is refused, and nothing is opened or sent", context do
-      person = seated!()
-
-      assert {:error, {:invalid_argument, message}} =
-               Recovery.enroll(person.ctx, %{"request_id" => request_id()}, context.opts)
-
-      assert message =~ "recovery_secret"
-
-      assert {:error, {:invalid_argument, _}} =
-               Recovery.enroll(
-                 person.ctx,
-                 %{"recovery_secret" => "short", "request_id" => request_id()},
-                 context.opts
-               )
-
-      assert attempts("enrollment") == []
-      assert writes() == []
-      assert row(person.user.id).identifier == nil
-    end
-
-    test "a session alone is asked for the exact set, directory and genesis, and registers nothing",
+  describe "enrollment at admission" do
+    test "opens staged with the genesis over the person's keys at the pinned directory, asking and sending nothing",
          context do
-      person = seated!()
-      seed = seed()
+      person = opened!(context)
 
-      assert {:error, {:confirmation_required, %{operation: "person.enroll"}}} =
-               Recovery.enroll(person.ctx, args(seed, request_id()), context.opts)
+      assert [attempt] = attempts("enrollment")
 
-      assert attempts("enrollment") == []
-      assert writes() == []
-      assert row(person.user.id).identifier == nil
+      assert %{
+               phase: "staged",
+               name: name,
+               request_id: request_id,
+               directory_url: directory,
+               kit_seed_sealed: <<_::binary>>
+             } = attempt
 
-      assert [%{action: "recovery_material", state: "pending", preview: preview}] =
-               confirmations(person.user.id)
+      assert name == person.identity.name
+      assert request_id == person.identity.request_id
+      assert directory == context.directory.url
 
       {:ok, genesis} =
-        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
+        Sanctum.Person.sign_genesis(person.user.id, [public(person.seed)], directory)
 
-      details = Jason.decode!(preview)["details"]
-      assert details["recovery_key"] == b64(public(seed))
-      assert details["directory"] == context.directory.url
-      assert details["genesis"] == genesis.genesis_hash
-      refute preview =~ b64(seed)
+      assert attempt.genesis == genesis.genesis
+      assert attempt.identifier == genesis.identifier
+      assert %{enrollment: "pending", identifier: nil} = row(person.user.id)
+      assert confirmations(person.user.id) == []
+      assert writes() == []
     end
 
-    test "under its proof registers the genesis at the pinned directory and answers the recovery code",
+    test "a staged attempt, left by a crash after the admission, is moved on by the next advance; an accepted one answers at once",
          context do
-      person = seated!()
-      seed = seed()
-      args = args(seed, request_id())
+      person = opened!(context)
+      assert [%{phase: "staged", id: attempt_id}] = attempts("enrollment")
 
-      assert {:ok, %{phase: "accepted", identifier: identifier} = enrolled} =
-               confirmed(person, &Recovery.enroll(&1, args, context.opts))
+      assert {:ok, answer} = Recovery.advance(person.ctx, context.opts)
 
-      assert Map.keys(enrolled) |> Enum.sort() ==
-               [:attempt_id, :code, :identifier, :phase, :request_id]
-
-      assert enrolled.code == code(identifier, seed)
-
-      assert {:ok, %{identifier: ^identifier, secret: ^seed}} =
-               Prima.RecoveryCode.decode(enrolled.code)
+      assert answer == %{
+               attempt_id: attempt_id,
+               identifier: answer.identifier,
+               name: person.identity.name,
+               phase: "accepted"
+             }
 
       row = row(person.user.id)
-      assert row.identifier == identifier
-      assert row.enrollment == "enrolled"
+      assert %{identifier: identifier, enrollment: "enrolled"} = row
+      assert identifier == answer.identifier
 
       assert [genesis] = Directory.log(context.directory.dir, identifier)
-      assert Identity.identifier(genesis) == identifier
-      assert genesis.recovery_keys == [public(seed)]
+      assert genesis.recovery_keys == [public(person.seed)]
       assert genesis.live_key == row.live_public_key
-      assert genesis.operational_key == row.operational_public_key
       assert genesis.directory == context.directory.url
       assert row.head_hash == Identity.hash(genesis)
+      assert [_registered] = writes()
 
-      # The proof was consumed with the attempt it opened.
-      assert [%{state: "consumed"}] =
-               Enum.filter(confirmations(person.user.id), &(&1.action == "recovery_material"))
+      # Accepted, it answers at once and sends nothing.
+      assert {:ok, ^answer} = Recovery.advance(person.ctx, context.opts)
+      assert writes() == []
     end
 
-    test "a directory that refuses the genesis leaves the attempt refused and no identifier",
+    test "a directory that refuses the genesis ends the attempt refused, and a repeat answers the same",
          context do
-      person = seated!()
-      seed = seed()
+      person = opened!(context)
+      [%{identifier: identifier}] = attempts("enrollment")
+      Directory.next(context.directory.dir, identifier, :refuse)
 
-      {:ok, genesis} =
-        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
-
-      Directory.next(context.directory.dir, genesis.identifier, :refuse)
-      args = args(seed, request_id())
-
-      assert {:error, :enrollment_refused} =
-               confirmed(person, &Recovery.enroll(&1, args, context.opts))
-
+      assert {:error, :directory_refused} = Recovery.advance(person.ctx, context.opts)
       assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
       assert [%{phase: "refused", kit_seed_sealed: nil}] = attempts("enrollment")
-      assert Directory.log(context.directory.dir, genesis.identifier) == nil
-      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
-    end
-
-    test "a lost reply resumes the one attempt, registering the same genesis bytes", context do
-      person = seated!()
-      seed = seed()
-      id = request_id()
-
-      {:ok, genesis} =
-        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
-
-      Directory.next(context.directory.dir, genesis.identifier, :drop)
-
-      assert {:error, :directory_unavailable} =
-               confirmed(person, &Recovery.enroll(&1, args(seed, id), context.opts))
-
-      assert [%{phase: "submitted", genesis: bytes} = attempt] = attempts("enrollment")
-      assert bytes == genesis.genesis
+      assert Directory.log(context.directory.dir, identifier) == nil
       _ = Directory.requests()
 
-      # The retry needs no second proof and registers the same bytes.
-      assert {:ok, %{phase: "accepted", identifier: identifier, attempt_id: attempt_id}} =
-               Recovery.enroll(person.ctx, args(seed, id), context.opts)
+      assert {:error, :directory_refused} = Recovery.advance(person.ctx, context.opts)
+      assert writes() == []
+    end
 
-      assert identifier == genesis.identifier
-      assert attempt_id == attempt.id
-      assert [%{body: body}] = writes()
-      assert body == genesis.genesis
+    test "a lost reply leaves the attempt submitted, and a repeat registers the same genesis bytes",
+         context do
+      person = opened!(context)
+      [%{identifier: identifier, genesis: bytes, id: attempt_id}] = attempts("enrollment")
+      Directory.next(context.directory.dir, identifier, :drop)
+
+      assert {:error, :directory_unavailable} = Recovery.advance(person.ctx, context.opts)
+      assert [%{phase: "submitted", genesis: ^bytes}] = attempts("enrollment")
+      _ = Directory.requests()
+
+      assert {:ok, %{phase: "accepted", identifier: ^identifier, attempt_id: ^attempt_id}} =
+               Recovery.advance(person.ctx, context.opts)
+
+      assert [%{body: ^bytes}] = writes()
       assert length(attempts("enrollment")) == 1
       assert length(Directory.log(context.directory.dir, identifier)) == 1
-
-      # The request id is this request's; another enrollment is not opened.
-      assert {:error, :request_id_reused} =
-               Recovery.enroll(person.ctx, args(seed(), id), context.opts)
-
-      assert {:error, :already_enrolled} =
-               Recovery.enroll(person.ctx, args(seed(), request_id()), context.opts)
     end
 
-    test "a second enrollment in flight is named, and with no directory pinned none begins",
-         context do
+    test "a person with no enrollment has nothing to advance or rename", context do
       person = seated!()
-      seed = seed()
-      id = request_id()
 
-      {:ok, genesis} =
-        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
-
-      Directory.next(context.directory.dir, genesis.identifier, :drop)
-
-      {:error, :directory_unavailable} =
-        confirmed(person, &Recovery.enroll(&1, args(seed, id), context.opts))
-
-      assert {:error, {:attempt_in_progress, ^id}} =
-               Recovery.enroll(person.ctx, args(seed(), request_id()), context.opts)
-
-      Application.delete_env(:sanctum, :directory_url)
-      other = seated!()
-
-      assert {:error, :no_directory} =
-               Recovery.enroll(other.ctx, args(seed(), request_id()), context.opts)
-    end
-  end
-
-  describe "an unfinished enrollment" do
-    test "abandoned at submitted, a retry under its request id registers nothing, and a new secret enrolls anew",
-         context do
-      person = seated!()
-      seed = seed()
-      id = request_id()
-
-      {:ok, genesis} =
-        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
-
-      # The directory registers the genesis and its answer is lost.
-      Directory.next(context.directory.dir, genesis.identifier, :drop)
-
-      assert {:error, :directory_unavailable} =
-               confirmed(person, &Recovery.enroll(&1, args(seed, id), context.opts))
-
-      assert %{enrollment: "pending"} = row(person.user.id)
-      _ = Directory.requests()
-
-      assert {:ok, %{request_id: ^id, phase: "superseded"}} =
-               Recovery.abandon_enrollment(person.ctx)
-
-      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
-      assert [%{phase: "superseded", kit_seed_sealed: nil}] = attempts("enrollment")
-
-      # The browser that still held the seed retries: it is told the
-      # enrollment was abandoned, and nothing reaches the directory.
-      assert {:error, :enrollment_abandoned} =
-               Recovery.enroll(person.ctx, args(seed, id), context.opts)
-
+      assert {:error, :no_attempt} = Recovery.advance(person.ctx, context.opts)
+      assert {:error, :no_attempt} = Recovery.rename(person.ctx, "nova")
       assert writes() == []
-      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
-      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
-
-      # The genesis the directory registered stays there, unused.
-      assert [_genesis] = Directory.log(context.directory.dir, genesis.identifier)
-
-      # A new secret enrolls anew, under a new identifier.
-      anew = args(seed(), request_id())
-
-      assert {:ok, %{phase: "accepted", identifier: identifier}} =
-               confirmed(person, &Recovery.enroll(&1, anew, context.opts))
-
-      assert identifier != genesis.identifier
-      assert %{identifier: ^identifier, enrollment: "enrolled"} = row(person.user.id)
     end
 
-    test "abandoned after the directory registered it and before its acceptance moved, it answers abandoned",
+    test "the wanted name is replaced until the person's name is recorded, and never after",
          context do
-      person = seated!()
-      seed = seed()
-      id = request_id()
-      args = args(seed, id)
-      test = self()
-      handler = "recovery-abandon-between-#{System.unique_integer([:positive])}"
+      person = opened!(context)
 
-      # The registration's answer has arrived, on the request's own process,
-      # and the attempt has not moved: the person abandons it then.
-      :ok =
-        :telemetry.attach(
-          handler,
-          [:finch, :request, :stop],
-          fn _event, _measurements, %{request: request}, _config ->
-            if request.method == "POST" and String.ends_with?(request.path, "/genesis") do
-              :telemetry.detach(handler)
-              send(test, {:abandoned, Recovery.abandon_enrollment(person.ctx)})
-            end
-          end,
-          nil
-        )
+      assert {:error, {:invalid_argument, _}} = Recovery.rename(person.ctx, "Not A Name")
+      assert {:ok, %{name: "nova", phase: "staged"}} = Recovery.rename(person.ctx, "nova")
+      assert [%{name: "nova"}] = attempts("enrollment")
 
-      on_exit(fn -> :telemetry.detach(handler) end)
+      {:ok, %{phase: "accepted"}} = Recovery.advance(person.ctx, context.opts)
+      assert {:ok, %{name: "luna", phase: "accepted"}} = Recovery.rename(person.ctx, "luna")
 
-      assert {:error, :enrollment_abandoned} =
-               confirmed(person, &Recovery.enroll(&1, args, context.opts))
+      named!(person)
 
-      assert_received {:abandoned, {:ok, %{request_id: ^id, phase: "superseded"}}}
+      assert {:error, {:invalid_argument, "Your name is set and cannot be changed."}} =
+               Recovery.rename(person.ctx, "stella")
 
-      # The acceptance wrote nothing: the person is unenrolled, and the
-      # genesis the directory registered stays there unused.
-      {:ok, genesis} =
-        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
-
-      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
-      assert [%{phase: "superseded", kit_seed_sealed: nil}] = attempts("enrollment")
-      assert [_registered] = Directory.log(context.directory.dir, genesis.identifier)
+      assert [%{name: "luna"}] = attempts("enrollment")
     end
 
-    test "abandoned at staged, killed before its submission, ends with nothing sent", context do
-      person = seated!()
-      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
+    test "a refused enrollment takes no new name", context do
+      person = opened!(context)
+      [%{identifier: identifier}] = attempts("enrollment")
+      Directory.next(context.directory.dir, identifier, :refuse)
+      {:error, :directory_refused} = Recovery.advance(person.ctx, context.opts)
 
-      seed = seed()
-      id = request_id()
-
-      {:ok, genesis} =
-        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
-
-      # Opened, and killed before its move to submitted.
-      {:ok, _staged} =
-        Arca.IdentityAttempts.open(Context.actor(person.ctx), %{
-          kind: "enrollment",
-          request_id: id,
-          user_id: person.user.id,
-          identifier: genesis.identifier,
-          directory_url: context.directory.url,
-          genesis: genesis.genesis,
-          request_digest: genesis.genesis_hash,
-          kit_seed_sealed: "sealed-kit-seed"
-        })
-
-      assert %{enrollment: "pending"} = row(person.user.id)
-
-      assert {:error, {:attempt_in_progress, ^id}} =
-               Recovery.enroll(person.ctx, args(seed(), request_id()), context.opts)
-
-      assert {:ok, %{request_id: ^id, phase: "superseded"}} =
-               Recovery.abandon_enrollment(person.ctx)
-
-      assert [%{phase: "superseded", kit_seed_sealed: nil}] = attempts("enrollment")
-      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
-      assert writes() == []
-      assert Directory.log(context.directory.dir, genesis.identifier) == nil
+      assert {:error, :no_attempt} = Recovery.rename(person.ctx, "nova")
+      assert [%{name: name}] = attempts("enrollment")
+      assert name == person.identity.name
     end
 
-    test "an accepted one is registered: not abandoned, its recovery code still shown", context do
-      person = enrolled!(context)
-      attempt_id = person.enrolled.attempt_id
+    test "status answers the recorded name and the name the enrollment wants", context do
+      person = opened!(context)
 
-      assert {:error, :registered} = Recovery.abandon_enrollment(person.ctx)
-      assert %{enrollment: "enrolled", identifier: identifier} = row(person.user.id)
-      assert identifier == person.enrolled.identifier
+      assert {:ok, %{name: nil, kits: [kit]}} = Recovery.status(person.ctx)
+      assert %{kind: "enrollment", phase: "staged", name: name, deliverable: false} = kit
+      assert name == person.identity.name
 
-      assert {:ok, %{code: shown}} = confirmed(person, &Recovery.recovery_code(&1, attempt_id))
-      assert shown == code(identifier, person.seed)
+      {:ok, _} = Recovery.advance(person.ctx, context.opts)
+      named!(person)
 
-      # Saved, it is no longer in progress: nothing is left to abandon.
-      assert {:ok, %{phase: "completed"}} = Recovery.recovery_code_saved(person.ctx, attempt_id)
-      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
-      assert %{enrollment: "enrolled", identifier: ^identifier} = row(person.user.id)
+      assert {:ok, %{name: ^name, kits: [%{phase: "accepted", deliverable: true}]}} =
+               Recovery.status(person.ctx)
     end
   end
 
@@ -787,14 +646,10 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{phase: "completed"}} = Recovery.recovery_code_saved(person.ctx, attempt_id)
       assert Arca.Repo.get!(IdentityAttempt, attempt_id).kit_seed_sealed == nil
 
-      assert {:ok, enrolled} =
-               Recovery.enroll(
-                 person.ctx,
-                 args(person.seed, person.enrolled.request_id),
-                 context.opts
-               )
-
-      refute Map.has_key?(enrolled, :code)
+      # The admission's answer holds no code once it is saved.
+      assert {:ok, recovery} = Recovery.admission_recovery(person.user.id)
+      refute Map.has_key?(recovery, :code)
+      assert {:ok, %{phase: "completed"}} = Recovery.advance(person.ctx, context.opts)
 
       # Nobody else reaches it.
       other = seated!()
@@ -842,6 +697,25 @@ defmodule Sanctum.RecoveryTest do
 
       assert_received {:saved, {:ok, %{phase: "completed"}}}
       assert Arca.Repo.get!(IdentityAttempt, attempt_id).kit_seed_sealed == nil
+    end
+  end
+
+  describe "saying the recovery code is saved" do
+    test "before the person's name is recorded is refused, and the code stays", context do
+      person = opened!(context)
+      {:ok, %{attempt_id: attempt_id}} = Recovery.advance(person.ctx, context.opts)
+
+      assert {:error,
+              {:conflict, "Your name is not recorded yet, so your recovery code cannot be saved."}} =
+               Recovery.recovery_code_saved(person.ctx, attempt_id)
+
+      assert %{phase: "accepted", kit_seed_sealed: <<_::binary>>} =
+               Arca.Repo.get!(IdentityAttempt, attempt_id)
+
+      named!(person)
+
+      assert {:ok, %{attempt_id: ^attempt_id, phase: "completed"}} =
+               Recovery.recovery_code_saved(person.ctx, attempt_id)
     end
   end
 

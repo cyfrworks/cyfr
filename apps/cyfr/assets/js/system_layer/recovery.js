@@ -17,7 +17,9 @@
  * same way and read by the server. The recovery code the server composes
  * arrives in a push to this layer alone and is drawn into the prompt's
  * own place as text, with a Copy button that writes it to the clipboard,
- * then emptied when the prompt ends.
+ * then emptied when the prompt ends. A new person's first secret and its
+ * request id are drawn the same way (`drawSeed`, `drawRequestId`), by the
+ * newcomer pages' hook when the person taps "Create a passkey".
  *
  * On the restore page, the installation token and the recovery code are
  * typed into a form whose inputs have no name, and posted straight to
@@ -87,16 +89,12 @@ export class Material {
   }
 
   /**
-   * The event payload for `kind` (`enrollment`, `holder` or `kit`) of the
+   * The event payload for `kind` (`holder` or `kit`) of the
    * prompt `promptId`, `typed` the recovery code that signs an added one;
    * or null when an added code has none to sign with.
    */
   submission(promptId, kind, typed = "") {
     switch (kind) {
-      case "enrollment": {
-        const held = this.hold(promptId, () => ({seed: drawSeed(this.crypto), requestId: drawRequestId(this.crypto)}))
-        return {prompt_id: promptId, recovery_secret: held.seed, request_id: held.requestId}
-      }
       case "holder": {
         const signer = (this.held.get(promptId)?.signer) || (typeof typed === "string" ? typed.trim() : "")
         if (!signer) return null
@@ -134,15 +132,28 @@ export class Material {
 }
 
 /**
+ * The recovery `code` as the nodes of its text: each group with its
+ * hyphen, then a <wbr>, so a line breaks only after a hyphen and no group
+ * is split. A <wbr> adds no text, so the element's text, a selection of
+ * it and Copy are the code exactly.
+ */
+export function codeNodes(doc, code) {
+  const groups = code.split("-")
+  return groups.flatMap((group, i) =>
+    i < groups.length - 1 ? [doc.createTextNode(`${group}-`), doc.createElement("wbr")] : [doc.createTextNode(group)]
+  )
+}
+
+/**
  * Draw the recovery `code` into `slot` as the text of one element, with
- * the Copy button beside it, and show it. The code is held nowhere else.
+ * the Copy button below it, and show it. The code is held nowhere else.
  */
 export function drawCode(doc, slot, code) {
   if (!slot || typeof slot.replaceChildren !== "function" || typeof code !== "string" || !code) return
   const text = doc.createElement("p")
   text.setAttribute("data-test", "recovery-code")
-  text.setAttribute("class", "font-mono break-all")
-  text.textContent = code
+  text.setAttribute("class", "font-mono break-normal")
+  text.replaceChildren(...codeNodes(doc, code))
   const copy = doc.createElement("button")
   copy.setAttribute("type", "button")
   copy.setAttribute("data-recovery-copy", "")

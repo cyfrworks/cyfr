@@ -479,8 +479,21 @@ defmodule Prima.Refusal do
 
   defp row(:unknown_identity), do: {:not_found, "The directory does not know this identity."}
 
-  defp row(:directory_unavailable),
-    do: {:unavailable, "The identity's directory could not be read just now; try again shortly."}
+  defp row(:directory_unavailable), do: {:unavailable, "cyfr.run did not answer. Try again."}
+
+  # The registration of a person's name and identity at cyfr.run
+  # (`registry.register`): the registry's refusals of the name, the
+  # directory's of the identity, and a person with nothing to register.
+  defp row(:name_taken), do: {:conflict, "Someone holds that name. Choose another."}
+
+  defp row(:name_reserved),
+    do: {:invalid_argument, "cyfr.run keeps that name for itself. Choose another."}
+
+  defp row(:directory_refused),
+    do: {:forbidden, "cyfr.run refused this identity. Ask whoever runs this CYFR."}
+
+  defp row(:no_attempt),
+    do: {:not_found, "There is no unfinished name and recovery code to finish here."}
 
   # Stored bytes that no longer match the digest their row recorded: an
   # integrity refusal, not an outage — a retry will not help, and the

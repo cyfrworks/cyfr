@@ -5,22 +5,24 @@ defmodule Cyfr.ReleaseFixtureTest do
   @moduledoc """
   The release proofs' fixture (`tests/release-boot/fixture.exs`), evaluated
   as `bin/cyfr rpc` evaluates it inside a release: its `person` command
-  makes the installation's first person by the setup admission, and every
+  makes the installation's first person by the setup admission, their
+  enrollment finished with no network and their name recorded, and every
   later one with the rows an open admission writes, held to the open
   admission's caps.
   """
 
-  # The setup token the fixture puts for its call, the door and the caps
-  # are process-wide.
+  # The setup token the fixture puts for its call, the pinned directory,
+  # the door and the caps are process-wide.
   use ExUnit.Case, async: false
 
-  alias Arca.Schemas.User
+  alias Arca.Schemas.{IdentityAttempt, PersonIdentity, User}
   alias Sanctum.Auth.Identity
 
   @fixture Path.expand("../../../../tests/release-boot/fixture.exs", __DIR__)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
+    Sanctum.Test.Newcomers.directory!()
 
     # The installation holds no person inside this test's transaction,
     # whatever the suite committed: the fixture's first person is setup's.
@@ -39,6 +41,17 @@ defmodule Cyfr.ReleaseFixtureTest do
        %{fixture: fixture} do
     first = person!(fixture, "first@example.com", "fixture-first")
     assert Sanctum.Tenancy.platform_admin?(first["user_id"])
+
+    # Finished: registered as the directory's acceptance records it, the
+    # code saved and the name recorded, with nothing sent.
+    assert %IdentityAttempt{phase: "completed", kit_seed_sealed: nil, name: "release-proof"} =
+             attempt = Arca.Repo.get_by!(IdentityAttempt, user_id: first["user_id"])
+
+    assert %PersonIdentity{enrollment: "enrolled", identifier: identifier} =
+             Arca.Repo.get_by!(PersonIdentity, user_id: first["user_id"])
+
+    assert identifier == attempt.identifier
+    assert {:ok, %{namespace: "release-proof"}} = Sanctum.Tenancy.Users.get(first["user_id"])
 
     {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
     second = person!(fixture, "second@example.com", "fixture-second")

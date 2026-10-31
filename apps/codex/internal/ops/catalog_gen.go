@@ -217,8 +217,6 @@ const (
 	PersonCarryList                 = "carry_list"
 	PersonCertify                   = "certify"
 	PersonCloseRecovery             = "close_recovery"
-	PersonEnroll                    = "enroll"
-	PersonEnrollAbandon             = "enroll_abandon"
 	PersonLinkDoor                  = "link_door"
 	PersonRecoveryCode              = "recovery_code"
 	PersonRecoveryCodeAdd           = "recovery_code_add"
@@ -242,7 +240,6 @@ const (
 	RecordList                      = "list"
 	RecordPayload                   = "payload"
 	RegistryAppeal                  = "appeal"
-	RegistryClaimPersonal           = "claim_personal"
 	RegistryClaimPublisher          = "claim_publisher"
 	RegistryGetNamespace            = "get_namespace"
 	RegistryLegalAccept             = "legal_accept"
@@ -253,6 +250,7 @@ const (
 	RegistryMembersList             = "members_list"
 	RegistryMembersRemove           = "members_remove"
 	RegistryMembersUpdate           = "members_update"
+	RegistryRegister                = "register"
 	RegistryReport                  = "report"
 	RegistrySync                    = "sync"
 	RegistryTokensIssue             = "tokens_issue"
@@ -363,11 +361,11 @@ var Actions = map[string][]string{
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
-	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "enroll", "enroll_abandon", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "rotate", "status", "unlink_door"},
+	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "rotate", "status", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "register", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -2270,6 +2268,8 @@ func (args InstanceEntryUsageArgs) MarshalJSON() ([]byte, error) {
 type InvitationCreateArgs struct {
 	// The group athanor the newcomer is seated in, which you hold a seat in. Left out, the invitation seats them in no group: the platform administrator's alone (create)
 	AthanorId Field[string] `json:"athanor_id,omitzero"`
+	// The name offered to the newcomer, filled in on their invitation page; they may choose another (create)
+	Name Field[string] `json:"name,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3361,36 +3361,6 @@ func (args PersonCloseRecoveryArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PersonCloseRecovery, fields: fields(args)})
 }
 
-// PersonEnrollArgs carries arguments for person.enroll.
-type PersonEnrollArgs struct {
-	// enroll: the new recovery code's secret, drawn by the trusted form (32 bytes, unpadded base64url)
-	RecoverySecret string `json:"recovery_secret"`
-	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)
-	RequestId string `json:"request_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonEnrollArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonEnrollArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonEnroll, fields: fields(args)})
-}
-
-// PersonEnrollAbandonArgs carries arguments for person.enroll_abandon.
-type PersonEnrollAbandonArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PersonEnrollAbandonArgs) MarshalJSON() ([]byte, error) {
-	type fields PersonEnrollAbandonArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PersonEnrollAbandon, fields: fields(args)})
-}
-
 // PersonLinkDoorArgs carries arguments for person.link_door.
 type PersonLinkDoorArgs struct {
 	// link_door: the sign-in method to link, as its provider name
@@ -3429,7 +3399,7 @@ type PersonRecoveryCodeAddArgs struct {
 	RecoveryCode string `json:"recovery_code"`
 	// recovery_code_add: the new code's secret
 	Holder PersonRecoveryCodeAddArgsHolder `json:"holder"`
-	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)
+	// The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)
 	RequestId string `json:"request_id"`
 }
 
@@ -3492,7 +3462,7 @@ func (args PersonRenewCertificateArgs) MarshalJSON() ([]byte, error) {
 
 // PersonRotateArgs carries arguments for person.rotate.
 type PersonRotateArgs struct {
-	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, recovery_code_add)
+	// The attempt's request id: a retry under the same id resumes the same attempt (rotate, recovery_code_add)
 	RequestId string `json:"request_id"`
 }
 
@@ -4357,21 +4327,6 @@ func (args RegistryAppealArgs) MarshalJSON() ([]byte, error) {
 	}{Action: RegistryAppeal, fields: fields(args)})
 }
 
-// RegistryClaimPersonalArgs carries arguments for registry.claim_personal.
-type RegistryClaimPersonalArgs struct {
-	// The handle to claim at the registry, your personal namespace
-	Handle string `json:"handle"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryClaimPersonalArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryClaimPersonalArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: RegistryClaimPersonal, fields: fields(args)})
-}
-
 // RegistryClaimPublisherArgs carries arguments for registry.claim_publisher.
 type RegistryClaimPublisherArgs struct {
 	// Namespace slug (publisher or personal)
@@ -4530,6 +4485,21 @@ func (args RegistryMembersUpdateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryMembersUpdate, fields: fields(args)})
+}
+
+// RegistryRegisterArgs carries arguments for registry.register.
+type RegistryRegisterArgs struct {
+	// register: another name to take, in place of the one chosen at creation (after cyfr.run refused it as taken or reserved)
+	Name Field[string] `json:"name,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args RegistryRegisterArgs) MarshalJSON() ([]byte, error) {
+	type fields RegistryRegisterArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: RegistryRegister, fields: fields(args)})
 }
 
 // RegistryReportArgs carries arguments for registry.report.
@@ -5067,6 +5037,12 @@ type SessionSetupArgs struct {
 	SetupToken *string `json:"setup_token"`
 	// setup: the command line's host name, which its session is listed by in Prism
 	Machine string `json:"machine"`
+	// setup: the name the first person takes, theirs for life
+	Name string `json:"name"`
+	// setup: the new recovery code's secret, drawn by the command line (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+	// setup: the enrollment's request id, drawn by the command line (req_ and 32 hex digits)
+	RequestId string `json:"request_id"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

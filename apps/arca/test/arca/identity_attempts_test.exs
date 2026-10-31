@@ -8,9 +8,9 @@ defmodule Arca.IdentityAttemptsTest do
   phases only in order and only from the phase the row holds, one in
   progress per person and kind (and per installation token), with the
   confirmation an enrollment consumes committed or rolled back with its
-  attempt, an enrollment abandoned only before its acceptance, the kit's
-  acknowledgment erasing the seed for good, and a stale
-  member advancing nothing.
+  attempt, an enrollment abandoned only before its acceptance, its wanted
+  name replaced only until it ends, the kit's acknowledgment erasing the
+  seed for good, and a stale member advancing nothing.
   """
 
   # Installs the process-wide mode and takes the cell's slot; each case
@@ -325,6 +325,130 @@ defmodule Arca.IdentityAttemptsTest do
       assert {:ok, again} = IdentityAttempts.acknowledge_kit(as(person), accepted.id)
       assert is_nil(again.kit_seed_sealed)
       assert {:ok, %{kit_seed_sealed: nil}} = IdentityAttempts.get(as(person), accepted.id)
+    end
+
+    test "holds the wanted name, which an exact retry does not compare and a rename replaces until it ends" do
+      person = person!()
+      attrs = Map.put(enrollment(person.id), :name, "mira")
+      {:ok, attempt} = IdentityAttempts.open(as(person), attrs)
+      assert attempt.name == "mira"
+
+      assert {:ok, %{id: id, name: "mira"}} =
+               IdentityAttempts.open(as(person), %{attrs | name: "another"})
+
+      assert id == attempt.id
+
+      assert {:ok, %{name: "nova", revision: revision}} =
+               IdentityAttempts.rename(as(person), attempt.id, "nova")
+
+      assert revision == attempt.revision + 1
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted")
+      assert {:ok, %{name: "luna"}} = IdentityAttempts.rename(as(person), attempt.id, "luna")
+
+      stranger = %Prima.Actor{user_id: "usr_stranger"}
+      assert {:error, :cross_tenant} = IdentityAttempts.rename(stranger, attempt.id, "theft")
+
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), attempt.id, "late")
+      assert {:ok, %{name: "luna"}} = IdentityAttempts.get(as(person), attempt.id)
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), "iat_none", "nobody")
+    end
+
+    test "once the person's row records a name, a rename is refused and the attempt follows the recorded name in any phase but superseded" do
+      person = person!()
+
+      {:ok, attempt} =
+        IdentityAttempts.open(as(person), Map.put(enrollment(person.id), :name, "mira"))
+
+      # Nothing recorded: the attempt keeps the name it wants.
+      assert {:ok, %{name: "mira", revision: revision}} =
+               IdentityAttempts.follow_name(as(person), attempt.id)
+
+      assert revision == attempt.revision
+
+      # A rename that landed before the record: the record wins.
+      {:ok, _} = IdentityAttempts.rename(as(person), attempt.id, "nova")
+      {:ok, _} = Arca.Users.set_namespace(Prima.Actor.system(), person.id, "mira")
+      assert {:error, :named} = IdentityAttempts.rename(as(person), attempt.id, "luna")
+
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted")
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+
+      assert {:ok, %{name: "mira", phase: "completed"}} =
+               IdentityAttempts.follow_name(as(person), attempt.id)
+
+      assert {:ok, %{name: "mira"}} = IdentityAttempts.follow_name(as(person), attempt.id)
+
+      stranger = %Prima.Actor{user_id: "usr_stranger"}
+      assert {:error, :cross_tenant} = IdentityAttempts.follow_name(stranger, attempt.id)
+      assert {:error, :not_found} = IdentityAttempts.follow_name(as(person), "iat_none")
+
+      # An abandoned enrollment is no longer the person's: it keeps its name.
+      other = person!()
+
+      {:ok, abandoned} =
+        IdentityAttempts.open(as(other), Map.put(enrollment(other.id), :name, "old"))
+
+      {:ok, _} = IdentityAttempts.advance(as(other), abandoned.id, "staged", "superseded")
+      {:ok, _} = Arca.Users.set_namespace(Prima.Actor.system(), other.id, "other")
+      assert {:ok, %{name: "old"}} = IdentityAttempts.follow_name(as(other), abandoned.id)
+    end
+
+    test "a refused or abandoned enrollment keeps its name" do
+      person = person!()
+
+      {:ok, refused} =
+        IdentityAttempts.open(as(person), Map.put(enrollment(person.id), :name, "a"))
+
+      {:ok, _} = IdentityAttempts.advance(as(person), refused.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), refused.id, "submitted", "refused")
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), refused.id, "b")
+
+      {:ok, abandoned} = IdentityAttempts.open(as(person), enrollment(person.id))
+      {:ok, _} = IdentityAttempts.advance(as(person), abandoned.id, "staged", "superseded")
+      assert {:error, :not_found} = IdentityAttempts.rename(as(person), abandoned.id, "c")
+
+      assert {:ok, %{name: "a"}} = IdentityAttempts.get(as(person), refused.id)
+      assert {:ok, %{name: nil}} = IdentityAttempts.get(as(person), abandoned.id)
+    end
+
+    test "the person's latest enrollment is read whatever its phase but superseded" do
+      person = person!()
+      assert {:error, :not_found} = IdentityAttempts.enrollment(as(person), person.id)
+
+      {:ok, first} = IdentityAttempts.open(as(person), enrollment(person.id))
+
+      assert {:ok, %{id: id, phase: "staged"}} =
+               IdentityAttempts.enrollment(as(person), person.id)
+
+      assert id == first.id
+
+      {:ok, _} = IdentityAttempts.advance(as(person), first.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), first.id, "submitted", "refused")
+
+      assert {:ok, %{id: ^id, phase: "refused"}} =
+               IdentityAttempts.enrollment(server(), person.id)
+
+      {:ok, second} = IdentityAttempts.open(as(person), enrollment(person.id, "second"))
+      assert {:ok, %{id: second_id}} = IdentityAttempts.enrollment(as(person), person.id)
+      assert second_id == second.id
+
+      # An abandoned one is passed over for the one before it.
+      {:ok, _} = IdentityAttempts.advance(as(person), second.id, "staged", "superseded")
+      assert {:ok, %{id: ^id}} = IdentityAttempts.enrollment(as(person), person.id)
+
+      accepted = enrolled!(person)
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), accepted.id)
+
+      assert {:ok, %{phase: "completed"} = latest} =
+               IdentityAttempts.enrollment(as(person), person.id)
+
+      assert latest.id == accepted.id
+
+      stranger = %Prima.Actor{user_id: "usr_stranger"}
+      assert {:error, :cross_tenant} = IdentityAttempts.enrollment(stranger, person.id)
     end
 
     test "a person reaches only their own attempts" do
@@ -1249,5 +1373,69 @@ defmodule Arca.IdentityAttemptsRaceTest do
 
     assert {:ok, %{enrollment: "none"}} =
              unboxed(fn -> PersonIdentities.get(server(), user_id) end)
+  end
+
+  @tag :postgres
+  test "a follower re-reads the attempt after the rename and record ahead of its person lock", %{
+    user_id: user_id
+  } do
+    test = self()
+    as = %Prima.Actor{user_id: user_id}
+
+    {:ok, attempt} =
+      unboxed(fn ->
+        IdentityAttempts.open(
+          as,
+          Map.put(enrollment(user_id, "follow-race-#{System.unique_integer()}"), :name, "mira")
+        )
+      end)
+
+    renamer =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            assert {:ok, %{name: "nova"}} = IdentityAttempts.rename(as, attempt.id, "nova")
+            send(test, :rename_written)
+
+            receive do
+              :commit -> :ok
+            after
+              10_000 -> flunk("rename release missing")
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :rename_written, 5_000
+
+    recorder =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:recorder, backend()})
+          Users.set_namespace(server(), user_id, "mira")
+        end)
+      end)
+
+    assert_receive {:recorder, record_pid}, 5_000
+    LockWait.await_lock_wait!(record_pid, [~s(UPDATE "users")])
+
+    follower =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:follower, backend()})
+          IdentityAttempts.follow_name(as, attempt.id)
+        end)
+      end)
+
+    assert_receive {:follower, follow_pid}, 5_000
+    LockWait.await_lock_wait!(follow_pid, [~s(FROM "users"), "FOR UPDATE"])
+    send(renamer.pid, :commit)
+    assert {:ok, :ok} = Task.await(renamer, 15_000)
+    assert {:ok, %{namespace: "mira"}} = Task.await(recorder, 15_000)
+    assert {:ok, %{name: "mira"}} = Task.await(follower, 15_000)
+    actual = unboxed(fn -> Arca.Repo.get!(IdentityAttempt, attempt.id) end)
+
+    assert actual.name == "mira",
+           "follow_name returned mira but left persisted attempt #{actual.name}"
   end
 end

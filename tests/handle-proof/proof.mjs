@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ask as askRunSh, launchBrowser, readCode, readHomes, redact as redactKnown, saveCode, startProxy, waitFor,
+  admit, ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
   HANDLE, LONG_AGO, OCI, PER, bytesFrom, check, classification, coseTerm, objectModels, otherId, sha256hex,
@@ -32,6 +32,8 @@ const originOf = (name) => homes.find((home) => home.name === name).origin;
 const A = originOf("a");
 const B = originOf("b");
 const layer = "#system-layer-dialog";
+// The name B's administrator types on B's first setup screen.
+const ADMIN = "proof-b";
 
 const secrets = [];
 const redact = (text) => redactKnown(text, secrets);
@@ -264,23 +266,29 @@ async function cookieDigest(context, origin, cell) {
   return ask({ op: "session_digest", cell, cookie }, { secret: true });
 }
 
-async function setUp(page, origin, cell) {
+// A CYFR's first person, through its two setup screens at its setup link,
+// the token in its fragment: `name` typed on the first and found free at
+// the registry, a passkey made, and on the second, once the identity is
+// registered at registry.test and the name claimed, the recovery code
+// read (lib.mjs `admit`). Answers the code and the clock reading at the
+// tap that made the passkey.
+async function setUp(page, origin, cell, name) {
   const { token } = await ask({ op: "setup_token", cell }, { secret: true });
   secrets.push(token);
   await page.goto(`${origin}/setup#${token}`);
-  await page.locator('[data-test="setup-create"]').waitFor({ timeout: 60_000 });
-  await ready(page);
-  await page.locator('[data-test="setup-create"]').click();
-  await page.waitForSelector('[data-test="setup-done"]', { timeout: 60_000 });
   await connected(page);
+  const { recovery, created } = await admit(page, name, secrets, { before: () => ready(page) });
   await counted();
+  return { recovery, created };
 }
 
-// The segment of the person's own athanor, from where Continue lands
-// (`/chat?a=@me`, or a page under `/a/<segment>`).
+// "I saved it" on the second screen, and the segment of the person's own
+// athanor from where it lands, signed in (`/chat?a=@me`, or a page under
+// `/a/<segment>`).
 async function continueToCyfr(page, origin) {
-  await page.locator('[data-test="setup-continue"]').click();
+  await page.locator('[data-test="admission-saved"]').click();
   await page.waitForURL((url) => url.origin === origin && (url.pathname === "/chat" || url.pathname.startsWith("/a/")), { timeout: 60_000 });
+  await connected(page);
   const url = new URL(page.url());
   return url.searchParams.get("a") ?? decodeURIComponent(url.pathname.split("/")[2]);
 }
@@ -318,38 +326,32 @@ async function main(chromium) {
   S.ttlHours = Number((await ask({ op: "setting", cell: "b", key: "session_ttl_hours" })).value);
   S.clients = await ask({ op: "user_agents" });
 
-  // 1. Setup at A: a passkey, @proof, enrollment at registry.test, the
-  // recovery code saved, and only then the claim at the registry.
+  // 1. Setup at A: @proof typed on the first screen and free at the
+  // registry, a passkey, and on the second the identity registered at
+  // registry.test and @proof claimed before the recovery code is shown;
+  // then "I saved it", which completes the attempt and lands in CYFR.
   const deskContext = await freshContext(chromium);
   const desk = await deskContext.newPage();
   await authenticatorWith(desk);
   let from = clock();
-  await setUp(desk, A, "a");
+  const { recovery, created } = await setUp(desk, A, "a", HANDLE);
+  windowed("enroll", created, "the enrollment, to the recovery code shown");
   windowed("setup", from, "setup at A");
   const aCredential = await credentialFor(desk, "a.test");
   S.credentials.a = { credentialId: aCredential.credentialId, signCount: aCredential.signCount, cose: coseTerm(aCredential.privateKey) };
   await claim("setup:a.passkeys", "A's one passkey, the one the browser's authenticator holds", cyfrRows("a", "passkeys"), cyfrIo("a", "passkeys"));
-
-  from = clock();
-  await desk.locator('[data-test="identity-handle-input"]').fill(HANDLE);
-  await desk.waitForSelector('[data-test="identity-handle-check"][data-check="free"]', { timeout: 60_000 });
-  await desk.locator('[data-test="identity-choose"]').click();
-  await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="enrollment"]`, { timeout: 60_000 });
-  await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
-  const enrollPreview = await confirmHere(desk);
-  const recovery = await readCode(desk, secrets);
-  windowed("enroll", from, "the enrollment, to the recovery code shown");
   const id = recovery.identifier;
   S.identifier = id;
   // The directory the enrollment is at is the attempt's and the identity's
   // `directory_url`, which their models hold.
-  record.setup = { identifier: id, enroll_preview: enrollPreview };
+  record.setup = { identifier: id };
   if (!row("setup", PER.test(id),
-    "A is set up through /setup with a passkey; @proof chosen, the enrollment at registry.test confirmed with it, the recovery code shown", record.setup)) return;
+    "A is set up through /setup's two screens: @proof typed and free at the registry, a passkey made, the identity registered at registry.test and @proof claimed, the recovery code shown", record.setup)) return;
 
-  // Before the acknowledgement: the directory holds the genesis, the
-  // attempt is accepted, and the registry holds nothing of the person.
-  await claim("setup:registry.directory.identity_log_entries", "the directory's one entry: A's genesis, whose hash is the identifier", registryRows("directory.identity_log_entries"), {
+  // Before the recovery code is saved: the directory holds A's genesis,
+  // the attempt is accepted, and the registry holds @proof, A's acceptance
+  // of its policy and the nonces of the two requests A signed.
+  await claim("setup:registry.directory.identity_log_entries", "the directory's entry of A's identifier: A's genesis, whose hash is the identifier", registryRows("directory.identity_log_entries", "identifier", id), {
     ...registryIo("directory.identity_log_entries", "id"),
     prepare: async (entries) => {
       const entry = bytesFrom(entries[0]?.entry);
@@ -357,16 +359,21 @@ async function main(chromium) {
     },
   });
   await claim("setup:pre:a.identity_attempts", "A's enrollment attempt, accepted, its recovery code not yet saved", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
-  await claim("setup:pre:registry.namespaces[proof]", "the registry holds no @proof before the recovery code is saved", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
-  await claim("setup:pre:registry.policy_acceptances[a]", "nor an acceptance by A's identifier", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
-  await claim("setup:pre:registry.request_nonces[a]", "nor a request A's identifier signed", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+  await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by A's identifier", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
+  await claim("setup:registry.identity_heads[a]", "the registry's read of A's log at registry.test", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
+  await claim("setup:registry.policy_acceptances[a]", "A's identifier's acceptance of the registry's policy", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
+  await claim("setup:registry.request_nonces[a]", "the nonces of A's two signed requests, the acceptance and the claim", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+  await claim("setup:handle_answer[proof]", "the registry's answer for @proof: A's identifier and directory", handleAnswer(HANDLE), answerIo(HANDLE, id));
 
   from = clock();
-  await saveCode(desk);
-  await desk.waitForSelector('[data-test="identity-claimed"]', { timeout: 120_000 });
-  windowed("ack", from, "saving the recovery code, to @proof claimed");
-  const claimedText = await desk.locator('[data-test="identity-claimed"]').innerText();
-  row("setup", claimedText.includes(`@${HANDLE}`), "once the recovery code is saved, the card claims @proof", { claimed: claimedText });
+  const segment = await continueToCyfr(desk, A);
+  windowed("ack", from, "saving the recovery code, to CYFR");
+  await desk.goto(`${A}/a/${encodeURIComponent(segment)}/settings`);
+  await connected(desk);
+  const card = await desk.locator('[data-test="identity"]').getAttribute("data-state", { timeout: 30_000 }).catch(() => null);
+  const named = (await desk.locator('[data-test="identity-name"]').innerText({ timeout: 30_000 }).catch(() => "")).trim();
+  row("setup", card === "named" && named === `Your name is @${HANDLE}.`,
+    "once the recovery code is saved, CYFR lands signed in and Settings says Your name is @proof.", { card, named });
 
   await claim("setup:a.identity_attempts", "the attempt after the recovery code is saved: the transition from the attempt read before it", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
   await claim("setup:a.athanors", "A's one athanor, its person's", cyfrRows("a", "athanors"), cyfrIo("a", "athanors"));
@@ -379,20 +386,13 @@ async function main(chromium) {
       await opens("a", "identity", identity, "operational_key_sealed", "operational");
     },
   });
-  await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by A's identifier", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
-  await claim("setup:registry.identity_heads[a]", "the registry's read of A's log at registry.test", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
-  await claim("setup:registry.policy_acceptances[a]", "A's identifier's acceptance of the registry's policy", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
-  await claim("setup:registry.request_nonces[a]", "the nonces of A's two signed requests, the acceptance and the claim", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
-  await claim("setup:handle_answer[proof]", "the registry's answer for @proof: A's identifier and directory", handleAnswer(HANDLE), answerIo(HANDLE, id));
-
-  const segment = await continueToCyfr(desk, A);
 
   // 2. B's administrator, set up through /setup, allows @proof.
   const adminContext = await freshContext(chromium);
   const admin = await adminContext.newPage();
   await authenticatorWith(admin);
   from = clock();
-  await setUp(admin, B, "b");
+  await setUp(admin, B, "b", ADMIN);
   const bSegment = await continueToCyfr(admin, B);
   windowed("admin", from, "setup at B");
   const bCredential = await credentialFor(admin, "b.test");
@@ -561,7 +561,7 @@ async function main(chromium) {
     ["a.memberships", cyfrRows("a", "memberships"), cyfrIo("a", "memberships")],
     ["a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
     ["a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
-    ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries"), registryIo("directory.identity_log_entries", "id")],
+    ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries", "identifier", id), registryIo("directory.identity_log_entries", "id")],
     ["registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
     ["registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
     ["registry.policy_acceptances[a]", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id")],

@@ -13,8 +13,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
   certificate in that transaction (`Sanctum.Issuance.device_hold/1`); the
   revocation commits between the confirmation and the write. A change
   whose confirmation is consumed in its write's own transaction (a
-  certification for another home, an enrollment, another recovery code, a
-  live-key rotation, a remote sign-in assertion, a passkey) is held there
+  certification for another home, another recovery code, a live-key
+  rotation, a remote sign-in assertion, a passkey) is held there
   by the consumption (`Sanctum.Consent.Authz.consume/2`); the revocation lands
   inside that transaction, right after the device's standing was read
   there. A device never reaches a door's link or unlink, which are a
@@ -671,15 +671,14 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # The person's identity
   # ---------------------------------------------------------------------------
 
-  # The person enrolled at the scripted directory under their session, as
-  # they enroll from Prism; answers their recovery code.
+  # The person enrolled at the scripted directory, as their admission
+  # enrolls them and `registry.register` registers them; answers their
+  # recovery code.
   defp enrolled!(session_ctx, opts) do
-    args = %{"recovery_secret" => Encoding.b64(recovery_secret()), "request_id" => request_id()}
-
-    {:ok, %{phase: "accepted", code: code}} =
-      Sanctum.TestContext.confirming(session_ctx, &Recovery.enroll(&1, args, opts))
-
-    code
+    identity = Sanctum.Test.Newcomers.identity()
+    :ok = Recovery.open_at_admission(session_ctx.user_id, identity, Sanctum.directory_url())
+    {:ok, %{phase: "accepted", identifier: identifier}} = Recovery.advance(session_ctx, opts)
+    Prima.RecoveryCode.encode(identifier, identity.recovery_secret)
   end
 
   defp certify_args do
@@ -778,30 +777,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
                Sanctum.TestContext.confirming(ctx, &RemoteCertification.certify(&1, args))
 
       assert [%{audience_home: @hub}] = certifications(user.id)
-    end
-
-    test "enrolling is refused by a revocation at its write: no attempt is opened",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      {client_id, ctx} = paired!(session_ctx)
-      id = request_id()
-      args = %{"recovery_secret" => Encoding.b64(recovery_secret()), "request_id" => id}
-
-      assert {:error, :not_standing} =
-               revoked_at_its_write(session_ctx, client_id, ctx, &Recovery.enroll(&1, args, opts))
-
-      assert attempt(id) == nil
-      assert %{enrollment: "none", identifier: nil} = identity(user.id)
-    end
-
-    test "the person enrolls while the device stands",
-         %{session_ctx: session_ctx, user: user, opts: opts} do
-      {_client_id, ctx} = paired!(session_ctx)
-      args = %{"recovery_secret" => Encoding.b64(recovery_secret()), "request_id" => request_id()}
-
-      assert {:ok, %{phase: "accepted"}} =
-               Sanctum.TestContext.confirming(ctx, &Recovery.enroll(&1, args, opts))
-
-      assert %{enrollment: "enrolled"} = identity(user.id)
     end
 
     test "another recovery code is refused by a revocation at its write: no attempt is opened, the head stays",

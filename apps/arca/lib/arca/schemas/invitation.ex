@@ -6,7 +6,7 @@ defmodule Arca.Schemas.Invitation do
   Ecto schema for the `invitations` table (backs `Arca.Invitations`): one
   invitation to become a person here, stored by the hash of its code,
   with its issuer's `security_generation` when they issued it
-  (`issuer_generation`).
+  (`issuer_generation`) and the name it offers its newcomer, if any.
   """
 
   use Ecto.Schema
@@ -20,6 +20,7 @@ defmodule Arca.Schemas.Invitation do
     field :issued_by, :string
     field :issuer_generation, :integer
     field :athanor_id, :string
+    field :name, :string
     field :expires_at, :utc_datetime_usec
     field :redeemed_by, :string
     field :redeemed_at, :utc_datetime_usec

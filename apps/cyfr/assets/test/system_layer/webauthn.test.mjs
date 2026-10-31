@@ -243,6 +243,16 @@ describe("the sign-in page's hook", () => {
   })
 })
 
+// A newcomer's `<mode>_passkey` payload: the credential, and the recovery
+// secret (32 bytes, unpadded base64url) and request id the hook drew at
+// the tap; the name is the page's, never sent from here.
+function assertMaterial(payload) {
+  assert.deepEqual(Object.keys(payload).sort(), ["credential", "recovery_secret", "request_id"])
+  assert.match(payload.recovery_secret, /^[A-Za-z0-9_-]{43}$/)
+  assert.equal(fromB64url(payload.recovery_secret).byteLength, 32)
+  assert.match(payload.request_id, /^req_[0-9a-f]{32}$/)
+}
+
 for (const [mode, page] of [["setup", "the setup page"], ["invite", "the invitation page"]]) {
   describe(`${page}'s hook`, () => {
     let original, location
@@ -302,9 +312,31 @@ for (const [mode, page] of [["setup", "the setup page"], ["invite", "the invitat
         [`${mode}_token`, `${mode}_start`, `${mode}_passkey`]
       )
       assert.equal(pushed[2].payload.credential.registration, "token-1")
+      assertMaterial(pushed[2].payload)
+      assert.deepEqual(pushed[1].payload, {}, "the start sends no material")
 
       hook.updated()
       hook.destroyed()
+    })
+
+    test("draws a new recovery secret and request id at each tap", async () => {
+      Object.defineProperty(globalThis.navigator, "credentials", {
+        configurable: true,
+        value: {create: async () => created()}
+      })
+
+      const pushed = []
+      const {el} = newcomerHook(pushed)
+      clickStart(el)
+      await settled()
+      clickStart(el)
+      await settled()
+
+      const [first, second] = pushed.filter((entry) => entry.event === `${mode}_passkey`)
+      assertMaterial(first.payload)
+      assertMaterial(second.payload)
+      assert.notEqual(first.payload.recovery_secret, second.payload.recovery_secret)
+      assert.notEqual(first.payload.request_id, second.payload.request_id)
     })
 
     test("hands the token over again to the page process a reconnect starts", () => {
@@ -395,6 +427,7 @@ describe("the sign-in page's newcomer hook", () => {
       ["create_start", "create_passkey"]
     )
     assert.equal(pushed[1].payload.credential.registration, "token-2")
+    assertMaterial(pushed[1].payload)
 
     hook.reconnected()
     hook.updated()

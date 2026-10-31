@@ -68,8 +68,6 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "grants", "revoke"],
     "person" => [
       "status",
-      "enroll",
-      "enroll_abandon",
       "rotate",
       "recovery_code",
       "recovery_code_saved",

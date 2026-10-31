@@ -63,56 +63,34 @@ func TestRegistrySync_MeetsItsConfirmationOnATerminal(t *testing.T) {
 	}
 }
 
-// `cyfr registry claim <handle>` asks registry.claim_personal for exactly
-// that handle.
-func TestRegistryClaim_AsksClaimPersonalForTheHandle(t *testing.T) {
-	srv := newCLIServer(t, "", `{"handle":"alice","identifier":"alice@cyfr.run"}`)
-
-	out, err := runCLI(t, srv, "registry", "claim", "alice")
-	if err != nil {
-		t.Fatalf("cyfr registry claim failed: %v\n%s", err, out)
+// Sync takes no argument; one is refused before any request.
+func TestRegistrySync_RefusesAnArgument(t *testing.T) {
+	srv := newCLIServer(t, "")
+	out, err := runCLI(t, srv, "registry", "sync", "alice")
+	if err == nil {
+		t.Errorf("cyfr registry sync alice was accepted:\n%s", out)
 	}
-
-	if srv.count() != 1 {
-		t.Fatalf("expected one request, got %d", srv.count())
-	}
-	name, args := srv.call(0)
-	if want := map[string]any{"action": "claim_personal", "handle": "alice"}; name != "registry" || !reflect.DeepEqual(args, want) {
-		t.Errorf("expected registry %v, got %s %v", want, name, args)
-	}
-	if !strings.Contains(out, "alice") {
-		t.Errorf("the output lacks the claimed handle:\n%s", out)
+	if srv.count() != 0 {
+		t.Errorf("cyfr registry sync alice sent %d requests", srv.count())
 	}
 }
 
-// The claim takes exactly one handle and sync none; anything else is
-// refused before any request.
-func TestRegistryClaimAndSync_RefuseOtherArguments(t *testing.T) {
-	for _, args := range [][]string{
-		{"registry", "claim"},
-		{"registry", "claim", "alice", "bob"},
-		{"registry", "sync", "alice"},
-	} {
-		srv := newCLIServer(t, "")
-		out, err := runCLI(t, srv, args...)
-		if err == nil {
-			t.Errorf("cyfr %s was accepted:\n%s", strings.Join(args, " "), out)
-		}
-		if srv.count() != 0 {
-			t.Errorf("cyfr %s sent %d requests", strings.Join(args, " "), srv.count())
+// The registry's identity-provider probe and the personal claim are gone:
+// there is no `cyfr registry probe` and no `cyfr registry claim`, since a
+// person's name is taken at cyfr.run when CYFR makes them, and `cyfr
+// registry claim alice` sends nothing.
+func TestRegistry_HasNoProbeAndNoClaim(t *testing.T) {
+	for _, name := range []string{"probe", "claim"} {
+		if sub := subcommand(registryCmd, name); sub != nil {
+			t.Errorf("`cyfr registry %s` is still registered: %s", name, sub.Short)
 		}
 	}
-}
+	if subcommand(registryCmd, "sync") == nil {
+		t.Error("`cyfr registry sync` is not registered")
+	}
 
-// The registry's identity-provider probe is gone: there is no
-// `cyfr registry probe`.
-func TestRegistry_HasNoProbe(t *testing.T) {
-	if sub := subcommand(registryCmd, "probe"); sub != nil {
-		t.Errorf("`cyfr registry probe` is still registered: %s", sub.Short)
-	}
-	for _, name := range []string{"claim", "sync"} {
-		if subcommand(registryCmd, name) == nil {
-			t.Errorf("`cyfr registry %s` is not registered", name)
-		}
+	srv := newCLIServer(t, "")
+	if out, _ := runCLI(t, srv, "registry", "claim", "alice"); srv.count() != 0 {
+		t.Errorf("cyfr registry claim alice sent %d requests:\n%s", srv.count(), out)
 	}
 }
