@@ -744,8 +744,8 @@ async function stepTwoCanvases(page, name, viewport) {
   await lib.waitFor(async () => receiptsOf(await instrument(page), marks0, markets.id, "ready").length >= 1 || null, { timeoutMs: SAMPLE_MS, what: "markets live ready" }).catch(() => null);
   const marks = await instrument(page);
   const readies = receiptsOf(marks, marks0, null, "ready");
-  // A validation frame and the live canvas frame are canvas-kind; a column
-  // app beside the canvas (canvas-full) readies too, and is not counted.
+  // A validation frame and the live canvas frame are canvas-kind; the
+  // window over the canvas (canvas-full) readies too, and is not counted.
   const validationReady = readies.filter((r) => r.frame !== markets.id && r.kind === "canvas");
   const marketsReady = readies.filter((r) => r.frame === markets.id);
   const marketsVersions = await versions("markets");

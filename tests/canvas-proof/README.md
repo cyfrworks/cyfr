@@ -86,9 +86,9 @@ token, answers `answer-N.json`.
   a launcher for each installed tincture (`button.app` with the name in
   `.label`) and the schedules, from the bus.
 - `canvas-full`: an ordinary tincture, opened full over a canvas from the
-  shipped canvas's launcher tile, and on the desk `markets`' column app,
-  the sibling frame the `activation` step clicks in. In the hand a column
-  app is laid over the whole canvas, so `markets` has none there.
+  shipped canvas's launcher tile, and on the desk `markets`' window, the
+  sibling frame the `activation` step clicks in. In the hand every app is
+  full over the whole canvas, so `markets` has none there.
 - `canvas-probe`: a canvas page (`tinctures/canvas-probe/`) that reads the
   feed `candles` and draws its candles as its own SVG, tags each feed event
   it reads with the state the shell last told it (`cyfr.on("state")`),
@@ -161,8 +161,8 @@ received is read once it has handled the verbs the click sent.
 | `disconnect` | the phone's or the PC's socket is cut: the canvas is marked disconnected, still drawn, and its frame is inert; regained, the canvas is live and the shell switches again |
 | `failed_fire` | a feed bound at one minute for this step alone: the fixture claims a seq, the scheduler's own fire at the due minute claims a later one and ends with an error, having run nothing and accepted nothing, and the fixture's claim is then accepted; the step records the seqs, the fires' runs and errors, and whether the accepted seq moved, and the binding is removed. Why a fire failed is not observable: the store keeps no reason for a fire's error |
 
-The steps run in this order in each browser: the first six on the shipped
-canvas, the probe and the written canvases, then `activation`,
+The steps run in this order in each browser: the first eleven on the
+shipped canvas, the probe and the written canvases, then `activation`,
 `grant_control`, `rebound_control`, `connection_allowlist` and `policy`,
 then the steps on `canvas-broken` (whose validation fails or whose frame
 dies into the fallback), the socket cut and the scheduler's fire.
