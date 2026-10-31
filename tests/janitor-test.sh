@@ -5,11 +5,14 @@
 # scripts/janitor.sh against planted state: a stand-in docker
 # (tests/image-stub.sh) holding containers, networks, volumes and images
 # named for live and finished runs, heavy-check holder records, image
-# locks and uses, run, log and evidence directories, and the
-# install-screen proof's base-image cache, under a toy repository with
-# three worktrees and a clone. Each janitor run's output is printed,
-# indented. It needs git, python3, flock, pgrep and setsid, and no
-# Docker, database or build.
+# locks and uses, run, log and evidence directories, the install-screen
+# proof's scratch directories and its base-image cache, under a toy
+# repository with three worktrees and a clone; then the janitor and the
+# proof's prepare.sh each waiting for the cache's lock. Each janitor run's
+# output is printed, indented. It needs git, python3, flock, pgrep, setsid
+# and Linux's /proc, and no Docker, database or build; prepare.sh's case
+# needs Ubuntu's cloud image keyring (/usr/share/keyrings, ubuntu-keyring)
+# and says it is skipped without it.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 S=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-janitor-test.XXXXXX")
@@ -115,6 +118,14 @@ record "$l2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.slot3.h
 plant_container other-project-db
 plant_container cyfr-gate-4242-boot-psql
 touch "$DOCKER_STUB/networks/cyfr-gate-4242-boot-net"
+# Rule 1: the install-screen proof's scratch directories, one of a finished
+# run and one of a live run, beside another directory named under the
+# finished run's prefix, which that run may keep, and one under no prefix.
+scratch_done="$S/tmp/cyfr-$seed-$d1-install-screen.Ab12Cd"
+scratch_live="$S/tmp/cyfr-$seed-$l1-install-screen.Ef34Gh"
+mkdir -p "$scratch_done/seed" "$scratch_live" "$S/tmp/cyfr-$seed-$d1-cyfr-browser-Ij56Kl" "$S/tmp/cyfr-install-screen.Mn78Op"
+echo key >"$scratch_done/key"
+echo password >"$scratch_done/seed/password"
 
 # Rule 2: labelled images, each kept for one reason alone or removable.
 base=$(cd "$S/repo" && scripts/image.sh --tag-only locus)
@@ -227,6 +238,7 @@ has dry "would remove 2 dead uses of $h6"
 has dry "would remove image $tq"
 has dry "would remove directory $S/tmp/cyfr-evidence.install-screen-case2.d"
 has dry "would remove base-image $S/cache/$sum3"
+has dry "would remove directory $scratch_done"
 
 lock_inode=$(inode "$STATE/$h6.lock")
 begin 'rule 1: a finished run, by its record or by no record and no process, loses its objects'
@@ -253,6 +265,12 @@ has main "kept container cyfr-$seed-$l2-proof: its pid $l2 is alive"
 for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do there "$DOCKER_STUB/containers/cyfr-$seed-$pid-proof"; done
 for name in other-project-db cyfr-gate-4242-boot-psql; do there "$DOCKER_STUB/containers/$name"; lacks main "$name"; done
 lacks main cyfr-gate-4242-boot-net
+
+begin "rule 1: the install-screen proof's scratch directory, holding a guest's key, goes once its run is finished"
+gone "$scratch_done"; has main "removed directory $scratch_done"
+there "$scratch_live"; has main "kept directory $scratch_live: its pid $l1 is alive"
+there "$S/tmp/cyfr-$seed-$d1-cyfr-browser-Ij56Kl"; lacks main cyfr-browser-Ij56Kl
+there "$S/tmp/cyfr-install-screen.Mn78Op"; lacks main cyfr-install-screen.Mn78Op
 
 begin 'rule 2: an old image no worktree produces, no live use names and no container uses goes; each reason alone keeps one'
 gone "$(image_file "$t0")"; has main "removed image $t0"
@@ -430,5 +448,82 @@ else
   echo "    image.sh took the lock first; the janitor kept the tag"
 fi
 [ "$(inode "$STATE/$hc.lock")" = "$lock_inode" ] || fail 'the lock file was replaced'
+
+# Whether a process whose command line matches the extended regex $1 has
+# the file $2 open.
+holds_open() {
+  local pid fd
+  for pid in $(pgrep -f -- "$1"); do
+    for fd in /proc/"$pid"/fd/*; do
+      [ "$(readlink "$fd" 2>/dev/null)" != "$2" ] || return 0
+    done
+  done
+  return 1
+}
+
+begin "rule 7: a set goes only under the cache's lock"
+sum6=6666666666666666666666666666666666666666666666666666666666666666
+mkdir -p "$S/cache/$sum6"
+echo image >"$S/cache/$sum6/ubuntu-26.04-server-cloudimg-amd64.img"
+age 30 "$S/cache/$sum6"
+( exec 7>>"$S/cache/.lock"; flock 7; touch "$S/base-held"; until_true 60 test -e "$S/base-release" ) & holder=$!
+until_true 10 test -e "$S/base-held" || fail "the test could not take the cache's lock"
+janitor base-racing --keep-build-cache >/dev/null & racing=$!
+until_true 60 holds_open 'scripts/janitor\.sh' "$S/cache/.lock" || fail "the janitor never took the cache's lock: $(cat "$S/base-racing.out")"
+sleep 1
+ps -p "$racing" >/dev/null || fail 'the janitor did not wait for the lock'
+there "$S/cache/$sum6/ubuntu-26.04-server-cloudimg-amd64.img"
+touch "$S/base-release"; wait "$holder"
+wait "$racing" || fail "the janitor exited $?"
+has base-racing "removed base-image $S/cache/$sum6"; gone "$S/cache/$sum6"
+
+begin "prepare.sh replaces a set only under the cache's lock"
+keyring=/usr/share/keyrings/ubuntu-cloudimage-keyring.gpg
+if [ ! -r "$keyring" ]; then
+  echo "    skipped: prepare.sh refuses to run without $keyring (package ubuntu-keyring)"
+else
+  # prepare.sh from a copy of the proof pinned to a stand-in image, which
+  # stand-ins for curl and gpgv serve and accept; stat answers that the
+  # cache is on disk, since prepare.sh refuses a tmpfs.
+  mkdir -p "$S/prep" "$S/stand-in-release" "$S/prep-bin"
+  cp -R "$S/repo/scripts" "$S/repo/tests" "$S/prep/"
+  image=ubuntu-26.04-server-cloudimg-amd64.img
+  echo 'the stand-in image' >"$S/stand-in-release/$image"
+  sum7=$(sha256sum "$S/stand-in-release/$image" | cut -d ' ' -f 1)
+  printf '%s *%s\n' "$sum7" "$image" >"$S/stand-in-release/SHA256SUMS"
+  echo signature >"$S/stand-in-release/SHA256SUMS.gpg"
+  sed -i "s/^CLOUD_IMAGE_SHA256=.*/CLOUD_IMAGE_SHA256=$sum7/" "$S/prep/$proof/base-image.sh"
+  cat >"$S/prep-bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=
+while [ "$#" -gt 1 ]; do
+  if [ "$1" = -o ]; then out=$2; shift; fi
+  shift
+done
+cp "$STAND_IN_RELEASE/${1##*/}" "$out"
+EOF
+  printf '#!/bin/sh\nexit 0\n' >"$S/prep-bin/gpgv"
+  cat >"$S/prep-bin/stat" <<EOF
+#!/usr/bin/env bash
+if [ "\$*" = "-f -c %T $S/cache" ]; then echo ext2/ext3; exit 0; fi
+exec $(command -v stat) "\$@"
+EOF
+  chmod +x "$S/prep-bin/curl" "$S/prep-bin/gpgv" "$S/prep-bin/stat"
+  # What the cache held at that sum, which no longer verifies.
+  mkdir -p "$S/cache/$sum7"
+  echo stale >"$S/cache/$sum7/$image"
+  ( exec 7>>"$S/cache/.lock"; flock 7; touch "$S/prep-held"; until_true 60 test -e "$S/prep-release" ) & holder=$!
+  until_true 10 test -e "$S/prep-held" || fail "the test could not take the cache's lock"
+  (PATH="$S/prep-bin:$PATH" STAND_IN_RELEASE="$S/stand-in-release" "$S/prep/$proof/prepare.sh" >"$S/prep.out" 2>&1) & preparing=$!
+  until_true 60 holds_open 'install-screen-proof/prepare\.sh' "$S/cache/.lock" ||
+    fail "prepare.sh never took the cache's lock: $(cat "$S/prep.out")"
+  sleep 1
+  ps -p "$preparing" >/dev/null || fail "prepare.sh did not wait for the lock: $(cat "$S/prep.out")"
+  [ "$(cat "$S/cache/$sum7/$image")" = stale ] || fail 'prepare.sh replaced the set under a lock it did not hold'
+  touch "$S/prep-release"; wait "$holder"
+  wait "$preparing" || fail "prepare.sh exited $?: $(cat "$S/prep.out")"
+  [ "$(cat "$S/cache/$sum7/$image")" = 'the stand-in image' ] || fail "prepare.sh did not replace the set: $(cat "$S/prep.out")"
+  sed 's/^/    /' "$S/prep.out"
+fi
 
 echo 'janitor tests passed'

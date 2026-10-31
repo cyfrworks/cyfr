@@ -116,18 +116,20 @@ const (
 	SudoWrongPassword
 )
 
-// ReadSudoCause reads sudo's own words for why it ran nothing.
-func ReadSudoCause(printed string) SudoCause {
+// ReadSudoCause reads, in what sudo printed, the policy's words for why
+// it ran nothing, case-insensitively and in the policy's order; sudo runs
+// with LC_ALL=C, so its words are the ones the policy names.
+func ReadSudoCause(p Policy, printed string) SudoCause {
 	text := strings.ToLower(printed)
-	has := func(words ...string) bool {
-		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(text, w) })
+	has := func(words []string) bool {
+		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(text, strings.ToLower(w)) })
 	}
 	switch {
-	case has("incorrect authentication attempt", "incorrect password attempt", "authentication failed"):
+	case has(p.Sudo.WrongPassword):
 		return SudoWrongPassword
-	case has("interactive authentication is required", "a password is required"):
+	case has(p.Sudo.NeedsPassword):
 		return SudoNeedsPassword
-	case has("i'm afraid i can't do that", "may not run", "is not in the sudoers", "is not allowed to"):
+	case has(p.Sudo.NotAllowed):
 		return SudoNotAllowed
 	}
 	return SudoUnknown

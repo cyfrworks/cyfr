@@ -34,10 +34,11 @@
 # Case 2, cyfr init on a machine without Docker: what sudo-rs's
 # per-command -k leaves, with and without a prior login; init's preview,
 # one question and one password, the init continued through sg docker,
-# newgrp before cyfr
-# up, Docker 28+ and Compose v2 installed from Ubuntu's archive, cgroup v2
-# and AppArmor, the account's project files, no reusable sudo login after
-# it, and a second init that shows nothing and makes no apt transaction
+# which pulls the stack's images through Docker and makes the project's
+# files in the group docker, .env readable by the account alone (600),
+# newgrp before cyfr up, Docker 28+ and Compose v2 installed from Ubuntu's
+# archive, cgroup v2 and AppArmor, no reusable sudo login after it, and a
+# second init that shows nothing and makes no apt transaction
 # (s1-ready.png). Case 3, its refusals and retries: declined, each of the
 # three locks held, offline, then an interrupt at each durable action,
 # each retried: during apt-get update, during dpkg's unpack, while
@@ -59,6 +60,10 @@
 # the installer's provenance and typed line (installer.txt), the terminal's
 # transcript, the serial console, QEMU's log, the journal, apt's history
 # and the named screenshots. DIR/results.txt holds one verdict per part.
+# The run's scratch directory, <run prefix>install-screen.XXXXXX under
+# ${TMPDIR:-/tmp}, holds the guest's SSH key and password: the teardown
+# removes it, and scripts/janitor.sh's rule 1 removes a killed run's once
+# the run is finished.
 # Only disks are on disk: the base image is the host's cache, which
 # tests/install-screen-proof/prepare.sh fills and verifies outside any
 # lane and the run mounts read-only and verifies again with no network,
@@ -217,7 +222,7 @@ case_1_trunk() {
   check "trunk: cosign is still not installed" guest_cosign_absent
   check "trunk: screenshot s1-trunk.png" guest_screenshot s1-trunk.png
   guest_packages packages-after.txt
-  check "trunk: no package changed" cmp -s "$GUEST_DIR/packages-before.txt" "$GUEST_DIR/packages-after.txt"
+  check "trunk: no package changed" same_record "$GUEST_DIR/packages-before.txt" "$GUEST_DIR/packages-after.txt"
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict trunk
@@ -407,6 +412,8 @@ case_2() {
      sed "/Install these requirements/q" "$1" | grep -qF "Members of the docker group control Docker"' sh "$GUEST_DIR/transcript-c2-init.txt"
   check "c2: init continued, asking how CYFR is reached after the install" transcript_has c2-init 'How will you reach CYFR\?'
   check "c2: init prepared the project" transcript_has c2-init '^CYFR project initialized\.'
+  check "c2: the continued init pulled the stack's images through Docker ($(grep -c '^Pulling .* \.\.\.$' "$GUEST_DIR/transcript-c2-init.txt" 2>/dev/null) pulls, each with docker's Status line, and no \"Warning: failed to pull\")" \
+    pulls_succeeded "$GUEST_DIR/transcript-c2-init.txt"
   check "c2: init offers newgrp or a new login before cyfr up" transcript_has c2-init 'Run `newgrp docker` here, or log out and in again, before `cyfr up`\.'
   check "c2: init closes by naming cyfr up" transcript_has c2-init "Next: run 'cyfr up' to start the stack\."
   pane_step_end c2-init
@@ -418,11 +425,17 @@ case_2() {
   check "c2: the terminal init ran in keeps its old groups" sh -c 'grep -q "^groups: " "$1" && ! grep -qE "^groups: (.* )?docker( |$)" "$1" && grep -qE "^docker info [1-9]" "$1"' sh "$GUEST_DIR/transcript-c2-groups.txt"
   pane_step_end c2-groups
   guest_ssh_relogin
-  guest_ssh 'getent group docker; stat -c "%U:%G %n" ~/cyfr ~/cyfr/.env ~/cyfr/docker-compose.yml ~/cyfr/data ~/cyfr/aqua; id' >"$GUEST_DIR/project.txt" 2>&1
+  guest_ssh 'getent group docker; stat -c "%U:%G %a %n" ~/cyfr ~/cyfr/.env ~/cyfr/docker-compose.yml ~/cyfr/data ~/cyfr/aqua; id' >"$GUEST_DIR/project.txt" 2>&1
   check "c2: the account is in the docker group" grep -qE '^docker:x:[0-9]+:(.*,)?proof(,.*)?$' "$GUEST_DIR/project.txt"
-  # The init that continues through sg docker has docker for its group, so
-  # what it makes is the account's, in the docker group.
-  check "c2: the project's files are the account's" sh -c '[ "$(grep -cE "^proof:(proof|docker) " "$1")" = 5 ]' sh "$GUEST_DIR/project.txt"
+  # ~/cyfr is the person's shell's (mkdir). What init makes in it, the init
+  # that continued through sg docker made, with docker for its group; a
+  # continuation that never gained the group makes them proof:proof.
+  check "c2: ~/cyfr, which the shell made, is the account's ($(stat_of "$GUEST_DIR/project.txt" cyfr))" \
+    owned_as "$GUEST_DIR/project.txt" proof:proof cyfr
+  check "c2: what the continued init made is the account's, in the group docker sg gave it (.env, docker-compose.yml, data, aqua)" \
+    owned_as "$GUEST_DIR/project.txt" proof:docker .env docker-compose.yml data aqua
+  check "c2: .env is readable by the account alone, mode 600 ($(stat_of "$GUEST_DIR/project.txt" .env))" \
+    mode_is "$GUEST_DIR/project.txt" .env 600
 
   step "c2: newgrp docker, then cyfr up"
   pane_type 'newgrp docker' || fail "newgrp was not typed"
@@ -456,13 +469,21 @@ case_2() {
   check "c2: the second init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "c2: the second init shows and asks nothing (asked ${PANE_ANSWERED[0]}, ${PANE_ANSWERED[1]} passwords)" test "${PANE_ANSWERED[0]}/${PANE_ANSWERED[1]}/${PANE_ANSWERED[2]}" = 0/0/0
   check "c2: the second init makes no apt transaction ($before, then $after)" test "$before" = "$after"
-  check "c2: the second init rewrites nothing and starts or stops no container" cmp -s "$GUEST_DIR/before-second-init.txt" "$GUEST_DIR/after-second-init.txt"
+  check "c2: the second init rewrites nothing and starts or stops no container (each record holds the three files' sums and the running containers)" \
+    second_init_unchanged
   pane_step_end c2-init-again
   pane_sudo_probe c2-probe-end
   check "c2: no reusable sudo login at the end (sudo's refusal)" probe_refused c2-probe-end
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict c2
+}
+
+# Whether the second init left the project and the stack as they were:
+# both records whole (project_record_whole) and the same.
+second_init_unchanged() {
+  project_record_whole "$GUEST_DIR/before-second-init.txt" && project_record_whole "$GUEST_DIR/after-second-init.txt" &&
+    same_record "$GUEST_DIR/before-second-init.txt" "$GUEST_DIR/after-second-init.txt"
 }
 
 # hold LOCK UNIT: root holds the lock LOCK in the transient unit UNIT, as
@@ -517,8 +538,8 @@ exit 1'
 # shows a line matching MARK, the action's `→ <command>` line, which the
 # parent prints as the action starts; then Ctrl-C, typed from inside the
 # guest within 0.1 s of a process matching PATTERN running and the shell
-# condition COND holding, waited for up to SECONDS (INTERRUPT_WHEN); then
-# the run's end. LATER matches the line
+# condition COND holding, waited for up to SECONDS, cut at the case's
+# deadline (INTERRUPT_WHEN); then the run's end. LATER matches the line
 # of the action after it, which a run interrupted in time never shows.
 # Its evidence: transcript-NAME.txt, interrupt-NAME.txt and the machine's
 # state before and after the run (state-before-NAME.txt,
@@ -534,7 +555,9 @@ c3_interrupted() {
     fail "$name: no line matching $mark within $PANE_BUDGET s ($GUEST_DIR/transcript-$name.txt)"
   fi
   asked="${PANE_ANSWERED[0]}/${PANE_ANSWERED[1]}"
-  GUEST_SSH_TIMEOUT=$((seconds + 30)) guest_ssh "sh interrupt-when.sh $(printf '%q' "$pattern") $seconds $(printf '%q' "$cond")" \
+  # The interrupter's wait and SSH's 30 s more, cut at the case's deadline.
+  budget $((seconds + 30)) && [ "$BUDGET" -gt 30 ] || fail "$name: the case's deadline came before the interrupt"
+  GUEST_SSH_TIMEOUT=$BUDGET guest_ssh "sh interrupt-when.sh $(printf '%q' "$pattern") $((BUDGET - 30)) $(printf '%q' "$cond")" \
     >"$GUEST_DIR/interrupt-$name.txt" 2>&1
   if ! pane_converse 300 "^$name exit status [0-9]+"; then
     pane_save "transcript-$name.txt"
@@ -625,7 +648,7 @@ case_3() {
     guest_root "systemctl stop $unit" || true
   done
   guest_packages packages-after-locks.txt
-  check "c3: nothing was installed while a lock was held" cmp -s "$GUEST_DIR/packages-before.txt" "$GUEST_DIR/packages-after-locks.txt"
+  check "c3: nothing was installed while a lock was held" same_record "$GUEST_DIR/packages-before.txt" "$GUEST_DIR/packages-after-locks.txt"
 
   step "c3: offline"
   # Nothing leaves the guest's own network, QEMU's 10.0.2.0/24: the
@@ -663,9 +686,10 @@ case_3() {
   guest_root "$SLOW_START_OFF" || fail "the service's slow start was not removed ($GUEST_DIR/root.txt)"
   # The start the interrupt left runs on in systemd; the next run is the
   # group change's alone once it has.
-  closes=$((SECONDS + 180))
+  budget 180 || fail "the case's deadline came before docker.service's interrupted start ended"
+  closes=$((SECONDS + BUDGET))
   until guest_ssh 'systemctl is-active --quiet docker.service'; do
-    [ "$SECONDS" -lt "$closes" ] || fail "docker.service was not active within 180 s of the interrupted start"
+    [ "$SECONDS" -lt "$closes" ] || fail "docker.service was not active within $BUDGET s of the interrupted start"
     sleep 2
   done
   hold pwd cyfr-proof-hold-pwd

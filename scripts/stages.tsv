@@ -49,16 +49,16 @@ handoff	install-policy	scoped	600	apps/codex/internal/install/policy.json,script
 handoff	install-verify-test	exclusive	900	scripts/install.sh,scripts/generate-install-policy.py,apps/codex/internal/install/policy.json,tests/install-verify-test.sh,tests/fixtures/install_prerequisites.json	sh tests/install-verify-test.sh
 handoff	go-checks	scoped	1200	apps/codex/**	cd apps/codex && test -z "$(gofmt -l .)" && go vet ./... && go build ./...
 handoff	go-test	exclusive	2700	apps/codex/**,tests/fixtures/**	cd apps/codex && go test ./... -race
-handoff	install-screen-proof-test	exclusive	900	tests/install-screen-proof/**	bash tests/install-screen-proof/cleanup-test.sh && bash tests/install-screen-proof/predicates-test.sh
+handoff	install-screen-proof-test	exclusive	900	tests/install-screen-proof/**,scripts/lib/run-names.sh,scripts/image.sh	bash tests/install-screen-proof/cleanup-test.sh && bash tests/install-screen-proof/predicates-test.sh
 # The install-screen proof's VM cases boot from the base image in the host's
 # cache and run the proof image, which tests/install-screen-proof/prepare.sh
 # fetches and builds outside any lane; without them a case exits 69 and names
 # that command. Cases 2 and 3 run this tree's cyfr, built from the whole Go
 # module; cases 1 and 4 run the install script.
-handoff	install-screen-proof-1	proof	3600	tests/install-screen-proof/**,scripts/install.sh	tests/install-screen-proof/run.sh --case 1
-handoff	install-screen-proof-2	proof	3600	tests/install-screen-proof/**,apps/codex/**	tests/install-screen-proof/run.sh --case 2
-handoff	install-screen-proof-3	proof	3600	tests/install-screen-proof/**,apps/codex/**	tests/install-screen-proof/run.sh --case 3
-handoff	install-screen-proof-4	proof	3600	tests/install-screen-proof/**,scripts/install.sh	tests/install-screen-proof/run.sh --case 4
+handoff	install-screen-proof-1	proof	3600	tests/install-screen-proof/**,scripts/install.sh,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 1
+handoff	install-screen-proof-2	proof	3600	tests/install-screen-proof/**,apps/codex/**,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 2
+handoff	install-screen-proof-3	proof	3600	tests/install-screen-proof/**,apps/codex/**,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 3
+handoff	install-screen-proof-4	proof	3600	tests/install-screen-proof/**,scripts/install.sh,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 4
 
 pull-request	gate	exclusive	2700	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
 

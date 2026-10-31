@@ -9,13 +9,18 @@
 # statement.
 #   1. What a killed run left. Docker containers, networks, volumes and
 #      image tags whose names match RUN_NAMES_PATTERN
-#      (scripts/lib/run-names.sh) go once the run their pid names is
-#      finished. Each of these keeps the run on its own: a live process
-#      holds the pid, even another program and whatever a record says; the
-#      heavy-check holder record naming the pid shows a live process in
-#      its group (group=), or a live watchdog (watchdog=), or no group, as
-#      heavy-check wrote before it recorded one. Containers go with
-#      `docker rm -f -v`, then networks, volumes and tags.
+#      (scripts/lib/run-names.sh), and the install-screen proof's scratch
+#      directories of this user, $JANITOR_TMP/<run prefix>install-screen.*
+#      (tests/install-screen-proof/run.sh), which hold a guest's SSH key
+#      and password, go once the run their pid names is finished. Each of
+#      these keeps the run on its own: a live process holds the pid, even
+#      another program and whatever a record says; the heavy-check holder
+#      record naming the pid shows a live process in its group (group=),
+#      or a live watchdog (watchdog=), or no group, as heavy-check wrote
+#      before it recorded one. Containers go with `docker rm -f -v`, then
+#      networks, volumes and tags, then the directories. Another
+#      directory named under a run prefix is not touched, since a run may
+#      keep its own on purpose.
 #   2. Old images. An image tagged cyfr-locus:in-<h> or cyfr:in-<h>
 #      (scripts/image.sh), or cyfr-install-screen:in-<h> (the
 #      install-screen proof's, tests/install-screen-proof/prepare.sh),
@@ -57,9 +62,11 @@
 #      when no worktree of this repository pins its sum (each worktree's
 #      own base-image.sh, its CLOUD_IMAGE_SHA256= line as written; a
 #      worktree whose file has no such line is named and pins nothing)
-#      and it has not changed for 24 hours. Nothing else in the cache is
-#      touched: prepare.sh removes the .fetch-<pid> directories it works
-#      in.
+#      and it has not changed for 24 hours, both read holding the cache's
+#      lock (BASE_LOCK, base-image.sh), which prepare.sh holds while it
+#      replaces a set, waiting up to two hours for it; a dry run holds it
+#      only where it exists. Nothing else in the cache is touched:
+#      prepare.sh removes the .fetch-<pid> directories it works in.
 #
 # It prints `removed <kind> <name>`, or `would remove <kind> <name>` with
 # --dry-run, which removes nothing, and `kept <kind> <name>: <reason>` for
@@ -186,6 +193,19 @@ sweep_run_objects() {
   done < <(list_objects "$kind" 2>/dev/null)
 }
 for kind in container network volume image; do sweep_run_objects "$kind"; done
+scratch_pattern=${RUN_NAMES_PATTERN}'install-screen\.[^/]+$'
+while IFS= read -r -d '' dir; do
+  [[ ${dir##*/} =~ $scratch_pattern ]] || continue
+  [ -O "$dir" ] || continue
+  pid=${BASH_REMATCH[2]}
+  if [ -z "${why_kept[$pid]+set}" ]; then why_kept[$pid]=$(unfinished "$pid"); fi
+  reason=${why_kept[$pid]}
+  if [ -n "$reason" ]; then kept directory "$dir" "$reason"; continue; fi
+  if $dry; then removed directory "$dir"
+  elif rm -rf -- "$dir"; then removed directory "$dir"
+  else failure directory "$dir" 'rm -rf failed'
+  fi
+done < <(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name 'cyfr-*-install-screen.*' -type d -print0 2>/dev/null)
 
 # Rule 2. The tags the repository's worktrees produce today.
 declare -A produced=()
@@ -378,25 +398,38 @@ done
 
 # Rule 7.
 base_image=$root/tests/install-screen-proof/base-image.sh
-cache=$( [ -f "$base_image" ] && . "$base_image" >/dev/null 2>&1 && printf '%s' "${BASE_CACHE:-}") || cache=
-if [ -n "$cache" ] && [ -d "$cache" ]; then
-  declare -A pinned=()
-  while IFS= read -r worktree; do
-    file=$worktree/tests/install-screen-proof/base-image.sh
-    [ -f "$file" ] || continue
-    sum=$(sed -n 's/^CLOUD_IMAGE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$file")
-    if [[ $sum =~ ^[0-9a-f]{64}$ ]]; then pinned[$sum]=1; else echo "worktree $worktree: no base-image pin"; fi
-  done < <(git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p')
-  while IFS= read -r -d '' dir; do
-    sum=${dir##*/}
-    [ -O "$dir" ] || continue
-    if [ -n "${pinned[$sum]+set}" ]; then kept base-image "$dir" 'a worktree pins it'; continue; fi
-    if [ -n "$(find "$dir" -maxdepth 0 -mmin -1440)" ]; then kept base-image "$dir" 'it changed within 24 hours'; continue; fi
-    if $dry; then removed base-image "$dir"
-    elif chmod -R u+w -- "$dir" && rm -rf -- "$dir"; then removed base-image "$dir"
-    else failure base-image "$dir" 'rm -rf failed'
-    fi
-  done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/[0-9a-f]{64}' -print0 2>/dev/null)
+base=$( [ -f "$base_image" ] && . "$base_image" >/dev/null 2>&1 && printf '%s\n%s' "${BASE_CACHE:-}" "${BASE_LOCK:-}") || base=
+cache=${base%%$'\n'*} base_lock=${base#*$'\n'}
+# Holds the cache's lock on descriptor 7, waiting up to two hours. A dry
+# run makes no lock file: it holds one only where one exists.
+take_base_lock() {
+  if $dry && [ ! -e "$base_lock" ]; then return 0; fi
+  exec 7>>"$base_lock" || return 1
+  flock -w 7200 7 || { exec 7>&-; return 1; }
+}
+if [ -n "$cache" ] && [ -n "$base_lock" ] && [ -d "$cache" ]; then
+  if ! take_base_lock; then
+    kept base-images "$cache" 'its lock stayed held for two hours'
+  else
+    declare -A pinned=()
+    while IFS= read -r worktree; do
+      file=$worktree/tests/install-screen-proof/base-image.sh
+      [ -f "$file" ] || continue
+      sum=$(sed -n 's/^CLOUD_IMAGE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$file")
+      if [[ $sum =~ ^[0-9a-f]{64}$ ]]; then pinned[$sum]=1; else echo "worktree $worktree: no base-image pin"; fi
+    done < <(git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p')
+    while IFS= read -r -d '' dir; do
+      sum=${dir##*/}
+      [ -O "$dir" ] || continue
+      if [ -n "${pinned[$sum]+set}" ]; then kept base-image "$dir" 'a worktree pins it'; continue; fi
+      if [ -n "$(find "$dir" -maxdepth 0 -mmin -1440)" ]; then kept base-image "$dir" 'it changed within 24 hours'; continue; fi
+      if $dry; then removed base-image "$dir"
+      elif chmod -R u+w -- "$dir" && rm -rf -- "$dir"; then removed base-image "$dir"
+      else failure base-image "$dir" 'rm -rf failed'
+      fi
+    done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/[0-9a-f]{64}' -print0 2>/dev/null)
+    exec 7>&- 2>/dev/null || :
+  fi
 fi
 
 exit "$failed"

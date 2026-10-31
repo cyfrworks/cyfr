@@ -285,10 +285,11 @@ guest_boot() {
     grep -qE '^id: uid=[0-9]+\(proof\) gid=[0-9]+\(proof\) groups=[0-9]+\(proof\),[0-9]+\(sudo\)$' "$GUEST_DIR/guest.txt"
   check "$part: no sudoers rule lets the account skip its password (sudo -n true is sudo's refusal: exit 1, $SUDO_REFUSAL)" \
     sh -c 'grep -qx "sudo -n true status: 1" "$1" && grep -qE "$2" "$1"' sh "$GUEST_DIR/guest.txt" "$SUDO_REFUSAL"
-  check "$part: cloud-init wrote no sudoers file" guest_no_cloud_sudoers
+  check "$part: cloud-init wrote no sudoers file (the listing of /etc/sudoers.d was read)" no_cloud_sudoers "$GUEST_DIR/guest.txt"
   check "$part: tty1's getty runs" grep -qx 'getty@tty1: active' "$GUEST_DIR/guest.txt"
 
-  closes=$((SECONDS + 60))
+  budget 60 || BUDGET=0
+  closes=$((SECONDS + BUDGET))
   until docker exec "$GUEST" grep -q 'cyfr-proof login:' /case/serial.log 2>/dev/null; do
     [ "$SECONDS" -lt "$closes" ] || break
     sleep 1
@@ -296,10 +297,6 @@ guest_boot() {
   check "$part: the guest reached its login prompt (serial console)" \
     docker exec "$GUEST" grep -q 'cyfr-proof login:' /case/serial.log
   check "$part: screenshot login-prompt.png" guest_screenshot login-prompt.png
-}
-
-guest_no_cloud_sudoers() {
-  ! sed -n '/^sudoers.d:/,/^getty@tty1:/p' "$GUEST_DIR/guest.txt" | grep -qi 'cloud'
 }
 
 # QEMU's own account of KVM inside the container, in GUEST_DIR/kvm.txt.
@@ -336,7 +333,8 @@ tty1_login() {
     printf '%s\n' "$PROOF_USER" | guest_keys || fail "QMP did not type on the guest's keyboard"
     sleep 3
     { cat "$WORK/password"; printf '\n'; } | guest_keys || fail "QMP did not type on the guest's keyboard"
-    closes=$((SECONDS + 30))
+    budget 30 || fail "the case's deadline came before the test account signed in on tty1"
+    closes=$((SECONDS + BUDGET))
     while [ "$SECONDS" -lt "$closes" ]; do
       if guest_ssh "pgrep -u $PROOF_USER -t tty1 -x bash" >/dev/null 2>&1; then
         signed=1
@@ -350,9 +348,10 @@ tty1_login() {
     fail "the test account did not sign in on tty1 after three tries ($GUEST_DIR/tty1-login-failed.png)"
   fi
   printf '%s\n' 'tmux new-session -s proof' | guest_keys || fail "QMP did not type on the guest's keyboard"
-  closes=$((SECONDS + 60))
+  budget 60 || fail "the case's deadline came before the tmux session proof started on tty1"
+  closes=$((SECONDS + BUDGET))
   until guest_ssh 'tmux has-session -t proof' 2>/dev/null; do
-    [ "$SECONDS" -lt "$closes" ] || fail "no tmux session proof started on tty1 within 60 s"
+    [ "$SECONDS" -lt "$closes" ] || fail "no tmux session proof started on tty1 within $BUDGET s"
     sleep 1
   done
   pane_wait '\$ *$' 30 || fail "the shell in the tmux session drew no prompt within $PANE_BUDGET s"

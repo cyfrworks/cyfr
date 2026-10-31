@@ -1,6 +1,6 @@
 {
  "version": 1,
- "about": "The installer's decisions on observed facts, read by apps/codex/internal/install's tests and tests/install-verify-test.sh. systems: /etc/os-release text and the CPU architecture, whether automatic preparation supports them and the system named in refusals. universe: the output of `apt-get indextargets --no-release-info --format '$(RELEASE) $(COMPONENT) $(IDENTIFIER)'` and the release codename, whether universe's packages are enabled. bootstrap: the install script's facts (supported system, universe enabled, a verification bypass set, commands on PATH, packages dpkg reports installed, read on the supported system alone) and the packages it offers before release verification; cosign is not needed under a bypass. init: cyfr init's facts (internal/install.Facts) and its decision: the outcome, the root actions in order, the refusal's cause and whether init continues in a process carrying the docker group.",
+ "about": "The installer's decisions on observed facts, read by apps/codex/internal/install's tests and tests/install-verify-test.sh. systems: /etc/os-release text and the CPU architecture, whether automatic preparation supports them and the system named in refusals. universe: the output of `apt-get indextargets --no-release-info --format '$(RELEASE) $(COMPONENT) $(IDENTIFIER)'` and the release codename, whether universe's packages are enabled. bootstrap: the install script's facts (supported system, universe enabled, a verification bypass set, commands on PATH, packages dpkg reports installed, read on the supported system alone) and the packages it offers before release verification; cosign is not needed under a bypass. init: cyfr init's facts (internal/install.Facts) and its decision: the outcome, the root actions in order, the refusal's cause and whether init continues in a process carrying the docker group. sudo: what sudo printed when it ran nothing, and the cause policy.json's sudo words read in it (needs-password, wrong-password, not-allowed, unknown).",
  "systems": [
   {
    "name": "Ubuntu 26.04 point release on amd64",
@@ -1499,6 +1499,83 @@
     "actions": [],
     "continue": false
    }
+  }
+ ],
+ "sudo": [
+  {
+   "name": "sudo-rs -n with no cached login",
+   "printed": "sudo: interactive authentication is required\n",
+   "cause": "needs-password"
+  },
+  {
+   "name": "classic sudo -n",
+   "printed": "sudo: a password is required\n",
+   "cause": "needs-password"
+  },
+  {
+   "name": "sudo-rs after three wrong passwords",
+   "printed": "[sudo: authenticate] Password: \nsudo: Authentication failed, try again.\nsudo: maximum 3 incorrect authentication attempts\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "sudo-rs after one wrong password",
+   "printed": "sudo: Authentication failed, try again.\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "sudo-rs's limit of attempts alone",
+   "printed": "sudo: maximum 3 incorrect authentication attempts\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "a wrong password read before a refusal of the account",
+   "printed": "sudo: Authentication failed, try again.\nsudo: I'm sorry alice. I'm afraid I can't do that\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "a password asked for read before a refusal of the account",
+   "printed": "sudo: a password is required\nSorry, user alice may not run sudo on cyfr.\n",
+   "cause": "needs-password"
+  },
+  {
+   "name": "classic sudo after three wrong passwords",
+   "printed": "Sorry, try again.\nsudo: 3 incorrect password attempts\n",
+   "cause": "wrong-password"
+  },
+  {
+   "name": "sudo-rs for an account sudoers does not name",
+   "printed": "sudo: I'm sorry alice. I'm afraid I can't do that\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "classic sudo for an account outside sudoers",
+   "printed": "alice is not in the sudoers file.\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "classic sudo for a command sudoers does not allow",
+   "printed": "Sorry, user alice may not run sudo on cyfr.\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "classic sudo for another host",
+   "printed": "alice is not allowed to run sudo on cyfr.\n",
+   "cause": "not-allowed"
+  },
+  {
+   "name": "no new privileges is no known cause",
+   "printed": "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.\n",
+   "cause": "unknown"
+  },
+  {
+   "name": "a locked account is no known cause",
+   "printed": "sudo: account validation failure, is your account locked?\n",
+   "cause": "unknown"
+  },
+  {
+   "name": "nothing printed",
+   "printed": "",
+   "cause": "unknown"
   }
  ]
 }

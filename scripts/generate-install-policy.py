@@ -7,7 +7,8 @@ Usage: python3 -I scripts/generate-install-policy.py [--check] [--policy FILE] [
 
 The policy (FILE, by default apps/codex/internal/install/policy.json) is the
 one definition of the system the installer prepares automatically, its
-bootstrap packages, the CLI's install path and the install lock. The install
+bootstrap packages, the CLI's install path, the install lock and sudo's
+words for why it ran nothing. The install
 script cannot read JSON before its own tools exist, so it carries the values
 it needs as shell assignments between its BEGIN and END lines, which this
 writes and nothing else in the script restates or assigns. `--check`
@@ -17,7 +18,9 @@ name (NAME=, ${NAME=} or ${NAME:=}, or read, for, getopts, local or unset
 naming it) would override the block, so either run exits 1 naming it and
 writes nothing. A policy value outside its grammar exits 2 and writes
 nothing: each value is placed in single quotes and some reach a root shell
-as arguments.
+as arguments. sudo's words are lowercase, as they are matched in any case,
+one a line in their list, so none holds a line break, and a list is never
+empty, since grep reads an empty list as a word every text holds.
 """
 
 import argparse
@@ -44,6 +47,13 @@ WORD = re.compile(r"[a-z0-9][a-z0-9._-]*")
 ARCH = re.compile(r"[a-z0-9_]+")
 TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._()/-]*")
 PATH = re.compile(r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
+SUDO_WORDS = re.compile(r"[a-z0-9][a-z0-9 ',.-]*")
+# sudo's causes in the order they are read, each with its policy key.
+SUDO_CAUSES = (
+    ("POLICY_SUDO_WRONG_PASSWORD", "wrong_password"),
+    ("POLICY_SUDO_NEEDS_PASSWORD", "needs_password"),
+    ("POLICY_SUDO_NOT_ALLOWED", "not_allowed"),
+)
 # A shell assignment to a POLICY_ name: NAME= anywhere a word starts, so
 # also after export or readonly and inside ${NAME=} and ${NAME:=}; or a
 # builtin that sets or unsets the names it is given as words of their own.
@@ -87,6 +97,18 @@ def bootstrap_row(row, where):
     return f"{package} {kinds[0]} {','.join(values)} {'yes' if universe else 'no'}"
 
 
+def sudo_words(sudo, key):
+    words = field(sudo, key, "sudo")
+    if not isinstance(words, list) or not words:
+        raise PolicyError(f"sudo.{key} is not a list of sudo's words")
+    return [matching(w, SUDO_WORDS, f"sudo.{key}[{i}]") for i, w in enumerate(words)]
+
+
+def quoted(text):
+    """text in single quotes, each of its own quotes as '\\''."""
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
 def assignments(policy):
     """The block's lines between BEGIN and END for the policy."""
     system = field(policy, "system", "policy")
@@ -98,6 +120,7 @@ def assignments(policy):
     bootstrap = field(policy, "bootstrap", "policy")
     if not isinstance(bootstrap, list) or not bootstrap:
         raise PolicyError("bootstrap is not a list of rows")
+    sudo = field(policy, "sudo", "policy")
     seconds = field(lock, "seconds", "lock")
     if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 3600:
         raise PolicyError(f"lock.seconds is {seconds!r}, not a whole number of seconds from 1 to 3600")
@@ -125,7 +148,10 @@ def assignments(policy):
         assign("POLICY_INSTALL_PATH", matching(field(policy, "install_path", "policy"), PATH, "install_path")),
         assign("POLICY_LOCK_PATH", matching(field(lock, "path", "lock"), PATH, "lock.path")),
         assign("POLICY_LOCK_SECONDS", str(seconds)),
-    ]
+        "# sudo's own words for why it ran nothing, one a line, as sudo-rs and",
+        "# sudo print them with LC_ALL=C: a password refused, a password needed",
+        "# and an account sudo does not allow, read in that order, in any case.",
+    ] + [f"{name}={quoted(chr(10).join(sudo_words(sudo, key)))}" for name, key in SUDO_CAUSES]
 
 
 def shown(path):

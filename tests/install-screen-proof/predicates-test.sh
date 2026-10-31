@@ -15,9 +15,17 @@
 #       the installed version's own sources, not any line of the version
 #       table: not a newer candidate's archive while another source's
 #       version is installed
+#   same_record, project_record_whole, no_cloud_sudoers
+#       a comparison or an absence over a record that was written whole,
+#       not two empty files or an error
+#   stat_of, owned_as, mode_is, pulls_succeeded
+#       case 2's continued init: its files in the group docker, .env 600,
+#       and its pulls through Docker, not an init that skipped them or ran
+#       without the group
 #   preview_commands, repair_shown_iff_audit, packages_changed
 #   interrupt_sentence_true
-#       "Nothing was installed." exactly when nothing changed
+#       "Nothing was installed." exactly when nothing changed, each over
+#       whole machine-state records (state_whole)
 #   kvm_diagnosis
 #       the host change each observed failure needs
 #   budget
@@ -154,6 +162,94 @@ cosign:
 /usr/bin/cosign'
 expect pass "cosign installed from Ubuntu's archive, any component" apt_installed_from_archive "$GUEST_DIR/cosign.txt" cosign '' '[a-z]+'
 
+# Records compared, and absences read, only when they were written whole.
+put rec-a.txt $'cosign\t2.4.1-1\tii '
+put rec-b.txt $'cosign\t2.4.1-1\tii '
+put rec-c.txt $'cosign\t2.4.1-2\tii '
+: >"$GUEST_DIR/rec-empty-1.txt"
+: >"$GUEST_DIR/rec-empty-2.txt"
+expect pass "two records written the same are the same" same_record "$GUEST_DIR/rec-a.txt" "$GUEST_DIR/rec-b.txt"
+expect fail "two records that differ are not" same_record "$GUEST_DIR/rec-a.txt" "$GUEST_DIR/rec-c.txt"
+expect fail "two empty records are no state" same_record "$GUEST_DIR/rec-empty-1.txt" "$GUEST_DIR/rec-empty-2.txt"
+expect fail "a record never written is not another's" same_record "$GUEST_DIR/rec-a.txt" "$GUEST_DIR/rec-missing.txt"
+sums='b95eb95ff869f17309aeb844ab920c39e7ebe39c71504cfff9e9b78e6f83553e  .env
+4dc1a2b322d8701c3c0142c3450aceca727ac73a38e10b2212d748ad5d778c33  docker-compose.yml
+68bb989fcadfe71490a13ddd5ec8a3c09f6bb610b79d716dd54905712d34ba23  Caddyfile'
+put second-whole.txt "$sums
+1f0e3dad99908345f7439f8ffabdffc4c0d1e1f2a3b4c5d6e7f8091a2b3c4d5e
+6a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809"
+put second-stopped.txt "$sums"
+put second-short.txt "${sums%$'\n'*}
+1f0e3dad99908345f7439f8ffabdffc4c0d1e1f2a3b4c5d6e7f8091a2b3c4d5e"
+put second-ssh.txt 'ssh: connect to host guest port 22: Connection refused'
+expect pass "a project record with the three sums and the running containers is whole" project_record_whole "$GUEST_DIR/second-whole.txt"
+expect fail "a project record with no running container compares no stack" project_record_whole "$GUEST_DIR/second-stopped.txt"
+expect fail "a project record missing a file's sum is not whole" project_record_whole "$GUEST_DIR/second-short.txt"
+expect fail "SSH's error is no project record" project_record_whole "$GUEST_DIR/second-ssh.txt"
+guest_with() { # the guest record, its sudoers.d listing's own entries the arguments
+  printf '%s\n' 'VERSION_ID="26.04"' 'id: uid=1000(proof) gid=1000(proof) groups=1000(proof),27(sudo)' 'sudoers.d:' "$@" \
+    'getty@tty1: active' 'sudo: interactive authentication is required' 'sudo -n true status: 1'
+}
+listing=('total 12' 'drwxr-xr-x   2 root root 4096 Oct 16 16:27 .' 'drwxr-xr-x 106 root root 4096 Oct 31 16:28 ..'
+  '-r--r-----   1 root root  863 Jan 14  2026 README')
+guest_with "${listing[@]}" >"$GUEST_DIR/guest-clean.txt"
+guest_with "${listing[@]}" '-r--r-----   1 root root  142 Oct 31 16:28 90-cloud-init-users' >"$GUEST_DIR/guest-cloud.txt"
+guest_with 'ls: cannot open directory /etc/sudoers.d: Permission denied' >"$GUEST_DIR/guest-unread.txt"
+: >"$GUEST_DIR/guest-empty.txt"
+expect pass "a sudoers.d listing of README alone names no cloud-init file" no_cloud_sudoers "$GUEST_DIR/guest-clean.txt"
+expect fail "a listing naming 90-cloud-init-users" no_cloud_sudoers "$GUEST_DIR/guest-cloud.txt"
+expect fail "a listing ls could not read shows nothing" no_cloud_sudoers "$GUEST_DIR/guest-unread.txt"
+expect fail "an empty guest record shows nothing" no_cloud_sudoers "$GUEST_DIR/guest-empty.txt"
+
+# Case 2's continued init: its files, and its pulls.
+project() { # the project record, .env's line the first argument and aqua's the second
+  printf '%s\n' 'docker:x:109:proof' 'proof:proof 775 /home/proof/cyfr' "$1" \
+    'proof:docker 644 /home/proof/cyfr/docker-compose.yml' 'proof:docker 775 /home/proof/cyfr/data' "$2" \
+    'uid=1000(proof) gid=1000(proof) groups=1000(proof),27(sudo),109(docker)'
+}
+project 'proof:docker 600 /home/proof/cyfr/.env' 'proof:docker 775 /home/proof/cyfr/aqua' >"$GUEST_DIR/project-sg.txt"
+project 'proof:docker 640 /home/proof/cyfr/.env' 'proof:docker 775 /home/proof/cyfr/aqua' >"$GUEST_DIR/project-640.txt"
+project 'proof:docker 600 /home/proof/cyfr/.env' 'proof:proof 775 /home/proof/cyfr/aqua' >"$GUEST_DIR/project-one.txt"
+project 'proof:docker 600 /home/proof/cyfr/.env' "stat: cannot statx '/home/proof/cyfr/aqua': No such file or directory" >"$GUEST_DIR/project-missing.txt"
+sed 's/^proof:docker /proof:proof /' "$GUEST_DIR/project-sg.txt" >"$GUEST_DIR/project-nosg.txt"
+made=(.env docker-compose.yml data aqua)
+expect pass "stat_of reads the directory's own line, not its files'" test "$(stat_of "$GUEST_DIR/project-sg.txt" cyfr)" = 'proof:proof 775'
+expect pass "the directory the shell made is the account's" owned_as "$GUEST_DIR/project-sg.txt" proof:proof cyfr
+expect pass "what the continued init made is in the group docker" owned_as "$GUEST_DIR/project-sg.txt" proof:docker "${made[@]}"
+expect fail "an init that never gained the group made its files proof:proof" owned_as "$GUEST_DIR/project-nosg.txt" proof:docker "${made[@]}"
+expect fail "one file outside the group docker" owned_as "$GUEST_DIR/project-one.txt" proof:docker "${made[@]}"
+expect fail "a file stat could not find" owned_as "$GUEST_DIR/project-missing.txt" proof:docker "${made[@]}"
+expect fail "no names" owned_as "$GUEST_DIR/project-sg.txt" proof:docker
+expect fail "an empty record" owned_as "$GUEST_DIR/rec-empty-1.txt" proof:proof cyfr
+expect pass ".env at 600" mode_is "$GUEST_DIR/project-sg.txt" .env 600
+expect fail ".env at 640, readable by the group docker" mode_is "$GUEST_DIR/project-640.txt" .env 600
+expect fail ".env absent from the record" mode_is "$GUEST_DIR/rec-empty-1.txt" .env 600
+d1=d3d2d6ac79f54113d1dd0383d39457ef767e05f6c9b7532e1cefa8166239b922
+d2=27ba4d7bc6de222aca861c64343229341f227cbf8b706e54363a1c1f4d193964
+pull() { # REPOSITORY DIGEST [STATUS]: init's pull of one image, docker pull's lines after it
+  printf '%s\n' "Pulling ghcr.io/cyfrworks/$1:0.6.0-alpha.5@sha256:$2 ..." \
+    "ghcr.io/cyfrworks/$1@sha256:$2: Pulling from cyfrworks/$1" '4f4fb700ef54: Pull complete ' "Digest: sha256:$2"
+  [ -z "${3-x}" ] || printf '%s\n' "Status: ${3:-Downloaded newer image} for ghcr.io/cyfrworks/$1@sha256:$2" \
+    "ghcr.io/cyfrworks/$1:0.6.0-alpha.5@sha256:$2"
+}
+reach='Choose 1, 2 or 3 [1]: 3'
+done_line='CYFR project initialized.'
+printf '%s\n' "$reach" "$(pull cyfr "$d1")" "$(pull cyfr-locus "$d2")" "$done_line" >"$GUEST_DIR/pulls-ok.txt"
+printf '%s\n' "$reach" "$(pull cyfr "$d1" 'Image is up to date')" "$(pull cyfr-locus "$d2")" "$done_line" >"$GUEST_DIR/pulls-current.txt"
+printf '%s\n' "$reach" "$done_line" >"$GUEST_DIR/pulls-skipped.txt"
+printf '%s\n' "$reach" "Pulling ghcr.io/cyfrworks/cyfr:0.6.0-alpha.5@sha256:$d1 ..." \
+  'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock' \
+  "Warning: failed to pull ghcr.io/cyfrworks/cyfr:0.6.0-alpha.5@sha256:$d1: exit status 1 (continuing anyway)" "$done_line" >"$GUEST_DIR/pulls-refused.txt"
+printf '%s\n' "$reach" "$(pull cyfr "$d1")" "$(pull cyfr-locus "$d2")" 'WARNING: Failed to pull ghcr.io/cyfrworks/cyfr-caddy' "$done_line" >"$GUEST_DIR/pulls-warned.txt"
+printf '%s\n' "$reach" "$(pull cyfr "$d1")" "$(pull cyfr-locus "$d2" '')" "$done_line" >"$GUEST_DIR/pulls-unfinished.txt"
+expect pass "init's pulls, each with docker pull's Status line" pulls_succeeded "$GUEST_DIR/pulls-ok.txt"
+expect pass "an image already up to date is pulled" pulls_succeeded "$GUEST_DIR/pulls-current.txt"
+expect fail "an init that skipped its pulls (--no-pull)" pulls_succeeded "$GUEST_DIR/pulls-skipped.txt"
+expect fail "a pull Docker refused, which init warns of and carries on" pulls_succeeded "$GUEST_DIR/pulls-refused.txt"
+expect fail "a failed pull's warning in any case" pulls_succeeded "$GUEST_DIR/pulls-warned.txt"
+expect fail "a pull without docker's Status line" pulls_succeeded "$GUEST_DIR/pulls-unfinished.txt"
+expect fail "no transcript" pulls_succeeded "$GUEST_DIR/pulls-missing.txt"
+
 # Previews, repairs and packages across an interrupted run.
 preview='$ cd ~/c3 && cyfr init --no-pull; echo "c3-x exit status $?"
 CYFR needs docker.io, the running Docker service and proof'"'"'s membership of the docker group on this machine. These commands make the changes, as root:
@@ -183,6 +279,9 @@ expect fail "a repair previewed when dpkg --audit reported none" repair_shown_if
 cp "$GUEST_DIR/transcript-group.txt" "$GUEST_DIR/transcript-missed.txt"
 cp "$GUEST_DIR/state-before-repair.txt" "$GUEST_DIR/state-before-missed.txt"
 expect fail "no repair previewed when dpkg --audit reported one" repair_shown_iff_audit missed
+cp "$GUEST_DIR/transcript-group.txt" "$GUEST_DIR/transcript-unread.txt"
+: >"$GUEST_DIR/state-before-unread.txt"
+expect fail "no repair previewed, its state record never written" repair_shown_iff_audit unread
 
 nothing='Error: Interrupted while installing docker.io, docker-compose-v2, the running Docker service and proof'"'"'s membership of the docker group. Nothing was installed. Run `cyfr init` again to finish'
 left='^CError: Interrupted while installing docker.io, docker-compose-v2, the running Docker service and proof'"'"'s membership of the docker group. CYFR left docker.io partly installed. Run `cyfr init` again to finish'
@@ -203,6 +302,8 @@ case_of left-same "$same" "$same" "$left"
 case_of nothing-grouped "$same" "$grouped" "$nothing"
 case_of unfinished "$same" "$same" "${nothing% Run*}"
 case_of silent "$same" "$same" ''
+case_of nothing-unread '' '' "$nothing"
+case_of left-lost "$same" '' "$left"
 expect pass "Nothing was installed, and nothing changed" interrupt_sentence_true nothing-same
 expect fail "Nothing was installed, though dpkg's packages changed" interrupt_sentence_true nothing-changed
 expect pass "what was left partly installed, after ^C, when dpkg's packages changed" interrupt_sentence_true left-changed
@@ -210,8 +311,11 @@ expect fail "something left, though nothing changed" interrupt_sentence_true lef
 expect fail "Nothing was installed, though the account joined the group" interrupt_sentence_true nothing-grouped
 expect fail "a sentence that does not say to run cyfr init again" interrupt_sentence_true unfinished
 expect fail "no sentence" interrupt_sentence_true silent
+expect fail "Nothing was installed, its state records never written" interrupt_sentence_true nothing-unread
+expect fail "something left, its state record after the run lost" interrupt_sentence_true left-lost
 expect pass "dpkg's packages changed" packages_changed nothing-changed
 expect fail "only the group changed, no package" packages_changed nothing-grouped
+expect fail "a state record lost after the run is no change" packages_changed left-lost
 
 # KVM's diagnosis, from the preflight's observations.
 preflight() { # NAME SECURITY MODULES ERROR

@@ -184,12 +184,9 @@ func prepareMachine(ctx context.Context, yes bool, args []string, out, errOut io
 		return false, interruption{fmt.Errorf("Interrupted while installing %s. %s Run %s again to finish", requirements, completed, initCommand)}
 	case res.failure != nil:
 		return false, errors.New(install.Failure(p, res.failure.Err(), completed, initCommand))
-	case !res.started:
-		cause := install.ReadSudoCause(res.sudoSaid)
-		if cause == install.SudoUnknown && !interactive {
-			cause = install.SudoNeedsPassword
-		}
-		return false, errors.New(install.SudoRefused(cause, requirements, completed, initCommand))
+	case !res.started && res.status != 0:
+		// The entry ran nothing and sudo said why, or said nothing known.
+		return false, errors.New(install.SudoRefused(install.ReadSudoCause(p, res.sudoSaid), requirements, completed, initCommand))
 	case res.err != nil:
 		return false, errors.New(install.Failure(p, res.err, completed, initCommand))
 	}
@@ -220,7 +217,7 @@ var sgProgram = "/usr/bin/sg"
 func continueWithGroup(p install.Policy, args []string, account string, out, errOut io.Writer) error {
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("%s joined the %s group, and cyfr init could not find its own program to go on with it (%v). Run `newgrp %s`, then %s again", account, p.Docker.Group, err, p.Docker.Group, initCommand)
+		return fmt.Errorf("%s joined the %s group, and cyfr init could not find its own program to go on with it (%v). Run `newgrp %s`, or log out and in again, then %s again", account, p.Docker.Group, err, p.Docker.Group, initCommand)
 	}
 	cmd := exec.Command(sgProgram, p.Docker.Group, "-c", shellQuote(append([]string{self, "init"}, args...)))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, terminalOr(out), terminalOr(errOut)
@@ -229,9 +226,9 @@ func continueWithGroup(p install.Policy, args []string, account string, out, err
 	var exit *exec.ExitError
 	switch {
 	case errors.As(err, &exit):
-		return handedOver{exit.ExitCode()}
+		return handedOver{exitStatus(exit)}
 	case err != nil:
-		return fmt.Errorf("%s joined the %s group, and cyfr init could not go on with it (%v). Run `newgrp %s`, then %s again", account, p.Docker.Group, err, p.Docker.Group, initCommand)
+		return fmt.Errorf("%s joined the %s group, and cyfr init could not go on with it (%v). Run `newgrp %s`, or log out and in again, then %s again", account, p.Docker.Group, err, p.Docker.Group, initCommand)
 	}
 	return nil
 }
@@ -343,11 +340,13 @@ func runEntry(argv, env []string, plan install.Plan, out, errOut io.Writer) entr
 // run from, and the entry would take that account for the plan's. Through
 // sudo, sudo sets them.
 func entryEnv(root bool) []string {
-	env := os.Environ()
-	if root {
-		env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "SUDO_") })
-	}
-	return env
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "LC_ALL=") || root && strings.HasPrefix(kv, "SUDO_")
+	})
+	// sudo prints its refusals in the C locale, the words the policy names
+	// (install.ReadSudoCause); the entry's own environment is sudo's reset
+	// one, and its actions' install.RootEnv.
+	return append(env, "LC_ALL=C")
 }
 
 // tailWriter keeps the last max bytes written to it.

@@ -5,7 +5,12 @@
 
 package cmd
 
-import "os"
+import (
+	"os"
+	"os/exec"
+)
 
 // No root entry runs on Windows: automatic preparation is Linux's alone.
 func ownedByRoot(os.FileInfo) bool { return false }
+
+func exitStatus(exit *exec.ExitError) int { return exit.ExitCode() }

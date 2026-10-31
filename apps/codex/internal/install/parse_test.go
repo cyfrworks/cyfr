@@ -77,26 +77,6 @@ func TestParseCandidate(t *testing.T) {
 	}
 }
 
-// ReadSudoCause reads sudo-rs's and sudo's own refusals.
-func TestReadSudoCause(t *testing.T) {
-	for printed, want := range map[string]SudoCause{
-		"sudo: interactive authentication is required\n":                                      SudoNeedsPassword,
-		"sudo: a password is required\n":                                                      SudoNeedsPassword,
-		"[sudo: authenticate] Password: \nsudo: Authentication failed, try again.\n":          SudoWrongPassword,
-		"sudo: maximum 3 incorrect authentication attempts\n":                                 SudoWrongPassword,
-		"sudo: 3 incorrect password attempts\n":                                               SudoWrongPassword,
-		"sudo: I'm sorry alice. I'm afraid I can't do that\n":                                 SudoNotAllowed,
-		"Sorry, user alice may not run /usr/local/bin/cyfr internal install-apply on cyfr.\n": SudoNotAllowed,
-		"alice is not in the sudoers file.\n":                                                 SudoNotAllowed,
-		"sudo: unable to resolve host cyfr\n":                                                 SudoUnknown,
-		"":                                                                                    SudoUnknown,
-	} {
-		if got := ReadSudoCause(printed); got != want {
-			t.Errorf("ReadSudoCause(%q) = %d, want %d", printed, got, want)
-		}
-	}
-}
-
 // SameSocket takes a link to the policy's socket for the socket itself,
 // and nothing else.
 func TestSameSocket(t *testing.T) {

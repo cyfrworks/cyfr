@@ -45,8 +45,11 @@ set -eu
 # a fixed helper (root_helper_text) that takes the machine-wide install
 # lock, runs apt and installs only the file whose SHA-256 the person's side
 # verified. A verification bypass leaves nothing verified for root to
-# install, so under one the CLI is installed as on other systems, which
-# install as before and are told what they lack.
+# install, so under one the CLI goes only where the person can write it: a
+# run as root, or a CYFR_INSTALL_DIR the person cannot write, is refused
+# before anything is downloaded or elevated, since `cyfr init` would run a
+# root-owned cyfr as root. Other systems install as before and are told
+# what they lack.
 
 GITHUB_REPO="cyfrworks/cyfr"
 BINARY_NAME="cyfr"
@@ -69,6 +72,18 @@ cosign commands cosign yes'
 POLICY_INSTALL_PATH='/usr/local/bin/cyfr'
 POLICY_LOCK_PATH='/run/cyfr-install.lock'
 POLICY_LOCK_SECONDS='60'
+# sudo's own words for why it ran nothing, one a line, as sudo-rs and
+# sudo print them with LC_ALL=C: a password refused, a password needed
+# and an account sudo does not allow, read in that order, in any case.
+POLICY_SUDO_WRONG_PASSWORD='incorrect authentication attempt
+incorrect password attempt
+authentication failed'
+POLICY_SUDO_NEEDS_PASSWORD='interactive authentication is required
+a password is required'
+POLICY_SUDO_NOT_ALLOWED='i'\''m afraid i can'\''t do that
+may not run
+is not in the sudoers
+is not allowed to'
 # END install policy
 
 # Where the system's identity, the person's answers and root's tools come
@@ -108,9 +123,10 @@ main() {
 
     # On the supported system root installs the verified CLI: at the
     # policy's path, or in an explicit CYFR_INSTALL_DIR the person cannot
-    # write. A download a bypass leaves unverified is never root's to
-    # install, so under a bypass, as on every other system, install_binary
-    # installs it, as it always has.
+    # write. A download a bypass leaves unverified is never root's, so
+    # there, before anything is downloaded or elevated, a bypass refuses a
+    # run as root and a directory the person cannot write; install_binary
+    # installs the rest, as it does on every other system.
     root_dest=
     if [ "$supported" = yes ] && ! skip_verify && ! allow_unverified; then
         if [ -z "${CYFR_INSTALL_DIR:-}" ]; then
@@ -123,7 +139,13 @@ main() {
             fi
         fi
     else
+        if [ "$supported" = yes ] && [ "$as_root" = yes ]; then
+            refuse_unverified_as_root
+        fi
         install_dir="$(resolve_install_dir)"
+        if [ "$supported" = yes ] && [ ! -w "$install_dir" ]; then
+            refuse_unverified_dir
+        fi
     fi
 
     tmpdir="$(mktemp -d)"
@@ -526,11 +548,12 @@ words() {
 }
 
 # The command that runs this installer again, with the CYFR_ settings the
-# person gave it after the pipe, where sh receives them.
+# person gave it after the pipe, where sh receives them; an argument, empty
+# for none, takes CYFR_INSTALL_DIR's place.
 install_command() {
     command_settings=
     add_setting CYFR_VERSION "${CYFR_VERSION:-}"
-    add_setting CYFR_INSTALL_DIR "${CYFR_INSTALL_DIR:-}"
+    add_setting CYFR_INSTALL_DIR "${1-${CYFR_INSTALL_DIR:-}}"
     add_setting CYFR_INSTALL_YES "${CYFR_INSTALL_YES:-}"
     add_setting CYFR_ALLOW_UNVERIFIED "${CYFR_ALLOW_UNVERIFIED:-}"
     add_setting CYFR_INSECURE_SKIP_VERIFY "${CYFR_INSECURE_SKIP_VERIFY:-}"
@@ -628,38 +651,70 @@ refuse_no_sudo() {
     refuse "This account cannot run sudo, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` from an account that can install software."
 }
 
+# A verification bypass's cyfr where root would own it, on the system the
+# policy names: $1 says why the copy would be root's, $2 is the next step.
+refuse_unverified() {
+    refuse "$(bypass_setting) leaves this cyfr unverified, and $1; an unverified program must not be root's, because \`cyfr init\` would run it as root. $(completed_changes). $2"
+}
+
+refuse_unverified_as_root() {
+    refuse_unverified "this installer runs as root, so the copy it installs would be root's" \
+        "Run \`$(install_command "")\` as your own account, without sudo, to install it in ~/.local/bin or another directory you can write."
+}
+
+refuse_unverified_dir() {
+    unverified_plain="$(plain_install_dir)"
+    if [ "$unverified_plain" = "$install_dir" ]; then
+        refuse_unverified "this account cannot write $install_dir, so only root could install it there" \
+            "Run \`$(install_command "")\` with CYFR_INSTALL_DIR set after the pipe to a directory you can write."
+    fi
+    refuse_unverified "this account cannot write $install_dir, so only root could install it there" \
+        "Run \`$(install_command "$unverified_plain")\` to install it in $unverified_plain, or set CYFR_INSTALL_DIR to another directory you can write."
+}
+
+bypass_setting() {
+    if skip_verify; then
+        printf 'CYFR_INSECURE_SKIP_VERIFY=1\n'
+    else
+        printf 'CYFR_ALLOW_UNVERIFIED=1\n'
+    fi
+}
+
 # Why sudo started no root step, read from its own words as with_root_helper
-# kept them: sudo-rs's, and sudo's in the C locale. Words it does not know,
-# where no terminal could take a password, are sudo -n's missing password;
-# internal/install's ReadSudoCause and SudoRefused read and word them alike.
+# kept them; words of no known cause claim none, with or without a
+# terminal. internal/install's SudoRefused words the causes alike.
 refuse_sudo() {
-    if sudo_said 'incorrect authentication attempt' 'incorrect password attempt' 'authentication failed'; then
-        refuse "sudo did not accept the password, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` again and type this account's password."
-    fi
-    if sudo_said 'interactive authentication is required' 'a password is required'; then
-        refuse_needs_password
-    fi
-    if sudo_said "i'm afraid i can't do that" 'may not run' 'is not in the sudoers' 'is not allowed to'; then
-        refuse_no_sudo
-    fi
-    case " $elevation " in
-        *" -n "*) refuse_needs_password ;;
+    case "$(sudo_cause "$tmpdir/said")" in
+        wrong-password)
+            refuse "sudo did not accept the password, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` again and type this account's password."
+            ;;
+        needs-password)
+            refuse "sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` in a terminal, or give this account sudo without a password prompt."
+            ;;
+        not-allowed) refuse_no_sudo ;;
     esac
     refuse "sudo did not run CYFR's installer, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` again once sudo works for this account."
 }
 
-refuse_needs_password() {
-    refuse "sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install $requirements. $(completed_changes). Run \`$(install_command)\` in a terminal, or give this account sudo without a password prompt."
+# The cause sudo's words in the file $1 name: the first of wrong-password,
+# needs-password and not-allowed whose words the policy block lists are in
+# it, else unknown. internal/install's ReadSudoCause reads them alike, and
+# both read the cases of tests/fixtures/install_prerequisites.json.
+sudo_cause() {
+    if sudo_said "$POLICY_SUDO_WRONG_PASSWORD" "$1"; then
+        echo wrong-password
+    elif sudo_said "$POLICY_SUDO_NEEDS_PASSWORD" "$1"; then
+        echo needs-password
+    elif sudo_said "$POLICY_SUDO_NOT_ALLOWED" "$1"; then
+        echo not-allowed
+    else
+        echo unknown
+    fi
 }
 
-# Whether sudo's kept words hold one of $@, in any case.
+# Whether the file $2 holds one of the words $1, one a line, in any case.
 sudo_said() {
-    for said_text in "$@"; do
-        if grep -i -q -F -- "$said_text" "$tmpdir/said" 2>/dev/null; then
-            return 0
-        fi
-    done
-    return 1
+    LC_ALL=C grep -i -q -F -e "$1" -- "$2" 2>/dev/null
 }
 
 # Root's refusal $1, as the helper reported it.
@@ -805,15 +860,16 @@ render_commands() {
 
 # Sets elevation to the words elevate puts before root's command: none as
 # root, sudo -k where a terminal can take sudo's password, and sudo -n -k,
-# which asks for none, where nothing can. -k ignores a cached login, and
-# cleanup's sudo -k invalidates the one this leaves.
+# which asks for none, where nothing can. sudo runs in the C locale, so a
+# refusal prints the words the policy block lists; -k ignores a cached
+# login, and cleanup's sudo -k invalidates the one this leaves.
 elevation_words() {
     if [ "$as_root" = yes ]; then
         elevation=
     elif tty_open; then
-        elevation='sudo -k --'
+        elevation='env LC_ALL=C sudo -k --'
     else
-        elevation='sudo -n -k --'
+        elevation='env LC_ALL=C sudo -n -k --'
     fi
 }
 
@@ -1468,17 +1524,22 @@ resolve_install_dir() {
         echo "$CYFR_INSTALL_DIR"
         return
     fi
+    dir="$(plain_install_dir)"
+    mkdir -p "$dir"
+    echo "$dir"
+}
 
-    # Apple Silicon Homebrew prefix, then /usr/local/bin
+# The directory an install without CYFR_INSTALL_DIR takes: the Apple
+# Silicon Homebrew prefix, then /usr/local/bin, where writable, else
+# ~/.local/bin.
+plain_install_dir() {
     for dir in $PLAIN_INSTALL_DIRS; do
         if [ -d "$dir" ] && [ -w "$dir" ]; then
             echo "$dir"
             return
         fi
     done
-    dir="${HOME}/.local/bin"
-    mkdir -p "$dir"
-    echo "$dir"
+    echo "${HOME}/.local/bin"
 }
 
 install_binary() {

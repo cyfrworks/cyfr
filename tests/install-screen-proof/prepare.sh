@@ -21,7 +21,9 @@
 # connections and given up as stalled below 100 KiB/s for 60 s, each
 # attempt retried from where it stopped, at most eight; its SHA-256 must
 # be the pinned sum. Only then does the whole set move into BASE_DIR, by
-# one rename. It writes only under BASE_CACHE, working in
+# one rename, holding the cache's lock (BASE_LOCK, base-image.sh) while it
+# removes what BASE_DIR held and renames, as scripts/janitor.sh holds it
+# while it removes a set. It writes only under BASE_CACHE, working in
 # BASE_CACHE/.fetch-<pid>, which it removes on every exit; a .fetch-<pid>
 # whose process is gone, left by a killed run of this script, is removed
 # when it starts. A complete BASE_DIR is kept and not fetched again. Sets
@@ -233,10 +235,13 @@ else
   verified "$WORK" || fail "the downloaded set did not verify"
   chmod 0444 "$WORK"/*
   rm -f "$WORK.gpgv.log"
+  exec 8>>"$BASE_LOCK" || fail "the cache's lock $BASE_LOCK was not opened"
+  flock 8
   if [ -e "$BASE_DIR" ]; then chmod -R u+w -- "$BASE_DIR"; rm -rf -- "$BASE_DIR"; fi
   mv -T "$WORK" "$BASE_DIR" || fail "the verified set was not moved to $BASE_DIR"
   WORK=""
   chmod 0555 "$BASE_DIR"
+  exec 8>&-
 fi
 rm -f "$BASE_DIR.gpgv.log"
 echo "prepare: $BASE_DIR: $CLOUD_IMAGE verified, sum $CLOUD_IMAGE_SHA256"

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/cyfr/codex/internal/install"
@@ -32,7 +33,12 @@ type vectors struct {
 		Enabled      bool   `json:"enabled"`
 	} `json:"universe"`
 	Bootstrap json.RawMessage `json:"bootstrap"`
-	Init      []struct {
+	Sudo      []struct {
+		Name    string `json:"name"`
+		Printed string `json:"printed"`
+		Cause   string `json:"cause"`
+	} `json:"sudo"`
+	Init []struct {
 		Name  string        `json:"name"`
 		Facts install.Facts `json:"facts"`
 		Want  struct {
@@ -108,3 +114,50 @@ func TestInitVectors(t *testing.T) {
 }
 
 func bytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
+
+// TestSudoVectors reads each refusal as the policy's sudo words read it,
+// the same cases the install script's tests read.
+func TestSudoVectors(t *testing.T) {
+	p := install.Load()
+	causes := map[string]install.SudoCause{
+		"needs-password": install.SudoNeedsPassword,
+		"wrong-password": install.SudoWrongPassword,
+		"not-allowed":    install.SudoNotAllowed,
+		"unknown":        install.SudoUnknown,
+	}
+	v := readVectors(t)
+	if len(v.Sudo) == 0 {
+		t.Fatal("the vector file holds no sudo case")
+	}
+	for _, c := range v.Sudo {
+		t.Run(c.Name, func(t *testing.T) {
+			want, ok := causes[c.Cause]
+			if !ok {
+				t.Fatalf("cause %q", c.Cause)
+			}
+			if got := install.ReadSudoCause(p, c.Printed); got != want {
+				t.Errorf("ReadSudoCause(%q) = %d, want %s", c.Printed, got, c.Cause)
+			}
+		})
+	}
+}
+
+// TestSudoWordsAreLowercaseAndNotEmpty holds the policy's sudo words to
+// what ReadSudoCause matches: an empty word would match every refusal.
+func TestSudoWordsAreLowercaseAndNotEmpty(t *testing.T) {
+	p := install.Load()
+	for name, words := range map[string][]string{
+		"wrong_password": p.Sudo.WrongPassword,
+		"needs_password": p.Sudo.NeedsPassword,
+		"not_allowed":    p.Sudo.NotAllowed,
+	} {
+		if len(words) == 0 {
+			t.Errorf("%s names no word", name)
+		}
+		for _, w := range words {
+			if strings.TrimSpace(w) == "" || w != strings.ToLower(w) {
+				t.Errorf("%s word %q is empty or not lowercase", name, w)
+			}
+		}
+	}
+}

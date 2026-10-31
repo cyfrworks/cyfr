@@ -416,6 +416,12 @@ for i, case in enumerate(data["bootstrap"]):
                  " ".join(case["commands"]), " ".join(case["installed"]), case["outcome"],
                  " ".join(case["packages"]), case["name"]])
 table("bootstrap", rows)
+
+rows = []
+for i, case in enumerate(data["sudo"]):
+    write(f"sudo.{i}", case["printed"])
+    rows.append([i, case["cause"], case["name"]])
+table("sudo", rows)
 PY
 then
     printf 'install-verify-test: cannot flatten %s\n' "$vectors" >&2
@@ -546,6 +552,11 @@ expect "bootstrap: CYFR_ALLOW_UNVERIFIED=yes is no bypass" '
     printf "%s [%s]\n" "$bootstrap_outcome" "$bootstrap_packages"' \
     "install [cosign]" "$extra/commands:$extra/stubs:$base"
 
+# What sudo printed, read through the classifier refuse_sudo uses.
+while IFS='|' read -r n cause name; do
+    expect "sudo's words: $name" 'sudo_cause "$1"' "$cause" "$vec/sudo.$n"
+done <"$vec/sudo"
+
 expect "the rerun command carries the CYFR_ settings after the pipe, quoted where the shell needs it" '
     CYFR_VERSION=0.6.0-alpha.5
     CYFR_INSTALL_DIR="/opt/my tools/it'\''s"
@@ -624,6 +635,36 @@ else
     fail_check "$desc" "exit $gen_status" "$gen_out"
 fi
 
+# sudo's words are lowercase and one a line, and a list of none would read
+# as a word every refusal holds.
+for broken in 'a capital: ["Authentication failed"]' 'a line break: ["a password\nis required"]' 'no word: []'; do
+    cp "$policy" "$gen/sudo-policy.json"
+    python3 -I - "$gen/sudo-policy.json" "${broken#*: }" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    policy = json.load(f)
+policy["sudo"]["wrong_password"] = json.loads(sys.argv[2])
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(policy, f)
+PY
+    desc="a list of sudo's words with ${broken%%:*} is refused and writes nothing"
+    gen_out="$(python3 -I "$generator" --policy "$gen/sudo-policy.json" --script "$gen/install.sh" 2>&1)"
+    gen_status=$?
+    case "$gen_status:$gen_out" in
+        2:*sudo.wrong_password*)
+            if cmp -s "$gen/install.sh" "$gen/install.sh.before"; then
+                pass "$desc"
+            else
+                fail_check "$desc" "the script changed"
+            fi
+            ;;
+        *) fail_check "$desc" "exit $gen_status" "$gen_out" ;;
+    esac
+done
+
 # A policy name assigned outside the block would override it however the
 # block reads, so --check and a write refuse it, naming the line, and a
 # write changes nothing; a line that only reads a policy name passes.
@@ -680,6 +721,7 @@ values = [
     policy["install_path"],
     policy["lock"]["path"],
 ] + [row["installed"] for row in policy["bootstrap"] if "installed" in row]
+values += [word for key in ("wrong_password", "needs_password", "not_allowed") for word in policy["sudo"][key]]
 found = [f"{i + 1}: {line}" for i, line in enumerate(lines) if not begin <= i <= end and any(v in line for v in values)]
 print("\n".join(found))
 sys.exit(1 if found else 0)
@@ -997,9 +1039,12 @@ else
 fi
 EOF
     # sudo keeps CYFR's root step, its one multi-line argument, in
-    # root-step. Its modes print what sudo-rs 0.2.13 prints for each
-    # refusal; a command other than /bin/sh, as install_binary's sudo cp,
-    # is recorded and not run, since the test cannot be root.
+    # root-step, and the LC_ALL it ran with in sudo-locale. Its modes print
+    # what sudo-rs 0.2.13 prints for each refusal, what sudo-rs and sudo
+    # 1.9.17p2 print in a process that cannot gain privileges, and sudo's
+    # words for a refused password, which it translates outside the C
+    # locale; a command other than /bin/sh, as install_binary's sudo cp, is
+    # recorded and not run, since the test cannot be root.
     cat >"$w/bin/sudo" <<'EOF'
 #!/bin/sh
 W=${0%/*/*}
@@ -1018,6 +1063,7 @@ printf '%s\n' "$line" >>"$W/events"
 if [ "$#" -eq 1 ] && [ "$1" = -k ]; then
     exit 0
 fi
+printf '%s\n' "${LC_ALL-unset}" >>"$W/sudo-locale"
 noninteractive=no
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1041,6 +1087,24 @@ case "$(cat "$W/sudo-mode" 2>/dev/null)" in
         ;;
     unknown)
         echo "sudo: account validation failure, is your account locked?" >&2
+        exit 1
+        ;;
+    no-new-privileges)
+        echo 'sudo: The "no new privileges" flag is set, which prevents sudo from running as root.' >&2
+        echo 'sudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.' >&2
+        exit 1
+        ;;
+    classic-wrong-password)
+        case "${LC_ALL:-${LC_MESSAGES:-${LANG:-C}}}" in
+            C | POSIX)
+                echo "Sorry, try again." >&2
+                echo "sudo: 3 incorrect password attempts" >&2
+                ;;
+            *)
+                echo "Entschuldigung, versuchen Sie es noch einmal." >&2
+                echo "sudo: 3 Fehlversuche bei der Passworteingabe" >&2
+                ;;
+        esac
         exit 1
         ;;
     refuse-n)
@@ -1313,8 +1377,8 @@ run_dir() {
 # The commands the preview showed are the commands root ran, in order:
 # the indented lines under its heading against root's argv as the world's
 # stubs kept it, mktemp's name put back as its template; the step the
-# preview names against sudo's arguments; and each flock's descriptor 9
-# on the world's install lock.
+# preview names against env setting the LC_ALL sudo ran with before sudo's
+# arguments; and each flock's descriptor 9 on the world's install lock.
 shown_is_run() {
     awk '/^CYFR runs these commands as root:$/ { on = 1; next }
         on && /^  / { print substr($0, 3); next }
@@ -1336,7 +1400,7 @@ ran
 $(cat "$w/ran")"
     fi
     shown_step="$(sed -n 's/^They run as one root step: //p' "$w/out")"
-    ran_step="$(grep '^sudo .* /bin/sh -c ' "$w/events")"
+    ran_step="env LC_ALL=$(cat "$w/sudo-locale" 2>/dev/null) $(grep '^sudo .* /bin/sh -c ' "$w/events")"
     if [ -z "$shown_step" ] || [ "$shown_step" != "$ran_step" ]; then
         note "the preview names the step '$shown_step', and sudo ran '$ran_step'"
     fi
@@ -1379,6 +1443,7 @@ else
 fi
 
 elevation="sudo -k -- /bin/sh -c <CYFR's root step> cyfr-install-helper run "
+shown_elevation="env LC_ALL=C $elevation"
 lock_note="flock takes CYFR's install lock, $fixture/world-@/install.lock, open as file descriptor 9, waiting up to 2 seconds for another installation to finish."
 retry_note="apt-get update is tried again each second, for up to 2 seconds, while another package-list update holds its lock."
 binary_note="mktemp's name takes the place of XXXXXX, and mv runs only when sha256sum gives the verified download's SHA-256."
@@ -1406,7 +1471,7 @@ $(world_lock_note)
 $retry_note
 $binary_note
 $verify_note
-They run as one root step: ${elevation}$d $w/usrlocal/cyfr cosign
+They run as one root step: ${shown_elevation}$d $w/usrlocal/cyfr cosign
 Install these requirements? [y/N] "
 out_has "cyfr v1.2.3 installed successfully to $w/usrlocal/cyfr"
 shown_is_run
@@ -1517,13 +1582,30 @@ sudo did not run CYFR's installer, so CYFR cannot install cosign and cyfr in $w/
 out_lacks "cannot run sudo"
 verdict "a sudo refusal of other words, in a terminal, claims no cause"
 
-make_world sudo-unknown-no-terminal
-rm "$w/tty"
-printf 'unknown\n' >"$w/sudo-mode"
-run_world CYFR_INSTALL_YES=1
+# Without a terminal too: a locked account, and a process that cannot gain
+# privileges, are no missing password.
+for mode in unknown no-new-privileges; do
+    make_world "sudo-$mode-no-terminal"
+    rm "$w/tty"
+    printf '%s\n' "$mode" >"$w/sudo-mode"
+    run_world CYFR_INSTALL_YES=1
+    status_is 1
+    out_has "sudo did not run CYFR's installer, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=1.2.3 CYFR_INSTALL_YES=1 sh\` again once sudo works for this account."
+    out_lacks "sudo needs this account's password"
+    elevated_once_then_cleaned "sudo -n -k -- /bin/sh -c <CYFR's root step> cyfr-install-helper run "
+    verdict "a sudo -n refusal in words of no known cause ($mode) claims none"
+done
+
+# sudo runs in the C locale, so in a German session the words it prints
+# are still the ones the policy lists.
+make_world sudo-translated
+printf 'classic-wrong-password\n' >"$w/sudo-mode"
+run_world LANG=de_DE.UTF-8
 status_is 1
-out_has "sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install cosign and cyfr in $w/usrlocal."
-verdict "a sudo -n refusal of other words is the password it could not ask for"
+out_has "sudo: 3 incorrect password attempts
+sudo did not accept the password, so CYFR cannot install cosign and cyfr in $w/usrlocal. Nothing was installed. Run \`$cmd_text\` again and type this account's password."
+elevated_once_then_cleaned "$elevation"
+verdict "a German session's refused password is read in sudo's C words"
 
 make_world no-sudo
 rm "$w/bin/sudo"
@@ -1593,7 +1675,7 @@ out_has "CYFR runs these commands as root:
   mv -f -T -- $w/usrlocal/.cyfr.XXXXXX $w/usrlocal/cyfr
 $(world_lock_note)
 $binary_note
-They run as one root step: ${elevation}$d $w/usrlocal/cyfr
+They run as one root step: ${shown_elevation}$d $w/usrlocal/cyfr
 Install these requirements? [y/N] "
 out_lacks "apt-get update"
 shown_is_run
@@ -1680,7 +1762,7 @@ if [ "$("$real_id" -u)" != 0 ]; then
   apt-get -o DPkg::Lock::Timeout=2 install -y --no-install-recommends ca-certificates
 $(world_lock_note)
 $retry_note
-They run as one root step: ${elevation}$d - ca-certificates
+They run as one root step: ${shown_elevation}$d - ca-certificates
 Install these requirements? [y/N] "
     out_lacks "signature and checksum checks"
     out_lacks "mktemp"
@@ -1691,24 +1773,63 @@ Install these requirements? [y/N] "
     verdict "a bypass missing ca-certificates: root installs the package alone, and the CLI goes the plain way"
 fi
 
-# An explicit CYFR_INSTALL_DIR the person cannot write keeps install_binary's
-# own sudo cp under a bypass, and no root step.
+# A CYFR_INSTALL_DIR the person cannot write would make the unverified copy
+# root's, so a bypass refuses it before any download, and no sudo runs to
+# leave a login behind.
 if [ "$("$real_id" -u)" != 0 ]; then
     make_world bypass-explicit
     mkdir "$w/locked"
-    chmod 555 "$w/locked"
+    chmod 555 "$w/locked" "$w/usrlocal"
     run_world CYFR_ALLOW_UNVERIFIED=1 CYFR_INSTALL_DIR="$w/locked"
-    chmod 755 "$w/locked"
-    status_is 0
-    out_has "Elevated permissions required to install to $w/locked"
-    out_lacks "as root"
-    if ! grep -q "^sudo cp $w/tmp/[^ ]*/cyfr $w/locked/cyfr\$" "$w/events" || ! grep -q -x -F "sudo chmod +x $w/locked/cyfr" "$w/events"; then
-        note "install_binary's sudo cp and chmod did not run"
-    fi
-    events_lack "/bin/sh -c"
-    events_lack "apt-get"
-    verdict "a bypass with an unwritable CYFR_INSTALL_DIR keeps install_binary's sudo cp"
+    chmod 755 "$w/locked" "$w/usrlocal"
+    status_is 1
+    out_has "CYFR_ALLOW_UNVERIFIED=1 leaves this cyfr unverified, and this account cannot write $w/locked, so only root could install it there; an unverified program must not be root's, because \`cyfr init\` would run it as root. Nothing was installed. Run \`curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=1.2.3 CYFR_INSTALL_DIR=$w/home/.local/bin CYFR_ALLOW_UNVERIFIED=1 sh\` to install it in $w/home/.local/bin, or set CYFR_INSTALL_DIR to another directory you can write."
+    nothing_as_root
+    events_lack "curl"
+    not_installed "$w/locked/cyfr"
+    not_installed "$w/home/.local/bin/cyfr"
+    tmp_is_empty
+    verdict "a bypass refuses a CYFR_INSTALL_DIR the person cannot write before any download, running no sudo"
+
+    make_world bypass-home-locked
+    chmod 555 "$w/usrlocal" "$w/home/.local/bin"
+    run_world CYFR_ALLOW_UNVERIFIED=1
+    chmod 755 "$w/usrlocal" "$w/home/.local/bin"
+    status_is 1
+    out_has "CYFR_ALLOW_UNVERIFIED=1 leaves this cyfr unverified, and this account cannot write $w/home/.local/bin, so only root could install it there; an unverified program must not be root's, because \`cyfr init\` would run it as root. Nothing was installed. Run \`curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=1.2.3 CYFR_ALLOW_UNVERIFIED=1 sh\` with CYFR_INSTALL_DIR set after the pipe to a directory you can write."
+    nothing_as_root
+    events_lack "curl"
+    not_installed "$w/home/.local/bin/cyfr"
+    verdict "a bypass whose ~/.local/bin the person cannot write is refused, running no sudo"
 fi
+
+# Run as root, as `curl … | sudo sh` runs it, every copy is root's, so a
+# bypass refuses before any download or root command, whatever it lacks,
+# and the command it names drops CYFR_INSTALL_DIR, which was root's choice.
+make_world bypass-as-root
+with_cosign
+printf '0\n' >"$w/uid"
+run_world CYFR_INSECURE_SKIP_VERIFY=1
+status_is 1
+out_has "CYFR_INSECURE_SKIP_VERIFY=1 leaves this cyfr unverified, and this installer runs as root, so the copy it installs would be root's; an unverified program must not be root's, because \`cyfr init\` would run it as root. Nothing was installed. Run \`curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=1.2.3 CYFR_INSECURE_SKIP_VERIFY=1 sh\` as your own account, without sudo, to install it in ~/.local/bin or another directory you can write."
+nothing_as_root
+events_lack "curl"
+not_installed "$w/usrlocal/cyfr"
+not_installed "$w/home/.local/bin/cyfr"
+tmp_is_empty
+verdict "a bypass run as root is refused before any download, naming a run as the account"
+
+make_world bypass-as-root-packages
+: >"$w/dpkg-installed"
+mkdir "$w/opt"
+printf '0\n' >"$w/uid"
+run_world CYFR_ALLOW_UNVERIFIED=1 CYFR_INSTALL_DIR="$w/opt"
+status_is 1
+out_has "CYFR_ALLOW_UNVERIFIED=1 leaves this cyfr unverified, and this installer runs as root, so the copy it installs would be root's; an unverified program must not be root's, because \`cyfr init\` would run it as root. Nothing was installed. Run \`curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=1.2.3 CYFR_ALLOW_UNVERIFIED=1 sh\` as your own account, without sudo,"
+out_lacks "Install these requirements?"
+nothing_as_root
+not_installed "$w/opt/cyfr"
+verdict "a bypass run as root that lacks ca-certificates runs no apt and installs nothing"
 
 make_world install-lock
 : >"$w/install.lock"

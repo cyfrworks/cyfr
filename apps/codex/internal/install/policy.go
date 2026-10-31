@@ -56,7 +56,14 @@ type Policy struct {
 		Endpoint     string `json:"endpoint"`
 	} `json:"docker"`
 	InstallPath string `json:"install_path"`
-	Lock        struct {
+	// Sudo holds sudo's own words for why it ran nothing (ReadSudoCause).
+	Sudo struct {
+		About         string   `json:"about"`
+		WrongPassword []string `json:"wrong_password"`
+		NeedsPassword []string `json:"needs_password"`
+		NotAllowed    []string `json:"not_allowed"`
+	} `json:"sudo"`
+	Lock struct {
 		Path    string `json:"path"`
 		Seconds int    `json:"seconds"`
 	} `json:"lock"`

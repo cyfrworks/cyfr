@@ -15,7 +15,9 @@
 # boots from it. The cache is every worktree's: scripts/janitor.sh
 # removes a set no worktree pins, reading each worktree's pin from its
 # CLOUD_IMAGE_SHA256= line as written below, 64 hex digits and nothing
-# else on the line.
+# else on the line. BASE_LOCK, a file in the cache, is the cache's lock
+# (flock): prepare.sh holds it while it replaces a set, and the janitor
+# while it removes one.
 
 # Read by the files that source this one.
 # shellcheck disable=SC2034
@@ -27,3 +29,5 @@ CLOUD_IMAGE_SHA256=5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7
 BASE_CACHE=${CYFR_PROOF_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cyfr/install-screen-proof}
 # shellcheck disable=SC2034
 BASE_DIR=$BASE_CACHE/$CLOUD_IMAGE_SHA256
+# shellcheck disable=SC2034
+BASE_LOCK=$BASE_CACHE/.lock

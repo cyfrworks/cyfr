@@ -5,14 +5,17 @@
 # The install-and-screen proof's ownership, exit traps and teardown,
 # sourced by tests/install-screen-proof/run.sh and by its regression
 # (tests/install-screen-proof/cleanup-test.sh), after
-# scripts/lib/run-names.sh. It reads PROOF_PREFIX and PROOF_WORK, and calls
-# docker.
+# scripts/lib/run-names.sh. It reads PROOF_PREFIX, which starts as
+# PROOF_RUN_PREFIX, and PROOF_WORK, and calls docker.
 #
 # Every name the run gives Docker begins with PROOF_PREFIX, which must be a
 # whole prefix of RUN_NAMES_PATTERN (cyfr-<seed>-<pid>-), so janitor rule 1
-# removes what a killed run leaves. proof_own records a container or volume
-# before it is made, and refuses, recording nothing, without such a prefix
-# or for a name outside it; proof_watch records a background process. The
+# removes what a killed run leaves; it is assigned from PROOF_RUN_PREFIX
+# alone, so the commit gate's container-name check
+# (tests/commit-gate-test.sh) traces each --name made from it to the run
+# prefix. proof_own records a container or volume before it is made, and
+# refuses, recording nothing, without such a prefix or for a name outside
+# it; proof_watch records a background process. The
 # teardown removes what was recorded and nothing else: not another run's
 # names, nor a name the run did not record, nor the proof image the
 # containers run, which every run shares (prepare.sh).
@@ -39,7 +42,7 @@
 # apart (default 3), one that still fails named on stderr; then
 # PROOF_WORK, the run's scratch directory. Evidence directories stay.
 
-PROOF_PREFIX=${PROOF_PREFIX:-}
+PROOF_PREFIX=${PROOF_RUN_PREFIX:-}
 PROOF_WORK=${PROOF_WORK:-}
 PROOF_QMP_SOCKET=/run/proof/qmp.sock
 PROOF_CONTAINERS=() PROOF_VOLUMES=() PROOF_WATCHERS=() PROOF_SSH_CONTROLS=()
@@ -129,7 +132,9 @@ proof_guest_stop() {
   PROOF_STOPPED[$name]=1
 }
 
-# Removes the container or volume ($1) named $2, or finds it gone.
+# Removes the container or volume ($1) named $2, or finds it gone. Each
+# kind's inspection and removal is spelled out, so no docker command takes
+# its verb from a variable.
 proof_gone() {
   local kind=$1 name=$2 attempt err=""
   case $name in
@@ -140,12 +145,15 @@ proof_gone() {
       ;;
   esac
   for attempt in 1 2 3; do
-    if ! err=$(docker "$kind" inspect "$name" 2>&1 >/dev/null); then
-      case $err in *"No such"* | *"no such"*) return 0 ;; esac
-    fi
     case $kind in
-      container) err=$(docker container rm --force "$name" 2>&1 >/dev/null) && return 0 ;;
-      volume) err=$(docker volume rm "$name" 2>&1 >/dev/null) && return 0 ;;
+      container)
+        err=$(docker container inspect "$name" 2>&1 >/dev/null) || case $err in *"No such"* | *"no such"*) return 0 ;; esac
+        err=$(docker container rm --force "$name" 2>&1 >/dev/null) && return 0
+        ;;
+      volume)
+        err=$(docker volume inspect "$name" 2>&1 >/dev/null) || case $err in *"No such"* | *"no such"*) return 0 ;; esac
+        err=$(docker volume rm "$name" 2>&1 >/dev/null) && return 0
+        ;;
     esac
     [ "$attempt" = 3 ] || sleep "${PROOF_CLEANUP_PAUSE:-3}"
   done

@@ -5,22 +5,51 @@
     "version_id": "26.04",
     "codename": "resolute",
     "name": "Ubuntu 26.04 LTS",
-    "architectures": ["amd64", "arm64"]
+    "architectures": [
+      "amd64",
+      "arm64"
+    ]
   },
   "universe": {
     "component": "universe",
     "command": "sudo add-apt-repository universe"
   },
   "bootstrap": [
-    {"package": "ca-certificates", "installed": "ca-certificates", "universe": false},
-    {"package": "curl", "commands": ["curl", "wget"], "universe": false},
-    {"package": "cosign", "commands": ["cosign"], "universe": true}
+    {
+      "package": "ca-certificates",
+      "installed": "ca-certificates",
+      "universe": false
+    },
+    {
+      "package": "curl",
+      "commands": [
+        "curl",
+        "wget"
+      ],
+      "universe": false
+    },
+    {
+      "package": "cosign",
+      "commands": [
+        "cosign"
+      ],
+      "universe": true
+    }
   ],
   "docker": {
     "packages": [
-      {"package": "docker.io", "universe": true},
-      {"package": "docker-compose-v2", "universe": true},
-      {"package": "apparmor", "universe": false}
+      {
+        "package": "docker.io",
+        "universe": true
+      },
+      {
+        "package": "docker-compose-v2",
+        "universe": true
+      },
+      {
+        "package": "apparmor",
+        "universe": false
+      }
     ],
     "minimum_major": 28,
     "group": "docker",
@@ -31,5 +60,23 @@
   "lock": {
     "path": "/run/cyfr-install.lock",
     "seconds": 60
+  },
+  "sudo": {
+    "about": "sudo's own words for why it ran nothing, as sudo-rs and sudo print them with LC_ALL=C, matched case-insensitively as substrings in this order; any other words are no known cause",
+    "wrong_password": [
+      "incorrect authentication attempt",
+      "incorrect password attempt",
+      "authentication failed"
+    ],
+    "needs_password": [
+      "interactive authentication is required",
+      "a password is required"
+    ],
+    "not_allowed": [
+      "i'm afraid i can't do that",
+      "may not run",
+      "is not in the sudoers",
+      "is not allowed to"
+    ]
   }
 }

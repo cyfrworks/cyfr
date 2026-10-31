@@ -47,7 +47,8 @@ func standInMachine(t *testing.T, m *fake.Machine, entry string) *standIn {
 		if entry == "" {
 			return nil, errNoSudo
 		}
-		// sh -c's $0 is --plan and $1 the plan's FIFO.
+		// The stand-in reads the plan on its standard input, as the
+		// entry does.
 		return []string{"/bin/sh", "-c", entry}, nil
 	}
 	machine.forget = func() { s.forgotten++ }
@@ -291,6 +292,7 @@ func TestRootRunsTheEntryWithoutTheOuterSudosAccount(t *testing.T) {
 	}
 	t.Setenv("SUDO_UID", "1000")
 	t.Setenv("SUDO_USER", "alice")
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
 	askTerminal = func() bool { return false }
 	var out bytes.Buffer
 	_ = runInit(context.Background(), initOptions{noPull: true, yes: true}, &out, &out)
@@ -303,6 +305,11 @@ func TestRootRunsTheEntryWithoutTheOuterSudosAccount(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "SUDO_") {
 		t.Errorf("root's entry ran with the outer sudo's variables:\n%s", raw)
+	}
+	// sudo, and so the entry, run in the C locale, whose words the policy
+	// names.
+	if lines := strings.Split(string(raw), "\n"); !slices.Contains(lines, "LC_ALL=C") || slices.Contains(lines, "LC_ALL=de_DE.UTF-8") {
+		t.Errorf("the entry's locale is not C alone:\n%s", raw)
 	}
 }
 
@@ -385,6 +392,12 @@ func TestInitNamesWhySudoRanNothing(t *testing.T) {
 			"sudo did not accept the password, so CYFR cannot install"},
 		"not allowed": {"echo \"sudo: I'm sorry alice. I'm afraid I can't do that\" >&2; exit 1", true,
 			"This account cannot run sudo, so CYFR cannot install"},
+		// Words no policy entry names say nothing of a password, with a
+		// terminal or without one.
+		"unknown words without a terminal": {"echo 'sudo: account validation failure, is your account locked?' >&2; exit 1", false,
+			"sudo did not run CYFR's installer, so CYFR cannot install"},
+		"unknown words with a terminal": {"echo 'sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.' >&2; exit 1", true,
+			"sudo did not run CYFR's installer, so CYFR cannot install"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			newInitProject(t)
@@ -397,6 +410,49 @@ func TestInitNamesWhySudoRanNothing(t *testing.T) {
 				t.Fatalf("runInit = %v, want %q", err, c.want)
 			}
 		})
+	}
+}
+
+// TestInitGoesOnWhenTheEntryFoundNothingToDo takes an entry that ended
+// well without an action, as root's own look at a machine that needs
+// nothing more ends it, for success: init looks at the machine again and
+// prepares the project.
+func TestInitGoesOnWhenTheEntryFoundNothingToDo(t *testing.T) {
+	newInitProject(t)
+	p := install.Load()
+	m := fake.New(p)
+	s := standInMachine(t, m, "cat >/dev/null; exit 0")
+	calls := 0
+	machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
+		calls++
+		if calls > 1 { // what the agreement needed is there by the time root looks
+			m.Packages = map[string]string{"docker.io": "installed", "docker-compose-v2": "installed", "apparmor": "installed"}
+			m.Service, m.Enabled, m.Members = "active", true, []string{"alice"}
+		}
+		return m.Facts(install.Account{Name: "alice", UID: 1000}, calls > 1), nil
+	}
+	askTerminal = func() bool { return true }
+	askInput = strings.NewReader("yes\n3\n")
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("runInit = %v\n%s", err, out.String())
+	}
+	if len(s.entryCalls) != 1 || !fileExists(".env") {
+		t.Fatalf("entry calls %v, .env %t:\n%s", s.entryCalls, fileExists(".env"), out.String())
+	}
+}
+
+// TestExitStatusOfASignalledChild gives a child a signal ended the status
+// a shell gives it, 128 and the signal, not -1.
+func TestExitStatusOfASignalledChild(t *testing.T) {
+	err := exec.Command("/bin/sh", "-c", "kill -TERM $$").Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exitStatus(exit) != 143 {
+		t.Fatalf("a child ended by TERM: %v, status %d", err, exitStatus(exit))
+	}
+	err = exec.Command("/bin/sh", "-c", "exit 7").Run()
+	if !errors.As(err, &exit) || exitStatus(exit) != 7 {
+		t.Fatalf("a child that exited 7: %v", err)
 	}
 }
 

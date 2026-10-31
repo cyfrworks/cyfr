@@ -15,7 +15,16 @@
 #   apt_installed_from_archive FILE PACKAGE PREFIX COMPONENT
 #                                  apt-cache policy's installed version's
 #                                  origin
+#   same_record FILE FILE          two records, both written, the same
+#   no_cloud_sudoers FILE          the guest's sudoers.d listing, read, names
+#                                  no cloud-init file
+#   stat_of FILE NAME, owned_as FILE OWNER:GROUP NAME..., mode_is FILE NAME MODE
+#                                  a stat record's owner, group and mode
+#   pulls_succeeded FILE           init pulled the stack's images through
+#                                  Docker
+#   project_record_whole FILE      a project record holds what it compares
 #   preview_commands NAME          the root commands a preview showed
+#   state_whole FILE               a machine-state record is whole
 #   packages_changed NAME          dpkg's packages across an interrupted run
 #   repair_shown_iff_audit NAME    dpkg --configure -a previewed exactly
 #                                  when dpkg --audit reported something
@@ -88,6 +97,78 @@ for raw in open(path, errors="replace"):
 sys.exit(1)' "$@"
 }
 
+# Whether the files $1 and $2 both hold a record, and the same one: two
+# records never written, or written empty, are not one state.
+same_record() {
+  [ -s "$1" ] && [ -s "$2" ] && cmp -s "$1" "$2"
+}
+
+# Whether the guest record FILE (lib.sh, guest_boot) holds the listing of
+# /etc/sudoers.d, its total and its own `.` entry, and that listing names
+# no file of cloud-init's (90-cloud-init-users).
+no_cloud_sudoers() {
+  local listing
+  listing=$(sed -n '/^sudoers\.d:$/,/^getty@tty1: /p' "$1" 2>/dev/null)
+  grep -qE '^total [0-9]+$' <<<"$listing" && grep -qE ' \.$' <<<"$listing" && ! grep -qi 'cloud' <<<"$listing"
+}
+
+# "OWNER:GROUP MODE" for the one path of the stat record FILE (lines of
+# `stat -c "%U:%G %a %n"`) whose last part is NAME; nothing when no path,
+# or more than one, has it.
+stat_of() {
+  awk -v name="$2" '
+    NF == 3 && $1 ~ /^[^:]+:[^:]+$/ && $2 ~ /^[0-7]+$/ {
+      n = split($3, part, "/")
+      if (part[n] == name) { found++; line = $1 " " $2 }
+    }
+    END { if (found == 1) print line }' "$1" 2>/dev/null
+}
+
+# owned_as FILE OWNER:GROUP NAME...: whether the stat record FILE gives
+# each NAME that owner and group.
+owned_as() {
+  local file=$1 owner=$2 name got
+  shift 2
+  [ "$#" -gt 0 ] || return 1
+  for name in "$@"; do
+    got=$(stat_of "$file" "$name")
+    [ -n "$got" ] && [ "${got% *}" = "$owner" ] || return 1
+  done
+}
+
+# mode_is FILE NAME MODE: whether the stat record FILE gives NAME the
+# octal MODE.
+mode_is() {
+  local got
+  got=$(stat_of "$1" "$2")
+  [ -n "$got" ] && [ "${got#* }" = "$3" ]
+}
+
+# Whether init's transcript FILE shows it pulled the stack's images through
+# Docker: a `Pulling REF ...` line at least, docker pull's own Status line
+# for each REF's digest (REF itself when it names none), and no `Warning:
+# failed to pull`, in any case, which init prints when a pull fails and
+# carries on. An init that skipped its pulls, or ran without the docker
+# group, fails it.
+pulls_succeeded() {
+  local file=$1 ref want n=0
+  if grep -qi 'warning: failed to pull' "$file" 2>/dev/null; then return 1; fi
+  while IFS= read -r ref; do
+    n=$((n + 1))
+    want=$(grep -oE '@sha256:[0-9a-f]{64}$' <<<"$ref") || want=$ref
+    grep -E '^Status: (Downloaded newer image|Image is up to date) for ' "$file" | grep -qF -- "$want" || return 1
+  done < <(sed -nE 's/^Pulling (.+) \.\.\.$/\1/p' "$file" 2>/dev/null)
+  [ "$n" -gt 0 ]
+}
+
+# Whether the project record FILE (run.sh, case 2's second init) holds the
+# sums of .env, docker-compose.yml and Caddyfile and a running container's
+# id at least, so that two of them compare the project and the stack.
+project_record_whole() {
+  [ "$(grep -cE '^[0-9a-f]{64}  (\.env|docker-compose\.yml|Caddyfile)$' "$1" 2>/dev/null)" = 3 ] &&
+    grep -qE '^[0-9a-f]{64}$' "$1"
+}
+
 # The root commands the run NAME's preview showed before its question, one
 # per line.
 preview_commands() {
@@ -95,10 +176,17 @@ preview_commands() {
     sed -nE 's/^  ((apt-get|dpkg|systemctl|usermod) .*)$/\1/p'
 }
 
+# Whether the machine-state record FILE (run.sh, guest_state) is whole:
+# dpkg's packages, then the group, service and audit lines.
+state_whole() {
+  grep -q $'\t' "$1" 2>/dev/null && grep -q '^group: ' "$1" && grep -q '^service: ' "$1" && grep -qx 'audit:' "$1"
+}
+
 # Whether dpkg's packages, the first part of run.sh's guest_state record,
-# differ after the run NAME from before it.
+# differ after the run NAME from before it, both records whole.
 packages_changed() {
-  ! cmp -s <(sed '/^group: /,$d' "$GUEST_DIR/state-before-$1.txt") <(sed '/^group: /,$d' "$GUEST_DIR/state-after-$1.txt")
+  state_whole "$GUEST_DIR/state-before-$1.txt" && state_whole "$GUEST_DIR/state-after-$1.txt" &&
+    ! cmp -s <(sed '/^group: /,$d' "$GUEST_DIR/state-before-$1.txt") <(sed '/^group: /,$d' "$GUEST_DIR/state-after-$1.txt")
 }
 
 # Whether the run NAME's preview repairs an interrupted package
@@ -106,6 +194,7 @@ packages_changed() {
 # before it.
 repair_shown_iff_audit() {
   local audit shown
+  state_whole "$GUEST_DIR/state-before-$1.txt" || return 1
   audit=$(sed -n '/^audit:$/,$p' "$GUEST_DIR/state-before-$1.txt" | sed 1d | grep -c .)
   shown=$(preview_commands "$1" | grep -cx 'dpkg --configure -a')
   if [ "$audit" -gt 0 ]; then [ "$shown" = 1 ]; else [ "$shown" = 0 ]; fi
@@ -118,10 +207,12 @@ interrupt_sentence() {
 
 # Whether the interrupted run NAME's sentence says what the interrupt left
 # and to run cyfr init again: "Nothing was installed." exactly when the
-# machine's state (run.sh's guest_state) is as it was before the run, else
-# what CYFR did ("CYFR installed ...", "left ... partly installed", ...).
+# machine's state (run.sh's guest_state, both records whole) is as it was
+# before the run, else what CYFR did ("CYFR installed ...", "left ...
+# partly installed", ...).
 interrupt_sentence_true() {
   local sentence
+  state_whole "$GUEST_DIR/state-before-$1.txt" && state_whole "$GUEST_DIR/state-after-$1.txt" || return 1
   sentence=$(interrupt_sentence "$1")
   [[ $sentence == *'. Run `cyfr init` again to finish'* ]] || return 1
   if cmp -s "$GUEST_DIR/state-before-$1.txt" "$GUEST_DIR/state-after-$1.txt"; then
