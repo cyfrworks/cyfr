@@ -557,6 +557,101 @@ defmodule Compendium.ConsentSetupPlanTest do
     plan.consent.needs
   end
 
+  describe "a shared key" do
+    alias Cyfr.Test.ShareFixtures
+
+    # One need for an openai.com key, which CYFR attaches.
+    @shared_need %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:openai.com",
+          "reason" => "to call the model",
+          "required" => true,
+          "fields" => ["OPENAI_API_KEY"],
+          "hosts" => ["api.openai.com"],
+          "attach" => %{
+            "in" => "header",
+            "name" => "Authorization",
+            "template" => "Bearer {value}"
+          }
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.openai.com"], "methods" => ["POST"]}}
+    }
+
+    setup do
+      ShareFixtures.traders!()
+    end
+
+    test "after Alice leaves the group Terry shared with, her grant is no longer ready",
+         %{alice: alice, traders: traders, share: share} do
+      ref = "reagent:local.plan-shared"
+      publish_manifest!(alice.ctx, "plan-shared", @shared_need)
+      walk!(alice.ctx, %{ref: ref, bindings: [%{need: "api_key", share_id: share.id}]})
+
+      {:ok, plan} = Compendium.Component.setup_plan(alice.ctx, ref)
+      assert plan.ready and plan.consent.ready
+      share_id = share.id
+
+      assert [%{entry_id: ^share_id, satisfied: true, detail: "bound to a key shared by Terry"}] =
+               plan.consent.needs
+
+      :ok = ShareFixtures.leave!(traders, alice)
+
+      {:ok, plan} = Compendium.Component.setup_plan(alice.ctx, ref)
+      refute plan.ready
+      refute plan.consent.ready
+
+      assert [
+               %{
+                 entry_id: ^share_id,
+                 satisfied: false,
+                 detail: "the shared key is no longer offered to you"
+               }
+             ] = plan.consent.needs
+    end
+
+    test "a key its owner rebound since the grant asks to re-approve",
+         %{alice: alice, terry: terry, entry: entry, share: share} do
+      ref = "reagent:local.plan-shared-rebound"
+      publish_manifest!(alice.ctx, "plan-shared-rebound", @shared_need)
+      walk!(alice.ctx, %{ref: ref, bindings: [%{need: "api_key", share_id: share.id}]})
+      assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(alice.ctx, ref)
+
+      ShareFixtures.rebind!(terry, entry)
+
+      assert detail!(alice.ctx, ref) ==
+               "the shared key was rebound since this consent — re-approve to continue"
+    end
+
+    test "a key a dependency's profile lends is held as its share, and said as it",
+         %{alice: alice, traders: traders, share: share} do
+      dep = "reagent:local.plan-shared-dep"
+      app = "reagent:local.plan-shared-app"
+      publish_manifest!(alice.ctx, "plan-shared-dep", @shared_need)
+
+      publish_manifest!(alice.ctx, "plan-shared-app", %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      walk!(alice.ctx, %{ref: dep, bindings: [%{need: "api_key", share_id: share.id}]})
+      walk!(alice.ctx, %{ref: app, selections: [%{dep: dep, label: "default"}]})
+
+      assert [%{satisfied: true, detail: "bound to a shared key (lent by its default profile)"}] =
+               detail_rows!(alice.ctx, app)
+
+      :ok = ShareFixtures.leave!(traders, alice)
+
+      assert [
+               %{
+                 entry_id: nil,
+                 satisfied: false,
+                 detail: "the shared key the default profile lends is no longer offered to you"
+               }
+             ] = detail_rows!(alice.ctx, app)
+    end
+  end
+
   describe "a borrowed key" do
     # The dependency declares one key and its own profile binds an entry;
     # each source depends on it and selects that profile. A selection
