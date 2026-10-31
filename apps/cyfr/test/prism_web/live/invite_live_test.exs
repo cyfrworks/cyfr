@@ -81,6 +81,15 @@ defmodule PrismWeb.InviteLiveTest do
     assert has_element?(view, "p", "This creates your name at cyfr.run under its terms.")
     assert has_element?(view, ~s([data-test="admission-name-input"][value=""]))
     assert has_element?(view, ~s([data-test="admission-create"][disabled]), "Create a passkey")
+
+    # Someone who already has a name takes the code to the sign-in page,
+    # in a fragment, which no server log records.
+    assert has_element?(
+             view,
+             ~s(a[data-test="invite-sign-in"][href="/login#invite=#{code}"]),
+             "Already have a CYFR name? Sign in with it."
+           )
+
     refute_vocabulary(render(view))
 
     name!(view, "mira")
@@ -218,6 +227,7 @@ defmodule PrismWeb.InviteLiveTest do
       assert has_element?(view, ~s([data-test="invite-refused"]), sentence)
       refute has_element?(view, ~s([data-test="admission-create"]))
       refute has_element?(view, ~s([data-test="invite-from"]))
+      refute has_element?(view, ~s([data-test="invite-sign-in"]))
       refute_vocabulary(render(view))
 
       render_hook(view, "invite_start", %{})

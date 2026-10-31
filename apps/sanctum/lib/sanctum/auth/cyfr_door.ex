@@ -22,8 +22,9 @@ defmodule Sanctum.Auth.CyfrDoor do
   `challenge/2` takes the carry fragment the person's browser brought
   from their signing home (`Prima.Carry`: the signed envelope and its
   payload, `%{"genesis" => genesis}`) and what the attempt requested
-  (`t:requested/0`): a request this browser's session holds, or one it no
-  longer holds. A lost request is refused before anything else. Before any
+  (`t:requested/0`): the request this browser's session holds, naming its
+  attempt and the invitation it carries, or `:lost` for one it no longer
+  holds. A lost request is refused before anything else. Before any
   network use it holds the envelope's destination to this home
   (`Sanctum.Person.home/0`) and the genesis to the envelope's identifier
   (`Prima.Identity.locate/2`: a genesis that does not hash to it causes
@@ -51,7 +52,9 @@ defmodule Sanctum.Auth.CyfrDoor do
   keyed map the browser's session cookie carries
   (`t:held/0`): 32 random challenge bytes, a challenge id, a browser
   secret, the carry's action id, the identifier, the source home and its
-  signed return URL, the `key_epoch` and an expiry. `redirect_url/1` is
+  signed return URL, the `key_epoch`, an expiry, and the request's
+  attempt and invitation copied in, so the challenge answers that attempt
+  alone. `redirect_url/1` is
   where the browser goes next: the envelope's signed return URL, always
   the source's `/carry`, with the challenge in its fragment
   (`challenge_fragment/1`). This home never redirects to an address the
@@ -61,7 +64,8 @@ defmodule Sanctum.Auth.CyfrDoor do
 
   `callback/2` takes the fragment the signing home sent the browser back
   with (`{"assertion": …, "genesis": …}`, `Prima.PersonAssertion.open/1`)
-  and the challenge the browser's session cookie holds. A challenge this
+  and the challenge the browser's session cookie holds, whose attempt and
+  invitation the caller held to the request first. A challenge this
   home already admitted under resumes its recorded result: its login
   receipt (`Arca.CarryActions.receipt/3`) bound to the browser secret and
   to the same assertion answers the session minted then, whose token is
@@ -76,7 +80,18 @@ defmodule Sanctum.Auth.CyfrDoor do
   unlocked (`Sanctum.SignIn.unlock/1`, which asks the door about them); a
   first-time one is admitted (`Sanctum.Newcomer.admit/2`'s `remote`
   admission: the door admits the identifier, and a `remote` identity row
-  is written with no key and no personal athanor). Their session is minted
+  is written with no key and no personal athanor).
+
+  A challenge carrying an invitation's hash admits by it
+  (`Sanctum.Invitations`). A person here already linked to the identity
+  is refused when a deny names them or their identifier, and otherwise
+  has the invitation redeemed, their seat and their identifier's allow
+  written in one transaction (`Sanctum.Invitations.redeem_for/2`) before
+  they are unlocked; a first-time one is admitted by the remote admission
+  with the invitation (`Sanctum.Newcomer`). An invitation that can no
+  longer be used grants nothing: a person the door admits anyway is
+  signed in, the answer saying so (`invitation: :unusable`), and anyone
+  else is refused `:invitation_invalid` with nothing written. Their session is minted
   (`Sanctum.Session.create/2`) with the login receipt in its transaction
   and the head's `key_epoch` recorded, read fresh once more; an epoch
   that moved since the assertion was verified admits nothing.
@@ -102,6 +117,8 @@ defmodule Sanctum.Auth.CyfrDoor do
     * `:session_ended` — a retried login whose session has ended since.
     * `:receipt_conflict` — a retried login under another browser secret
       or with another assertion.
+    * `:invitation_invalid` — an invitation that can no longer be used,
+      for a person the door does not admit without it.
     * `:unavailable` — the store could not answer.
   """
 
@@ -116,7 +133,7 @@ defmodule Sanctum.Auth.CyfrDoor do
 
   @challenge_bytes 32
   @secret_bytes 32
-  @held ~w(challenge challenge_id browser_secret action_id identifier source return_url key_epoch expires_at)
+  @held ~w(challenge challenge_id browser_secret action_id identifier source return_url key_epoch expires_at attempt invitation)
   # The installation's bound on carries that reach a directory read.
   @installation_cap 200
   @window_ms 60_000
@@ -125,25 +142,33 @@ defmodule Sanctum.Auth.CyfrDoor do
   The challenge a browser's session cookie carries between `challenge/2`
   and `callback/2`, string keyed: `challenge` (unpadded base64url of its
   32 bytes), `challenge_id`, `browser_secret`, `action_id`, `identifier`,
-  `source`, `return_url`, `key_epoch` and `expires_at` (Unix
-  milliseconds).
+  `source`, `return_url`, `key_epoch`, `expires_at` (Unix
+  milliseconds), `attempt` (the request's attempt id) and `invitation`
+  (the hash of the invitation the request carries, present and `nil` for
+  an ordinary sign-in).
   """
-  @type held :: %{required(String.t()) => String.t() | non_neg_integer()}
+  @type held :: %{required(String.t()) => String.t() | non_neg_integer() | nil}
 
   @typedoc """
-  What a sign-in attempt requested of the carry that answers it: `:none`
-  (an attempt this browser's session holds, which names no identity), or
-  `:lost` (an attempt whose request this browser's session no longer
-  holds).
+  What a sign-in attempt requested of the carry that answers it: the
+  request this browser's session holds, with its `"attempt"` id and its
+  `"invitation"` hash or `nil`, or `:lost` (an attempt whose request this
+  browser's session no longer holds).
   """
-  @type requested :: :none | :lost
+  @type requested :: %{required(String.t()) => String.t() | nil} | :lost
 
-  @typedoc "An admitted, or resumed, sign-in: the session's token and where it returns."
+  @typedoc """
+  An admitted, or resumed, sign-in: the session's token, where it
+  returns, and what became of the invitation the challenge carried
+  (`:none` for none, or for a resumed sign-in, which redeems nothing
+  again).
+  """
   @type admitted :: %{
           session_token: String.t(),
           resumed: boolean(),
           action_id: String.t(),
-          return_url: String.t()
+          return_url: String.t(),
+          invitation: :none | :redeemed | :unusable
         }
 
   # ---------------------------------------------------------------------------
@@ -213,10 +238,12 @@ defmodule Sanctum.Auth.CyfrDoor do
   @spec challenge(String.t(), requested()) :: {:ok, held()} | {:error, term()}
   def challenge(_fragment, :lost), do: {:error, :no_request}
 
-  def challenge(fragment, :none) when is_binary(fragment) do
+  def challenge(fragment, %{"attempt" => attempt, "invitation" => invitation})
+      when is_binary(fragment) do
     home = Person.home()
 
-    with {:ok, %{envelope: envelope, payload: payload}} <- carry(fragment),
+    with :ok <- attempted(attempt, invitation),
+         {:ok, %{envelope: envelope, payload: payload}} <- carry(fragment),
          :ok <- destination(envelope, home),
          {:ok, genesis} <- payload_genesis(payload, envelope.identifier),
          {:ok, digest} <- payload_digest(payload),
@@ -236,10 +263,14 @@ defmodule Sanctum.Auth.CyfrDoor do
          "source" => envelope.source,
          "return_url" => envelope.return_url,
          "key_epoch" => state.key_epoch,
-         "expires_at" => now + Arca.CarryActions.lifetime_ms()
+         "expires_at" => now + Arca.CarryActions.lifetime_ms(),
+         "attempt" => attempt,
+         "invitation" => invitation
        }}
     end
   end
+
+  def challenge(_fragment, %{}), do: {:error, :no_request}
 
   def challenge(_fragment, _requested), do: {:error, :invalid_carry}
 
@@ -267,6 +298,18 @@ defmodule Sanctum.Auth.CyfrDoor do
   @spec redirect_url(held()) :: String.t()
   def redirect_url(%{"return_url" => return_url} = held) when is_binary(return_url),
     do: return_url <> "#" <> challenge_fragment(held)
+
+  # The request names its attempt, and an invitation's hash or none: a
+  # request of any other shape is no request this home made.
+  defp attempted(attempt, invitation) do
+    if Encoding.id?(attempt) and invitation?(invitation),
+      do: :ok,
+      else: {:error, :no_request}
+  end
+
+  defp invitation?(nil), do: true
+  defp invitation?(hash) when is_binary(hash), do: hash =~ ~r/\A[0-9a-f]{64}\z/
+  defp invitation?(_other), do: false
 
   defp carry(fragment) do
     case Carry.parse_fragment(fragment) do
@@ -395,7 +438,7 @@ defmodule Sanctum.Auth.CyfrDoor do
          :ok <- same_identity(assertion, held),
          {:ok, state} <- fresh_state(assertion.identifier, transport["genesis"]),
          {:ok, assertion} <- verified_assertion(assertion, state, held, home),
-         {:ok, user} <- person(state, genesis),
+         {:ok, user, invitation} <- person(state, genesis, held["invitation"]),
          {:ok, ctx} <- context(user) do
       receipt = %{
         action_id: held["action_id"],
@@ -412,7 +455,7 @@ defmodule Sanctum.Auth.CyfrDoor do
              login_receipt: %{token: session_token(held), receipt: receipt}
            ) do
         {:ok, session} ->
-          {:ok, answer(session.token, held, false)}
+          {:ok, %{answer(session.token, held, false) | invitation: invitation}}
 
         # A concurrent request for the same challenge may have minted the
         # one session first: then this one resumes it.
@@ -430,7 +473,8 @@ defmodule Sanctum.Auth.CyfrDoor do
       session_token: token,
       resumed: resumed?,
       action_id: held["action_id"],
-      return_url: held["return_url"]
+      return_url: held["return_url"],
+      invitation: :none
     }
   end
 
@@ -450,28 +494,83 @@ defmodule Sanctum.Auth.CyfrDoor do
   end
 
   # The person the identity names: unlocked when one here holds it, and
-  # otherwise admitted as a remote newcomer.
-  defp person(state, genesis) do
-    key = Sanctum.Auth.Identity.cyfr_key(state.directory, state.identifier)
-
-    case Sanctum.SignIn.unlock(%{id: key, provider: "cyfr"}) do
-      {:ok, user} ->
-        {:ok, user}
-
-      {:error, :no_person} ->
-        remote = %{
-          identifier: state.identifier,
-          directory_url: state.directory,
-          genesis_hash: Identity.hash(genesis),
-          head_hash: state.head
-        }
-
-        with {:ok, %{person: user}} <- Sanctum.Newcomer.admit({:remote, remote}, :none),
-             do: {:ok, user}
-
-      {:error, reason} ->
-        {:error, reason}
+  # otherwise admitted as a remote newcomer; with an invitation, admitted
+  # by it (the module doc).
+  defp person(state, genesis, nil) do
+    case Sanctum.SignIn.unlock(%{id: key(state), provider: "cyfr"}) do
+      {:ok, user} -> {:ok, user, :none}
+      {:error, :no_person} -> newcomer(state, genesis, nil, :none)
+      {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp person(state, genesis, invitation) do
+    case Sanctum.Tenancy.Users.get_by_identity(key(state)) do
+      {:ok, %{status: "active"} = user} -> invited(user, state, invitation)
+      {:ok, _not_active} -> {:error, {:door, :denied}}
+      {:error, :not_found} -> invited_newcomer(state, genesis, invitation)
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp key(state), do: Sanctum.Auth.Identity.cyfr_key(state.directory, state.identifier)
+
+  # A person here already: refused on a deny before anything is written,
+  # then the invitation redeemed, their seat and their allow written, and
+  # the door asked once more by the unlock.
+  defp invited(user, state, invitation) do
+    case Sanctum.Door.Store.denied(user.id, state.identifier) do
+      {:ok, false} ->
+        case Sanctum.Invitations.redeem_for(invitation, user.id) do
+          {:ok, _redeemed} -> unlocked(state, :redeemed)
+          {:error, :invitation_invalid} -> unusable(Sanctum.Door.admit_person(user), state)
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:ok, true} ->
+        {:error, {:door, :denied}}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp invited_newcomer(state, genesis, invitation) do
+    case newcomer(state, genesis, invitation, :redeemed) do
+      {:error, :invitation_invalid} ->
+        case Sanctum.Door.admit_identifier(state.identifier) do
+          {:ok, :allowed} -> newcomer(state, genesis, nil, :unusable)
+          {:error, :unavailable} -> {:error, :unavailable}
+          {:error, _refused} -> {:error, :invitation_invalid}
+        end
+
+      admitted ->
+        admitted
+    end
+  end
+
+  # An invitation that can no longer be used: a person the door admits
+  # without it is signed in, and anyone else refused with nothing written.
+  defp unusable({:ok, :allowed}, state), do: unlocked(state, :unusable)
+  defp unusable({:error, :unavailable}, _state), do: {:error, :unavailable}
+  defp unusable({:error, _refused}, _state), do: {:error, :invitation_invalid}
+
+  defp unlocked(state, invitation) do
+    with {:ok, user} <- Sanctum.SignIn.unlock(%{id: key(state), provider: "cyfr"}),
+         do: {:ok, user, invitation}
+  end
+
+  defp newcomer(state, genesis, invitation, outcome) do
+    remote = %{
+      identifier: state.identifier,
+      directory_url: state.directory,
+      genesis_hash: Identity.hash(genesis),
+      head_hash: state.head,
+      invitation: invitation
+    }
+
+    with {:ok, %{person: user}} <- Sanctum.Newcomer.admit({:remote, remote}, :none),
+         do: {:ok, user, outcome}
   end
 
   # The person's own context, bound to the athanor their memberships give,
@@ -498,7 +597,8 @@ defmodule Sanctum.Auth.CyfrDoor do
          {:ok, _bytes} <- Encoding.unb64(held["challenge"], @challenge_bytes),
          true <- Encoding.id?(held["challenge_id"]) and Encoding.id?(held["action_id"]),
          true <- Encoding.identifier?(held["identifier"]) and Encoding.home?(held["source"]),
-         true <- is_binary(held["browser_secret"]) and is_integer(held["expires_at"]) do
+         true <- is_binary(held["browser_secret"]) and is_integer(held["expires_at"]),
+         :ok <- attempted(held["attempt"], held["invitation"]) do
       {:ok, held}
     else
       _malformed -> {:error, :no_challenge}

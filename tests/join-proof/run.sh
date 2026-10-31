@@ -271,6 +271,30 @@ PY
     h_person)
       ANSWER="$(join_fixture "$H" person "$(asked "$ask" identifier)")"
       ;;
+    h_invitation)
+      # An invitation H's operator makes for a group of its own, Garden,
+      # for the person who already has a name; its link carries the code.
+      garden="$(join_fixture "$H" group "@$SECRETS/admin-token" "Garden")"
+      invitation="$(admin_console invitation/create "{\"athanor_id\":\"$(field "$garden" athanor_id)\"}")"
+      ANSWER="$(python3 - "$garden" "$invitation" <<'PY'
+import json, sys
+garden, invitation = (json.loads(a) for a in sys.argv[1:])
+made = invitation.get("ok") or {}
+print(json.dumps({"athanor_id": garden["athanor_id"], "link": made.get("invitation_url"),
+                  "answer": None if made else invitation}))
+PY
+)"
+      ;;
+    h_door)
+      # H's door entries naming the identifier.
+      identifier="$(asked "$ask" identifier)"
+      ANSWER="$(admin_console door/list '{}' | python3 -c "
+import json, sys
+listed = json.load(sys.stdin).get('ok') or {}
+entries = [e for e in listed.get('entries', []) if e.get('value') == sys.argv[1]]
+print(json.dumps({'entries': [{k: e.get(k) for k in ('kind', 'value', 'effect', 'status', 'note', 'added_by')} for e in entries]}))
+" "$identifier")"
+      ;;
     h_receipts)
       ANSWER="$(join_fixture "$H" receipts "$(asked "$ask" identifier)")"
       ;;

@@ -15,7 +15,10 @@ defmodule Sanctum.InvitationsTest do
   anyone else their own. `lookup/1` names who invited and to which
   athanor, never by an address, and refuses an expired, redeemed or
   revoked code, and one whose issuer lost the seat or was denied, with one
-  answer.
+  answer. `redeemable_hash/1` makes the same checks from the code's hash.
+  `redeem_for/2` redeems one for a person this CYFR knows, writing their
+  seat and their identifier's allow with the redemption, once, and a deny
+  rolls all of it back with the invitation unspent.
   """
 
   # Contexts are loaded from sessions, and the caps' settings are
@@ -72,6 +75,34 @@ defmodule Sanctum.InvitationsTest do
   end
 
   defp row(id), do: Arca.Repo.get!(Invitation, id)
+
+  defp hash(code) do
+    {:ok, hash} = Invitations.code_hash(code)
+    hash
+  end
+
+  # A person whose keys another CYFR holds, known here by their identifier.
+  defp remote!(name \\ nil) do
+    n = System.unique_integer([:positive])
+    identifier = "per_" <> Prima.Digest.sha256_hex("invitations-remote-#{n}")
+
+    {:ok, user} =
+      Sanctum.Test.People.remote(
+        %{
+          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          provider: "cyfr"
+        },
+        %{identifier: identifier, directory_url: "https://dir.example"}
+      )
+
+    if name, do: {:ok, _} = Arca.Users.update(Prima.Actor.system(), user.id, %{namespace: name})
+    Map.put(user, :identifier, identifier)
+  end
+
+  defp door(identifier),
+    do: Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
+
+  defp seated?(user, group), do: Members.member?(user.id, group.id)
   defp invitations, do: Arca.Repo.aggregate(Invitation, :count)
 
   defp expire!(id) do
@@ -336,6 +367,33 @@ defmodule Sanctum.InvitationsTest do
       end
     end
 
+    test "redeemable_hash/1 agrees with redeemable/1, and refuses what is no hash" do
+      alice = person!()
+      bob = person!()
+      group = group!(alice, [bob])
+      {:ok, %{code: open}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{code: left}} = Invitations.create(ctx(bob), group.id)
+      {:ok, %{invitation: expired, code: expired_code}} = Invitations.create(ctx(alice), group.id)
+      expire!(expired.id)
+      {:ok, %{invitation: revoked, code: revoked_code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, _} = Invitations.revoke(ctx(alice), revoked.id)
+      {:ok, %{code: redeemed_code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, _} = Invitations.redeem(redeemed_code, person!().id)
+      :ok = Members.remove_member(group, user_id: bob.id)
+
+      assert :ok = Invitations.redeemable(open)
+      assert :ok = Invitations.redeemable_hash(hash(open))
+
+      for code <- [left, expired_code, revoked_code, redeemed_code] do
+        assert {:error, :invitation_invalid} = Invitations.redeemable(code)
+        assert {:error, :invitation_invalid} = Invitations.redeemable_hash(hash(code))
+      end
+
+      for value <- [open, String.upcase(hash(open)), "", nil, 7, hash(open) <> "0"] do
+        assert {:error, :invitation_invalid} = Invitations.redeemable_hash(value)
+      end
+    end
+
     test "a group archived since, and an issuer of one naming no athanor who no longer administers, admit no one" do
       admin = admin!()
       alice = person!()
@@ -351,5 +409,280 @@ defmodule Sanctum.InvitationsTest do
         assert {:error, :invitation_invalid} = Invitations.lookup(code)
       end
     end
+  end
+
+  describe "redeem_for/2" do
+    test "redeems once for a person known here, writing their seat and their identifier's allow" do
+      alice = person!()
+      group = group!(alice)
+      carol = remote!("carol")
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      note = "invitation " <> invitation.id
+
+      assert {:ok, %{redeemed_by: redeemed_by}} = Invitations.redeem_for(hash(code), carol.id)
+      assert redeemed_by == carol.id
+      assert seated?(carol, group)
+
+      assert [
+               %{
+                 kind: "identifier",
+                 effect: "allow",
+                 status: "allowed",
+                 added_by: added_by,
+                 note: ^note,
+                 label: "carol"
+               }
+             ] = door(carol.identifier)
+
+      assert added_by == alice.id
+
+      # Once: a second redemption, by anyone, finds it used and writes nothing.
+      dave = remote!()
+      assert {:error, :invitation_invalid} = Invitations.redeem_for(hash(code), dave.id)
+      assert {:error, :invitation_invalid} = Invitations.redeem_for(hash(code), carol.id)
+      refute seated?(dave, group)
+      assert door(dave.identifier) == []
+      assert length(door(carol.identifier)) == 1
+    end
+
+    test "one naming no athanor writes the allow and no seat" do
+      admin = admin!()
+      carol = remote!()
+      {:ok, %{code: code}} = Invitations.create(ctx(admin), nil)
+
+      assert {:ok, _} = Invitations.redeem_for(hash(code), carol.id)
+      assert [%{effect: "allow", label: nil}] = door(carol.identifier)
+      assert {:ok, []} = Members.list_by_user(carol.id)
+    end
+
+    test "a deny of the identifier or of the person refuses it, the invitation unspent and no seat" do
+      alice = person!()
+      group = group!(alice)
+      carol = remote!()
+      dave = remote!()
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, identifier_deny} = Sanctum.Door.Store.deny("identifier", carol.identifier, "ops")
+      {:ok, _person_deny} = Sanctum.Door.Store.deny("person", dave.id, "ops")
+
+      assert {:error, {:door, :denied}} = Invitations.redeem_for(hash(code), carol.id)
+      assert {:error, {:door, :denied}} = Invitations.redeem_for(hash(code), dave.id)
+
+      assert %{redeemed_at: nil, redeemed_by: nil} = row(invitation.id)
+      refute seated?(carol, group)
+      refute seated?(dave, group)
+      assert door(carol.identifier) == [identifier_deny]
+      assert door(dave.identifier) == []
+      assert :ok = Invitations.redeemable(code)
+    end
+
+    test "a spent, revoked or expired invitation writes no seat and no allow" do
+      alice = person!()
+      group = group!(alice)
+      {:ok, %{code: spent}} = Invitations.create(ctx(alice), group.id)
+      {:ok, _} = Invitations.redeem(spent, person!().id)
+      {:ok, %{invitation: revoked, code: revoked_code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, _} = Invitations.revoke(ctx(alice), revoked.id)
+      {:ok, %{invitation: expired, code: expired_code}} = Invitations.create(ctx(alice), group.id)
+      expire!(expired.id)
+
+      for code <- [spent, revoked_code, expired_code] do
+        carol = remote!()
+        assert {:error, :invitation_invalid} = Invitations.redeem_for(hash(code), carol.id)
+        refute seated?(carol, group)
+        assert door(carol.identifier) == []
+      end
+    end
+
+    test "a group's member cap, reached, refuses it and rolls the redemption back" do
+      alice = person!()
+      group = group!(alice)
+      carol = remote!()
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      Sanctum.Test.Settings.put("max_members_per_group", 1)
+
+      assert {:error, {:limit_reached, :max_members_per_group, 1}} =
+               Invitations.redeem_for(hash(code), carol.id)
+
+      assert %{redeemed_at: nil} = row(invitation.id)
+      assert door(carol.identifier) == []
+    end
+  end
+end
+
+defmodule Sanctum.InvitationsRaceTest do
+  @moduledoc """
+  A deny that commits on another connection while a known person's
+  redemption runs: after the caller's check of the door and before the
+  redemption's write, and, on PostgreSQL, inside the redemption's
+  transaction before its allow. Either way the deny wins: the redemption
+  rolls back with the invitation unspent, no seat and no allow.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
+
+  alias Arca.Schemas.{Athanor, ExternalIdentity, Invitation, Membership, PersonIdentity, User}
+  alias Arca.Schemas.ServerAllowlistEntry, as: Entry
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Sanctum.Door.Store
+  alias Sanctum.Invitations
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    n = System.unique_integer([:positive])
+    key = "github|https://github.com|invitations-race-#{n}"
+    identifier = "per_" <> Prima.Digest.sha256_hex("invitations-race-#{n}")
+    remote_key = Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier)
+    on_exit(fn -> unboxed(fn -> cleanup!([key, remote_key], identifier) end) end)
+
+    unboxed(fn ->
+      {:ok, issuer} = Sanctum.Test.People.linked(%{id: key, provider: "github"})
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Race #{n}")
+      ctx = Sanctum.Context.build(user_id: issuer.id)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx, group.id)
+      {:ok, hash} = Invitations.code_hash(code)
+
+      {:ok, carol} =
+        Sanctum.Test.People.remote(%{id: remote_key, provider: "cyfr"}, %{
+          identifier: identifier,
+          directory_url: "https://dir.example"
+        })
+
+      {:ok,
+       group: group, invitation: invitation, hash: hash, carol: carol, identifier: identifier}
+    end)
+  end
+
+  defp state(%{group: group, invitation: invitation, carol: carol, identifier: identifier}) do
+    unboxed(fn ->
+      %{
+        redeemed_by: Arca.Repo.get!(Invitation, invitation.id).redeemed_by,
+        seats:
+          Arca.Repo.aggregate(
+            from(m in Membership, where: m.user_id == ^carol.id and m.athanor_id == ^group.id),
+            :count
+          ),
+        door: Arca.Repo.all(from(e in Entry, where: e.value == ^identifier, select: e.effect))
+      }
+    end)
+  end
+
+  test "a deny committed between the door's check and the redemption's write wins",
+       %{hash: hash, carol: carol, identifier: identifier} = context do
+    test = self()
+
+    redeeming =
+      Task.async(fn ->
+        unboxed(fn ->
+          checked = Store.denied(carol.id, identifier)
+          send(test, {:checked, checked})
+
+          receive do
+            :go -> Invitations.redeem_for(hash, carol.id)
+          end
+        end)
+      end)
+
+    assert_receive {:checked, {:ok, false}}, 5_000
+    {:ok, _deny} = unboxed(fn -> Store.deny("identifier", identifier, "ops") end)
+    send(redeeming.pid, :go)
+
+    assert {:error, {:door, :denied}} = Task.await(redeeming, 25_000)
+    assert state(context) == %{redeemed_by: nil, seats: 0, door: ["deny"]}
+  end
+
+  test "a deny of the person committed between the check and the write wins",
+       %{hash: hash, carol: carol, identifier: identifier} = context do
+    test = self()
+
+    redeeming =
+      Task.async(fn ->
+        unboxed(fn ->
+          checked = Store.denied(carol.id, identifier)
+          send(test, {:checked, checked})
+
+          receive do
+            :go -> Invitations.redeem_for(hash, carol.id)
+          end
+        end)
+      end)
+
+    assert_receive {:checked, {:ok, false}}, 5_000
+    {:ok, _deny} = unboxed(fn -> Store.deny("person", carol.id, "ops") end)
+    send(redeeming.pid, :go)
+
+    assert {:error, {:door, :denied}} = Task.await(redeeming, 25_000)
+    assert state(context) == %{redeemed_by: nil, seats: 0, door: []}
+  end
+
+  @tag :postgres
+  test "a deny committed inside the redemption, after its conditional write, wins",
+       %{hash: hash, carol: carol, identifier: identifier} = context do
+    assert postgres?()
+    test = self()
+    handler = "invitations-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if Process.get(:redeeming) and metadata[:source] == "invitations" and
+               String.starts_with?(metadata[:query] || "", "UPDATE") do
+            Process.delete(:redeeming)
+            send(test, :redeemed_uncommitted)
+
+            receive do
+              :go -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    redeeming =
+      Task.async(fn ->
+        unboxed(fn ->
+          Process.put(:redeeming, true)
+          Invitations.redeem_for(hash, carol.id)
+        end)
+      end)
+
+    assert_receive :redeemed_uncommitted, 10_000
+    {:ok, _deny} = unboxed(fn -> Store.deny("identifier", identifier, "ops") end)
+    send(redeeming.pid, :go)
+
+    assert {:error, {:door, :denied}} = Task.await(redeeming, 25_000)
+    assert state(context) == %{redeemed_by: nil, seats: 0, door: ["deny"]}
+  end
+
+  defp cleanup!(keys, identifier) do
+    people =
+      Arca.Repo.all(from(i in ExternalIdentity, where: i.key in ^keys, select: i.user_id))
+
+    athanors =
+      Arca.Repo.all(
+        from(a in Athanor,
+          where: a.owner_user_id in ^people or a.created_by in ^people,
+          select: a.id
+        )
+      )
+
+    Arca.Repo.delete_all(from(e in Entry, where: e.value in ^[identifier | people]))
+    Arca.Repo.delete_all(from(i in Invitation, where: i.issued_by in ^people))
+
+    Arca.Repo.delete_all(
+      from(m in Membership, where: m.user_id in ^people or m.athanor_id in ^athanors)
+    )
+
+    Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id in ^people))
+    Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))
+    Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^athanors))
+    Arca.Repo.delete_all(from(u in User, where: u.id in ^people))
   end
 end

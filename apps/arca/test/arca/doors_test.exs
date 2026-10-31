@@ -216,6 +216,110 @@ defmodule Arca.DoorsTest do
     end
   end
 
+  describe "an allow unless denied" do
+    test "over no row it writes the allow", %{actor: actor} do
+      value = ident("unless-none")
+
+      assert {:ok, written} =
+               Doors.allow_unless_denied(actor, {"identifier", value}, %{
+                 added_by: "usr_issuer",
+                 note: "invitation inv_1",
+                 label: "mira"
+               })
+
+      assert %{
+               kind: "identifier",
+               value: ^value,
+               effect: "allow",
+               status: "allowed",
+               added_by: "usr_issuer",
+               note: "invitation inv_1",
+               label: "mira",
+               requested_by: nil
+             } = written
+
+      assert {:ok, ^written} = Doors.find(actor, "identifier", value)
+    end
+
+    test "over an allow it states the allow anew, keeping its id and birth", %{actor: actor} do
+      before = entry(actor, "identifier", ident("unless-allow"), %{added_by: "ops", note: "old"})
+
+      assert {:ok, written} =
+               Doors.allow_unless_denied(actor, {"identifier", before.value}, %{
+                 added_by: "usr_issuer",
+                 note: "invitation inv_2"
+               })
+
+      assert %{id: id, created_at: created_at, effect: "allow", status: "allowed"} = written
+      assert {id, created_at} == {before.id, before.created_at}
+
+      assert {written.added_by, written.note, written.label} ==
+               {"usr_issuer", "invitation inv_2", nil}
+
+      assert {:ok, ^written} = Doors.find(actor, "identifier", before.value)
+    end
+
+    test "over a request it puts the allow in force", %{actor: actor} do
+      request =
+        entry(actor, "identifier", ident("unless-request"), %{
+          status: "requested",
+          requested_by: "usr_member"
+        })
+
+      assert {:ok, %{id: id, status: "allowed", effect: "allow", requested_by: "usr_member"}} =
+               Doors.allow_unless_denied(actor, {"identifier", request.value}, %{
+                 added_by: "usr_issuer"
+               })
+
+      assert id == request.id
+    end
+
+    test "over a deny it writes nothing and answers denied", %{actor: actor} do
+      deny =
+        entry(actor, "identifier", ident("unless-deny"), %{effect: "deny", added_by: "ops"})
+
+      assert {:error, :denied} =
+               Doors.allow_unless_denied(actor, {"identifier", deny.value}, %{
+                 added_by: "usr_issuer",
+                 note: "invitation inv_3"
+               })
+
+      assert {:ok, ^deny} = Doors.find(actor, "identifier", deny.value)
+    end
+
+    test "a deny of any status is a deny", %{actor: actor} do
+      deny =
+        entry(actor, "identifier", ident("unless-deny-requested"), %{
+          effect: "deny",
+          status: "requested"
+        })
+
+      assert {:error, :denied} =
+               Doors.allow_unless_denied(actor, {"identifier", deny.value}, %{added_by: "x"})
+
+      assert {:ok, ^deny} = Doors.find(actor, "identifier", deny.value)
+    end
+
+    test "a shape the rows refuse writes nothing, and an athanor actor is refused", %{
+      actor: actor
+    } do
+      assert {:error, {:invalid, %{value: _}}} =
+               Doors.allow_unless_denied(actor, {"identifier", "per_short"}, %{})
+
+      assert {:error, {:invalid, %{kind: _}}} =
+               Doors.allow_unless_denied(actor, {"person", ident("unless-kind")}, %{})
+
+      assert {:error, :not_platform} =
+               Doors.allow_unless_denied(
+                 %Prima.Actor{athanor_id: "ath_doors"},
+                 {"identifier", ident("unless-tenant")},
+                 %{}
+               )
+
+      assert {:ok, []} = Doors.list(actor)
+    end
+  end
+
   describe "reads" do
     test "list is newest first and requests is oldest first, requested only", %{actor: actor} do
       old = entry(actor, "identifier", ident("old"), %{status: "requested"})
@@ -236,5 +340,109 @@ defmodule Arca.DoorsTest do
       waiting_stamps = Enum.map(waiting, & &1.created_at)
       assert waiting_stamps == Enum.sort(waiting_stamps, {:asc, DateTime})
     end
+  end
+end
+
+defmodule Arca.DoorsRaceTest do
+  @moduledoc """
+  An allow unless denied against a deny of the same identifier, each on
+  its own connection: the deny holds its write open, the allow waits
+  behind it (PostgreSQL's row or index lock, SQLite's write lock), and
+  once the deny commits the allow finds it and writes nothing.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
+
+  alias Arca.Doors
+  alias Arca.Schemas.ServerAllowlistEntry, as: Entry
+  alias Arca.Test.LockWait
+  alias Ecto.Adapters.SQL.Sandbox
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+  defp server, do: Prima.Actor.system()
+
+  defp backend do
+    if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
+  end
+
+  setup do
+    value = "per_" <> Prima.Digest.sha256_hex("door-race-#{System.unique_integer()}")
+    on_exit(fn -> unboxed(fn -> Arca.Repo.delete_all(where(Entry, value: ^value)) end) end)
+    {:ok, value: value}
+  end
+
+  # The deny's write, held open until the test lets it commit.
+  defp hold_deny(write) do
+    test = self()
+
+    Task.async(fn ->
+      unboxed(fn ->
+        Arca.Repo.transaction(fn ->
+          {:ok, deny} = write.()
+          send(test, :deny_holds)
+
+          receive do
+            :commit -> deny
+          end
+        end)
+      end)
+    end)
+  end
+
+  # The allow, in a transaction of its own as the redemption's is, rolled
+  # back on a deny.
+  defp allow(value) do
+    test = self()
+
+    Task.async(fn ->
+      unboxed(fn ->
+        send(test, {:allow, backend()})
+
+        Arca.Repo.transaction(fn ->
+          case Doors.allow_unless_denied(server(), {"identifier", value}, %{added_by: "usr_i"}) do
+            {:ok, entry} -> entry
+            {:error, reason} -> Arca.Repo.rollback(reason)
+          end
+        end)
+      end)
+    end)
+  end
+
+  defp race(value, deny) do
+    assert_receive :deny_holds, 5_000
+    allowing = allow(value)
+    assert_receive {:allow, pid}, 5_000
+
+    if postgres?(),
+      do: LockWait.await_lock_wait!(pid, [~s(INSERT INTO "server_allowlist")])
+
+    refute Task.yield(allowing, 300), "the allow decided while the deny held its write"
+
+    send(deny.pid, :commit)
+    assert {:ok, %{effect: "deny"}} = Task.await(deny, 25_000)
+    assert {:error, :denied} = Task.await(allowing, 25_000)
+
+    assert [%{effect: "deny", status: "allowed"}] =
+             unboxed(fn -> Arca.Repo.all(where(Entry, value: ^value)) end)
+  end
+
+  test "a deny that turns an allow into a deny meanwhile wins", %{value: value} do
+    {:ok, allowed} =
+      unboxed(fn -> Doors.insert(server(), %{kind: "identifier", value: value}) end)
+
+    deny = hold_deny(fn -> Doors.update(server(), allowed.id, %{effect: "deny"}) end)
+    race(value, deny)
+  end
+
+  test "a deny written over no row meanwhile wins", %{value: value} do
+    deny =
+      hold_deny(fn ->
+        Doors.insert(server(), %{kind: "identifier", value: value, effect: "deny"})
+      end)
+
+    race(value, deny)
   end
 end

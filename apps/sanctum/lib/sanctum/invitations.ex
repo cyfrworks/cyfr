@@ -49,6 +49,26 @@ defmodule Sanctum.Invitations do
   unexpired, inside the admission's transaction after the check. The seat
   an invitation naming a group makes reads its issuer's standing and seat
   there once more, under the group's lock (`issuer_seated/1`).
+
+  ## Redeeming as an existing identity
+
+  A person whose keys another CYFR holds redeems an invitation through
+  the CYFR sign-in, which carries the code's hash (`code_hash/1`) in this
+  CYFR's own session, never the code. `redeemable_hash/1` is
+  `redeemable/1`'s check from the hash. `redeem_for/2` redeems it for a
+  person this CYFR already knows, in a transaction of its own, and
+  `redeem_hash/2` for one it does not, in the remote admission's
+  (`Sanctum.Newcomer`). After the conditional write both write, in that
+  transaction, the seat the invitation names, under the group's lock,
+  and the identifier's allow (`Sanctum.Door.Store.allow_unless_denied/4`),
+  the row `door.allow`
+  writes, added by the issuer, noting the invitation, labelled with the
+  person's name here when they have one. A deny of the identifier, even
+  one committed a moment before, refuses the allow, and a deny of the
+  person or the identifier read again before the commit refuses it too:
+  either rolls the redemption back with the invitation unspent and no
+  seat, and the person is refused `{:door, :denied}`. Later sign-ins are
+  admitted by that allow, which any later deny outranks.
   """
 
   alias Sanctum.Context
@@ -155,7 +175,8 @@ defmodule Sanctum.Invitations do
   """
   @spec lookup(term()) :: {:ok, shown()} | {:error, :invitation_invalid | :unavailable}
   def lookup(code) do
-    with {:ok, %{row: row, issuer: issuer, athanor: athanor}} <- standing(code) do
+    with {:ok, code_hash} <- code_hash(code),
+         {:ok, %{row: row, issuer: issuer, athanor: athanor}} <- standing(code_hash) do
       shown = %{inviter: inviter(issuer), expires_at: row.expires_at}
       shown = if athanor, do: Map.put(shown, :athanor, athanor.name), else: shown
       {:ok, if(is_binary(row.name), do: Map.put(shown, :name, row.name), else: shown)}
@@ -170,8 +191,34 @@ defmodule Sanctum.Invitations do
   """
   @spec redeemable(term()) :: :ok | {:error, :invitation_invalid | :unavailable}
   def redeemable(code) do
-    with {:ok, _standing} <- standing(code), do: :ok
+    with {:ok, code_hash} <- code_hash(code), do: redeemable_hash(code_hash)
   end
+
+  @doc """
+  `redeemable/1` from the code's hash (`code_hash/1`), making exactly its
+  checks: `:ok`, `{:error, :invitation_invalid}`, or `{:error,
+  :unavailable}`. A value that is no hash opens nothing. Reads only.
+  """
+  @spec redeemable_hash(term()) :: :ok | {:error, :invitation_invalid | :unavailable}
+  def redeemable_hash(code_hash) do
+    with :ok <- hash(code_hash), {:ok, _standing} <- standing(code_hash), do: :ok
+  end
+
+  @doc """
+  The hash an invitation is stored under, of the code `code` as it was
+  given (base64url without padding, of 32 bytes): the lowercase hex
+  SHA-256 of its bytes. Anything else is `:invitation_invalid`, as an
+  unknown code is.
+  """
+  @spec code_hash(term()) :: {:ok, String.t()} | {:error, :invitation_invalid}
+  def code_hash(code) when is_binary(code) do
+    case Base.url_decode64(code, padding: false) do
+      {:ok, <<_::binary-size(@code_bytes)>> = bytes} -> {:ok, Prima.Digest.sha256_hex(bytes)}
+      _malformed -> invalid()
+    end
+  end
+
+  def code_hash(_code), do: invalid()
 
   @doc """
   Mark the invitation `code` opens redeemed by the person `user_id`, in
@@ -189,6 +236,97 @@ defmodule Sanctum.Invitations do
         {:ok, row} -> {:ok, row}
         {:error, :not_found} -> {:error, :invitation_invalid}
         {:error, reason} -> {:error, unavailable(reason)}
+      end
+    end
+  end
+
+  @doc """
+  Redeem the invitation `code_hash` names for the person `user_id`, whom
+  this CYFR already knows by their identifier (the module doc): after
+  `redeemable_hash/1` agreed, in one transaction, the conditional write
+  `redeem/2` makes, then the seat, the allow and the deny read once more
+  (the module doc). Answers the redeemed
+  invitation. One closed meanwhile, or by another redemption first, is
+  `:invitation_invalid`; a deny is `{:door, :denied}`; either writes
+  nothing.
+  """
+  @spec redeem_for(term(), String.t()) ::
+          {:ok, map()} | {:error, :invitation_invalid | {:door, :denied} | :unavailable | term()}
+  def redeem_for(code_hash, user_id) when is_binary(user_id) do
+    with :ok <- redeemable_hash(code_hash),
+         {:ok, person} <- known(user_id) do
+      case Arca.Invitations.redeem_for(server(), code_hash, user_id,
+             also: &seat_and_allow(&1, person)
+           ) do
+        {:ok, row} ->
+          joined(row, user_id)
+          {:ok, row}
+
+        {:error, :not_found} ->
+          invalid()
+
+        {:error, reason} ->
+          {:error, unavailable(reason)}
+      end
+    end
+  end
+
+  @typedoc "Who an existing identity's redemption admits: their id, identifier and name here."
+  @type redeemer :: %{
+          required(:user_id) => String.t(),
+          required(:identifier) => String.t(),
+          required(:label) => String.t() | nil
+        }
+
+  @doc """
+  Redeem the invitation `code_hash` names for `person`, a remote person
+  the admission is making, in the admission's transaction after
+  `redeemable_hash/1` agreed (the module doc): the conditional write,
+  then the seat, the allow and the deny read once more. Answers `:ok`;
+  one closed meanwhile is `:invitation_invalid` and a deny `{:door,
+  :denied}`, each rolling the admission back.
+  """
+  @spec redeem_hash(String.t(), redeemer()) :: :ok | {:error, term()}
+  def redeem_hash(code_hash, %{user_id: user_id} = person) when is_binary(code_hash) do
+    case Arca.Invitations.redeem(server(), code_hash, user_id) do
+      {:ok, row} -> seat_and_allow(row, person)
+      {:error, :not_found} -> invalid()
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Tell the group the invitation `code_hash` names of the person `user_id`
+  it seated there, once the redemption committed. One naming no group, or
+  one that cannot be read, tells no one.
+  """
+  @spec announce(String.t(), String.t()) :: :ok
+  def announce(code_hash, user_id) when is_binary(code_hash) and is_binary(user_id) do
+    case Arca.Invitations.by_code_hash(server(), code_hash) do
+      {:ok, row} -> joined(row, user_id)
+      {:error, _unread} -> :ok
+    end
+  end
+
+  defp joined(%{athanor_id: athanor_id}, user_id) when is_binary(athanor_id) do
+    Members.broadcast_change(user_id, athanor_id, :joined)
+    Sanctum.Notify.member_changed(athanor_id)
+    :ok
+  end
+
+  defp joined(_invitation, _user_id), do: :ok
+
+  # What a redemption by an existing identity writes in its transaction,
+  # after the invitation's conditional write (the module doc): the seat
+  # the invitation names, when it names one, then the identifier's allow,
+  # then the door's deny read once more.
+  defp seat_and_allow(invitation, %{user_id: user_id, identifier: identifier} = person) do
+    with :ok <- invited_seat(invitation, user_id),
+         :ok <- allowed(invitation, person) do
+      case Sanctum.Door.Store.denied(user_id, identifier) do
+        {:ok, false} -> :ok
+        {:ok, true} -> {:error, {:door, :denied}}
+        {:error, :unavailable} -> {:error, :unavailable}
       end
     end
   end
@@ -337,9 +475,8 @@ defmodule Sanctum.Invitations do
 
   # The invitation, its issuer and the athanor it names, when every check
   # of the module doc holds.
-  defp standing(code) do
-    with {:ok, code_hash} <- code_hash(code),
-         {:ok, row} <- invitation(code_hash),
+  defp standing(code_hash) do
+    with {:ok, row} <- invitation(code_hash),
          :ok <- open(row),
          {:ok, issuer} <- issuer(row),
          {:ok, athanor} <- named_place(row) do
@@ -347,16 +484,58 @@ defmodule Sanctum.Invitations do
     end
   end
 
-  # The code as it was given: base64url without padding, of 32 bytes.
-  # Anything else opens nothing, as an unknown code does.
-  defp code_hash(code) when is_binary(code) do
-    case Base.url_decode64(code, padding: false) do
-      {:ok, <<_::binary-size(@code_bytes)>> = bytes} -> {:ok, Prima.Digest.sha256_hex(bytes)}
-      _malformed -> invalid()
+  # A hash `code_hash/1` answers: 64 lowercase hex digits.
+  defp hash(value) when is_binary(value) and byte_size(value) == 64 do
+    if value =~ ~r/\A[0-9a-f]{64}\z/, do: :ok, else: invalid()
+  end
+
+  defp hash(_value), do: invalid()
+
+  # The person a redemption admits, as this CYFR knows them: their
+  # identifier, and their name here for the allow's label.
+  defp known(user_id) do
+    with {:ok, %{identifier: identifier}} when is_binary(identifier) <-
+           Arca.PersonIdentities.get(server(), user_id),
+         {:ok, user} <- Users.get(user_id) do
+      label = if is_binary(user[:namespace]) and user[:namespace] != "", do: user.namespace
+      {:ok, %{user_id: user_id, identifier: identifier, label: label}}
+    else
+      {:ok, _no_identifier} -> invalid()
+      {:error, :not_found} -> invalid()
+      {:error, reason} -> {:error, unavailable(reason)}
     end
   end
 
-  defp code_hash(_code), do: invalid()
+  # The seat a group invitation names, under the group's lock, its issuer
+  # still seated there and the group's member cap counted, as the
+  # invitation admission's is; a person seated there already keeps the
+  # seat they hold.
+  defp invited_seat(%{athanor_id: nil}, _user_id), do: :ok
+
+  defp invited_seat(%{athanor_id: athanor_id, issued_by: issuer} = invitation, user_id) do
+    case Members.ensure(user_id,
+           scope: "athanor",
+           athanor_id: athanor_id,
+           added_by: issuer,
+           reserve: fn ->
+             with :ok <- issuer_seated(invitation), do: Members.member_cap(athanor_id)
+           end
+         ) do
+      {:ok, _seat} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp allowed(%{id: id, issued_by: issuer}, %{identifier: identifier, label: label}) do
+    case Sanctum.Door.Store.allow_unless_denied("identifier", identifier, issuer,
+           note: "invitation " <> id,
+           label: label
+         ) do
+      {:ok, _entry} -> :ok
+      {:error, :denied} -> {:error, {:door, :denied}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp invitation(code_hash) do
     case Arca.Invitations.by_code_hash(server(), code_hash) do

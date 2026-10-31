@@ -65,14 +65,15 @@ recovery code or a confirmation's secret is deleted once read.
 |---|---|
 | `home` | the person is set up at A through `/setup`'s two screens: `@join-a` typed and found free at the stand-in, a passkey made, the identity registered at `dir.test` and the name claimed, the recovery code read and saved, and A holds that one person, admitted by setup and enrolled under the code's identifier; then they add a second recovery code (`person/recovery_code_add`), approved by the first, and pair a glass at A |
 | `hub` | H, enrolling its own people at `dir2.test`, allows the person's identifier at its door and invites it to a group athanor and a pair athanor |
-| `sign_in` | a fresh profile with no saved homes opens H by its address and names A; A's `/carry` is reached through A's sign-in with the carry's fragment kept, the person begins there, both homes show the same code, A's confirmation names it, and H admits once, making them a member of both athanors; every cross-home request is `cross-site`; neither origin's storage holds a list of homes |
+| `sign_in` | a fresh profile with no saved homes opens H by its address and names A in "Sign in from your CYFR"; A's `/carry` is reached through A's sign-in with the carry's fragment kept, the person begins there, both homes show the same code, A's confirmation names it, and H admits once, making them a member of both athanors; every cross-home request is `cross-site`; neither origin's storage holds a list of homes |
 | `resolution` | H read the person at `dir.test`, which their genesis names, and nothing of them at its own `dir2.test`; neither home's database has a table of visited homes |
-| `second_profile` | another fresh profile signs in by entered address the same way, importing nothing of the first |
+| `second_profile` | another fresh profile signs in by entered address the same way, importing nothing of the first; back at H's sign-in page, the field is filled with A from this browser's memory there (`cyfr:sign-in:your-cyfr`) |
 | `crafted` | a crafted carry link at A or H writes nothing: no action, confirmation, receipt or session |
 | `copied_session` | a copy of the person's session at A, in a browser holding none of their passkeys, obtains no assertion for H (A asks for a fresh proof it cannot give, which the person's own glass shows), and is no session at H |
 | `dropped_callback` | H's callback, committed, its answer never delivered: the browser's retry is answered with the session H made, never a second admission |
 | `closed_hops` | a tab closed after the carry began, after H's challenge reached A, and after A's assertion was made: a new tab resumes, and each ends in one admission |
-| `forged_completion` | a return no home sent, saying `admitted`, writes no membership, admission or saved address at either home |
+| `forged_completion` | a return no home sent, saying `admitted`, writes no membership, admission or saved address at either home; H's storage holds only `cyfr:sign-in:your-cyfr` |
+| `invited` | an invitation link H's operator makes for a new group, opened in a browser that signs in at A, taken through "Already have a CYFR name? Sign in with it.": H's sign-in page says who invited and never shows the code, the person signs in from A, and H seats them in the group and states the allow under their identifier anew, naming the invitation; a later sign-in with no link admits them; the link a second time says it can no longer be used |
 | `h_passkey` | a passkey the person registers at H from a CYFR-door session waits: signing in with it admits nobody; H's operator authorizes that exact registration with a fresh proof of their own, and only then is it active |
 | `a_passkey_at_h` | a passkey scoped to A signs nobody in at H |
 | `phone` | a phone opens H's pairing code, keeps the code while the person certifies its key at A under a fresh confirmation there (`/carry#certify=`), comes back with A's certificate and pairs at H; A records the certification |
@@ -95,7 +96,8 @@ page, so each includes up to one page load past the moment of retirement;
 the steps allow H's freshness bound plus 30 s and plus 40 s. LiveView keeps
 its reload counters in `localStorage` (keys ending `consecutive-reloads`),
 which are no list of homes, and `forged_completion` allows A's storage
-those keys alone.
+those keys alone, and H's those keys and the one address its sign-in
+page remembers.
 
 An externally operated directory is not provided: both directories here
 are disposable writers the run starts, which prove no hosted service.

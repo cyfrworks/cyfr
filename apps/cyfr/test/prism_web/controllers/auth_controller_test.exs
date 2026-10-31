@@ -779,8 +779,23 @@ defmodule PrismWeb.AuthControllerTest do
 
       identity = DirectoryServer.identity!(directory.dir, directory.url)
       %{fragment: fragment} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      {:ok, held} = CyfrDoor.challenge(fragment, :none)
+      {:ok, held} = CyfrDoor.challenge(fragment, %{"attempt" => attempt(), "invitation" => nil})
       %{directory: directory, identity: identity, held: held}
+    end
+
+    defp attempt, do: "att_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+    # The request the start keeps for the attempt `held` answers.
+    defp request_for(held, overrides \\ %{}) do
+      Map.merge(
+        %{
+          "home" => held["source"],
+          "expires_at" => in_a_minute(),
+          "attempt" => held["attempt"],
+          "invitation" => held["invitation"]
+        },
+        overrides
+      )
     end
 
     defp cyfr_ticket(held, binding \\ @cyfr_browser) do
@@ -800,8 +815,7 @@ defmodule PrismWeb.AuthControllerTest do
     # is given (nil for none), beside the challenge.
     defp holding(conn, held, request \\ :address)
 
-    defp holding(conn, held, :address),
-      do: holding(conn, held, %{"home" => held["source"], "expires_at" => in_a_minute()})
+    defp holding(conn, held, :address), do: holding(conn, held, request_for(held))
 
     defp holding(conn, held, nil),
       do: Plug.Test.init_test_session(conn, %{"cyfr_challenge" => held})
@@ -824,7 +838,10 @@ defmodule PrismWeb.AuthControllerTest do
 
       conn =
         conn
-        |> Plug.Test.init_test_session(%{"_csrf_token" => @cyfr_browser})
+        |> Plug.Test.init_test_session(%{
+          "_csrf_token" => @cyfr_browser,
+          "cyfr_request" => request_for(held)
+        })
         |> get("/auth/cyfr?" <> URI.encode_query(%{ticket: ticket}))
 
       assert conn.status == 303
@@ -852,6 +869,31 @@ defmodule PrismWeb.AuthControllerTest do
       assert redirected_to(get(build_conn(), "/auth/cyfr")) == "/login"
     end
 
+    test "an earlier attempt after a later start is refused: its ticket installs nothing against the later request",
+         %{conn: conn, held: held} do
+      # Attempt A's challenge, and attempt B's request, started since, of
+      # the same CYFR and the same invitation (none).
+      later = request_for(held, %{"attempt" => attempt()})
+
+      for request <- [later, nil] do
+        ticket = cyfr_ticket(held)
+
+        session =
+          if request,
+            do: %{"_csrf_token" => @cyfr_browser, "cyfr_request" => request},
+            else: %{"_csrf_token" => @cyfr_browser}
+
+        refused =
+          conn
+          |> Plug.Test.init_test_session(session)
+          |> get("/auth/cyfr?" <> URI.encode_query(%{ticket: ticket}))
+
+        assert redirected_to(refused) == "/login"
+        refute get_session(refused, "cyfr_challenge")
+        assert Arca.Cache.get({:login_cyfr_ticket, ticket}) == :miss
+      end
+    end
+
     # Where the browser reports how the sign-in ended: the person's home's
     # `/carry`, the return URL the carry's envelope signed, with the outcome.
     defp carry_return(held, outcome) do
@@ -865,7 +907,7 @@ defmodule PrismWeb.AuthControllerTest do
       fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
 
       # The sign-in's request, which the challenge answers.
-      request = %{"home" => "https://a.example", "expires_at" => in_a_minute()}
+      request = request_for(held)
 
       signed_in = callback(conn, held, fragment, request)
 
@@ -880,9 +922,9 @@ defmodule PrismWeb.AuthControllerTest do
       landed = get(recycle(signed_in), "/")
       assert redirected_to(landed) == "/login?error=no_athanor"
 
-      # The response was lost: the browser still holds the challenge and
-      # the request, and its retry resumes the one session and reports the
-      # same outcome.
+      # A retry of the same completed attempt resumes: the response was
+      # lost, the browser still holds that attempt's challenge and request,
+      # and its retry resumes the one session and reports the same outcome.
       again = callback(build_conn(), held, fragment, request)
       assert redirected_to(again, 303) == carry_return(held, :admitted)
       assert get_session(again, :sanctum_session_token) == token
@@ -895,7 +937,11 @@ defmodule PrismWeb.AuthControllerTest do
 
       for {why, request} <- [
             {"no request", nil},
-            {"another CYFR's", %{"home" => "https://b.example", "expires_at" => in_a_minute()}}
+            {"another CYFR's", request_for(held, %{"home" => "https://b.example"})},
+            {"a later attempt's, of the same CYFR and invitation",
+             request_for(held, %{"attempt" => attempt()})},
+            {"one whose invitation differs",
+             request_for(held, %{"invitation" => Prima.Digest.sha256_hex("another")})}
           ] do
         refused = callback(build_conn(), held, fragment, request)
         assert html_response(refused, 401) =~ "Sign-in failed", why
@@ -912,11 +958,7 @@ defmodule PrismWeb.AuthControllerTest do
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identifier(identity.identifier)
 
       # The same assertion under a request the challenge answers admits.
-      admitted =
-        callback(build_conn(), held, fragment, %{
-          "home" => "https://a.example",
-          "expires_at" => in_a_minute()
-        })
+      admitted = callback(build_conn(), held, fragment, request_for(held))
 
       assert redirected_to(admitted, 303) == carry_return(held, :admitted)
       assert get_session(admitted, :sanctum_session_token) == CyfrDoor.session_token(held)
@@ -965,15 +1007,16 @@ defmodule PrismWeb.AuthControllerTest do
       assert redirected_to(signed_in, 303) == carry_return(held, :admitted)
     end
 
-    test "an identity the door refuses gets 403, no session, and a link home reporting the refusal",
+    test "an identity the door refuses gets 403 and no session, on a page that names no address",
          %{conn: conn, held: held} = ctx do
       fragment = DirectoryServer.assertion_fragment(ctx.identity, held, Sanctum.Person.home())
       refused = callback(conn, held, fragment)
 
       body = html_response(refused, 403)
       assert body =~ "Not allowed on this server"
-      assert body =~ "Back to Aqua"
-      assert body =~ ~s(href="#{carry_return(held, :refused)}")
+      assert body =~ ~s(href="/login")
+      refute body =~ held["source"]
+      refute body =~ "/carry"
       refute get_session(refused, :sanctum_session_token)
     end
 
@@ -989,7 +1032,11 @@ defmodule PrismWeb.AuthControllerTest do
       refused = callback(conn, held, fragment)
       body = html_response(refused, 401)
       assert body =~ "Begin it again from your CYFR"
-      assert body =~ ~s(href="#{carry_return(held, :refused)}")
+      # The sessionless rule: the failed page links only to this CYFR's
+      # sign-in, never to the source's `/carry`.
+      assert body =~ ~s(href="/login")
+      refute body =~ held["source"]
+      refute body =~ "/carry"
       refute get_session(refused, :sanctum_session_token)
 
       # A browser holding no challenge has no home to report to.
@@ -1000,7 +1047,7 @@ defmodule PrismWeb.AuthControllerTest do
           "fragment" => DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
         })
 
-      refute html_response(unheld, 401) =~ "Back to Aqua"
+      refute html_response(unheld, 401) =~ "/carry"
       refute get_session(unheld, :sanctum_session_token)
     end
 
@@ -1016,7 +1063,7 @@ defmodule PrismWeb.AuthControllerTest do
         )
 
       conflicted = callback(build_conn(), held, another)
-      refute html_response(conflicted, 401) =~ "Back to Aqua"
+      refute html_response(conflicted, 401) =~ "/carry"
     end
 
     test "a directory that cannot be read answers try again, signs nobody in, and reports nothing home",
@@ -1028,8 +1075,41 @@ defmodule PrismWeb.AuthControllerTest do
       paused = callback(conn, held, fragment)
       body = html_response(paused, 503)
       assert body =~ "Try again shortly"
-      refute body =~ "Back to Aqua"
+      refute body =~ "/carry"
       refute get_session(paused, :sanctum_session_token)
+    end
+
+    test "an invitation that can no longer be used signs in a person the door admits, with its sentence, and refuses anyone else",
+         %{conn: conn, directory: directory} do
+      sentence = "This invitation can no longer be used. Ask whoever invited you for a new one."
+      spent = Prima.Digest.sha256_hex("an invitation no row holds")
+
+      invited = fn identity ->
+        %{fragment: fragment} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+
+        {:ok, held} =
+          CyfrDoor.challenge(fragment, %{"attempt" => attempt(), "invitation" => spent})
+
+        {held, DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())}
+      end
+
+      allowed = DirectoryServer.identity!(directory.dir, directory.url)
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", allowed.identifier, "test")
+      {held, fragment} = invited.(allowed)
+      signed_in = callback(conn, held, fragment)
+
+      assert redirected_to(signed_in, 303) == carry_return(held, :admitted)
+      assert get_session(signed_in, :sanctum_session_token)
+      assert Phoenix.Flash.get(signed_in.assigns.flash, :error) == sentence
+
+      stranger = DirectoryServer.identity!(directory.dir, directory.url)
+      {held, fragment} = invited.(stranger)
+      refused = callback(build_conn(), held, fragment)
+
+      assert html_response(refused, 403) =~ sentence
+      refute get_session(refused, :sanctum_session_token)
+      assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identifier(stranger.identifier)
+      assert Enum.filter(Sanctum.Door.Store.list(), &(&1.value == stranger.identifier)) == []
     end
   end
 
@@ -1042,17 +1122,26 @@ defmodule PrismWeb.AuthControllerTest do
       :ok
     end
 
+    @attempt "att_" <> String.duplicate("0a", 16)
+
     # The ticket the sign-in page mints for an attempt: the CYFR's origin
-    # and its /carry, beside `attempt`.
-    defp start_ticket(attempt \\ %{}) do
+    # and its /carry, the attempt's id and the invitation's hash or none,
+    # beside `extra`.
+    defp start_ticket(extra \\ %{}) do
       ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       {:ok, to} = Sanctum.Auth.CyfrDoor.signing_home("https://alice.example")
 
       Arca.Cache.put(
         {:login_cyfr_start, ticket},
         Map.merge(
-          %{home: "https://alice.example", to: to, browser_binding: @start_browser},
-          attempt
+          %{
+            home: "https://alice.example",
+            to: to,
+            attempt: @attempt,
+            invitation: nil,
+            browser_binding: @start_browser
+          },
+          extra
         ),
         60_000
       )
@@ -1068,12 +1157,17 @@ defmodule PrismWeb.AuthControllerTest do
       |> get("/auth/cyfr/start" <> query)
     end
 
-    test "keeps the attempt's request in this browser's session for the carry's lifetime, its home alone whatever else the ticket holds, and answers 303 to the CYFR's /carry" do
+    test "keeps the attempt's request in this browser's session for the carry's lifetime, its home, attempt and invitation alone whatever else the ticket holds, and answers 303 to the CYFR's /carry" do
       lifetime = Sanctum.Auth.CyfrDoor.carry_lifetime_ms()
-      kept = %{"home" => "https://alice.example"}
+      hash = Prima.Digest.sha256_hex("an invitation")
 
-      for attempt <- [%{}, %{identifier: @identifier}] do
-        {ticket, to} = start_ticket(attempt)
+      for {extra, kept} <- [
+            {%{},
+             %{"home" => "https://alice.example", "attempt" => @attempt, "invitation" => nil}},
+            {%{identifier: @identifier, invitation: hash},
+             %{"home" => "https://alice.example", "attempt" => @attempt, "invitation" => hash}}
+          ] do
+        {ticket, to} = start_ticket(extra)
         before = System.os_time(:millisecond)
 
         started = start(build_conn(), "?" <> URI.encode_query(%{ticket: ticket}))
@@ -1121,7 +1215,21 @@ defmodule PrismWeb.AuthControllerTest do
       refute get_session(started, "cyfr_challenge")
 
       assert started |> get_session("cyfr_request") |> Map.delete("expires_at") ==
-               %{"home" => "https://alice.example"}
+               %{"home" => "https://alice.example", "attempt" => @attempt, "invitation" => nil}
+    end
+
+    test "a ticket that names no attempt keeps nothing" do
+      {ticket, _to} = start_ticket()
+
+      Arca.Cache.put(
+        {:login_cyfr_start, ticket},
+        Map.delete(elem(Arca.Cache.get({:login_cyfr_start, ticket}), 1), :attempt),
+        60_000
+      )
+
+      refused = start(build_conn(), "?" <> URI.encode_query(%{ticket: ticket}))
+      assert redirected_to(refused) == "/login"
+      refute get_session(refused, "cyfr_request")
     end
 
     test "a ticket another browser presents is spent and keeps nothing; a missing one too",
