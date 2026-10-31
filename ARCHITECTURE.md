@@ -115,6 +115,8 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 - The `cyfr` binary, speaking MCP to Emissary with an API key or a session; its operation catalog is generated from the gate's table.
 - The access engine (`apps/codex/internal/access`), which `cyfr init`, `setup`, `access`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
+- The machine's own requirements (`apps/codex/internal/install`): on the supported Ubuntu release, `cyfr init` observes what the stack needs and the host lacks, shows the exact changes, and on the person's agreement applies them through one elevation of a fixed root entry that accepts only its policy's actions, then observes again; elsewhere, and for Docker another provider installed, the host is used as it is. One policy defines the supported system and its packages, and the install script, which installs the tools it verifies a release with, carries a copy generated from it. `init` prepares and `up` starts, on every system.
+- The optional screen launcher opens CYFR's account setup or Prism at the access engine's committed address and owns its display processes. *Not built yet.*
 - Two faces of the one program on the machine: the terminal, and the setup pages `cyfr setup` serves on the machine's loopback before the stack runs, for a device's own screen. The pages drive `cyfr init`'s sequence and `cyfr up`'s start, no second setup, and only the machine reaches them; Prism is never a setup surface.
 
 ### Locus: where untrusted things run
@@ -127,6 +129,8 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Apps and releases
 
 `prima`, `arca` and `sanctum` are Mix apps of their own because Sanctum's licence boundary is an application directory and Sanctum needs Arca beneath it; `cyfr` hosts Host, the domains and the surfaces under Boundary declarations; `locus` depends on `prima` alone; the keeper and `codex` are Go.
+
+The signed CLI embeds the screen launcher and its templates, and the system's package manager supplies and updates the browser, display layer and keyboard. *Not built yet.* On the supported Ubuntu release the host's requirements come from Ubuntu's own archive, cosign among them, which stays installed once the install script has verified a release with it.
 
 ## 4. How modules talk
 

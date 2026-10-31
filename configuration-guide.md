@@ -209,6 +209,7 @@ assigns one.
 | `CYFR_NO_INTERACTIVE` | the Codex CLI: turns off its prompts, as `--no-interactive` does |
 | `CYFR_INSECURE_SKIP_VERIFY` | the installer (scripts/install.sh): skips verifying the download's checksum and signature |
 | `CYFR_INSTALL_DIR` | the installer (scripts/install.sh): where it puts the CLI |
+| `CYFR_INSTALL_YES` | the installer (scripts/install.sh): agrees to the root commands it shows without a question; sudo must then work without a prompt |
 | `CYFR_ALLOW_UNVERIFIED` | the installer: installs without cosign or the release's signature, on the checksum alone |
 | `CYFR_VERSION` | the installer: the release it installs |
 | `CYFR_IMAGE` | the test harness: the app image the backends image suite runs |
