@@ -462,6 +462,89 @@ defmodule Sanctum.ProviderVaultProfileTest do
     assert why =~ "api_key"
   end
 
+  test "the profile tool binds a key shared with the person by its share id, on the app's " <>
+         "calls and on a dependency's edge, and says why one not offered is refused" do
+    %{alice: alice, terry: terry, share: share} = Cyfr.Test.ShareFixtures.traders!()
+
+    keyed = %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:openai.com",
+          "hosts" => ["api.openai.com"],
+          "reason" => "to call the model",
+          "fields" => ["OPENAI_API_KEY"],
+          "attach" => %{
+            "in" => "header",
+            "name" => "Authorization",
+            "template" => "Bearer {value}"
+          }
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
+    }
+
+    for {name, manifest} <- [
+          {"mcp-shared", keyed},
+          {"mcp-shared-app",
+           %{"dependencies" => %{"static" => [%{"ref" => "reagent:local.mcp-shared"}]}}}
+        ] do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(alice.ctx, @wasm, %{
+          name: name,
+          version: "1.0.0",
+          type: "reagent",
+          manifest:
+            Jason.encode!(
+              Map.merge(manifest, %{"name" => name, "version" => "1.0.0", "type" => "reagent"})
+            )
+        })
+    end
+
+    preview = fn ctx, decisions ->
+      Sanctum.Provider.handle("profile", ctx, %{"action" => "preview", "decisions" => decisions})
+    end
+
+    source = fn rows ->
+      for %{"kind" => "credential", "values" => v} <- rows, do: {v["name"], v["source"]}
+    end
+
+    assert {:ok, %{rows: rows}} =
+             preview.(alice.ctx, %{
+               "ref" => "reagent:local.mcp-shared",
+               "bindings" => [%{"need" => "api_key", "share_id" => share.id}]
+             })
+
+    assert source.(rows) == [{"Shared by Terry", "share"}]
+
+    assert {:ok, %{rows: rows}} =
+             preview.(alice.ctx, %{
+               "ref" => "reagent:local.mcp-shared-app",
+               "selections" => [%{"dep" => "reagent:local.mcp-shared", "share_id" => share.id}]
+             })
+
+    assert source.(rows) == [{"Shared by Terry", "share"}]
+
+    # A key's owner is offered no share of their own.
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(terry.ctx, @wasm, %{
+        name: "mcp-shared",
+        version: "1.0.0",
+        type: "reagent",
+        manifest:
+          Jason.encode!(
+            Map.merge(keyed, %{"name" => "mcp-shared", "version" => "1.0.0", "type" => "reagent"})
+          )
+      })
+
+    assert {:error, "share_not_offered: " <> why} =
+             preview.(terry.ctx, %{
+               "ref" => "reagent:local.mcp-shared",
+               "bindings" => [%{"need" => "api_key", "share_id" => share.id}]
+             })
+
+    assert why == ~s(the key shared for "api_key" is not offered to you)
+  end
+
   test "the profile tool decodes a selection's account name, refuses one the binding key " <>
          "cannot carry, and publish refuses an edge carrying named accounts",
        %{ctx: ctx} do
