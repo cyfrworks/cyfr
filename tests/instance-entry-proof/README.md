@@ -2,8 +2,9 @@
 
 `run.sh` proves, on the browser harness (`tests/browser/`), that an
 instance entry is offered, capped, narrowed, revoked and denied as the
-platform administrator sets it in Prism, that its first sign-in binding is
-made, and that the administrator enters no athanor they hold no seat in.
+platform administrator sets it in Prism, that a newcomer's first sign-in
+binds the administrator's share to everyone, and that the administrator
+enters no athanor they hold no seat in.
 The home is one `cyfr` release on a SQLite cell, `home.test`, behind the
 harness's HTTPS front (`browser_home`). The platform administrator
 (`operator@example.com`), the installation's first person and so made by
@@ -17,9 +18,17 @@ passkey Chromium's virtual authenticator makes and registers first, as
 home's part of a step through its output directory (`ask-N.json`, answered
 `answer-N.json`): a sign-in, and the reads and claims of `fixture.exs`,
 which calls the real paths and answers bounded facts. The material an
-entry unseals is discarded inside the fixture and never serialized, and the
-proof fails if either key, or a digest of one, reaches a page, an answer or
-the record.
+entry or a share unseals is discarded inside the fixture and never
+serialized, and the proof fails if either key, or a digest of one, reaches
+a page, an answer or the record.
+
+The administrator's share is the one thing the fixture seeds
+(`admin_share`): an attach-only key of the administrator's own athanor
+made with Company AI's provider, field and destination, its value made and
+dropped inside the fixture, shared with everyone by `Arca.Shares.create/3`
+under the administrator's own actor. No page of the release offers a Share
+action, and the confirmations a key and a share ask are proven only with
+the administrator's passkey, which lives in the browser's authenticator.
 
 The harness runs no execution engine and no model, so `run.sh` never starts
 a run: an admission is the loader's answer (`Opus.authority_for/3`'s
@@ -27,9 +36,10 @@ path), asked once the person's athanor is filled, as a turn is admitted
 only then (`Sanctum.Provisioning.ready/1`), since a sign-in answers before
 the fill that mints its consent bootstrap; and a claim is
 `Sanctum.InstanceEntries.resolve/4`'s under the member's established
-context and the admitted root's node facts, never a request sent to a
-provider. Instance-entry claims count resolver uses, not dispatched HTTP
-requests.
+context and the admitted root's node facts, or, through the share her head
+binds, `Sanctum.Shares.resolve/5`'s held to the digest and the field the
+head binds it at, never a request sent to a provider. Claims count
+resolver uses, not dispatched HTTP requests.
 
 `VAULT_PROOF_VIEWPORT` is `desktop` (1280×900, the default) or `720x720`;
 every step runs at either, and the record names the one it ran at.
@@ -55,13 +65,15 @@ by their own canonical text). The home's side is one read (`fixture.exs`
 
 - every row of the instance's entries (tombstoned ones too), of their listed
   members and of their use, read from the tables whole;
+- every row of the shares and of their use, read from the tables whole;
 - once Ana has signed in, every profile of `catalyst:local.openai` in her
   athanor, every consent of those profiles, every binding row of those
   consents, and the entries offered to her;
 - once Bea has signed in, her row.
 
 The model changes at each step only by what that step did: an entry made,
-narrowed, used, revoked; a sign-in; a claim counted; a deny. So a change
+narrowed, used, revoked; a share made; a sign-in; a claim counted; a deny.
+So a change
 made behind the browser to any of these, at any time, fails the next
 step, whichever step that is. A step about one object says so in its row,
 and passes only if the whole state matches as well. Nothing this README
@@ -72,12 +84,15 @@ The model takes only these values from the home, each the decision or
 identity it names, never a read of what it is compared with:
 
 - each entry's id, as its card on the Settings page shows it;
+- the administrator's share's id and its source entry's id, as the fixture
+  that made them answers (`admin_share`);
 - each person's id, athanor and segment, the administrator's included, from
   their sign-in;
 - the profile and consent the loader roots Ana's run on (`fixture.exs`
   `admit`);
 - what the request implies an entry stores (`requested_digest`);
-- what the bootstrap derives for her head (`derived_head`);
+- what the bootstrap derives for her head from Company AI's request and the
+  share (`derived_head`);
 - the database's time as the run starts (`clock`), and its time and UTC date
   at the end of each `state` read: the window a stored time is held to, and
   the today a use row's day is;
@@ -102,16 +117,18 @@ unchecked.
 | `instance_entries` | `name`, `kind`, `provider_hint`, `field_names`, `status`, `payload_rev`, `audience`, `person_daily`, `total_daily`, `component_policy` | `destination`, `binding_digest`: what the card's request implies (`requested_digest`); `sealed_payload`: the payload its card typed, compared inside the fixture | `id`: the card's; `created_by`: the administrator's sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
 | `instance_entry_members` | | | `instance_entry_id`: the card's; `user_id`: the sign-in's; `inserted_at`: a time |
 | `instance_entry_usage` | `count` | | `instance_entry_id`: the card's; `user_id`: the sign-in's, or the empty id of the entry's own total; `day`: today; `updated_at`: a time |
+| `shares` | `audience`, `group_id`, `person_daily`, `total_daily`, `status` | | `id`, `vault_entry_id`: the fixture's `admin_share`; `athanor_id`, `created_by`: the administrator's sign-in's; `inserted_at`, `updated_at`: times |
+| `share_usage` | `count` | | `athanor_id`: the administrator's sign-in's; `share_id`: the fixture's `admin_share`; `user_id`: the sign-in's, or the empty id of the share's own total; `day`: today; `updated_at`: a time |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
 | `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `resolved_policy`, `blob_digest`, `activation`, `shape_digest`, `commit_digest`: what the bootstrap derives (`derived_head`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
-| `consent_vault_refs` | `binding_key`, `scope`, `vault_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `instance_entry_id`: the card's |
+| `consent_vault_refs` | `binding_key`, `scope`, `vault_entry_id`, `instance_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `share_id`: the fixture's `admin_share` |
 | `users` | `email`, `email_verified`, `admission`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`, `personal_athanor_id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `created_at`, `updated_at`: times |
 
 The bounds:
 
 - **An id** equals the one its source showed: the entry's card on the
-  Settings page, the person's sign-in, or the loader's admission of Ana's
-  root.
+  Settings page, the fixture's `admin_share`, the person's sign-in, or the
+  loader's admission of Ana's root.
 - **A time** is none where the model holds none (an entry never used, a
   person not denied). Otherwise it lies inside the run's window: from the
   database's time as the run starts to its time at the end of the read that
@@ -148,10 +165,13 @@ the first of two duplicate members, and a parse here would keep the last.
 - **The head's policy blob, its digest, its activation and its shape and
   commit digests** are compared with what the first sign-in's bootstrap
   derives from the request alone. They are built by the owner's own builders
-  over the installed catalyst and the requested entry, never read back from
+  over the installed catalyst and the administrator's share of a key made
+  with Company AI's provider, field and destination, never read back from
   the head. The loader checks the blob only against the digest in the same
   row, so a widened blob stored with its own digest would otherwise be
-  admitted.
+  admitted. The binding row's digest is the one Company AI's request
+  implies (`requested_digest`), since the share's source was made with the
+  same binding fields.
 
 **Decisions.** Each answer is compared whole with the decision the step
 expects, every field in one of the same three classes:
@@ -173,9 +193,9 @@ as the exact set the model holds.
 | Step | What holds |
 |---|---|
 | `create_entry` | the administrator makes Company AI (provider `openai.com`, the provider of the shipped model catalyst `catalyst:local.openai`; destination `https` `api.openai.com`, `POST` and `GET`, `/v1/chat/completions` and `/v1/models`, no port; audience everyone; component policy any; a person cap of 3) and Company Mail (provider `mail.example`, whose destination no shipped catalyst's need calls; destination `https` `api.mail.example`, `POST`, `/v1/send`; audience everyone; no caps) on the Settings card; each key is typed in the system layer's prompt alone, and each `credential_entry` confirmation is proven with the administrator's passkey; the store holds those two entries alone, each whole stored entry the one its card requested, and no page shows a key |
-| `first_sign_in` | the administrator opens the door to newcomers on the Settings page (`*`); Ana's first sign-in provisions her athanor, whose bootstrap commits her `catalyst:local.openai` default profile: the whole stored profile is her active owner profile labelled `default`, sourced from the catalyst, headed by the bootstrap's consent; the whole stored head is revision 1, versionless, `open_inert`, admitting the interactive and programmatic origins, granted by Ana via `bootstrap`, superseding nothing; its stored binding rows are exactly one, whole: Company AI on the catalyst's default slot, scope `instance`, standing, at the digest its request implies; the real loader admits that root under her interactive context, on that head, with no run started; her vault's "Provided by this instance" offers exactly both entries and shows no material |
+| `first_sign_in` | the administrator opens the door to newcomers on the Settings page (`*`) and shares with everyone a key of their own made with Company AI's provider, field and destination (`admin_share`): the whole stored share is that entry's, to everyone, uncapped and active; Ana's first sign-in provisions her athanor, whose bootstrap commits her `catalyst:local.openai` default profile: the whole stored profile is her active owner profile labelled `default`, sourced from the catalyst, headed by the bootstrap's consent; the whole stored head is revision 1, versionless, `open_inert`, admitting the interactive and programmatic origins, granted by Ana via `bootstrap`, superseding nothing; its stored binding rows are exactly one, whole: the administrator's share on the catalyst's default slot, scope `share`, standing, at the digest Company AI's request implies; the real loader admits that root under her interactive context, on that head, with no run started; one `resolve/5` claim through the share under her context is admitted, and the whole state holds its use as two rows, Ana's 1 and the day's 1, on the database's today; her consent's row binding of the share (`Sanctum.Consent.row_binding/3`) reads it offered, whole; her vault's "Provided by this instance" offers exactly both entries and shows no material |
 | `claim_cap` | three `resolve/4` claims of Company AI under Ana's context are admitted, each whole answer an admission; her vault then reads "3 requests today" and "Your daily limit is reached; it resets at midnight UTC."; the fourth claim's whole answer is the refusal `connection_cap` with a reset at the database's next UTC midnight; the whole state read after the step holds Company AI's use as two rows, Ana's 3 and the day's 3, each on the database's today, and no other use row |
-| `narrow_audience` | Bea signs in once, so the card's people picker lists her; the administrator narrows Company AI from everyone to Bea on the card, whose save sends the audience the card showed (`audience_shown`, the `expected` audience) and needs no prompt; the whole stored entry is the one requested, listed for Bea alone and used; Ana's next claim's whole answer is `not_offered`, her consent's row binding (`Sanctum.Consent.row_binding/3`) answers not offered, whole, and her vault no longer offers it |
+| `narrow_audience` | Bea signs in once, so the card's people picker lists her; the administrator narrows Company AI from everyone to Bea on the card, whose save sends the audience the card showed (`audience_shown`, the `expected` audience) and needs no prompt; the whole stored entry is the one requested, listed for Bea alone and used; the whole answer of Ana's next claim of it is `not_offered`, her consent's row binding of the administrator's share still reads it offered, whole, and her vault no longer offers Company AI |
 | `revoke` | Ana's claim of Company Mail is admitted; the administrator revokes Company Mail on the card; Ana's next claim's whole answer is `entry_unavailable` (revoked); the whole stored entry is the one requested, used and revoked; her vault offers nothing |
 | `deny_person` | the administrator denies Bea by her user id at the door on the Settings page (`door.deny`): the whole stored Company AI is the one requested, listed for no one; Bea's whole stored row is the active one read just before the deny with the three columns a deny commits together (`Sanctum.Tenancy.Users`): denied, a denial time set, and her security generation one above; no stored audience lists her; Company AI's card reads "nobody listed" |
 | `admin_focus` | the administrator's athanor switcher, its popover waited for until drawn, links to no athanor of Ana's (no path under her segment, no page naming her athanor as its `a`), nor does the page; a direct visit to Ana's vault lands elsewhere with "There is no athanor at <her segment>.", what a missing athanor's address says; Sanctum's focus and refocus of the administrator's session onto Ana's athanor (`Sanctum.Context.focus/2`, `refocus/2`) refuse `not_found` |
@@ -188,10 +208,10 @@ in the tree.
 
 | Claim | Test file | Test | Owner |
 |---|---|---|---|
-| Real own/provided/instance attached requests reach only the admitted destination, with current instance policy enforced | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream"; "any admits a consented custom component only within its destination and egress"; "tightening to shipped refuses the next custom component request before claim or upstream contact" | `Opus.Host.AttachedFetch`, `Sanctum.Attach` |
+| Real own/provided/instance/shared attached requests reach only the admitted destination, with current instance policy enforced, and a redirect through a shared key is never followed | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream"; "any admits a consented custom component only within its destination and egress"; "tightening to shipped refuses the next custom component request before claim or upstream contact"; "a request through a grant of a shared key carries its owner's key to the source's host, a redirect is answered and never followed, and a request off the destination is refused with nothing counted" | `Opus.Host.AttachedFetch`, `Sanctum.Attach`, `Sanctum.Shares` |
 | Reflected material, runner memory/logs/events/output and positive control | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs`; `tests/locus-runtime-image/canary.py`; `apps/cyfr/test/integration/runtime/secret_audit_test.exs` | "reflected credentials are masked across frames and execution exits"; scenario `credential_canary` (real runner, scripted control plane, with its mandatory positive-control record); "an attached value is audited by field and destination without material" | `Prima.SecretMasker`, `Opus.Host.AttachedFetch`, `canary.py` |
-| Real streamed AQUA turn through an instance entry, cap and revocation | `apps/cyfr/test/integration/runtime/model_contract_test.exs` | "an instance entry drives a streamed model turn without exposing its value"; "instance cap and revocation refuse the next model request" | `Sanctum.InstanceEntries`, `Aqua.Loop` |
-| Bootstrap binding and matching/lifetime decisions | `apps/cyfr/test/sanctum/consent/bootstrap_test.exs`; `apps/sanctum/test/sanctum/instance_entries_test.exs`; `apps/cyfr/test/sanctum/consent/commit_test.exs` | "a newly provisioned athanor binds its sole offered entry whose destination fits, whatever its label"; "the fourth claim is refused with its database reset"; "any and shipped enforce the stored component policy at each resolution"; "widening a component policy requires confirmation and rejects a stale write"; "matching and binding lifetimes are committed per edge without implicit disclosure" | `Sanctum.Consent.Bootstrap`, `Sanctum.InstanceEntries`, `Sanctum.Consent.Commit` |
+| Real streamed AQUA turn through the administrator's share, its cap and its revoke | `apps/cyfr/test/integration/runtime/model_contract_test.exs` | "the administrator's share drives a streamed model turn without exposing its value"; "a share's cap and its revoke refuse the next model request" | `Sanctum.Shares`, `Aqua.Loop` |
+| Bootstrap binding and matching/lifetime decisions | `apps/cyfr/test/sanctum/consent/bootstrap_test.exs`; `apps/sanctum/test/sanctum/instance_entries_test.exs`; `apps/cyfr/test/sanctum/consent/commit_test.exs` | "a newly provisioned athanor binds the administrator's share to everyone whose source fits, whatever its label, and never a member's share to everyone"; "two of the administrator's shares that fit bind the newest"; "the fourth claim is refused with its database reset"; "any and shipped enforce the stored component policy at each resolution"; "widening a component policy requires confirmation and rejects a stale write"; "matching and binding lifetimes are committed per edge without implicit disclosure" | `Sanctum.Consent.Bootstrap`, `Sanctum.InstanceEntries`, `Sanctum.Consent.Commit` |
 | Administrator lacks a seat; stale platform basis cannot issue tenant authority | `apps/cyfr/test/sanctum/context_focus_test.exs`; `apps/sanctum/test/sanctum/issuance_test.exs` | "a platform administrator without a seat cannot focus an athanor"; "a platform membership cannot authorize tenant credential issuance" | `Sanctum.Context`, `Sanctum.Issuance` |
 
 ## Declared coverage limit

@@ -5,9 +5,13 @@
 # it by `bin/cyfr rpc` (tests/instance-entry-proof/run.sh `entry_fixture`).
 # The file evaluates to a function of the argument list; each command
 # answers one line, `ENTRY=` and a JSON object of bounded, non-secret
-# facts. It seeds nothing an administrator does in the browser: it calls
-# the real paths named below and reads back what they decided. Material
-# an instance entry unseals is discarded here and never serialized.
+# facts. It calls the real paths named below and reads back what they
+# decided, and seeds one thing, the administrator's share to everyone
+# (`admin_share`), which the browser cannot make: no page of the release
+# offers a Share action, and the confirmations a key and a share ask are
+# proven only with the administrator's passkey, which lives in the
+# browser's authenticator. Material an instance entry or a share unseals
+# is discarded here and never serialized.
 #
 #   clock
 #       The database's time (`Arca.ServerMetaStorage.now!/0`): the start of
@@ -21,7 +25,8 @@
 #       comparing it with the digest PAYLOAD_DIGESTS_JSON names for the
 #       entry's id (`sealed_payload` below); every row of
 #       `instance_entry_members` and of
-#       `instance_entry_usage`; once Ana has signed in, every profile of
+#       `instance_entry_usage`; every row of `shares` and of
+#       `share_usage`; once Ana has signed in, every profile of
 #       catalyst:local.openai in her athanor, every consent of those
 #       profiles, every binding row of those consents, and the entries
 #       offered to her (`Sanctum.InstanceEntries.offered/1`); once Bea has
@@ -51,10 +56,21 @@
 #   under the context it establishes as a request establishes it
 #   (`Sanctum.Caller.establish/2`), at Prism (origin interactive).
 #
-#   derived_head SESSION_TOKEN ENTRY_ID PROVIDER FIELD DESTINATION_JSON
+#   admin_share SESSION_TOKEN PROVIDER FIELD DESTINATION_JSON
+#       The administrator, by their session, shares with everyone an
+#       attach-only `api_key` of their own athanor of PROVIDER, holding the
+#       one field FIELD, bound to DESTINATION_JSON's canonical text. The
+#       entry's row is written sealed as `Sanctum.Vault` writes one (the
+#       same payload, AAD, cipher and binding digest), its value made here
+#       and never serialized, and the share by `Arca.Shares.create/3` under
+#       the administrator's own actor, which holds it to every rule of a
+#       share but the confirmation (see above). Answers the entry's id and
+#       the share's.
+#
+#   derived_head SESSION_TOKEN SHARE_ID PROVIDER FIELD DESTINATION_JSON
 #       What the first sign-in's bootstrap derives for the person's head of
-#       catalyst:local.openai when it binds the instance entry ENTRY_ID that
-#       an administrator requested with PROVIDER, the one field FIELD and
+#       catalyst:local.openai when it binds the administrator's share
+#       SHARE_ID of a key with PROVIDER, the one field FIELD and
 #       DESTINATION_JSON: the policy blob's text, its digest, the
 #       activation's text, the shape digest and the commit digest, each
 #       built by the owner's own public builders from the installed
@@ -72,17 +88,21 @@
 #       consent bootstrap before it marks the athanor filled. An athanor
 #       not filled within the bound answers the refusal `not_provisioned`.
 #
-#   claim SESSION_TOKEN ENTRY_ID COUNT URL METHOD
-#       COUNT calls of `Sanctum.InstanceEntries.resolve/4` under the
-#       person's context, for a request of METHOD to URL, with the node
-#       facts of the root the loader admits for catalyst:local.openai:
-#       each answers admitted, or the refusal with a cap's reset, and the
-#       database's next UTC midnight, computed here from its clock. The
-#       material resolved is dropped here.
+#   claim SESSION_TOKEN SOURCE ID COUNT URL METHOD
+#       COUNT claims under the person's context, for a request of METHOD
+#       to URL: for SOURCE `instance`, of the instance entry ID through
+#       `Sanctum.InstanceEntries.resolve/4`, with the node facts of the
+#       root the loader admits for catalyst:local.openai; for SOURCE
+#       `share`, of the share ID through `Sanctum.Shares.resolve/5`, held
+#       to the digest and the field the person's openai head binds it at,
+#       as `Sanctum.Attach` holds a request. Each answers admitted, or the
+#       refusal with a cap's reset, and the database's next UTC midnight,
+#       computed here from its clock. The material resolved is dropped
+#       here.
 #
-#   row_binding SESSION_TOKEN ENTRY_ID
-#       The person's openai head's instance row naming ENTRY_ID, read live
-#       by the loader (`Sanctum.Consent.row_binding/3`): offered or the
+#   row_binding SESSION_TOKEN SHARE_ID
+#       The person's openai head's share row naming SHARE_ID, read live by
+#       the loader (`Sanctum.Consent.row_binding/3`): offered or the
 #       refusal.
 #
 #   focus SESSION_TOKEN ATHANOR_ID
@@ -129,8 +149,22 @@ fn args ->
     |> Enum.find(&(&1 != :ok))
   end
 
-  instance_row = fn head, entry_id ->
-    Enum.find(head.vault_refs, &(Map.get(&1, :instance_entry_id) == entry_id))
+  share_row = fn head, share_id ->
+    Enum.find(head.vault_refs, &(Map.get(&1, :share_id) == share_id))
+  end
+
+  # The digest and the field the person's openai head binds the share
+  # `share_id` at, as `Sanctum.Attach` reads them from the head's blob: the
+  # approved digest and the need's one field mapped to the source's.
+  bound_share = fn head, share_id ->
+    with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
+         {:ok, %{vault: %{scope: "share", entry_id: ^share_id} = vault}} <-
+           Prima.Authority.Blob.ingress(blob, openai),
+         [{need_field, entry_field}] <- Map.to_list(vault.projection.fields) do
+      {:ok, vault.binding_digest, {:field, need_field, entry_field}}
+    else
+      _unbound -> {:error, :not_bound}
+    end
   end
 
   today = fn -> DateTime.to_date(Arca.ServerMetaStorage.now!()) end
@@ -226,6 +260,8 @@ fn args ->
 
       members = rows_of.(Arca.Schemas.InstanceEntryMember)
       usage = rows_of.(Arca.Schemas.InstanceEntryUsage)
+      shares = rows_of.(Arca.Schemas.Share)
+      share_usage = rows_of.(Arca.Schemas.ShareUsage)
 
       ana =
         if ana_token == "-" do
@@ -282,6 +318,8 @@ fn args ->
         entries: entries,
         members: members,
         usage: usage,
+        shares: shares,
+        share_usage: share_usage,
         ana: ana,
         bea: bea
       })
@@ -302,7 +340,46 @@ fn args ->
 
       answer.(%{destination: canonical, binding_digest: digest})
 
-    ["derived_head", token, entry_id, provider, field, destination] ->
+    ["admin_share", token, provider, field, destination] ->
+      admin = person_ctx.(token)
+      actor = Sanctum.Context.actor(admin)
+      id = Prima.UUID7.generate_id("vlt")
+      {:ok, parsed} = Prima.Destination.new(Jason.decode!(destination), true)
+
+      # The key's value, made here and dropped with this call.
+      value = "sk-shared-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+      {:ok, json} = Sanctum.Vault.Payload.encode_material(%{field => value})
+      aad = Sanctum.CipherAAD.vault_entry(Sanctum.Context.athanor!(admin), id, provider)
+      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+
+      binding = %{
+        provider_hint: provider,
+        field_names: Jason.encode!([field]),
+        oauth_endpoints: nil,
+        oauth_scopes: nil,
+        destination: Prima.Destination.canonical(parsed),
+        attach_only: true
+      }
+
+      {:ok, digest} = Sanctum.VaultReader.binding_digest(binding)
+
+      {:ok, entry} =
+        Arca.VaultStorage.put(
+          actor,
+          Map.merge(binding, %{
+            id: id,
+            name: "Company AI, shared",
+            kind: "api_key",
+            status: "active",
+            sealed_payload: sealed,
+            binding_digest: digest
+          })
+        )
+
+      {:ok, share} = Arca.Shares.create(actor, %{entry_id: entry.id, audience: "everyone"})
+      answer.(%{entry_id: entry.id, share_id: share.id})
+
+    ["derived_head", token, share_id, provider, field, destination] ->
       ctx = person_ctx.(token)
       {:ok, parsed} = Prima.Destination.new(Jason.decode!(destination), true)
 
@@ -329,16 +406,16 @@ fn args ->
           need.kind in ~w(api_key oauth bundle) and is_map(need.attach) and need.disclose != true
         end)
 
-      # The binding the first sign-in commits for the requested entry, under
-      # the automatic map of the need over the entry's one field, as
-      # provisioning takes it.
+      # The binding the first sign-in commits for the administrator's share,
+      # under the automatic map of the need over its source's one field, as
+      # provisioning takes it: the share's id is the binding's entry.
       fields = Sanctum.Consent.Plan.field_map(need, [field])
 
       binding = %{
         need: need.name,
-        entry_id: entry_id,
+        entry_id: share_id,
         binding_digest: digest,
-        scope: "instance",
+        scope: "share",
         destination: Prima.Destination.to_map(parsed),
         attach: Prima.Manifest.Needs.attach_to_map(need.attach),
         fields: fields,
@@ -373,7 +450,7 @@ fn args ->
           bindings: [
             %{
               need: need.name,
-              instance_entry_id: entry_id,
+              share_id: share_id,
               binding_digest: digest,
               fields: fields,
               scopes: need.scopes,
@@ -406,21 +483,48 @@ fn args ->
           answer.(%{admitted: false, refusal: tag.(reason)})
       end
 
-    ["claim", token, entry_id, count, url, method] ->
+    ["claim", token, source, id, count, url, method] ->
       ctx = person_ctx.(token)
       request = %{uri: URI.parse(url), method: method}
 
-      facts =
-        case admitted.(ctx) do
-          {:ok, _authority, facts} -> facts
-          {:error, _refused} -> %{node_ref: openai <> ":0.0.0", activation_digest: "unadmitted"}
+      # One claim of the source, its material dropped here, unread.
+      resolve =
+        case source do
+          "instance" ->
+            facts =
+              case admitted.(ctx) do
+                {:ok, _authority, facts} ->
+                  facts
+
+                {:error, _refused} ->
+                  %{node_ref: openai <> ":0.0.0", activation_digest: "unadmitted"}
+              end
+
+            fn ->
+              case Sanctum.InstanceEntries.resolve(ctx, id, request, facts) do
+                {:ok, %{id: ^id}, _material} -> :admitted
+                refused -> refused
+              end
+            end
+
+          "share" ->
+            bound =
+              case head.(ctx) do
+                {_profile, head} -> bound_share.(head, id)
+                :timeout -> {:error, :not_bound}
+              end
+
+            fn ->
+              with {:ok, approved, take} <- bound,
+                   {:ok, _value} <- Sanctum.Shares.resolve(ctx, id, approved, request, take),
+                   do: :admitted
+            end
         end
 
       results =
         for _ <- 1..String.to_integer(count) do
-          case Sanctum.InstanceEntries.resolve(ctx, entry_id, request, facts) do
-            # The material is dropped here, unread.
-            {:ok, %{id: ^entry_id}, _material} ->
+          case resolve.() do
+            :admitted ->
               %{admitted: true}
 
             {:error, {:connection_cap, %DateTime{} = reset_at}} ->
@@ -443,21 +547,21 @@ fn args ->
         next_utc_midnight: DateTime.to_iso8601(next_midnight.())
       })
 
-    ["row_binding", token, entry_id] ->
+    ["row_binding", token, share_id] ->
       ctx = person_ctx.(token)
 
       case head.(ctx) do
         {_profile, head} ->
-          case instance_row.(head, entry_id) do
+          case share_row.(head, share_id) do
             nil ->
               answer.(%{row: false})
 
             row ->
               case Sanctum.Consent.row_binding(ctx, head, row) do
-                {:instance, ^entry_id, {:ok, _view}} ->
+                {:share, ^share_id, {:ok, _view}} ->
                   answer.(%{row: true, offered: true})
 
-                {:instance, ^entry_id, {:error, reason}} ->
+                {:share, ^share_id, {:error, reason}} ->
                   answer.(%{row: true, offered: false, refusal: tag.(reason)})
 
                 other ->
