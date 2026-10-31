@@ -68,8 +68,9 @@ database and `data/dev-stack/cyfr-run.json`), when that state is gone. A
 `mix` boot outside the loop names no registry or directory unless `.env`
 does. The run that
 writes the setup token prints the setup link,
-`http://localhost:4000/setup#<token>`, as `cyfr init` does: it sets up
-CYFR's first person, who administers it, with a passkey. Prism and the
+`http://localhost:4000/setup#<token>`, as `cyfr init` does: it asks for a
+name and a passkey, which set up CYFR's first person, who administers it,
+and shows their recovery code, all against the stand-in. Prism and the
 server reload as their files change; a change under `apps/locus` or to the
 Locus image's other inputs takes effect at the next start. Ctrl-C stops
 the server and removes the containers; the image stays, so a start with

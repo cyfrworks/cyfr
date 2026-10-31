@@ -252,12 +252,13 @@ defmodule Sanctum do
   end
 
   @doc """
-  Whether `value` is a directory this deployment may pin for enrollment:
-  a directory URL (`Prima.Identity.Encoding.directory_url?/1`) served over
-  `https`, or over `http` on a loopback host (`loopback_host?/1`), no
-  longer than a confirmation preview's text
-  (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes), since an
-  enrollment's preview names its directory.
+  Whether `value` is a directory this deployment may pin for registering
+  its people: a directory URL (`Prima.Identity.Encoding.directory_url?/1`)
+  served over `https`, or over `http` on a loopback host
+  (`loopback_host?/1`), no longer than a confirmation preview's text
+  (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes), since the
+  confirmation that shows a recovery code again names the directory in its
+  preview (`Sanctum.Recovery`).
 
   Plain HTTP is allowed on loopback alone because TLS protects a network
   path and loopback has none, and because a directory is trusted only for
