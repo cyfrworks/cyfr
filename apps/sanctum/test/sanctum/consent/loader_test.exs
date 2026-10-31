@@ -506,6 +506,51 @@ defmodule Sanctum.Consent.LoaderTest do
                Loader.row_binding(person, %{}, instance_row(entry, "sha256:instance"))
     end
 
+    test "a share row is read live as the person is offered it, its source held to its digest" do
+      terry = Arca.Test.Shares.owner!()
+      alice = Arca.Test.Shares.owner!()
+      traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+      entry = Arca.Test.Shares.entry!(terry.actor, %{field_names: ~s(["KEY"])})
+      {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
+
+      share =
+        Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+
+      person =
+        Context.build(
+          user_id: alice.user.id,
+          athanor_id: alice.athanor.id,
+          permissions: Context.person_permissions(),
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      row = fn approved ->
+        %{
+          binding_key: Prima.Authority.Blob.binding_key(Fixtures.formula_ref(), "@ingress", nil),
+          scope: "share",
+          share_id: share.id,
+          binding_digest: approved
+        }
+      end
+
+      assert {:share, id, {:ok, view}} = Loader.row_binding(person, %{}, row.(digest))
+      assert id == share.id and view.binding_digest == digest and view.id == share.id
+
+      # Its source rebound since the row was approved.
+      assert {:share, _, {:error, :binding_went_stale}} =
+               Loader.row_binding(person, %{}, row.("sha256:approved-earlier"))
+
+      # Alice leaves the group: no longer offered to her.
+      {:ok, _left} =
+        Arca.SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(traders.id), alice.user.id,
+          verify: fn _ -> :ok end
+        )
+
+      assert {:share, _, {:error, :not_offered}} = Loader.row_binding(person, %{}, row.(digest))
+    end
+
     test "provided configuration names no binding and resolves to itself", %{ctx: ctx} do
       provided = %{
         "provided" => %{
