@@ -546,7 +546,7 @@ async function main() {
     const revoked = await ask({ op: "revoke", profile_id: regranted.profile_id });
     record.revocation = revoked;
     // The answer held whole (`revokedHeld` in heads.mjs): admitted before under
-    // the flows head's consent, refused at the first admission after, and each
+    // the share head's consent, refused at the first admission after, and each
     // copy with one field changed or added refused.
     const revocation = { consent: shareHead.consent_id, refusal: REVOKED, boundUs: REVOKE_BOUND_US };
     const revokedCopies = [

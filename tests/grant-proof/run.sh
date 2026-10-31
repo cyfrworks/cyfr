@@ -125,7 +125,7 @@ destination() {
 
 # Each step the proof asks for (harness.sh `answer_asks`).
 answer_ask() {
-  local ask="$1" id="$2" op decisions
+  local ask="$1" id="$2" op decisions opened owner
   op="$(asked "$ask" op)"
   case "$op" in
     head) ANSWER="$(grant_fixture head "$user_id" "$REF")" ;;
