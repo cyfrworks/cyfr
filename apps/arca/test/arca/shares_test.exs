@@ -119,7 +119,7 @@ defmodule Arca.SharesTest do
       oauth = entry!(terry.actor, %{kind: "oauth"})
       incomplete = entry!(terry.actor, %{destination: @incomplete})
       revoked = entry!(terry.actor)
-      :ok = Arca.VaultStorage.set_status(terry.actor, revoked.id, "revoked")
+      {:ok, _} = Arca.VaultStorage.set_status(terry.actor, revoked.id, "revoked")
       theirs = entry!(stranger.actor)
       group_actor = %Prima.Actor{athanor_id: outsiders.id, user_id: stranger.user.id}
       not_owner = %{terry.actor | user_id: stranger.user.id}
@@ -430,7 +430,7 @@ defmodule Arca.SharesTest do
          %{terry: terry, entry: entry} do
       alice = owner!()
       share!(terry.actor, entry.id)
-      :ok = Arca.VaultStorage.set_status(terry.actor, entry.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(terry.actor, entry.id, "needs_reauth")
       assert offered_ids(alice.user.id) == []
     end
 
@@ -514,6 +514,8 @@ defmodule Arca.SharesConcurrencyTest do
 
   alias Arca.Test.Shares, as: Fixture
   alias Ecto.Adapters.SQL.Sandbox
+
+  @everyone %{audience: "everyone", group_id: nil}
 
   setup do
     {:ok, made} = Agent.start(fn -> [] end)
@@ -619,7 +621,7 @@ defmodule Arca.SharesConcurrencyTest do
         )
       end)
 
-    assert {_task, _holder, {:ok, []}} = held
+    assert {_task, _holder, {:ok, %{affected: [], rebound_share_ids: []}}} = held
 
     create =
       waiting(
@@ -627,7 +629,7 @@ defmodule Arca.SharesConcurrencyTest do
         ["vault_entries", "FOR UPDATE"]
       )
 
-    assert {:ok, {:ok, []}} = release(held)
+    assert {:ok, {:ok, %{affected: [], rebound_share_ids: []}}} = release(held)
     assert Task.await(create, 15_000) == {:error, :disclosed_not_shareable}
     assert unboxed(fn -> Arca.Shares.list(terry.actor) end) == {:ok, []}
   end
@@ -638,7 +640,7 @@ defmodule Arca.SharesConcurrencyTest do
     share =
       unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
 
-    held = holding(fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice") end)
+    held = holding(fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone) end)
 
     revoke =
       waiting(
@@ -664,7 +666,7 @@ defmodule Arca.SharesConcurrencyTest do
 
     claim =
       waiting(
-        fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice") end,
+        fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone) end,
         ["shares", "FOR SHARE"]
       )
 

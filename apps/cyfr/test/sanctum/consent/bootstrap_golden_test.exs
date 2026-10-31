@@ -11,13 +11,14 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   change to what strangers on a `*` server are granted, and is bumped by
   re-recording (`CYFR_GOLDEN_RECORD=1 mix test <this file>`).
 
-  Two cases are pinned: the server's own mint of an athanor no instance
-  entry is offered to, and a person's first sign-in to an athanor while
-  one instance entry with no label, for Anthropic's API host, is offered
-  to them. The newest shipped model catalysts have CYFR attach their key
-  (their `api_key` need declares an attach rule), so that sign-in binds
-  the offered entry on claude's ingress, whose need's host its
-  destination covers, and every other blob is the first case's.
+  Two cases are pinned: the server's own mint of an athanor, which binds
+  no key, and a person's first sign-in to their own athanor while the
+  platform administrator shares with everyone one key with no label, for
+  Anthropic's API host. The newest shipped model catalysts have CYFR
+  attach their key (their `api_key` need declares an attach rule), so
+  that sign-in binds the administrator's share on claude's ingress, whose
+  need's host its source's destination covers, and every other blob is
+  the first case's.
 
   Only the blob is golden: the activation and its digests move with every
   wasm rebuild, so they are asserted present, not pinned. The origins a
@@ -27,14 +28,17 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   """
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.ShareFixtures
   alias Sanctum.Consent.{Bootstrap}
 
   @repo_root Path.expand("../../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
   @golden Path.expand("../../support/fixtures/consent_golden.json", __DIR__)
 
-  @without "no_instance_entry"
-  @with_one "one_offered_instance_entry"
+  @without "no_share"
+  @with_one "one_administrator_share"
+
+  @anthropic ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -59,8 +63,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     :ok
   end
 
-  # An athanor filled from the bundle as a fill fills it: the bundle copied
-  # in and the scan minting its rows, the AQUA tree copied in and indexed.
+  # A group athanor filled from the bundle: the server's own context there.
   defp filled!(name) do
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
@@ -70,7 +73,21 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
         created_by: "system"
       })
 
-    ctx = Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
+    fill!(athanor.id)
+  end
+
+  # A person signed in to their own athanor, filled from the bundle: who a
+  # first sign-in's walk runs as.
+  defp own_filled! do
+    person = ShareFixtures.person!("Golden")
+    fill!(person.athanor.id)
+    person.ctx
+  end
+
+  # The athanor filled as a fill fills it: the bundle copied in and the
+  # scan minting its rows, the AQUA tree copied in and indexed.
+  defp fill!(athanor_id) do
+    ctx = Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
@@ -78,23 +95,38 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     ctx
   end
 
-  # A person signed in to the athanor: who a first sign-in's walk runs as.
-  defp person!(%Sanctum.Context{athanor_id: athanor_id}) do
-    {ctx, _user} =
-      Sanctum.TestContext.person!(
-        Sanctum.Context.build(
-          user_id: "local|local|golden-#{System.unique_integer([:positive])}",
-          provider: "local",
-          namespace: "golden",
-          athanor_id: athanor_id,
-          permissions: Sanctum.Context.person_permissions(),
-          scope: :athanor,
-          auth_method: :oidc,
-          authenticated: true
-        )
+  # The platform administrator's attach-only key with no label, for
+  # Anthropic's API host, shared with everyone under a fixed id, since the
+  # binding the blob pins names it: the row written whole, as
+  # `Arca.Shares.create/3` writes one but for its minted id.
+  defp administrator_share! do
+    admin = ShareFixtures.person!("Admin")
+    {:ok, _seat} = Sanctum.TestContext.ensure_platform(admin.user.id)
+
+    attrs = %{
+      kind: "api_key",
+      provider_hint: "",
+      field_names: ~s(["ANTHROPIC_API_KEY"]),
+      destination: @anthropic,
+      attach_only: true
+    }
+
+    {:ok, digest} =
+      Sanctum.VaultReader.binding_digest(
+        Map.merge(attrs, %{oauth_endpoints: nil, oauth_scopes: nil})
       )
 
-    ctx
+    entry = Arca.Test.Shares.entry!(admin.actor, Map.put(attrs, :binding_digest, digest))
+
+    %{
+      id: "shr_golden-company",
+      athanor_id: admin.athanor.id,
+      vault_entry_id: entry.id,
+      audience: "everyone",
+      created_by: admin.user.id
+    }
+    |> Arca.Schemas.Share.changeset()
+    |> Arca.Repo.insert!()
   end
 
   defp blobs!(ctx, minted, granted_by) do
@@ -117,25 +149,11 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     assert minted != []
     without = blobs!(seeded, minted, "system:bootstrap")
 
-    # A person's first sign-in while the instance offers them one entry,
-    # with no label, whose destination is a shipped catalyst's host.
-    {:ok, entry} =
-      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-        # Fixed, since the binding the blob pins names it.
-        id: "ine_golden-company",
-        name: "golden-company",
-        kind: "api_key",
-        field_names: ~s(["ANTHROPIC_API_KEY"]),
-        destination:
-          ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-        sealed_payload: "sealed",
-        binding_digest: "sha256:golden",
-        audience: "everyone",
-        created_by: "usr_admin"
-      })
-
-    assert entry.provider_hint == ""
-    person = person!(filled!("Golden offered"))
+    # A person's first sign-in to their own athanor while the platform
+    # administrator shares with everyone one key, with no label, whose
+    # destination is a shipped catalyst's host.
+    share = administrator_share!()
+    person = own_filled!()
     {:ok, %{minted: offered_minted}} = Bootstrap.run(person)
     with_one = blobs!(person, offered_minted, person.user_id)
 
@@ -162,15 +180,15 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
       end
     end
 
-    # The offered entry binds the one catalyst whose need calls the host
-    # its destination names, and nothing else moves.
+    # The share binds the one catalyst whose need calls the host its
+    # source's destination names, and nothing else moves.
     claude = "catalyst:local.claude"
     assert Map.delete(with_one, claude) == Map.delete(without, claude)
 
     assert [^claude] =
-             for({ref, blob} <- with_one, blob =~ ~s("scope":"instance"), do: ref)
+             for({ref, blob} <- with_one, blob =~ ~s("scope":"share"), do: ref)
 
-    assert with_one[claude] =~ ~s("entry_id":"ine_golden-company")
+    assert with_one[claude] =~ ~s("entry_id":"#{share.id}")
   end
 
   defp copy_bundle!(dest) do

@@ -497,6 +497,41 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert {:ok, %{status: "archived"}} = Athanors.get(athanor.id)
     end
 
+    # A remote person whose last seat here is this one is retired by the
+    # leave, and the shares of an athanor they own end with them: each is
+    # announced once the leave committed. Their own athanor holds no seat
+    # of theirs here, so the group's is their last.
+    test "a leave that retires the person announces every share it revoked", %{athanor: athanor} do
+      terry = remote!(identifier())
+      n = System.unique_integer([:positive])
+
+      {:ok, own} =
+        Arca.Athanors.insert(Prima.Actor.system(), %{
+          kind: "person",
+          name: "Own #{n}",
+          slug: "own-#{n}",
+          owner_user_id: terry.id,
+          created_by: terry.id
+        })
+
+      owner = %Prima.Actor{athanor_id: own.id, user_id: terry.id, scope: :athanor}
+      share = Arca.Test.Shares.share!(owner, Arca.Test.Shares.entry!(owner).id)
+
+      {:ok, :added} = Members.add(athanor, [user_id: terry.id], "system")
+      {:ok, :added} = Members.add(athanor, [user_id: person(n).id], "system")
+
+      Sanctum.Test.ShareAnnouncements.listen()
+      assert :ok = Members.remove_member(athanor, user_id: terry.id)
+
+      share_id = share.id
+
+      assert_receive {:share_announced, :revoked,
+                      %{share_id: ^share_id, kind: :revoked, user_id: nil}}
+
+      refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
+      assert Arca.Test.Shares.share_status(owner, share.id) == "revoked"
+    end
+
     test "retires in one transition the person's sessions bound to it and their clients and certificates there",
          %{athanor: athanor} do
       n = System.unique_integer([:positive])

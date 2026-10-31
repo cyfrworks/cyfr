@@ -61,6 +61,20 @@
                 },
                 "attach": { "in": "header", "name": "Authorization", "template": "Bearer {value}" },
                 "projection": { "fields": { "service_key": "service_key" }, "scopes": [] }
+              },
+              "Market": {
+                "entry_id": "shr_golden-market",
+                "binding_digest": "sha256:bind-market",
+                "scope": "share",
+                "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|dest|name:Market",
+                "destination": {
+                  "hosts": ["market.supabase.co"],
+                  "scheme": "https",
+                  "methods": ["GET"],
+                  "paths": ["/rest/v1"]
+                },
+                "attach": { "in": "header", "name": "apikey", "template": "{value}" },
+                "projection": { "fields": { "service_key": "service_key" }, "scopes": [] }
               }
             }
           },

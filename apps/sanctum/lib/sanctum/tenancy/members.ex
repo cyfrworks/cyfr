@@ -514,12 +514,14 @@ defmodule Sanctum.Tenancy.Members do
 
   # After the commit, from what it returned: the sessions it ended let go,
   # the person's other contexts drop their memo so their next request
-  # revalidates, and the person and the roster are told.
+  # revalidates, the shares a retirement revoked announce it, and the
+  # person and the roster are told.
   defp announce_left(user_id, athanor_id, change) do
     if change.revoked_session_hashes != [],
       do: Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
 
     Sanctum.Session.invalidate_memo_for_user(user_id)
+    Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
     broadcast_change(user_id, athanor_id, :left)
     Sanctum.Notify.member_changed(athanor_id)
   end

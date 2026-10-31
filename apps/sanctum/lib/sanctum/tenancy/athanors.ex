@@ -336,7 +336,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Mark an athanor archived. Nothing is deleted; every ingress gate refuses
-  it, its API keys are revoked in the same transaction
+  it, its API keys and its shares are revoked in the same transaction
   (`Arca.SecurityTransitions.archive_athanor/3`), whatever is running in
   it is cancelled, the established-context memo of every member is dropped
   and its members are told — the same on every path that archives (a
@@ -363,6 +363,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
     with {:ok, change} <- Arca.SecurityTransitions.archive_athanor(server(), id, verify: verify) do
       announce_archived([id], change)
+      Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
       {:ok, committed(athanor, change)}
     end
   end

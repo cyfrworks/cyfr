@@ -493,7 +493,7 @@ defmodule Prima.HostAPITest do
 
       assert types ==
                ~w(credential_header_refused connection_not_granted destination_mismatch
-                  connection_cap component_not_admitted domain_blocked)
+                  connection_cap component_not_admitted domain_blocked owner_not_standing)
 
       refute Enum.any?(call["refusals"], &(&1["answer"] =~ "attach_unavailable"))
 

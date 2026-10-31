@@ -251,15 +251,16 @@ defmodule Sanctum.Consent do
   What one vault row of the head revision `consent` (from
   `head_consent/2`) binds now, read by its tag: the athanor's own entry,
   a selection of another profile's key resolved as a run resolves it
-  under the context's origin, an instance entry read live as the
-  context's person is offered it and held to the row's digest, or a row
-  naming none (`Sanctum.Consent.Loader.row_binding/3`). Nothing is
+  under the context's origin, an instance entry or a share read live as
+  the context's person is offered it and held to the row's digest, or a
+  row naming none (`Sanctum.Consent.Loader.row_binding/3`). Nothing is
   raised.
   """
   @spec row_binding(Sanctum.Context.t(), map(), map()) ::
           {:entry, String.t(), String.t()}
           | {:selection, String.t(), {:ok, map()} | {:error, term()}}
           | {:instance, String.t(), {:ok, map()} | {:error, term()}}
+          | {:share, String.t(), {:ok, map()} | {:error, term()}}
           | :malformed
   def row_binding(%Sanctum.Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref),
     do: Sanctum.Consent.Loader.row_binding(ctx, consent, ref)

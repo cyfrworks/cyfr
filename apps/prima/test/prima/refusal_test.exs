@@ -395,6 +395,7 @@ defmodule Prima.RefusalTest do
     {:scope_not_attenuable, :forbidden},
     {:disclosure_refused, :forbidden},
     {:not_offered, :forbidden},
+    {:owner_not_standing, :forbidden},
     {:component_not_admitted, :forbidden},
     {:provider_mismatch, :invalid_argument},
     {{:provider_mismatch, "openai.com"}, :invalid_argument},
@@ -436,6 +437,7 @@ defmodule Prima.RefusalTest do
     "scope_not_attenuable" => :forbidden,
     "disclosure_refused" => :forbidden,
     "not_offered" => :forbidden,
+    "owner_not_standing" => :forbidden,
     "component_not_admitted" => :forbidden,
     "provider_mismatch" => :invalid_argument,
     "credential_header_refused" => :invalid_argument,
@@ -579,7 +581,7 @@ defmodule Prima.RefusalTest do
                Enum.sort(~w(destination_mismatch provider_mismatch connection_not_granted
                             credential_header_refused connection_cap scope_not_attenuable
                             endpoints_immutable grant_expired disclosure_refused not_offered
-                            component_not_admitted)a)
+                            owner_not_standing component_not_admitted)a)
 
       assert length(Refusal.classes()) == 16
 
@@ -598,6 +600,15 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message(:component_not_admitted) ==
                "This instance entry requires an unmodified shipped component."
+
+      # A key is offered and capped as an instance entry or as a share, so
+      # those sentences name neither; a share's owner who does not stand
+      # lends nothing, and the sentence says nothing of their account.
+      assert Refusal.message(:not_offered) == "This key is not offered to you."
+      assert Refusal.message(:connection_cap) == "This key's request cap for today is reached."
+
+      assert %Refusal{class: :forbidden, message: lent} = Refusal.classify(:owner_not_standing)
+      assert lent == "This key is not available."
 
       # A detail beside the reason stays out of the sentence.
       assert Refusal.message({:provider_mismatch, "openai.com"}) ==

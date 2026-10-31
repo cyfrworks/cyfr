@@ -433,11 +433,12 @@ defmodule Sanctum.Consent.BlobBuilder do
   (`Prima.Authority.Blob.binding_key/3`, as `encode/1` places it) — so one
   entry bound on two edges, or under two names, is two rows. A bound
   entry's row names its scope, the entry (the athanor's own or the
-  instance's) and the digest it is bound at, and each named account
-  beside it is a row of its own; a selection's (`via`) is the borrower's
-  own binding, naming the label of the profile it borrows from and the
-  digest it pinned, if any. Each row carries its binding's lifetime and
-  `renew` as `vault_resource/1` recorded them, standing when none was.
+  instance's) or the share it reaches, and the digest it is bound at, and
+  each named account beside it is a row of its own; a selection's (`via`)
+  is the borrower's own binding, naming the label of the profile it
+  borrows from and the digest it pinned, if any. Each row carries its
+  binding's lifetime and `renew` as `vault_resource/1` recorded them,
+  standing when none was.
   Provided configuration names no entry and writes no row.
   """
   @spec vault_refs(map()) :: [Arca.ConsentStorage.ref_input()]
@@ -453,6 +454,27 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   defp named_bindings(%{"named" => %{} = named}), do: Enum.sort(named)
   defp named_bindings(_vault), do: []
+
+  @doc """
+  `refs` with each share binding naming the audience it was admitted
+  under (`admitted`), taken from the binding of `bindings` that names the
+  share: the audience its writer read the share at when it offered or kept
+  it. `Arca.ConsentStorage` holds the share's row to it under the
+  revision's lock and refuses a share binding that names none.
+  """
+  @spec admitted([Arca.ConsentStorage.ref_input()], [map()]) ::
+          [Arca.ConsentStorage.ref_input()]
+  def admitted(refs, bindings) when is_list(refs) and is_list(bindings) do
+    audiences =
+      for %{scope: "share", entry_id: id, admitted: %{} = audience} <- bindings,
+          into: %{},
+          do: {id, audience}
+
+    Enum.map(refs, fn
+      %{share_id: id} = ref when is_binary(id) -> Map.put(ref, :admitted, Map.get(audiences, id))
+      ref -> ref
+    end)
+  end
 
   @doc """
   The `consent_vault_refs` row of one vault resource under `binding_key`:
@@ -484,6 +506,10 @@ defmodule Sanctum.Consent.BlobBuilder do
           binding_digest: digest
         }
 
+      # A share's bound resource names the share as its entry.
+      "share" ->
+        %{binding_key: binding_key, scope: "share", share_id: entry_id, binding_digest: digest}
+
       scope ->
         %{
           binding_key: binding_key,
@@ -507,7 +533,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   blob's grammar reads (`Prima.Authority.Blob`):
 
     * a bound entry (`binding/0`): its `entry_id`, `binding_digest`,
-      `scope` (`athanor` or `instance`), `destination` and `attach`
+      `scope` (`athanor`, `instance` or `share`, whose `entry_id` is the
+      share's id), `destination` and `attach`
       rule (absent for a disclose-only need), the `projection` it names
       (`{"fields": {need field: entry field}, "scopes": [...]}`), and
       under `named` each named account's own resource by its name.

@@ -51,13 +51,15 @@ defmodule Sanctum.Consent.CommitDigest do
 
   ## Accounts and lifetimes
 
-  A binding names exactly one of the athanor's entry (`entry_id`) and an
-  instance entry (`instance_entry_id`), the account `name` it is bound
+  A binding names exactly one of the athanor's entry (`entry_id`), an
+  instance entry (`instance_entry_id`) and a share (`share_id`), the
+  account `name` it is bound
   under (absent for the need's default), its `lifetime` (`kind`, and the
   `until` instant of an `until` binding) and `renew`, whether the person
   renews a consumed `once`. A need may be bound once per name. A
-  selection names exactly one of the lender's `label`, an entry or an
-  instance entry, the dependency's `need` an entry is chosen for, the
+  selection names exactly one of the lender's `label`, an entry, an
+  instance entry or a share, the dependency's `need` an entry is chosen
+  for, the
   account `name` an entry rides under beside the edge's default (absent
   for the default), and its own lifetime and `renew`. An edge is selected
   once per name, a name compared case-folded. Each is a decision, so two
@@ -93,6 +95,7 @@ defmodule Sanctum.Consent.CommitDigest do
           required(:need) => String.t(),
           optional(:entry_id) => String.t(),
           optional(:instance_entry_id) => String.t(),
+          optional(:share_id) => String.t(),
           required(:binding_digest) => String.t(),
           optional(:name) => String.t() | nil,
           optional(:fields) => %{optional(String.t()) => String.t()},
@@ -113,6 +116,7 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:label) => String.t(),
           optional(:entry_id) => String.t(),
           optional(:instance_entry_id) => String.t(),
+          optional(:share_id) => String.t(),
           optional(:need) => String.t(),
           optional(:name) => String.t() | nil,
           required(:binding_digest) => String.t(),
@@ -286,11 +290,13 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              binding,
-             ~w(need entry_id instance_entry_id binding_digest fields scopes name lifetime renew)a,
+             ~w(need entry_id instance_entry_id share_id binding_digest fields scopes name lifetime
+                renew)a,
              tag
            ),
          {:ok, need} <- Normalize.required_string(binding, :need, tag),
-         {:ok, entry} <- one_entry(binding, [:entry_id, :instance_entry_id], :bindings),
+         {:ok, entry} <-
+           one_entry(binding, [:entry_id, :instance_entry_id, :share_id], :bindings),
          {:ok, binding_digest} <- Normalize.required_string(binding, :binding_digest, tag),
          {:ok, name} <- Normalize.optional_string(binding, :name, tag),
          {:ok, fields} <- Normalize.string_map(binding, :fields, tag),
@@ -398,13 +404,14 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              selection,
-             ~w(from dep label entry_id instance_entry_id need name binding_digest fields
-                lifetime renew)a,
+             ~w(from dep label entry_id instance_entry_id share_id need name binding_digest
+                fields lifetime renew)a,
              tag
            ),
          {:ok, from} <- Normalize.required_string(selection, :from, tag),
          {:ok, dep} <- Normalize.required_string(selection, :dep, tag),
-         {:ok, lent} <- one_entry(selection, [:label, :entry_id, :instance_entry_id], :selections),
+         {:ok, lent} <-
+           one_entry(selection, [:label, :entry_id, :instance_entry_id, :share_id], :selections),
          {:ok, need} <- Normalize.optional_string(selection, :need, tag),
          {:ok, name} <- Normalize.optional_string(selection, :name, tag),
          {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),

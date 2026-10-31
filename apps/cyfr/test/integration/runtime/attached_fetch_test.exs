@@ -11,11 +11,14 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
   The credential reaches the upstream, attached by CYFR, and nothing of it
   reaches the runner: for an athanor's own attach-only entry, for a value
-  an app provides its dependency, and for an instance entry offered to
+  an app provides its dependency, for an instance entry offered to
   everyone, bound to a component of the person's own while the entry's
-  component policy is `any`. A URL outside the entry's destination, or
-  outside the grant's egress, reaches no upstream; tightening the entry to
-  `shipped` refuses the next root before any claim or upstream contact. A
+  component policy is `any`, and for a key another person shares with a
+  group the person is in, bound to a component of the person's own. A
+  redirect through a shared key is answered and never followed. A URL
+  outside the entry's destination, or outside the grant's egress, reaches
+  no upstream and counts no use; tightening the entry to `shipped`
+  refuses the next root before any claim or upstream contact. A
   credential the upstream reflects is masked across the answer's frames,
   in the guest's output and everywhere the execution leaves a trace. A
   `once` binding, an `until` binding past its instant and a revoked entry
@@ -40,6 +43,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
   @secret "sk-attached-e1-canary-7f3a9c21d0"
   @instance_secret "sk-instance-e1-canary-2c8d5e14"
+  @shared_secret "sk-shared-e1-canary-5a7e2b90d4"
   @rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
 
   defmodule Upstream do
@@ -77,6 +81,14 @@ defmodule Locus.Runtime.AttachedFetchTest do
       Process.sleep(100)
       {:ok, conn} = chunk(conn, second <> " tail")
       conn
+    end
+
+    # A redirect to a path the shared key's destination admits: followed,
+    # the key would reach it.
+    defp answer(conn, "/redirect") do
+      conn
+      |> put_resp_header("location", "/landing")
+      |> send_resp(302, "moved")
     end
 
     defp answer(conn, _path), do: send_resp(conn, 200, "hello from upstream")
@@ -259,6 +271,72 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
     {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
     entry
+  end
+
+  # A person made as an open admission makes one, signed in under `name`
+  # to their own athanor through Prism: `%{user: _, athanor: _, actor: _,
+  # ctx: _}`.
+  defp person!(name) do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|attached-#{n}",
+        provider: "github",
+        email: "attached-#{n}@example.com",
+        verified: true,
+        name: name
+      })
+
+    athanor = Sanctum.Test.People.athanor!(user)
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: user.id,
+        provider: "github",
+        namespace: "attached-#{n}",
+        athanor_id: athanor.id,
+        permissions: Sanctum.Context.person_permissions(),
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+      |> Sanctum.TestContext.via(:prism)
+
+    %{user: user, athanor: athanor, actor: Sanctum.Context.actor(ctx), ctx: ctx}
+  end
+
+  # Terry's attach-only key of the probe's provider, to the upstream's
+  # paths a shared key's requests use, shared with `group` under the
+  # confirmation a share asks.
+  defp shared!(terry, port, group) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(terry.ctx, %{
+        name: "shared-#{System.unique_integer([:positive])}",
+        kind: "api_key",
+        provider_hint: "upstream.test",
+        fields: %{"KEY" => @shared_secret},
+        destination: %{
+          "hosts" => ["127.0.0.1", "upstream.test"],
+          "scheme" => "http",
+          "port" => port,
+          "methods" => ["GET", "POST"],
+          "paths" => ["/hello", "/redirect", "/landing"]
+        }
+      })
+
+    params = %{entry_id: entry.id, audience: "group", group_id: group.id}
+
+    {:ok, share} =
+      Sanctum.TestContext.confirming(terry.ctx, &Sanctum.Shares.create(&1, params))
+
+    share
+  end
+
+  # Each person's count of a share's use today, as its owner reads it.
+  defp share_used(owner, share) do
+    {:ok, %{people: people}} = Arca.ShareUsage.usage(owner.actor, share.id, 1)
+    Map.new(people, &{&1.user_id, &1.count})
   end
 
   # The requests claimed against an instance entry's caps today.
@@ -515,6 +593,60 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
     refute_received {:upstream, _request}
     assert usage(entry.id) == 1
+  end
+
+  test "a request through a grant of a shared key carries its owner's key to the source's " <>
+         "host, a redirect is answered and never followed, and a request off the destination " <>
+         "is refused with nothing counted",
+       %{port: port} do
+    # Terry and Alice, each in their own athanor, are in the group Traders,
+    # and Terry shares his key with it. Alice grants her own component the
+    # share through the consent walk.
+    terry = person!("Terry")
+    alice = person!("Alice")
+    traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, alice.athanor.id) end)
+    Sanctum.TestContext.ready!(alice.athanor.id)
+
+    share = shared!(terry, port, traders)
+    probe = publish_probe!(alice.ctx)
+    consent!(alice.ctx, probe, [%{need: "api_key", share_id: share.id}])
+
+    played = run!(alice.ctx, probe, request(port, "/hello"))
+    assert %{"status" => 200, "body" => "hello from upstream"} = output!(played)
+
+    # CYFR attached Terry's key to the request Alice's component named,
+    # which carried none, and the runner was handed nothing at its attach.
+    sent = upstream!()
+    assert sent.path == "/hello" and header(sent, "x-api-key") == [@shared_secret]
+    assert [%{answer: %{"ok" => handed}}] = TwoServices.calls(:attach, played.id)
+    assert handed == %{}
+    assert_never_in_runner(played, @shared_secret)
+    assert share_used(terry, share) == %{alice.user.id => 1}
+
+    # A redirect is the guest's answer, and the request it names is never
+    # made, with the key or without it: the target, inside the source's
+    # destination, sees nothing.
+    played = run!(alice.ctx, probe, request(port, "/redirect"))
+    assert %{"status" => 302, "headers" => headers} = output!(played)
+    assert headers["location"] == "/landing"
+    sent = upstream!()
+    assert sent.path == "/redirect" and header(sent, "x-api-key") == [@shared_secret]
+    refute_receive {:upstream, _followed}, 500
+    assert_never_in_runner(played, @shared_secret)
+    assert share_used(terry, share) == %{alice.user.id => 2}
+
+    # Off the source's destination, a path it does not name or another
+    # port, the request is refused before anything is counted or sent.
+    for input <- [request(port, "/elsewhere"), request(port + 1, "/hello")] do
+      played = run!(alice.ctx, probe, input)
+
+      assert refused!(played, "destination_mismatch") ==
+               Prima.Refusal.message(:destination_mismatch)
+    end
+
+    refute_received {:upstream, _request}
+    assert share_used(terry, share) == %{alice.user.id => 2}
   end
 
   # ---------------------------------------------------------------------------

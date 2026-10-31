@@ -721,7 +721,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     test "same binding replaces material under CAS and clears needs_reauth", %{ctx: ctx} do
       view = idp_entry!(ctx, "G", %{"note" => "kept"})
 
-      :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
       digest_before = entry.binding_digest
 
@@ -949,7 +949,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert {:error, :unknown_state} = OAuthGrant.complete(state, "code", pending.redirect_uri)
 
       view = idp_entry!(ctx, "G-rewide", %{"note" => "kept"})
-      :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
 
       script!([{:ok, %{"access_token" => "at-rewide", "scope" => "#{@send}"}}])
@@ -1111,7 +1111,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       # its material is erased, and the refresh's write-back must not seal
       # the provider's answer into it again.
       script!([
-        {fn -> :ok = Arca.VaultStorage.tombstone(Sanctum.Context.actor(ctx), entry.id) end,
+        {fn -> {:ok, _} = Arca.VaultStorage.tombstone(Sanctum.Context.actor(ctx), entry.id) end,
          {:ok,
           %{"access_token" => "at-refreshed", "refresh_token" => "rt-2", "expires_in" => 3600}}}
       ])
@@ -1270,7 +1270,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         end)
 
       await_waiting!(lock)
-      :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
+      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
 
       release!(lock)
       assert {:error, {:entry_unavailable, "revoked"}} = Task.await(dispense, 30_000)
@@ -1311,7 +1311,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
       script!([
         {fn ->
-           :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
+           {:ok, _} =
+             Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
          end, {:ok, %{"access_token" => "at-refreshed", "expires_in" => 3600}}}
       ])
 

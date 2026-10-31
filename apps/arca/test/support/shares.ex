@@ -161,16 +161,25 @@ defmodule Arca.Test.Shares do
     profile
   end
 
-  @doc "A share binding as a revision's writer names it."
-  @spec share_ref(String.t(), String.t()) :: map()
-  def share_ref(share_id, digest \\ "sha256:d0") do
+  @doc """
+  A share binding as a revision's writer names it, admitted under
+  `admitted`, the share's audience as the writer read it (everyone unless
+  given).
+  """
+  @spec share_ref(String.t(), String.t(), map()) :: map()
+  def share_ref(share_id, digest \\ "sha256:d0", admitted \\ everyone()) do
     %{
       binding_key: "formula:local.consumer|@ingress|default",
       scope: "share",
       share_id: share_id,
-      binding_digest: digest
+      binding_digest: digest,
+      admitted: admitted
     }
   end
+
+  @doc "The audience `everyone`, as a write or a writer names it."
+  @spec everyone() :: map()
+  def everyone, do: %{audience: "everyone", group_id: nil}
 
   @doc "The attributes of revision `revision` of the profile `profile_id`."
   @spec revision_attrs(String.t(), String.t(), pos_integer()) :: map()

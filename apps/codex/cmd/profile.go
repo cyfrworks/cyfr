@@ -27,12 +27,13 @@ import (
 func init() {
 	profileGrantCmd.Flags().StringSlice("entry", nil,
 		"Bind a need of the app: need[|account]=id[:lifetime] (repeatable). An id beginning "+
-			"ine_ is an instance entry, any other an entry of the athanor; |account names an "+
+			"ine_ is an instance entry, shr_ a key shared with you, any other an entry of the "+
+			"athanor; |account names an "+
 			"account beside the need's default; the lifetime is standing (the default), 5m, 1h, "+
 			"session or once")
 	profileGrantCmd.Flags().StringSlice("selection", nil,
 		"Fill a dependency's credential: dep[|account]=id[:lifetime] (repeatable). An id "+
-			"beginning vlt_ or ine_ names an entry, anything else the label of the dependency's "+
+			"beginning vlt_, ine_ or shr_ names an entry, anything else the label of the dependency's "+
 			"profile that lends its key; |account names an account beside the edge's default, "+
 			"which names an entry; the lifetime is as --entry's")
 	profileGrantCmd.Flags().Bool("get-head-only", false,
@@ -163,6 +164,7 @@ var profileGrantCmd = &cobra.Command{
 	Example: `  cyfr profile grant c:moonmoon69.gmail
   cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123
   cyfr profile grant c:local.model --entry api_key=ine_abc123:1h
+  cyfr profile grant c:local.model --entry api_key=shr_abc123
   cyfr profile grant f:local.report --selection reagent:local.db=vlt_def456:once
   cyfr profile grant f:local.report --selection 'reagent:local.db|Supabase 2=vlt_def789'
   cyfr profile grant f:local.daily-report --origin interactive --origin schedule`,
@@ -425,7 +427,7 @@ func parseSlotFlag(flag, pair string) (slotFlag, error) {
 	}
 	if named && flag == "--selection" && selectionChoice(value).label {
 		return slotFlag{}, fmt.Errorf("%s %q names the account %s by a profile's label; a named "+
-			"account names an entry, an id beginning vlt_ or ine_", flag, pair, account)
+			"account names an entry, an id beginning vlt_, ine_ or shr_", flag, pair, account)
 	}
 	return slotFlag{target: target, account: account, value: value, choice: choice}, nil
 }
@@ -551,21 +553,29 @@ func lifetimeOf(choice string, chooser grantChooser) (string, string, error) {
 }
 
 // idChoice is what a binding or selection names: an entry of the athanor,
-// an instance entry, or (a selection only) a lending profile's label.
+// an instance entry, a key shared with the person, or (a selection only)
+// a lending profile's label.
 type idChoice struct {
 	value    string
 	instance bool
+	share    bool
 	label    bool
 }
 
 func entryChoice(id string) idChoice {
-	return idChoice{value: id, instance: strings.HasPrefix(id, "ine_")}
+	return idChoice{
+		value:    id,
+		instance: strings.HasPrefix(id, "ine_"),
+		share:    strings.HasPrefix(id, "shr_"),
+	}
 }
 
 func selectionChoice(value string) idChoice {
 	switch {
 	case strings.HasPrefix(value, "ine_"):
 		return idChoice{value: value, instance: true}
+	case strings.HasPrefix(value, "shr_"):
+		return idChoice{value: value, share: true}
 	case strings.HasPrefix(value, "vlt_"):
 		return idChoice{value: value}
 	default:
@@ -575,9 +585,12 @@ func selectionChoice(value string) idChoice {
 
 func bindingItem(need string, id idChoice, kind, until string) ops.ProfilePreviewArgsDecisionsBindingsItem {
 	item := ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(need)}
-	if id.instance {
+	switch {
+	case id.instance:
 		item.InstanceEntryId = ops.Value(id.value)
-	} else {
+	case id.share:
+		item.ShareId = ops.Value(id.value)
+	default:
 		item.EntryId = ops.Value(id.value)
 	}
 	lifetime := ops.ProfilePreviewArgsDecisionsBindingsItemLifetime{Kind: kind}
@@ -598,6 +611,8 @@ func selectionItem(row depRow, need string, id idChoice, kind, until string) ops
 		item.Label = ops.Value(id.value)
 	case id.instance:
 		item.InstanceEntryId = ops.Value(id.value)
+	case id.share:
+		item.ShareId = ops.Value(id.value)
 	default:
 		item.EntryId = ops.Value(id.value)
 	}
@@ -654,6 +669,8 @@ func readNeed(raw any) (needRow, bool) {
 			row.suggested = &idChoice{value: id}
 		} else if id := str(suggested["instance_entry_id"]); id != "" {
 			row.suggested = &idChoice{value: id, instance: true}
+		} else if id := str(suggested["share_id"]); id != "" {
+			row.suggested = &idChoice{value: id, share: true}
 		}
 	}
 	for _, c := range asList(m["candidates"]) {
@@ -707,6 +724,17 @@ func (d depRow) provided() bool {
 	return false
 }
 
+// candidateID is the id a candidate is chosen by: its entry's, its
+// instance entry's or its share's.
+func candidateID(c map[string]any) string {
+	for _, key := range []string{"entry_id", "instance_entry_id", "share_id"} {
+		if id := str(c[key]); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
 func asList(value any) []any {
 	list, _ := value.([]any)
 	return list
@@ -747,6 +775,8 @@ func readHeads(plan map[string]any) []headBinding {
 			head.id = idChoice{value: str(m["entry_id"])}
 		case str(m["instance_entry_id"]) != "":
 			head.id = idChoice{value: str(m["instance_entry_id"]), instance: true}
+		case str(m["share_id"]) != "":
+			head.id = idChoice{value: str(m["share_id"]), share: true}
 		case str(m["label"]) != "":
 			head.id = idChoice{value: str(m["label"]), label: true}
 		default:
@@ -839,7 +869,7 @@ func headNeed(needs []needRow, id idChoice) string {
 	var holding []string
 	for _, need := range needs {
 		for _, c := range need.candidates {
-			if str(c["entry_id"]) == id.value || str(c["instance_entry_id"]) == id.value {
+			if candidateID(c) == id.value {
 				holding = append(holding, need.name)
 				break
 			}
@@ -1105,6 +1135,8 @@ func askEntry(need needRow, lenders []map[string]any, chooser grantChooser) (*id
 			options = append(options, prompt.Option{Label: label, Value: "vlt:" + id})
 		} else if id := str(c["instance_entry_id"]); id != "" {
 			options = append(options, prompt.Option{Label: label, Value: "ine:" + id})
+		} else if id := str(c["share_id"]); id != "" {
+			options = append(options, prompt.Option{Label: label, Value: "shr:" + id})
 		}
 	}
 	for _, l := range lenders {
@@ -1127,6 +1159,8 @@ func askEntry(need needRow, lenders []map[string]any, chooser grantChooser) (*id
 		return &idChoice{value: id}, nil
 	case "ine":
 		return &idChoice{value: id, instance: true}, nil
+	case "shr":
+		return &idChoice{value: id, share: true}, nil
 	case "label":
 		return &idChoice{value: id, label: true}, nil
 	}
@@ -1278,7 +1312,7 @@ func selectedNeed(row depRow, id idChoice) (string, error) {
 	for _, need := range row.needs {
 		names = append(names, need.name)
 		for _, c := range need.candidates {
-			if str(c["entry_id"]) == id.value || str(c["instance_entry_id"]) == id.value {
+			if candidateID(c) == id.value {
 				holding = append(holding, need.name)
 				break
 			}
@@ -1403,7 +1437,7 @@ func needLines(component, from string, need needRow, lenders []map[string]any) [
 	switch {
 	case need.suggested != nil:
 		for _, c := range need.candidates {
-			if str(c["entry_id"]) == need.suggested.value || str(c["instance_entry_id"]) == need.suggested.value {
+			if candidateID(c) == need.suggested.value {
 				lines = append(lines, "    suggested: "+str(c["name"])+", "+sourceWords(str(c["source"]), ""))
 			}
 		}
@@ -1705,6 +1739,8 @@ func removalLine(item map[string]any) string {
 		entry = str(item["entry_id"])
 	case str(item["instance_entry_id"]) != "":
 		entry = str(item["instance_entry_id"])
+	case str(item["share_id"]) != "":
+		entry = str(item["share_id"])
 	default:
 		entry = fmt.Sprintf("the key its '%s' profile lent", str(item["via"]))
 	}
@@ -1746,14 +1782,17 @@ func credentialSentence(node string, values map[string]any) string {
 }
 
 // sourceWords says whose credential a binding is: the athanor's own entry,
-// an entry the instance offers, or the public configuration the
-// publisher of node ships.
+// an entry the instance offers, a key another person shares (its name
+// already says whose: "Shared by" its owner), or the public configuration
+// the publisher of node ships.
 func sourceWords(source, node string) string {
 	switch source {
 	case "own":
 		return "an entry of this athanor"
 	case "instance":
 		return "provided by this instance"
+	case "share":
+		return "a key shared with you"
 	case "provided":
 		return "provided by " + publisherOf(node, "its publisher") + ", the app's public configuration"
 	default:

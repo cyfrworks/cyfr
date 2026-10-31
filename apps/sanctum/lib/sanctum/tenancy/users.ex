@@ -282,8 +282,9 @@ defmodule Sanctum.Tenancy.Users do
   After the commit, and only from what it returned: the removed sessions'
   established contexts are dropped and their revocation announced, every
   archived athanor's members lose their cached contexts and the athanor's
-  archival is announced, and every roster the denial changed is told.
-  Denying a person already denied re-runs the retirement and checks it.
+  archival is announced, every share the denial revoked announces it, and
+  every roster the denial changed is told. Denying a person already
+  denied re-runs the retirement and checks it.
   """
   @spec deny(user()) :: {:ok, user()} | {:error, term()}
   def deny(%{id: user_id} = user) do
@@ -291,6 +292,7 @@ defmodule Sanctum.Tenancy.Users do
            Arca.SecurityTransitions.deny_user(server(), user_id, verify: fn _rows -> :ok end) do
       Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
       Athanors.announce_archived(change.archived_athanor_ids, change)
+      Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
       Members.announce_removed(user_id, change)
 
       :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{

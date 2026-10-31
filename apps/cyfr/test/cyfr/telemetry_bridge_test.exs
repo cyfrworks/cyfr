@@ -33,6 +33,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     Request,
     ScheduleRun,
     Session,
+    ShareChanged,
     Tinctures,
     VaultEntryChanged,
     Webhooks
@@ -108,7 +109,18 @@ defmodule Cyfr.TelemetryBridgeTest do
        {ApiKeys, %{kind: :changed}}},
       {[:cyfr, :sanctum, :webhooks, :changed], tenant, Bus.webhooks(@actor),
        {Webhooks, %{kind: :changed}}}
-    ] ++ confirmation_cases(tenant) ++ instance_entry_cases() ++ file_offer_cases()
+    ] ++
+      confirmation_cases(tenant) ++
+      instance_entry_cases() ++ share_cases() ++ file_offer_cases()
+  end
+
+  # A share's durable changes, each on the one global topic as its share
+  # id and kind, whatever else the emitter attached.
+  defp share_cases do
+    for kind <- Prima.ShareKinds.all() do
+      {[:cyfr, :sanctum, :share, kind], %{share_id: "shr_1", kind: kind, user_id: @user},
+       Bus.shares(), {ShareChanged, %{kind: kind, share_id: "shr_1"}}}
+    end
   end
 
   # Sending a copy: each transition, a receipt that landed and one the
@@ -320,6 +332,48 @@ defmodule Cyfr.TelemetryBridgeTest do
       end
 
       refute_receive %InstanceEntryChanged{}, 100
+    end
+
+    test "a share's change carries its id and kind and nothing else" do
+      listen(Bus.shares())
+
+      :telemetry.execute([:cyfr, :sanctum, :share, :audience], %{count: 1}, %{
+        share_id: "shr_audience",
+        kind: :audience,
+        user_id: @user,
+        audience: "group",
+        group_id: "ath_traders",
+        vault_entry_id: "vlt_market",
+        fields: %{"API_KEY" => "sk-share-never-bridged"}
+      })
+
+      assert_receive %ShareChanged{} = heard
+
+      assert Map.from_struct(heard) == %{kind: :audience, share_id: "shr_audience"}
+      refute inspect(heard) =~ "sk-share"
+      refute inspect(heard) =~ @user
+      refute inspect(heard) =~ "ath_traders"
+      refute inspect(heard) =~ "vlt_market"
+
+      # Published once, on the one global topic.
+      refute_receive %ShareChanged{}, 100
+    end
+
+    test "a share event naming no share, or another kind, is dropped and counted" do
+      count_drops(self())
+      listen(Bus.shares())
+      event = [:cyfr, :sanctum, :share, :revoked]
+
+      for metadata <- [
+            %{kind: :revoked},
+            %{share_id: "", kind: :revoked},
+            %{share_id: "shr_1", kind: :caps}
+          ] do
+        :telemetry.execute(event, %{count: 1}, metadata)
+        assert_receive {:dropped, %{count: 1}, %{event: ^event}}
+      end
+
+      refute_receive %ShareChanged{}, 100
     end
 
     test "an offer's transition reaches both its people, and a receipt that failed or landed " <>
@@ -710,6 +764,39 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       id = record.id
       refute_receive %Execution{execution_id: ^id}, 200
+    end
+  end
+
+  # A share's recipients live in other athanors: each hears what its owner
+  # did on the one global topic, as the share and the kind, and reads what
+  # it is offered again under its own context.
+  describe "a share its owner revokes" do
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
+    test "reaches a recipient subscribed to the shares topic as its id and kind alone" do
+      terry = Arca.Test.Shares.owner!()
+      entry = Arca.Test.Shares.entry!(terry.actor)
+      share = Arca.Test.Shares.share!(terry.actor, entry.id)
+
+      owner = %{
+        Sanctum.TestContext.local(:prism)
+        | user_id: terry.user.id,
+          athanor_id: terry.athanor.id
+      }
+
+      # The recipient is a process of its own, as Alice's page is.
+      relay(Bus.shares())
+
+      assert {:ok, %{affected: []}} = Sanctum.Shares.revoke(owner, share.id)
+
+      topic = Bus.shares()
+      share_id = share.id
+      assert_receive {:heard, ^topic, %ShareChanged{share_id: ^share_id} = heard}, 1_000
+      assert Map.from_struct(heard) == %{kind: :revoked, share_id: share_id}
+      refute_receive {:heard, ^topic, %ShareChanged{share_id: ^share_id}}, 100
     end
   end
 

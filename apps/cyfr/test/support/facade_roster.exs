@@ -35,6 +35,7 @@
     "Sanctum.RequestLog",
     "Sanctum.Resources",
     "Sanctum.RunningTasks",
+    "Sanctum.Shares",
     "Sanctum.TinctureAccess",
     "Sanctum.ToolGrants",
     "Sanctum.VirtualTools",

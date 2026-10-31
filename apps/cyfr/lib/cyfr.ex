@@ -46,6 +46,7 @@ defmodule Cyfr do
       Bus.Schedules,
       Bus.Session,
       Bus.SettingsChanged,
+      Bus.ShareChanged,
       Bus.ThreadEvent,
       Bus.Tinctures,
       Bus.VaultEntryChanged,

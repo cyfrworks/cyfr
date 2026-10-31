@@ -688,7 +688,7 @@ defmodule Sanctum.VaultTest do
 
     test "rotating a needs_reauth entry reactivates it", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "v"}})
-      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
 
       assert {:ok, 1} =
                rotate(ctx, %{
@@ -704,7 +704,7 @@ defmodule Sanctum.VaultTest do
     test "a rotate that loses its compare-and-set leaves the entry whole", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "before"}})
       resource = resource_for(ctx, view.id)
-      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
+      {:ok, _} = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
 
       # The material write and the reactivation that goes with it are one
       # transaction: a lost race leaves neither, so the entry is still
@@ -720,7 +720,7 @@ defmodule Sanctum.VaultTest do
       assert entry.status == "needs_reauth"
       assert entry.payload_rev == 0
 
-      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "active")
+      {:ok, _} = Arca.VaultStorage.set_status(actor(ctx), view.id, "active")
       assert {:ok, %{"key" => "before"}} = VaultReader.fetch(ctx, resource, @dispense)
     end
   end
@@ -1399,6 +1399,115 @@ defmodule Sanctum.VaultTest do
       # The living-name unique index ignores tombstones.
       assert {:ok, _} =
                create(ctx, %{name: "reusable", kind: "api_key", destination: @destination})
+    end
+  end
+
+  # An entry offered through shares tells the shares' recipients, in other
+  # athanors, what happened to it, once the change committed: by share id
+  # and kind, under the owner as the acting person.
+  describe "an entry's shares" do
+    @shared %{
+      "hosts" => ["api.example.com"],
+      "methods" => ["GET"],
+      "paths" => ["/v1/"],
+      "scheme" => "https"
+    }
+
+    # The owner is a person their admission made, with their own athanor,
+    # so their confirmations are proven as anyone's are.
+    setup %{ctx: ctx} do
+      n = System.unique_integer([:positive])
+
+      {:ok, user} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|vault-share-#{n}",
+          provider: "github",
+          email: "terry#{n}@example.com",
+          verified: true
+        })
+
+      own = Sanctum.Test.People.athanor!(user)
+
+      terry = %{
+        user: user,
+        actor: %Prima.Actor{athanor_id: own.id, user_id: user.id, scope: :athanor}
+      }
+
+      ctx = %{ctx | user_id: user.id, athanor_id: own.id}
+
+      view =
+        create!(ctx, %{fields: %{"key" => "v1"}, destination: @shared, disclose: false})
+
+      share = Arca.Test.Shares.share!(terry.actor, view.id)
+      Sanctum.Test.ShareAnnouncements.listen()
+      {:ok, ctx: ctx, terry: terry, view: view, share: share}
+    end
+
+    defp announced(kind, share_id, user_id),
+      do: {:share_announced, kind, %{share_id: share_id, kind: kind, user_id: user_id}}
+
+    test "a rotation announces rotated for each active share of the entry, and no other",
+         %{ctx: ctx, terry: terry, view: view, share: share} do
+      traders = Arca.Test.Shares.group!([terry.user.id])
+
+      revoked =
+        Arca.Test.Shares.share!(terry.actor, view.id, %{audience: "group", group_id: traders.id})
+
+      {:ok, _} = Arca.Shares.revoke(terry.actor, revoked.id, Vault.blocked_profile_status())
+
+      other = create!(ctx, %{fields: %{"key" => "v1"}, destination: @shared, disclose: false})
+      elsewhere = Arca.Test.Shares.share!(terry.actor, other.id)
+
+      assert {:ok, 1} =
+               rotate(ctx, %{id: view.id, fields: %{"key" => "v2"}, expected_payload_rev: 0})
+
+      expected = announced(:rotated, share.id, terry.user.id)
+      assert_receive ^expected
+
+      for id <- [share.id, revoked.id, elsewhere.id] do
+        refute_receive {:share_announced, _kind, %{share_id: ^id}}, 50
+      end
+    end
+
+    test "a rebind announces rebound for each share it carried",
+         %{ctx: ctx, terry: terry, view: view, share: share} do
+      narrowed = %{@shared | "paths" => ["/v1/quotes/"]}
+
+      assert {:ok, %{binding_digest: _}} =
+               rebind_confirmed(ctx, %{id: view.id, destination: narrowed})
+
+      expected = announced(:rebound, share.id, terry.user.id)
+      assert_receive ^expected
+
+      share_id = share.id
+
+      refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 50
+    end
+
+    test "a revoke announces revoked for each share it revoked",
+         %{ctx: ctx, terry: terry, view: view, share: share} do
+      assert {:ok, _} = Vault.revoke(ctx, view.id)
+
+      expected = announced(:revoked, share.id, terry.user.id)
+      assert_receive ^expected
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
+    end
+
+    test "a delete announces revoked for each share it revoked",
+         %{ctx: ctx, terry: terry, view: view, share: share} do
+      assert :ok = Vault.delete(ctx, view.id)
+
+      expected = announced(:revoked, share.id, terry.user.id)
+      assert_receive ^expected
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
+    end
+
+    test "a refused change announces nothing", %{ctx: ctx, view: view, share: share} do
+      assert {:error, :payload_conflict} =
+               rotate(ctx, %{id: view.id, fields: %{"key" => "v2"}, expected_payload_rev: 7})
+
+      share_id = share.id
+      refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
     end
   end
 

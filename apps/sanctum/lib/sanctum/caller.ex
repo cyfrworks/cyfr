@@ -882,6 +882,39 @@ defmodule Sanctum.Caller do
 
   defp memo_ttl_ms, do: Application.get_env(:sanctum, :caller_memo_ttl_ms, 2_000)
 
+  @doc """
+  Whether the person `user_id` stands on this CYFR now, read from the
+  store and from no context: their row is `active`, and then the company
+  sign-in this CYFR may require holds (`Sanctum.CompanyLogin.standing/1`),
+  checked last as on every path here. A person with no row, denied, or
+  whose company sign-in lapsed does not stand, and stands again when it
+  holds; a store that cannot answer is `{:error, :unavailable}`, never a
+  standing.
+
+  It is the one read of a person's standing beside a context of their
+  own: `Sanctum.Shares` asks it of a share's recipient and its owner when
+  it discovers a share for a person and when it resolves one for a use.
+  """
+  @spec stands?(String.t()) :: {:ok, boolean()} | {:error, :unavailable}
+  def stands?(user_id) when is_binary(user_id) and user_id != "" do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{status: "active"}} -> company_stands(user_id)
+      {:ok, _not_active} -> {:ok, false}
+      {:error, :not_found} -> {:ok, false}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  def stands?(_no_person), do: {:ok, false}
+
+  defp company_stands(user_id) do
+    case company(user_id) do
+      :ok -> {:ok, true}
+      {:error, :company_login_required} -> {:ok, false}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
   # Which credential the context holds, as far as revalidation goes. A
   # frame credential is a derived credential held to its own rows at every
   # use (`derived_standing/2`), whatever its source was; a context that

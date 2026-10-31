@@ -45,7 +45,8 @@ defmodule Opus.Host.AttachedFetch do
     6. the `http:` rate of the node is taken once (`rate_limited`);
     7. `Sanctum.Attach.resolve/5` decides the value (the binding's
        lifetime, the entry, the instance entry's audience, policy and
-       caps, or the publisher's provided value).
+       caps, the share's audience, its owner's standing and its caps, or
+       the publisher's provided value).
 
   Each refusal is a guest error naming the request's call id, answered
   before anything is emitted, and recorded as a denial of the attempt's

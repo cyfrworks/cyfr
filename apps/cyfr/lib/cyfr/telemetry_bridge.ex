@@ -8,10 +8,10 @@ defmodule Cyfr.TelemetryBridge do
   A foundation below the host emits `:telemetry` and never broadcasts, so
   every announcement the identity domain makes — a tray entry, a session
   minted or revoked, a dropped caller memo, a membership, a vault entry,
-  an instance entry, an archive, the API key and webhook rosters, a
-  pending confirmation — every file offer the storage layer moves, and
-  every lifecycle event the console follows reaches `Cyfr.Bus` here.
-  The events it attaches are exactly
+  an instance entry, a share, an archive, the API key and webhook
+  rosters, a pending confirmation — every file offer the storage layer
+  moves, and every lifecycle event the console follows reaches
+  `Cyfr.Bus` here. The events it attaches are exactly
   `Cyfr.Telemetry.Catalog.consumed_by(:bridge)`; there is no second list.
 
   Each event maps to one payload constructor, which takes only the
@@ -53,6 +53,7 @@ defmodule Cyfr.TelemetryBridge do
     Request,
     ScheduleRun,
     Session,
+    ShareChanged,
     Tinctures,
     VaultEntryChanged,
     Webhooks
@@ -303,6 +304,17 @@ defmodule Cyfr.TelemetryBridge do
        )
        when is_binary(entry_id) and entry_id != "",
        do: [{:global, Bus.instance_entries(), InstanceEntryChanged.new(kind, entry_id)}]
+
+  # A share's durable change, on the one global topic its recipients in
+  # other athanors hear: the share id and the kind, and nothing else the
+  # emitter attached (the acting person among it).
+  defp messages(
+         [:cyfr, :sanctum, :share, kind],
+         _measurements,
+         %{share_id: share_id, kind: kind}
+       )
+       when is_binary(share_id) and share_id != "",
+       do: [{:global, Bus.shares(), ShareChanged.new(kind, share_id)}]
 
   # Sending a copy, on the topic of each person it concerns: an offer's
   # transitions reach its sender and its recipient, and a receipt that

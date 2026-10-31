@@ -200,6 +200,19 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                              template: "Bearer {value}"
                            },
                            projection: %{fields: %{"service_key" => "service_key"}, scopes: []}
+                         },
+                         "Market" => %{
+                           entry_id: "shr_golden-market",
+                           binding_digest: "sha256:bind-market",
+                           scope: "share",
+                           binding_key: key.("dest", "Market"),
+                           destination:
+                             destination.(["market.supabase.co"],
+                               methods: ["GET"],
+                               paths: ["/rest/v1"]
+                             ),
+                           attach: %{in: "header", name: "apikey", template: "{value}"},
+                           projection: %{fields: %{"service_key" => "service_key"}, scopes: []}
                          }
                        }
                      },
@@ -295,6 +308,13 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
     {:child, archive} = Transition.step(auth, :call, named_invoke)
     assert archive.resources.vault.entry_id == "vault-entry-archive"
     assert archive.resources.vault.scope == "instance"
+
+    # A shared account rides as the share it names: its entry is the share.
+    {:child, market} =
+      Transition.step(auth, :call, {:invoke, Map.put(target, :connection, "Market")})
+
+    assert market.resources.vault.entry_id == "shr_golden-market"
+    assert market.resources.vault.scope == "share"
 
     assert {:deny, :connection_not_granted} =
              Transition.step(auth, :call, {:invoke, Map.put(target, :connection, "Other")})

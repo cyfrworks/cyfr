@@ -18,8 +18,13 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
   An event is emitted by a file whose code passes it to `:telemetry.execute`
   or `:telemetry.span`, as a literal list or a module attribute holding
-  one; a file whose code passes anything else (a variable, a call) is read
-  as emitting every event its code spells. Documentation and comments are
+  one, or, for a family held to the one list of its kinds, as the
+  family's prefix and a variable kind in the canonical form
+  `Cyfr.Test.TelemetryFamilies` states, which emits every event of the
+  family; a variable kind outside that form is an unbounded producer,
+  refused naming its file and line; a file whose code passes anything
+  else (a variable, a call) is read as emitting every event its code
+  spells. Documentation and comments are
   not code, so an event a moduledoc mentions is not emitted by it.
 
   The rule is checked on the tree, and on planted violations, each of
@@ -107,13 +112,24 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
         reduce: Map.new(Prima.Test.SourceTree.app_libs(@root) ++ [@worker], &{&1, MapSet.new()}) do
       emitted ->
         key = if String.starts_with?(path, worker), do: @worker, else: lib
-        events = emitted_by_source(Prima.Test.SourceTree.read(path))
+        events = emitted_by_source(Prima.Test.SourceTree.read(path), path)
         Map.update!(emitted, key, &MapSet.union(&1, events))
     end
   end
 
+  # Every unbounded family producer in the apps' libs, by file and line.
+  defp unbounded_by_tree do
+    for lib <- Prima.Test.SourceTree.app_libs(@root),
+        path <- @root |> Path.join(lib) |> Path.join("**/*.ex") |> Path.wildcard(),
+        message <- families(Prima.Test.SourceTree.read(path), path).unbounded,
+        do: message
+  end
+
+  defp families(source, path),
+    do: Cyfr.Test.TelemetryFamilies.scan(source, Path.relative_to(path, @root))
+
   # The events one source file's code emits.
-  defp emitted_by_source(source) do
+  defp emitted_by_source(source, path \\ "planted.ex") do
     ast = Code.string_to_quoted!(source)
     attributes = attributes(ast)
 
@@ -123,6 +139,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
         when fun in @emitting ->
           case event_of(first, attributes) do
             {:ok, event} -> {node, {MapSet.put(emits, event), dynamic?}}
+            :family -> {node, {emits, dynamic?}}
             :error -> {node, {emits, true}}
           end
 
@@ -130,11 +147,19 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
           {node, acc}
       end)
 
+    emits = MapSet.union(emits, MapSet.new(families(source, path).events))
+
     if dynamic?, do: MapSet.union(emits, spelled(ast)), else: emits
   end
 
+  # A family-shaped event is the shared rule's to read
+  # (`Cyfr.Test.TelemetryFamilies.scan/2`), canonical or unbounded.
   defp event_of(list, _attributes) when is_list(list) do
-    if event?(list), do: {:ok, list}, else: :error
+    cond do
+      event?(list) -> {:ok, list}
+      Cyfr.Test.TelemetryFamilies.family_shaped?(list) -> :family
+      true -> :error
+    end
   end
 
   defp event_of({:@, _, [{name, _, context}]}, attributes) when is_atom(context),
@@ -179,6 +204,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
   test "the tree holds the rule" do
     assert violations(Catalog.all(), emitted_by_tree()) == []
+    assert unbounded_by_tree() == []
   end
 
   test "what a runner emits is the worker's roster, and the audit hears none of it" do
@@ -237,6 +263,66 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   # ---------------------------------------------------------------------------
   # Planted violations
   # ---------------------------------------------------------------------------
+
+  # A family's producer emits its every kind only in the canonical form:
+  # the kind a parameter of the clause, guarded by membership in the
+  # family's list and never bound again. Each other form is refused by
+  # its file and line, and emits nothing of the family.
+  test "a variable kind in a family's place is accepted only under its list's guard" do
+    shares = for kind <- Prima.ShareKinds.all(), do: [:cyfr, :sanctum, :share, kind]
+
+    canonical = """
+    defmodule Planted.Canonical do
+      @kinds Prima.ShareKinds.all()
+      defp announce(kind, id) when kind in @kinds,
+        do: :telemetry.execute([:cyfr, :sanctum, :share, kind], %{count: 1}, %{id: id})
+      def direct(kind) when is_atom(kind) and kind in Prima.ShareKinds.all(),
+        do: :telemetry.execute([:cyfr, :sanctum, :share, kind], %{}, %{})
+    end
+    """
+
+    assert emitted_by_source(canonical) == MapSet.new(shares)
+    assert families(canonical, "planted.ex").unbounded == []
+
+    for {source, line, why} <- [
+          {"""
+           defmodule Planted.Unlisted do
+             def f do
+               kind = :unlisted
+               :telemetry.execute([:cyfr, :sanctum, :share, kind], %{}, %{})
+             end
+           end
+           """, 4, "the kind kind is not a parameter of the clause"},
+          {"""
+           defmodule Planted.UnknownPrefix do
+             @kinds Prima.ShareKinds.all()
+             def f(kind) when kind in @kinds,
+               do: :telemetry.execute([:cyfr, :planted, :family, kind], %{}, %{})
+           end
+           """, 4, "no family has the prefix [:cyfr, :planted, :family]"},
+          {"""
+           defmodule Planted.Rebound do
+             @kinds Prima.ShareKinds.all()
+             def f(kind) when kind in @kinds do
+               kind = :unlisted
+               :telemetry.execute([:cyfr, :sanctum, :share, kind], %{}, %{})
+             end
+           end
+           """, 5, "the kind kind is bound again in the clause"},
+          {"""
+           defmodule Planted.OtherList do
+             def f(kind) when kind in [:created, :unlisted] or is_atom(kind),
+               do: :telemetry.execute([:cyfr, :sanctum, :share, kind], %{}, %{})
+           end
+           """, 3, "the kind kind is not guarded by membership in its family's list"}
+        ] do
+      assert families(source, "planted.ex").unbounded == [
+               "planted.ex:#{line}: unbounded family producer: #{why}"
+             ]
+
+      assert MapSet.disjoint?(emitted_by_source(source), MapSet.new(shares)), source
+    end
+  end
 
   test "a credential read audited in the runner that reads it is refused both ways" do
     # A runner's vault import emitting the credential read the control

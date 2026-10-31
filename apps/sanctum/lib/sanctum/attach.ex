@@ -32,6 +32,11 @@ defmodule Sanctum.Attach do
        then resolved under its audience, component policy, destination
        and caps (`Sanctum.InstanceEntries.resolve/4`); an instance entry
        holds no token, so an OAuth projection of one attaches nothing
+       (`:no_oauth_material`); a share through `Sanctum.Shares.resolve/5`,
+       handed the digest the consent approved and the one field the
+       projection reads, which holds the share to its audience, its
+       owner's standing, that digest, its source's destination and its
+       caps before it unseals; a share offers no token either
        (`:no_oauth_material`); a provided value from the resource itself,
        held to its destination.
 
@@ -122,6 +127,7 @@ defmodule Sanctum.Attach do
          :ok <- lifetime(ctx, vault, use) do
       case vault do
         %{scope: "instance"} -> instance(ctx, vault, take, request, facts)
+        %{scope: "share"} -> share(ctx, vault, take, request)
         %{scope: "athanor"} -> athanor(ctx, vault, take, request)
         _other_scope -> {:error, :connection_not_granted}
       end
@@ -196,6 +202,21 @@ defmodule Sanctum.Attach do
 
   defp instance_field(:token), do: {:error, :no_oauth_material}
   defp instance_field({:field, _need_field, _entry_field} = take), do: {:ok, take}
+
+  # A share is its owner's entry, reached through the share the consent
+  # names: the digest the consent approved travels into the resolution,
+  # which answers the one field the projection reads and nothing else of
+  # the material. A share offers no token.
+  defp share(_ctx, _vault, :token, _request), do: {:error, :no_oauth_material}
+
+  defp share(ctx, %{entry_id: share_id, binding_digest: approved} = vault, take, request)
+       when is_binary(approved) do
+    with {:ok, value} <- Sanctum.Shares.resolve(ctx, share_id, approved, request, take) do
+      {:ok, %{value: value, attach: vault.attach, masking: [value]}}
+    end
+  end
+
+  defp share(_ctx, _vault, _take, _request), do: {:error, :binding_went_stale}
 
   # The entry field the map names, refused by the component's own name.
   defp field_value(%{"fields" => fields}, {:field, need_field, entry_field}) do

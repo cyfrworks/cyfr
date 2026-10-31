@@ -171,11 +171,14 @@ defmodule Sanctum.Pairing do
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
   are sensitive, and no operation makes either (each is *Not built yet*
-  in ARCHITECTURE.md). `credential_sharing` is a widening of who or what may use an
-  instance entry (`instance_entry.set_audience`,
-  `instance_entry.set_component_policy`); whether a request widens is
-  decided from the stored entry by `Sanctum.InstanceEntries`, which asks
-  for the confirmation only then.
+  in ARCHITECTURE.md). `credential_sharing` is offering a key to more
+  people than before: a new share (`share.create`) and a share's audience
+  widened to everyone or to another group (`share.set_audience`), decided
+  by `Sanctum.Shares`, and a widening of who or what may use an instance
+  entry (`instance_entry.set_audience`,
+  `instance_entry.set_component_policy`), decided by
+  `Sanctum.InstanceEntries`. Whether a change widens is decided from the
+  stored row, and the confirmation is asked only then.
 
   `sensitive?/1` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive

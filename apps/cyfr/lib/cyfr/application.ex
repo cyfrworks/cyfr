@@ -710,6 +710,9 @@ defmodule Cyfr.Application do
         "#{length(change.uncertain_turn_ids)} turns ended uncertain"
     )
 
+    # From the committed answer: the recipients of every share it revoked,
+    # in other athanors, read what they are offered again.
+    Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
     :ignore
   end
 

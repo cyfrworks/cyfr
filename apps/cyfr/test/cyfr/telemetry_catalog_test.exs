@@ -20,11 +20,11 @@ defmodule Cyfr.TelemetryCatalogTest do
   @event_re ~r/\[:cyfr(?:,\s*:[a-z_0-9]+)+\]/
 
   defp source_events do
-    Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
-    |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
+    source_files()
     |> Enum.flat_map(fn path ->
+      code = Prima.Test.SourceTree.read(path)
       # Collapse formatting so a list wrapped across lines still matches.
-      source = path |> Prima.Test.SourceTree.read() |> String.replace(~r/\n\s*/, " ")
+      source = String.replace(code, ~r/\n\s*/, " ")
 
       Regex.scan(@event_re, source)
       |> Enum.map(fn [match] ->
@@ -34,13 +34,38 @@ defmodule Cyfr.TelemetryCatalogTest do
         |> String.split(~r/,\s*/)
         |> Enum.map(&String.trim_leading(&1, ":"))
       end)
+      |> Kernel.++(family_events(path, code))
     end)
     |> MapSet.new()
+  end
+
+  # A family's events where its producer passes `[prefix..., kind]` to
+  # `:telemetry.execute` in the canonical form the one rule states
+  # (`Cyfr.Test.TelemetryFamilies.scan/2`), as segment strings.
+  defp family_events(path, source) do
+    families(path, source).events
+    |> Enum.map(fn event -> Enum.map(event, &Atom.to_string/1) end)
+  end
+
+  defp families(path, source),
+    do: Cyfr.Test.TelemetryFamilies.scan(source, Path.relative_to(path, @umbrella_root))
+
+  # Every family producer outside the canonical form, by file and line.
+  defp unbounded_producers do
+    for path <- source_files(),
+        message <- families(path, Prima.Test.SourceTree.read(path)).unbounded,
+        do: message
+  end
+
+  defp source_files do
+    Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+    |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
   end
 
   # Compared as segment strings, so a source event the catalog lacks is
   # never made an atom.
   test "every event named in source is catalogued, and none is stale" do
+    assert unbounded_producers() == [], "a family producer outside the canonical form"
     found = source_events()
     catalogued = MapSet.new(Catalog.events(), fn event -> Enum.map(event, &Atom.to_string/1) end)
 
@@ -94,6 +119,27 @@ defmodule Cyfr.TelemetryCatalogTest do
 
     for event <- events do
       assert Catalog.all()[event].consumers == [:audit, :bridge], inspect(event)
+      assert event in Catalog.consumed_by(:audit)
+      assert event in Catalog.consumed_by(:bridge)
+    end
+  end
+
+  # A share's durable changes are audited, and the bridge carries each to
+  # the recipients in other athanors: one event per kind, the kinds the
+  # emitter's own list, which the bus payload reads too.
+  test "every share change is audited and bridged, one event per kind" do
+    kinds = Prima.ShareKinds.all()
+
+    assert Enum.sort(kinds) == Enum.sort(~w(created audience caps rebound rotated revoked)a)
+    assert Cyfr.Bus.ShareChanged.kinds() == kinds
+
+    events = for kind <- kinds, do: [:cyfr, :sanctum, :share, kind]
+
+    assert Enum.filter(Catalog.events(), &match?([:cyfr, :sanctum, :share | _], &1)) ==
+             Enum.sort(events)
+
+    for event <- events do
+      assert Catalog.all()[event] == %{consumers: [:audit, :bridge]}, inspect(event)
       assert event in Catalog.consumed_by(:audit)
       assert event in Catalog.consumed_by(:bridge)
     end

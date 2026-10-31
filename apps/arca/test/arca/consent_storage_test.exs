@@ -363,11 +363,11 @@ defmodule Arca.ConsentStorageTest do
       {:ok, head, _refs} = ConsentStorage.get_head(actor, profile.id)
 
       revoked = entry!(athanor)
-      :ok = VaultStorage.set_status(actor, revoked.id, "revoked")
+      {:ok, _} = VaultStorage.set_status(actor, revoked.id, "revoked")
       reauth = entry!(athanor)
-      :ok = VaultStorage.set_status(actor, reauth.id, "needs_reauth")
+      {:ok, _} = VaultStorage.set_status(actor, reauth.id, "needs_reauth")
       gone = entry!(athanor)
-      :ok = VaultStorage.tombstone(actor, gone.id)
+      {:ok, _} = VaultStorage.tombstone(actor, gone.id)
       elsewhere = entry!("ath_other")
 
       for {id, refusal} <- [
@@ -478,6 +478,8 @@ defmodule Arca.ConsentStorageTest do
             Map.put(ref, :scope, "athanor"),
             Map.put(ref, :scope, "instance"),
             Map.delete(ref, :binding_digest),
+            Map.delete(ref, :admitted),
+            Map.put(ref, :admitted, %{audience: "group", group_id: nil}),
             ref |> Map.delete(:share_id) |> Map.put(:vault_entry_id, entry.id)
           ] do
         assert {_profile, {:error, {:invalid, %{vault_refs: [_ | _]}}}} =
@@ -496,7 +498,7 @@ defmodule Arca.ConsentStorageTest do
       {:ok, _} = Arca.Shares.revoke(terry.actor, revoked.id, "needs_consent")
       reauth_entry = Arca.Test.Shares.entry!(terry.actor)
       reauth = Arca.Test.Shares.share!(terry.actor, reauth_entry.id)
-      :ok = VaultStorage.set_status(terry.actor, reauth_entry.id, "needs_reauth")
+      {:ok, _} = VaultStorage.set_status(terry.actor, reauth_entry.id, "needs_reauth")
       group = Arca.Test.Shares.group!([alice.user.id])
 
       for {athanor, ref, refusal} <- [
@@ -514,6 +516,33 @@ defmodule Arca.ConsentStorageTest do
 
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
       assert {:ok, %{binding_digest: "sha256:d0"}} = VaultStorage.get(terry.actor, entry.id)
+    end
+
+    test "a share whose audience moved from the one its binding was admitted under is " <>
+           "refused under the lock, and the audience it holds is admitted",
+         %{terry: terry, share: share, alice: alice} do
+      group = Arca.Test.Shares.group!([terry.user.id])
+      narrowed = %{audience: "group", group_id: group.id}
+
+      {:ok, _} =
+        Arca.Shares.set_audience(terry.actor, share.id, Arca.Test.Shares.everyone(), narrowed)
+
+      for admitted <- [Arca.Test.Shares.everyone(), %{narrowed | group_id: "ath_other"}] do
+        ref = Arca.Test.Shares.share_ref(share.id, "sha256:d0", admitted)
+
+        assert {_profile, {:error, {:audience_changed, id}}} =
+                 share_revision(alice.athanor.id, [ref]),
+               inspect(admitted)
+
+        assert id == share.id
+      end
+
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+
+      assert {_profile, {:ok, _consent}} =
+               share_revision(alice.athanor.id, [
+                 Arca.Test.Shares.share_ref(share.id, "sha256:d0", narrowed)
+               ])
     end
 
     test "an own entry and a share bind together, each locked in its order",

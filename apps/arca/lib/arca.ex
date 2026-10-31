@@ -207,6 +207,8 @@ defmodule Arca do
       SecurityTransitions,
       ServerMetaStorage,
       SessionStorage,
+      ShareUsage,
+      Shares,
       Storage,
       Storage.UnitLocator,
       StorageProjectionChanges,

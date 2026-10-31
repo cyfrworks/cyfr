@@ -29,8 +29,9 @@ defmodule Prima.ConsentPreview do
       profile of that label; `provider`, the entry's provider hint,
       absent when it has none; `destination`, where its material may go,
       as `Prima.Destination.to_map/1` writes it; `source`, `own` for the
-      athanor's entry, `instance` for an instance entry, `provided` for a
-      publisher's provided configuration; `disclosed`, whether the
+      athanor's entry, `instance` for an instance entry, `share` for a key
+      another person shares, `provided` for a publisher's provided
+      configuration; `disclosed`, whether the
       component may read the value itself; `suggested`, whether the plan
       chose it; `choice_required`, whether the person must choose;
       `connection`, the account name, present exactly for a named
@@ -76,9 +77,9 @@ defmodule Prima.ConsentPreview do
   account, its `connection`, the key naming exactly these
   (`Prima.Authority.Blob.binding_key/3`); `need`, the need it was bound
   for, null when that cannot be told; exactly one of `entry_id`,
-  `instance_entry_id` and `via` (the label of the profile that lent it);
-  and the entry's `name` and `source` (`own` or `instance`), each absent
-  when the entry cannot be read. Items are sorted by `binding_key`, each
+  `instance_entry_id`, `share_id` and `via` (the label of the profile
+  that lent it); and the entry's `name` and `source` (`own`, `instance`
+  or `share`), each absent when the entry cannot be read. Items are sorted by `binding_key`, each
   key once. Anything else is `{:invalid_field, "removed"}`
   (`check_removed/1`).
   """
@@ -208,15 +209,15 @@ defmodule Prima.ConsentPreview do
   end
 
   @removed_fields ~w(binding_key node edge need)
-  @removed_optional ~w(connection entry_id instance_entry_id via name source)
-  @removed_identities ~w(entry_id instance_entry_id via)
-  @removed_sources ~w(own instance)
+  @removed_optional ~w(connection entry_id instance_entry_id share_id via name source)
+  @removed_identities ~w(entry_id instance_entry_id share_id via)
+  @removed_sources ~w(own instance share)
 
   # One binding of the head: its key spells its node, its edge (in a
   # credential row's grammar) and its slot; its need is a name or null;
-  # what it bound is named by exactly one of an entry, an instance entry
-  # and a lender's label; the entry's name and source are there only when
-  # the entry was read.
+  # what it bound is named by exactly one of an entry, an instance entry,
+  # a share and a lender's label; the entry's name and source are there
+  # only when the entry was read.
   defp removed_item?(item) when is_map(item) and not is_struct(item) do
     Encoding.fields(item, @removed_fields, @removed_optional) == :ok and
       Row.text?(item["binding_key"]) and Row.text?(item["node"]) and Row.edge?(item["edge"]) and
@@ -281,7 +282,7 @@ defmodule Prima.ConsentPreview.Row do
   @max_text 1024
   @max_set 256
   @wildcard "*"
-  @sources ~w(own instance provided)
+  @sources ~w(own instance share provided)
   @lifetimes ~w(standing until once)
   @classes Enum.map(Prima.Source.classes(), &Atom.to_string/1)
 

@@ -543,7 +543,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
     end
 
     test "named accounts are rows of their own, each with its decision's lifetime and renew, " <>
-           "an instance entry's row names it, and provided configuration is no row",
+           "an instance entry's and a share's rows name them, and provided configuration is " <>
+           "no row",
          %{ctx: ctx} do
       publish!(ctx, "narrow-dep", %{})
       publish!(ctx, "narrow-root", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
@@ -575,7 +576,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                 scope: "instance",
                 lifetime: %{kind: "once", until: nil},
                 renew: true
-              })
+              }),
+              binding.("shr_three", %{name: "Supabase 3", scope: "share"})
             ]
           })
         )
@@ -627,6 +629,15 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                  lifetime_kind: "once",
                  expires_at: nil,
                  renew: true
+               },
+               %{
+                 binding_key: key.("name:Supabase 3"),
+                 scope: "share",
+                 share_id: "shr_three",
+                 binding_digest: "sha256:shr_three",
+                 lifetime_kind: "standing",
+                 expires_at: nil,
+                 renew: false
                }
              ]
 
@@ -638,8 +649,11 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       {:ok, blob} = Blob.parse(json)
       {:ok, ingress} = Blob.ingress(blob, root)
 
-      assert %{"Supabase 1" => %{binding_key: one}, "Supabase 2" => %{scope: "instance"}} =
-               ingress.vault.named
+      assert %{
+               "Supabase 1" => %{binding_key: one},
+               "Supabase 2" => %{scope: "instance"},
+               "Supabase 3" => %{scope: "share", entry_id: "shr_three"}
+             } = ingress.vault.named
 
       assert one == key.("name:Supabase 1")
       {:ok, edge} = Blob.lookup_edge(blob, root, @dep, "")

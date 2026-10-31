@@ -51,7 +51,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   @vectors Path.expand("../../../../tests/fixtures/consent_preview.json", __DIR__)
   @ref "tincture:local.dashboard"
 
-  # The vectors' four credentials, each as its row's sentence.
+  # The vectors' five credentials, each as its row's sentence.
   @sentences [
     "reagent:local.weather uses weather-api, an entry of this athanor, for its own calls: " <>
       "a weather.example account, sent only to https://api.weather.example. " <>
@@ -63,6 +63,10 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     "reagent:local.geo uses weather-api, provided by this instance, from reagent:local.weather, " <>
       "as the account 'Geo account': a weather.example account, sent only to " <>
       "https://*.weather.example port 8443, methods GET, POST, paths /v2. " <>
+      "CYFR attaches the value and the component never holds it.",
+    "reagent:local.quotes uses Shared by Terry, a key shared with you, from " <>
+      "reagent:local.weather: a market.example account, sent only to " <>
+      "https://api.market.example, methods GET, paths /v1/. " <>
       "CYFR attaches the value and the component never holds it.",
     "reagent:local.maps uses maps public key, provided by local, the app's public " <>
       "configuration, from reagent:local.weather for its geocode need: sent only to " <>
@@ -77,6 +81,8 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     "Removes api_key account 'Work': weather-work",
     "Removes a binding of reagent:local.geo from reagent:local.weather account 'Old geo': " <>
       "ine_old_geo",
+    "Removes a binding of reagent:local.geo from reagent:local.weather account 'Old share': " <>
+      "Shared by Terry",
     "Removes a binding of reagent:local.maps from reagent:local.weather default: " <>
       "the key its 'old-maps' profile lent"
   ]
@@ -195,6 +201,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
     assert Enum.any?(credentials, &(&1["values"]["disclosed"] != true))
     assert Enum.any?(credentials, &(&1["values"]["source"] == "instance"))
+    assert Enum.any?(credentials, &(&1["values"]["source"] == "share"))
 
     # No control claims more than its methods, and no row says the
     # component never holds a value without saying CYFR attaches it.
@@ -242,6 +249,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "lifetime", %{"kind" => "once"}), do: ["one run"]
   defp expected(_row, "source", "own"), do: ["an entry of this athanor"]
   defp expected(_row, "source", "instance"), do: ["provided by this instance"]
+  defp expected(_row, "source", "share"), do: ["a key shared with you"]
 
   defp expected(row, "source", "provided") do
     {:ok, %{namespace: publisher}} = Prima.ComponentRef.parse(row["node"])
