@@ -546,10 +546,12 @@ async function sharedByYou(page) {
 
 const byYouRow = (id) => `[data-test="shared-by-you-row"][data-id="${id}"]`;
 
-// Each entry's id by its name, as the Vault page's rows show them.
-async function entryIds(page, vault) {
+// Each entry's id by its name, as the Vault page's rows show them, once
+// `count` rows are drawn.
+async function entryIds(page, vault, count) {
   await open(page, vault);
-  await page.waitForSelector("#vault-entries", { timeout: 30_000 });
+  await page.waitForFunction((n) => document.querySelectorAll('[data-test="entry-name"]').length >= n, count,
+    { timeout: 30_000 }).catch(() => null);
   const shown = await page.$$eval('[data-test="entry-name"]', (els) => els.map((el) => [
     (el.querySelector("span.font-medium") || { textContent: "" }).textContent.trim(), el.getAttribute("data-id"),
   ]));
@@ -600,7 +602,10 @@ async function createKey(page, vault, spec) {
   await page.locator(`${form} button[type="submit"]`).click();
   const confirmation = await proveOwn(page);
   const created = await told(page, "Entry created.");
-  return { form: formFields, disclosed, created, confirmation, key_on_page: holdsKey(await page.content()) };
+  const diagnosed = created ? [] : await diagnose(page, `create-${spec.provider}`);
+  return {
+    form: formFields, disclosed, created, confirmation, diagnosed, key_on_page: holdsKey(await page.content()),
+  };
 }
 
 // A key shared with everyone through the system layer's sharing sheet: what
@@ -734,8 +739,11 @@ async function main() {
     // share_key
     // -----------------------------------------------------------------------
     const passkey = await registerPasskey(admin, settings);
+    record.share_key = { passkey };
     const madeAi = await createKey(admin, vault, AI);
+    record.share_key.ai = madeAi;
     const madeMail = await createKey(admin, vault, MAIL);
+    record.share_key.mail = madeMail;
     operator = await ask({ op: "admin" });
     // What each request implies the owner stores, from the destination it
     // typed: the destination's canonical text and the digest over it.
@@ -744,7 +752,7 @@ async function main() {
     });
     aiImplied = await impliedBy(AI);
     mailImplied = await impliedBy(MAIL);
-    const shownIds = await entryIds(admin, vault);
+    const shownIds = await entryIds(admin, vault, 2);
     ai = { id: shownIds[AI.name] };
     mail = { id: shownIds[MAIL.name] };
     const sharedAi = await shareKey(admin, vault, ai.id, AI);
