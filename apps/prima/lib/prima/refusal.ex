@@ -127,6 +127,7 @@ defmodule Prima.Refusal do
     "scope_not_attenuable" => :forbidden,
     "disclosure_refused" => :forbidden,
     "not_offered" => :forbidden,
+    "owner_not_standing" => :forbidden,
     "component_not_admitted" => :forbidden,
     "provider_mismatch" => :invalid_argument,
     "credential_header_refused" => :invalid_argument,
@@ -153,7 +154,8 @@ defmodule Prima.Refusal do
     scope_not_attenuable: {:forbidden, "This entry's scopes are granted whole or not at all."},
     disclosure_refused:
       {:forbidden, "This credential is attached by CYFR and never disclosed to a component."},
-    not_offered: {:forbidden, "This instance entry is not offered to you."},
+    not_offered: {:forbidden, "This key is not offered to you."},
+    owner_not_standing: {:forbidden, "The person who shared this key cannot lend it right now."},
     component_not_admitted:
       {:forbidden, "This instance entry requires an unmodified shipped component."},
     provider_mismatch: {:invalid_argument, "The entry is for another provider."},
@@ -163,7 +165,7 @@ defmodule Prima.Refusal do
       {:invalid_argument, "An OAuth entry's endpoints are fixed when it is created."},
     connection_not_granted:
       {:setup_required, "This account is not granted to the component; grant it first."},
-    connection_cap: {:rate_limited, "This instance entry's request cap for today is reached."},
+    connection_cap: {:rate_limited, "This key's request cap for today is reached."},
     grant_expired: {:consent_required, "The grant for this account has expired; grant it again."}
   }
 
@@ -300,8 +302,9 @@ defmodule Prima.Refusal do
   @doc """
   The credential refusals' reasons, each a typed reason of this table and
   a guest error `type` a host call may answer: where a credential may go,
-  how it is disclosed, which provider and account it is for, and how an
-  instance entry is offered and capped.
+  how it is disclosed, which provider and account it is for, how an
+  instance entry or a share is offered and capped, and whether the person
+  who shared a key stands to lend it.
   """
   @spec credential_reasons() :: [atom()]
   def credential_reasons, do: @credential |> Map.keys() |> Enum.sort()

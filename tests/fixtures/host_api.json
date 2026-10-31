@@ -653,11 +653,11 @@
           "why": "the URL or the method is outside the bound entry's destination"
         },
         {
-          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This instance entry's request cap for today is reached.\",\"type\":\"connection_cap\"}",
+          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This key's request cap for today is reached.\",\"type\":\"connection_cap\"}",
           "answer_iv_hex": "a1a2a3a4a5a6a7a8a9aaab03",
-          "answer_sealed": "oaKjpKWmp6ipqqsDJC3UkXbOCX9uSElRhwnG8HntBvK_PIHUaPCo0TagjvcJu3WZ8J8RJGRCHr0GqbG7WkiD6P3Xwt6GCjbiPpFougSXrv94SKvWWEfPb2BczO2Ha5YIuFegLZWD8pe9qdIm1zbsL84wwmjXwi9rD31IgH-sqi6CBZah0Dm4LgKXW71Krh99AIXgtJyI7Pgy_muvf6XNsqdB7dhxhhMtkc2OzOMfcVhDNRy6v9KbEg",
+          "answer_sealed": "oaKjpKWmp6ipqqsDvjPTd0KGpbQkhv8cvVAjSHntBvK_PIHUaPCo0TagjvcJu3WZ8J8RJGRCHr0GqbG7WkiD6P3Xwt6GCjbiPpFougSXrv94SKvWWEfPb2BczO2Ha5YIuFegLZWD8pe9qdIm1T3mfNx-02iG0iRsCSQMki_-qTCFQJG6lDugfkuCFL0PuxNxBJju_8OK6uQj-CHwOeiA8OtQ99x9y0dQkcOQgPs",
           "call_id": "EBESExQVFhcYGRobHB0eHw",
-          "why": "the instance entry's request cap for today is reached"
+          "why": "the key's request cap for today is reached"
         },
         {
           "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This instance entry requires an unmodified shipped component.\",\"type\":\"component_not_admitted\"}",
