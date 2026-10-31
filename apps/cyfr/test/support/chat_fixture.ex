@@ -287,16 +287,15 @@ defmodule Cyfr.Test.ChatFixture do
     {user, own} = person!("chat-admin")
     {:ok, _seat} = Sanctum.TestContext.ensure_platform(user.id)
 
-    Sanctum.Context.build(
-      user_id: user.id,
-      provider: "github",
-      namespace: "chat-admin-#{System.unique_integer([:positive])}",
-      athanor_id: own.id,
-      permissions: Sanctum.Context.person_permissions(),
-      scope: :athanor,
-      auth_method: :oidc,
-      authenticated: true
-    )
+    # The suite's signed-in person (`Sanctum.TestContext.local/0`), named
+    # for the administrator in their own athanor.
+    %{
+      Sanctum.TestContext.local()
+      | user_id: user.id,
+        provider: "github",
+        namespace: "chat-admin-#{System.unique_integer([:positive])}",
+        athanor_id: own.id
+    }
     |> Sanctum.TestContext.via(:prism)
   end
 

@@ -50,17 +50,15 @@ defmodule Cyfr.Test.ShareFixtures do
     {:ok, user} =
       Arca.Users.update(Prima.Actor.system(), owner.user.id, %{display_name: display_name})
 
-    ctx =
-      Sanctum.Context.build(
-        user_id: user.id,
+    # The suite's signed-in person (`Sanctum.TestContext.local/0`), named
+    # for this person in their own athanor.
+    ctx = %{
+      Sanctum.TestContext.local()
+      | user_id: user.id,
         provider: "github",
         namespace: "share-#{System.unique_integer([:positive])}",
-        athanor_id: owner.athanor.id,
-        permissions: Sanctum.Context.person_permissions(),
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
+        athanor_id: owner.athanor.id
+    }
 
     Map.merge(owner, %{user: user, ctx: Sanctum.TestContext.via(ctx, :prism)})
   end
