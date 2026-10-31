@@ -37,9 +37,9 @@ var adminCmd = &cobra.Command{
 		"lets anyone in, and lets anyone create an identity here. A deny names a person " +
 		"here by their id (usr_…) or a person identifier; it is sticky and ejects the " +
 		"person. An allow or a deny may give a name (@name) instead: cyfr.run is " +
-		"asked which identifier the name belongs to, and the entry keeps that identifier, " +
-		"with the name shown beside it, so a name that later changes hands moves no " +
-		"access. Requests are invites members made for identifiers the allowlist does " +
+		"asked which identifier the name belongs to, and the entry keeps the identifier " +
+		"the name named when the entry was written, with the name shown beside it. " +
+		"Requests are invites members made for identifiers the allowlist does " +
 		"not know, and sign-ins it refused. Only platform admins may edit the list, and " +
 		"no deny names one.",
 }
