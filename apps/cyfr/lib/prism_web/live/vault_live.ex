@@ -430,7 +430,9 @@ defmodule PrismWeb.VaultLive do
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_repeat(:authorize, _tool, args, socket), do: start_grant(socket, args)
 
-  def system_layer_repeat(tag, tool, args, socket), do: share_call(socket, tag, tool, args)
+  def system_layer_repeat({kind, _id} = tag, tool, args, socket)
+      when kind in [:share_revoke, :share_audience, :share_caps],
+      do: share_call(socket, tag, tool, args)
 
   # The sharing sheet made its share: the person's shares are read again.
   # Any other outcome leaves the page as it was; the sheet says a refusal.
