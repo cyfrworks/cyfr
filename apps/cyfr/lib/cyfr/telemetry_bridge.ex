@@ -10,9 +10,8 @@ defmodule Cyfr.TelemetryBridge do
   minted or revoked, a dropped caller memo, a membership, a vault entry,
   an instance entry, a share, an archive, the API key and webhook
   rosters, a pending confirmation — every file offer the storage layer
-  moves, and
-  every lifecycle event the console follows reaches `Cyfr.Bus` here.
-  The events it attaches are exactly
+  moves, and every lifecycle event the console follows reaches
+  `Cyfr.Bus` here. The events it attaches are exactly
   `Cyfr.Telemetry.Catalog.consumed_by(:bridge)`; there is no second list.
 
   Each event maps to one payload constructor, which takes only the

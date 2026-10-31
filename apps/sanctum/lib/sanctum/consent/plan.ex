@@ -192,9 +192,9 @@ defmodule Sanctum.Consent.Plan do
   it, and, where its key and binding can be read, placed as the commit
   reads it (`Sanctum.Consent.Commit.head_place/2`): `source`, which of
   `entry_id`, `instance_entry_id`, `share_id` and `label` it binds; the
-  `node` and `edge` its key names, the dependency the edge reaches (`dep`) and its
-  account's name (`connection`); and the `need` it was bound for, absent
-  when that cannot be told.
+  `node` and `edge` its key names, the dependency the edge reaches
+  (`dep`) and its account's name (`connection`); and the `need` it was
+  bound for, absent when that cannot be told.
   """
   @type head_binding :: %{
           required(:binding_key) => String.t(),
@@ -1329,9 +1329,8 @@ defmodule Sanctum.Consent.Plan do
   # athanor's entry, the instance entry, the share or the lending
   # profile's label, never material), its lifetime and whether a root
   # consumed it, and, as the commit reads the row (`Commit.head_place/2`),
-  # which of these it
-  # binds (`source`), where it sits and the need it was bound for. A row
-  # whose key or binding cannot be read is placed nowhere.
+  # which of these it binds (`source`), where it sits and the need it was
+  # bound for. A row whose key or binding cannot be read is placed nowhere.
   defp head_binding(ref, held, reads) do
     %{
       binding_key: ref.binding_key,

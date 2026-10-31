@@ -3216,10 +3216,6 @@ defmodule Sanctum.Consent.Commit do
     }
   end
 
-  # Whether the plan suggests this entry for the need, and whether the
-  # need asks the person to choose, by the plan's rule. A row whose need
-  # cannot be named (a lender's need among several, a public twin's
-  # binding) says neither.
   # Whose a bound resource is, by its scope, and the key a candidate names
   # it by (`Plan.need_choice/4`).
   defp row_source("instance"), do: "instance"
@@ -3230,6 +3226,10 @@ defmodule Sanctum.Consent.Commit do
   defp source_key("share"), do: :share_id
   defp source_key(_own), do: :entry_id
 
+  # Whether the plan suggests this entry for the need, and whether the
+  # need asks the person to choose, by the plan's rule. A row whose need
+  # cannot be named (a lender's need among several, a public twin's
+  # binding) says neither.
   defp choice_values(_reads, :unknown, _node, _identity), do: {false, false}
 
   defp choice_values({ctx, sources, {graph, rows}}, declared_need, {_kind, node_key}, identity) do

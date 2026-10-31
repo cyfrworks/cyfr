@@ -437,8 +437,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   each named account beside it is a row of its own; a selection's (`via`)
   is the borrower's own binding, naming the label of the profile it
   borrows from and the digest it pinned, if any. Each row carries its
-  binding's lifetime and
-  `renew` as `vault_resource/1` recorded them, standing when none was.
+  binding's lifetime and `renew` as `vault_resource/1` recorded them,
+  standing when none was.
   Provided configuration names no entry and writes no row.
   """
   @spec vault_refs(map()) :: [Arca.ConsentStorage.ref_input()]
