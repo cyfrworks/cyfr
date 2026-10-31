@@ -18,8 +18,11 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
   An event is emitted by a file whose code passes it to `:telemetry.execute`
   or `:telemetry.span`, as a literal list or a module attribute holding
-  one; a file whose code passes anything else (a variable, a call) is read
-  as emitting every event its code spells. Documentation and comments are
+  one, or, for a family held to the one list of its kinds
+  (`Cyfr.Test.TelemetryFamilies`), as the family's prefix and a variable
+  kind, which emits every event of the family; a file whose code passes
+  anything else (a variable, a call) is read as emitting every event its
+  code spells. Documentation and comments are
   not code, so an event a moduledoc mentions is not emitted by it.
 
   The rule is checked on the tree, and on planted violations, each of
@@ -123,6 +126,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
         when fun in @emitting ->
           case event_of(first, attributes) do
             {:ok, event} -> {node, {MapSet.put(emits, event), dynamic?}}
+            {:family, events} -> {node, {MapSet.union(emits, MapSet.new(events)), dynamic?}}
             :error -> {node, {emits, true}}
           end
 
@@ -134,7 +138,11 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   end
 
   defp event_of(list, _attributes) when is_list(list) do
-    if event?(list), do: {:ok, list}, else: :error
+    cond do
+      event?(list) -> {:ok, list}
+      events = family(list) -> {:family, events}
+      true -> :error
+    end
   end
 
   defp event_of({:@, _, [{name, _, context}]}, attributes) when is_atom(context),
@@ -172,6 +180,17 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
   defp event?([:cyfr, _ | _] = list), do: Enum.all?(list, &is_atom/1)
   defp event?(_list), do: false
+
+  # A family's prefix followed by a variable kind, as its producer passes it.
+  defp family(list) do
+    case Enum.split(list, -1) do
+      {prefix, [{kind, _meta, context}]} when is_atom(kind) and is_atom(context) ->
+        if Enum.all?(prefix, &is_atom/1), do: Cyfr.Test.TelemetryFamilies.events(prefix)
+
+      _other ->
+        nil
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # The tree
