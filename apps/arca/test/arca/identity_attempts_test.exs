@@ -355,6 +355,47 @@ defmodule Arca.IdentityAttemptsTest do
       assert {:error, :not_found} = IdentityAttempts.rename(as(person), "iat_none", "nobody")
     end
 
+    test "once the person's row records a name, a rename is refused and the attempt follows the recorded name in any phase but superseded" do
+      person = person!()
+
+      {:ok, attempt} =
+        IdentityAttempts.open(as(person), Map.put(enrollment(person.id), :name, "mira"))
+
+      # Nothing recorded: the attempt keeps the name it wants.
+      assert {:ok, %{name: "mira", revision: revision}} =
+               IdentityAttempts.follow_name(as(person), attempt.id)
+
+      assert revision == attempt.revision
+
+      # A rename that landed before the record: the record wins.
+      {:ok, _} = IdentityAttempts.rename(as(person), attempt.id, "nova")
+      {:ok, _} = Arca.Users.set_namespace(Prima.Actor.system(), person.id, "mira")
+      assert {:error, :named} = IdentityAttempts.rename(as(person), attempt.id, "luna")
+
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted")
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+
+      assert {:ok, %{name: "mira", phase: "completed"}} =
+               IdentityAttempts.follow_name(as(person), attempt.id)
+
+      assert {:ok, %{name: "mira"}} = IdentityAttempts.follow_name(as(person), attempt.id)
+
+      stranger = %Prima.Actor{user_id: "usr_stranger"}
+      assert {:error, :cross_tenant} = IdentityAttempts.follow_name(stranger, attempt.id)
+      assert {:error, :not_found} = IdentityAttempts.follow_name(as(person), "iat_none")
+
+      # An abandoned enrollment is no longer the person's: it keeps its name.
+      other = person!()
+
+      {:ok, abandoned} =
+        IdentityAttempts.open(as(other), Map.put(enrollment(other.id), :name, "old"))
+
+      {:ok, _} = IdentityAttempts.advance(as(other), abandoned.id, "staged", "superseded")
+      {:ok, _} = Arca.Users.set_namespace(Prima.Actor.system(), other.id, "other")
+      assert {:ok, %{name: "old"}} = IdentityAttempts.follow_name(as(other), abandoned.id)
+    end
+
     test "a refused or abandoned enrollment keeps its name" do
       person = person!()
 

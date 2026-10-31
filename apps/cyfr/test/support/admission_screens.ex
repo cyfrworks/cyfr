@@ -155,10 +155,14 @@ defmodule PrismWeb.AdmissionScreens do
     })
   end
 
-  @doc "Type `name` on screen 1, and let the page answer its check."
+  @doc """
+  Type `name` on screen 1, and let the page answer its check. The page it
+  renders holds none of the vocabulary rule's words (`refute_vocabulary/1`),
+  as does the page `admit!/3` renders and the screen `screen_2?/2` reads.
+  """
   def name!(view, name) do
     view |> element(~s([data-test="admission-name"])) |> render_change(%{"name" => name})
-    render(view)
+    view |> render() |> tap(&refute_vocabulary/1)
   end
 
   @doc "The browser's ceremony under the options the page in `mode` answered."
@@ -182,7 +186,7 @@ defmodule PrismWeb.AdmissionScreens do
     fields = identity |> Newcomers.fields() |> Map.delete("name")
     credential = credential || ceremony(view, mode)
     render_hook(view, "#{mode}_passkey", Map.put(fields, "credential", credential))
-    render(view)
+    view |> render() |> refute_vocabulary()
     identity
   end
 
@@ -192,9 +196,16 @@ defmodule PrismWeb.AdmissionScreens do
     code
   end
 
-  @doc "Whether screen 2 stands in `state`."
-  def screen_2?(view, state),
-    do: has_element?(view, ~s([data-test="admission-code"][data-state="#{state}"]))
+  @doc """
+  Whether screen 2 stands in `state`. Screen 2, wherever it is drawn, holds
+  none of the vocabulary rule's words.
+  """
+  def screen_2?(view, state) do
+    if has_element?(view, ~s([data-test="admission-code"])),
+      do: view |> element(~s([data-test="admission-code"])) |> render() |> refute_vocabulary()
+
+    has_element?(view, ~s([data-test="admission-code"][data-state="#{state}"]))
+  end
 
   @doc """
   `html`'s visible text holds none of the vocabulary rule's words: handle,

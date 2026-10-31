@@ -242,16 +242,45 @@ defmodule Arca.IdentityAttempts do
 
   @doc """
   Replace the name the enrollment `id` wants registered, while it has not
-  ended (`completed`, `refused` or `superseded`): one conditional write.
-  An attempt that ended, or that is no enrollment, is `:not_found`.
+  ended (`completed`, `refused` or `superseded`) and its person's row
+  records no name: one conditional write under the person's row lock, the
+  lock `follow_name/2` takes, so a rename and the record of a claimed name
+  are ordered. A person whose row records a name is `:named`; an attempt
+  that ended, or that is no enrollment, is `:not_found`.
   """
   @spec rename(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+          {:ok, row()} | {:error, :named | :not_found | :cross_tenant | :database_error}
   def rename(%Prima.Actor{} = actor, id, name) when is_binary(id) and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.rename", fn ->
       Arca.Repo.locking_transaction(fn ->
-        with {:ok, attempt} <- held(actor, id) do
+        with {:ok, attempt} <- held(actor, id),
+             nil <- recorded_name!(attempt.user_id) do
           renamed(attempt, name)
+        else
+          name when is_binary(name) -> {:error, :named}
+          {:error, _reason} = refusal -> refusal
+        end
+        |> Arca.Repo.committed()
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  @doc """
+  Make the enrollment `id` carry the name its person's row records, once
+  one is recorded, whatever its phase but `superseded`: the name the
+  registry accepted is the person's for life, and the attempt follows it.
+  Under the person's row lock, as `rename/3`, so a rename that read no
+  recorded name before the record committed is overwritten here, and one
+  after it is refused. Answers the attempt as it stands after.
+  """
+  @spec follow_name(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+  def follow_name(%Prima.Actor{} = actor, id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.follow_name", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with {:ok, attempt} <- held(actor, id) do
+          followed(attempt, recorded_name!(attempt.user_id))
         end
         |> Arca.Repo.committed()
       end)
@@ -789,6 +818,25 @@ defmodule Arca.IdentityAttempts do
   end
 
   defp renamed(%IdentityAttempt{}, _name), do: {:error, :not_found}
+
+  # The name the person's row records, read under the person's row lock,
+  # the first of the standing order.
+  defp recorded_name!(user_id) when is_binary(user_id) do
+    _locked = Arca.DirectoryHeads.lock_person!(user_id)
+    Arca.Repo.one(from(u in Arca.Schemas.User, where: u.id == ^user_id, select: u.namespace))
+  end
+
+  defp followed(%IdentityAttempt{kind: "enrollment", phase: phase, name: current} = attempt, name)
+       when is_binary(name) and name != current and phase != "superseded" do
+    Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^attempt.id),
+      set: [name: name, updated_at: Arca.ServerMetaStorage.now!()],
+      inc: [revision: 1]
+    )
+
+    {:ok, Arca.Repo.get!(IdentityAttempt, attempt.id)}
+  end
+
+  defp followed(%IdentityAttempt{} = attempt, _name), do: {:ok, attempt}
 
   defp reproof(id, change) do
     with %IdentityAttempt{kind: "restore", phase: "completed", user_id: user_id} = attempt

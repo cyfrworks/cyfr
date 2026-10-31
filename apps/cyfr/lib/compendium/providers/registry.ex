@@ -430,11 +430,15 @@ defmodule Compendium.Providers.Registry do
   # the registry binds the name to the identifier the request is signed
   # under and answers it, the same again for a repeat by the same
   # identifier, so a claim whose answer was lost is recorded by the next.
+  # The answer is read again once the claim is recorded: the name the
+  # person's row records is the attempt's from then on, even when a rename
+  # landed while the claim was in flight (`Sanctum.Recovery.advance/2`).
   def handle(%Context{user_id: user_id} = ctx, %{"action" => "register"} = args)
       when is_binary(user_id) do
     with {:ok, _renamed} <- renamed(ctx, Map.get(args, "name")),
          {:ok, attempt} <- Sanctum.Recovery.advance(ctx),
-         :ok <- registered(ctx, attempt) do
+         :ok <- registered(ctx, attempt),
+         {:ok, attempt} <- Sanctum.Recovery.advance(ctx) do
       {:ok,
        %{
          "attempt_id" => attempt.attempt_id,

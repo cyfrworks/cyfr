@@ -263,7 +263,8 @@ defmodule Sanctum.Recovery do
   person saved, answers at once and sends nothing.
 
   Answers `%{attempt_id, identifier, name, phase}`, `name` being the name
-  the attempt wants registered.
+  the attempt wants registered, which is the name the person's row records
+  once one is: the attempt follows it first.
 
   Refusals: `:no_attempt` (the person has no enrollment), `:directory_refused`
   (the directory refused the genesis, and the attempt is `refused`),
@@ -277,8 +278,19 @@ defmodule Sanctum.Recovery do
 
     with {:ok, user_id} <- person(ctx),
          {:ok, attempt} <- enrollment(ctx, user_id),
+         {:ok, attempt} <- follow_name(ctx, attempt),
          {:ok, attempt} <- continue_enrollment(ctx, attempt, opts),
          do: {:ok, registration(attempt)}
+  end
+
+  # The attempt carrying the name the person's row records, once one is
+  # (`Arca.IdentityAttempts.follow_name/2`).
+  defp follow_name(ctx, attempt) do
+    case Arca.IdentityAttempts.follow_name(Context.actor(ctx), attempt.id) do
+      {:ok, followed} -> {:ok, followed}
+      {:error, :not_found} -> {:error, :no_attempt}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
   end
 
   @doc """
@@ -297,9 +309,17 @@ defmodule Sanctum.Recovery do
          :ok <- unnamed(user_id),
          {:ok, attempt} <- enrollment(ctx, user_id) do
       case Arca.IdentityAttempts.rename(Context.actor(ctx), attempt.id, name) do
-        {:ok, renamed} -> {:ok, registration(renamed)}
-        {:error, :not_found} -> {:error, :no_attempt}
-        {:error, _unanswered} -> {:error, :unavailable}
+        {:ok, renamed} ->
+          {:ok, registration(renamed)}
+
+        {:error, :named} ->
+          {:error, {:invalid_argument, "Your name is set and cannot be changed."}}
+
+        {:error, :not_found} ->
+          {:error, :no_attempt}
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
       end
     end
   end

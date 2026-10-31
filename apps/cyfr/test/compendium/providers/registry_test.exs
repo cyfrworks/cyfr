@@ -512,6 +512,36 @@ defmodule Compendium.Providers.RegistryTest do
 
     defp directory_writes, do: Enum.filter(DirectoryServer.requests(), &(&1.method == "POST"))
 
+    # A rename that lands while a claim is in flight: the claimed name is
+    # recorded, the attempt follows it, and every answer after names it.
+    test "a name edit overlapping a successful claim cannot change the name reported after saving",
+         %{directory: directory} do
+      person = admitted!(directory, "mira")
+
+      registry(
+        person,
+        directory,
+        claiming(fn request ->
+          assert {:ok, %{name: "nova"}} = Sanctum.Recovery.rename(person.ctx, "nova")
+          accepting().(request)
+        end)
+      )
+
+      assert {:ok, %{"name" => "mira"} = first} = register(person.ctx)
+      assert namespace(person.ctx) == "mira"
+
+      assert {:ok, %{name: "mira"}} =
+               Arca.IdentityAttempts.get(Sanctum.Context.actor(person.ctx), person.attempt.id)
+
+      assert {:error, {:invalid_argument, "Your name is set and cannot be changed."}} =
+               Sanctum.Recovery.rename(person.ctx, "nova")
+
+      assert {:ok, %{phase: "completed"}} =
+               Sanctum.Recovery.recovery_code_saved(person.ctx, person.attempt.id)
+
+      assert {:ok, ^first} = register(person.ctx)
+    end
+
     test "a staged enrollment, as a crash after the admission leaves it, is registered, its policy accepted and its name claimed and recorded",
          %{directory: directory} do
       person = admitted!(directory, "mira")
