@@ -55,6 +55,31 @@ defmodule PrismWeb.VaultLive do
   announcement, which names an entry and a kind and nothing the person
   is not offered.
 
+  Share, on an entry the store would share (`Arca.Shares.eligible/1`'s
+  rule: active, attach-only, of a kind in
+  `Prima.CredentialKinds.shareable/0`, with a destination naming its
+  methods and paths), opens the system layer's sharing sheet
+  (`PrismWeb.SystemLayer.Share`) for it, offering everyone and the
+  groups the person is an active member of (`athanor.list`, each named
+  as the person reads it, a DM as the other person), which makes the
+  share through `share.create` under its fresh confirmation. "Shared by
+  you" lists the person's shares (`share.list`), each in one line: the
+  entry, its audience, today's use and its caps, or that it is revoked;
+  an active one changes its audience (`share.set_audience`, naming the
+  audience the row showed as `expected`; a widening asks a fresh
+  confirmation through the page's layer), its caps (`share.set_caps`) and
+  is revoked (`share.revoke`). "Shared with you" lists what
+  `share.offered` answers and nothing more: each share's provider, kind
+  and destination, "Shared by" its owner's name, and the person's own use
+  today. Both sections read again on every `Cyfr.Bus.shares/0`
+  announcement, which names a share and a kind and nothing else, and on
+  every change to the person's own seats (`Cyfr.Bus.Membership`), since
+  leaving a group ends what it was offered and writes nothing to a share.
+  A read that failed says so, and is never drawn as nothing shared. A
+  key is shared, and a share granted, from the person's own athanor
+  alone, so Share and both sections are drawn on its Vault page and on
+  no group's.
+
   Entering material — an entry, its rotation, an OAuth grant, an OAuth
   app's client credentials — is a sensitive change: the page asks for a
   fresh confirmation through its system layer
@@ -71,7 +96,10 @@ defmodule PrismWeb.VaultLive do
   on_mount PrismWeb.SystemLayer.Hook
 
   alias PrismWeb.SystemLayer
+  alias PrismWeb.SystemLayer.Share
   require Logger
+
+  @share_kinds Prima.ShareKinds.all()
 
   @impl true
   def mount(_params, _session, socket) do
@@ -92,6 +120,12 @@ defmodule PrismWeb.VaultLive do
       |> assign(:defaults, %{})
       |> assign(:offered, [])
       |> assign(:offered_error, nil)
+      |> assign(:shares, [])
+      |> assign(:shares_error, nil)
+      |> assign(:shared_with_you, [])
+      |> assign(:shared_with_you_error, nil)
+      |> assign(:groups, [])
+      |> assign(:own, own_vault?(socket.assigns[:context]))
       |> assign(:used_by, %{})
       |> assign(:clients, [])
       |> assign(:show_add, nil)
@@ -303,6 +337,69 @@ defmodule PrismWeb.VaultLive do
   end
 
   # ---------------------------------------------------------------------------
+  # Events — sharing
+  # ---------------------------------------------------------------------------
+
+  # The sheet is the system layer's: it reads the groups as they are now,
+  # and makes the share under its own confirmation.
+  def handle_event("share", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.entries, &(&1.id == id)) do
+      %{} = entry ->
+        if socket.assigns.own and shareable?(entry) do
+          socket = fetch_groups(socket)
+
+          SystemLayer.show(SystemLayer.layer_id(), %{
+            id: share_prompt(id),
+            kind: :share,
+            action: :credential_sharing,
+            subject: %{entry_id: id, name: entry.name, groups: socket.assigns.groups}
+          })
+
+          {:noreply, socket}
+        else
+          {:noreply, socket}
+        end
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("share_revoke", %{"id" => id}, socket),
+    do: share_call(socket, {:share_revoke, id}, "share/revoke", %{"share_id" => id})
+
+  # The audience chosen, sent beside the one the row showed as `expected`:
+  # a share whose audience moved since is the operation's conflict, and
+  # nothing is saved. The row's own audience chosen again sends nothing.
+  def handle_event("share_audience", %{"share_id" => id, "audience" => chosen} = params, socket) do
+    expected =
+      case params["expected_audience"] do
+        "group" -> %{"audience" => "group", "group_id" => params["expected_group_id"]}
+        audience -> %{"audience" => audience}
+      end
+
+    with false <- chosen == Share.audience_value(expected),
+         {:ok, audience} <- Share.audience(chosen, socket.assigns.groups) do
+      args = Map.merge(audience, %{"share_id" => id, "expected" => expected})
+      share_call(socket, {:share_audience, id}, "share/set_audience", args)
+    else
+      true -> {:noreply, put_flash(socket, :info, "Nothing changed.")}
+      {:error, sentence} -> {:noreply, put_flash(socket, :error, sentence)}
+    end
+  end
+
+  # Both caps are written, each empty for no limit.
+  def handle_event("share_caps", %{"share_id" => id} = params, socket) do
+    case Share.caps(params) do
+      {:ok, caps} ->
+        share_call(socket, {:share_caps, id}, "share/set_caps", Map.put(caps, "share_id", id))
+
+      {:error, sentence} ->
+        {:noreply, put_flash(socket, :error, sentence)}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Events — provided by this instance
   # ---------------------------------------------------------------------------
 
@@ -333,12 +430,26 @@ defmodule PrismWeb.VaultLive do
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_repeat(:authorize, _tool, args, socket), do: start_grant(socket, args)
 
+  def system_layer_repeat(tag, tool, args, socket), do: share_call(socket, tag, tool, args)
+
+  # The sharing sheet made its share: the person's shares are read again.
+  # Any other outcome leaves the page as it was; the sheet says a refusal.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report("share-" <> _entry_id, :confirmed, socket),
+    do: {:noreply, socket |> fetch_shares() |> put_flash(:info, "Shared.")}
+
+  def system_layer_report("share-" <> _entry_id, _outcome, socket), do: {:noreply, socket}
+  def system_layer_report(_prompt_id, _outcome, _socket), do: :pass
+
   @impl true
   def handle_info(:load, socket) do
     {:noreply,
      socket
      |> fetch_entries()
      |> fetch_offered()
+     |> fetch_groups()
+     |> fetch_shares()
+     |> fetch_shared_with_you()
      |> fetch_used_by()
      |> fetch_clients()
      |> assign(:loading, false)}
@@ -355,10 +466,17 @@ defmodule PrismWeb.VaultLive do
     {:noreply, socket |> fetch_offered() |> fetch_entries()}
   end
 
-  # A share changed somewhere on this instance: the page reads what it
-  # shows again, under this person's own context.
-  def handle_info(%Cyfr.Bus.ShareChanged{}, socket) do
-    {:noreply, fetch_entries(socket)}
+  # A share changed somewhere on this CYFR: the announcement names it and
+  # nothing else, so what this person shares and is offered is read again
+  # under their own context.
+  def handle_info(%Cyfr.Bus.ShareChanged{kind: kind}, socket) when kind in @share_kinds do
+    {:noreply, socket |> fetch_shares() |> fetch_shared_with_you()}
+  end
+
+  # The person's seats changed: a group joined or left offers more or less,
+  # with nothing written to any share.
+  def handle_info(%Cyfr.Bus.Membership{}, socket) do
+    {:noreply, socket |> fetch_groups() |> fetch_shared_with_you()}
   end
 
   def handle_info(msg, socket) do
@@ -451,6 +569,140 @@ defmodule PrismWeb.VaultLive do
         assign(socket, offered: [], offered_error: message)
     end
   end
+
+  # The person's shares, active and revoked, each with today's use.
+  defp fetch_shares(%{assigns: %{own: false}} = socket), do: socket
+
+  defp fetch_shares(socket) do
+    case fetch_list(socket, "share/list", :shares) do
+      {:ok, shares} ->
+        assign(socket, shares: shares, shares_error: nil)
+
+      {:error, message} ->
+        Logger.warning("[VaultLive] share/list failed: #{message}")
+        assign(socket, shares: [], shares_error: message)
+    end
+  end
+
+  # What is shared with this person, exactly as `share.offered` answers it.
+  defp fetch_shared_with_you(%{assigns: %{own: false}} = socket), do: socket
+
+  defp fetch_shared_with_you(socket) do
+    case fetch_list(socket, "share/offered", :shares) do
+      {:ok, offered} ->
+        assign(socket, shared_with_you: offered, shared_with_you_error: nil)
+
+      {:error, message} ->
+        Logger.warning("[VaultLive] share/offered failed: #{message}")
+        assign(socket, shared_with_you: [], shared_with_you_error: message)
+    end
+  end
+
+  # The groups the person is an active member of, DMs included, each named
+  # as the person reads it: the audiences a share of theirs may name. A
+  # list that cannot be read offers everyone alone.
+  defp fetch_groups(%{assigns: %{own: false}} = socket), do: socket
+
+  defp fetch_groups(socket) do
+    groups =
+      case fetch_list(socket, "athanor/list", :athanors) do
+        {:ok, athanors} ->
+          for %{kind: "group", status: "active"} = athanor <- athanors,
+              do: %{
+                id: athanor.id,
+                name: PrismWeb.Athanors.label(athanor, socket.assigns.context)
+              }
+
+        {:error, message} ->
+          Logger.warning("[VaultLive] athanor/list failed: #{message}")
+          []
+      end
+
+    assign(socket, :groups, groups)
+  end
+
+  defp share_prompt(entry_id), do: "share-" <> entry_id
+
+  # Whether this is the person's own athanor's vault, where a key is
+  # shared and a share granted.
+  defp own_vault?(%Sanctum.Context{athanor_id: id} = ctx) when is_binary(id),
+    do: PrismWeb.Athanors.own?(%{id: id}, ctx)
+
+  defp own_vault?(_ctx), do: false
+
+  # The page's own share writes: through the layer, so one that needs a
+  # fresh confirmation (a widened audience) is asked there and made again
+  # once confirmed. A refusal, a conflict among them, saves nothing and is
+  # said; the shares are read again either way.
+  defp share_call(socket, tag, tool, args) do
+    case SystemLayer.call(socket, tag, tool, args) do
+      {:ok, _result, socket} ->
+        {:noreply, socket |> fetch_shares() |> put_flash(:info, share_done(tag))}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, socket |> fetch_shares() |> put_flash(:error, "Not saved: #{fmt(reason)}")}
+    end
+  end
+
+  defp share_done({:share_revoke, _id}), do: "Share revoked."
+  defp share_done({:share_audience, _id}), do: "Audience saved."
+  defp share_done({:share_caps, _id}), do: "Caps saved."
+
+  # Share is offered for an entry the store would share: the rule of
+  # `Arca.Shares.eligible/1`, read from what `vault.list` answers. The
+  # operation decides again.
+  defp shareable?(%{status: "active", attach_only: true, kind: kind, destination: %{} = to}),
+    do:
+      kind in Prima.CredentialKinds.shareable() and Map.get(to, "methods", []) != [] and
+        Map.get(to, "paths", []) != []
+
+  defp shareable?(_entry), do: false
+
+  # One share as its owner reads it: the entry, who it is shared with, and
+  # today's use and the caps, or that it is revoked.
+  defp share_line(share, entries, groups) do
+    entry =
+      case Enum.find(entries, &(&1.id == share.entry_id)) do
+        %{name: name} -> name
+        nil -> "a deleted entry"
+      end
+
+    case share.status do
+      "active" ->
+        "#{entry}, #{audience_words(share, groups)}, #{share.used_today} today, " <>
+          caps_words(share.person_daily, share.total_daily)
+
+      status ->
+        "#{entry}, #{audience_words(share, groups)}, #{status}"
+    end
+  end
+
+  defp audience_words(%{audience: "everyone"}, _groups), do: "shared with everyone"
+
+  defp audience_words(%{group_id: id}, groups) do
+    case Enum.find(groups, &(&1.id == id)) do
+      %{name: name} -> "shared with #{name}"
+      nil -> "shared with a group you are no longer in"
+    end
+  end
+
+  defp caps_words(nil, nil), do: "no cap"
+
+  defp caps_words(person, total) do
+    [cap_words(person, "a person"), cap_words(total, "in all")]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(", ")
+  end
+
+  defp cap_words(nil, _whose), do: nil
+  defp cap_words(0, whose), do: "no use #{whose}"
+  defp cap_words(cap, whose), do: "at most #{cap} #{whose} a day"
+
+  defp cap_input(nil), do: ""
+  defp cap_input(cap), do: Integer.to_string(cap)
 
   # The kinds of entry the create form makes, each with the words it is
   # offered under. An OAuth entry is made by its own form, through a grant.
@@ -634,6 +886,9 @@ defmodule PrismWeb.VaultLive do
   defp policy_label("any"), do: "Any consented component"
   defp policy_label("shipped"), do: "Unmodified shipped components"
   defp policy_label(other), do: to_string(other)
+
+  defp shared_provider(%{provider_hint: provider}) when provider not in [nil, ""], do: provider
+  defp shared_provider(_offer), do: "A shared key"
 
   defp used_today(0), do: "none today"
   defp used_today(1), do: "1 request today"
@@ -858,6 +1113,15 @@ defmodule PrismWeb.VaultLive do
           <:col :let={entry} label="Actions">
             <div class="flex flex-wrap gap-1">
               <.button
+                :if={@own and shareable?(entry)}
+                variant="ghost"
+                phx-click="share"
+                phx-value-id={entry.id}
+                data-test="entry-share"
+              >
+                Share
+              </.button>
+              <.button
                 :if={entry.kind != "oauth"}
                 variant="ghost"
                 phx-click="show_rotate"
@@ -892,6 +1156,168 @@ defmodule PrismWeb.VaultLive do
             </div>
           </:col>
         </.table>
+      </.card>
+
+      <.card :if={@own}>
+        <section data-test="shared-by-you" class="space-y-2">
+          <h3 class="text-sm font-medium text-gray-400">Shared by you</h3>
+          <p class="text-xs text-gray-500">
+            Keys of yours that others on this CYFR may grant to their own apps. No one sees a
+            key: CYFR attaches it to their requests bound for its destination. Today's use counts
+            everyone's requests; a day ends at midnight UTC. An empty cap is no limit, and 0 admits
+            no use.
+          </p>
+          <p
+            :if={@shares_error}
+            role="alert"
+            class="text-xs text-red-400"
+            data-test="shared-by-you-unread"
+          >
+            Your shares could not be read: {@shares_error}
+          </p>
+          <div
+            :if={!@loading && is_nil(@shares_error) && @shares == []}
+            class="text-xs text-gray-500"
+            data-test="shared-by-you-none"
+          >
+            You share no key.
+          </div>
+          <ul :if={@shares != []} class="divide-y divide-gray-800">
+            <li
+              :for={share <- @shares}
+              class="space-y-2 py-2 text-sm"
+              data-test="shared-by-you-row"
+              data-id={share.id}
+              data-status={share.status}
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span data-test="share-line">{share_line(share, @entries, @groups)}</span>
+                <.button
+                  :if={share.status == "active"}
+                  variant="ghost"
+                  phx-click="share_revoke"
+                  phx-value-id={share.id}
+                  data-test="share-revoke"
+                  data-confirm="Revoke this share? The next request through it is refused, and everyone who granted it must grant again."
+                >
+                  Revoke
+                </.button>
+              </div>
+              <div :if={share.status == "active"} class="flex flex-wrap items-end gap-4">
+                <form
+                  id={"share-audience-" <> share.id}
+                  phx-submit="share_audience"
+                  class="flex items-end gap-2"
+                  data-test="share-audience-form"
+                >
+                  <input type="hidden" name="share_id" value={share.id} />
+                  <input type="hidden" name="expected_audience" value={share.audience} />
+                  <input type="hidden" name="expected_group_id" value={share.group_id || ""} />
+                  <label class="block text-xs text-gray-500">
+                    Shared with
+                    <select
+                      name="audience"
+                      class="mt-1 block rounded-md border-gray-600 bg-transparent text-sm"
+                    >
+                      <option value="everyone" selected={share.audience == "everyone"}>
+                        Everyone on this CYFR
+                      </option>
+                      <option
+                        :for={group <- @groups}
+                        value={Share.audience_value(%{"audience" => "group", "group_id" => group.id})}
+                        selected={share.group_id == group.id}
+                      >
+                        {group.name}
+                      </option>
+                    </select>
+                  </label>
+                  <.button type="submit" variant="ghost" data-test="share-audience-save">
+                    Change
+                  </.button>
+                </form>
+                <form
+                  id={"share-caps-" <> share.id}
+                  phx-submit="share_caps"
+                  class="flex items-end gap-2"
+                  data-test="share-caps-form"
+                >
+                  <input type="hidden" name="share_id" value={share.id} />
+                  <label class="block text-xs text-gray-500">
+                    Each person, per day
+                    <input
+                      type="number"
+                      name="person_daily"
+                      min="0"
+                      step="1"
+                      value={cap_input(share.person_daily)}
+                      class="mt-1 block w-28 rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm"
+                    />
+                  </label>
+                  <label class="block text-xs text-gray-500">
+                    Everyone together, per day
+                    <input
+                      type="number"
+                      name="total_daily"
+                      min="0"
+                      step="1"
+                      value={cap_input(share.total_daily)}
+                      class="mt-1 block w-28 rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm"
+                    />
+                  </label>
+                  <.button type="submit" variant="ghost" data-test="share-caps-save">
+                    Save caps
+                  </.button>
+                </form>
+              </div>
+            </li>
+          </ul>
+        </section>
+      </.card>
+
+      <.card :if={@own}>
+        <section data-test="shared-with-you" class="space-y-2">
+          <h3 class="text-sm font-medium text-gray-400">Shared with you</h3>
+          <p class="text-xs text-gray-500">
+            Keys others on this CYFR share with you, which you may grant to your own apps. You never
+            see a key: CYFR attaches it to your requests bound for its destination. Your use today
+            counts your own requests alone.
+          </p>
+          <p
+            :if={@shared_with_you_error}
+            role="alert"
+            class="text-xs text-red-400"
+            data-test="shared-with-you-unread"
+          >
+            What is shared with you could not be read: {@shared_with_you_error}
+          </p>
+          <div
+            :if={!@loading && is_nil(@shared_with_you_error) && @shared_with_you == []}
+            class="text-xs text-gray-500"
+            data-test="shared-with-you-none"
+          >
+            No one shares a key with you.
+          </div>
+          <ul :if={@shared_with_you != []} class="divide-y divide-gray-800">
+            <li
+              :for={offer <- @shared_with_you}
+              class="space-y-1 py-2 text-sm"
+              data-test="shared-with-you-row"
+              data-id={offer.id}
+            >
+              <div>
+                <span class="font-medium">{shared_provider(offer)}</span>
+                <span class="text-xs text-gray-500">· {offer.kind}</span>
+              </div>
+              <div class="font-mono text-xs" data-test="shared-destination">
+                {destination_line(offer.destination)}
+              </div>
+              <div class="text-xs text-gray-400" data-test="shared-by">Shared by {offer.owner}</div>
+              <div class="text-xs text-gray-500" data-test="shared-use">
+                Your use: {used_today(offer.used_today)}
+              </div>
+            </li>
+          </ul>
+        </section>
       </.card>
 
       <%!-- Provided by this instance: the instance entries offered to this person --%>
