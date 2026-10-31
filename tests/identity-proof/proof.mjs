@@ -223,11 +223,14 @@ async function setUp(desk, authenticator, proxy) {
   await desk.goto(`${A}/setup#${token}`);
   await connected(desk);
   const { recovery: code } = await admit(desk, NAME, secrets);
-  const shownBeforeSave = (await desk.content()).includes(code.code);
+  // Decided on the text a person reads, never the raw HTML: the code is
+  // drawn with a <wbr> after each hyphen, which splits it in the markup
+  // and adds nothing to the text.
+  const shownBeforeSave = (await desk.locator('[data-test="admission-code"] [data-test="recovery-code"]').textContent()).trim() === code.code;
   const landed = await saveAdmissionCode(desk);
   await connected(desk);
   const saidSaved = await flashed(desk, SAVED).then(() => true, () => false);
-  const afterSave = (await desk.content()).includes(code.code);
+  const afterSave = (await desk.evaluate(() => document.body.textContent)).includes(code.code);
   const leaked = await leaks(desk, proxy, mark);
   const person = await ask({ op: "a_person" });
   segmentA = person.segment;
