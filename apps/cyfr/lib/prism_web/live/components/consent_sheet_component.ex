@@ -537,7 +537,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, {:account, _edge, _ref} = slot} <- slot_of(token),
            %{} = held <- Map.get(socket.assigns.choices, slot),
-           {:ok, source, id} when source in ["own", "instance"] <- picked(params),
+           {:ok, source, id} when source in ["own", "instance", "share"] <- picked(params),
            true <- {source, id} in candidate_picks(account_need(socket.assigns.plan, slot, held)) do
         choice = held |> rebound(source, id) |> Map.merge(%{source: source, id: id, renew: false})
 
@@ -860,12 +860,14 @@ defmodule PrismWeb.ConsentSheetComponent do
     end)
   end
 
-  # What a pick names: an entry of the athanor, an instance entry, or a
-  # lending profile's label.
+  # What a pick names: an entry of the athanor, an instance entry, a key
+  # shared with the person, or a lending profile's label.
   defp picked(%{"entry_id" => id}) when is_binary(id) and id != "", do: {:ok, "own", id}
 
   defp picked(%{"instance_entry_id" => id}) when is_binary(id) and id != "",
     do: {:ok, "instance", id}
+
+  defp picked(%{"share_id" => id}) when is_binary(id) and id != "", do: {:ok, "share", id}
 
   defp picked(%{"label" => label}) when is_binary(label) and label != "",
     do: {:ok, "label", label}
@@ -1279,6 +1281,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     case candidate do
       %{entry_id: id} when is_binary(id) -> {"own", id}
       %{instance_entry_id: id} when is_binary(id) -> {"instance", id}
+      %{share_id: id} when is_binary(id) -> {"share", id}
       _other -> nil
     end
   end
@@ -2058,13 +2061,14 @@ defmodule PrismWeb.ConsentSheetComponent do
     case candidate_pick(candidate) do
       {"own", id} -> %{"phx-value-entry_id" => id}
       {"instance", id} -> %{"phx-value-instance_entry_id" => id}
+      {"share", id} -> %{"phx-value-share_id" => id}
       nil -> %{}
     end
   end
 
   # The entry a slot holds for this need, as a candidate's pick.
   defp chosen_pick(%{source: source, id: id} = choice, need, several)
-       when source in ["own", "instance"] do
+       when source in ["own", "instance", "share"] do
     if not several or Map.get(choice, :need) in [nil, field(need, :need)],
       do: {source, id}
   end
@@ -2078,6 +2082,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     case suggested(need) do
       %{entry_id: id} -> {"own", id}
       %{instance_entry_id: id} -> {"instance", id}
+      %{share_id: id} -> {"share", id}
       nil -> nil
     end
   end

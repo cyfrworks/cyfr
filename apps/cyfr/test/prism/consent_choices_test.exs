@@ -25,19 +25,22 @@ defmodule Prism.ConsentChoicesTest do
   # ---------------------------------------------------------------------------
 
   # A need of one field, each candidate holding it by the same name, so
-  # its map is automatic, as the plan answers it.
+  # its map is automatic, as the plan answers it: an entry of the
+  # athanor's, or a key shared with the person (`shr_`).
   defp need(name, ids),
     do: %{
       need: name,
       kind: "api_key",
       required: true,
       fields: ["KEY"],
-      candidates:
-        for(
-          id <- ids,
-          do: %{entry_id: id, source: "own", field_names: ["KEY"], fields: %{"KEY" => "KEY"}}
-        )
+      candidates: for(id <- ids, do: candidate(id))
     }
+
+  defp candidate("shr_" <> _ = id),
+    do: %{share_id: id, source: "share", field_names: ["KEY"], fields: %{"KEY" => "KEY"}}
+
+  defp candidate(id),
+    do: %{entry_id: id, source: "own", field_names: ["KEY"], fields: %{"KEY" => "KEY"}}
 
   # A plan of one app need or two, and a dependency edge declaring one
   # need or two, each need with its own candidates.
@@ -49,12 +52,14 @@ defmodule Prism.ConsentChoicesTest do
       %{
         source_ref: @ref,
         candidates: [],
-        needs: for(i <- 1..app_needs, do: need("key_#{i}", ["vlt_a#{i}", "vlt_b#{i}"])),
+        needs:
+          for(i <- 1..app_needs, do: need("key_#{i}", ["vlt_a#{i}", "vlt_b#{i}", "shr_c#{i}"])),
         dependency_needs: [
           %{
             from: @ref,
             dep: @dep,
-            needs: for(i <- 1..dep_needs, do: need("db_#{i}", ["vlt_d#{i}", "vlt_e#{i}"])),
+            needs:
+              for(i <- 1..dep_needs, do: need("db_#{i}", ["vlt_d#{i}", "vlt_e#{i}", "shr_f#{i}"])),
             candidates: [%{label: "work", entry_id: "vlt_lent", source: "own"}]
           }
         ],
@@ -104,15 +109,16 @@ defmodule Prism.ConsentChoicesTest do
     dep_need_name = if several?, do: dep_need.need
 
     gen all(
-          app <- choice("own", hd(app_need.candidates).entry_id, nil),
-          default_kind <- member_of([:own, :label]),
+          app <- one_of([choice("own", "vlt_a1", nil), choice("share", "shr_c1", nil)]),
+          default_kind <- member_of([:own, :share, :label]),
           default <-
-            if(default_kind == :own,
-              do: choice("own", hd(dep_need.candidates).entry_id, dep_need_name),
-              else: choice("label", "work", nil)
-            ),
+            case default_kind do
+              :own -> choice("own", hd(dep_need.candidates).entry_id, dep_need_name)
+              :share -> choice("share", "shr_f1", dep_need_name)
+              :label -> choice("label", "work", nil)
+            end,
           app_names <- names(),
-          dep_names <- if(default_kind == :own, do: names(), else: constant([])),
+          dep_names <- if(default_kind == :label, do: constant([]), else: names()),
           app_accounts <- fixed_list(for(_ <- app_names, do: choice("own", "vlt_b1", nil))),
           dep_accounts <-
             fixed_list(for(_ <- dep_names, do: choice("own", "vlt_e1", dep_need_name)))
@@ -194,7 +200,9 @@ defmodule Prism.ConsentChoicesTest do
       assert Map.get(decisions, "label") == label
 
       for item <- decisions["bindings"] ++ Map.get(decisions, "selections", []) do
-        assert Enum.count(~w(entry_id instance_entry_id label), &Map.has_key?(item, &1)) == 1
+        assert Enum.count(~w(entry_id instance_entry_id share_id label), &Map.has_key?(item, &1)) ==
+                 1
+
         assert %{"kind" => kind} = item["lifetime"]
         assert kind in ~w(standing once until)
         assert Map.get(item, "renew", true) == true
@@ -322,6 +330,47 @@ defmodule Prism.ConsentChoicesTest do
       ],
       head_bindings: head_bindings
     }
+  end
+
+  test "a key shared with the person opens on its suggestion, is sent by its share id, and a " <>
+         "head binding it reopens on it" do
+    shared = need("key_1", ["shr_c1"]) |> Map.put(:suggested, %{share_id: "shr_c1"})
+    plan = %{regrant([]) | needs: [shared]}
+
+    standing = %{
+      source: "share",
+      id: "shr_c1",
+      need: nil,
+      lifetime: %{"kind" => "standing"},
+      choice: "standing",
+      renew: false
+    }
+
+    assert ConsentChoices.initial_choices(plan, @now) == %{{:need, "key_1", nil} => standing}
+
+    decisions =
+      ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, %{
+        {:need, "key_1", nil} => standing
+      })
+
+    assert decisions["bindings"] == [
+             %{"need" => "key_1", "share_id" => "shr_c1", "lifetime" => %{"kind" => "standing"}}
+           ]
+
+    assert ConsentChoices.choices_of(decisions, plan) == %{{:need, "key_1", nil} => standing}
+
+    # A re-grant reopens on the share its head binds, once as it was.
+    held =
+      head(
+        "#{@ref}|@ingress|default",
+        %{share_id: "shr_c1"},
+        %{source: "share", node: @ref, edge: "@ingress", need: "key_1"},
+        %{kind: "once", until: nil}
+      )
+
+    assert ConsentChoices.initial_choices(%{plan | head_bindings: [held]}, @now) == %{
+             {:need, "key_1", nil} => %{standing | lifetime: %{"kind" => "once"}, choice: "once"}
+           }
   end
 
   test "a head binding reopens on its slot for the need the plan places it on, never wider" do

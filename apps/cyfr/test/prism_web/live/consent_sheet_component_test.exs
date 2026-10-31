@@ -1958,6 +1958,82 @@ defmodule PrismWeb.ConsentSheetComponentTest do
              ~s(data-test="grant-removed")
   end
 
+  describe "a key shared with the person" do
+    # Alice, signed in to her own athanor, grants a catalyst that has CYFR
+    # attach an openai.com key; Terry, seated with her in Traders, shares
+    # his with Traders, and it is the one key that can meet the need.
+    setup %{conn: conn} do
+      alice = test_user()
+      conn = log_in_user(conn, alice)
+      athanor = seated_athanor()
+      {:ok, view, _html} = live_isolated(conn, PrismWeb.ConsentSheetComponentTest.Host)
+
+      terry = Cyfr.Test.ShareFixtures.person!("Terry")
+      traders = Arca.Test.Shares.group!([terry.user.id, alice.user_id])
+      entry = Cyfr.Test.ShareFixtures.key!(terry)
+
+      share =
+        Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+
+      local = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: athanor.id}
+      name = "sheet-shared-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: name,
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A catalyst calling the model with a key CYFR attaches",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:openai.com",
+                  "reason" => "to call the model",
+                  "fields" => ["OPENAI_API_KEY"],
+                  "required" => true,
+                  "hosts" => ["api.openai.com"],
+                  "attach" => %{
+                    "in" => "header",
+                    "name" => "Authorization",
+                    "template" => "Bearer {value}"
+                  }
+                }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.openai.com"], "methods" => ["POST"]}}
+            })
+        })
+
+      context = :sys.get_state(view.pid).socket.assigns.context
+      node = "catalyst:local.#{name}"
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(context, "g-shared", node)
+      send(view.pid, {:prompt, grant})
+      render(view)
+
+      %{view: view, node: node, share: share}
+    end
+
+    test "the candidate reads Shared by Terry, its pick names the share, and the grant says " <>
+           "whose key it is",
+         %{view: view, node: node, share: share} do
+      html = render(view)
+      doc = LazyHTML.from_fragment(html)
+      [pick] = doc |> LazyHTML.query(~s([data-test="grant-pick"])) |> Enum.to_list()
+
+      assert pick |> LazyHTML.text() |> String.replace(~r/\s+/, " ") =~
+               ~r/^\s*Shared by Terry a key shared with you, sent only to https:\/\/api\.openai\.com/
+
+      assert LazyHTML.attribute(pick, "phx-value-share_id") == [share.id]
+      assert LazyHTML.attribute(pick, "aria-pressed") == ["true"]
+
+      assert ("#{node} uses Shared by Terry, a key shared with you, for its own calls: a " <>
+                "openai.com account, sent only to https://api.openai.com, methods POST, paths " <>
+                "/v1/. CYFR attaches the value and the component never holds it.") in sentences(
+               html
+             )
+    end
+  end
+
   test "no page draws the sheet but the system layer" do
     live = Path.expand("../../../lib/prism_web/live", __DIR__)
 
