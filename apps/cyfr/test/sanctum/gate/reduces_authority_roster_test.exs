@@ -15,9 +15,9 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   alias Sanctum.Catalog
 
   # Each takes authority away and gives none: signing out, a command line
-  # withdrawing its sign-in, revoking (a command line's session among
-  # them), withdrawing consent, leaving, removing a member, denying someone
-  # at a door, unlinking a door and archiving.
+  # withdrawing its sign-in, revoking (a command line's session and a
+  # shared key among them), withdrawing consent, leaving, removing a
+  # member, denying someone at a door, unlinking a door and archiving.
   @roster ~w(
     athanor.archive
     door.deny
@@ -33,6 +33,7 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     session.cli_cancel
     session.cli_revoke
     session.logout
+    share.revoke
     vault.revoke
     webhook.revoke
   )

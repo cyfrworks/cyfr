@@ -27,6 +27,7 @@ defmodule Sanctum.Provider do
   - `passkey` - Passkeys at this home
   - `confirmation` - Pending confirmations of sensitive changes
   - `instance_entry` - The instance's own credentials, offered to the people on it
+  - `share` - A person's own keys offered to a group they are in or to everyone
 
   ## Resources
 
@@ -102,7 +103,8 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.Pairing.definition(),
       Sanctum.Providers.Passkey.definition(),
       Sanctum.Providers.Confirmation.definition(),
-      Sanctum.Providers.InstanceEntry.definition()
+      Sanctum.Providers.InstanceEntry.definition(),
+      Sanctum.Providers.Share.definition()
     ]
   end
 
@@ -137,6 +139,7 @@ defmodule Sanctum.Provider do
   def handle("passkey", ctx, args), do: Sanctum.Providers.Passkey.handle(ctx, args)
   def handle("confirmation", ctx, args), do: Sanctum.Providers.Confirmation.handle(ctx, args)
   def handle("instance_entry", ctx, args), do: Sanctum.Providers.InstanceEntry.handle(ctx, args)
+  def handle("share", ctx, args), do: Sanctum.Providers.Share.handle(ctx, args)
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
