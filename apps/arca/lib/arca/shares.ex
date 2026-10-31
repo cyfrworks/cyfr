@@ -114,6 +114,14 @@ defmodule Arca.Shares do
   @spec cap?(term()) :: boolean()
   defdelegate cap?(cap), to: Share
 
+  @doc "The largest daily cap a share holds (`Arca.Schemas.Share.max_cap/0`)."
+  @spec max_cap() :: pos_integer()
+  defdelegate max_cap(), to: Share
+
+  @doc "The audiences a share may name (`Arca.Schemas.Share.audiences/0`)."
+  @spec audiences() :: [String.t()]
+  defdelegate audiences(), to: Share
+
   defguardp resolved(athanor_id) when is_binary(athanor_id) and athanor_id != ""
   defguardp platform(actor) when is_struct(actor, Prima.Actor) and actor.scope == :platform
 
