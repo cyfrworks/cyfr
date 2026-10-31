@@ -27,7 +27,10 @@ defmodule Prima.Destination do
 
   `methods` and `paths` are optional on an athanor's entry and required,
   non-empty, on an instance entry: `new/2`'s second argument says which.
-  A present `methods` or `paths` is never empty.
+  An athanor's entry is shared only once its destination names both
+  (`Arca.Shares`), so a key reaches no one but its owner on a destination
+  that admits any method or path. A present `methods` or `paths` is never
+  empty.
 
   ## Canonical form
 
@@ -111,7 +114,8 @@ defmodule Prima.Destination do
   @doc """
   The destination `map` spells, normalized, or why it is refused.
   `require_methods_and_paths` is true for an instance entry, whose
-  destination names both.
+  destination names both; a shared entry's must name both too, which the
+  share checks on the stored destination.
   """
   @spec new(term(), boolean()) :: {:ok, t()} | {:error, error()}
   def new(map, require_methods_and_paths)
