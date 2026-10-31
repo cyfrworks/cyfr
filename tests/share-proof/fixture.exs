@@ -405,7 +405,7 @@ fn args ->
       })
 
     ["requested_digest", provider, field, destination] ->
-      {:ok, parsed} = Prima.Destination.new(Jason.decode!(destination), true)
+      {:ok, parsed} = Prima.Destination.from_map(Jason.decode!(destination))
       canonical = Prima.Destination.canonical(parsed)
 
       {:ok, digest} =
@@ -431,7 +431,7 @@ fn args ->
 
     ["derived_head", token, share_id, provider, field, destination] ->
       ctx = person_ctx.(token)
-      {:ok, parsed} = Prima.Destination.new(Jason.decode!(destination), true)
+      {:ok, parsed} = Prima.Destination.from_map(Jason.decode!(destination))
 
       {:ok, digest} =
         Sanctum.VaultReader.binding_digest(%{

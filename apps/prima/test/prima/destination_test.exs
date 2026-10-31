@@ -15,17 +15,17 @@ defmodule Prima.DestinationTest do
 
   alias Prima.Destination
 
-  defp new!(map, required \\ false) do
-    {:ok, destination} = Destination.new(map, required)
+  defp new!(map) do
+    {:ok, destination} = Destination.from_map(map)
     destination
   end
 
-  defp refused(map, required \\ false) do
-    assert {:error, {:invalid_destination, reason}} = Destination.new(map, required)
+  defp refused(map) do
+    assert {:error, {:invalid_destination, reason}} = Destination.from_map(map)
     reason
   end
 
-  describe "new/2 and the canonical form" do
+  describe "from_map/1 and the canonical form" do
     test "normalizes hosts, scheme, methods and paths, and round-trips" do
       destination =
         new!(%{
@@ -188,28 +188,17 @@ defmodule Prima.DestinationTest do
       assert refused(%{"hosts" => ["a.example.com"], "paths" => paths}) == {:too_many, "paths"}
 
       assert {:ok, %Destination{hosts: kept}} =
-               Destination.new(%{"hosts" => Enum.take(hosts, 32)}, false)
+               Destination.from_map(%{"hosts" => Enum.take(hosts, 32)})
 
       assert length(kept) == 32
 
       assert {:ok, %Destination{paths: kept}} =
-               Destination.new(
-                 %{"hosts" => ["a.example.com"], "paths" => Enum.take(paths, 32)},
-                 false
-               )
+               Destination.from_map(%{
+                 "hosts" => ["a.example.com"],
+                 "paths" => Enum.take(paths, 32)
+               })
 
       assert length(kept) == 32
-    end
-
-    test "a destination required to name methods and paths, without them" do
-      host = %{"hosts" => ["a.example.com"]}
-      assert refused(host, true) == {:required, "methods"}
-      assert refused(Map.put(host, "methods", ["GET"]), true) == {:required, "paths"}
-
-      assert {:ok, _} =
-               Destination.new(Map.merge(host, %{"methods" => ["GET"], "paths" => ["/"]}), true)
-
-      assert {:ok, _} = Destination.new(host, false)
     end
 
     test "an unknown member, and a value that is no map" do
@@ -223,14 +212,11 @@ defmodule Prima.DestinationTest do
     setup do
       %{
         inference:
-          new!(
-            %{
-              "hosts" => ["api.openai.com"],
-              "methods" => ["GET", "POST"],
-              "paths" => ["/v1/chat/completions", "/v1/models"]
-            },
-            true
-          )
+          new!(%{
+            "hosts" => ["api.openai.com"],
+            "methods" => ["GET", "POST"],
+            "paths" => ["/v1/chat/completions", "/v1/models"]
+          })
       }
     end
 
@@ -451,7 +437,7 @@ defmodule Prima.DestinationTest do
   end
 
   describe "the grammar's predicates" do
-    test "valid_host? and valid_path? answer the grammar new/2 holds" do
+    test "valid_host? and valid_path? answer the grammar from_map/1 holds" do
       assert Destination.valid_host?("api.example.com")
       assert Destination.valid_host?("*.example.com")
       refute Destination.valid_host?("API.example.com")

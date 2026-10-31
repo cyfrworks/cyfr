@@ -617,7 +617,6 @@ defmodule Sanctum.Providers.Vault do
   defp destination_refusal({:invalid_list, field}), do: "#{field} is a list"
   defp destination_refusal({:empty, field}), do: "#{field}, when present, is not empty"
   defp destination_refusal({:too_many, field}), do: "#{field} names too many entries"
-  defp destination_refusal({:required, field}), do: "#{field} is required"
   defp destination_refusal(_other), do: "it is outside the destination grammar"
 
   defp action_enum, do: Prima.Provider.action_enum(definition())
