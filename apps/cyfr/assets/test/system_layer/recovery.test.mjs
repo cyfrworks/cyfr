@@ -67,7 +67,16 @@ function node(tag = "div", attrs = {}) {
     parent: null,
     children: [],
     hidden: Boolean(attrs.hidden),
-    textContent: "",
+    own: "",
+    // As a browser's: the text of every child, or the element's own; set,
+    // it replaces the children.
+    get textContent() {
+      return element.children.length ? element.children.map((child) => child.textContent).join("") : element.own
+    },
+    set textContent(text) {
+      element.own = String(text)
+      element.children = []
+    },
     value: "",
     dataset: {},
     listeners: {},
@@ -105,11 +114,14 @@ function matches(element, selector) {
   return name in element.attrs && (value === undefined || element.attrs[name] === value)
 }
 
-const fakeDoc = {createElement: (tag) => node(tag)}
+const fakeDoc = {createElement: (tag) => node(tag), createTextNode: (text) => ({tag: "#text", textContent: text, children: []})}
 
-// Every text a drawn node holds, its children's included.
+// Every text a drawn node holds, by element: a node's text, its
+// children's included.
 function texts(element) {
-  return [element.textContent, ...element.children.flatMap((child) => texts(child))].filter(Boolean)
+  if (element.children.every((child) => child.tag === "#text" || child.tag === "wbr"))
+    return [element.textContent].filter(Boolean)
+  return element.children.flatMap((child) => texts(child))
 }
 
 // Storage that fails the test if anything reads or writes it.
@@ -232,7 +244,14 @@ describe("a recovery code", () => {
     assert.equal(slot.hidden, false)
     const [shown, copy] = slot.children
     assert.equal(slot.children.length, 2)
-    assert.deepEqual([shown.tag, shown.attrs, shown.textContent, shown.children], ["p", {"data-test": "recovery-code", class: "font-mono break-all"}, held.code, []])
+    assert.deepEqual([shown.tag, shown.attrs, shown.textContent], ["p", {"data-test": "recovery-code", class: "font-mono break-normal"}, held.code])
+    // A line breaks only after a hyphen: a <wbr> follows each, and nothing
+    // else, and every group is whole.
+    const groups = held.code.split("-")
+    assert.deepEqual(
+      shown.children.map((child) => (child.tag === "wbr" ? "<wbr>" : child.textContent)),
+      groups.flatMap((group, i) => (i < groups.length - 1 ? [`${group}-`, "<wbr>"] : [group]))
+    )
     assert.deepEqual(
       [copy.tag, copy.attrs.type, copy.attrs["data-recovery-copy"], copy.attrs["data-test"], copy.textContent],
       ["button", "button", "", "recovery-copy", "Copy"]

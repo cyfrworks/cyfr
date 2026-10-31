@@ -132,15 +132,28 @@ export class Material {
 }
 
 /**
+ * The recovery `code` as the nodes of its text: each group with its
+ * hyphen, then a <wbr>, so a line breaks only after a hyphen and no group
+ * is split. A <wbr> adds no text, so the element's text, a selection of
+ * it and Copy are the code exactly.
+ */
+export function codeNodes(doc, code) {
+  const groups = code.split("-")
+  return groups.flatMap((group, i) =>
+    i < groups.length - 1 ? [doc.createTextNode(`${group}-`), doc.createElement("wbr")] : [doc.createTextNode(group)]
+  )
+}
+
+/**
  * Draw the recovery `code` into `slot` as the text of one element, with
- * the Copy button beside it, and show it. The code is held nowhere else.
+ * the Copy button below it, and show it. The code is held nowhere else.
  */
 export function drawCode(doc, slot, code) {
   if (!slot || typeof slot.replaceChildren !== "function" || typeof code !== "string" || !code) return
   const text = doc.createElement("p")
   text.setAttribute("data-test", "recovery-code")
-  text.setAttribute("class", "font-mono break-all")
-  text.textContent = code
+  text.setAttribute("class", "font-mono break-normal")
+  text.replaceChildren(...codeNodes(doc, code))
   const copy = doc.createElement("button")
   copy.setAttribute("type", "button")
   copy.setAttribute("data-recovery-copy", "")

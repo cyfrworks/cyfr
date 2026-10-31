@@ -22,6 +22,7 @@ import {nextStop, tabOrder} from "./focus.js"
 import {
   clearCode,
   clearFields,
+  codeNodes,
   copyCode,
   drawCode,
   drawRequestId,
@@ -1114,15 +1115,7 @@ export function drawAdmissionCode(root, code) {
     slot.textContent = code
     return
   }
-  // A line breaks only after a hyphen, so no group of the code is split
-  // across lines: each hyphen is followed by a <wbr>, which adds no text,
-  // so the drawn text, a selection of it and Copy are the code exactly.
-  const groups = code.split("-")
-  slot.replaceChildren(
-    ...groups.flatMap((group, i) =>
-      i < groups.length - 1 ? [doc.createTextNode(`${group}-`), doc.createElement("wbr")] : [doc.createTextNode(group)]
-    )
-  )
+  slot.replaceChildren(...codeNodes(doc, code))
 }
 
 // The screen's drawn recovery code under `root`, emptied.
