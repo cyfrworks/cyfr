@@ -610,6 +610,31 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert_unbound!(ana)
     end
 
+    # A narrowing landing after that read leaves the person outside the
+    # share's audience: the mint's lock holds the share to the audience the
+    # walk read it at and refuses it, and the walk mints the catalyst
+    # without it in the same run, as when no share fits.
+    test "a share narrowed after the walk read it, to a group the person is not in, is " <>
+           "refused under the mint's lock, and the catalyst is minted without it",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      group = Arca.Test.Shares.group!([admin.user.id])
+
+      after_read!("shares", fn ->
+        {:ok, _narrowed} =
+          Arca.Shares.set_audience(
+            admin.actor,
+            shared.share.id,
+            Arca.Test.Shares.everyone(),
+            %{audience: "group", group_id: group.id}
+          )
+      end)
+
+      assert Bootstrap.run(ana) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert_unbound!(ana)
+    end
+
     # A context that is not the server's but names no person has nothing
     # offered to it, as `Sanctum.Consent.Plan` reads the same refusal: the
     # read answered, and the catalyst is minted without a share.
@@ -894,6 +919,46 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
       {unbound, _vault} = model_head!(ana)
       assert unbound.revision == 3
+      assert_unbound!(ana)
+    end
+
+    # A narrowing landing after a boot's revision read the share's facts:
+    # the revision's lock holds the share to the audience the facts named
+    # and refuses it, and the boot writes the revision again with no
+    # binding, as when the share is no longer carried.
+    test "a boot's revision with no person whose share is narrowed after its facts were " <>
+           "read is written without the share",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+      group = Arca.Test.Shares.group!([admin.user.id])
+
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "3m"}})
+      handler = {__MODULE__, :revoke_share_after_facts, System.unique_integer([:positive])}
+
+      narrow = fn ->
+        Arca.Shares.set_audience(
+          admin.actor,
+          shared.share.id,
+          Arca.Test.Shares.everyone(),
+          %{audience: "group", group_id: group.id}
+        )
+      end
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          &__MODULE__.revoke_share_after_facts/4,
+          %{test: self(), revoke: narrow}
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      :telemetry.detach(handler)
+      assert {:ok, %{audience: "group"}} = Process.get(:share_revoked)
       assert_unbound!(ana)
     end
 

@@ -346,7 +346,13 @@ defmodule Sanctum.AttachTest do
 
     {profile_id, consent_id} =
       head!(recipient, [
-        %{binding_key: key, scope: "share", share_id: share.id, binding_digest: approved}
+        %{
+          binding_key: key,
+          scope: "share",
+          share_id: share.id,
+          binding_digest: approved,
+          admitted: %{audience: share.audience, group_id: share.group_id}
+        }
       ])
 
     {:ok, destination} = Prima.Destination.from_map(@share_destination)

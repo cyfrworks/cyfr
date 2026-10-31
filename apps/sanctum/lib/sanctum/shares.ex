@@ -94,12 +94,16 @@ defmodule Sanctum.Shares do
 
   @typedoc """
   A share as a consent binds it for a person: the source entry's binding
-  facts, the digest derived from them, and the owner's display name. No
-  name of the entry and no material.
+  facts, the digest derived from them, the owner's display name, and the
+  audience the share was read at (`audience`, `group_id`), which a
+  revision binding it is held to under its lock. No name of the entry and
+  no material.
   """
   @type binding_view :: %{
           id: String.t(),
           owner: String.t(),
+          audience: String.t(),
+          group_id: String.t() | nil,
           kind: String.t(),
           provider_hint: String.t(),
           field_names: [String.t()],
@@ -109,8 +113,13 @@ defmodule Sanctum.Shares do
           attach_only: true
         }
 
-  @typedoc "What a carried binding with no person is held to: the source's facts."
+  @typedoc """
+  What a carried binding with no person is held to: the source's facts,
+  and the audience the share was read at.
+  """
   @type binding_facts :: %{
+          audience: String.t(),
+          group_id: String.t() | nil,
           kind: String.t(),
           provider_hint: String.t(),
           field_names: [String.t()],
@@ -387,7 +396,8 @@ defmodule Sanctum.Shares do
   The facts a boot's revision with no person holds a carried share
   binding to (`Sanctum.Consent.Bootstrap`): the source's `kind`,
   `provider_hint`, `field_names`, `status` and derived `binding_digest`,
-  for any active share. A share absent or revoked is
+  and the share's `audience` and `group_id`, which the revision's lock
+  holds the share to, for any active share. A share absent or revoked is
   `{:error, :not_offered}`, a source no longer active
   `{:error, {:entry_unavailable, status}}`, and a damaged source
   `{:error, :corrupt}`.
@@ -427,8 +437,10 @@ defmodule Sanctum.Shares do
     6. the request is inside the source's destination
        (`{:error, :destination_mismatch}`);
     7. one use is counted under the share's caps, read from its locked
-       row (`Arca.ShareUsage.claim/3`), refused only under a set cap that
-       is reached (`{:error, {:connection_cap, reset_at}}`);
+       row (`Arca.ShareUsage.claim/4`), refused only under a set cap that
+       is reached (`{:error, {:connection_cap, reset_at}}`), and refused
+       as not offered when the row was revoked or its audience moved from
+       the one step 2 admitted the person under;
     8. the material is unsealed under the owner's internal context
        through `Sanctum.VaultReader.load_and_unseal/2`, with a resource
        naming the source entry and `approved_digest`, so that read decides
@@ -464,7 +476,7 @@ defmodule Sanctum.Shares do
          :ok <- inside(offered.source.destination, request) do
       owner = owner_context(offered)
 
-      with {:ok, _counted} <- claim(owner, share_id, ctx.user_id),
+      with {:ok, _counted} <- claim(owner, offered.share, ctx.user_id),
            {:ok, _entry, payload} <-
              VaultReader.load_and_unseal(owner, %{
                entry_id: offered.source.id,
@@ -503,12 +515,18 @@ defmodule Sanctum.Shares do
   defp owner_context(%{share: share}),
     do: Context.internal(athanor_id: share.athanor_id, scope: :athanor)
 
-  # A revoke that landed after the share was read is waited for by the
-  # claim's lock and refuses it: the share is no longer offered.
-  defp claim(owner, share_id, user_id) do
-    case Usage.claim(Context.actor(owner), share_id, user_id) do
+  # The claim is held to the audience the person was admitted under: a
+  # revoke that landed after the share was read is waited for by the
+  # claim's lock and refuses it, and a narrowing, which takes no lock, is
+  # read under that lock and refuses it too. Either way the share is no
+  # longer offered.
+  defp claim(owner, share, user_id) do
+    admitted = %{audience: share.audience, group_id: share.group_id}
+
+    case Usage.claim(Context.actor(owner), share.id, user_id, admitted) do
       {:ok, counted} -> {:ok, counted}
       {:error, {:share_unavailable, _status}} -> {:error, :not_offered}
+      {:error, :audience_changed} -> {:error, :not_offered}
       {:error, :not_found} -> {:error, :not_offered}
       {:error, {:connection_cap, _reset_at}} = capped -> capped
       {:error, _unanswered} -> {:error, :unavailable}
@@ -626,6 +644,8 @@ defmodule Sanctum.Shares do
        %{
          id: share.id,
          owner: display_name(owner),
+         audience: share.audience,
+         group_id: share.group_id,
          kind: source.kind,
          provider_hint: source.provider_hint || "",
          field_names: decode_list(source.field_names),

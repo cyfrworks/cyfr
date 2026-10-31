@@ -351,7 +351,14 @@ defmodule Sanctum.Providers.ShareTest do
       owner = Sanctum.Context.actor(terry.ctx)
 
       for _ <- 1..2,
-          do: assert({:ok, _} = Arca.ShareUsage.claim(owner, share.id, alice.user.id))
+          do:
+            assert(
+              {:ok, _} =
+                Arca.ShareUsage.claim(owner, share.id, alice.user.id, %{
+                  audience: "everyone",
+                  group_id: nil
+                })
+            )
 
       today = DateTime.to_date(Arca.ServerMetaStorage.now!())
 

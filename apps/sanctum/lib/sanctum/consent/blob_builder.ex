@@ -456,6 +456,27 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp named_bindings(_vault), do: []
 
   @doc """
+  `refs` with each share binding naming the audience it was admitted
+  under (`admitted`), taken from the binding of `bindings` that names the
+  share: the audience its writer read the share at when it offered or kept
+  it. `Arca.ConsentStorage` holds the share's row to it under the
+  revision's lock and refuses a share binding that names none.
+  """
+  @spec admitted([Arca.ConsentStorage.ref_input()], [map()]) ::
+          [Arca.ConsentStorage.ref_input()]
+  def admitted(refs, bindings) when is_list(refs) and is_list(bindings) do
+    audiences =
+      for %{scope: "share", entry_id: id, admitted: %{} = audience} <- bindings,
+          into: %{},
+          do: {id, audience}
+
+    Enum.map(refs, fn
+      %{share_id: id} = ref when is_binary(id) -> Map.put(ref, :admitted, Map.get(audiences, id))
+      ref -> ref
+    end)
+  end
+
+  @doc """
   The `consent_vault_refs` row of one vault resource under `binding_key`:
   a bound entry (`entry_id`, `binding_digest`, `scope`) or a selection
   (`via`: its `label` and pinned `binding_digest`), with the lifetime and

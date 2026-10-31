@@ -81,10 +81,13 @@ defmodule Sanctum.Consent.Bootstrap do
   (`Sanctum.Shares.binding_facts/1`); for an instance entry, the entry
   (`Sanctum.InstanceEntries.binding_facts/1`). Otherwise it binds none.
   A revoke landing after that read meets the revision's storage lock,
-  and the walk reports that source skipped with the refusal, while
-  `Sanctum.Attach` holds each request to the share's audience and caps
-  and its owner's standing, or to the instance entry's audience, policy
-  and caps.
+  and the walk reports that source skipped with the refusal. A share's
+  binding is also held there to the audience the walk read it at
+  (`Arca.ConsentStorage`), and a narrowing that landed after the read is
+  refused by that lock, so the walk writes the mint or the revision again
+  with no binding, as when no share fits. `Sanctum.Attach` holds each
+  request to the share's audience and caps and its owner's standing, or
+  to the instance entry's audience, policy and caps.
 
   The first mint is the only one that binds, and a revision keeps only
   what its head bound, so a store that cannot answer is never read as
@@ -382,8 +385,14 @@ defmodule Sanctum.Consent.Bootstrap do
   # that fits its need, when one does (the moduledoc).
   defp mint({ctx, claim}, component, source_ref, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
-         {:ok, binding} <- first_sign_in_binding(ctx, component, source_ref),
-         {:ok, nodes} <-
+         {:ok, binding} <- first_sign_in_binding(ctx, component, source_ref) do
+      mint = &mint_with({ctx, claim}, component, source_ref, vouched, activation, &1)
+      unbound_if_narrowed(mint, binding)
+    end
+  end
+
+  defp mint_with({ctx, claim}, component, source_ref, vouched, activation, binding) do
+    with {:ok, nodes} <-
            BlobBuilder.build(ctx, activation.graph, source_ref, source_vault(source_ref, binding),
              source_row: component,
              edge_vault_fn: selection_fn(activation.graph, vouched)
@@ -398,8 +407,20 @@ defmodule Sanctum.Consent.Bootstrap do
         blob_json,
         digests,
         activation_json,
-        BlobBuilder.vault_refs(nodes)
+        BlobBuilder.admitted(BlobBuilder.vault_refs(nodes), List.wrap(binding))
       )
+    end
+  end
+
+  # A share narrowed after the walk read it no longer offers itself to the
+  # person, and the revision's lock refuses it (`Arca.ConsentStorage`'s
+  # audience compare): the walk writes again with no binding, as when no
+  # share fits, rather than binding a share outside its audience or
+  # leaving the catalyst unminted.
+  defp unbound_if_narrowed(write, binding) do
+    case write.(binding) do
+      {:error, {:audience_changed, _share_id}} when not is_nil(binding) -> write.(nil)
+      written -> written
     end
   end
 
@@ -560,6 +581,7 @@ defmodule Sanctum.Consent.Bootstrap do
          entry_id: view.id,
          binding_digest: digest,
          scope: scope,
+         admitted: admitted(scope, view),
          destination: Prima.Destination.to_map(destination),
          attach: Prima.Manifest.Needs.attach_to_map(need.attach),
          fields: fields,
@@ -572,6 +594,11 @@ defmodule Sanctum.Consent.Bootstrap do
       _ -> {:ok, nil}
     end
   end
+
+  # The audience a share was read at, which the revision's lock holds its
+  # row to; an instance entry has none.
+  defp admitted("share", read), do: %{audience: read.audience, group_id: read.group_id}
+  defp admitted(_instance, _read), do: nil
 
   defp automatic_map(need, field_names) do
     case Sanctum.Consent.Plan.field_map(need, field_names) do
@@ -664,6 +691,7 @@ defmodule Sanctum.Consent.Bootstrap do
          entry_id: id,
          binding_digest: vault.binding_digest,
          scope: scope,
+         admitted: admitted(scope, facts),
          destination: Prima.Destination.to_map(vault.destination),
          attach: Prima.Manifest.Needs.attach_to_map(need.attach),
          fields: fields,
@@ -804,8 +832,32 @@ defmodule Sanctum.Consent.Bootstrap do
   defp revise_bootstrap({ctx, claim}, component, source_ref, profile, {head, refs}, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, binding} <-
-           kept_binding(ctx, {profile, head, refs}, component, source_ref, activation.graph),
-         {:ok, nodes} <-
+           kept_binding(ctx, {profile, head, refs}, component, source_ref, activation.graph) do
+      revise =
+        &revise_with(
+          {ctx, claim},
+          component,
+          source_ref,
+          {profile, head},
+          vouched,
+          activation,
+          &1
+        )
+
+      unbound_if_narrowed(revise, binding)
+    end
+  end
+
+  defp revise_with(
+         {ctx, claim},
+         component,
+         source_ref,
+         {profile, head},
+         vouched,
+         activation,
+         binding
+       ) do
+    with {:ok, nodes} <-
            BlobBuilder.build(ctx, activation.graph, source_ref, source_vault(source_ref, binding),
              source_row: component,
              edge_vault_fn: selection_fn(activation.graph, vouched)
@@ -833,7 +885,7 @@ defmodule Sanctum.Consent.Bootstrap do
                granted_by: granted_by(ctx),
                granted_via: "bootstrap"
              },
-             BlobBuilder.vault_refs(nodes),
+             BlobBuilder.admitted(BlobBuilder.vault_refs(nodes), List.wrap(binding)),
              head.id,
              fenced(ctx, claim)
            ) do

@@ -41,7 +41,9 @@ defmodule Arca.ConsentStorage do
   no row (`{:error, :not_found}`; an athanor's own entry is read in the
   revision's athanor alone), when a share has no row
   (`{:error, :not_found}`) or is not `active`
-  (`{:error, {:share_unavailable, status}}`), when a share's source no
+  (`{:error, {:share_unavailable, status}}`), when a share's audience is
+  no longer the one its binding was admitted under, read under its lock
+  (`{:error, {:audience_changed, share_id}}`), when a share's source no
   longer holds the digest its binding was approved at, read again under
   the locks (`{:error, {:binding_went_stale, share_id}}`), and when a
   revision binding a share is not in the active own athanor of the person
@@ -154,7 +156,8 @@ defmodule Arca.ConsentStorage do
           optional(:binding_digest) => String.t() | nil,
           optional(:lifetime_kind) => String.t(),
           optional(:expires_at) => DateTime.t() | nil,
-          optional(:renew) => boolean()
+          optional(:renew) => boolean(),
+          optional(:admitted) => Arca.Shares.audience() | nil
         }
 
   @doc """
@@ -163,10 +166,13 @@ defmodule Arca.ConsentStorage do
 
   `vault_refs` is one `t:ref_input/0` per binding, unique by
   `binding_key`; a row naming none or two of an entry, an instance entry,
-  a share and a selection, a scope its entry does not match, an entry without its
-  digest, an `until` without `expires_at`, any other lifetime with one,
-  or a key twice is refused `{:error, {:invalid, %{vault_refs: [why]}}}`
-  with nothing written (`Arca.Schemas.ConsentVaultRef.changeset/1`). The profile row is locked before anything else, the
+  a share and a selection, a scope its entry does not match, an entry
+  without its digest, an `until` without `expires_at`, any other lifetime
+  with one, a share binding that does not name the audience it was
+  admitted under (`admitted`, `%{audience: _, group_id: _}`, which is
+  held to the share's row under its lock and never stored), or a key
+  twice is refused `{:error, {:invalid, %{vault_refs: [why]}}}` with
+  nothing written (`Arca.Schemas.ConsentVaultRef.changeset/1`). The profile row is locked before anything else, the
   superseded head's rows are read under that lock, and a new row whose
   key, entry, scope and lifetime equal a superseded row's keeps that
   row's `consumed_by_root` unless it says `renew`. The head then advances
@@ -277,6 +283,7 @@ defmodule Arca.ConsentStorage do
   defp ref_input(%{} = ref, consent_id, athanor_id) do
     renew = Map.get(ref, :renew, false)
     expires_at = Map.get(ref, :expires_at)
+    admitted = Map.get(ref, :admitted)
 
     attrs =
       ref
@@ -303,6 +310,10 @@ defmodule Arca.ConsentStorage do
       not changeset.valid? ->
         {:error, {:invalid, %{vault_refs: Enum.map(changeset.errors, &ref_error/1)}}}
 
+      present?(Ecto.Changeset.get_field(changeset, :share_id)) and
+          not Arca.Shares.audience_valid?(admitted) ->
+        invalid_refs("names, for a share, the audience it was admitted under")
+
       true ->
         row = Ecto.Changeset.apply_changes(changeset)
 
@@ -317,12 +328,15 @@ defmodule Arca.ConsentStorage do
            binding_digest: row.binding_digest,
            lifetime_kind: row.lifetime_kind,
            expires_at: row.expires_at,
-           renew: renew
+           renew: renew,
+           admitted: if(row.share_id, do: admitted)
          }}
     end
   end
 
   defp ref_input(_ref, _consent_id, _athanor_id), do: invalid_refs("is a binding")
+
+  defp present?(value), do: is_binary(value) and value != ""
 
   defp ref_error({field, {message, _meta}}), do: "#{field} #{message}"
 
@@ -467,8 +481,13 @@ defmodule Arca.ConsentStorage do
   # Every share the bindings name, held shared in id order after the
   # entries and before the profile: a share's revoke, which takes the row
   # exclusive before it reads the heads that bind it, waits for this
-  # revision or is refused here by the status. Then each share binding's
-  # digest is read again from its source entry under the locks.
+  # revision or is refused here by the status. Each share binding is then
+  # held to the audience its revision admitted it under, read from the
+  # locked row (`Arca.Shares.same_audience?/2`): a narrowing takes no lock,
+  # so one that landed after the revision read the share refuses it here
+  # rather than leaving the share bound outside its audience. Then each
+  # share binding's digest is read again from its source entry under the
+  # locks.
   defp lock_shares(_refs, sources, _entries) when map_size(sources) == 0, do: {:ok, %{}}
 
   # arca:unscoped-ok a binding names another athanor's share by its bare
@@ -476,17 +495,20 @@ defmodule Arca.ConsentStorage do
   defp lock_shares(refs, sources, entries) do
     ids = sources |> Map.keys() |> Enum.sort()
 
-    statuses =
+    held =
       from(s in Arca.Schemas.Share,
         where: s.id in ^ids,
         order_by: s.id,
-        select: {s.id, s.status}
+        select: {s.id, {s.status, %{audience: s.audience, group_id: s.group_id}}}
       )
       |> Arca.QueryHelpers.for_share()
       |> Arca.Repo.all()
       |> Map.new()
 
-    with :ok <- shares_active(statuses, ids) do
+    statuses = Map.new(held, fn {id, {status, _audience}} -> {id, status} end)
+
+    with :ok <- shares_active(statuses, ids),
+         :ok <- shares_admitted(refs, held) do
       stale =
         Enum.find(refs, fn
           %{share_id: id, binding_digest: digest} when is_binary(id) ->
@@ -502,6 +524,20 @@ defmodule Arca.ConsentStorage do
         else: {:ok, statuses}
     end
   end
+
+  defp shares_admitted(refs, held) do
+    case Enum.find(refs, &moved_audience?(&1, held)) do
+      nil -> :ok
+      moved -> {:error, {:audience_changed, moved.share_id}}
+    end
+  end
+
+  defp moved_audience?(%{share_id: id, admitted: admitted}, held) when is_binary(id) do
+    {_status, audience} = Map.fetch!(held, id)
+    not Arca.Shares.same_audience?(audience, admitted)
+  end
+
+  defp moved_audience?(_ref, _held), do: false
 
   defp shares_active(statuses, ids) do
     Enum.reduce_while(ids, :ok, fn id, :ok ->

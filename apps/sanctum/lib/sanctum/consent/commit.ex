@@ -40,7 +40,8 @@ defmodule Sanctum.Consent.Commit do
   offered to the person (`{:not_offered, need}`), active, and admitted by
   its component policy for the source (`{:component_not_admitted, need}`);
   and a share must be offered to the person
-  (`{:share_not_offered, need}`), its owner standing
+  (`{:share_not_offered, need}`, also when its audience moved after the
+  preview and the revision's lock refuses it), its owner standing
   (`{:owner_not_standing, need}`) and its source active, with no
   component policy to admit. A share is bound in the person's own
   athanor alone (`Arca.ConsentStorage`'s `:not_own_athanor`), and a
@@ -1249,6 +1250,7 @@ defmodule Sanctum.Consent.Commit do
         entry_id: bound.id,
         binding_digest: bound.digest,
         scope: bound.scope,
+        admitted: Map.get(bound, :admitted),
         destination: destination,
         attach: attach_rule(declared_need),
         fields: fields,
@@ -1749,6 +1751,7 @@ defmodule Sanctum.Consent.Commit do
         entry_id: bound.id,
         binding_digest: bound.digest,
         scope: bound.scope,
+        admitted: Map.get(bound, :admitted),
         destination: destination,
         attach: attach_rule(declared_need),
         fields: fields,
@@ -2017,6 +2020,9 @@ defmodule Sanctum.Consent.Commit do
            entry: Map.merge(view, %{name: name, attach_only: true}),
            digest: view.binding_digest,
            scope: "share",
+           # The audience the share was offered under, which the
+           # revision's lock holds its row to (`Arca.ConsentStorage`).
+           admitted: %{audience: view.audience, group_id: view.group_id},
            kind: view.kind,
            provider: view.provider_hint,
            disclosed: false,
@@ -2725,6 +2731,7 @@ defmodule Sanctum.Consent.Commit do
         })
       end)
       |> Enum.uniq_by(& &1.binding_key)
+      |> BlobBuilder.admitted(prep.bindings)
 
     with {:ok, nodes, narrowed} <- BlobBuilder.narrow_nodes(nodes, prep.source_ref, prep.subset),
          {:ok, blob_json} <- JCS.encode(%{"canonical" => @canonical, "nodes" => nodes}),
@@ -2778,7 +2785,8 @@ defmodule Sanctum.Consent.Commit do
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          :ok <- check_binding_digests(blob_json, prep) do
-      {:ok, blob_json, BlobBuilder.vault_refs(nodes), BlobBuilder.narrowed(nodes)}
+      refs = BlobBuilder.admitted(BlobBuilder.vault_refs(nodes), prep.bindings ++ prep.selections)
+      {:ok, blob_json, refs, BlobBuilder.narrowed(nodes)}
     end
   end
 
@@ -2915,9 +2923,22 @@ defmodule Sanctum.Consent.Commit do
 
         conflict(:race, prep.expected_revision, actual)
 
+      # A share narrowed after the person was offered it, refused under the
+      # revision's lock: no longer offered to them, for the need it was
+      # bound for.
+      {:error, {:audience_changed, share_id}} ->
+        {:error, {:share_not_offered, shared_need(prep, share_id)}}
+
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp shared_need(prep, share_id) do
+    Enum.find_value(prep.bindings ++ prep.selections, share_id, fn
+      %{scope: "share", entry_id: ^share_id, need: need} when is_binary(need) -> need
+      _other -> nil
+    end)
   end
 
   defp pinned_version(%{scope: :pinned, component: component}), do: component.version

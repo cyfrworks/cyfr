@@ -515,6 +515,8 @@ defmodule Arca.SharesConcurrencyTest do
   alias Arca.Test.Shares, as: Fixture
   alias Ecto.Adapters.SQL.Sandbox
 
+  @everyone %{audience: "everyone", group_id: nil}
+
   setup do
     {:ok, made} = Agent.start(fn -> [] end)
 
@@ -638,7 +640,7 @@ defmodule Arca.SharesConcurrencyTest do
     share =
       unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
 
-    held = holding(fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice") end)
+    held = holding(fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone) end)
 
     revoke =
       waiting(
@@ -664,7 +666,7 @@ defmodule Arca.SharesConcurrencyTest do
 
     claim =
       waiting(
-        fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice") end,
+        fn -> Arca.ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone) end,
         ["shares", "FOR SHARE"]
       )
 

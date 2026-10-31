@@ -200,7 +200,13 @@ defmodule Sanctum.SharesTest do
           resolved_policy: "{}",
           activation: %{},
           vault_refs: [
-            %{binding_key: key, scope: "share", share_id: share.id, binding_digest: digest}
+            %{
+              binding_key: key,
+              scope: "share",
+              share_id: share.id,
+              binding_digest: digest,
+              admitted: %{audience: share.audience, group_id: share.group_id}
+            }
           ]
         }
       )
@@ -623,6 +629,8 @@ defmodule Sanctum.SharesTest do
       assert view == %{
                id: share.id,
                owner: "Terry",
+               audience: "everyone",
+               group_id: nil,
                kind: "api_key",
                provider_hint: "example.com",
                field_names: ["KEY", "ORG"],
@@ -664,6 +672,8 @@ defmodule Sanctum.SharesTest do
       assert Shares.binding_facts(share.id) ==
                {:ok,
                 %{
+                  audience: "everyone",
+                  group_id: nil,
                   kind: "api_key",
                   provider_hint: "example.com",
                   field_names: ["KEY", "ORG"],

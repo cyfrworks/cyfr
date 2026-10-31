@@ -10,6 +10,8 @@ defmodule Arca.ShareUsageTest do
   alias Arca.ShareUsage
   alias Arca.Test.QueryCounter
 
+  @everyone %{audience: "everyone", group_id: nil}
+
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     terry = owner!()
@@ -24,11 +26,11 @@ defmodule Arca.ShareUsageTest do
 
   defp today, do: DateTime.to_date(Arca.ServerMetaStorage.now!())
 
-  describe "claim/3" do
+  describe "claim/4" do
     test "an absent cap is no limit, and every use is counted", %{terry: terry, share: share} do
       for n <- 1..3 do
         assert {:ok, %{person: ^n, total: ^n, day: day}} =
-                 ShareUsage.claim(terry.actor, share.id, "usr_alice")
+                 ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
 
         assert day == today()
       end
@@ -41,7 +43,7 @@ defmodule Arca.ShareUsageTest do
       :ok = capped!(terry, share, 0, nil)
 
       assert {:error, {:connection_cap, reset_at}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_alice")
+               ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
 
       assert reset_at == DateTime.new!(Date.add(today(), 1), ~T[00:00:00.000000], "Etc/UTC")
       assert {:ok, %{people: [], totals: []}} = ShareUsage.usage(terry.actor, share.id, 1)
@@ -49,51 +51,70 @@ defmodule Arca.ShareUsageTest do
       :ok = capped!(terry, share, nil, 0)
 
       assert {:error, {:connection_cap, _}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_bea")
+               ShareUsage.claim(terry.actor, share.id, "usr_bea", @everyone)
     end
 
     test "N admits N a person and N in total that day, each cap on its own",
          %{terry: terry, share: share} do
       :ok = capped!(terry, share, 2, 3)
 
-      assert {:ok, %{person: 1}} = ShareUsage.claim(terry.actor, share.id, "usr_alice")
-      assert {:ok, %{person: 2}} = ShareUsage.claim(terry.actor, share.id, "usr_alice")
+      assert {:ok, %{person: 1}} = ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
+      assert {:ok, %{person: 2}} = ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
 
       assert {:error, {:connection_cap, _}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_alice")
+               ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
 
       assert {:ok, %{person: 1, total: 3}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_bea")
+               ShareUsage.claim(terry.actor, share.id, "usr_bea", @everyone)
 
       assert {:error, {:connection_cap, _}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_carl")
+               ShareUsage.claim(terry.actor, share.id, "usr_carl", @everyone)
 
       # The person's cap alone, with no total.
       :ok = capped!(terry, share, 3, nil)
 
       assert {:ok, %{person: 3, total: 4}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_alice")
+               ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
     end
 
     test "caps set since the share was read are the ones a claim is held to; a revoked share " <>
            "and another athanor's share count nothing",
          %{terry: terry, share: share} do
-      assert {:ok, %{person: 1}} = ShareUsage.claim(terry.actor, share.id, "usr_alice")
+      assert {:ok, %{person: 1}} = ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
       :ok = capped!(terry, share, 1, nil)
 
       assert {:error, {:connection_cap, _}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_alice")
+               ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
 
       other = owner!()
-      assert {:error, :not_found} = ShareUsage.claim(other.actor, share.id, "usr_alice")
+
+      assert {:error, :not_found} =
+               ShareUsage.claim(other.actor, share.id, "usr_alice", @everyone)
 
       {:ok, _} = Arca.Shares.revoke(terry.actor, share.id, "needs_consent")
 
       assert {:error, {:share_unavailable, "revoked"}} =
-               ShareUsage.claim(terry.actor, share.id, "usr_bea")
+               ShareUsage.claim(terry.actor, share.id, "usr_bea", @everyone)
 
       assert {:ok, %{people: [%{user_id: "usr_alice", count: 1}], totals: [%{count: 1}]}} =
                ShareUsage.usage(terry.actor, share.id, 1)
+    end
+
+    test "a claim under an audience the share no longer holds is refused and counts nothing; " <>
+           "one under the audience it holds is counted",
+         %{terry: terry, share: share} do
+      group = group!([terry.user.id])
+      narrowed = %{audience: "group", group_id: group.id}
+      {:ok, _} = Arca.Shares.set_audience(terry.actor, share.id, @everyone, narrowed)
+
+      assert {:error, :audience_changed} =
+               ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
+
+      assert {:error, :audience_changed} =
+               ShareUsage.claim(terry.actor, share.id, "usr_alice", %{narrowed | group_id: "g"})
+
+      assert {:ok, %{people: [], totals: []}} = ShareUsage.usage(terry.actor, share.id, 1)
+      assert {:ok, %{person: 1}} = ShareUsage.claim(terry.actor, share.id, "usr_alice", narrowed)
     end
 
     test "a cap outside the rule is refused where caps are set, and an actor with no athanor " <>
@@ -119,7 +140,9 @@ defmodule Arca.ShareUsageTest do
                Arca.Shares.get(terry.actor, share.id)
 
       QueryCounter.assert_queries(0, fn ->
-        assert {:error, :no_athanor} = ShareUsage.claim(%Prima.Actor{}, share.id, "usr_alice")
+        assert {:error, :no_athanor} =
+                 ShareUsage.claim(%Prima.Actor{}, share.id, "usr_alice", @everyone)
+
         assert {:error, :no_athanor} = ShareUsage.usage(%Prima.Actor{}, share.id, 1)
         assert {:error, :cross_tenant} = ShareUsage.sweep(Prima.Actor.in_athanor("ath_x"))
       end)
@@ -131,7 +154,7 @@ defmodule Arca.ShareUsageTest do
          %{terry: terry, share: share} do
       other = owner!()
       theirs = share!(other.actor, entry!(other.actor).id)
-      {:ok, _} = ShareUsage.claim(terry.actor, share.id, "usr_alice")
+      {:ok, _} = ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
       old = Date.add(today(), -(ShareUsage.kept_days() + 1))
 
       {1, _} =

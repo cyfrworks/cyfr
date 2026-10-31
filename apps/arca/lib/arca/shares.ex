@@ -32,8 +32,10 @@ defmodule Arca.Shares do
   audience `{:error, :already_shared}`, each with nothing written.
 
   `set_audience/4` is a compare-and-set against the audience the caller
-  read, and takes no lock: a use or a revision racing it reads the share
-  at one audience or the other. `revoke/3` takes the share's row
+  read, and takes no lock: a use's claim and a revision's lock each hold
+  the audience they admitted under against the row they lock
+  (`same_audience?/2`), so one racing a narrowing is refused rather than
+  admitted outside the audience. `revoke/3` takes the share's row
   exclusive, so it serializes with a use's claim (`Arca.ShareUsage`),
   which reads it shared, and blocks every profile, in every athanor, whose
   head binds it (`Arca.ConsentStorage.block_dependents/4`) in the same
@@ -109,6 +111,20 @@ defmodule Arca.Shares do
   """
   @spec audience_valid?(term()) :: boolean()
   defdelegate audience_valid?(audience), to: Share
+
+  @doc """
+  Whether the share row's audience `held` is the audience `admitted` a
+  caller read it at, both `%{audience: _, group_id: _}`: the one compare
+  a use's claim (`Arca.ShareUsage.claim/4`) and a revision's lock on the
+  shares it binds (`Arca.ConsentStorage`) make, so a narrowing, which
+  takes no lock, refuses what raced it rather than admitting outside the
+  audience.
+  """
+  @spec same_audience?(audience(), map()) :: boolean()
+  def same_audience?(%{audience: audience, group_id: group_id}, %{audience: audience} = admitted),
+    do: Map.get(admitted, :group_id) == group_id
+
+  def same_audience?(_held, _admitted), do: false
 
   @doc "Whether `cap` is a cap a share may hold (`Arca.Schemas.Share.cap?/1`)."
   @spec cap?(term()) :: boolean()
