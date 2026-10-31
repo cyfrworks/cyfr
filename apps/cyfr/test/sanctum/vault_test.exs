@@ -1452,6 +1452,29 @@ defmodule Sanctum.VaultTest do
       assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
     end
 
+    test "the vault tool says why it refuses a rebind of a shared key, and moves nothing",
+         %{ctx: ctx, terry: terry, view: view, share: share} do
+      {:ok, before} = Arca.VaultStorage.get(terry.actor, view.id)
+
+      for {args, sentence} <- [
+            {%{"disclose" => true}, "shared: this key is shared, so it stays attach-only"},
+            {%{"destination" => Map.delete(@shared, "methods")},
+             "shared_destination_incomplete: this key is shared, so its destination must " <>
+               "name methods and paths"}
+          ] do
+        call = Map.merge(%{"action" => "rebind", "id" => view.id}, args)
+
+        assert {:error, ^sentence} =
+                 Sanctum.TestContext.confirming(ctx, &Sanctum.Providers.Vault.handle(&1, call))
+
+        assert {:ok, ^before} = Arca.VaultStorage.get(terry.actor, view.id)
+        assert Arca.Test.Shares.share_status(terry.actor, share.id) == "active"
+      end
+
+      share_id = share.id
+      refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
+    end
+
     test "a refused change announces nothing", %{ctx: ctx, view: view, share: share} do
       assert {:error, :payload_conflict} =
                rotate(ctx, %{id: view.id, fields: %{"key" => "v2"}, expected_payload_rev: 7})
