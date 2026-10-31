@@ -247,8 +247,9 @@ defmodule Sanctum.Newcomer do
   Whether `token` opens setup now: it is the configured setup token, and
   a setup would be admitted (`Arca.InstallationClaims.setup_open?/1`).
   The setup page asks before it starts a passkey ceremony, so a link that
-  is not valid, or a CYFR set up already, creates no passkey; the
-  admission decides again in its transaction. One refusal for both, as
+  is not valid, or a CYFR set up already, creates no passkey, and a program
+  on this machine asks through the setup status route; the admission
+  decides again in its transaction. One refusal for both, as
   the admission answers, so a guesser learns nothing from it.
   """
   @spec setup_open(term()) :: :ok | {:error, :setup_closed | :unavailable}

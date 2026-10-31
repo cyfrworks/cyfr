@@ -225,7 +225,7 @@ defmodule CyfrWeb.Endpoint do
   # therefore not parsed, and a multipart request is refused 415 before
   # any byte of its body is read: every body the parsers read passes
   # RawBodyReader, whose caps hold for webhooks, the directory, the
-  # restore ingress and a renewal.
+  # restore ingress, a renewal and the setup status read.
   #
   # `/mcp`'s body is not read here. Its pipeline (`Emissary.Router`)
   # parses it under the same options, answered in JSON-RPC, only after

@@ -60,6 +60,12 @@
           ":fetch_session",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
+        "setup_status" => [
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "Emissary.Web.Plugs.LocalOnly",
+          ":accepts",
+          "CyfrWeb.Plugs.AuthRateLimit"
+        ],
         "tincture" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -215,6 +221,15 @@
           auth: "public_health",
           live_view: nil,
           pipe_through: ["api", "health_throttle"]
+        },
+        %{
+          verb: "POST",
+          path: "/api/setup/status",
+          plug: "Emissary.Web.SetupStatusController",
+          plug_opts: ":status",
+          auth: "setup_token",
+          live_view: nil,
+          pipe_through: ["setup_status"]
         },
         %{
           verb: "GET",

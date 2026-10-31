@@ -20,7 +20,12 @@
 #            again." with no recovery code and no way into CYFR, since the
 #            home's directory and registry are `.invalid` names
 #            (compose.yml); the same link in another browser then closed,
-#            and the command exited 0, its address gone.
+#            and the command exited 0, its address gone. Setup's status
+#            route (POST /api/setup/status) is asked on the published
+#            loopback port before the person exists (the setup token open,
+#            an invalid token closed, a browser's Origin refused, no person
+#            made) and again after (both closed, the Origin refused, the
+#            person kept).
 #   refusal  `cyfr setup` again in that project: exit 1 with the sentence
 #            of an existing home, which points at `cyfr access`, nothing
 #            written and nothing served at the port asked for.
@@ -30,7 +35,11 @@
 #            under it joins again as that name, a new link; the approval in
 #            the stand-in; the page names the machine, the home is served
 #            through Serve at its name, and the Done page shows that
-#            ts.net address with its sentence and does not move.
+#            ts.net address with its sentence and does not move. The
+#            status route refuses the setup token through Serve, onto the
+#            proxy listener, with or without headers claiming loopback,
+#            while the same token opens it on the loopback port, and no
+#            service of the project logs the token.
 #
 # Usage: tests/setup-proof/run.sh
 # Env: SETUP_PROOF_IMAGE (default cyfr:setup-proof), built from this tree
@@ -194,10 +203,58 @@ waiting_join() {
   printf '{"error":"no join container of %s waited for approval within 180 s"}\n' "$CASE_PROJECT"
 }
 
+# The JSON `$1`, or {"error": ...} when it is empty: what proof.mjs reads.
+one_answer() {
+  if [ -n "$1" ]; then printf '%s\n' "$1"; else echo '{"error":"no answer"}'; fi
+}
+
+# POST /api/setup/status at CASE_PROJECT's loopback port under the token
+# `$1`, with curl's arguments `$2...`, as {status, body}. The token goes to
+# curl on its standard input, so no process list shows it.
+status_local() {
+  local token="$1" port code
+  shift
+  port="$(env_value "$CASE_PROJECT" CYFR_PORT)"
+  code="$(printf 'Authorization: Bearer %s\n' "$token" | curl -sS --max-time 10 -o "$WORK/status.body" -w '%{http_code}' \
+    -H @- -H 'Content-Type: application/json' -d '{"version":1}' "$@" "http://127.0.0.1:$port/api/setup/status" || true)"
+  python3 -I -c 'import json, sys; print(json.dumps({"status": int(sys.argv[1] or 0), "body": open(sys.argv[2]).read()}))' \
+    "$code" "$WORK/status.body"
+}
+
+# The status route's answers on the loopback port and how many people
+# CASE_PROJECT holds once they are given, as JSON.
+status_report() {
+  local token setup invalid origin people
+  token="$(env_value "$CASE_PROJECT" CYFR_SETUP_TOKEN)"
+  setup="$(status_local "$token")"
+  invalid="$(status_local "$(printf '%064d' 0)")"
+  origin="$(status_local "$token" -H "Origin: http://localhost:$(env_value "$CASE_PROJECT" CYFR_PORT)")"
+  people="$(docker exec -u app "$(compose_in "$CASE_PROJECT" ps -q cyfr)" /app/bin/cyfr rpc \
+    'IO.puts(Arca.Repo.aggregate(Arca.Schemas.User, :count))')"
+  printf '{"setup":%s,"invalid":%s,"origin":%s,"people":%s}\n' "$setup" "$invalid" "$origin" "${people:-null}"
+}
+
+# The status route under the setup token from a device on the tailnet,
+# through Serve onto the proxy listener at the name `$1`, with and without
+# headers that claim loopback, beside the same token on the loopback port.
+status_through_serve() {
+  local name="$1" token local_answer plain claimed
+  local -a post
+  token="$(env_value "$CASE_PROJECT" CYFR_SETUP_TOKEN)"
+  local_answer="$(status_local "$token")"
+  post=(--ca /ca.pem --connect tailscale:443 --method POST --header "authorization: Bearer $token"
+    --header 'content-type: application/json' --body '{"version":1}')
+  plain="$(standin_fetch "${post[@]}" "https://$name/api/setup/status")"
+  claimed="$(standin_fetch "${post[@]}" --header 'x-forwarded-for: 127.0.0.1' --header 'x-cyfr-ingress: loopback' \
+    "https://$name/api/setup/status")"
+  printf '{"local":%s,"plain":%s,"claimed":%s}\n' "$local_answer" "$(one_answer "$plain")" "$(one_answer "$claimed")"
+}
+
 # The proof's asks: `join` (the waiting join container, not `not`),
-# `approve` (the person's approval of `container` in the stand-in) and
+# `approve` (the person's approval of `container` in the stand-in),
 # `served` (the home through Serve at `name`, from a device on the
-# tailnet).
+# tailnet), `status` (setup's status route on the loopback port) and
+# `status_serve` (that route through Serve at `name`).
 dispatch() {
   local request op name answer
   request="$(cat "$1")"
@@ -216,10 +273,23 @@ dispatch() {
       name="$(jget "$request" name)"
       ANSWER="$(served "$name")"
       ;;
+    status)
+      ANSWER="$(status_report)"
+      ;;
+    status_serve)
+      ANSWER="$(status_through_serve "$(jget "$request" name)")"
+      ;;
     *)
       ANSWER="{\"error\":\"no ask named $op\"}"
       ;;
   esac
+}
+
+# `standin fetch` `$@` from a container of the stand-in on proof-tailnet,
+# trusting CASE_PROJECT's authority, as fetch's JSON line.
+standin_fetch() {
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-fetch-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network "${CASE_PROJECT}_proof-tailnet" -v "$WORK/$CASE_PROJECT.ca.pem:/ca.pem:ro" "$STANDIN_IMAGE" \
+    standin fetch "$@" 2>/dev/null | sed -n '/^{/p' | tail -1 || true
 }
 
 # The home of CASE_PROJECT through Serve at the name `$1`, from a device on
@@ -232,8 +302,7 @@ served() {
   [ -n "$ts" ] || { echo '{"error":"no tailscale container runs"}'; return; }
   docker exec "$ts" standin ca >"$WORK/$CASE_PROJECT.ca.pem" || { echo '{"error":"the stand-in has no authority"}'; return; }
   while [ "$SECONDS" -lt "$closes" ]; do
-    answer="$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-fetch-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network "${CASE_PROJECT}_proof-tailnet" -v "$WORK/$CASE_PROJECT.ca.pem:/ca.pem:ro" "$STANDIN_IMAGE" \
-      standin fetch --ca /ca.pem --connect tailscale:443 "https://$name/api/health" 2>/dev/null | sed -n '/^{/p' | tail -1 || true)"
+    answer="$(standin_fetch --ca /ca.pem --connect tailscale:443 "https://$name/api/health")"
     if [ -n "$answer" ] && [ "$(jget "$answer" status)" = 200 ]; then
       break
     fi
@@ -327,6 +396,11 @@ setup_wait 120
 [ "$SETUP_STATUS" = 0 ] || fail "cyfr setup exited $SETUP_STATUS: $(tail -n 30 "$WORK/$TAILNET.setup.log")"
 [ "$(env_value "$TAILNET" CYFR_ACCESS)" = tailnet ] || fail ".env says the home is reached as $(env_value "$TAILNET" CYFR_ACCESS)"
 [ "$(env_value "$TAILNET" CYFR_HOST)" = proofhome.proof.ts.net ] || fail ".env's host is $(env_value "$TAILNET" CYFR_HOST)"
+token="$(env_value "$TAILNET" CYFR_SETUP_TOKEN)"
+[[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail ".env holds no setup token of 64 lowercase hexadecimal characters"
+if compose_in "$TAILNET" logs --no-color 2>&1 | grep -qF "$token"; then
+  fail "a service of the tailnet home logged the setup token"
+fi
 ok "the home is served at https://proofhome.proof.ts.net, and cyfr setup exited 0"
 
 echo
