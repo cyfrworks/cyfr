@@ -221,24 +221,6 @@ defmodule PrismWeb.SystemLayerTest do
     %{view: view, ctx: ctx, user: user}
   end
 
-  # A platform administrator's page, the layer the Settings page mounts.
-  defp signed_in_admin(%{conn: conn}) do
-    user = test_user()
-    {:ok, _} = Sanctum.TestContext.ensure_platform(user.user_id)
-    %{view: view, ctx: ctx} = signed_in(%{conn: conn}, user)
-    %{view: view, ctx: %{ctx | platform_admin: true}, user: user}
-  end
-
-  defp signed_in(%{conn: conn}, user) do
-    conn = log_in_user(conn, user)
-    athanor = seated_athanor()
-
-    {:ok, view, _html} =
-      live_isolated(conn, Host, session: %{"athanor_id" => athanor.id, "test" => self()})
-
-    %{view: view, ctx: person_context(user, athanor)}
-  end
-
   # A tincture's context entered onto the guest plane: a client with no
   # person behind it who can give a proof.
   defp none_client(%{conn: conn}) do
@@ -4881,212 +4863,11 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # An instance entry's value
+  # Where a credential goes, and the sharing sheet's shape
   # ---------------------------------------------------------------------------
 
-  describe "an instance entry's value" do
-    setup :signed_in_admin
-
-    @instance_destination %{
-      "hosts" => ["api.example.com"],
-      "scheme" => "https",
-      "methods" => ["GET", "POST"],
-      "paths" => ["/v1/chat/completions", "/v1/models"]
-    }
-
-    # What the administrator's card collected for a new entry: everything
-    # but the value.
-    defp instance_arguments(name, over \\ %{}) do
-      Map.merge(
-        %{
-          "name" => name,
-          "kind" => "api_key",
-          "provider_hint" => "example.com",
-          "destination" => @instance_destination,
-          "component_policy" => "shipped",
-          "audience" => "everyone",
-          "members" => []
-        },
-        over
-      )
-    end
-
-    defp instance_value(id, name, operation, arguments, field \\ "API_KEY") do
-      %{
-        id: id,
-        kind: :credential_entry,
-        action: :credential_entry,
-        subject: %{
-          name: name,
-          field: field,
-          target: :instance,
-          operation: operation,
-          arguments: arguments
-        }
-      }
-    end
-
-    defp instance_entry(name) do
-      {:ok, entries} = Arca.InstanceEntries.list(Prima.Actor.system())
-      Enum.find(entries, &(&1.name == name))
-    end
-
-    test "the key goes to instance_entry.create with the card's arguments, once its record " <>
-           "is confirmed, and is held nowhere",
-         %{view: view, ctx: ctx, user: user} do
-      authenticator = Sanctum.TestContext.passkey!(user.user_id)
-      name = "instance-layer-#{System.unique_integer([:positive])}"
-      secret = "sk-instance-layer-#{System.unique_integer([:positive])}-sentinel"
-
-      html = prompt(view, instance_value("ie1", name, :create, instance_arguments(name)))
-
-      # The value alone is asked: the card named where it goes, and an
-      # instance entry is never disclosed.
-      assert has_element?(view, ~s(form#system-layer-credential[data-target="instance"]))
-      assert has_element?(view, ~s(input#system-layer-secret[type="password"][name="secret"]))
-      refute has_element?(view, ~s(input[name="destination_hosts"]))
-      refute has_element?(view, ~s(input[name="disclose"]))
-      assert html =~ "Enter the key for the instance entry #{name}"
-
-      assert has_element?(
-               view,
-               ~s([data-test="credential-attach"]),
-               "CYFR attaches it to requests bound for the entry's destination"
-             )
-
-      assert has_element?(
-               view,
-               ~s(button[form="system-layer-credential"]),
-               "Save to this instance"
-             )
-
-      submit = fn ->
-        view |> form("#system-layer-credential", %{"secret" => secret}) |> render_submit()
-      end
-
-      submit.()
-
-      # Waiting on its record: nothing created, and the value nowhere.
-      no_outcome("ie1")
-      assert render(view) =~ ~s(data-status="waiting")
-      assert instance_entry(name) == nil
-
-      assert {:ok, [%{ref: ref, operation: "instance_entry.create"}]} =
-               Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
-
-      refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
-               secret
-
-      prove_here!(view, ref, authenticator)
-      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
-
-      submit.()
-      assert outcome("ie1") == :confirmed
-      assert open_prompt(view) == nil
-
-      entry = instance_entry(name)
-      assert entry.provider_hint == "example.com"
-      assert entry.component_policy == "shipped"
-      # Attach-only is what an instance entry is: its view says so and its
-      # row stores no such column.
-      assert entry.audience == "everyone"
-      assert Jason.decode!(entry.field_names) == ["API_KEY"]
-      assert Jason.decode!(entry.destination) == @instance_destination
-
-      refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
-               secret
-
-      refute render(view) =~ secret
-      refute logged() =~ secret
-    end
-
-    test "a rotation's key goes to instance_entry.rotate of the entry the card named, " <>
-           "under its own confirmation",
-         %{view: view, ctx: ctx, user: user} do
-      authenticator = Sanctum.TestContext.passkey!(user.user_id)
-      name = "instance-rotate-#{System.unique_integer([:positive])}"
-
-      params = %{
-        name: name,
-        kind: "api_key",
-        provider_hint: "example.com",
-        fields: %{"API_KEY" => "sk-first"},
-        destination: @instance_destination,
-        audience: "everyone"
-      }
-
-      admin =
-        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
-          operation: "instance_entry.create",
-          arguments: params,
-          resource: name
-        })
-
-      {:ok, created} = Sanctum.InstanceEntries.create(admin, params)
-      arguments = %{"entry_id" => created.id, "expected_payload_rev" => created.payload_rev}
-
-      prompt(view, instance_value("ie2", name, :rotate, arguments))
-      assert render(view) =~ "Rotate the instance entry #{name}"
-
-      submit = fn ->
-        view |> form("#system-layer-credential", %{"secret" => "sk-rotated"}) |> render_submit()
-      end
-
-      submit.()
-
-      assert {:ok, [%{ref: ref, operation: "instance_entry.rotate"}]} =
-               Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
-
-      assert instance_entry(name).payload_rev == created.payload_rev
-
-      prove_here!(view, ref, authenticator)
-      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
-      submit.()
-
-      assert outcome("ie2") == :confirmed
-      assert instance_entry(name).payload_rev == created.payload_rev + 1
-    end
-
-    test "an empty key is asked for again and dispatches nothing", %{view: view, ctx: ctx} do
-      name = "instance-empty-#{System.unique_integer([:positive])}"
-      prompt(view, instance_value("ie3", name, :create, instance_arguments(name)))
-
-      html = view |> form("#system-layer-credential", %{"secret" => " "}) |> render_submit()
-
-      assert html =~ "Enter the credential to save it."
-      no_outcome("ie3")
-      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
-    end
-
-    test "a subject that carries a value, names another operation or mixes in a grant's " <>
-           "prefill is no prompt" do
-      valid = instance_value("v", "n", :create, instance_arguments("n"))
-      assert {:ok, %{subject: %{target: :instance, operation: :create}}} = Prompt.validate(valid)
-
-      rotate =
-        instance_value("v", "n", :rotate, %{"entry_id" => "ine_1", "expected_payload_rev" => 0})
-
-      assert {:ok, %{subject: %{operation: :rotate}}} = Prompt.validate(rotate)
-
-      for subject <- [
-            %{
-              valid.subject
-              | arguments: Map.put(instance_arguments("n"), "fields", %{"K" => "v"})
-            },
-            %{valid.subject | arguments: Map.put(instance_arguments("n"), "secret", "v")},
-            %{valid.subject | arguments: Map.delete(instance_arguments("n"), "name")},
-            %{valid.subject | operation: :delete},
-            %{valid.subject | target: :elsewhere},
-            Map.put(valid.subject, :athanor_id, "ath_1"),
-            %{rotate.subject | arguments: %{"entry_id" => "ine_1"}},
-            %{rotate.subject | arguments: %{"entry_id" => "ine_1", "expected_payload_rev" => -1}},
-            Map.delete(valid.subject, :arguments)
-          ] do
-        assert {:error, :invalid_prompt} = Prompt.validate(%{valid | subject: subject}),
-               inspect(subject)
-      end
-
-      # Naming the vault, or nothing, is the vault's prompt as before.
+  describe "a credential entry's prompt" do
+    test "goes to the person's own vault alone: a prompt naming any other target is none" do
       vault = %{
         id: "v",
         kind: :credential_entry,
@@ -5094,10 +4875,50 @@ defmodule PrismWeb.SystemLayerTest do
         subject: %{name: "n"}
       }
 
-      assert {:ok, %{subject: %{name: "n", field: "API_KEY"}}} = Prompt.validate(vault)
+      assert {:ok, %{subject: %{name: "n", field: "API_KEY"} = subject}} = Prompt.validate(vault)
+      refute Map.has_key?(subject, :target)
 
-      assert {:ok, %{subject: %{target: :vault}}} =
-               Prompt.validate(put_in(vault.subject[:target], :vault))
+      instance = %{
+        target: :instance,
+        operation: :create,
+        arguments: %{"name" => "n", "provider_hint" => "openai.com"}
+      }
+
+      for subject <- [
+            Map.merge(vault.subject, instance),
+            Map.put(vault.subject, :target, :instance),
+            Map.put(vault.subject, :target, :vault)
+          ] do
+        assert {:error, :invalid_prompt} = Prompt.validate(%{vault | subject: subject}),
+               inspect(subject)
+      end
+    end
+  end
+
+  describe "the sharing sheet's prompt" do
+    @share %{
+      id: "share-vlt_1",
+      kind: :share,
+      action: :credential_sharing,
+      subject: %{entry_id: "vlt_1", name: "market key", groups: [%{id: "ath_g", name: "Traders"}]}
+    }
+
+    test "names the entry and the person's groups, under credential_sharing alone" do
+      assert {:ok, @share} = Prompt.validate(@share)
+      assert {:ok, _} = Prompt.validate(put_in(@share.subject.groups, []))
+
+      for prompt <- [
+            %{@share | action: :credential_entry},
+            %{@share | action: nil},
+            put_in(@share.subject[:value], "sk-1"),
+            put_in(@share.subject[:audience], "everyone"),
+            put_in(@share.subject.groups, [%{id: "ath_g"}]),
+            put_in(@share.subject.groups, [%{id: "", name: "Traders"}]),
+            put_in(@share.subject.entry_id, ""),
+            update_in(@share.subject, &Map.delete(&1, :name))
+          ] do
+        assert {:error, :invalid_prompt} = Prompt.validate(prompt), inspect(prompt)
+      end
     end
   end
 
@@ -5953,6 +5774,13 @@ defmodule PrismWeb.SystemLayerTest do
         sign_in: {sign_in("k-sign-in"), "Sign in to go on."},
         credential_entry:
           {credential("k-credential", "probe"), "The value goes straight to your vault"},
+        share:
+          {%{
+             id: "k-share",
+             kind: :share,
+             action: :credential_sharing,
+             subject: %{entry_id: "vlt_k", name: "probe", groups: []}
+           }, "Offer this key to everyone on this CYFR or to one of your groups"},
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
            "Pair a phone or another browser with this CYFR"},
