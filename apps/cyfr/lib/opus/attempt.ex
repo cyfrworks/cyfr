@@ -423,10 +423,11 @@ defmodule Opus.Attempt do
   Attach the caller's runner, whose claim on the attempt row is written
   (`Arca.ExecutionAttempts.claim/4`), and answer what the run's vault edge
   discloses: the fields of a disclosed entry's projection, or a publisher's
-  provided values. An attach-only entry and an instance entry disclose
-  nothing (CYFR attaches their value to the requests the guest names a
-  connection on), and neither does an edge that grants none: each answers
-  an empty map.
+  provided values. An attach-only entry, an instance entry and a share
+  disclose nothing (CYFR attaches their value to the requests the guest
+  names a connection on), and neither does an edge that grants none: each
+  answers an empty map. An edge whose binding scope is none of these
+  closes the run `setup_required`, never read as an entry of its own.
 
   The first attach unseals the edge while its consent is still the
   profile's head, holds a disclosed binding to its lifetime (a `once`
@@ -1156,19 +1157,23 @@ defmodule Opus.Attempt do
   end
 
   # What the edge discloses to the runner. A publisher's provided values
-  # are public and handed over whole. An instance entry is never
-  # disclosed, and an attach-only entry's fields are refused by the vault
-  # reader before anything is unsealed: CYFR attaches either to the
+  # are public and handed over whole. An instance entry and a share are
+  # never disclosed, and an attach-only entry's fields are refused by the
+  # vault reader before anything is unsealed: CYFR attaches each to the
   # requests the guest names a connection on, and the run goes on with
-  # nothing handed over. A key or bundle edge's fields are read here; an
-  # OAuth edge that names only scopes reads none, its token flowing
-  # through the dispense call under those scopes. An anonymous caller is
-  # refused at attach on either, as the vault reader refuses it on a field
-  # read.
+  # nothing handed over. A key or bundle edge of the athanor's own entry
+  # has its fields read here; an OAuth edge that names only scopes reads
+  # none, its token flowing through the dispense call under those scopes.
+  # An anonymous caller is refused at attach on either, as the vault
+  # reader refuses it on a field read. A scope this list does not name
+  # discloses nothing and closes the run: it is never read as the
+  # athanor's own entry.
   defp disclosed(_state, %{provided: %{values: values}}), do: {:ok, values}
-  defp disclosed(_state, %{scope: "instance"}), do: {:ok, %{}}
+  defp disclosed(_state, %{scope: scope}) when scope in ["instance", "share"], do: {:ok, %{}}
+  defp disclosed(state, %{scope: "athanor"} = vault), do: own_disclosed(state, vault)
+  defp disclosed(_state, _unknown_scope), do: {:setup_required, :connection_not_granted}
 
-  defp disclosed(%__MODULE__{close: close} = state, vault) do
+  defp own_disclosed(%__MODULE__{close: close} = state, vault) do
     cond do
       reads_fields?(vault) ->
         case Sanctum.VaultReader.fetch(close.ctx, vault, dispense_use(state)) do

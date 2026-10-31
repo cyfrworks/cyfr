@@ -322,6 +322,40 @@ defmodule Opus.AttemptMaskingTest do
       assert %{secrets: secrets} = AttemptFixtures.attached!(ctx: ctx, authority: instance)
       assert secrets == %{}
     end
+
+    test "a share is never disclosed, and an edge of a scope none names closes the run" do
+      ctx = Sanctum.TestContext.local(:api)
+      vault = %{kind: "api_key", fields: %{"KEY" => "k"}}
+
+      # Attach reads the edge the attempt holds: each case rewrites it there,
+      # over an attempt opened on the athanor's own disclosed entry.
+      rescoped = fn change ->
+        fixture = AttemptFixtures.attached!(ctx: ctx, vault: vault, attach: false)
+
+        :sys.replace_state(fixture.pid, fn state ->
+          update_in(state.authority.resources.vault, change)
+        end)
+
+        {fixture, AttemptFixtures.call(fixture, "attach", %{"assignment" => fixture.assignment})}
+      end
+
+      # A share's edge names the share and its scope; CYFR attaches its
+      # owner's key and hands the guest nothing.
+      {_share, answer} = rescoped.(&%{&1 | entry_id: "shr_never", scope: "share"})
+      assert %{"ok" => secrets} = answer
+      assert secrets == %{}
+
+      # The athanor's own disclosed entry, under a scope no clause names, is
+      # never read as the athanor's own: nothing is handed over and the run
+      # closes setup_required.
+      {unknown, answer} = rescoped.(&%{&1 | scope: "elsewhere"})
+
+      assert %{"error" => "setup_required", "payload" => %{"reason" => "connection_not_granted"}} =
+               answer
+
+      assert {:error, {:setup_required, %{reason: :connection_not_granted}}} =
+               AttemptWaiter.await(unknown.pid, unknown.close)
+    end
   end
 
   # ---------------------------------------------------------------------------
