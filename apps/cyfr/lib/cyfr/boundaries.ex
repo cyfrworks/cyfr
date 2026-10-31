@@ -489,9 +489,11 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
           "`Sanctum.Shares` is the kinds a share announces, which the telemetry catalog " <>
-          "reads at compile time rather than spell them again (`kinds/0`), and " <>
+          "reads at compile time rather than spell them again (`kinds/0`); " <>
           "`Cyfr.RetentionScheduler`'s periodic sweep of share usage days (`sweep_usage/0`), " <>
-          "which names no share and no person. " <>
+          "which names no share and no person; and the composition root's announcement of " <>
+          "the shares a declared restore revoked, from what its transition answered " <>
+          "(`announce_each/3`). " <>
           "`Sanctum.Decisions` is `Cyfr.RetentionScheduler`'s purge of the host's own " <>
           "decisions, the rows without a tenant, under the platform's system actor " <>
           "(`purge_global/2`), which reaches no athanor's row, and the decision an entry " <>
@@ -2084,7 +2086,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
-    "Sanctum.Shares" => [sweep_usage: 0],
+    "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SignIn" => [
       link_ticket: 2,
       record_claim: 2,

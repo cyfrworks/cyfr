@@ -767,6 +767,39 @@ defmodule Cyfr.TelemetryBridgeTest do
     end
   end
 
+  # A share's recipients live in other athanors: each hears what its owner
+  # did on the one global topic, as the share and the kind, and reads what
+  # it is offered again under its own context.
+  describe "a share its owner revokes" do
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
+    test "reaches a recipient subscribed to the shares topic as its id and kind alone" do
+      terry = Arca.Test.Shares.owner!()
+      entry = Arca.Test.Shares.entry!(terry.actor)
+      share = Arca.Test.Shares.share!(terry.actor, entry.id)
+
+      owner = %{
+        Sanctum.TestContext.local(:prism)
+        | user_id: terry.user.id,
+          athanor_id: terry.athanor.id
+      }
+
+      # The recipient is a process of its own, as Alice's page is.
+      relay(Bus.shares())
+
+      assert {:ok, %{affected: []}} = Sanctum.Shares.revoke(owner, share.id)
+
+      topic = Bus.shares()
+      share_id = share.id
+      assert_receive {:heard, ^topic, %ShareChanged{share_id: ^share_id} = heard}, 1_000
+      assert Map.from_struct(heard) == %{kind: :revoked, share_id: share_id}
+      refute_receive {:heard, ^topic, %ShareChanged{share_id: ^share_id}}, 100
+    end
+  end
+
   # The bridge's handlers run in the emitting process, this one, and the
   # PubSub dispatch sends from it: once `:telemetry.execute/3` returns,
   # every message the event put on a topic this test hears is already in

@@ -984,6 +984,40 @@ defmodule Cyfr.BoundariesTest do
                  "instance-entry usage days (`sweep_usage/0`), which names no entry and no person"
     end
 
+    # A share is Sanctum's to administer and resolve through declared
+    # operations and its own attach path: the host reaches it for the
+    # retention cycle's usage sweep, which names no share and no person,
+    # and for the composition root's announcement of the shares a declared
+    # restore revoked. The kinds the telemetry catalog derives are read at
+    # compile time, so no beam calls `kinds/0`.
+    test "the host reaches the shares for the usage sweep and the restore's announcement alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.Shares"] == [announce_each: 3, sweep_usage: 0]
+
+      reached =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            {"Sanctum.Shares", function, arity} <- sanctum_reaches(String.to_charlist(path)),
+            uniq: true,
+            do: {module_name(path), function, arity}
+
+      assert Enum.sort(reached) == [
+               {"Cyfr.Application", :announce_each, 3},
+               {"Cyfr.RetentionScheduler", :sweep_usage, 0}
+             ]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", allow: allow} = row <- Boundaries.surfaces(),
+                 "Sanctum.Shares" in allow,
+                 do: row
+               )
+
+      assert "apps/cyfr/lib/cyfr/**/*.ex" in row.from
+      assert row.reason =~ "`Sanctum.Shares` is the kinds a share announces"
+      assert row.reason =~ "sweep of share usage days (`sweep_usage/0`)"
+      assert row.reason =~ "a declared restore revoked"
+    end
+
     # The vault decides the value an attached request carries; the control
     # plane's transport is its one caller, and reaches nothing else of it.
     test "the host reaches the attach decision for resolve/5 alone, from the attached request" do

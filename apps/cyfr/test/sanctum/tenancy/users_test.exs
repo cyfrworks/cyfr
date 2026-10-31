@@ -301,6 +301,29 @@ defmodule Sanctum.Tenancy.UsersTest do
     do:
       athanor_id |> Members.list_by_athanor() |> rows!() |> Enum.filter(&(&1.status == "invited"))
 
+  # A denial revokes every share of the person's own athanor in its
+  # transaction, and each is announced once it committed, so recipients in
+  # other athanors read what they are offered again. No person acts.
+  test "deny announces every share it revoked, once" do
+    terry = Arca.Test.Shares.owner!()
+    share = Arca.Test.Shares.share!(terry.actor, Arca.Test.Shares.entry!(terry.actor).id)
+    {:ok, u} = Users.get(terry.user.id)
+
+    Sanctum.Test.ShareAnnouncements.listen()
+    assert {:ok, %{status: "denied"}} = Users.deny(u)
+
+    share_id = share.id
+
+    assert_receive {:share_announced, :revoked,
+                    %{share_id: ^share_id, kind: :revoked, user_id: nil}}
+
+    refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
+
+    # A denial again finds no active share, and announces none.
+    assert {:ok, _} = Users.deny(u)
+    refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
+  end
+
   test "revalidate drops a denied person's session context to unauthenticated" do
     u = person(5)
 

@@ -83,6 +83,26 @@ defmodule Cyfr.ReleaseTest do
       assert is_binary(restore_id)
     end
 
+    # The transition revokes every active share on the server, and the
+    # step announces each once it committed, before the gate opens, so the
+    # recipients' pages read what they are offered again. No person acts.
+    test "the boot's step announces every share the restore revoked, once" do
+      terry = Arca.Test.Shares.owner!()
+      share = Arca.Test.Shares.share!(terry.actor, Arca.Test.Shares.entry!(terry.actor).id)
+      _restore_id = Cyfr.Release.mark_restore()
+
+      Sanctum.Test.ShareAnnouncements.listen()
+      assert :ignore = Cyfr.Application.declared_restore()
+
+      share_id = share.id
+
+      assert_receive {:share_announced, :revoked,
+                      %{share_id: ^share_id, kind: :revoked, user_id: nil}}
+
+      refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
+    end
+
     test "a step whose transition fails refuses the boot and keeps the marker" do
       restore_id = Cyfr.Release.mark_restore()
       name = "release_restore_fail"
