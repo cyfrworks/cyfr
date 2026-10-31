@@ -11,7 +11,9 @@
 # in the background is shown and asked again; a version that only rewords
 # its need's reason asks nothing; a version that lets one more class reach
 # the host the person kept is asked again, the new flow ticked and granted
-# under the digest the command line previews; and a revocation is measured
+# under the digest the command line previews; a key a second person shares
+# with everyone is picked for the tincture's need on the grant prompt and
+# the tincture's attached request carries it; and a revocation is measured
 # at admission.
 #
 # The proof asks the server for its part through the output directory
@@ -116,9 +118,14 @@ printf '%s' "$published" | grep -q '"version":"1.0.0"' || fail "grant-probe was 
 filed="$(grant_fixture file "$user_id" data/probe/notes/today.md)"
 printf '%s' "$filed" | grep -q 'data/probe/notes' || fail "the probe's folder was not written: $filed"
 
+# The destination a question names, as JSON.
+destination() {
+  python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$1"
+}
+
 # Each step the proof asks for (harness.sh `answer_asks`).
 answer_ask() {
-  local ask="$1" id="$2" op decisions
+  local ask="$1" id="$2" op decisions opened owner
   op="$(asked "$ask" op)"
   case "$op" in
     head) ANSWER="$(grant_fixture head "$user_id" "$REF")" ;;
@@ -129,6 +136,29 @@ answer_ask() {
       ;;
     revoke)
       ANSWER="$(grant_fixture revoke "$user_id" "$token" "$(asked "$ask" profile_id)" "$REF")"
+      ;;
+    owner)
+      # The owner of the shared key: a second person, signed in once the
+      # door admits newcomers (fixture.exs `door`), through the release
+      # fixture's door as the first person was.
+      opened="$(grant_fixture door "$token")"
+      printf '%s' "$opened" | grep -q '"door":"\*"' || fail "the door did not open to newcomers: $opened"
+      owner="$(server_fixture "$CELL" person owner@example.com grant-proof-owner Olive)"
+      [ -n "$owner" ] || fail "the fixture signed the owner in"
+      ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$owner")"
+      ;;
+    share)
+      ANSWER="$(grant_fixture share "$(asked "$ask" owner)" "$(destination "$ask")")"
+      ;;
+    me)
+      ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$person")"
+      ;;
+    requested) ANSWER="$(grant_fixture requested "$(destination "$ask")")" ;;
+    clock) ANSWER="$(grant_fixture clock)" ;;
+    shared) ANSWER="$(grant_fixture shared "$user_id" "$REF" "$(asked "$ask" share_id)")" ;;
+    attach)
+      ANSWER="$(grant_fixture attach "$token" "$REF" "$(asked "$ask" owner)" "$(asked "$ask" entry_id)" \
+        "$(asked "$ask" url)" "$(asked "$ask" method)")"
       ;;
     cli_preview)
       # The command line's preview of exactly the decisions the proof

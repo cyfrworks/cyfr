@@ -28,6 +28,14 @@
 //                that exit with the class unticked; ticked and granted, the
 //                head holds the flow, under the digest the command line
 //                previews for the same decisions
+//   share        a key a second person shares with everyone: on the grant
+//                prompt the person picks it for the tincture's key need,
+//                and the head is the flows head one revision on under the
+//                digest the command line previews for the same decisions;
+//                its binding row, the share and its use rows are held whole,
+//                and the tincture's attached request to the entry's
+//                destination carries the owner's key in the rule's header,
+//                one off it is refused, and one use is counted
 //   revocation   the profile revoked in the console: the next admission is
 //                refused for want of a profile, timed from the revocation's
 //                answer, and the answer is held whole
@@ -45,8 +53,8 @@ import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
-  REVOKE_BOUND_US, changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld,
-  revokedHeld, sameHead, sameSet,
+  REVOKE_BOUND_US, attachCopies, attachHeld, changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies,
+  previewHeld, regrantHeld, revokedHeld, rowCopies, rowsHeld, sameHead, sameSet,
 } from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
@@ -67,6 +75,14 @@ const GRANT_DESCRIBED = "Approve what this app may use and reach";
 // What the loader answers once the person's one owner profile is revoked:
 // no profile to admit under (fixture.exs `admit`).
 const REVOKED = ":no_profile";
+// The owner's key the share step offers: where it may go, as its owner's
+// request names it, the header the tincture's need attaches it by, the
+// owner's display name and the URLs the tincture's requests name.
+const FEED = { scheme: "https", hosts: [KEPT], methods: ["GET"], paths: ["/feed"] };
+const FEED_HEADER = "x-feed-token";
+const OWNER_NAME = "Olive";
+const FEED_URL = `https://${KEPT}/feed`;
+const OFF_FEED_URL = `https://${KEPT}/elsewhere`;
 const { homes } = readHomes(homesFile);
 const base = homes[0].origin;
 const components = `${base}/a/${encodeURIComponent(segment)}/components`;
@@ -119,6 +135,27 @@ function sheet(page) {
       origins,
       admits: admits ? admits.textContent.replace(/\s+/g, " ").trim() : null,
       text: root.textContent.replace(/\s+/g, " ").trim(),
+    };
+  }, layer);
+}
+
+// What the open sheet shows of the tincture's key need: each entry or share
+// offered for it, with its text, the share or entry it names and whether it
+// is pressed.
+function feedNeed(page) {
+  return page.evaluate((dialog) => {
+    const need = document.querySelector(`${dialog} [data-test="grant-need"][data-need="feed"]`);
+    if (!need) return { shown: false, picks: [] };
+    const text = (el) => el.textContent.replace(/\s+/g, " ").trim();
+    return {
+      shown: true,
+      text: text(need),
+      picks: [...need.querySelectorAll('[data-test="grant-pick"]')].map((b) => ({
+        text: text(b),
+        share_id: b.getAttribute("phx-value-share_id"),
+        entry_id: b.getAttribute("phx-value-entry_id"),
+        pressed: b.getAttribute("aria-pressed") === "true",
+      })),
     };
   }, layer);
 }
@@ -401,17 +438,120 @@ async function main() {
         preview_copies_refused: flowsPreviewCopies.map((copy) => !flowsPreviewHeld(copy)) })) return;
 
     // -----------------------------------------------------------------------
+    // share
+    // -----------------------------------------------------------------------
+    // A second person, Olive, signs in and shares a key for the tincture's
+    // key need with everyone (fixture.exs `share`, the step's one seed).
+    // Nothing of the person's head changes until they grant it.
+    const clock = await ask({ op: "clock" });
+    const me = await ask({ op: "me" });
+    const owner = await ask({ op: "owner" });
+    const seeded = await ask({ op: "share", owner: owner.user_id, destination: FEED });
+    const requested = await ask({ op: "requested", destination: FEED });
+    const unshared = await ask({ op: "admit" });
+    const beforeGrant = await ask({ op: "shared", share_id: seeded.share_id });
+    await openGrant(page);
+    const offeredSheet = await feedNeed(page);
+    const sharePick = offeredSheet.picks.find((p) => p.share_id === seeded.share_id);
+    if (sharePick && !sharePick.pressed) {
+      await page.locator(`${layer} [data-test="grant-need"][data-need="feed"] [data-test="grant-pick"]` +
+        `[phx-value-share_id="${seeded.share_id}"]`).click();
+    }
+    const pending = `${layer} [data-test="grant-need"][data-need="feed"] [data-test="grant-lifetime-pending"]`;
+    if (await page.locator(pending).count()) {
+      await page.locator(`${pending} button[data-lifetime="standing"]`).click();
+    }
+    const picked = await waitFor(async () => {
+      const shown = await sheet(page);
+      const credential = shown.rows.find((r) => r.kind === "credential" && r.text.includes(`Shared by ${OWNER_NAME}`));
+      return credential ? { shown, credential } : false;
+    }, { what: "the shared key's credential row" }).catch(() => null);
+    const pickedSheet = await feedNeed(page);
+    const bindingKey = picked ? (/Binding: (\S+)/.exec(picked.credential.text) || [])[1] : undefined;
+    const shareDecisions = {
+      ...flowsDecisions, bindings: [{ need: "feed", share_id: seeded.share_id, lifetime: { kind: "standing" } }],
+    };
+    const shareShown = await ask({ op: "cli_preview", decisions: shareDecisions });
+    if (picked) await confirm(page);
+    const shareHead = await ask({ op: "head" });
+    const granted4 = await ask({ op: "shared", share_id: seeded.share_id });
+    const carried = await ask({
+      op: "attach", owner: owner.user_id, entry_id: seeded.entry_id, url: FEED_URL, method: "GET",
+    });
+    const offFeed = await ask({
+      op: "attach", owner: owner.user_id, entry_id: seeded.entry_id, url: OFF_FEED_URL, method: "GET",
+    });
+    const used = await ask({ op: "shared", share_id: seeded.share_id });
+    const shareAdmitted = await ask({ op: "admit" });
+
+    // The model: what each stored row holds, from the step's own decisions
+    // and the ids its sources showed.
+    const bindingRow = {
+      consent_id: shareHead.consent_id, athanor_id: me.athanor_id, share_id: seeded.share_id,
+      binding_key: bindingKey, vault_entry_id: null, via_label: null, binding_digest: requested.binding_digest,
+      lifetime_kind: "standing", expires_at: null, consumed_by_root: null,
+    };
+    const shareRow = {
+      id: seeded.share_id, athanor_id: owner.athanor_id, vault_entry_id: seeded.entry_id, created_by: owner.user_id,
+      audience: "everyone", group_id: null, person_daily: null, total_daily: null, status: "active",
+    };
+    const useRow = (user_id) => ({ athanor_id: owner.athanor_id, share_id: seeded.share_id, user_id, count: 1 });
+    const windowOf = (read) => ({ from: clock.now, to: read.now, today: read.today });
+    const shareGrant = { before: flowHead, shape: flowHead.shape_digest, digest: shareShown.commit_digest };
+    const shareCopies = [...changedCopies(shareHead, DROPPED), ...digestCopies(shareHead, flowHead.commit_digest)];
+    const sharePreview = {
+      digest: shareHead.commit_digest, revision: flowHead.revision, origins: ["interactive"], domains: [KEPT],
+      paths: [PICKED],
+    };
+    const sharePreviewHeld = (answer) => previewHeld(answer, sharePreview);
+    const held = {
+      before: sameHead(unshared, { admitted: true, consent_id: flowHead.consent_id }) &&
+        rowsHeld("shares", beforeGrant.shares, [shareRow], windowOf(beforeGrant)) &&
+        rowsHeld("share_usage", beforeGrant.usage, [], windowOf(beforeGrant)),
+      offered: !!sharePick && sharePick.text.startsWith(`Shared by ${OWNER_NAME}`) &&
+        offeredSheet.picks.length === 1 && !!picked && typeof bindingKey === "string",
+      head: regrantHeld(shareHead, shareGrant) && shareCopies.every((copy) => !regrantHeld(copy, shareGrant)),
+      preview: sharePreviewHeld(shareShown) && previewCopies(shareShown, DROPPED).every((c) => !sharePreviewHeld(c)),
+      binding: rowsHeld("consent_vault_refs", granted4.bindings, [bindingRow], windowOf(granted4)) &&
+        rowCopies("consent_vault_refs", granted4.bindings)
+          .every((c) => !rowsHeld("consent_vault_refs", c, [bindingRow], windowOf(granted4))),
+      share: rowsHeld("shares", granted4.shares, [shareRow], windowOf(granted4)) &&
+        rowCopies("shares", granted4.shares).every((c) => !rowsHeld("shares", c, [shareRow], windowOf(granted4))),
+      carried: attachHeld(carried, { consent: shareHead.consent_id, header: FEED_HEADER }) &&
+        attachCopies(carried).every((c) => !attachHeld(c, { consent: shareHead.consent_id, header: FEED_HEADER })),
+      off_destination: attachHeld(offFeed, { consent: shareHead.consent_id, refusal: "destination_mismatch" }) &&
+        attachCopies(offFeed)
+          .every((c) => !attachHeld(c, { consent: shareHead.consent_id, refusal: "destination_mismatch" })),
+      used: rowsHeld("share_usage", used.usage, [useRow(me.user_id), useRow("")], windowOf(used)) &&
+        rowCopies("share_usage", used.usage)
+          .every((c) => !rowsHeld("share_usage", c, [useRow(me.user_id), useRow("")], windowOf(used))) &&
+        rowsHeld("shares", used.shares, [shareRow], windowOf(used)) &&
+        rowsHeld("consent_vault_refs", used.bindings, [bindingRow], windowOf(used)),
+      admitted: sameHead(shareAdmitted, { admitted: true, consent_id: shareHead.consent_id }),
+    };
+    record.share = {
+      owner, seeded, requested, unshared, before: beforeGrant, offered: offeredSheet, picked: pickedSheet,
+      credential: picked && picked.credential.text, decisions: shareDecisions, preview: previewRecord(shareShown),
+      head: shareHead, granted: granted4, carried, off_destination: offFeed, used, admitted: shareAdmitted, held,
+    };
+    if (!row("share", Object.values(held).every(Boolean),
+      "a key a second person shares with everyone is offered on the grant prompt as shared by its owner and picked for the tincture's key need; the head is the flows head one revision on under the digest the command line previews for the same decisions; its binding row, the share and its use rows are held whole, every field exact, derived or bound; the tincture's attached request to the entry's destination carries the owner's key in the rule's header, one off it is refused destination_mismatch, one use is counted for the person and the day, and the run is admitted under the new head",
+      { held, offered: offeredSheet, credential: picked && picked.credential.text, head: shareHead,
+        digest: previewShown(shareShown), bindings: granted4.bindings, shares: granted4.shares, usage: used.usage,
+        carried, off_destination: offFeed, admitted: shareAdmitted })) return;
+
+    // -----------------------------------------------------------------------
     // revocation
     // -----------------------------------------------------------------------
     const revoked = await ask({ op: "revoke", profile_id: regranted.profile_id });
     record.revocation = revoked;
     // The answer held whole (`revokedHeld` in heads.mjs): admitted before under
-    // the flows head's consent, refused at the first admission after, and each
+    // the share head's consent, refused at the first admission after, and each
     // copy with one field changed or added refused.
-    const revocation = { consent: flowHead.consent_id, refusal: REVOKED, boundUs: REVOKE_BOUND_US };
+    const revocation = { consent: shareHead.consent_id, refusal: REVOKED, boundUs: REVOKE_BOUND_US };
     const revokedCopies = [
       { ...revoked, attempts: 2 },
-      { ...revoked, before: { admitted: true, consent_id: regranted.consent_id } },
+      { ...revoked, before: { admitted: true, consent_id: flowHead.consent_id } },
       { ...revoked, refused: { admitted: false, refusal: "consent_required" } },
       { ...revoked, refused_after_us: REVOKE_BOUND_US + 1 },
       { ...revoked, also: true },
@@ -433,7 +573,7 @@ async function main() {
 }
 
 main()
-  .then(() => process.exit(rows.length === 6 && rows.every((r) => r.held) ? 0 : 1))
+  .then(() => process.exit(rows.length === 7 && rows.every((r) => r.held) ? 0 : 1))
   .catch((error) => {
     console.error(error);
     process.exit(1);

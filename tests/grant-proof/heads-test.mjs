@@ -6,7 +6,9 @@
 // head the first grant commits (`grantedHeld`); the command line's preview of
 // a grant, whole (`previewHeld`); the head a re-grant commits, and the flows
 // grant's as one (`regrantHeld`, `flowsHeld`); and the revocation's answer
-// (`revokedHeld`). Each holds its object and refuses every copy that changes
+// (`revokedHeld`); the share step's stored rows, every field classified
+// (`rowsHeld`, `SHARE_FIELDS`), and what an attached request carried
+// (`attachHeld`). Each holds its object and refuses every copy that changes
 // it (`changedCopies`, `digestCopies`, `previewCopies`, which make no copy
 // equal to its object).
 //
@@ -15,8 +17,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  REVOKE_BOUND_US, changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld,
-  revokedHeld, sameHead,
+  REVOKE_BOUND_US, SHARE_FIELDS, attachCopies, attachHeld, changedCopies, digestCopies, flowsHeld, grantedHeld,
+  previewCopies, previewHeld, regrantHeld, revokedHeld, rowCopies, rowsHeld, sameHead,
 } from "./heads.mjs";
 
 const KEPT = "alpha.grant.test";
@@ -296,4 +298,68 @@ test("a revocation's answer with a field changed, missing or added is refused", 
   ];
   for (const copy of copies) assert.equal(revokedHeld(copy, revocation), false, JSON.stringify(copy));
   for (const answer of [null, undefined, [], "revoked"]) assert.equal(revokedHeld(answer, revocation), false);
+});
+
+const window = { from: "2026-10-31T10:00:00.000000Z", to: "2026-10-31T10:00:05.000000Z", today: "2026-10-31" };
+const inside = "2026-10-31T10:00:01.123456Z";
+const binding = {
+  consent_id: id("cons", 4), athanor_id: "ath_recipient", share_id: "shr_1", binding_key: "tincture:local.grant-probe|@ingress|default",
+  vault_entry_id: null, via_label: null, binding_digest: digest("5"), lifetime_kind: "standing", expires_at: null,
+  consumed_by_root: null,
+};
+const share = {
+  id: "shr_1", athanor_id: "ath_owner", vault_entry_id: "vlt_1", audience: "everyone", group_id: null,
+  person_daily: null, total_daily: null, status: "active", created_by: "usr_owner", inserted_at: inside, updated_at: inside,
+};
+const use = { athanor_id: "ath_owner", share_id: "shr_1", user_id: "usr_recipient", day: "2026-10-31", count: 1, updated_at: inside };
+const modelOf = (row) => Object.fromEntries(Object.entries(row).filter(([k]) => !["inserted_at", "updated_at", "day"].includes(k)));
+
+test("every field of the share step's tables is in exactly one class", () => {
+  for (const [table, { exact, derived, bound }] of Object.entries(SHARE_FIELDS)) {
+    const all = [...exact, ...derived, ...bound.ids, ...bound.times, ...bound.days];
+    assert.equal(new Set(all).size, all.length, table);
+  }
+  assert.deepEqual(Object.keys(binding).sort(), [...SHARE_FIELDS.consent_vault_refs.exact,
+    ...SHARE_FIELDS.consent_vault_refs.derived, ...SHARE_FIELDS.consent_vault_refs.bound.ids].sort());
+});
+
+test("the share step's rows are held whole against the model, times in the window and days today", () => {
+  assert.equal(rowsHeld("consent_vault_refs", [binding], [binding], window), true);
+  assert.equal(rowsHeld("shares", [share], [modelOf(share)], window), true);
+  const total = { ...use, user_id: "" };
+  assert.equal(rowsHeld("share_usage", [total, use], [modelOf(use), modelOf(total)], window), true);
+  assert.equal(rowsHeld("share_usage", [], [], window), true);
+});
+
+test("a row with a field added, missing or changed, a time out of the window, another day, or a row added or removed is refused", () => {
+  const cases = [
+    ["consent_vault_refs", [binding], [binding]],
+    ["shares", [share], [modelOf(share)]],
+    ["share_usage", [use, { ...use, user_id: "" }], [modelOf(use), modelOf({ ...use, user_id: "" })]],
+    ["share_usage", [], []],
+  ];
+  for (const [table, rows, models] of cases) {
+    const copies = rowCopies(table, rows);
+    assert.ok(copies.length > 0, table);
+    for (const copy of copies) assert.equal(rowsHeld(table, copy, models, window), false, `${table} ${JSON.stringify(copy)}`);
+  }
+  assert.equal(rowsHeld("shares", [{ ...share, inserted_at: "2026-10-31T09:59:59.999999Z" }], [modelOf(share)], window), false);
+  assert.equal(rowsHeld("shares", [{ ...share, updated_at: "yesterday" }], [modelOf(share)], window), false);
+});
+
+const carried = { admitted: true, consent_id: id("cons", 4), attached: true, in: "header", header: "x-feed-token", owner_key: true };
+const offDestination = { admitted: true, consent_id: id("cons", 4), attached: false, refusal: "destination_mismatch" };
+
+test("an attached request is held whole: the owner's key in the rule's header, or the refusal", () => {
+  assert.equal(attachHeld(carried, { consent: id("cons", 4), header: "x-feed-token" }), true);
+  assert.equal(attachHeld(offDestination, { consent: id("cons", 4), refusal: "destination_mismatch" }), true);
+  for (const copy of attachCopies(carried)) {
+    assert.equal(attachHeld(copy, { consent: id("cons", 4), header: "x-feed-token" }), false, JSON.stringify(copy));
+  }
+  for (const copy of attachCopies(offDestination)) {
+    assert.equal(attachHeld(copy, { consent: id("cons", 4), refusal: "destination_mismatch" }), false, JSON.stringify(copy));
+  }
+  for (const answer of [null, undefined, [], "carried"]) {
+    assert.equal(attachHeld(answer, { consent: id("cons", 4), header: "x-feed-token" }), false);
+  }
 });

@@ -20,6 +20,12 @@ defmodule Locus.Runtime.AttachedFetchTest do
   and everywhere the execution leaves a trace. A `once` binding, an
   `until` binding past its instant and a revoked entry each refuse the
   next root before an upstream request.
+
+  After a declared restore a share stands revoked and the run of the
+  person it was shared with is refused before an upstream request, until
+  its owner rotates the key, shares it again and the person grants it
+  again; and a newcomer's first sign-in binds nothing until the
+  platform administrator has shared their key with everyone again.
   """
 
   use ExUnit.Case, async: false
@@ -40,6 +46,8 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
   @secret "sk-attached-e1-canary-7f3a9c21d0"
   @shared_secret "sk-shared-e1-canary-5a7e2b90d4"
+  @rotated_secret "sk-shared-e1-rotated-3c81f6a2e9"
+  @model_secret "sk-model-e1-canary-9d42b7c1a6"
   @rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
 
   defmodule Upstream do
@@ -570,6 +578,271 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
     refute_received {:upstream, _request}
     assert share_used(terry, share) == %{alice.user.id => 2}
+  end
+
+  # ---------------------------------------------------------------------------
+  # A share across a declared restore
+  # ---------------------------------------------------------------------------
+
+  @model "catalyst:local.restore-model"
+  @inference %{
+    "hosts" => ["api.openai.com"],
+    "scheme" => "https",
+    "methods" => ["POST"],
+    "paths" => ["/v1/"]
+  }
+
+  # A shipped catalyst a newcomer's athanor is filled with, whose one need
+  # attaches an openai.com key: the need a first sign-in binds the
+  # administrator's share to everyone for. The seed tree is the test's own.
+  defp ship_model! do
+    seed = Cyfr.Test.SeedBundle.isolate!()
+    File.cp_r!(Path.expand("../../../../../seed/aqua", __DIR__), Path.join(seed, "aqua"))
+    unit = Path.join([seed, "components", "catalysts", "local", "restore-model", "1.0.0"])
+    File.mkdir_p!(unit)
+    File.write!(Path.join(unit, "catalyst.wasm"), Cyfr.Test.Guests.wasm(:catalyst))
+
+    File.write!(
+      Path.join(unit, "cyfr-manifest.json"),
+      Jason.encode!(%{
+        "name" => "restore-model",
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "hosts" => ["api.openai.com"],
+            "reason" => "to call the model",
+            "fields" => ["OPENAI_API_KEY"],
+            "attach" => %{
+              "in" => "header",
+              "name" => "Authorization",
+              "template" => "Bearer {value}"
+            }
+          }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
+      })
+    )
+  end
+
+  # A newcomer's first sign-in (`Sanctum.Provisioning.after_sign_in/1`):
+  # their athanor filled and the model catalyst minted. Answers the
+  # catalyst's head and its binding rows, as stored.
+  defp first_sign_in!(name) do
+    newcomer = person!(name)
+    assert :ok = Sanctum.Provisioning.after_sign_in(newcomer.user.id)
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(newcomer.actor, @model)
+    {:ok, head, refs} = Arca.ConsentStorage.get_head(newcomer.actor, profile.id)
+    {newcomer, head, refs}
+  end
+
+  # The first sign-in's one binding row: the administrator's share in the
+  # catalyst's default slot, standing, at the digest its entry derives.
+  defp model_bound(newcomer, head, share, entry) do
+    [
+      %{
+        consent_id: head.id,
+        athanor_id: newcomer.athanor.id,
+        binding_key: "#{@model}|@ingress|default",
+        vault_entry_id: nil,
+        share_id: share.id,
+        via_label: nil,
+        binding_digest: entry.binding_digest,
+        lifetime_kind: "standing",
+        expires_at: nil,
+        consumed_by_root: nil
+      }
+    ]
+  end
+
+  # `person`'s call of the gate's tool `tool`, as a person at Prism makes it.
+  defp gate!(person, tool, args) do
+    {:ok, answer} = Sanctum.Gate.call_external(tool, person.ctx, args)
+    answer
+  end
+
+  # `owner`'s shares, by id, each with its status, as the share tool lists them.
+  defp share_statuses(owner) do
+    owner
+    |> gate!("share", %{"action" => "list"})
+    |> Map.fetch!(:shares)
+    |> Map.new(&{&1.id, &1.status})
+  end
+
+  # The shares offered to `person`, by id, as the share tool answers them.
+  defp offered_ids(person) do
+    person |> gate!("share", %{"action" => "offered"}) |> Map.fetch!(:shares) |> Enum.map(& &1.id)
+  end
+
+  # `owner` rotates `entry` to the material `fields`, under the
+  # confirmation a rotation asks, through the vault tool.
+  defp rotate!(owner, entry, fields) do
+    %{entries: entries} = gate!(owner, "vault", %{"action" => "list"})
+    %{payload_rev: rev} = Enum.find(entries, &(&1.id == entry.id))
+
+    {:ok, _rotated} =
+      Sanctum.TestContext.confirming(
+        owner.ctx,
+        &Sanctum.Gate.call_external("vault", &1, %{
+          "action" => "rotate",
+          "id" => entry.id,
+          "fields" => fields,
+          "expected_payload_rev" => rev
+        })
+      )
+
+    :ok
+  end
+
+  # `owner` shares `entry` with `audience`, under the confirmation a share
+  # asks, through the share tool. Answers the share's id.
+  defp share_again!(owner, entry, audience) do
+    {:ok, %{share: %{id: id}}} =
+      Sanctum.TestContext.confirming(
+        owner.ctx,
+        &Sanctum.Gate.call_external(
+          "share",
+          &1,
+          Map.merge(%{"action" => "create", "entry_id" => entry.id}, audience)
+        )
+      )
+
+    id
+  end
+
+  # A run the restore left without a grant: refused at admission, since
+  # the restore blocked the profile the grant is held by, before its guest
+  # made any request; nothing reached the upstream, and nothing of either
+  # key crossed into the runner.
+  defp refused_before_request!(played) do
+    assert played.result == {:error, {:profile_unavailable, :needs_consent}}
+    assert TwoServices.calls(:attached_fetch, played.id) == []
+    refute_received {:upstream, _request}
+    assert_never_in_runner(played, @shared_secret)
+    assert_never_in_runner(played, @rotated_secret)
+  end
+
+  test "after a declared restore a share is revoked and its run refused until the key is " <>
+         "rotated, shared and granted again; a first sign-in binds nothing until it is shared",
+       %{port: port} do
+    ship_model!()
+
+    # Terry, the platform administrator, shares his key to the upstream
+    # with Traders, Alice's group and his, and his model key with
+    # everyone. Alice grants her own component his share and runs it.
+    terry = person!("Terry")
+    {:ok, _seat} = Sanctum.TestContext.ensure_platform(terry.user.id)
+    alice = person!("Alice")
+    traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, alice.athanor.id) end)
+    Sanctum.TestContext.ready!(alice.athanor.id)
+
+    share = shared!(terry, port, traders)
+    {:ok, entry} = Arca.VaultStorage.get(terry.actor, share.entry_id)
+
+    {:ok, model} =
+      Sanctum.TestContext.create_vault(terry.ctx, %{
+        name: "model-#{System.unique_integer([:positive])}",
+        kind: "api_key",
+        provider_hint: "openai.com",
+        fields: %{"OPENAI_API_KEY" => @model_secret},
+        destination: @inference
+      })
+
+    {:ok, model} = Arca.VaultStorage.get(terry.actor, model.id)
+    model_share = share_again!(terry, model, %{"audience" => "everyone"})
+
+    probe = publish_probe!(alice.ctx)
+    consent!(alice.ctx, probe, [%{need: "api_key", share_id: share.id}])
+
+    played = run!(alice.ctx, probe, request(port, "/hello"))
+    assert %{"status" => 200} = output!(played)
+    sent = upstream!()
+    assert sent.path == "/hello" and header(sent, "x-api-key") == [@shared_secret]
+    assert share_used(terry, share) == %{alice.user.id => 1}
+
+    # Before the restore a newcomer's first sign-in binds the
+    # administrator's share to everyone.
+    {pia, head, refs} = first_sign_in!("Pia")
+    assert refs == model_bound(pia, head, %{id: model_share}, model)
+
+    # The restore is declared as `cyfr restore` declares it, and the boot's
+    # step before the gate applies it.
+    assert is_binary(Cyfr.Release.mark_restore())
+    assert :ignore = Cyfr.Application.declared_restore()
+
+    # Both shares read revoked to their owner, nothing is offered to Alice,
+    # and her run is refused before its guest makes a request: no key is
+    # attached, counted or sent.
+    assert share_statuses(terry) == %{share.id => "revoked", model_share => "revoked"}
+    assert offered_ids(alice) == []
+    refused_before_request!(run!(alice.ctx, probe, request(port, "/hello")))
+    assert share_used(terry, share) == %{alice.user.id => 1}
+
+    # A first sign-in binds nothing: the administrator's share is revoked.
+    {_nia, _head, refs} = first_sign_in!("Nia")
+    assert refs == []
+
+    # Terry recovers his passkey, as a recovery re-enables it, and rotates
+    # both keys. A rotation revives neither share nor Alice's grant: the
+    # shares stay revoked, her run is refused, a first sign-in still binds
+    # nothing, and the revoked share cannot be granted again.
+    passkey = Arca.Repo.get_by!(Arca.Schemas.Passkey, user_id: terry.user.id)
+
+    {:ok, _reenabled} =
+      Arca.Passkeys.reenable(Prima.Actor.system(), terry.user.id, passkey.id,
+        verify: fn _passkey -> :ok end
+      )
+
+    :ok = rotate!(terry, entry, %{"KEY" => @rotated_secret})
+    :ok = rotate!(terry, model, %{"OPENAI_API_KEY" => @model_secret <> "-rotated"})
+
+    assert share_statuses(terry) == %{share.id => "revoked", model_share => "revoked"}
+    assert offered_ids(alice) == []
+    refused_before_request!(run!(alice.ctx, probe, request(port, "/hello")))
+    {_ned, _head, refs} = first_sign_in!("Ned")
+    assert refs == []
+
+    assert Commit.preview(alice.ctx, %{
+             ref: probe,
+             bindings: [%{need: "api_key", share_id: share.id}]
+           }) == {:error, {:share_not_offered, "api_key"}}
+
+    # Terry shares the key with Traders again: a new share, offered to
+    # Alice. Her grant still names the one the restore revoked, so her run
+    # is refused until she grants the new one.
+    again = share_again!(terry, entry, %{"audience" => "group", "group_id" => traders.id})
+    refute again == share.id
+
+    assert share_statuses(terry) == %{
+             share.id => "revoked",
+             model_share => "revoked",
+             again => "active"
+           }
+
+    assert offered_ids(alice) == [again]
+    refused_before_request!(run!(alice.ctx, probe, request(port, "/hello")))
+
+    # Alice grants again, and her run carries the rotated key to the
+    # source's host, counted on the new share alone.
+    consent!(alice.ctx, probe, [%{need: "api_key", share_id: again}])
+    played = run!(alice.ctx, probe, request(port, "/hello"))
+    assert %{"status" => 200, "body" => "hello from upstream"} = output!(played)
+    sent = upstream!()
+    assert sent.path == "/hello" and header(sent, "x-api-key") == [@rotated_secret]
+    assert_never_in_runner(played, @rotated_secret)
+    assert share_used(terry, %{id: again}) == %{alice.user.id => 1}
+    assert share_used(terry, share) == %{alice.user.id => 1}
+
+    # Until the administrator shares the model key with everyone again a
+    # first sign-in binds nothing; once shared, the next binds the new share.
+    {_ida, _head, refs} = first_sign_in!("Ida")
+    assert refs == []
+    model_again = share_again!(terry, model, %{"audience" => "everyone"})
+    {noa, head, refs} = first_sign_in!("Noa")
+    {:ok, model} = Arca.VaultStorage.get(terry.actor, model.id)
+    assert refs == model_bound(noa, head, %{id: model_again}, model)
   end
 
   # ---------------------------------------------------------------------------
