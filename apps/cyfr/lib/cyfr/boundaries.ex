@@ -1967,7 +1967,10 @@ defmodule Cyfr.Boundaries do
     "Sanctum.ClientIp" => [from_connect_info: 1, ingress: 1, put_ingress: 2, resolve: 1],
     # A tincture version's frame opens, and its data routes answer, under
     # the grant held to that version by the decision a run is held to.
+    # A component's setup plan reads whether each binding its grant carries
+    # is still live, as a run's attach reads its lifetime, without using it.
     "Sanctum.Consent" => [
+      binding_live: 4,
       head_consent: 2,
       profiles: 2,
       revoke_source: 2,

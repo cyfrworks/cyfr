@@ -127,7 +127,7 @@ defmodule Compendium.ConsentSetupPlan do
   defp describe(ctx, profile) do
     case Sanctum.Consent.head_consent(ctx, profile.id) do
       {:ok, consent} ->
-        bound = check_needs(ctx, consent)
+        bound = check_needs(ctx, profile.id, consent)
         needs = bound ++ unbound_required(ctx, profile.source_ref, bound)
 
         %{
@@ -175,8 +175,12 @@ defmodule Compendium.ConsentSetupPlan do
   defp unread_head(_unanswered, _profile_id),
     do: {"unavailable", "this profile's consent cannot be read right now — try again"}
 
-  # One row per binding the head consent carries, read by what it names.
-  defp check_needs(ctx, consent) do
+  # One row per binding the head consent carries, read by what it names,
+  # and live as a run's attach reads its lifetime
+  # (`Sanctum.Consent.binding_live/4`):
+  # a binding whose `until` has passed, or whose `once` a run has used, is
+  # not satisfied, so the grant reads not ready and is offered again.
+  defp check_needs(ctx, profile_id, consent) do
     read_itself = read_itself_keys(consent)
 
     Enum.map(consent.vault_refs, fn ref ->
@@ -190,12 +194,24 @@ defmodule Compendium.ConsentSetupPlan do
             check_ref(ctx, other)
         end
 
+      {satisfied, detail} = live(ctx, profile_id, consent, ref, {satisfied, detail})
+
       %{
         entry_id: entry_id,
         satisfied: satisfied,
         detail: detail
       }
     end)
+  end
+
+  defp live(_ctx, _profile_id, _consent, _ref, {false, _detail} = unsatisfied), do: unsatisfied
+
+  defp live(ctx, profile_id, consent, ref, satisfied) do
+    case Sanctum.Consent.binding_live(ctx, profile_id, consent, ref) do
+      :ok -> satisfied
+      {:error, :grant_expired} -> {false, "its grant has expired — grant it again"}
+      {:error, _unanswered} -> {false, "its grant cannot be read right now — try again"}
+    end
   end
 
   # The bindings the component reads itself: the bound entries whose edge

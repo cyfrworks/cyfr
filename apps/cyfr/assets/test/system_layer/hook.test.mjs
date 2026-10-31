@@ -57,7 +57,6 @@ function fakeDialog(doc, calls, controls) {
   const now = () => ({fullscreen: doc.fullscreenElement, pointerLock: doc.pointerLockElement})
   Object.assign(dialog, {
     open: false,
-    popover: false,
     showModal() {
       calls.push({showModal: now()})
       dialog.open = true
@@ -66,15 +65,6 @@ function fakeDialog(doc, calls, controls) {
       calls.push("close")
       dialog.open = false
     },
-    showPopover() {
-      calls.push({showPopover: now()})
-      dialog.popover = true
-    },
-    hidePopover() {
-      calls.push("hidePopover")
-      dialog.popover = false
-    },
-    matches: (selector) => selector === ":popover-open" && dialog.popover,
     querySelectorAll: () => controls
   })
   return dialog
@@ -121,8 +111,7 @@ function mount(dataset) {
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
 
-const openPrompt = (id = "p1", dismissable = "true") => ({open: "true", promptId: id, dismissable, mode: "modal"})
-const safeMode = {open: "true", promptId: "safe", dismissable: "false", mode: "popover"}
+const openPrompt = (id = "p1") => ({open: "true", promptId: id})
 
 async function shown(dataset = openPrompt()) {
   mount(dataset)
@@ -146,17 +135,6 @@ describe("showing a prompt", () => {
       {showModal: {fullscreen: null, pointerLock: null}}
     ])
     assert.equal(dialog.open, true)
-  })
-
-  test("safe mode is a popover in the top layer, shown after the same exits", async () => {
-    mount(safeMode)
-    assert.deepEqual(calls, ["exitPointerLock", "exitFullscreen"])
-
-    doc.settle()
-    await flush()
-
-    assert.deepEqual(calls.at(-1), {showPopover: {fullscreen: null, pointerLock: null}})
-    assert.equal(dialog.open, false, "safe mode is not modal")
   })
 
   test("a document that is not fullscreen shows the prompt without an exit", async () => {
@@ -209,20 +187,11 @@ describe("focus", () => {
     assert.equal(doc.activeElement.name, "secret", "focus outside the prompt is brought back in")
   })
 
-  test("safe mode takes focus but does not hold it, so the page stays reachable", async () => {
-    await shown(safeMode)
-    assert.equal(doc.activeElement.name, "secret")
-
-    doc.activeElement = controls[3]
-    assert.equal(tab(false), false, "Tab leaves safe mode for the rest of the page")
-    assert.equal(doc.activeElement.name, "confirm")
-  })
-
   test("focus returns to where it was when the prompt closes", async () => {
     await shown()
     assert.notEqual(doc.activeElement, doc.frame)
 
-    hook.el.dataset = {open: "false", promptId: "", dismissable: "false"}
+    hook.el.dataset = {open: "false", promptId: ""}
     hook.updated()
 
     assert.equal(dialog.open, false)
@@ -239,17 +208,6 @@ describe("Escape", () => {
 
     assert.equal(cancel.defaultPrevented, true, "the browser does not close it; the server does")
     assert.deepEqual(pushed, [{target: hook.el, event: "dismiss", payload: {id: "p7"}}])
-  })
-
-  test("does nothing in safe mode", async () => {
-    await shown(safeMode)
-
-    const cancel = new Event("cancel", {cancelable: true})
-    dialog.dispatchEvent(cancel)
-
-    assert.equal(cancel.defaultPrevented, true)
-    assert.deepEqual(pushed, [])
-    assert.equal(dialog.popover, true)
   })
 
   test("a prompt the browser closed anyway is shown again", async () => {
@@ -504,7 +462,7 @@ describe("the page's frames while a modal prompt is open", () => {
   }
 
   const closeLayer = (hook) => {
-    hook.el.dataset = {open: "false", promptId: "", dismissable: "false"}
+    hook.el.dataset = {open: "false", promptId: ""}
     hook.updated()
   }
 
@@ -671,15 +629,6 @@ describe("the page's frames while a modal prompt is open", () => {
     assert.ok(frames.every(hidden), "the panel's prompt is still open")
 
     closeLayer(panel.hook)
-    assert.equal(styles.length, 0)
-    assert.ok(untouched(frames[0], {}))
-  })
-
-  test("safe mode's popover hides nothing", async () => {
-    layer("system-layer", safeMode)
-    doc.settle()
-    await flush()
-
     assert.equal(styles.length, 0)
     assert.ok(untouched(frames[0], {}))
   })

@@ -93,6 +93,23 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
+  test "the shipped canvas offers a grant on exactly Prima.Refusal's sentences for a missing or lapsed grant" do
+    # The canvas reads a run's stored error as its sentence alone, so it
+    # matches these two whole; a third grant sentence, or a reworded one,
+    # fails here until the canvas's list is changed with it.
+    model = read!("seed/components/tinctures/local/canvas/0.3.0/src/model.ts")
+
+    [list] =
+      Regex.run(~r/export const GRANT_SENTENCES = \[(.*?)\];/s, model, capture: :all_but_first)
+
+    sentences = Regex.scan(~r/"([^"]+)"/, list, capture: :all_but_first) |> List.flatten()
+
+    assert sentences == [
+             Prima.Refusal.message(:connection_not_granted),
+             Prima.Refusal.message(:grant_expired)
+           ]
+  end
+
   # ==========================================================================
   # ComponentRef: verdict-level binding + the constants the regex test skips
   # ==========================================================================

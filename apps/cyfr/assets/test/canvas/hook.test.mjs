@@ -15,7 +15,6 @@ import {
   frameSignal,
   installedSignal,
   nextStanding,
-  safeModeChord,
   switchChord
 } from "../../js/canvas/signals.js"
 import IframeBridge from "../../js/hooks/iframe_bridge.js"
@@ -471,6 +470,7 @@ describe("a canvas frame's bridge", () => {
   const VALIDATION = HANDSHAKES.valid.find(({reply}) => reply.canvas.mode === "validation").reply
   const PRESS = fixture.shell.find((vector) => vector.verb === "press").message.args
   const OPEN = {ref: "tincture:local.vault"}
+  const GRANT = fixture.shell.find((vector) => vector.verb === "grant").message.args
 
   // A canvas frame whose bridge is answered `reply` for its handshake: the
   // window posts, the view's events, and once loaded its end of the port
@@ -622,13 +622,14 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
-  test("an open or a press reaches the view only under the shell's activation with the frame focused, live and shown", async () => {
+  test("an open, a press or a grant reaches the view only under the shell's activation with the frame focused, live and shown", async () => {
     const bridge = connect()
     const port = bridge.load()
     const other = {id: "another element"}
     const asks = [
       {v: 1, verb: "open", frame: CANVAS, args: OPEN},
-      {v: 1, verb: "press", frame: CANVAS, args: PRESS}
+      {v: 1, verb: "press", frame: CANVAS, args: PRESS},
+      {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
     ]
 
     try {
@@ -664,13 +665,14 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
-  test("inside one activation every open and press is forwarded, and none once it has passed", async () => {
+  test("inside one activation every open, press and grant is forwarded, and none once it has passed", async () => {
     const bridge = connect()
     const port = bridge.load()
     const asks = [
       {v: 1, verb: "press", frame: CANVAS, args: PRESS},
-      {v: 1, verb: "press", frame: CANVAS, args: PRESS},
+      {v: 1, verb: "grant", frame: CANVAS, args: GRANT},
       {v: 1, verb: "open", frame: CANVAS, args: OPEN},
+      {v: 1, verb: "grant", frame: CANVAS, args: {ref: "catalyst:local.claude"}},
       {v: 1, verb: "press", frame: CANVAS, args: {...PRESS, action: "buy"}}
     ]
 
@@ -693,21 +695,25 @@ describe("a canvas frame's bridge", () => {
     const bridge = connect()
     const port = bridge.load()
     const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
+    const grant = {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
 
     try {
       activation("active")
       focus(bridge.el)
       bridge.el.wrapper.inert = true
       await send(bridge, port, press)
+      await send(bridge, port, grant)
       bridge.el.wrapper.inert = false
       bridge.el.wrapper.dataset.canvasShown = "false"
       await send(bridge, port, press)
+      await send(bridge, port, grant)
       assert.equal(forwarded(bridge.events).length, 0)
 
-      // The positive control: shown and not inert, the same press passes.
+      // The positive control: shown and not inert, the same press and grant pass.
       bridge.el.wrapper.dataset.canvasShown = "true"
       await send(bridge, port, press)
-      assert.deepEqual(forwarded(bridge.events), [press])
+      await send(bridge, port, grant)
+      assert.deepEqual(forwarded(bridge.events), [press, grant])
     } finally {
       bridge.close()
       port.close()
@@ -793,10 +799,6 @@ describe("a canvas frame's bridge", () => {
 
       try {
         await eventually(() => states.length === 1)
-        if (verb === "failed") {
-          api.ready()
-          await eventually(() => forwarded(bridge.events).length === 1)
-        }
 
         handlers.frame_state({frame: CANVAS, state: "frozen"})
         bridge.el.wrapper.dataset.canvasShown = "false"
@@ -807,7 +809,7 @@ describe("a canvas frame's bridge", () => {
         await eventually(() => reported().length === 1)
 
         assert.deepEqual(states, ["live", "frozen"])
-        assert.deepEqual(reported(), [{v: 1, verb, frame: CANVAS, args: verb === "failed" ? {stage: "runtime"} : {}}])
+        assert.deepEqual(reported(), [{v: 1, verb, frame: CANVAS, args: verb === "failed" ? {stage: "load"} : {}}])
         assert.equal(bridge.hook.dropped, 0)
       } finally {
         bridge.close()
@@ -816,12 +818,13 @@ describe("a canvas frame's bridge", () => {
     })
   }
 
-  test("a validation frame's open and press are dropped, pressed or not; its ready and failed reach the view", async () => {
+  test("a validation frame's open, press and grant are dropped, pressed or not; its ready and failed reach the view", async () => {
     const bridge = connect({reply: VALIDATION})
     const port = bridge.load()
     const asks = [
       {v: 1, verb: "open", frame: CANVAS, args: OPEN},
-      {v: 1, verb: "press", frame: CANVAS, args: PRESS}
+      {v: 1, verb: "press", frame: CANVAS, args: PRESS},
+      {v: 1, verb: "grant", frame: CANVAS, args: GRANT}
     ]
     const passes = [
       {v: 1, verb: "ready", frame: CANVAS, args: {}},
@@ -1004,8 +1007,8 @@ describe("a rotated credential", () => {
   })
 })
 
-describe("the safe mode chord", () => {
-  test("Ctrl+Alt+S on the shell's page asks the shell for safe mode; nothing else does", () => {
+describe("Ctrl+Alt+S", () => {
+  test("on the shell's page asks the shell for nothing and is left to the page", () => {
     const pushed = []
     const hook = Object.assign(Object.create(Canvas), {
       el: canvasElement().hook,
@@ -1021,19 +1024,12 @@ describe("the safe mode chord", () => {
       return prevented
     }
 
-    assert.equal(press({key: "s", code: "KeyS", ctrlKey: true, altKey: false}), false)
-    assert.equal(press({key: "s", code: "KeyS", ctrlKey: false, altKey: true}), false)
-    assert.equal(press({key: "x", code: "KeyX", ctrlKey: true, altKey: true}), false)
-    assert.equal(press({key: "ß", code: "KeyS", ctrlKey: true, altKey: true}), true)
-    assert.deepEqual(pushed, [{event: "safe_mode", payload: {}}])
-
-    hook.disconnected()
-    press({key: "S", code: "KeyS", ctrlKey: true, altKey: true})
-    assert.equal(pushed.length, 1)
+    assert.equal(press({key: "s", code: "KeyS", ctrlKey: true, altKey: true}), false)
+    assert.equal(press({key: "S", code: "KeyS", ctrlKey: true, altKey: true}), false)
+    assert.deepEqual(pushed, [])
 
     hook.destroyed()
     assert.equal(listeners.keydown, undefined)
-    assert.equal(safeModeChord(null), false)
   })
 })
 

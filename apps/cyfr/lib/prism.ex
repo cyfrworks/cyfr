@@ -16,7 +16,8 @@ defmodule Prism do
     glass before it opens live.
   - `Prism.Labels` / `Prism.Tray` — mode vocabulary and the notification
     tray's badge state.
-  - `Prism.SafeMode` — what the system layer offers when a canvas fails.
+  - `Prism.Fallback` — the shipped canvas shown in the place of one that
+    did not start or stopped, and the ways back the system layer offers.
   - `Prism.ConsentChoices` — the consent sheet's choices, pure over the
     plan's typed rows.
 
@@ -29,9 +30,9 @@ defmodule Prism do
       Arrangement,
       CanvasValidation,
       ConsentChoices,
+      Fallback,
       Frames,
       Labels,
-      SafeMode,
       TinctureRegistry,
       Tray
     ],

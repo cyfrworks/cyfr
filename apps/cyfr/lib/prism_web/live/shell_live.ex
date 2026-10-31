@@ -50,8 +50,8 @@ defmodule PrismWeb.ShellLive do
   version written meanwhile that needs validating is validated in its
   turn, each such version once, and otherwise the working version opens.
   A grant prompt the shell raised for a canvas is withdrawn once the
-  canvas is decided for another tincture or leaves the screen, and safe
-  mode withdraws every grant prompt the shell raised. The shell
+  canvas is decided for another tincture, leaves the screen or falls
+  back. The shell
   reads its listing (`Prism.TinctureRegistry`) again each time it decides
   a canvas with no frame held, and decides against that one read, so a
   tincture, a canvas or a version installed or removed while the shell is
@@ -66,8 +66,8 @@ defmodule PrismWeb.ShellLive do
   each sent as `switch_canvas`, with no wrap at either end; no canvas
   switches itself. A switch freezes the canvas it leaves, whatever it
   declares, and its apps unless they hold a background grant; a canvas
-  once opened stays held until the shell ends, the layout drops it or safe
-  mode clears every frame, and showing it again thaws it.
+  once opened stays held until the shell ends, the layout drops it or it
+  falls back, and showing it again thaws it.
 
   A canvas frame is a page like any tincture's: its messages over the
   port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
@@ -76,18 +76,22 @@ defmodule PrismWeb.ShellLive do
   listed tincture that is not a canvas, by name) is pushed to each held
   canvas frame after its handshake and whenever the listing changes, and
   `posture`, `covered` and `state` come from the glass. From the live,
-  visible canvas, `ready` keeps it out of safe mode, `failed` before
-  `ready` is safe mode `crashed`, `open` is the person's open of a listed
-  tincture (`app_open` below), and `press` presses a feed's action through
-  `feed.press` once the served version's declaration reads that feed.
+  visible canvas, `ready` keeps it standing, `failed` before `ready`
+  falls it back (below), `open` is the person's open of a listed
+  tincture (`app_open` below), `press` presses a feed's action through
+  `feed.press` once the served version's declaration reads that feed, and
+  `grant` offers the person's grant to an installed component through the
+  system layer's generic grant path, unless an offer for it is open or it
+  is granted with nothing its grant needs missing; its outcome opens no
+  frame.
   `ready` and `failed` report how a canvas's page loaded and runs, so they
   count from a hidden canvas too, frozen or not the one shown: its `ready`
-  makes it ready, and its `failed` before that marks it died, which is
-  safe mode `crashed` once the canvas is shown. A `failed` from a canvas
+  makes it ready, and its `failed` before that marks it died, which falls
+  it back once the canvas is shown. A `failed` from a canvas
   this view recorded as ready, shown or hidden, changes nothing: a page
   error after `ready` is not a crash. From a validation frame only `ready` and `failed`
-  act. A canvas's other verbs, an `open` or a `press` from a canvas the
-  glass does not show live, and `press` and `failed` from a frame that is
+  act. A canvas's other verbs, an `open`, a `press` or a `grant` from a
+  canvas the glass does not show live, and `press` and `failed` from a frame that is
   not a canvas's are dropped and counted.
 
   ## Arranging
@@ -115,10 +119,10 @@ defmodule PrismWeb.ShellLive do
   `share` from 1, each to 10000. An event is answered `%{ok: true}`, or
   `%{error: reason}` with nothing changed: a frame this view does not
   hold (`not_held`), an app of a canvas not shown (`hidden`), a canvas
-  behind a launch from the picker (`hidden`), safe mode (`safe_mode`), a
-  payload of another shape (`malformed`), a placement in the hand, where
-  every app is full (`hand`), an app the layout does not place
-  (`not_placed`) or a document the layout refuses (`invalid`). A gesture
+  behind a launch from the picker (`hidden`), a payload of another shape
+  (`malformed`), a placement in the hand, where every app is full
+  (`hand`), an app the layout does not place (`not_placed`) or a document
+  the layout refuses (`invalid`). A gesture
   is made at once on the frames, keeping every frame still placed, and
   on the person's layout as this view holds it (`Prism.Arrangement`), and
   `installed` is pushed again to every canvas frame.
@@ -135,27 +139,37 @@ defmodule PrismWeb.ShellLive do
   the revision this view last read or wrote, its own write announced
   among them, changes nothing; any other read is taken whole.
 
-  ## Safe mode
+  ## The fallback
 
   A canvas the glass shows that has not sent `ready` within ten seconds of
-  being shown — its frame's open, for one that opens shown — or that was
-  refused at its open, is safe mode `not_ready`; one that reports a
-  failure, or whose frame dies while the glass shows it, is `crashed`, and
-  so is a hidden canvas that reported a failure, once it is shown (a
-  hidden canvas whose frame dies is discarded, and opens anew once
-  shown); a validation that leaves no working version is
-  `not_validated`; and the person's own ask — the shell's `Safe mode`
-  button or Ctrl+Alt+S on the shell's page, never a frame's message — is
-  `requested`. A hidden canvas runs no ready deadline, since it reads and
-  acts on nothing: one not ready yet has the whole ten seconds from the
-  moment it is shown, and one ready before it was hidden stays ready.
-  Safe mode discards every frame with its credential and
-  the system layer shows its prompt (`Prism.SafeMode`) over the visible
-  canvas; no picker is drawn and nothing launches. The way out the person
-  chooses ends it: the canvas again, the kept version once the system
-  layer restored it, or the shipped canvas shown on this glass until the
-  shell ends or the layout changes. The assistant's panel is not the
-  shell's and is untouched.
+  being shown — its frame's open, for one that opens shown — that sent
+  `failed` before it, or that could not be opened, falls back
+  (`Prism.Fallback`, `not_ready`); so does one whose frame dies while the
+  glass shows it (`gone`: the page loaded a second time), a hidden canvas
+  that failed before its `ready`, once it is shown (a hidden canvas whose
+  frame dies is discarded, and opens anew once shown), and a canvas whose
+  new version did not start and which has no earlier version to show
+  (`not_validated`). A hidden canvas runs no ready deadline, since it
+  reads and acts on nothing: one not ready yet has the whole ten seconds
+  from the moment it is shown, and one ready before it was hidden stays
+  ready.
+
+  Falling back discards that canvas's frame, and a validation of it, with
+  their credentials, withdraws a grant prompt it raised, and opens the
+  shipped canvas (`tincture:local.canvas`) in its place on this glass,
+  with no validation and no write. Every app over it, every other canvas
+  and the assistant's panel stay as they are, and the person goes on
+  arranging. While the glass shows it, the system layer draws one line in
+  the shelf's area offering to try again and, while the canvas keeps one,
+  the last working version. A canvas fallen back stays so: its late
+  `ready` changes nothing, and the shipped canvas dying in turn is torn
+  down with its credential and not opened again until the person tries
+  again, the line standing. The
+  fallback ends only on the person's choice — the canvas opened again
+  from the layout, the kept version once the system layer restored it —
+  or when a published layout names another tincture for the canvas or
+  drops it; a publication that only arranges keeps it, so saving a
+  gesture never opens the failed canvas again.
 
   ## The picker
 
@@ -218,12 +232,10 @@ defmodule PrismWeb.ShellLive do
   bridge alone, and keeps none. A frozen frame is not renewed, so a canvas
   hidden past its deadline is refused when it is shown again.
 
-  While a full frame is shown it covers everything under it, so the
-  shell sets `covered`: the layout takes its chrome (the top bar, the
-  sidebar and the drawer) out of reach with `inert`, and the canvas does
-  the same to every layer under the full frame. The full frame and its
-  capsule, the shell's Safe mode control, the system layer and the
-  assistant's panel stay reachable.
+  A full frame fills the apps' area between the top bar and the shelf, and
+  the canvas makes every layer under it `inert`. The top bar, the shelf,
+  the full frame and its capsule, the system layer and the assistant's
+  panel stay reachable.
 
   Activation, a press and the system layer's restore run in this view's
   own callbacks; it starts no task for them. Every credential this view
@@ -237,13 +249,13 @@ defmodule PrismWeb.ShellLive do
 
   alias Prism.CanvasValidation
   alias Prism.Frames
-  alias Prism.SafeMode
+  alias Prism.Fallback
   alias Sanctum.TinctureAuth
 
   # How long a canvas has, from the moment the glass shows it, to send
-  # `ready` before the shell enters safe mode (`ready_deadlines/2`): from
+  # `ready` before the shell falls it back (`ready_deadlines/2`): from
   # its frame's open, for one that opens shown, so a page that never
-  # loads, and so never handshakes, falls to safe mode as one that loads
+  # loads, and so never handshakes, falls back as one that loads
   # and dies.
   @canvas_ready_ms 10_000
 
@@ -271,7 +283,6 @@ defmodule PrismWeb.ShellLive do
       |> assign(:active_nav, "canvas")
       |> assign(:frames, Frames.new())
       |> assign(:renewals, %{})
-      |> assign(:covered, false)
       |> assign(:posture, "desk")
       |> assign(:arrangement, nil)
       |> assign(:layout_base, nil)
@@ -284,11 +295,12 @@ defmodule PrismWeb.ShellLive do
       |> assign(:canvas_ready, MapSet.new())
       |> assign(:canvas_died, MapSet.new())
       |> assign(:canvas_deadlines, %{})
-      |> assign(:shipped, nil)
       |> assign(:layout_changed, false)
       |> assign(:decisions, %{})
       |> assign(:trialled, %{})
-      |> assign(:safe_mode, nil)
+      |> assign(:fallbacks, %{})
+      |> assign(:noticed, nil)
+      |> assign(:spent, MapSet.new())
       |> assign(:credential_prompts, %{})
       |> assign(:grant_prompts, %{})
       |> assign(:grant_decisions, %{})
@@ -548,9 +560,10 @@ defmodule PrismWeb.ShellLive do
 
   # A canvas frame loaded a second time: its port is closed and it is
   # spent. A validation frame's death is the validation's outcome `died`;
-  # the visible canvas's is safe mode `crashed`; a hidden canvas's is torn
-  # down, its credential revoked and its frame forgotten, so showing that
-  # canvas again opens it anew.
+  # the visible canvas's falls it back (`gone`); the shipped canvas's, in
+  # a fallback's place, is torn down and spent (`spend/2`); any other
+  # hidden canvas's is torn down, its credential revoked and its frame
+  # forgotten, so showing that canvas again opens it anew.
   def handle_event("frame_gone", %{"frame" => frame_id}, socket) when is_binary(frame_id) do
     %{context: ctx, frames: frames} = socket.assigns
 
@@ -559,9 +572,16 @@ defmodule PrismWeb.ShellLive do
         {:noreply, validation_ended(socket, canvas_id, :gone)}
 
       %{key: {:canvas, canvas_id} = key} ->
-        if canvas_id == Frames.visible_canvas(frames),
-          do: {:noreply, enter_safe_mode(socket, :crashed)},
-          else: {:noreply, frames(socket, &Frames.discard(ctx, &1, key))}
+        cond do
+          Map.has_key?(socket.assigns.fallbacks, canvas_id) ->
+            {:noreply, socket |> spend(canvas_id) |> frames(&Frames.discard(ctx, &1, key))}
+
+          canvas_id == Frames.visible_canvas(frames) ->
+            {:noreply, enter_fallback(socket, :gone)}
+
+          true ->
+            {:noreply, frames(socket, &Frames.discard(ctx, &1, key))}
+        end
 
       nil ->
         {:noreply, socket}
@@ -574,11 +594,6 @@ defmodule PrismWeb.ShellLive do
   # by the chord or the edge strip, which name a direction. Nothing wraps.
   def handle_event("switch_canvas", params, socket) when is_map(params),
     do: {:noreply, switch_canvas(socket, switch_target(socket.assigns, params))}
-
-  # The person asked for safe mode through the shell's own chrome: its
-  # button, or the chord the canvas hook hears on the shell's page.
-  def handle_event("safe_mode", _params, socket),
-    do: {:noreply, enter_safe_mode(socket, :requested)}
 
   # The person's devices: the system layer's pairing prompt, one at a time.
   def handle_event("devices", _params, socket) do
@@ -647,9 +662,6 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # No tincture runs while safe mode is on.
-  defp launch_tincture(%{assigns: %{safe_mode: %{}}} = socket, _tincture_id), do: socket
-
   defp launch_tincture(socket, tincture_id) do
     case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
       nil -> socket
@@ -682,7 +694,7 @@ defmodule PrismWeb.ShellLive do
   # excepted, whose canvas asks for its grant once, itself
   # (`ask_canvas_grant/3`) — a canvas's ready deadline runs only while it
   # is shown (`ready_deadlines/2`), and a canvas that failed while hidden
-  # enters safe mode the moment it is shown.
+  # falls back the moment it is shown.
   defp frames(socket, fun), do: put_frames(socket, fun.(socket.assigns.frames))
 
   defp put_frames(socket, later) do
@@ -694,7 +706,7 @@ defmodule PrismWeb.ShellLive do
     socket =
       replacements
       |> Enum.reduce(socket, &push_event(&2, "frame_bearer", &1))
-      |> assign(frames: later, covered: Frames.active(later) != nil)
+      |> assign(:frames, later)
       |> arm_renewals(before, later)
       |> ready_deadlines(later)
 
@@ -713,12 +725,12 @@ defmodule PrismWeb.ShellLive do
 
     socket = Enum.reduce(ungranted, socket, &offer_grant(&2, &1))
 
-    # A canvas that failed while hidden is shown: safe mode, as its failure
-    # would have been had it been shown then.
+    # A canvas that failed while hidden is shown: it falls back, as its
+    # failure would have had it been shown then.
     died = socket.assigns.canvas_died
 
     if Enum.any?(Frames.list(later), &(&1.visible and MapSet.member?(died, &1.id))),
-      do: enter_safe_mode(socket, :crashed),
+      do: enter_fallback(socket, :not_ready),
       else: socket
   end
 
@@ -856,8 +868,7 @@ defmodule PrismWeb.ShellLive do
   # From the canvas the glass shows, live, `ready`, a failure at either
   # stage, `open` and `press` act. A hidden canvas, frozen or not the one
   # shown, acts on nothing, but its `ready` makes it ready and its failure
-  # marks it died, which takes the shell to safe mode `crashed` once it is
-  # shown (`put_frames/2`).
+  # marks it died, which falls it back once it is shown (`put_frames/2`).
   defp canvas_verb(socket, %{key: {:canvas, canvas_id}, state: state} = frame, decoded) do
     shown = state == :live and canvas_id == Frames.visible_canvas(socket.assigns.frames)
 
@@ -873,9 +884,9 @@ defmodule PrismWeb.ShellLive do
     do: update(socket, :canvas_ready, &MapSet.put(&1, id))
 
   # A page error after the canvas reported ready is not a crash: only a
-  # canvas that fails before its `ready` falls to safe mode.
+  # canvas that fails before its `ready` falls back.
   defp live_canvas_verb(socket, frame, %{verb: :failed}) do
-    if ready?(socket, frame), do: socket, else: enter_safe_mode(socket, :crashed)
+    if ready?(socket, frame), do: socket, else: enter_fallback(socket, :not_ready)
   end
 
   defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}}, %{
@@ -887,9 +898,76 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
     do: press(socket, frame, args)
 
+  defp live_canvas_verb(socket, _frame, %{verb: :grant, args: %{"ref" => ref}}),
+    do: grant_from_canvas(socket, ref)
+
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
   defp ready?(socket, %{id: id}), do: MapSet.member?(socket.assigns.canvas_ready, id)
+
+  # The person asked, from the canvas, for their grant to an installed
+  # component: offered through the system layer's generic grant path (the
+  # one AQUA's own asks take: Sanctum's preview, which the person confirms
+  # or not), and its outcome waits on no frame, since the component is
+  # most often a catalyst with none. Dropped and counted, offering nothing,
+  # when the reference names nothing installed, when an offer for the
+  # component is already open, or when the component is granted and
+  # nothing its grant needs is missing. A grant with a connection it needs
+  # missing is offered again: its sheet asks the person to connect it.
+  defp grant_from_canvas(socket, ref) do
+    ctx = socket.assigns.context
+
+    with {:ok, component} <- installed_component(ctx, ref),
+         false <- offering?(socket.assigns, component),
+         false <- granted_and_complete?(socket, component),
+         {:ok, offered} <- grant_prompt(socket, {:component, component}, nil, component) do
+      offered
+    else
+      _refused -> drop_message(socket)
+    end
+  end
+
+  # The component `ref` names among the athanor's installed ones, versionless
+  # or at an installed version, as the grant names it: without its version.
+  defp installed_component(ctx, ref) do
+    with {:ok, %{"component_ref" => canonical}} <- Compendium.inspect_component(ctx, ref),
+         {:ok, parsed} <- Prima.ComponentRef.parse(canonical) do
+      {:ok, Prima.ComponentRef.to_string(%{parsed | version: nil})}
+    else
+      _none -> :error
+    end
+  end
+
+  # Whether a grant offer for `component` is open, whatever raised it: a
+  # canvas's request names the component; an app opened or a canvas shown
+  # whose grant waits names its card, whose reference is the component's.
+  defp offering?(%{grant_prompts: prompts, tinctures: cards}, component) do
+    Enum.any?(prompts, fn
+      {_id, {{:component, offered}, _none}} -> offered == component
+      {_id, {_key, tincture_id}} -> offered_ref(cards, tincture_id) == component
+    end)
+  end
+
+  defp offered_ref(cards, tincture_id) do
+    case Enum.find(cards, &(&1.id == tincture_id)) do
+      %{} = card -> Frames.ref_of(card)
+      nil -> nil
+    end
+  end
+
+  # Granted and complete: the component's setup plan holds the person's
+  # grant and reads it ready, every need it binds still live. No grant, a
+  # grant missing a connection, and a plan that cannot be read are not, so
+  # the offer's own plan decides them.
+  defp granted_and_complete?(socket, component) do
+    case PrismWeb.Ops.call_tool(socket, "component", %{
+           "action" => "setup_plan",
+           "reference" => component
+         }) do
+      {:ok, %{consent: %{ready: true}}} -> true
+      _not_complete -> false
+    end
+  end
 
   defp died(socket, %{id: id}), do: update(socket, :canvas_died, &MapSet.put(&1, id))
 
@@ -1118,7 +1196,6 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp arranging(%{assigns: %{safe_mode: %{}}}), do: {:error, :safe_mode}
   defp arranging(%{assigns: %{document: nil}}), do: {:error, :no_layout}
 
   # The visible canvas is arranged while the glass shows it: under one of
@@ -1370,7 +1447,6 @@ defmodule PrismWeb.ShellLive do
 
   # Hold the frames the arrangement places over the visible canvas, and
   # the canvas itself.
-  defp arrange(%{assigns: %{safe_mode: %{}}} = socket), do: socket
   defp arrange(%{assigns: %{arrangement: nil}} = socket), do: socket
 
   defp arrange(socket) do
@@ -1385,10 +1461,11 @@ defmodule PrismWeb.ShellLive do
   # held for it is kept, unless the frame runs a tincture the layout no
   # longer names for it, which is torn down with no call — a trial's
   # credential revoked and nothing activated; otherwise the shell decides
-  # what to open.
-  defp show_canvas(%{assigns: %{safe_mode: %{}}} = socket), do: socket
+  # what to open. The system layer then draws the notice of the canvas
+  # shown, if it fell back (`sync_notice/1`).
+  defp show_canvas(socket), do: socket |> show_visible() |> sync_notice()
 
-  defp show_canvas(socket) do
+  defp show_visible(socket) do
     socket = withdraw_hidden(socket)
     %{context: ctx, frames: frames} = socket.assigns
 
@@ -1404,7 +1481,7 @@ defmodule PrismWeb.ShellLive do
           %{key: key} = frame ->
             if runs?(socket, frame, entry),
               do: assign(socket, :showing, :canvas),
-              else: socket |> frames(&Frames.discard(ctx, &1, key)) |> show_canvas()
+              else: socket |> frames(&Frames.discard(ctx, &1, key)) |> show_visible()
         end
     end
   end
@@ -1412,13 +1489,13 @@ defmodule PrismWeb.ShellLive do
   defp runs?(socket, %{reference: reference}, entry) do
     running = Prima.ComponentRef.build("tincture", reference.publisher, reference.name)
 
-    if socket.assigns.shipped == entry.id,
-      do: running == SafeMode.shipped_canvas(),
+    if Map.has_key?(socket.assigns.fallbacks, entry.id),
+      do: running == Fallback.shipped_canvas(),
       else: running == entry.tincture
   end
 
-  # What a canvas with no frame held opens: the shipped canvas safe mode
-  # chose for it; nothing for a tincture nobody installed; safe mode for
+  # What a canvas with no frame held opens: the shipped canvas, for one
+  # fallen back; nothing for a tincture nobody installed; the fallback for
   # one installed as anything but a local canvas; otherwise its versions
   # decide whether its newest version is validated first or its working
   # version opens. The listing is read again first (`reread_listing/1`),
@@ -1436,16 +1513,19 @@ defmodule PrismWeb.ShellLive do
     socket = withdraw_moved(socket, entry.id, deciding_for(socket, entry))
 
     cond do
-      socket.assigns.shipped == entry.id ->
+      MapSet.member?(socket.assigns.spent, entry.id) ->
+        assign(socket, :showing, :canvas)
+
+      Map.has_key?(socket.assigns.fallbacks, entry.id) ->
         open_shipped(socket, entry)
 
       card = Frames.resolve(entry.tincture, socket.assigns.canvases) ->
         if card.publisher == Prima.ComponentPath.default_publisher(),
           do: versions(socket, entry, card),
-          else: enter_safe_mode(socket, :not_ready)
+          else: enter_fallback(socket, :not_ready)
 
       Frames.resolve(entry.tincture, socket.assigns.tinctures) ->
-        enter_safe_mode(socket, :not_ready)
+        enter_fallback(socket, :not_ready)
 
       true ->
         assign(socket, :showing, :none)
@@ -1453,11 +1533,11 @@ defmodule PrismWeb.ShellLive do
   end
 
   # The card id of the tincture `decide/2` decides canvas `entry` for:
-  # the shipped canvas's on safe mode's shipped path, the listed card the
-  # layout names, or none.
+  # the shipped canvas's for one fallen back, the listed card the layout
+  # names, or none.
   defp deciding_for(socket, entry) do
     card =
-      if socket.assigns.shipped == entry.id,
+      if Map.has_key?(socket.assigns.fallbacks, entry.id),
         do: %{id: "iframe_" <> shipped_name()},
         else:
           Frames.resolve(entry.tincture, socket.assigns.canvases) ||
@@ -1471,10 +1551,10 @@ defmodule PrismWeb.ShellLive do
       {:ok, %{document: document}} ->
         if CanvasValidation.needed?(document, card.version),
           do: validate(socket, entry, card),
-          else: open_working(socket, entry, card, document.working, :else_safe_mode, :ask)
+          else: open_working(socket, entry, card, document.working, :else_fallback, :ask)
 
       {:error, _refused} ->
-        enter_safe_mode(socket, :not_ready)
+        enter_fallback(socket, :not_ready)
     end
   end
 
@@ -1577,7 +1657,7 @@ defmodule PrismWeb.ShellLive do
   defp newer?(_trialled, _card, _tried, {:error, _refused}), do: false
 
   # Read the canvas's versions again and open its working version, or,
-  # without one, `fallback`: safe mode `not_validated`, or the canvas's
+  # without one, `fallback`: the fallback `not_validated`, or the canvas's
   # refusal. `ask` is whether a working version refused for want of its
   # grant asks for it (`open_live/4`).
   defp show_working(socket, entry, fallback, ask) do
@@ -1597,8 +1677,8 @@ defmodule PrismWeb.ShellLive do
   defp working_of(socket, entry, card, {:error, _refused}, fallback, ask),
     do: open_working(socket, entry, card, nil, fallback, ask)
 
-  defp open_working(socket, _entry, _card, nil, :else_safe_mode, _ask),
-    do: enter_safe_mode(socket, :not_validated)
+  defp open_working(socket, _entry, _card, nil, :else_fallback, _ask),
+    do: enter_fallback(socket, :not_validated)
 
   defp open_working(socket, entry, _card, nil, {:else_refuse, refusal}, _ask),
     do: refuse_canvas(socket, entry, refusal)
@@ -1606,17 +1686,17 @@ defmodule PrismWeb.ShellLive do
   defp open_working(socket, entry, card, working, _fallback, ask) do
     case card_at(socket.assigns.context, card, working) do
       {:ok, card} -> open_live(socket, entry, card, ask)
-      :error -> enter_safe_mode(socket, :not_ready)
+      :error -> enter_fallback(socket, :not_ready)
     end
   end
 
   # The live canvas, opened unless a frame of it is held already: that
   # frame, live or refused, stands, and nothing of it is read as this
   # open's answer. Refused at its own open for want of a grant, it shows
-  # its refusal, never safe mode, and is offered the grant prompt once,
+  # its refusal, never the fallback, and is offered the grant prompt once,
   # kept as the canvas's (`ask_canvas_grant/3`) — `:quiet` in answer to
   # the person's dismissal of one, which asks nothing again. Any other
-  # refusal at its own open is safe mode `not_ready`.
+  # refusal at its own open falls it back (`not_ready`).
   defp open_live(socket, %{id: canvas_id} = entry, card, ask) do
     if Frames.get(socket.assigns.frames, {:canvas, canvas_id}) do
       assign(socket, :showing, :canvas)
@@ -1638,7 +1718,7 @@ defmodule PrismWeb.ShellLive do
           end
 
         %{state: :refused} ->
-          enter_safe_mode(socket, :not_ready)
+          enter_fallback(socket, :not_ready)
 
         # Opened: shown, with its ready deadline armed (`ready_deadlines/2`),
         # or frozen behind a full frame, with none until it is shown. Or
@@ -1650,7 +1730,7 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # The canvas shows its refusal, never safe mode. Held as it is, so a
+  # The canvas shows its refusal, never the fallback. Held as it is, so a
   # refusal for want of a grant asks nothing again until the canvas is
   # decided again (`forget_refusal/3`). A refusal newly held is a decision
   # about the canvas.
@@ -1696,8 +1776,9 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # Safe mode's shipped canvas, on this glass alone: the newest version
+  # The fallback's shipped canvas, on this glass alone: the newest version
   # the install media ships, opened live with no validation and no write.
+  # One that cannot be read leaves the place empty beside the notice.
   defp open_shipped(socket, entry) do
     ctx = socket.assigns.context
     name = shipped_name()
@@ -1708,18 +1789,18 @@ defmodule PrismWeb.ShellLive do
     else
       _unavailable ->
         Logger.info("[ShellLive] the shipped canvas could not be read for #{ctx.athanor_id}")
-        enter_safe_mode(socket, :not_ready)
+        assign(socket, :showing, :none)
     end
   end
 
   defp shipped_name do
-    {:ok, %Prima.ComponentRef{name: name}} = Prima.ComponentRef.parse(SafeMode.shipped_canvas())
+    {:ok, %Prima.ComponentRef{name: name}} = Prima.ComponentRef.parse(Fallback.shipped_canvas())
     name
   end
 
   defp shipped_card(socket, name, version) do
     base =
-      Frames.resolve(SafeMode.shipped_canvas(), socket.assigns.canvases) ||
+      Frames.resolve(Fallback.shipped_canvas(), socket.assigns.canvases) ||
         %{
           id: "iframe_" <> name,
           publisher: Prima.ComponentPath.default_publisher(),
@@ -1737,9 +1818,7 @@ defmodule PrismWeb.ShellLive do
   # ---- switching -------------------------------------------------------------
 
   # The canvas a switch names: one of the arrangement's, or the one before
-  # or after the visible canvas. Nothing in safe mode, and nothing past
-  # either end.
-  defp switch_target(%{safe_mode: %{}}, _params), do: nil
+  # or after the visible canvas. Nothing past either end.
   defp switch_target(%{arrangement: nil}, _params), do: nil
 
   defp switch_target(%{arrangement: arrangement}, %{"canvas" => canvas})
@@ -1781,51 +1860,55 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # ---- safe mode -------------------------------------------------------------
+  # ---- the fallback ----------------------------------------------------------
 
-  # Safe mode: every frame is discarded with its credential, a validation
-  # in progress included, with every canvas's ready deadline, every grant
-  # prompt the shell raised is withdrawn, and the system layer offers the
-  # ways out.
-  defp enter_safe_mode(%{assigns: %{safe_mode: %{}}} = socket, _reason), do: socket
+  # The visible canvas falls back (`Prism.Fallback`): its frame, and a
+  # validation of it, are discarded with their credentials, a grant prompt
+  # it raised is withdrawn, and the shipped canvas opens in its place.
+  # Every app, every other canvas and the assistant stay as they are. A
+  # canvas already fallen back stays so: a second death, or the shipped
+  # canvas failing in turn, changes nothing.
+  defp enter_fallback(socket, reason) do
+    case visible_entry(socket.assigns) do
+      %{id: id} = entry ->
+        if Map.has_key?(socket.assigns.fallbacks, id),
+          do: socket,
+          else: fall_back(socket, entry, reason)
 
-  defp enter_safe_mode(socket, reason) do
+      nil ->
+        socket
+    end
+  end
+
+  defp fall_back(socket, %{id: canvas_id} = entry, reason) do
     ctx = socket.assigns.context
-    entry = visible_entry(socket.assigns)
-    {prompt_id, socket} = next_prompt_id(socket, "safe-mode")
+    {notice_id, socket} = next_prompt_id(socket, "fallback")
 
-    Enum.each(socket.assigns.canvas_deadlines, fn {_id, {timer, _token}} ->
-      Process.cancel_timer(timer)
-    end)
-
-    subject =
-      SafeMode.enter(reason, %{
-        canvas: entry && entry.id,
-        tincture: entry && entry.tincture,
+    fallback =
+      Fallback.enter(reason, %{
+        canvas: canvas_id,
+        tincture: entry.tincture,
         kept: kept(socket, entry)
       })
 
-    # Withdrawn before safe mode's prompt arrives, so none stands in front.
-    socket.assigns.grant_prompts |> Map.keys() |> Enum.each(&withdraw_prompt/1)
-    show_prompt(%{id: prompt_id, kind: :safe_mode, action: nil, subject: subject})
+    raised =
+      for {prompt_id, {{:activation, ^canvas_id}, _tincture}} <- socket.assigns.grant_prompts,
+          do: prompt_id
 
     socket
-    |> assign(:frames, Frames.clear(ctx, socket.assigns.frames))
-    |> assign(:covered, false)
-    |> assign(:safe_mode, %{id: prompt_id, reason: reason, canvas: subject.canvas})
-    |> assign(:canvas_ready, MapSet.new())
-    |> assign(:canvas_died, MapSet.new())
-    |> assign(:canvas_deadlines, %{})
-    |> assign(:credential_prompts, %{})
-    |> assign(:grant_prompts, %{})
-    |> assign(:grant_decisions, %{})
-    |> assign(:trialled, %{})
+    |> withdraw_prompts(raised)
+    |> update(:fallbacks, &Map.put(&1, canvas_id, %{id: notice_id, fallback: fallback}))
+    |> decided(canvas_id)
+    |> frames(fn frames ->
+      frames
+      |> then(&CanvasValidation.cancel(ctx, &1, canvas_id))
+      |> then(&Frames.discard(ctx, &1, {:canvas, canvas_id}))
+    end)
+    |> show_canvas()
   end
 
-  # The version the visible canvas's versions document keeps, read as safe
-  # mode is entered; none when it cannot be read.
-  defp kept(_socket, nil), do: nil
-
+  # The version the canvas's versions document keeps, read as it falls
+  # back; none when it cannot be read.
   defp kept(socket, entry) do
     with %{publisher: "local", name: name} <-
            Frames.resolve(entry.tincture, socket.assigns.canvases),
@@ -1837,16 +1920,46 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # The person chose a way out: the canvas runs again from the layout as it
-  # stands — the kept version, once restored, is its working one — or the
-  # shipped canvas is shown in its place on this glass. The reload reads
-  # the layout as it stands now, so a layout change still waiting on a read
-  # from before this choice is spent: only a change published after it
-  # lets the shipped canvas go.
-  defp leave_safe_mode(socket, offer) do
-    shipped = if offer == :shipped, do: socket.assigns.safe_mode.canvas
-    send_update(PrismWeb.CanvasLive, id: "canvas", reload: true)
-    assign(socket, safe_mode: nil, showing: :pending, shipped: shipped, layout_changed: false)
+  # A way back chosen on the notice: the fallback ends, its shipped frame
+  # is discarded, and the canvas is decided again from the layout as it
+  # stands — the kept version, once restored, is its working one.
+  defp leave_fallback(socket, canvas_id) do
+    socket
+    |> update(:fallbacks, &Map.delete(&1, canvas_id))
+    |> update(:spent, &MapSet.delete(&1, canvas_id))
+    |> frames(&Frames.discard(socket.assigns.context, &1, {:canvas, canvas_id}))
+    |> show_canvas()
+  end
+
+  # The shipped canvas in a fallback's place died in turn: its frame is
+  # torn down with its credential and renewal, the fallback and its line
+  # stand, and nothing opens in the canvas's place again until the person
+  # tries again, so a canvas that keeps dying never loops.
+  defp spend(socket, canvas_id), do: update(socket, :spent, &MapSet.put(&1, canvas_id))
+
+  # The canvas fallen back whose notice is `notice_id`, if any.
+  defp fallen_back(fallbacks, notice_id) do
+    Enum.find_value(fallbacks, fn
+      {canvas_id, %{id: ^notice_id}} -> canvas_id
+      _other -> nil
+    end)
+  end
+
+  # The system layer draws the notice of the canvas the glass shows, if it
+  # fell back, and none otherwise; it is told only when that changes.
+  defp sync_notice(socket) do
+    notice =
+      case visible_entry(socket.assigns) do
+        %{id: id} -> Map.get(socket.assigns.fallbacks, id)
+        nil -> nil
+      end
+
+    if notice == socket.assigns.noticed do
+      socket
+    else
+      send_update(PrismWeb.SystemLayer, id: PrismWeb.SystemLayer.layer_id(), notice: notice)
+      assign(socket, :noticed, notice)
+    end
   end
 
   # ============================================================================
@@ -1882,8 +1995,8 @@ defmodule PrismWeb.ShellLive do
   # answered `consent_required`, or a trial or the live canvas was refused
   # at its open for want of it: the grant prompt for the tincture version
   # of the card whose open it was, so the grant records what that version
-  # reads, a working version's as a trial's (the shipped canvas's own on
-  # safe mode's shipped path, never the layout's), kept as
+  # reads, a working version's as a trial's (the shipped canvas's own for
+  # a canvas fallen back, never the layout's), kept as
   # `{:activation, canvas_id}`,
   # once, and answering the canvas's latest decision. While one is open
   # for the canvas and that tincture, deciding the canvas again asks
@@ -1990,6 +2103,9 @@ defmodule PrismWeb.ShellLive do
     |> place()
   end
 
+  # A grant the canvas asked for opens nothing: no frame waited on it.
+  defp granted(socket, {{:component, _component}, nil}), do: socket
+
   defp granted(socket, {key, tincture_id}) do
     %{context: ctx, frames: frames} = socket.assigns
     held = Frames.get(frames, key)
@@ -2031,17 +2147,14 @@ defmodule PrismWeb.ShellLive do
   end
 
   defp prompt_outcome(socket, id, outcome) do
-    %{safe_mode: safe_mode, credential_prompts: credentials, grant_prompts: grants} =
+    %{fallbacks: fallbacks, credential_prompts: credentials, grant_prompts: grants} =
       socket.assigns
 
     cond do
-      match?(%{id: ^id}, safe_mode) ->
+      canvas_id = fallen_back(fallbacks, id) ->
         case outcome do
-          {:confirmed, offer} when offer in [:retry, :kept, :shipped] ->
-            leave_safe_mode(socket, offer)
-
-          _refused ->
-            socket
+          {:confirmed, offer} when offer in [:retry, :kept] -> leave_fallback(socket, canvas_id)
+          _other -> socket
         end
 
       socket.assigns.pairing_prompt == id ->
@@ -2213,19 +2326,17 @@ defmodule PrismWeb.ShellLive do
 
   # The picker is for when no canvas runs: a layout with no canvas, a
   # canvas whose tincture is not installed, or a layout that could not be
-  # read. It is under an active full frame like everything else, and safe
-  # mode draws only its prompt.
-  defp picker?(%{frames: frames, safe_mode: safe_mode, showing: showing}) do
-    is_nil(safe_mode) and Frames.active(frames) == nil and showing == :none
+  # read. It is under an active full frame like everything else.
+  defp picker?(%{frames: frames, showing: showing}) do
+    Frames.active(frames) == nil and showing == :none
   end
 
   defp prompting?(%{
-         safe_mode: safe_mode,
          credential_prompts: credentials,
          grant_prompts: grants,
          pairing_prompt: pairing
        }),
-       do: not is_nil(safe_mode) or credentials != %{} or grants != %{} or not is_nil(pairing)
+       do: credentials != %{} or grants != %{} or not is_nil(pairing)
 
   defp visibility_label(true), do: "public"
   defp visibility_label(false), do: "private"
@@ -2306,8 +2417,8 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # Every prompt the shell shows is its own: safe mode, pairing, a
-  # credential entry, a grant.
+  # Every prompt the shell shows is its own: the fallback's notice,
+  # pairing, a credential entry, a grant.
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_report(id, outcome, socket) when is_binary(id),
     do: {:noreply, prompt_outcome(socket, id, outcome)}
@@ -2377,9 +2488,9 @@ defmodule PrismWeb.ShellLive do
   end
 
   # A shown canvas's ready deadline, armed under `token` the whole period
-  # ago (`ready_deadlines/2`): without its `ready` the shell enters safe
-  # mode. One cancelled or superseded since, or whose frame is no longer
-  # shown, changes nothing.
+  # ago (`ready_deadlines/2`): without its `ready` the canvas falls back.
+  # One cancelled or superseded since, or whose frame is no longer shown,
+  # changes nothing.
   def handle_info({:canvas_deadline, frame_id, token}, socket) do
     %{canvas_deadlines: held, canvas_ready: ready, frames: frames} = socket.assigns
 
@@ -2389,7 +2500,7 @@ defmodule PrismWeb.ShellLive do
 
         if MapSet.member?(shown_canvases(frames), frame_id) and
              not MapSet.member?(ready, frame_id),
-           do: {:noreply, enter_safe_mode(socket, :not_ready)},
+           do: {:noreply, enter_fallback(socket, :not_ready)},
            else: {:noreply, socket}
 
       _cancelled_or_superseded ->
@@ -2460,11 +2571,11 @@ defmodule PrismWeb.ShellLive do
     {:noreply, socket}
   end
 
-  # A published layout, read: the shipped canvas safe mode showed in its
-  # place goes once the layout names another tincture for that canvas, and
+  # A published layout, read: a canvas's fallback ends once the layout
+  # names another tincture for that canvas or drops it, and
   # a canvas's refusal for want of its grant is let go, so the arrangement
   # read decides that canvas again. A publication that keeps the canvas's
-  # tincture and only arranges keeps the shipped canvas, so saving a
+  # tincture and only arranges keeps the fallback, so saving a
   # gesture never opens the canvas that failed again. Before a read
   # succeeds nothing of it is applied.
   defp apply_layout_change(%{assigns: %{layout_changed: false}} = socket, _read), do: socket
@@ -2473,24 +2584,26 @@ defmodule PrismWeb.ShellLive do
     canvases =
       for %{key: {:canvas, canvas_id}} <- Frames.list(socket.assigns.frames), do: canvas_id
 
-    socket = socket |> assign(:layout_changed, false) |> drop_shipped(read.document)
+    socket = socket |> assign(:layout_changed, false) |> drop_fallbacks(read.document)
     Enum.reduce(canvases, socket, &forget_refusal(&2, &1, :ungranted))
   end
 
-  # The shipped canvas's frame is discarded when the layout now names
-  # another tincture for its canvas, or drops the canvas, so the canvas the
-  # layout names opens in its place.
-  defp drop_shipped(%{assigns: %{shipped: nil}} = socket, _document), do: socket
+  # A canvas's fallback ends, its shipped frame discarded, when the layout
+  # now names another tincture for the canvas, or drops it, so the canvas
+  # the layout names opens in its place.
+  defp drop_fallbacks(socket, document) do
+    %{context: ctx, fallbacks: fallbacks, document: held} = socket.assigns
 
-  defp drop_shipped(%{assigns: %{shipped: canvas_id, context: ctx}} = socket, document) do
-    if canvas_tincture(socket.assigns.document, canvas_id) ==
-         canvas_tincture(document, canvas_id) do
-      socket
-    else
-      socket
-      |> assign(:shipped, nil)
-      |> frames(&Frames.discard(ctx, &1, {:canvas, canvas_id}))
-    end
+    Enum.reduce(fallbacks, socket, fn {canvas_id, _fallback}, socket ->
+      if canvas_tincture(held, canvas_id) == canvas_tincture(document, canvas_id) do
+        socket
+      else
+        socket
+        |> update(:fallbacks, &Map.delete(&1, canvas_id))
+        |> update(:spent, &MapSet.delete(&1, canvas_id))
+        |> frames(&Frames.discard(ctx, &1, {:canvas, canvas_id}))
+      end
+    end)
   end
 
   defp canvas_tincture(nil, _canvas_id), do: nil
@@ -2590,7 +2703,6 @@ defmodule PrismWeb.ShellLive do
         frames={@frames}
         tinctures={@tinctures}
         arrangement={@arrangement}
-        safe_mode={not is_nil(@safe_mode)}
       />
 
       <%!-- The page's keys, pushed from an element of their own: the page
@@ -2601,24 +2713,12 @@ defmodule PrismWeb.ShellLive do
 
       <%!-- The shell's own chrome: no frame draws it or reaches it. --%>
       <button
-        id="shell-safe-mode"
-        type="button"
-        phx-click="safe_mode"
-        disabled={not is_nil(@safe_mode)}
-        aria-keyshortcuts="Control+Alt+S"
-        title="Safe mode (Ctrl+Alt+S)"
-        class="absolute bottom-2 left-2 z-[67] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
-      >
-        Safe mode
-      </button>
-
-      <button
         id="shell-devices"
         type="button"
         phx-click="devices"
         data-test="shell-devices"
         title="Pair or revoke a device"
-        class="absolute bottom-2 left-24 z-[67] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+        class="absolute bottom-2 left-2 z-[67] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
       >
         Devices
       </button>
@@ -2639,7 +2739,7 @@ defmodule PrismWeb.ShellLive do
       />
 
       <%!-- Picker: drawn when no canvas runs, while no tincture is
-           active and safe mode is off. It is the shell's last element, so
+           active. It is the shell's last element, so
            drawing or hiding it moves no other one, the system layer's
            open dialog included, which a move would take out of the top
            layer. Its z-index keeps it above the canvas layer and under

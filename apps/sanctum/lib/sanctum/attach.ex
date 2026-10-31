@@ -290,6 +290,32 @@ defmodule Sanctum.Attach do
 
   def lifetime(%Context{}, _resource, %{}), do: :ok
 
+  @doc false
+  # Whether the binding `resource` carries is live for `use` now, as
+  # `lifetime/3` answers it at a use, without using it: the same pins and
+  # the same row, a `once` row live while no run has consumed it and never
+  # consumed here. Read outside Sanctum through
+  # `Sanctum.Consent.binding_live/4`, never for an attach.
+  @spec live(Context.t(), map(), map()) :: :ok | {:error, :grant_expired | :unavailable}
+  def live(%Context{} = ctx, %{binding_key: key} = resource, %{} = use) when is_binary(key) do
+    pins = %{
+      Authority.zero()
+      | profile_id: Map.get(use, :profile_id),
+        consent_id: Map.get(use, :consent_id),
+        resources: %Edge{vault: resource}
+    }
+
+    if Sanctum.Consent.Loader.pinned_intact?(ctx, pins) do
+      with :ok <- row_admits(ctx, pins.profile_id, pins.consent_id, key, :read) do
+        lender(ctx, resource, :read)
+      end
+    else
+      {:error, :grant_expired}
+    end
+  end
+
+  def live(%Context{}, _resource, %{}), do: :ok
+
   defp lender(
          ctx,
          %{lender: %{profile_id: profile, consent_id: consent, binding_key: key}},
@@ -336,6 +362,9 @@ defmodule Sanctum.Attach do
       {:error, _superseded_consumed_or_gone} -> {:error, :grant_expired}
     end
   end
+
+  # Read, not used: a `once` row is live until a run consumes it.
+  defp admits(%{lifetime_kind: "once", consumed_by_root: nil}, _a, _p, _c, :read), do: :ok
 
   defp admits(_row, _actor, _profile_id, _consent_id, _root), do: {:error, :grant_expired}
 end

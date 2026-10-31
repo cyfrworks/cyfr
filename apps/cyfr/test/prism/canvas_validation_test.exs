@@ -157,7 +157,7 @@ defmodule Prism.CanvasValidationTest do
       fn ->
         _ = render(view)
         assigns = assigns(view)
-        assigns.showing != :pending or assigns.safe_mode != nil
+        assigns.showing != :pending or assigns.fallbacks != %{}
       end,
       2_000,
       "the shell to settle"
@@ -268,7 +268,7 @@ defmodule Prism.CanvasValidationTest do
       torn_down!(view, trial)
       assert %{document: %{working: "1.0.0", kept: nil, failed: nil}, revision: 1} = stored(ctx)
       assert %{state: :live, visible: true, reference: %{version: "1.0.0"}} = live_canvas(view)
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
 
     test "not ready by the deadline records not_ready, and the working version opens",
@@ -298,7 +298,7 @@ defmodule Prism.CanvasValidationTest do
       assert stored(ctx).revision == revision
     end
 
-    test "a failure at load records died, and with no working version is safe mode not_validated",
+    test "a failure at load records died, and with no working version falls back not_validated",
          %{conn: conn, ctx: ctx} do
       view = shell!(conn)
       trial = trial(view)
@@ -307,14 +307,12 @@ defmodule Prism.CanvasValidationTest do
 
       torn_down!(view, trial)
       assert %{working: nil, failed: %{version: "1.0.0", outcome: "died"}} = stored(ctx).document
-      assert %{reason: :not_validated} = assigns(view).safe_mode
+      assert %{"home" => %{fallback: %{reason: :not_validated}}} = assigns(view).fallbacks
 
-      assert render(view) =~
-               Phoenix.HTML.safe_to_string(
-                 Phoenix.HTML.html_escape(
-                   "Your canvas's new version did not start, and it has no earlier version to show."
-                 )
-               )
+      # The notice offers trying again alone: there is no kept version.
+      assert has_element?(view, "#system-layer-notice", "Your canvas stopped.")
+      assert has_element?(view, ~s(#system-layer-notice button[phx-value-offer="retry"]))
+      refute has_element?(view, ~s(#system-layer-notice button[phx-value-offer="kept"]))
     end
 
     test "a failure at runtime records died", %{conn: conn, ctx: ctx} do
@@ -343,7 +341,7 @@ defmodule Prism.CanvasValidationTest do
       assert %{failed: %{version: "1.0.0", outcome: "died"}} = stored(ctx).document
     end
 
-    test "a member that lost its slot activates and records nothing, revokes the trial's credential, and is never safe mode",
+    test "a member that lost its slot activates and records nothing, revokes the trial's credential, and never falls back",
          %{conn: conn, ctx: ctx} do
       slot = claimant!()
       view = shell!(conn)
@@ -354,7 +352,7 @@ defmodule Prism.CanvasValidationTest do
 
       torn_down!(view, trial)
       assert stored(ctx) == %{document: Arca.CanvasVersions.empty(), revision: 0}
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
       assert %{state: :refused, refusal: :unavailable} = live_canvas(view)
     end
 
@@ -405,7 +403,7 @@ defmodule Prism.CanvasValidationTest do
 
       assert %{state: :refused, refusal: :ungranted} = live_canvas(view)
       assert trial(view) == nil
-      assert assigns(view).safe_mode == nil
+      assert assigns(view).fallbacks == %{}
     end
   end
 

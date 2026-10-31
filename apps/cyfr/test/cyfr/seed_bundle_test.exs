@@ -73,11 +73,11 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.2.0 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.3.0 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.2.0"
+    assert canvas.version == "0.3.0"
 
     # The seed ships this one version of the canvas.
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)

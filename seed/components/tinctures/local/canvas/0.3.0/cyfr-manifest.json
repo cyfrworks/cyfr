@@ -1,14 +1,14 @@
 {
   "name": "canvas",
   "type": "tincture",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "local",
-  "description": "Your canvas: a tile for each app you installed, your recent runs with failed ones first, your schedules with when each runs next, and the last schedule runs.",
+  "description": "Your canvas: the day in one sentence, what needs your attention grouped by cause with a grant where one fixes it, your recent runs, your apps, and your schedules with the week ahead.",
   "tags": ["canvas", "system"],
   "category": "utility",
   "tincture": {
     "icon": "canvas",
-    "tagline": "Your apps, runs and schedules",
+    "tagline": "Your day, your runs, your apps and schedules",
     "frame": {
       "placement": "canvas"
     },

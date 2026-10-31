@@ -18,14 +18,8 @@ function run(events, state = initial) {
   return {state, effects}
 }
 
-const open = (promptId, dismissable = true, mode = "modal") => ({
-  type: "sync",
-  open: true,
-  promptId,
-  dismissable,
-  mode
-})
-const closed = {type: "sync", open: false, promptId: null, dismissable: false}
+const open = (promptId) => ({type: "sync", open: true, promptId})
+const closed = {type: "sync", open: false, promptId: null}
 
 describe("the tab order", () => {
   test("positive tabindex first, ascending, then tabindex 0 in document order", () => {
@@ -106,19 +100,6 @@ describe("show and hide", () => {
     assert.deepEqual(effects, ["focus-first"])
   })
 
-  test("a prompt in the other mode closes the shown one and opens again, leaving fullscreen first", () => {
-    const {state: opening} = run([open("p1")])
-    const {state: shown} = run([{type: "ready", attempt: opening.attempt}], opening)
-    const {state, effects} = run([open("safe", false, "popover")], shown)
-    assert.equal(state.phase, "opening")
-    assert.equal(state.mode, "popover")
-    assert.deepEqual(effects, ["close", "exit-pointer-lock", "exit-fullscreen"])
-
-    const {state: reshown, effects: after} = run([{type: "ready", attempt: state.attempt}], state)
-    assert.equal(reshown.phase, "shown")
-    assert.deepEqual(after, ["show", "focus-first"])
-  })
-
   test("the same prompt rendered again does nothing", () => {
     const {state: opening} = run([open("p1")])
     const {state: shown} = run([{type: "ready", attempt: opening.attempt}], opening)
@@ -127,27 +108,23 @@ describe("show and hide", () => {
 })
 
 describe("dismissal", () => {
-  const shownWith = (dismissable) => {
-    const {state: opening} = run([open("p1", dismissable, dismissable ? "modal" : "popover")])
+  const shown = () => {
+    const {state: opening} = run([open("p1")])
     return run([{type: "ready", attempt: opening.attempt}], opening).state
   }
 
-  test("Escape dismisses a dismissable prompt", () => {
-    assert.deepEqual(run([{type: "cancel"}], shownWith(true)).effects, ["push-dismiss"])
-  })
-
-  test("Escape does nothing in safe mode", () => {
-    assert.deepEqual(run([{type: "cancel"}], shownWith(false)).effects, [])
+  test("Escape dismisses every prompt", () => {
+    assert.deepEqual(run([{type: "cancel"}], shown()).effects, ["push-dismiss"])
   })
 
   test("a dialog the browser closed while it is open is shown again, after leaving fullscreen", () => {
-    const {state, effects} = run([{type: "closed"}], shownWith(false))
+    const {state, effects} = run([{type: "closed"}], shown())
     assert.equal(state.phase, "opening")
     assert.deepEqual(effects, ["exit-pointer-lock", "exit-fullscreen"])
   })
 
   test("fullscreen or pointer lock taken while a prompt shows is left, and the prompt shown above it", () => {
-    const {state, effects} = run([{type: "escalated"}], shownWith(true))
+    const {state, effects} = run([{type: "escalated"}], shown())
     assert.equal(state.phase, "opening")
     assert.deepEqual(effects, ["close", "exit-pointer-lock", "exit-fullscreen"])
   })

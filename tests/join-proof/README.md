@@ -53,6 +53,13 @@ and the cross-home isolation each engine enforces is the multi-home smoke's
 to hold in all three. In-app browsers and mail clients that rewrite links
 are not covered.
 
+The press that begins a pairing in H's Devices prompt waits until the
+prompt's dialog is the page's modal top layer and two animation frames have
+passed. A canvas frame under the prompt runs in a process of its own, and
+Chromium can route a press made sooner to that frame, which then holds focus
+while the page hears nothing. A press that lands in a frame is recorded in
+the step's `press` and made once more; a second miss fails the step.
+
 ## Steps
 
 `proof.mjs` runs the sign-ins (`common.mjs`) and `steps.mjs` the rest;

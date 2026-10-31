@@ -27,6 +27,12 @@
 #       person's grant leaves one; a feed fires under `schedule`. Answers
 #       the reference and the profile id.
 #
+#   ungranted TOKEN NAME
+#       `catalyst:local.NAME` at 1.0.0, the suite's catalyst guest published
+#       as `source` publishes it, with no profile: a component installed and
+#       not granted, which no frame opens, for the markets canvas's grant
+#       control to ask for. Answers the reference.
+#
 #   write TOKEN CANVAS KIND STREAMS_JSON
 #       A new version of the canvas CANVAS written with `canvas.write`,
 #       through `console`: its page the files KIND names (below), on the
@@ -91,8 +97,9 @@
 #                 `died` (the SDK reports `failed` at stage `load`);
 #   broken-crash  becomes ready, then reloads its own frame from a timer:
 #                 shown live its frame loads a second time, which the bridge
-#                 reports as `frame_gone`, the frame's death, and the shell
-#                 takes as safe mode `crashed`. Its reload comes well after a
+#                 reports as `frame_gone`, the frame's death, which falls
+#                 the canvas back to the shipped one. Its reload comes well
+#                 after a
 #                 validation frame is torn down, so validation activates it
 #                 first.
 #
@@ -159,16 +166,18 @@ fn args ->
     "markets" => ~S"""
     // A written canvas on the vanilla template: it reads the feed `candles`
     // and draws its candles as its own SVG, and presses the feed's refresh
-    // action from a button the person clicks. `window.__canvas` offers the
-    // presses the activation step drives from a timer, so a press can leave
-    // with no person input, and the self-focus it records.
+    // action from a button the person clicks, and asks for a component's
+    // grant from another. `window.__canvas` offers the presses and the
+    // grant the activation and grant steps drive from a timer, so one can
+    // leave with no person input, and the self-focus it records.
     const root = document.getElementById("root")
     root.innerHTML =
       '<h1>markets</h1><p id="seen">no result yet</p>' +
       '<svg id="chart" width="320" height="140"></svg>' +
       '<p><button id="press" type="button">Refresh</button>' +
       '<button id="press3" type="button">Refresh three</button>' +
-      '<button id="later" type="button">Refresh later</button></p>'
+      '<button id="later" type="button">Refresh later</button>' +
+      '<button id="grant" type="button">Grant grant-target</button></p>'
     const chart = document.getElementById("chart")
     const seen = document.getElementById("seen")
     let binding = null
@@ -184,6 +193,8 @@ fn args ->
       press()
     })
     document.getElementById("later").addEventListener("click", () => setTimeout(() => press(), 8000))
+    const grant = () => cyfr.grant("catalyst:local.grant-target")
+    document.getElementById("grant").addEventListener("click", () => grant())
 
     function onEvent(event) {
       const data = event && event.data
@@ -224,6 +235,10 @@ fn args ->
       // behind: with no person input near it, the shell drops it.
       pressAfter: (ms) => {
         setTimeout(() => press(), ms)
+      },
+      // A grant asked from a timer, with no person input near it.
+      grantAfter: (ms) => {
+        setTimeout(() => grant(), ms)
       },
       // The canvas focuses itself and then presses from a timer: the
       // activation step records what each browser does with a press that
@@ -276,8 +291,8 @@ fn args ->
     """,
     "broken-crash" => """
     // Becomes ready, then reloads its own frame from a timer: shown live
-    // the frame loads a second time, its death, which is safe mode
-    // `crashed`; a page that only throws after ready is not. The delay is
+    // the frame loads a second time, its death, which falls the canvas
+    // back; a page that only throws after ready does not. The delay is
     // well past a validation frame's teardown, so validation activates
     // this version before any reload, and only the live frame dies.
     #{version_from_url}
@@ -416,6 +431,32 @@ fn args ->
         )
 
       answer.(%{reference: reference, profile_id: profile_id})
+
+    ["ungranted", token, name] ->
+      ctx = establish.(token)
+
+      wasm =
+        File.read!(
+          Path.expand("../../apps/cyfr/test/support/test_wasm/guests/catalyst.wasm", __DIR__)
+        )
+
+      {:ok, _component} =
+        Compendium.Registry.publish_bytes(ctx, wasm, %{
+          name: name,
+          version: "1.0.0",
+          type: "catalyst",
+          publisher: "local",
+          manifest:
+            Jason.encode!(%{
+              "name" => name,
+              "type" => "catalyst",
+              "version" => "1.0.0",
+              "publisher" => "local",
+              "description" => "The canvas proof's component a canvas asks a grant for."
+            })
+        })
+
+      answer.(%{reference: Prima.ComponentRef.build("catalyst", "local", name)})
 
     ["write", token, canvas, kind, streams] ->
       {template, files} = {"vanilla", canvas_files.(kind)}

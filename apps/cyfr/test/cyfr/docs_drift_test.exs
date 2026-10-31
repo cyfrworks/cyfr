@@ -1969,7 +1969,7 @@ defmodule Cyfr.DocsDriftTest do
 
   # A layout is published only through the layout tool: `layout.edit`
   # (`Compendium.Providers.Layout`) is `Arca.Layouts.publish/4`'s one
-  # caller, and every shell, the canvas and safe mode only read the layout.
+  # caller, and the canvas and the fallback only read the layout.
   # The tincture guide names that tool as how a layout is published, and
   # the writers the code admits.
   test "a layout is published only through the layout tool" do

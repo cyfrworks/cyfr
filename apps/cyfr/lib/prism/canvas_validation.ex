@@ -32,7 +32,8 @@ defmodule Prism.CanvasValidation do
       gate's control-plane fence refuses a member that lost its slot
       (`not_owner`), which activates and records nothing.
     * **A teardown with no call** (`cancel/3`): a switch, a layout change
-      that drops the canvas, or safe mode while it is trialled revokes the
+      that drops the canvas, or the canvas falling back while it is
+      trialled revokes the
       credential, then forgets the frame; nothing is activated or
       recorded, and the next show validates again.
 
@@ -50,19 +51,21 @@ defmodule Prism.CanvasValidation do
   @typedoc """
   What the shell does once activation answered:
 
-    * `{:show_working, :else_safe_mode}` — read the listing and the
+    * `{:show_working, :else_fallback}` — read the listing and the
       versions again and validate a newer version written meanwhile that
       needs validating, once per version; otherwise open the working
-      version live, or enter safe mode `not_validated` when there is none;
+      version live, or fall back (`Prism.Fallback`, `not_validated`) when
+      there is none;
     * `{:show_working, {:else_refuse, refusal}}` — the same, with the
-      canvas's refusal, as a refused frame shows it, in place of safe mode;
+      canvas's refusal, as a refused frame shows it, in place of the
+      fallback;
     * `:ask_grant` — the grant prompt for the canvas's tincture, and a
       new validation once it is confirmed;
     * `{:refuse, refusal}` — nothing more: the canvas shows its refusal,
-      never safe mode, since the version did not fail.
+      never the fallback, since the version did not fail.
   """
   @type next ::
-          {:show_working, :else_safe_mode | {:else_refuse, Frames.refusal()}}
+          {:show_working, :else_fallback | {:else_refuse, Frames.refusal()}}
           | :ask_grant
           | {:refuse, Frames.refusal()}
 
@@ -177,18 +180,18 @@ defmodule Prism.CanvasValidation do
   `not_ready` or `died`, and a conflict read the listing and the versions
   again and open the working version, unless a newer version written
   meanwhile needs validating, which the shell validates in its turn, once
-  per version and never the one just tried; any of them is safe mode
-  `not_validated` without a working version. `consent_required` asks for
-  the grant. `not_owner` is the canvas's refusal and nothing more.
-  Anything else is the same, with the canvas's refusal in place of safe
-  mode.
+  per version and never the one just tried; any of them falls back
+  (`not_validated`) without a working version. `consent_required` asks
+  for the grant. `not_owner` is the canvas's refusal and nothing more.
+  Anything else is the same, with the canvas's refusal in place of the
+  fallback.
   """
   @spec next({:ok, term()} | {:error, term()}) :: next()
-  def next({:ok, _activation}), do: {:show_working, :else_safe_mode}
+  def next({:ok, _activation}), do: {:show_working, :else_fallback}
 
   def next({:error, reason}) do
     case Prima.Refusal.classify(reason).class do
-      :conflict -> {:show_working, :else_safe_mode}
+      :conflict -> {:show_working, :else_fallback}
       :consent_required -> :ask_grant
       :not_owner -> {:refuse, Frames.refusal(:not_owner)}
       :unavailable -> {:show_working, {:else_refuse, Frames.refusal(:unavailable)}}

@@ -73,23 +73,10 @@ export function bearerSignal(payload) {
     : null
 }
 
-// Whether a keydown is the safe mode chord, Ctrl+Alt+S: the shell's page
-// alone hears it, since a frame's keys stay in the frame's document.
-export function safeModeChord(event) {
-  return (
-    event !== null &&
-    typeof event === "object" &&
-    event.ctrlKey === true &&
-    event.altKey === true &&
-    event.metaKey !== true &&
-    (event.code === "KeyS" || event.key === "s" || event.key === "S")
-  )
-}
-
 // The canvas switch a keydown asks for: `previous` for Ctrl+Alt+ArrowLeft,
 // `next` for Ctrl+Alt+ArrowRight, null for anything else. Heard on the
-// shell's page alone, as the safe mode chord is; with a window active,
-// the same arrows tile it instead (`windowChord`).
+// shell's page alone, since a frame's keys stay in the frame's document;
+// with a window active, the same arrows tile it instead (`windowChord`).
 export function switchChord(event) {
   if (!chord(event)) return null
   if (event.key === "ArrowLeft") return "previous"
