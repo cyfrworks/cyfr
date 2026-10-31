@@ -83,8 +83,8 @@ defmodule Opus.Dispatch do
   A run claimed for a runner that already runs: its signed assignment, its
   attempt's keys and what its vault edge discloses (`secrets`): a disclosed
   entry's projected fields or a publisher's provided values, and never an
-  attach-only or instance entry's, which CYFR attaches to the run's
-  requests instead.
+  attach-only entry's, an instance entry's or a share's, which CYFR
+  attaches to the run's requests instead.
   """
   @type claimed :: %{
           assignment: Prima.Assignment.token(),

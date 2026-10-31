@@ -529,12 +529,12 @@ defmodule Sanctum.ProvisioningTest do
              Provisioning.provision(group, nil)
   end
 
-  describe "an instance entry offered at a person's first sign-in" do
+  describe "the administrator's share at a person's first sign-in" do
     @foo "catalyst:local.foo"
-    @unanswered "#{@foo}: Instance entries is unavailable — retry shortly"
+    @unanswered "#{@foo}: Shares is unavailable — retry shortly"
 
-    # The bundled catalyst's one need attaches an openai.com key, which an
-    # instance entry can meet.
+    # The bundled catalyst's one need attaches an openai.com key, which a
+    # shared key can meet.
     @needs %{
       "api_key" => %{
         "type" => "api_key:openai.com",
@@ -545,25 +545,13 @@ defmodule Sanctum.ProvisioningTest do
       }
     }
 
-    # The one entry the instance offers everyone for that need, admitting
-    # only shipped code.
-    defp offer! do
-      {:ok, entry} =
-        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-          name: "company-#{System.unique_integer([:positive])}",
-          kind: "api_key",
-          provider_hint: "openai.com",
-          field_names: ~s(["OPENAI_API_KEY"]),
-          destination:
-            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-          sealed_payload: "sealed",
-          binding_digest: "sha256:company-#{System.unique_integer([:positive])}",
-          audience: "everyone",
-          created_by: "usr_admin",
-          component_policy: "shipped"
-        })
-
-      entry
+    # The platform administrator's key for that need, shared with
+    # everyone: `%{entry: _, share: _}`.
+    defp share! do
+      admin = Cyfr.Test.ShareFixtures.person!("Admin")
+      {:ok, _seat} = Sanctum.TestContext.ensure_platform(admin.user.id)
+      entry = Cyfr.Test.ShareFixtures.key!(admin)
+      %{entry: entry, share: Arca.Test.Shares.share!(admin.actor, entry.id)}
     end
 
     defp away!(table),
@@ -580,20 +568,21 @@ defmodule Sanctum.ProvisioningTest do
       {head, refs}
     end
 
-    # The first mint is the only one that binds the instance entry: a fill
-    # that minted without it over an outage would leave the person to
-    # connect a key over an entry that exists.
+    # The first mint is the only one that binds the share: a fill that
+    # minted without it over an outage would leave the person to connect
+    # a key over one the administrator shares with them.
     @tag :capture_log
-    test "a first sign-in that cannot read the entries offered fails at bootstrap, saying " <>
-           "which source and why, and the next sign-in fills the athanor with the entry bound",
+    test "a first sign-in that cannot read the administrator's shares fails at bootstrap, " <>
+           "saying which source and why, and the next sign-in fills the athanor with the " <>
+           "share bound",
          %{bundle_dir: bundle_dir} do
       write_bundle!(bundle_dir, needs: @needs)
-      entry = offer!()
+      %{entry: entry, share: share} = share!()
       user = person(System.unique_integer([:positive]))
 
-      away!("instance_entries")
+      away!("shares")
       {first, log} = with_log(fn -> Provisioning.after_sign_in(user.id) end)
-      back!("instance_entries")
+      back!("shares")
 
       # The athanor the admission minted had its fill stopped at the
       # consent mint, with nothing minted for the catalyst; the row, the
@@ -616,7 +605,7 @@ defmodule Sanctum.ProvisioningTest do
                Arca.ProfileStorage.list_for_source(Prima.Actor.in_athanor(athanor_id), @foo)
 
       # The next sign-in tries the fill again at once, and with the store
-      # answering the catalyst is minted bound to the entry.
+      # answering the catalyst is minted bound to the share.
       assert :ok = Provisioning.after_sign_in(user.id)
       {:ok, filled} = Athanors.get(athanor_id)
       assert %DateTime{} = filled.provisioned_at
@@ -630,10 +619,10 @@ defmodule Sanctum.ProvisioningTest do
                  consent_id: head.id,
                  athanor_id: athanor_id,
                  binding_key: "#{@foo}|@ingress|default",
-                 scope: "instance",
+                 scope: "share",
                  vault_entry_id: nil,
-                 instance_entry_id: entry.id,
-                 share_id: nil,
+                 instance_entry_id: nil,
+                 share_id: share.id,
                  via_label: nil,
                  binding_digest: entry.binding_digest,
                  lifetime_kind: "standing",
@@ -644,24 +633,24 @@ defmodule Sanctum.ProvisioningTest do
     end
 
     # A boot's sync has no person and carries the head's binding as the
-    # head holds it; a store that cannot answer for the entry decides
+    # head holds it; a store that cannot answer for the share decides
     # nothing, and a sync is a heal, so nothing is recorded on the row.
     @tag :capture_log
-    test "a boot's sync over a filled athanor that cannot read the entry its catalyst binds " <>
+    test "a boot's sync over a filled athanor that cannot read the share its catalyst binds " <>
            "changes nothing, and says the next sync tries again",
          %{bundle_dir: bundle_dir} do
       write_bundle!(bundle_dir, needs: @needs)
-      entry = offer!()
+      %{share: share} = share!()
       user = person(System.unique_integer([:positive]))
       assert :ok = Provisioning.after_sign_in(user.id)
       athanor_id = Sanctum.Test.People.athanor!(user).id
       {:ok, %{provisioned_at: %DateTime{} = filled_at}} = Athanors.get(athanor_id)
-      {_head, [%{instance_entry_id: bound}]} = held = foo_head(athanor_id)
-      assert bound == entry.id
+      {_head, [%{share_id: bound}]} = held = foo_head(athanor_id)
+      assert bound == share.id
 
-      away!("instance_entries")
+      away!("shares")
       {synced, log} = with_log(fn -> Filler.sync_seeds() end)
-      back!("instance_entries")
+      back!("shares")
 
       assert synced == :ok
 

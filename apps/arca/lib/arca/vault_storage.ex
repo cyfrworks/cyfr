@@ -64,6 +64,11 @@ defmodule Arca.VaultStorage do
   the same transaction. Each takes the entry's row before the shares and
   the shares before the profiles (`Arca.ConsentStorage`'s order).
 
+  Each answers the shares its cascade reached, so the caller announces
+  them once it committed: a binding move the active shares it carried
+  (`rebound_share_ids`), a revoke and a tombstone the shares they
+  revoked (`revoked_share_ids`).
+
   ## Where the material may go
 
   Every entry names its `destination`, `Prima.Destination`'s JCS text,
@@ -133,6 +138,16 @@ defmodule Arca.VaultStorage do
           status: String.t() | nil,
           rebind: rebind() | nil
         }
+
+  @typedoc """
+  What a binding move did: the profiles of the actor's athanor it blocked
+  (`affected`) and the active shares of the entry it carried
+  (`rebound_share_ids`), whose dependents in other athanors it blocked too.
+  """
+  @type moved :: %{affected: [String.t()], rebound_share_ids: [String.t()]}
+
+  @typedoc "The shares of the entry a status write or a tombstone revoked."
+  @type ended :: %{revoked_share_ids: [String.t()]}
 
   @type refusal :: {:error, :no_athanor | :database_error}
 
@@ -346,10 +361,11 @@ defmodule Arca.VaultStorage do
   the row's current status, and a row in any other status is refused
   `{:error, {:entry_unavailable, status}}` with nothing written. Any other
   target status is `{:error, {:invalid_status, status}}`; a tombstone is
-  `tombstone/2`.
+  `tombstone/2`. Answers the shares of the entry a revoke revoked in the
+  same transaction, none for any other status.
   """
   @spec set_status(Prima.Actor.t(), String.t(), String.t()) ::
-          :ok
+          {:ok, ended()}
           | {:error, :not_found | {:entry_unavailable, String.t()} | {:invalid_status, term()}}
           | refusal()
   def set_status(%Prima.Actor{athanor_id: athanor_id} = actor, id, status)
@@ -381,11 +397,12 @@ defmodule Arca.VaultStorage do
   @doc """
   Tombstone an entry: status flip and material erasure in one update,
   with every default naming the entry removed and every share of it
-  revoked in the same transaction.
+  revoked in the same transaction, answering the shares it revoked.
   The partial unique index ignores tombstoned rows, so the name is
   immediately reusable.
   """
-  @spec tombstone(Prima.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
+  @spec tombstone(Prima.Actor.t(), String.t()) ::
+          {:ok, ended()} | {:error, :not_found} | refusal()
   def tombstone(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when resolved(athanor_id) and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.tombstone", fn ->
@@ -422,7 +439,8 @@ defmodule Arca.VaultStorage do
 
   `{:error, :binding_moved}` when another change landed first or the entry
   is gone; the caller re-reads and recomputes. The answer on success is
-  the profiles of the actor's athanor it blocked.
+  the profiles of the actor's athanor it blocked and the active shares it
+  carried (`t:moved/0`).
 
   `verify:` (optional) is the caller's check, run as the transaction's
   first step, before the compare-and-set: it answers `:ok`, or
@@ -433,7 +451,7 @@ defmodule Arca.VaultStorage do
   compare-and-set rolls the proof's consumption back with it.
   """
   @spec move_binding(Prima.Actor.t(), String.t(), String.t() | nil, map(), String.t(), keyword()) ::
-          {:ok, [String.t()]}
+          {:ok, moved()}
           | {:error, :binding_moved | :endpoints_immutable | {:invalid_destination, term()}}
           | {:error, term()}
           | refusal()
@@ -524,6 +542,10 @@ defmodule Arca.VaultStorage do
       written.
     * `:rebind` — `nil`, or `move_binding/5`'s three arguments as a map.
 
+  The answer on success is the new `payload_rev` with what the binding
+  move did (`t:moved/0`), nothing when the plan moves none: a rotation
+  that moves no binding leaves the entry's shares as they are.
+
   A row that is `tombstoned` or `revoked` is refused
   `{:error, {:entry_unavailable, status}}` before anything is written: a
   delete or a revoke that landed between the caller's read and this
@@ -543,7 +565,12 @@ defmodule Arca.VaultStorage do
   member writes none of them (`{:error, :not_owner}`).
   """
   @spec commit_payload(Prima.Actor.t(), String.t(), payload_plan(), keyword()) ::
-          {:ok, %{payload_rev: non_neg_integer(), affected: [String.t()]}}
+          {:ok,
+           %{
+             payload_rev: non_neg_integer(),
+             affected: [String.t()],
+             rebound_share_ids: [String.t()]
+           }}
           | {:error,
              :payload_conflict
              | :binding_moved
@@ -573,9 +600,9 @@ defmodule Arca.VaultStorage do
     commit = fn ->
       with :ok <- still_living(athanor_id, id),
            :ok <- maybe_status(athanor_id, id, status),
-           {:ok, affected} <- maybe_rebind(athanor_id, id, rebind),
+           {:ok, moved} <- maybe_rebind(athanor_id, id, rebind),
            :ok <- cas_payload(athanor_id, id, expected_rev, sealed) do
-        {:ok, %{payload_rev: expected_rev + 1, affected: affected}}
+        {:ok, Map.put(moved, :payload_rev, expected_rev + 1)}
       end
     end
 
@@ -702,7 +729,7 @@ defmodule Arca.VaultStorage do
     |> Arca.Repo.one()
   end
 
-  defp maybe_rebind(_athanor_id, _id, nil), do: {:ok, []}
+  defp maybe_rebind(_athanor_id, _id, nil), do: {:ok, %{affected: [], rebound_share_ids: []}}
 
   defp maybe_rebind(athanor_id, id, %{} = rebind), do: rebind(athanor_id, id, rebind)
 
@@ -741,7 +768,11 @@ defmodule Arca.VaultStorage do
              share_ids,
              blocked_status
            ) do
-      {:ok, for({^athanor_id, profile_id} <- blocked, do: profile_id)}
+      {:ok,
+       %{
+         affected: for({^athanor_id, profile_id} <- blocked, do: profile_id),
+         rebound_share_ids: share_ids
+       }}
     end
   end
 
@@ -765,12 +796,12 @@ defmodule Arca.VaultStorage do
   # A revoke or a tombstone that landed: every share of the entry is
   # revoked and their dependents blocked, under the entry's row it holds.
   defp ended(actor, id, status) when status in ["revoked", "tombstoned"] do
-    with {:ok, _revoked} <-
+    with {:ok, %{share_ids: share_ids}} <-
            Arca.Shares.revoke_by_entry(actor, id, Arca.StatusTransitions.blocked_profile_status()),
-         do: :ok
+         do: {:ok, %{revoked_share_ids: share_ids}}
   end
 
-  defp ended(_actor, _id, _status), do: :ok
+  defp ended(_actor, _id, _status), do: {:ok, %{revoked_share_ids: []}}
 
   defp cas_binding(athanor_id, id, from_digest, changes) do
     set =

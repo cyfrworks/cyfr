@@ -653,11 +653,11 @@
           "why": "the URL or the method is outside the bound entry's destination"
         },
         {
-          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This instance entry's request cap for today is reached.\",\"type\":\"connection_cap\"}",
+          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This key's request cap for today is reached.\",\"type\":\"connection_cap\"}",
           "answer_iv_hex": "a1a2a3a4a5a6a7a8a9aaab03",
-          "answer_sealed": "oaKjpKWmp6ipqqsDJC3UkXbOCX9uSElRhwnG8HntBvK_PIHUaPCo0TagjvcJu3WZ8J8RJGRCHr0GqbG7WkiD6P3Xwt6GCjbiPpFougSXrv94SKvWWEfPb2BczO2Ha5YIuFegLZWD8pe9qdIm1zbsL84wwmjXwi9rD31IgH-sqi6CBZah0Dm4LgKXW71Krh99AIXgtJyI7Pgy_muvf6XNsqdB7dhxhhMtkc2OzOMfcVhDNRy6v9KbEg",
+          "answer_sealed": "oaKjpKWmp6ipqqsDvjPTd0KGpbQkhv8cvVAjSHntBvK_PIHUaPCo0TagjvcJu3WZ8J8RJGRCHr0GqbG7WkiD6P3Xwt6GCjbiPpFougSXrv94SKvWWEfPb2BczO2Ha5YIuFegLZWD8pe9qdIm1T3mfNx-02iG0iRsCSQMki_-qTCFQJG6lDugfkuCFL0PuxNxBJju_8OK6uQj-CHwOeiA8OtQ99x9y0dQkcOQgPs",
           "call_id": "EBESExQVFhcYGRobHB0eHw",
-          "why": "the instance entry's request cap for today is reached"
+          "why": "the key's request cap for today is reached"
         },
         {
           "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This instance entry requires an unmodified shipped component.\",\"type\":\"component_not_admitted\"}",
@@ -672,6 +672,13 @@
           "answer_sealed": "oaKjpKWmp6ipqqsFrKcrkGrzuhu9s5JX_zJJ3qFkKCkdHN4JO8942ZTemGkDG-A219re1AjCpeacZRcV_n-hfQqmFesZIrwRMIR02NYZMqaYktCB5El2c20kSVf_lno1YwRMnHR53tGfe2p4_MpD1BC35hqiRBzhhsua-TsIufdmNy2U3acAl1FnArIDvHT2REEBNCkVLcihcLWZ3NCHsXr5G3FhlOaocr49zWtrmv7cV-WYn1YcahMWyfq0UqocRtk",
           "call_id": "EBESExQVFhcYGRobHB0eHw",
           "why": "the URL's host is outside the grant's egress domains: the denial a guest's own fetch would get, recorded, before the pin"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This key is not available.\",\"type\":\"owner_not_standing\"}",
+          "answer_iv_hex": "a1a2a3a4a5a6a7a8a9aaab06",
+          "answer_sealed": "oaKjpKWmp6ipqqsGdoKvYXIQ683f1qo9TaDNwwaUVHF7VpdhNz7X9f1OCIvKM5Ox8RF2wVB2ZniTOccQCljTsqmjs5hv94CGVKss69XatrfgIf06tqarbF8pcpeQNHQAkSYjtjRxcjM8yzBBtUEh1AibJoONp4WIzLtzr0qn9Y7kzHCP4OqBpWkVsCjl_n2Jk2ogkCXLSY4zQOxJY_MC",
+          "call_id": "EBESExQVFhcYGRobHB0eHw",
+          "why": "the share's owner does not stand: the recipient reads that the key is not available, nothing of the owner's account"
         }
       ]
     }

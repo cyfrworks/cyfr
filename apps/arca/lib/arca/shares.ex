@@ -32,8 +32,10 @@ defmodule Arca.Shares do
   audience `{:error, :already_shared}`, each with nothing written.
 
   `set_audience/4` is a compare-and-set against the audience the caller
-  read, and takes no lock: a use or a revision racing it reads the share
-  at one audience or the other. `revoke/3` takes the share's row
+  read, and takes no lock: a use's claim and a revision's lock each hold
+  the audience they admitted under against the row they lock
+  (`same_audience?/2`), so one racing a narrowing is refused rather than
+  admitted outside the audience. `revoke/3` takes the share's row
   exclusive, so it serializes with a use's claim (`Arca.ShareUsage`),
   which reads it shared, and blocks every profile, in every athanor, whose
   head binds it (`Arca.ConsentStorage.block_dependents/4`) in the same
@@ -77,13 +79,18 @@ defmodule Arca.Shares do
           updated_at: DateTime.t() | nil
         }
 
-  @typedoc "A share's source entry, as a reader binds it: no material and no name."
+  @typedoc """
+  A share's source entry, as a reader binds it: no material and no name,
+  and every column its binding digest is derived from.
+  """
   @type source :: %{
           id: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
           field_names: String.t(),
           destination: String.t(),
+          oauth_endpoints: String.t() | nil,
+          oauth_scopes: String.t() | nil,
           binding_digest: String.t() | nil,
           attach_only: boolean(),
           status: String.t()
@@ -97,6 +104,39 @@ defmodule Arca.Shares do
 
   @typedoc "What a revocation revoked and the profiles it blocked."
   @type revoked :: %{share_ids: [String.t()], blocked: [{String.t(), String.t()}]}
+
+  @doc """
+  Whether `audience`, `%{audience: _, group_id: _}`, is one a share may
+  name (`Arca.Schemas.Share.audience_valid?/1`).
+  """
+  @spec audience_valid?(term()) :: boolean()
+  defdelegate audience_valid?(audience), to: Share
+
+  @doc """
+  Whether the share row's audience `held` is the audience `admitted` a
+  caller read it at, both `%{audience: _, group_id: _}`: the one compare
+  a use's claim (`Arca.ShareUsage.claim/4`) and a revision's lock on the
+  shares it binds (`Arca.ConsentStorage`) make, so a narrowing, which
+  takes no lock, refuses what raced it rather than admitting outside the
+  audience.
+  """
+  @spec same_audience?(audience(), map()) :: boolean()
+  def same_audience?(%{audience: audience, group_id: group_id}, %{audience: audience} = admitted),
+    do: Map.get(admitted, :group_id) == group_id
+
+  def same_audience?(_held, _admitted), do: false
+
+  @doc "Whether `cap` is a cap a share may hold (`Arca.Schemas.Share.cap?/1`)."
+  @spec cap?(term()) :: boolean()
+  defdelegate cap?(cap), to: Share
+
+  @doc "The largest daily cap a share holds (`Arca.Schemas.Share.max_cap/0`)."
+  @spec max_cap() :: pos_integer()
+  defdelegate max_cap(), to: Share
+
+  @doc "The audiences a share may name (`Arca.Schemas.Share.audiences/0`)."
+  @spec audiences() :: [String.t()]
+  defdelegate audiences(), to: Share
 
   defguardp resolved(athanor_id) when is_binary(athanor_id) and athanor_id != ""
   defguardp platform(actor) when is_struct(actor, Prima.Actor) and actor.scope == :platform
@@ -259,16 +299,30 @@ defmodule Arca.Shares do
     |> eligible()
   end
 
-  defp eligible(nil), do: {:error, :not_found}
+  @doc """
+  Whether `entry`, a vault entry as its store answers it, may be shared:
+  `:ok`, or the refusal `create/3` answers for it (the module doc's).
+  `create/3` holds the row it locks to this; a caller asks it of the row
+  it read to refuse before it asks anything of a person.
+  """
+  @spec eligible(map() | nil) ::
+          :ok
+          | {:error,
+             :not_found
+             | {:entry_unavailable, String.t()}
+             | :disclosed_not_shareable
+             | :kind_not_shareable
+             | :destination_incomplete}
+  def eligible(nil), do: {:error, :not_found}
 
-  defp eligible(%VaultEntry{status: status}) when status != "active",
+  def eligible(%{status: status}) when status != "active",
     do: {:error, {:entry_unavailable, status}}
 
-  defp eligible(%VaultEntry{attach_only: false}), do: {:error, :disclosed_not_shareable}
+  def eligible(%{attach_only: false}), do: {:error, :disclosed_not_shareable}
 
-  defp eligible(%VaultEntry{} = entry) do
+  def eligible(%{kind: _, destination: _} = entry) do
     cond do
-      entry.kind not in Prima.CredentialKinds.instance() -> {:error, :kind_not_shareable}
+      entry.kind not in Prima.CredentialKinds.shareable() -> {:error, :kind_not_shareable}
       not complete_destination?(entry.destination) -> {:error, :destination_incomplete}
       true -> :ok
     end
@@ -774,6 +828,8 @@ defmodule Arca.Shares do
       provider_hint: v.provider_hint,
       field_names: v.field_names,
       destination: v.destination,
+      oauth_endpoints: v.oauth_endpoints,
+      oauth_scopes: v.oauth_scopes,
       binding_digest: v.binding_digest,
       attach_only: v.attach_only,
       status: v.status

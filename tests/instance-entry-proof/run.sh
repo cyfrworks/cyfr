@@ -6,17 +6,19 @@
 # browser harness starts a home (tests/browser/harness.sh), home.test behind
 # the harness's HTTPS front, its platform administrator signed in. In
 # Chromium (proof.mjs) the administrator offers the instance's own entries
-# from the Settings page, Ana signs in for the first time and is offered
-# them, her claims meet the person cap, a narrowing and a revocation
-# refuse her, Bea is denied at the door, and the administrator cannot
-# enter Ana's athanor.
+# from the Settings page, shares a key of their own with everyone, Ana
+# signs in for the first time, her first sign-in binds that share and she
+# is offered the entries, her claims meet the person cap, a narrowing and
+# a revocation refuse her, Bea is denied at the door, and the
+# administrator cannot enter Ana's athanor.
 #
 # The proof asks the server for its part through the output directory
 # (`ask-N.json`), and this script answers each (`answer-N.json`): a
 # person's sign-in through the release fixture's door
 # (tests/release-boot/fixture.exs `person`), and the claims and reads of
 # the proof's own fixture (tests/instance-entry-proof/fixture.exs), which
-# answers bounded facts and never material.
+# answers bounded facts and never material, and seeds the administrator's
+# share, which no page of the release makes.
 #
 # The harness runs no execution engine and no model, so no run is started:
 # an admission is the loader's answer, and a claim is the resolver's, not
@@ -162,17 +164,21 @@ answer_ask() {
       ANSWER="$(entry_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
         "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
       ;;
+    admin_share)
+      ANSWER="$(entry_fixture admin_share "$admin_token" "$(asked "$ask" provider)" "$(asked "$ask" field)" \
+        "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
+      ;;
     derived_head)
-      ANSWER="$(entry_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
+      ANSWER="$(entry_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" share_id)" \
         "$(asked "$ask" provider)" "$(asked "$ask" field)" \
         "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
       ;;
     admit) ANSWER="$(entry_fixture admit "$(token_of "$ask")")" ;;
     claim)
-      ANSWER="$(entry_fixture claim "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
+      ANSWER="$(entry_fixture claim "$(token_of "$ask")" "$(asked "$ask" source)" "$(asked "$ask" id)" \
         "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)")"
       ;;
-    row_binding) ANSWER="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" entry_id)")" ;;
+    row_binding) ANSWER="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" share_id)")" ;;
     focus) ANSWER="$(entry_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;
   esac

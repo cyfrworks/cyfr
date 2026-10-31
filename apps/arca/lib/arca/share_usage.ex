@@ -14,10 +14,14 @@ defmodule Arca.ShareUsage do
   date, read inside the claim's transaction and never taken from the
   caller, so every member of a cell counts the same day.
 
-  `claim/3` is one locking transaction (`Arca.Repo.locking_transaction/2`)
+  `claim/4` is one locking transaction (`Arca.Repo.locking_transaction/2`)
   under the owner's actor: the share's row is read shared
   (`Arca.QueryHelpers.for_share/1`), so a revoke, which takes it
   exclusive, and a claim serialize and a claim after the revoke refuses;
+  the audience the caller admitted the person under is compared with the
+  locked row's, so a narrowing that landed after the caller read the
+  share, which takes no lock of its own, refuses the claim rather than
+  counting a use outside the audience;
   both day rows are made present and read under a lock in a fixed order
   (the share's total first, then the person's); and both are raised by
   one. Each cap is the share's own, read from that locked row: `nil` is
@@ -27,8 +31,9 @@ defmodule Arca.ShareUsage do
   day admit one. `reset_at` is the next UTC midnight after the claimed
   day.
 
-  `usage/3` is the owner's read; `sweep/1` deletes the rows of days older
-  than thirty-five, in every athanor.
+  `usage/3` is the owner's read and `used_today/3` one person's count of
+  today; `sweep/1` deletes the rows of days older than thirty-five, in
+  every athanor.
   """
 
   import Ecto.Query
@@ -45,28 +50,32 @@ defmodule Arca.ShareUsage do
   @doc """
   Count one use of the share `share_id` of the actor's athanor by
   `user_id` today, held to the caps the share's row holds when the claim
-  reads it under its lock.
+  reads it under its lock, and to `admitted`, the audience
+  (`%{audience: _, group_id: _}`) the caller read the share at when it
+  admitted the person.
 
   Answers the day and both counts after the claim. Refused, with nothing
   counted: `{:error, {:connection_cap, reset_at}}` when a set cap is
   reached; `{:error, {:share_unavailable, status}}` for a share no longer
-  active; and `{:error, :not_found}` for a share the athanor does not
-  hold. The caps were held to their rule where they were set
+  active; `{:error, :audience_changed}` for a share whose audience is no
+  longer `admitted`; and `{:error, :not_found}` for a share the athanor
+  does not hold. The caps were held to their rule where they were set
   (`Arca.Schemas.Share.changeset/1`, `Arca.Shares.set_caps/4`).
   """
-  @spec claim(Prima.Actor.t(), String.t(), String.t()) ::
+  @spec claim(Prima.Actor.t(), String.t(), String.t(), Arca.Shares.audience()) ::
           {:ok, %{day: Date.t(), person: pos_integer(), total: pos_integer()}}
           | {:error,
              {:connection_cap, DateTime.t()}
              | {:share_unavailable, String.t()}
+             | :audience_changed
              | :not_found
              | :no_athanor
              | term()}
-  def claim(%Prima.Actor{athanor_id: athanor_id}, share_id, user_id)
+  def claim(%Prima.Actor{athanor_id: athanor_id}, share_id, user_id, %{} = admitted)
       when resolved(athanor_id) and is_binary(share_id) and is_binary(user_id) and user_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ShareUsage.claim", fn ->
       Arca.Repo.locking_transaction(fn ->
-        with {:ok, {person_cap, total_cap}} <- claimable(athanor_id, share_id) do
+        with {:ok, {person_cap, total_cap}} <- claimable(athanor_id, share_id, admitted) do
           day = DateTime.to_date(Arca.ServerMetaStorage.now!())
           now = now()
 
@@ -88,24 +97,33 @@ defmodule Arca.ShareUsage do
     end)
   end
 
-  def claim(%Prima.Actor{}, share_id, user_id) when is_binary(share_id) and is_binary(user_id),
-    do: {:error, :no_athanor}
+  def claim(%Prima.Actor{}, share_id, user_id, %{})
+      when is_binary(share_id) and is_binary(user_id),
+      do: {:error, :no_athanor}
 
   # The share's row, read shared, and its caps: a revoke holds it
-  # exclusive and is waited for, a share revoked since admits nothing, and
-  # caps set since are the ones the claim is held to.
-  defp claimable(athanor_id, share_id) do
+  # exclusive and is waited for, a share revoked since admits nothing, an
+  # audience moved since admits nothing, and caps set since are the ones
+  # the claim is held to.
+  defp claimable(athanor_id, share_id, admitted) do
     from(s in Share,
       where: s.id == ^share_id,
-      select: {s.status, s.person_daily, s.total_daily}
+      select: {s.status, s.audience, s.group_id, s.person_daily, s.total_daily}
     )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
     |> Arca.QueryHelpers.for_share()
     |> Arca.Repo.one()
     |> case do
-      nil -> {:error, :not_found}
-      {"active", person_daily, total_daily} -> {:ok, {person_daily, total_daily}}
-      {status, _person_daily, _total_daily} -> {:error, {:share_unavailable, status}}
+      nil ->
+        {:error, :not_found}
+
+      {"active", audience, group_id, person_daily, total_daily} ->
+        if Arca.Shares.same_audience?(%{audience: audience, group_id: group_id}, admitted),
+          do: {:ok, {person_daily, total_daily}},
+          else: {:error, :audience_changed}
+
+      {status, _audience, _group_id, _person_daily, _total_daily} ->
+        {:error, {:share_unavailable, status}}
     end
   end
 
@@ -147,6 +165,34 @@ defmodule Arca.ShareUsage do
 
   def usage(%Prima.Actor{}, share_id, days)
       when is_binary(share_id) and is_integer(days) and days > 0,
+      do: {:error, :no_athanor}
+
+  @doc """
+  How many times `user_id` used the share `share_id` of the actor's
+  athanor today, on the database's date as a claim counts it: `0` when
+  they have not.
+  """
+  @spec used_today(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :no_athanor | term()}
+  def used_today(%Prima.Actor{athanor_id: athanor_id}, share_id, user_id)
+      when resolved(athanor_id) and is_binary(share_id) and is_binary(user_id) and user_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.ShareUsage.used_today", fn ->
+      day = DateTime.to_date(Arca.ServerMetaStorage.now!())
+
+      count =
+        from(u in Usage,
+          where: u.share_id == ^share_id and u.user_id == ^user_id and u.day == ^day,
+          select: u.count
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.one()
+
+      {:ok, count || 0}
+    end)
+  end
+
+  def used_today(%Prima.Actor{}, share_id, user_id)
+      when is_binary(share_id) and is_binary(user_id),
       do: {:error, :no_athanor}
 
   @doc """

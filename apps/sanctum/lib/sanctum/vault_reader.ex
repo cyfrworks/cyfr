@@ -15,7 +15,11 @@ defmodule Sanctum.VaultReader do
      `scopes`
      (`oauth_token/4`). An edge without one is corrupt and dispenses
      nothing; consenting to the component again writes a named projection
-  3. the entry exists in the caller's tenant and is `active`
+  3. the entry exists in the tenant of the context's actor and is
+     `active`: the caller's own, or, for a share, the owner's, whose
+     internal context `Sanctum.Shares` derives from the share the
+     caller's consent names and hands here with a resource naming the
+     share's source entry and the digest that consent approved
   4. the binding digest **derived from the row's binding fields** equals
      the consent's copy — the stored column is a cache, never an
      authority, so a write path that edited endpoints without recomputing
@@ -47,7 +51,9 @@ defmodule Sanctum.VaultReader do
   (`Arca.VaultStorage.get_by_name/2`), and an instance entry is no
   athanor's. An instance entry is never named by a definition whose URL a
   member chose: a name only an instance entry carries is not found, and
-  that entry is neither unsealed nor used.
+  that entry is neither unsealed nor used. Neither is a share's source:
+  it is another athanor's entry, reached only through the share a
+  consent names, and never by name.
 
   ## The payload
 
@@ -367,8 +373,9 @@ defmodule Sanctum.VaultReader do
 
   @doc false
   # The consent read of an athanor's entry `resource` binds, shared with
-  # `Sanctum.Attach`: the entry under the caller's actor, active, at the
-  # binding digest the consent approved, unsealed under its AEAD. Whether
+  # `Sanctum.Attach` and `Sanctum.Shares`: the entry under the context's
+  # actor (the caller's, or a share's owner's), active, at the binding
+  # digest the consent approved, unsealed under its AEAD. Whether
   # its material may leave, and to whom, is the caller's to decide first.
   @spec load_and_unseal(Context.t(), vault_resource()) ::
           {:ok, Arca.VaultStorage.entry(), map()} | {:error, error()}
@@ -458,8 +465,10 @@ defmodule Sanctum.VaultReader do
 
   defp check_binding(_entry, _resource), do: {:error, :binding_mismatch}
 
-  # The AAD's athanor is the CALLER's, taken from the actor that read the
-  # row and never from the row itself. The facade has already refused any
+  # The AAD's athanor is the context actor's, taken from the actor that
+  # read the row and never from the row itself: the caller's own, or the
+  # owner's for a share, whose context `Sanctum.Shares` derives from the
+  # share the caller's consent names. The facade has already refused any
   # row outside that athanor, and binding the ciphertext to the reader's
   # tenant means a row that reached a foreign context by any path fails to
   # unseal instead of decrypting under the tenant it brought with it.

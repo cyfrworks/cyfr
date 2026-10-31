@@ -145,12 +145,14 @@ defmodule Sanctum.Consent.CommitDigestTest do
       assert {:error, {:invalid_commit, :bindings, why}} =
                CommitDigest.compute(Map.put(@base, :bindings, [Map.delete(@binding, :entry_id)]))
 
-      assert why =~ "exactly one of entry_id, instance_entry_id"
+      assert why =~ "exactly one of entry_id, instance_entry_id, share_id"
 
-      both = Map.put(@binding, :instance_entry_id, "ine-1")
+      for second <- [:instance_entry_id, :share_id] do
+        both = Map.put(@binding, second, "other-1")
 
-      assert {:error, {:invalid_commit, :bindings, _}} =
-               CommitDigest.compute(Map.put(@base, :bindings, [both]))
+        assert {:error, {:invalid_commit, :bindings, _}} =
+                 CommitDigest.compute(Map.put(@base, :bindings, [both]))
+      end
 
       assert {:error, {:invalid_commit, :binding_digest, _}} =
                CommitDigest.compute(
@@ -163,11 +165,13 @@ defmodule Sanctum.Consent.CommitDigestTest do
     @standing %{kind: "standing"}
     @until %{kind: "until", until: "2026-10-04T12:00:00Z"}
 
-    test "the instance id, the account name, the lifetime and renew each change the digest" do
+    test "the instance id, the share id, the account name, the lifetime and renew each change " <>
+           "the digest" do
       base = Map.put(@base, :bindings, [Map.put(@binding, :lifetime, @standing)])
 
       variants = [
         [@binding |> Map.delete(:entry_id) |> Map.put(:instance_entry_id, "vault-1")],
+        [@binding |> Map.delete(:entry_id) |> Map.put(:share_id, "vault-1")],
         [Map.put(@binding, :name, "Supabase 1")],
         [Map.put(@binding, :lifetime, %{kind: "once"})],
         [Map.put(@binding, :lifetime, @until)],
@@ -272,6 +276,7 @@ defmodule Sanctum.Consent.CommitDigestTest do
       variants = [
         [@selection],
         [entry |> Map.delete(:entry_id) |> Map.put(:instance_entry_id, "vault-1")],
+        [entry |> Map.delete(:entry_id) |> Map.put(:share_id, "vault-1")],
         [%{entry | need: "other"}],
         [Map.put(entry, :lifetime, %{kind: "once"})],
         [Map.put(entry, :renew, true)],
@@ -283,12 +288,14 @@ defmodule Sanctum.Consent.CommitDigestTest do
                "#{inspect(selections)} did not affect the digest"
       end
 
-      # A selection names exactly one of a label, an entry and an
-      # instance entry.
-      assert {:error, {:invalid_commit, :selections, _}} =
-               CommitDigest.compute(
-                 Map.put(@base, :selections, [Map.put(@selection, :entry_id, "vault-1")])
-               )
+      # A selection names exactly one of a label, an entry, an instance
+      # entry and a share.
+      for second <- [:entry_id, :share_id] do
+        assert {:error, {:invalid_commit, :selections, _}} =
+                 CommitDigest.compute(
+                   Map.put(@base, :selections, [Map.put(@selection, second, "vault-1")])
+                 )
+      end
     end
 
     test "a selection's account name changes the digest, and an edge takes its default and " <>

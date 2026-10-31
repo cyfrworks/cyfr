@@ -44,6 +44,12 @@ defmodule Sanctum.Vault do
   (`Sanctum.Telemetry.vault_entry_changed/4`) so dependents (external MCP
   server processes holding resolved headers) reconcile immediately.
 
+  An entry offered through shares tells their recipients, in other
+  athanors, once the change committed (`Sanctum.Shares.announce_each/3`):
+  a rebind announces `rebound` for each share it carried, a rotation
+  `rotated` for each active share of the entry, and a revoke or a delete
+  `revoked` for each share it revoked.
+
   What ships to callers is metadata only: names, kinds, field *names*,
   status. Material stays sealed; there is no read-back verb.
 
@@ -450,6 +456,7 @@ defmodule Sanctum.Vault do
       case Arca.VaultStorage.commit_payload(Context.actor(ctx), id, plan, hold) do
         {:ok, %{payload_rev: rev}} ->
           broadcast(ctx, id, :rotate, %{name: entry.name})
+          announce_rotated(ctx, id)
           {:ok, rev}
 
         {:error, _} = err ->
@@ -537,7 +544,7 @@ defmodule Sanctum.Vault do
     with {:ok, digest} <- VaultReader.binding_digest(rebound),
          {:ok, confirmation} <-
            rebind_confirmation(ctx, "vault.rebind", entry, rebound, digest),
-         {:ok, affected} <-
+         {:ok, %{affected: affected, rebound_share_ids: share_ids}} <-
            Arca.VaultStorage.move_binding(
              Context.actor(ctx),
              entry.id,
@@ -547,6 +554,7 @@ defmodule Sanctum.Vault do
              confirmation
            ) do
       if confirmation != [], do: Authz.consumed(ctx)
+      Sanctum.Shares.announce_each(ctx, :rebound, share_ids)
       {:ok, %{binding_digest: digest, affected: affected}}
     end
   end
@@ -687,11 +695,17 @@ defmodule Sanctum.Vault do
   def revoke(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_living(ctx, id),
-         :ok <- Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked"),
-         {:ok, affected} <-
-           Arca.ConsentStorage.head_profiles_referencing(Context.actor(ctx), id) do
-      broadcast(ctx, id, :revoke, %{name: entry.name})
-      {:ok, %{affected: Enum.sort(affected)}}
+         {:ok, %{revoked_share_ids: share_ids}} <-
+           Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked") do
+      # The revocation committed: its shares are announced whatever the
+      # read of the profiles after it answers.
+      Sanctum.Shares.announce_each(ctx, :revoked, share_ids)
+
+      with {:ok, affected} <-
+             Arca.ConsentStorage.head_profiles_referencing(Context.actor(ctx), id) do
+        broadcast(ctx, id, :revoke, %{name: entry.name})
+        {:ok, %{affected: Enum.sort(affected)}}
+      end
     end
   end
 
@@ -700,8 +714,10 @@ defmodule Sanctum.Vault do
   def delete(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_any(ctx, id),
-         :ok <- Arca.VaultStorage.tombstone(Context.actor(ctx), id) do
+         {:ok, %{revoked_share_ids: share_ids}} <-
+           Arca.VaultStorage.tombstone(Context.actor(ctx), id) do
       broadcast(ctx, id, :delete, %{name: entry.name})
+      Sanctum.Shares.announce_each(ctx, :revoked, share_ids)
       :ok
     end
   end
@@ -981,6 +997,24 @@ defmodule Sanctum.Vault do
         )
 
         default
+    end
+  end
+
+  # A rotation moves no digest and blocks nothing, so no share is written:
+  # the entry's active shares are read after the commit, under the owner's
+  # own actor, and each announces it. A read that fails costs the
+  # announcement, never the committed rotation.
+  defp announce_rotated(ctx, entry_id) do
+    case Arca.Shares.list(Context.actor(ctx)) do
+      {:ok, shares} ->
+        ids = for %{id: id, vault_entry_id: ^entry_id, status: "active"} <- shares, do: id
+        Sanctum.Shares.announce_each(ctx, :rotated, ids)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.Vault] the shares of a rotated entry were not announced: " <>
+            Prima.LoggerContext.shape(reason)
+        )
     end
   end
 

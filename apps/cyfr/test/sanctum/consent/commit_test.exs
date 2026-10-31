@@ -1762,7 +1762,7 @@ defmodule Sanctum.Consent.CommitTest do
         assert {:error, {:invalid_argument, why}} =
                  Commit.preview(ctx, %{ref: ref, bindings: [binding]})
 
-        assert why =~ "exactly one of entry_id and instance_entry_id"
+        assert why =~ "exactly one of entry_id, instance_entry_id and share_id"
       end
     end
 
@@ -2512,6 +2512,242 @@ defmodule Sanctum.Consent.CommitTest do
       # And the block stands: nothing after the revision unblocks it.
       assert {:ok, %{status: "needs_consent"}} =
                Arca.ProfileStorage.get(Sanctum.Context.actor(person), profile_id)
+    end
+  end
+
+  describe "shares" do
+    alias Cyfr.Test.ShareFixtures
+
+    setup do
+      ShareFixtures.traders!()
+    end
+
+    defp bind_share(person, ref, share),
+      do:
+        Commit.preview(person.ctx, %{
+          ref: ref,
+          bindings: [%{need: "api_key", share_id: share.id}]
+        })
+
+    # Terry's binding move, landing just after Alice's commit read the share
+    # and its source (`Arca.Shares.get_for_source/2`, outside any
+    # transaction), so her commit holds the digest it was shown and her
+    # revision meets the moved one under its own locks.
+    def rebind_after_read(_event, _measurements, meta, %{test: test, rebind: rebind}) do
+      if self() == test and Process.get(:share_rebound) == nil and meta[:source] == "shares" and
+           not Arca.Repo.in_transaction?() do
+        Process.put(:share_rebound, rebind.())
+      end
+    end
+
+    test "a share is a candidate Shared by its owner, suggested when it is the only one",
+         %{alice: alice, share: share} do
+      ref = custom!(alice.ctx, "commit-share-candidate")
+
+      {:ok, %{needs: [need]}} = Plan.plan(alice.ctx, %{ref: ref})
+
+      assert [
+               %{
+                 source: "share",
+                 share_id: id,
+                 name: "Shared by Terry",
+                 owner: "Terry",
+                 disclosed: false,
+                 fit: "exact",
+                 field_names: ["OPENAI_API_KEY"]
+               }
+             ] = need.candidates
+
+      assert id == share.id
+      assert need.suggested == %{share_id: share.id}
+      assert need.source == "share"
+    end
+
+    test "a commit binding a share writes its row by the share, and the blob's edge names the " <>
+           "share at the digest its source derives",
+         %{alice: alice, share: share, entry: entry} do
+      ref = custom!(alice.ctx, "commit-share")
+
+      {:ok, preview} = bind_share(alice, ref, share)
+      assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+      assert Map.take(values, ~w(name source disclosed suggested provider)) == %{
+               "name" => "Shared by Terry",
+               "source" => "share",
+               "disclosed" => false,
+               "suggested" => true,
+               "provider" => "openai.com"
+             }
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(alice.ctx, ref, %{bindings: [%{need: "api_key", share_id: share.id}]})
+
+      head = head!(alice.ctx, profile_id)
+
+      assert [
+               %{
+                 scope: "share",
+                 share_id: share_id,
+                 vault_entry_id: nil,
+                 instance_entry_id: nil,
+                 via_label: nil,
+                 binding_digest: digest
+               }
+             ] = head.vault_refs
+
+      assert share_id == share.id
+      assert digest == entry.binding_digest
+
+      {:ok, blob} = Jason.decode(head.resolved_policy)
+      vault = blob["nodes"][ref]["edges"]["@ingress"]["vault"]
+
+      assert Map.take(vault, ~w(scope entry_id binding_digest)) == %{
+               "scope" => "share",
+               "entry_id" => share.id,
+               "binding_digest" => entry.binding_digest
+             }
+
+      # A run loads the grant: its row and its blob name one share, and the
+      # root's key is the share's.
+      {:ok, [profile]} = Sanctum.Consent.profiles(alice.ctx, ref)
+      {:ok, component, _ref} = Compendium.Component.resolve_component(alice.ctx, ref)
+      {:ok, shape} = Sanctum.Consent.ShapeDerivation.live_digest(alice.ctx, ref)
+
+      assert {:ok, authority, _stamp} =
+               Sanctum.Consent.Loader.load_root(alice.ctx, profile,
+                 live: Compendium.resolve_verified_activation(alice.ctx, component),
+                 live_shape_digest: shape
+               )
+
+      assert %{scope: "share", entry_id: ^share_id} = authority.resources.vault
+    end
+
+    test "Terry rebinding his key after Alice's commit read it refuses her revision under its " <>
+           "locks: binding_went_stale",
+         %{alice: alice, terry: terry, share: share, entry: entry} do
+      ref = custom!(alice.ctx, "commit-share-stale")
+      decisions = %{ref: ref, bindings: [%{need: "api_key", share_id: share.id}]}
+
+      {:ok, plan} = Plan.plan(alice.ctx, %{ref: ref})
+      {:ok, preview} = Commit.preview(alice.ctx, decisions)
+
+      handler = {__MODULE__, :rebind_after_read, System.unique_integer([:positive])}
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.rebind_after_read/4, %{
+          test: self(),
+          rebind: fn -> ShareFixtures.rebind!(terry, entry) end
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:error, {:binding_went_stale, stale}} =
+               Commit.commit(alice.ctx, %{
+                 decisions: decisions,
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+
+      :telemetry.detach(handler)
+
+      # The move landed after the commit read the share at the digest it
+      # showed, and the revision refused it under its locks: nothing was
+      # granted, and the entry stands where Terry moved it.
+      moved = Process.get(:share_rebound)
+      assert is_binary(moved) and moved != entry.binding_digest
+      assert stale == share.id
+      assert {:ok, []} = Sanctum.Consent.profiles(alice.ctx, ref)
+      assert {:ok, %{binding_digest: ^moved}} = Arca.VaultStorage.get(terry.actor, entry.id)
+    end
+
+    test "a share not offered to the person, revoked, their own, or bound where the component " <>
+           "reads the value is refused",
+         %{alice: alice, terry: terry, share: share} do
+      ref = custom!(alice.ctx, "commit-share-refusals")
+
+      # Sam is in no group Terry shared with.
+      sam = ShareFixtures.person!("Sam")
+
+      assert {:error, {:share_not_offered, "api_key"}} =
+               bind_share(sam, custom!(sam.ctx, "commit-share-sam"), share)
+
+      # Terry's own share is offered to the others, never to him.
+      assert {:error, {:share_not_offered, "api_key"}} =
+               bind_share(terry, custom!(terry.ctx, "commit-share-terry"), share)
+
+      publish!(alice.ctx, "commit-share-reads", "1.0.0", keyed_manifest(%{"disclose" => true}))
+
+      assert {:error, {:disclosure_refused, "api_key"}} =
+               bind_share(alice, "reagent:local.commit-share-reads", share)
+
+      assert {:ok, _preview} = bind_share(alice, ref, share)
+
+      {:ok, _revoked} =
+        Arca.Shares.revoke(terry.actor, share.id, Sanctum.Vault.blocked_profile_status())
+
+      assert {:error, {:share_not_offered, "api_key"}} = bind_share(alice, ref, share)
+    end
+
+    test "a share chosen on a dependency's edge, and one a dependency's profile lends, bind as " <>
+           "the share",
+         %{alice: alice, share: share} do
+      two = two_deps!(alice.ctx)
+      dep_a = "reagent:local.commit-dep-a"
+      dep_b = "reagent:local.commit-dep-b"
+
+      # The dependency's own profile binds the share; its label lends it.
+      {:ok, _} = walk!(alice.ctx, dep_b, %{bindings: [%{need: "api_key", share_id: share.id}]})
+
+      selections = [%{dep: dep_a, share_id: share.id}, %{dep: dep_b, label: "default"}]
+      {:ok, preview} = Commit.preview(alice.ctx, %{ref: two, selections: selections})
+
+      assert for(
+               %{"kind" => "credential", "values" => v} <- preview.rows,
+               do: {v["edge"], v["name"], v["source"], v["disclosed"], v["label"]}
+             )
+             |> Enum.sort() == [
+               {dep_a, "Shared by Terry", "share", false, nil},
+               {dep_b, "Shared by Terry", "share", false, "default"}
+             ]
+
+      {:ok, %{profile_id: profile_id}} = walk!(alice.ctx, two, %{selections: selections})
+      rows = rows_by_key(alice.ctx, profile_id)
+
+      assert %{scope: "share", share_id: chosen, vault_entry_id: nil} =
+               rows["#{two}|#{dep_a}|default"]
+
+      assert %{scope: "athanor", via_label: "default", share_id: nil} =
+               rows["#{two}|#{dep_b}|default"]
+
+      assert chosen == share.id
+    end
+
+    test "a binding names exactly one of an entry, an instance entry and a share",
+         %{alice: alice, share: share} do
+      ref = custom!(alice.ctx, "commit-share-one")
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.preview(alice.ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "api_key", share_id: share.id, entry_id: "vlt_x"}]
+               })
+
+      assert why =~ "exactly one of entry_id, instance_entry_id and share_id"
+    end
+
+    test "a public profile refuses a share, whose callers are anonymous",
+         %{alice: alice, share: share} do
+      ref = custom!(alice.ctx, "commit-share-public")
+
+      {:ok, %{profile_id: owner}} =
+        walk!(alice.ctx, ref, %{bindings: [%{need: "api_key", share_id: share.id}]})
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.stage_publish(alice.ctx, %{profile_id: owner, need_ids: ["@ingress"]})
+
+      assert why =~ "binds a shared key"
     end
   end
 

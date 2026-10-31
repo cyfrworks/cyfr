@@ -15,7 +15,10 @@ defmodule Sanctum.Vault.Payload do
 
   Decoding is strict: another version, unknown keys, non-string field
   values and malformed oauth blocks are refused, so a tampered or
-  mis-written payload fails before any of it is dispensed.
+  mis-written payload fails before any of it is dispensed. A refusal
+  names the shape that failed and never a value: a plaintext that does
+  not read as JSON is `{:invalid_payload, {:not_json, position}}`, the
+  byte offset the parser stopped at and none of the bytes.
   """
 
   @type t :: map()
@@ -25,11 +28,13 @@ defmodule Sanctum.Vault.Payload do
 
   @doc "Decode and validate a sealed payload's plaintext."
   @spec decode(binary()) ::
-          {:ok, t()} | {:error, {:invalid_payload, term()}}
+          {:ok, t()} | {:error, {:invalid_payload, atom() | tuple()}}
   def decode(plaintext) when is_binary(plaintext) do
     case Jason.decode(plaintext) do
       {:ok, decoded} -> validate(decoded)
-      {:error, reason} -> {:error, {:invalid_payload, reason}}
+      # The parser's error holds the whole decrypted input: only where it
+      # stopped leaves here.
+      {:error, %Jason.DecodeError{position: position}} -> {:error, not_json(position)}
     end
   end
 
@@ -49,6 +54,8 @@ defmodule Sanctum.Vault.Payload do
       {:ok, Jason.encode!(valid)}
     end
   end
+
+  defp not_json(position) when is_integer(position), do: {:invalid_payload, {:not_json, position}}
 
   # ---------------------------------------------------------------------------
   # Validation

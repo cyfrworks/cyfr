@@ -11,9 +11,11 @@ defmodule Sanctum.AttachTest do
   pin refused, a missing row refused), then an athanor's entry held to its
   binding and destination, an instance entry held to the consented
   digest, refused when it is OAuth, and resolved under its policy,
-  destination and caps, or a publisher's provided value held to its
-  destination. A refusal touches nothing it comes before: no row is
-  consumed, no cap claimed and nothing unsealed.
+  destination and caps, a share resolved through its owner's entry under
+  the digest the consent approved, refused when it is OAuth, or a
+  publisher's provided value held to its destination. A refusal touches
+  nothing it comes before: no row is consumed, no cap claimed and nothing
+  unsealed.
   """
 
   # The component-facts port and the platform settings are node-wide.
@@ -100,6 +102,11 @@ defmodule Sanctum.AttachTest do
     "hosts" => ["api.openai.com"],
     "methods" => ["GET", "POST"],
     "paths" => ["/v1/chat/completions"]
+  }
+  @share_destination %{
+    "hosts" => ["api.example.com"],
+    "methods" => ["GET"],
+    "paths" => ["/v1/"]
   }
 
   @custom %{node_ref: "catalyst:local.my-chat:1.0.0", activation_digest: "sha256:custom"}
@@ -294,6 +301,78 @@ defmodule Sanctum.AttachTest do
   defp usage(entry_id) do
     {:ok, %{totals: totals}} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), entry_id, 1)
     Enum.sum(Enum.map(totals, & &1.count))
+  end
+
+  # A person signed in at this CYFR, in their own athanor, where a share
+  # is made and granted.
+  defp own!(name) do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{id: "local|local|attach-#{n}", provider: "local", name: name})
+
+    Context.build(
+      user_id: user.id,
+      provider: "local",
+      namespace: "attach#{n}",
+      athanor_id: Sanctum.Test.People.athanor!(user).id,
+      permissions: Context.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
+  # The owner's attach-only key shared with everyone, its row and the
+  # share, under the proof the creation asks.
+  defp shared!(owner) do
+    entry = entry!(owner, %{destination: @share_destination})
+
+    {:ok, share} =
+      TestContext.confirming(
+        owner,
+        &Sanctum.Shares.create(&1, %{entry_id: entry.id, audience: "everyone"})
+      )
+
+    {entry, share}
+  end
+
+  # The recipient's profile whose head binds `share` at the digest of its
+  # source, and the vault resource a run under it carries, naming the
+  # share and the digest `digest` (the approved one unless given).
+  defp share_bound!(recipient, entry, share, opts \\ []) do
+    {:ok, approved} = Sanctum.VaultReader.binding_digest(entry)
+    key = Prima.Authority.Blob.binding_key(@source, Prima.Authority.Blob.ingress_key(), nil)
+
+    {profile_id, consent_id} =
+      head!(recipient, [
+        %{
+          binding_key: key,
+          scope: "share",
+          share_id: share.id,
+          binding_digest: approved,
+          admitted: %{audience: share.audience, group_id: share.group_id}
+        }
+      ])
+
+    {:ok, destination} = Prima.Destination.from_map(@share_destination)
+
+    vault = %{
+      entry_id: share.id,
+      binding_digest: Keyword.get(opts, :digest, approved),
+      scope: "share",
+      binding_key: key,
+      destination: destination,
+      attach: @rule,
+      projection: Keyword.get(opts, :projection, %{fields: %{"MARKET_KEY" => "KEY"}, scopes: []})
+    }
+
+    {vault, facts(profile_id, consent_id)}
+  end
+
+  defp share_usage(owner, share) do
+    {:ok, usage} = Arca.ShareUsage.usage(Context.actor(owner), share.id, 2)
+    usage
   end
 
   # ---------------------------------------------------------------------------
@@ -682,6 +761,93 @@ defmodule Sanctum.AttachTest do
                Attach.resolve(ctx, vault, "api_key", url, facts)
 
       assert usage(entry.id) == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A share
+  # ---------------------------------------------------------------------------
+
+  describe "a share" do
+    test "attaches the one field its projection maps from the owner's entry, masked, and " <>
+           "counts the use in the owner's athanor" do
+      terry = own!("Terry")
+      alice = own!("Alice")
+      {entry, share} = shared!(terry)
+      {vault, facts} = share_bound!(alice, entry, share)
+
+      assert {:ok, %{value: @secret, attach: @rule, masking: [@secret]}} =
+               Attach.resolve(
+                 alice,
+                 vault,
+                 "api_key",
+                 request("https://api.example.com/v1/quotes", "GET"),
+                 facts
+               )
+
+      assert %{people: [%{user_id: user_id, count: 1}], totals: [%{count: 1}]} =
+               share_usage(terry, share)
+
+      assert user_id == alice.user_id
+    end
+
+    test "a request off the source's destination is refused, with no use counted" do
+      terry = own!("Terry")
+      alice = own!("Alice")
+      {entry, share} = shared!(terry)
+      {vault, facts} = share_bound!(alice, entry, share)
+
+      for {url, method} <- [
+            {"https://other.example.com/v1/quotes", "GET"},
+            {"https://api.example.com/v1/quotes", "POST"},
+            {"https://api.example.com/v2/quotes", "GET"}
+          ] do
+        assert {:error, :destination_mismatch} =
+                 Attach.resolve(alice, vault, "api_key", request(url, method), facts),
+               "#{method} #{url}"
+      end
+
+      assert share_usage(terry, share) == %{people: [], totals: []}
+      assert last_used(terry, entry) == nil
+    end
+
+    test "an OAuth projection of a share attaches nothing, with no use counted" do
+      terry = own!("Terry")
+      alice = own!("Alice")
+      {entry, share} = shared!(terry)
+
+      {vault, facts} =
+        share_bound!(alice, entry, share, projection: %{fields: %{}, scopes: ["scope.a"]})
+
+      assert {:error, :no_oauth_material} =
+               Attach.resolve(
+                 alice,
+                 vault,
+                 "api_key",
+                 request("https://api.example.com/v1/quotes", "GET"),
+                 facts
+               )
+
+      assert share_usage(terry, share) == %{people: [], totals: []}
+      assert last_used(terry, entry) == nil
+    end
+
+    test "a resource whose digest is not its source's is stale, with no use counted" do
+      terry = own!("Terry")
+      alice = own!("Alice")
+      {entry, share} = shared!(terry)
+      url = request("https://api.example.com/v1/quotes", "GET")
+
+      for digest <- ["sha256:approved-elsewhere", nil] do
+        {vault, facts} = share_bound!(alice, entry, share, digest: digest)
+
+        assert {:error, :binding_went_stale} =
+                 Attach.resolve(alice, vault, "api_key", url, facts),
+               inspect(digest)
+      end
+
+      assert share_usage(terry, share) == %{people: [], totals: []}
+      assert last_used(terry, entry) == nil
     end
   end
 

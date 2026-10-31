@@ -637,7 +637,7 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the thirty-eight stores and the transitions, each a module" do
+    test "the security-row roster is exactly the forty stores and the transitions, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -649,7 +649,8 @@ defmodule Cyfr.BoundariesTest do
                  Arca.IdentityLog Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
                  Arca.InstallationClaims Arca.RequestRateWindows Arca.InstanceEntries
-                 Arca.InstanceEntryUsage Arca.DecisionLog Arca.McpLog Arca.PolicyLog
+                 Arca.InstanceEntryUsage Arca.Shares Arca.ShareUsage Arca.DecisionLog
+                 Arca.McpLog Arca.PolicyLog
                  Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations
                  Arca.CompanyLoginAttempts Arca.SecurityTransitions
                ))
@@ -981,6 +982,42 @@ defmodule Cyfr.BoundariesTest do
       assert row.reason =~
                "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
                  "instance-entry usage days (`sweep_usage/0`), which names no entry and no person"
+    end
+
+    # A share is Sanctum's to administer and resolve through declared
+    # operations and its own attach path: the host reaches it for the
+    # retention cycle's usage sweep, which names no share and no person,
+    # and for the composition root's announcement of the shares a declared
+    # restore revoked.
+    test "the host reaches the shares for the usage sweep and the restore's announcement alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.Shares"] == [announce_each: 3, sweep_usage: 0]
+
+      reached =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            {"Sanctum.Shares", function, arity} <- sanctum_reaches(String.to_charlist(path)),
+            uniq: true,
+            do: {module_name(path), function, arity}
+
+      assert Enum.sort(reached) == [
+               {"Cyfr.Application", :announce_each, 3},
+               {"Cyfr.RetentionScheduler", :sweep_usage, 0}
+             ]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", allow: allow} = row <- Boundaries.surfaces(),
+                 "Sanctum.Shares" in allow,
+                 do: row
+               )
+
+      assert "apps/cyfr/lib/cyfr/**/*.ex" in row.from
+
+      assert row.reason =~
+               "`Sanctum.Shares` is `Cyfr.RetentionScheduler`'s periodic sweep of share usage days"
+
+      assert row.reason =~ "sweep of share usage days (`sweep_usage/0`)"
+      assert row.reason =~ "a declared restore revoked"
     end
 
     # The vault decides the value an attached request carries; the control

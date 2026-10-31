@@ -339,7 +339,7 @@ defmodule Locus.Runtime.ChainTest do
         })
 
       {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-      :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
+      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
       {entry, digest}
     end
 

@@ -13,18 +13,24 @@
 //                    Mail are made on the Settings card, each key typed in
 //                    the system layer's prompt alone and its credential_entry
 //                    confirmation proven with the administrator's passkey
-//   first_sign_in    Ana's first sign-in provisions her athanor: its
-//                    bootstrap binds Company AI on the openai catalyst, the
-//                    real loader admits the root with no run started, and
-//                    her vault offers both entries and shows no material
+//   first_sign_in    the administrator shares with everyone a key of their
+//                    own made with Company AI's provider, field and
+//                    destination (fixture.exs `admin_share`); Ana's first
+//                    sign-in provisions her athanor: its bootstrap binds
+//                    that share on the openai catalyst, the real loader
+//                    admits the root with no run started, a claim through
+//                    the share is admitted and counted, its row binding
+//                    reads offered, and her vault offers both entries and
+//                    shows no material
 //   claim_cap        three claims of Company AI under Ana's context are
 //                    admitted, her vault then says her daily limit is
 //                    reached and resets at midnight UTC, and the fourth is
 //                    refused with the database's next UTC midnight
 //   narrow_audience  the administrator narrows Company AI to Bea on the
 //                    card, which sends the audience it showed as expected:
-//                    Ana's claim and her consent's row binding are refused,
-//                    and her vault no longer offers it
+//                    Ana's claim of it is refused, her consent's row
+//                    binding of the share still reads offered, and her
+//                    vault no longer offers Company AI
 //   revoke           Company Mail, claimed by Ana just before, is revoked
 //                    on the card: her next claim is refused, and her vault
 //                    offers nothing
@@ -150,7 +156,7 @@ function requestedDestination(spec) {
 //   derived  compared with a value derived independently of the row, which
 //            the model holds: what a card's request implies the owner stores
 //            (`requested_digest`), or what the first sign-in's bootstrap
-//            derives from it (`derived_head`);
+//            derives from it and the administrator's share (`derived_head`);
 //   bound    a clock or server-minted value, held to the bound the table
 //            states.
 //
@@ -221,8 +227,10 @@ const typedPayload = {
 const CARD = "its card on the Settings page shows";
 const ADMISSION = "the loader's admission of Ana's root named";
 const SIGN_IN = "the person's sign-in named";
+const ADMIN = "the administrator's sign-in named";
+const SHARE = "the administrator's share (fixture.exs admin_share) named";
 const REQUESTED = "requested_digest, from the destination its card requested";
-const DERIVED = "derived_head, built by the owner's builders from the installed catalyst and the request";
+const DERIVED = "derived_head, built by the owner's builders from the installed catalyst, the request and the share";
 
 const FIELDS = {
   instance_entries: {
@@ -241,7 +249,7 @@ const FIELDS = {
     person_daily: exact,
     total_daily: exact,
     component_policy: exact,
-    created_by: minted("the administrator's sign-in named"),
+    created_by: minted(ADMIN),
     inserted_at: clock,
     updated_at: clock,
   },
@@ -253,6 +261,27 @@ const FIELDS = {
   instance_entry_usage: {
     instance_entry_id: minted(CARD),
     user_id: minted(`${SIGN_IN}, or the empty id of the entry's own total`),
+    day,
+    count: exact,
+    updated_at: clock,
+  },
+  shares: {
+    id: minted(SHARE),
+    athanor_id: minted(ADMIN),
+    vault_entry_id: minted(SHARE),
+    audience: exact,
+    group_id: exact,
+    person_daily: exact,
+    total_daily: exact,
+    status: exact,
+    created_by: minted(ADMIN),
+    inserted_at: clock,
+    updated_at: clock,
+  },
+  share_usage: {
+    athanor_id: minted(ADMIN),
+    share_id: minted(SHARE),
+    user_id: minted(`${SIGN_IN}, or the empty id of the share's own total`),
     day,
     count: exact,
     updated_at: clock,
@@ -292,8 +321,8 @@ const FIELDS = {
     binding_key: exact,
     scope: exact,
     vault_entry_id: exact,
-    instance_entry_id: minted(CARD),
-    share_id: exact,
+    instance_entry_id: exact,
+    share_id: minted(SHARE),
     via_label: exact,
     binding_digest: derived(REQUESTED),
     lifetime_kind: exact,
@@ -341,14 +370,17 @@ function classified(table, row, read, problems) {
 
 // Everything the README names, as the home holds it (`fixture.exs`
 // `state`), every field through its class, shaped for the one comparison:
-// every entry, member and use row of the instance, Ana's profiles,
-// consents, binding rows and offered entries, and Bea's row.
+// every entry, member and use row of the instance, every share and share
+// use row, Ana's profiles, consents, binding rows and offered entries, and
+// Bea's row.
 function storedState(state, read, problems) {
   const each = (table, rows) => (rows || []).map((r) => classified(table, r, read, problems));
   return {
     entries: each("instance_entries", state && state.entries),
     members: each("instance_entry_members", state && state.members),
     usage: each("instance_entry_usage", state && state.usage),
+    shares: each("shares", state && state.shares),
+    share_usage: each("share_usage", state && state.share_usage),
     ana: (state && state.ana) ? {
       profiles: each("profiles", state.ana.profiles),
       consents: each("consents", state.ana.consents),
@@ -563,13 +595,13 @@ async function main() {
   try {
     // The proof's own model of everything the README names, changed at each
     // step only by what that step did: the instance's entries, their listed
-    // members and their use, Ana's profiles, consents, binding rows and
-    // offered entries once she has signed in, and Bea's row once she has.
-    // After every step the whole of it is compared with the whole of what
-    // the home holds, in one read, every field through its class: a change
-    // behind the browser to any of it fails the next step, whichever step
-    // that is.
-    const model = { entries: [], members: [], usage: [], ana: null, bea: null };
+    // members and their use, the shares and their use, Ana's profiles,
+    // consents, binding rows and offered entries once she has signed in,
+    // and Bea's row once she has. After every step the whole of it is
+    // compared with the whole of what the home holds, in one read, every
+    // field through its class: a change behind the browser to any of it
+    // fails the next step, whichever step that is.
+    const model = { entries: [], members: [], usage: [], shares: [], share_usage: [], ana: null, bea: null };
     // The database's time as the run starts: the window every stored time
     // is held to opens here, before anything the proof names is made.
     const run = { start: (await ask({ op: "clock" })).now };
@@ -603,6 +635,16 @@ async function main() {
     // today.
     const use = (entryId, userId, count) =>
       ({ instance_entry_id: entryId, user_id: userId, day: TODAY, count, updated_at: IN_WINDOW });
+    // A use row of the administrator's share, in their athanor, as the
+    // model holds it: the person's count, or the share's own total under
+    // the empty id, on the database's today.
+    const shareUse = (shareId, userId, count) => ({
+      athanor_id: operator.athanor_id, share_id: shareId, user_id: userId, day: TODAY, count, updated_at: IN_WINDOW,
+    });
+    // A claim of `spec`'s entry `id` (`source` instance) or of the share
+    // `id` (`source` share) under Ana's context, `count` times.
+    const claimOf = (source, id, spec, count) =>
+      ask({ op: "claim", user_id: ana.user_id, source, id, count, url: spec.url, method: spec.method });
     // A claim's whole answer: its results, and the database's next UTC
     // midnight, the value a cap's reset is compared with.
     const claimAnswer = (answer, results) =>
@@ -640,8 +682,26 @@ async function main() {
     // first_sign_in
     // -----------------------------------------------------------------------
     // The administrator opens the door to newcomers, which admits Ana and
-    // Bea when they are made.
+    // Bea when they are made, and shares with everyone, before Ana signs
+    // in, a key of their own made with Company AI's provider, field and
+    // destination: the share a newcomer's first sign-in binds.
     const allowed = [await door(admin, settings, "*", "allow")];
+    const shared = await ask({
+      op: "admin_share", provider: AI.provider, field: FIELD, destination: requestedDestination(AI),
+    });
+    model.shares = [{
+      id: shared.share_id,
+      athanor_id: operator.athanor_id,
+      vault_entry_id: shared.entry_id,
+      audience: "everyone",
+      group_id: null,
+      person_daily: null,
+      total_daily: null,
+      status: "active",
+      created_by: operator.user_id,
+      inserted_at: IN_WINDOW,
+      updated_at: IN_WINDOW,
+    }];
     ana = await ask({ op: "sign_in", name: "ana", email: "ana@example.com" });
     // The loader's decision on her root names the profile and consent it
     // roots on: the ids the model takes for the profile and head the
@@ -651,9 +711,14 @@ async function main() {
     // policy blob's text, its digest, the activation, the shape and commit
     // digests, built by the owner's own builders, never read back.
     const derived = await ask({
-      op: "derived_head", user_id: ana.user_id, entry_id: ai.id,
+      op: "derived_head", user_id: ana.user_id, share_id: shared.share_id,
       provider: AI.provider, field: FIELD, destination: requestedDestination(AI),
     });
+    // One claim through the share her head binds, held to the digest and
+    // the field it binds, is admitted and counted; the row binding reads
+    // the share live as offered.
+    const shareClaim = await claimOf("share", shared.share_id, AI, 1);
+    const shareBinding = await ask({ op: "row_binding", user_id: ana.user_id, share_id: shared.share_id });
     // The admission's whole answer: its profile and consent are the ids the
     // model takes; the node and activation digest it verified for the
     // catalyst are the ones the bootstrap derives (the derived activation's
@@ -674,9 +739,11 @@ async function main() {
     // two origins a machine-minted revision admits (spelled as the store
     // writes them), with the policy blob, its digest, the activation and
     // the shape and commit digests the bootstrap derives from the request,
-    // compared as stored text. The head holds one binding row, Company AI
-    // on the catalyst's own default slot, standing, at the digest its
-    // request implies; her vault offers both entries.
+    // compared as stored text. The head holds one binding row, the
+    // administrator's share on the catalyst's own default slot, standing,
+    // at the digest Company AI's request implies, which the share's source
+    // was made with; the share is used once by Ana; her vault offers both
+    // entries.
     model.ana = {
       profiles: [{
         id: admitted.profile_id,
@@ -711,10 +778,10 @@ async function main() {
         consent_id: admitted.consent_id,
         athanor_id: ana.athanor_id,
         binding_key: "catalyst:local.openai|@ingress|default",
-        scope: "instance",
+        scope: "share",
         vault_entry_id: null,
-        instance_entry_id: ai.id,
-        share_id: null,
+        instance_entry_id: null,
+        share_id: shared.share_id,
         via_label: null,
         binding_digest: aiImplied.binding_digest,
         lifetime_kind: "standing",
@@ -723,25 +790,30 @@ async function main() {
       }],
       offered: [ai.id, mail.id],
     };
+    model.share_usage = [shareUse(shared.share_id, ana.user_id, 1), shareUse(shared.share_id, "", 1)];
     const signed = await stateHolds();
     record.first_sign_in = {
-      allowed, ana: { user_id: ana.user_id, segment: ana.segment }, admitted, derived, shown, state: signed.compared,
+      allowed, shared, ana: { user_id: ana.user_id, segment: ana.segment }, admitted, derived, share_claim: shareClaim,
+      share_binding: shareBinding, shown, state: signed.compared,
     };
     if (!row("first_sign_in",
-      allowed.every(Boolean) && same(admitted, admission) && same(ids(shown), model.ana.offered) &&
+      allowed.every(Boolean) && same(admitted, admission) && claimAnswer(shareClaim, [{ admitted: true }]) &&
+        same(shareBinding, { row: true, offered: true }) && same(ids(shown), model.ana.offered) &&
         !holdsKey(anaHtml) && signed.held,
-      "Ana's first sign-in binds Company AI at bootstrap, the loader admits the root, her vault offers both, no material; " +
-        "the whole state is the model",
-      { admitted, shown: ids(shown), state: signed.compared })) return;
+      "Ana's first sign-in binds the administrator's share at bootstrap, the loader admits the root, a claim through " +
+        "the share is admitted, its row binding reads offered, her vault offers both, no material; the whole state is " +
+        "the model",
+      { shared, admitted, share_claim: shareClaim, share_binding: shareBinding, shown: ids(shown),
+        state: signed.compared })) return;
 
     // -----------------------------------------------------------------------
     // claim_cap
     // -----------------------------------------------------------------------
-    const three = await ask({ op: "claim", user_id: ana.user_id, entry_id: ai.id, count: 3, url: AI.url, method: AI.method });
+    const three = await claimOf("instance", ai.id, AI, 3);
     await open(anaPage, pagePath(ana.segment, "/vault"));
     const cappedShown = await offered(anaPage);
     const capped = cappedShown.find((o) => o.id === ai.id);
-    const fourth = await ask({ op: "claim", user_id: ana.user_id, entry_id: ai.id, count: 1, url: AI.url, method: AI.method });
+    const fourth = await claimOf("instance", ai.id, AI, 1);
     // Each claim's whole answer, the fourth's reset the database's next UTC
     // midnight; Company AI is used, and its use is Ana's three and the
     // day's three on the database's today, no one else's and no other day.
@@ -776,16 +848,17 @@ async function main() {
     const saved = await told(admin, "Audience saved.");
     const sent = frames.slice(mark).filter((f) => f.includes("instance_audience"));
     const sentExpected = sent.some((f) => f.includes("audience_shown=everyone"));
-    const claim = await ask({ op: "claim", user_id: ana.user_id, entry_id: ai.id, count: 1, url: AI.url, method: AI.method });
-    const rowBinding = await ask({ op: "row_binding", user_id: ana.user_id, entry_id: ai.id });
+    const claim = await claimOf("instance", ai.id, AI, 1);
+    const rowBinding = await ask({ op: "row_binding", user_id: ana.user_id, share_id: shared.share_id });
     await open(anaPage, pagePath(ana.segment, "/vault"));
     const afterNarrow = await offered(anaPage);
     // Bea's first sign-in leaves her row as the release fixture's person
     // is made and signs in (an open admission, her GitHub email verified,
     // "Release proof"), active, at security
     // generation 1, her personal athanor the one her sign-in names. Company
-    // AI is listed for Bea alone; Ana's claim and row binding are refused
-    // as not offered, and her vault offers Company Mail alone.
+    // AI is listed for Bea alone; Ana's claim of it is refused as not
+    // offered, the share her head binds stands, as the row binding reads
+    // it, and her vault offers Company Mail alone.
     model.bea = {
       user: {
         id: bea.user_id,
@@ -810,23 +883,23 @@ async function main() {
     model.members = [{ instance_entry_id: ai.id, user_id: bea.user_id, inserted_at: IN_WINDOW }];
     model.ana.offered = [mail.id];
     const notOffered = [{ admitted: false, refusal: "not_offered" }];
-    const rowRefused = { row: true, offered: false, refusal: "not_offered" };
+    const rowStands = { row: true, offered: true };
     const narrowedState = await stateHolds();
     record.narrow_audience = {
       listed, saved, sent, claim, rowBinding, shown: afterNarrow, state: narrowedState.compared,
     };
     if (!row("narrow_audience",
-      listed && saved && sentExpected && claimAnswer(claim, notOffered) && same(rowBinding, rowRefused) &&
+      listed && saved && sentExpected && claimAnswer(claim, notOffered) && same(rowBinding, rowStands) &&
         same(ids(afterNarrow), model.ana.offered) && narrowedState.held,
-      "Company AI narrowed to Bea on the card, sent with the audience it showed: Ana's claim and row binding refused, " +
-        "her vault drops it; the whole state is the model",
+      "Company AI narrowed to Bea on the card, sent with the audience it showed: Ana's claim of it refused, her share " +
+        "binding still offered, her vault drops it; the whole state is the model",
       { sent_expected: sentExpected, claim, row_binding: rowBinding, shown: ids(afterNarrow),
         state: narrowedState.compared })) return;
 
     // -----------------------------------------------------------------------
     // revoke
     // -----------------------------------------------------------------------
-    const before = await ask({ op: "claim", user_id: ana.user_id, entry_id: mail.id, count: 1, url: MAIL.url, method: MAIL.method });
+    const before = await claimOf("instance", mail.id, MAIL, 1);
     await open(admin, settings);
     const revoke = admin.locator(`${card(mail.id)} button[phx-click="instance_revoke"]`);
     await revoke.scrollIntoViewIfNeeded();
@@ -835,7 +908,7 @@ async function main() {
     const revoked = await told(admin, "Entry revoked.");
     const revokeShown = revoked ? [] :
       [...await diagnose(admin, "revoke"), { sent: frames.slice(revokeMark).filter((f) => f.includes("instance_revoke")) }];
-    const after = await ask({ op: "claim", user_id: ana.user_id, entry_id: mail.id, count: 1, url: MAIL.url, method: MAIL.method });
+    const after = await claimOf("instance", mail.id, MAIL, 1);
     await open(anaPage, pagePath(ana.segment, "/vault"));
     const afterRevoke = await offered(anaPage);
     const nothing = await told(anaPage, "This instance offers you no entry.", 10_000);

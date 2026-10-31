@@ -112,6 +112,7 @@ defmodule Sanctum do
       Resources,
       RunningTasks,
       Session,
+      Shares,
       SignIn,
       Tenancy,
       Tenancy.Athanors,

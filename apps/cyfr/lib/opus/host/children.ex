@@ -38,8 +38,8 @@ defmodule Opus.Host.Children do
   under the formula attempt's barrier carrying the key, and its attempt is
   claimed for the calling runner, and what its vault edge discloses is
   handed to that runner: a disclosed entry's fields or a publisher's
-  provided values, never an attach-only or instance entry's, which CYFR
-  attaches to the child's requests instead. The child's row names the
+  provided values, never an attach-only, instance or shared entry's, which
+  CYFR attaches to the child's requests instead. The child's row names the
   calling execution as its parent and carries the parent's origin
   (`Prima.Origin`), read where it is admitted: a child of a scheduled root
   is `schedule`, whatever the body says. The answer carries the child's

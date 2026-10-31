@@ -221,6 +221,9 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 			"as the account 'Geo account': a weather.example account, sent only to " +
 			"https://*.weather.example port 8443, methods GET, POST, paths /v2. " +
 			"CYFR attaches the value and the component never holds it.",
+		"reagent:local.quotes uses Shared by Terry, a key shared with you, from reagent:local.weather: " +
+			"a market.example account, sent only to https://api.market.example, methods GET, paths /v1/. " +
+			"CYFR attaches the value and the component never holds it.",
 		"reagent:local.maps uses maps public key, provided by local, the app's public configuration, " +
 			"from reagent:local.weather for its geocode need: sent only to https://geo.maps.example, " +
 			"paths /geocode. The component reads the value itself.",
@@ -238,10 +241,10 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 		t.Errorf("no row of the vectors asks for a choice:\n%s", text)
 	}
 	// The attach claim is each attach-only row's, and no disclosed row's: the
-	// vectors hold two of each.
+	// vectors hold three attach-only rows and two disclosed ones.
 	attached := "CYFR attaches the value and the component never holds it."
-	if got := strings.Count(text, attached); got != 2 {
-		t.Errorf("%q said %d times, want once per attach-only row (2):\n%s", attached, got, text)
+	if got := strings.Count(text, attached); got != 3 {
+		t.Errorf("%q said %d times, want once per attach-only row (3):\n%s", attached, got, text)
 	}
 	if got := strings.Count(text, "The component never holds the value."); got != 0 {
 		t.Errorf("an attach-only row says the component never holds the value without "+
@@ -274,6 +277,7 @@ func TestRenderPreview_ListsWhatTheGrantRemoves(t *testing.T) {
 		"    Removes api_key default: weather-old\n",
 		"    Removes api_key account 'Work': weather-work\n",
 		"    Removes a binding of reagent:local.geo from reagent:local.weather account 'Old geo': ine_old_geo\n",
+		"    Removes a binding of reagent:local.geo from reagent:local.weather account 'Old share': Shared by Terry\n",
 		"    Removes a binding of reagent:local.maps from reagent:local.weather default: " +
 			"the key its 'old-maps' profile lent\n",
 	}
@@ -516,18 +520,12 @@ func need(name, kind string, required bool, suggested string, choiceRequired boo
 		row["type"] = kind + ":openai.com"
 	}
 	if suggested != "" {
-		key := "entry_id"
-		if strings.HasPrefix(suggested, "ine_") {
-			key = "instance_entry_id"
-		}
+		key, _ := candidateKey(suggested)
 		row["suggested"] = map[string]any{key: suggested}
 	}
 	var list []any
 	for _, id := range candidates {
-		key, source := "entry_id", "own"
-		if strings.HasPrefix(id, "ine_") {
-			key, source = "instance_entry_id", "instance"
-		}
+		key, source := candidateKey(id)
 		list = append(list, map[string]any{key: id, "name": "entry " + id, "source": source,
 			"destination": map[string]any{"hosts": []any{"api.openai.com"}, "scheme": "https"}})
 	}
@@ -536,6 +534,20 @@ func need(name, kind string, required bool, suggested string, choiceRequired boo
 	}
 	raw, _ := json.Marshal(row)
 	return string(raw)
+}
+
+// candidateKey is the key and source a candidate of the id is named by: an
+// instance entry by its ine_ prefix, a key shared with the person by its
+// shr_ prefix, an entry of the athanor otherwise.
+func candidateKey(id string) (string, string) {
+	switch {
+	case strings.HasPrefix(id, "ine_"):
+		return "instance_entry_id", "instance"
+	case strings.HasPrefix(id, "shr_"):
+		return "share_id", "share"
+	default:
+		return "entry_id", "own"
+	}
 }
 
 func list(items ...string) string { return "[" + strings.Join(items, ",") + "]" }
@@ -625,6 +637,28 @@ func TestLifetimes_SessionIsHeldTo24HoursAndNeedsASession(t *testing.T) {
 	}
 }
 
+// --entry and --selection name a key shared with the person by its shr_
+// prefix, sent as its share_id and as nothing else.
+func TestProfileGrant_AShareIsNamedByItsPrefix(t *testing.T) {
+	maps := `{"from":"f:local.daily-report","dep":"reagent:local.maps","candidates":[],"needs":` +
+		list(need("tiles", "api_key", false, "", false, "shr_t")) + `}`
+	plan := planWith(list(need("api_key", "api_key", true, "", false, "shr_7")), list(maps), `[]`)
+	srv := newCLIServer(t, "profile.commit", plan, previewAnswer, commitAnswer)
+	runGrant(t, srv, "--entry", "api_key=shr_7", "--selection", "reagent:local.maps=shr_t:once")
+
+	preview, _ := sentDecisions(t, srv, 1)
+	bindings := asMaps(t, preview["bindings"])
+	if len(bindings) != 1 || bindings[0]["share_id"] != "shr_7" || bindings[0]["entry_id"] != nil ||
+		bindings[0]["instance_entry_id"] != nil {
+		t.Errorf("--entry api_key=shr_7 sent %v", bindings)
+	}
+	selections := asMaps(t, preview["selections"])
+	if len(selections) != 1 || selections[0]["share_id"] != "shr_t" || selections[0]["entry_id"] != nil ||
+		selections[0]["label"] != nil || !reflect.DeepEqual(selections[0]["lifetime"], map[string]any{"kind": "once"}) {
+		t.Errorf("--selection reagent:local.maps=shr_t:once sent %v", selections)
+	}
+}
+
 // --entry names its id, an instance entry by its ine_ prefix, and its
 // lifetime; with none named the binding stands. The commit carries the
 // decisions the preview was sent, the until computed once.
@@ -667,6 +701,7 @@ func TestProfileGrant_ASuggestionBindsARequiredDeclaredNeedAlone(t *testing.T) {
 		{"optional", planWith(list(need("api_key", "api_key", false, "vlt_s", false, "vlt_s")), `[]`, `[]`), nil},
 		{"undeclared", planWith(list(need("@ingress", "", false, "vlt_s", false, "vlt_s")), `[]`, `[]`), nil},
 		{"instance", planWith(list(need("api_key", "api_key", true, "ine_s", false, "ine_s")), `[]`, `[]`), []string{"ine_s"}},
+		{"share", planWith(list(need("api_key", "api_key", true, "shr_s", false, "shr_s")), `[]`, `[]`), []string{"shr_s"}},
 	}
 	for _, c := range cases {
 		srv := newCLIServer(t, "profile.commit", c.plan, previewAnswer, commitAnswer)
@@ -675,7 +710,7 @@ func TestProfileGrant_ASuggestionBindsARequiredDeclaredNeedAlone(t *testing.T) {
 		preview, _ := sentDecisions(t, srv, 1)
 		var got []string
 		for _, b := range asMaps(t, preview["bindings"]) {
-			got = append(got, str(b["entry_id"])+str(b["instance_entry_id"]))
+			got = append(got, str(b["entry_id"])+str(b["instance_entry_id"])+str(b["share_id"]))
 			if !reflect.DeepEqual(b["lifetime"], map[string]any{"kind": "standing"}) {
 				t.Errorf("%s: a suggestion is bound standing, got %v", c.name, b)
 			}
@@ -715,7 +750,7 @@ func TestProfileGrant_AChoiceIsRefusedWhenItCannotBeAsked(t *testing.T) {
 func TestCollectDecisions_AsksOnlyWhereAChoiceIsRequired(t *testing.T) {
 	var plan map[string]any
 	raw := planWith(list(
-		need("api_key", "api_key", true, "", true, "vlt_a", "ine_b"),
+		need("api_key", "api_key", true, "", true, "vlt_a", "ine_b", "shr_c"),
 	), list(`{"from":"f:local.daily-report","dep":"reagent:local.db","candidates":[`+
 		`{"label":"work","entry_name":"work key","fields":{"KEY":"KEY"},"scopes":[]}],"needs":`+
 		list(need("db", "api_key", true, "vlt_db", false, "vlt_db"))+`}`), `[]`)
@@ -734,7 +769,7 @@ func TestCollectDecisions_AsksOnlyWhereAChoiceIsRequired(t *testing.T) {
 			for _, o := range options {
 				values = append(values, o.Value)
 			}
-			if !reflect.DeepEqual(values, []string{"", "vlt:vlt_a", "ine:ine_b"}) {
+			if !reflect.DeepEqual(values, []string{"", "vlt:vlt_a", "ine:ine_b", "shr:shr_c"}) {
 				t.Errorf("offered %v", values)
 			}
 			return "ine:ine_b", nil
@@ -1588,6 +1623,8 @@ func expected(row map[string]any, field string, value any) []string {
 		return []string{"an entry of this athanor"}
 	case field == "source" && value == "instance":
 		return []string{"provided by this instance"}
+	case field == "source" && value == "share":
+		return []string{"a key shared with you"}
 	case field == "source" && value == "provided":
 		return []string{"provided by " + publisherOf(str(row["node"]), "")}
 	case field == "label":

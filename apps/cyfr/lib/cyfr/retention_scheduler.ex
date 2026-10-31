@@ -118,6 +118,7 @@ defmodule Cyfr.RetentionScheduler do
     {"webhooks", "webhook delivery sweep"},
     {"rates", "rate window sweep"},
     {"instance_usage", "instance entry usage sweep"},
+    {"share_usage", "share usage sweep"},
     {"tmp", "stale tmp sweep"},
     {"blobs", "thread blob orphan sweep"}
   ]
@@ -433,6 +434,7 @@ defmodule Cyfr.RetentionScheduler do
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
   defp step_fun("rates"), do: &sweep_rate_windows/0
   defp step_fun("instance_usage"), do: &sweep_instance_usage/0
+  defp step_fun("share_usage"), do: &sweep_share_usage/0
   defp step_fun("tmp"), do: &sweep_stale_tmp_files/0
   defp step_fun("blobs"), do: &sweep_thread_blob_orphans/0
 
@@ -470,6 +472,25 @@ defmodule Cyfr.RetentionScheduler do
         Logger.warning(
           "[RetentionScheduler] Instance entry usage sweep failed: #{inspect(reason)}"
         )
+    end
+  end
+
+  # The day counts of every share past the days their sweep keeps
+  # (`Sanctum.Shares.sweep_usage/0`): each is a row of its owner's athanor,
+  # and every use through a share writes one per person and day, so the
+  # rows grow with the people a share reaches rather than with the
+  # athanor's own work. One age delete across every athanor, naming no
+  # share and no person, under the cycle's claim.
+  defp sweep_share_usage do
+    case Sanctum.Shares.sweep_usage() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("[RetentionScheduler] Removed #{count} share usage row(s)")
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Share usage sweep failed: #{inspect(reason)}")
     end
   end
 

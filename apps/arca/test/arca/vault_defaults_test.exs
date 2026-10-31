@@ -142,7 +142,7 @@ defmodule Arca.VaultDefaultsTest do
 
   test "a tombstoned entry is not a default to set", %{actor: actor} do
     entry = entry!(actor, "anthropic.com")
-    :ok = Arca.VaultStorage.tombstone(actor, entry.id)
+    {:ok, _} = Arca.VaultStorage.tombstone(actor, entry.id)
 
     assert {:error, :not_found} =
              VaultDefaults.set(actor, "anthropic.com", %{vault_entry_id: entry.id})

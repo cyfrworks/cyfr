@@ -5,8 +5,10 @@ defmodule Sanctum.Consent.BootstrapTest do
 
   import ExUnit.CaptureLog, only: [with_log: 1]
 
+  alias Cyfr.Test.ShareFixtures
   alias Prima.Authority
   alias Prima.Authority.Blob
+  alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
 
@@ -125,10 +127,14 @@ defmodule Sanctum.Consent.BootstrapTest do
     assert length(minted) + length(skipped) == 101
   end
 
-  describe "the instance's entry at first sign-in" do
+  describe "the administrator's key at first sign-in" do
     @model "catalyst:local.boot-model"
     @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
     @anthropic_inference ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+
+    # What a mint or a revision that could not read a store skips.
+    @shares_unavailable {:unavailable, "Shares"}
+    @instance_unavailable {:unavailable, "Instance entries"}
 
     # A shipped catalyst whose one need attaches an openai.com key calling
     # `hosts`, api.openai.com unless a release says otherwise, which its
@@ -162,6 +168,41 @@ defmodule Sanctum.Consent.BootstrapTest do
       component
     end
 
+    # The platform administrator: a person of their own athanor holding
+    # the platform membership.
+    defp administrator! do
+      admin = ShareFixtures.person!("Admin")
+      {:ok, _seat} = Sanctum.TestContext.ensure_platform(admin.user.id)
+      admin
+    end
+
+    # `owner` shares with everyone an attach-only openai.com key of their
+    # own athanor, its one field `OPENAI_API_KEY`, to the inference API,
+    # or the key `over` names, stored at the digest its binding columns
+    # derive: `%{entry: _, share: _}`.
+    defp share!(owner, over \\ %{}) do
+      attrs =
+        Map.merge(
+          %{
+            kind: "api_key",
+            provider_hint: "openai.com",
+            field_names: ~s(["OPENAI_API_KEY"]),
+            destination: @inference,
+            attach_only: true
+          },
+          over
+        )
+
+      {:ok, digest} =
+        Sanctum.VaultReader.binding_digest(
+          Map.merge(attrs, %{oauth_endpoints: nil, oauth_scopes: nil})
+        )
+
+      entry = Arca.Test.Shares.entry!(owner.actor, Map.put(attrs, :binding_digest, digest))
+      %{entry: entry, share: Arca.Test.Shares.share!(owner.actor, entry.id)}
+    end
+
+    # An instance entry offered to everyone, admitting only shipped code.
     defp offer!(over \\ %{}) do
       {:ok, entry} =
         Arca.InstanceEntries.put(
@@ -186,6 +227,104 @@ defmodule Sanctum.Consent.BootstrapTest do
       entry
     end
 
+    # A bootstrap-only head of the catalyst `ref` whose ingress binds the
+    # instance entry `entry` in the default slot, standing, at revision 1,
+    # granted by the context's person: a head minted when a first sign-in
+    # still bound an instance entry, built by the bootstrap's own builders
+    # as that mint built it. A boot revises such a head while the instance
+    # entries stand.
+    defp instance_head!(ctx, entry, ref \\ @model) do
+      {:ok, cref} = Prima.ComponentRef.parse(ref)
+
+      {:ok, component} =
+        Sanctum.Consent.Components.get_latest(ctx, cref.name, cref.namespace, cref.type)
+
+      {:ok, activation} = Sanctum.Consent.Components.resolve(ctx, component)
+      {:ok, manifest} = Prima.Manifest.decode_strict(component.manifest)
+      [need] = Prima.Manifest.Needs.from_manifest(manifest)
+      {:ok, destination} = Prima.Destination.from_map(Jason.decode!(entry.destination))
+      fields = Sanctum.Consent.Plan.field_map(need, Jason.decode!(entry.field_names))
+
+      binding = %{
+        need: need.name,
+        entry_id: entry.id,
+        binding_digest: entry.binding_digest,
+        scope: "instance",
+        destination: Prima.Destination.to_map(destination),
+        attach: Prima.Manifest.Needs.attach_to_map(need.attach),
+        fields: fields,
+        scopes: need.scopes,
+        lifetime: %{kind: "standing", until: nil},
+        renew: false
+      }
+
+      vault_fn = fn node_key, _row, _manifest ->
+        if node_key == ref, do: BlobBuilder.vault_resource(binding)
+      end
+
+      {:ok, nodes} =
+        BlobBuilder.build(ctx, activation.graph, ref, vault_fn, source_row: component)
+
+      {:ok, blob} = BlobBuilder.encode(nodes)
+      blob_digest = Prima.Digest.sha256(blob)
+      {:ok, input} = Sanctum.Consent.ShapeDerivation.shape_input(ctx, ref)
+      {:ok, shape_digest} = Sanctum.Consent.ShapeDigest.compute(input)
+
+      {:ok, commit_digest} =
+        Sanctum.Consent.CommitDigest.compute(%{
+          shape_digest: shape_digest,
+          blob_digest: blob_digest,
+          label: "default",
+          kind: :owner,
+          invoke_mode: :open_inert,
+          origins: [:interactive, :programmatic],
+          bindings: [
+            %{
+              need: need.name,
+              instance_entry_id: entry.id,
+              binding_digest: entry.binding_digest,
+              fields: fields,
+              scopes: need.scopes,
+              lifetime: %{kind: "standing"},
+              renew: false
+            }
+          ]
+        })
+
+      {:ok, activation_json} = Prima.JCS.encode(activation.graph)
+      profile_id = Prima.UUID7.generate_id("prof")
+
+      {:ok, _consent} =
+        Arca.ConsentStorage.mint_profile_with_revision(
+          %{
+            id: profile_id,
+            athanor_id: ctx.athanor_id,
+            source_ref: ref,
+            kind: "owner",
+            label: "default",
+            status: "active"
+          },
+          %{
+            profile_id: profile_id,
+            revision: 1,
+            scope: "versionless",
+            pinned_version: "",
+            invoke_mode: "open_inert",
+            shape_digest: shape_digest,
+            commit_digest: commit_digest,
+            blob_digest: blob_digest,
+            resolved_policy: blob,
+            activation: activation_json,
+            admitted_origins: [:interactive, :programmatic],
+            granted_by: ctx.user_id,
+            granted_via: "bootstrap"
+          },
+          BlobBuilder.vault_refs(nodes)
+        )
+
+      profile_id
+    end
+
     defp model_head!(ctx, ref \\ @model) do
       {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
       {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
@@ -198,13 +337,10 @@ defmodule Sanctum.Consent.BootstrapTest do
     defp seed(ctx),
       do: Sanctum.Context.internal(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
 
-    # What a first mint that could not read the instance entries skips.
-    @unavailable {:unavailable, "Instance entries"}
-
     # Run `fun` once, right after the walk's first read of `table`: for
-    # the instance entries at a first mint, the entries offered to its
-    # person, before the chosen entry's binding is read; for the binding
-    # rows, the head's, before a revision reads the entry it keeps.
+    # the shares at a first mint, the administrator's shares, before the
+    # mint's transaction locks the one it binds; for the binding rows, the
+    # head's, before a revision reads the share or entry it keeps.
     defp after_read!(table, fun) do
       test = self()
       handler = "bootstrap-after-read-#{System.unique_integer([:positive])}"
@@ -225,11 +361,12 @@ defmodule Sanctum.Consent.BootstrapTest do
       on_exit(fn -> :telemetry.detach(handler) end)
     end
 
-    defp entries_away!,
-      do: Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
+    # A store gone from under the walk, and back.
+    defp away!(table),
+      do: Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
 
-    defp entries_back!,
-      do: Arca.Repo.query!("ALTER TABLE instance_entries_unavailable RENAME TO instance_entries")
+    defp back!(table),
+      do: Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
 
     defp no_profile?(ctx),
       do: Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), @model) == {:ok, []}
@@ -271,31 +408,58 @@ defmodule Sanctum.Consent.BootstrapTest do
     end
 
     # The catalyst's head at `revision`, minted or revised by the
-    # bootstrap, binds `entry` in the ingress's default slot, standing:
-    # its one binding row, whole.
-    defp assert_bound!(ctx, entry, revision \\ 1) do
+    # bootstrap, binds `bound` (`{:share, share_id}` or
+    # `{:instance, entry_id}`) at `digest` in the ingress's default slot,
+    # standing: its one binding row, whole.
+    defp assert_bound!(ctx, bound, digest, revision) do
       {head, refs} = head_rows!(ctx)
       granted_by = if ctx.auth_method == :system, do: "system:bootstrap", else: ctx.user_id
 
       assert {head.revision, head.granted_via, head.granted_by} ==
                {revision, "bootstrap", granted_by}
 
+      {scope, share_id, instance_entry_id} =
+        case bound do
+          {:share, id} -> {"share", id, nil}
+          {:instance, id} -> {"instance", nil, id}
+        end
+
       assert refs == [
                %{
                  consent_id: head.id,
                  athanor_id: ctx.athanor_id,
                  binding_key: "#{@model}|@ingress|default",
-                 scope: "instance",
+                 scope: scope,
                  vault_entry_id: nil,
-                 instance_entry_id: entry.id,
-                 share_id: nil,
+                 instance_entry_id: instance_entry_id,
+                 share_id: share_id,
                  via_label: nil,
-                 binding_digest: entry.binding_digest,
+                 binding_digest: digest,
                  lifetime_kind: "standing",
                  expires_at: nil,
                  consumed_by_root: nil
                }
              ]
+    end
+
+    defp assert_shared!(ctx, %{share: share, entry: entry}, revision \\ 1),
+      do: assert_bound!(ctx, {:share, share.id}, entry.binding_digest, revision)
+
+    defp assert_offered!(ctx, entry, revision),
+      do: assert_bound!(ctx, {:instance, entry.id}, entry.binding_digest, revision)
+
+    defp assert_unbound!(ctx) do
+      assert {head, nil} = model_head!(ctx)
+      assert head.vault_refs == []
+    end
+
+    # A revoke of the share `share_id` landing right after the boot's
+    # revision read the share's facts and before its transaction locks the
+    # share: run from the walk's first read of a share, once.
+    def revoke_share_after_facts(_event, _measurements, meta, %{test: test, revoke: revoke}) do
+      if self() == test and meta[:source] == "shares" and Process.get(:share_revoked) == nil do
+        Process.put(:share_revoked, Task.async(revoke) |> Task.await(30_000))
+      end
     end
 
     # A revoke of `entry_id` landing right after the boot's revision read
@@ -314,236 +478,572 @@ defmodule Sanctum.Consent.BootstrapTest do
       end
     end
 
+    # `person`, signed in to the shared test athanor, a group, where the
+    # old store's heads are revised; Ana, signed in to her own athanor,
+    # where a first sign-in binds a share; the platform administrator.
     setup %{ctx: ctx} do
       {person, _user} = Sanctum.TestContext.person!(ctx)
-      {:ok, person: person}
+      ana = ShareFixtures.person!("Ana")
+      {:ok, person: person, ana: ana.ctx, admin: administrator!()}
     end
 
-    test "a newly provisioned athanor binds its sole offered entry whose destination fits, " <>
-           "whatever its label",
-         %{person: person} do
-      ship_model!(person)
-      offered = offer!(%{provider_hint: "x.ai"})
-      _elsewhere = offer!(%{destination: @anthropic_inference})
+    # -------------------------------------------------------------------------
+    # The first mint
+    # -------------------------------------------------------------------------
 
-      assert {:ok, %{minted: minted}} = Bootstrap.run(person)
+    test "a newly provisioned athanor binds the administrator's share to everyone whose " <>
+           "source fits, whatever its label, and never a member's share to everyone",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin, %{provider_hint: "x.ai"})
+      _elsewhere = share!(admin, %{destination: @anthropic_inference})
+      # A member's share to everyone that fits, the newest of all: never a
+      # first sign-in's candidate.
+      _member = share!(ShareFixtures.person!("Sam"))
+
+      assert {:ok, %{minted: minted}} = Bootstrap.run(ana)
       assert @model in minted
 
-      {head, vault} = model_head!(person)
+      {head, vault} = model_head!(ana)
 
-      # The default slot, scoped instance, standing; a recorded bootstrap
-      # revision like every machine mint.
-      assert %{entry_id: id, scope: "instance", binding_key: key} = vault
-      assert id == offered.id
+      # The default slot, scoped share, naming the share at the digest its
+      # source derives, standing; a recorded bootstrap revision like every
+      # machine mint.
+      assert %{entry_id: id, scope: "share", binding_key: key} = vault
+      assert id == shared.share.id
+      assert vault.binding_digest == shared.entry.binding_digest
       assert key == "#{@model}|@ingress|default"
       assert vault.attach.name == "Authorization"
       refute Map.has_key?(vault, :named)
 
-      assert [%{instance_entry_id: ^id, scope: "instance", lifetime_kind: "standing"}] =
-               head.vault_refs
-
-      {:ok, row, _refs} =
-        Arca.ConsentStorage.get_head(Sanctum.Context.actor(person), head_profile_id(person))
-
-      assert row.granted_via == "bootstrap"
+      assert [%{share_id: ^id, scope: "share", lifetime_kind: "standing"}] = head.vault_refs
+      assert_shared!(ana, shared)
     end
 
-    test "two offered entries whose destination fits bind none, whatever their labels; the " <>
-           "next grant asks the person to choose",
-         %{person: person} do
-      ship_model!(person)
-      offer!()
-      offer!(%{provider_hint: ""})
+    test "two of the administrator's shares that fit bind the newest", %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      _older = share!(admin)
+      newest = share!(admin, %{provider_hint: ""})
 
-      assert {:ok, %{minted: minted}} = Bootstrap.run(person)
+      assert Bootstrap.run(ana) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert_shared!(ana, newest)
+    end
+
+    test "with no share of the administrator's that fits, the catalyst is minted without one, " <>
+           "and nothing is skipped",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      _elsewhere = share!(admin, %{destination: @anthropic_inference})
+
+      assert Bootstrap.run(ana) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert_unbound!(ana)
+    end
+
+    test "a server-side mint has no person and binds nothing", %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      share!(admin)
+
+      assert {:ok, %{minted: minted}} = Bootstrap.run(seed(ana))
       assert @model in minted
-
-      {head, vault} = model_head!(person)
-      assert vault == nil
-      assert head.vault_refs == []
-
-      # At the next grant the person chooses between them.
-      {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: @model})
-      row = Enum.find(plan.needs, &(&1.need == "api_key"))
-      assert length(row.candidates) == 2
-      assert row.suggested == nil and row.choice_required
+      assert_unbound!(ana)
     end
 
-    test "a server-side mint has no person and binds nothing", %{ctx: ctx} do
-      ship_model!(ctx)
-      offer!()
-
-      seed_ctx =
-        Sanctum.Context.internal(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
-
-      assert {:ok, %{minted: minted}} = Bootstrap.run(seed_ctx)
-      assert @model in minted
-      assert {_head, nil} = model_head!(ctx)
-    end
-
-    # The first mint is the only one that binds the instance entry, so a
-    # read of the entries offered that could not answer is never nothing
-    # offered: minted without the entry, the catalyst's person would have
-    # to connect a key over an entry that exists.
-    @tag :capture_log
-    test "an outage reading the entries offered mints nothing for the catalyst, and a run " <>
-           "once the store answers mints it bound",
-         %{person: person} do
+    # A share is bound only in a person's own athanor.
+    test "a first sign-in to a group athanor binds no share, and mints the catalyst",
+         %{person: person, admin: admin} do
       ship_model!(person)
-      offered = offer!()
-
-      entries_away!()
-      {unanswered, log} = with_log(fn -> Bootstrap.run(person) end)
-      entries_back!()
-
-      assert unanswered == {:ok, %{minted: [], revised: [], skipped: [{@model, @unavailable}]}}
-      assert log =~ "#{@model} skipped: Instance entries could not answer (:database_error)"
-      assert no_profile?(person)
+      share!(admin)
 
       assert Bootstrap.run(person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert_bound!(person, offered)
+      assert_unbound!(person)
     end
 
-    # The chosen entry's binding is the same read: an outage there skips
-    # the same way.
+    # The first mint is the only one that binds the share, so a read of
+    # the administrator's shares that could not answer is never nothing
+    # offered: minted without the share, the catalyst's person would have
+    # to connect a key over one that is there for them.
     @tag :capture_log
-    test "an outage reading the chosen entry's binding mints nothing for the catalyst, and a " <>
+    test "an outage reading the administrator's shares mints nothing for the catalyst, and a " <>
            "run once the store answers mints it bound",
-         %{person: person} do
-      ship_model!(person)
-      offered = offer!()
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
 
-      after_read!("instance_entries", &entries_away!/0)
-      {unanswered, log} = with_log(fn -> Bootstrap.run(person) end)
-      entries_back!()
+      away!("shares")
+      {unanswered, log} = with_log(fn -> Bootstrap.run(ana) end)
+      back!("shares")
 
-      assert unanswered == {:ok, %{minted: [], revised: [], skipped: [{@model, @unavailable}]}}
-      assert log =~ "#{@model} skipped: Instance entries could not answer (:database_error)"
-      assert no_profile?(person)
+      assert unanswered ==
+               {:ok, %{minted: [], revised: [], skipped: [{@model, @shares_unavailable}]}}
 
-      assert Bootstrap.run(person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert_bound!(person, offered)
+      assert log =~ "#{@model} skipped: Shares could not answer (:unavailable)"
+      assert no_profile?(ana)
+
+      assert Bootstrap.run(ana) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert_shared!(ana, shared)
     end
 
-    # The binding read's other refusals say nothing usable is offered:
-    # the catalyst is minted without the entry.
-    @tag :capture_log
-    test "a chosen entry its binding read answers not offered mints the catalyst without it",
-         %{person: person} do
-      ship_model!(person)
-      offered = offer!()
+    # The share is read once; a revoke landing after that read meets the
+    # mint's lock, which refuses the share, so nothing is minted, and the
+    # next run, no longer offered it, mints the catalyst without it.
+    test "a share revoked after the walk read it is refused under the mint's lock, nothing is " <>
+           "minted, and the next run mints the catalyst without it",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
 
-      after_read!("instance_entries", fn ->
-        {:ok, _blocked} =
-          Arca.InstanceEntries.tombstone(Arca.Test.Actor.platform(), offered.id, "needs_consent")
-      end)
-
-      {answer, log} = with_log(fn -> Bootstrap.run(person) end)
-
-      assert answer == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert log =~ "no instance entry bound for #{@model}: :not_offered"
-      assert {head, nil} = model_head!(person)
-      assert head.vault_refs == []
-    end
-
-    @tag :capture_log
-    test "a chosen entry its binding read answers not active mints the catalyst without it",
-         %{person: person} do
-      ship_model!(person)
-      offered = offer!()
-
-      after_read!("instance_entries", fn ->
-        {:ok, _blocked} =
-          Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), offered.id, "needs_consent")
-      end)
-
-      {answer, log} = with_log(fn -> Bootstrap.run(person) end)
-
-      assert answer == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert log =~ ~s(no instance entry bound for #{@model}: {:entry_unavailable, "revoked"})
-      assert {head, nil} = model_head!(person)
-      assert head.vault_refs == []
-    end
-
-    # The binding read is the one bound, so its destination is the one the
-    # fit is held to: a rebind between the offer's read and the binding's
-    # to a destination the need does not call binds nothing.
-    test "a chosen entry rebound off the need's hosts between the reads mints the catalyst " <>
-           "without it",
-         %{person: person} do
-      ship_model!(person)
-      offered = offer!()
-
-      after_read!("instance_entries", fn ->
-        {:ok, _moved} =
-          Arca.InstanceEntries.move_binding(
-            Arca.Test.Actor.platform(),
-            offered.id,
-            offered.binding_digest,
-            %{destination: @anthropic_inference, binding_digest: "sha256:moved-elsewhere"},
-            "needs_consent"
+      after_read!("shares", fn ->
+        {:ok, _revoked} =
+          Arca.Shares.revoke(
+            admin.actor,
+            shared.share.id,
+            Sanctum.Vault.blocked_profile_status()
           )
       end)
 
-      assert Bootstrap.run(person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert {head, nil} = model_head!(person)
-      assert head.vault_refs == []
+      assert Bootstrap.run(ana) ==
+               {:ok,
+                %{minted: [], revised: [], skipped: [{@model, {:share_unavailable, "revoked"}}]}}
+
+      assert no_profile?(ana)
+      assert Bootstrap.run(ana) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert_unbound!(ana)
     end
 
-    test "with no instance entry offered the catalyst is minted without one, and nothing is " <>
-           "skipped",
-         %{person: person} do
-      ship_model!(person)
+    # A narrowing landing after that read leaves the person outside the
+    # share's audience: the mint's lock holds the share to the audience the
+    # walk read it at and refuses it, and the walk mints the catalyst
+    # without it in the same run, as when no share fits.
+    test "a share narrowed after the walk read it, to a group the person is not in, is " <>
+           "refused under the mint's lock, and the catalyst is minted without it",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      group = Arca.Test.Shares.group!([admin.user.id])
 
-      assert Bootstrap.run(person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert {head, nil} = model_head!(person)
-      assert head.vault_refs == []
+      after_read!("shares", fn ->
+        {:ok, _narrowed} =
+          Arca.Shares.set_audience(
+            admin.actor,
+            shared.share.id,
+            Arca.Test.Shares.everyone(),
+            %{audience: "group", group_id: group.id}
+          )
+      end)
+
+      assert Bootstrap.run(ana) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert_unbound!(ana)
     end
 
     # A context that is not the server's but names no person has nothing
     # offered to it, as `Sanctum.Consent.Plan` reads the same refusal: the
-    # read answered, and the catalyst is minted without an entry.
+    # read answered, and the catalyst is minted without a share.
     test "a context with no person is offered nothing, and the catalyst is minted without a " <>
            "binding",
-         %{person: person} do
-      ship_model!(person)
-      offer!()
-      no_person = %{person | user_id: nil}
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      share!(admin)
+      no_person = %{ana | user_id: nil}
 
-      assert {:error, :not_offered} = Sanctum.InstanceEntries.offered(no_person)
+      assert {:error, :anonymous_denied} = Sanctum.Shares.administrator_shares(no_person)
       assert Bootstrap.run(no_person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert {head, nil} = model_head!(person)
-      assert head.vault_refs == []
+      assert_unbound!(ana)
     end
 
     test "an anonymous context is offered nothing, and the catalyst is minted without a binding",
-         %{person: person} do
-      ship_model!(person)
-      offer!()
-      anonymous = %{person | anonymous: true}
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      share!(admin)
+      anonymous = %{ana | anonymous: true}
 
-      assert {:error, :anonymous_denied} = Sanctum.InstanceEntries.offered(anonymous)
+      assert {:error, :anonymous_denied} = Sanctum.Shares.administrator_shares(anonymous)
       assert Bootstrap.run(anonymous) == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert {head, nil} = model_head!(person)
-      assert head.vault_refs == []
+      assert_unbound!(ana)
     end
 
     # A server-side mint has no person to read the offer as, so it reads
     # none, and an outage of the store holds nothing up.
-    test "a server-side mint under an instance-entries outage reads no offer and mints " <>
-           "without a binding",
-         %{ctx: ctx} do
-      ship_model!(ctx)
-      offer!()
+    test "a server-side mint under a shares outage reads no offer and mints without a binding",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      share!(admin)
 
-      entries_away!()
-      answer = Bootstrap.run(seed(ctx))
-      entries_back!()
+      away!("shares")
+      answer = Bootstrap.run(seed(ana))
+      back!("shares")
 
       assert answer == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert {head, nil} = model_head!(ctx)
-      assert head.vault_refs == []
+      assert_unbound!(ana)
     end
+
+    # The shape derivation refuses a source whose stored manifest does not
+    # decode, by the same term: whichever read meets it first, the person
+    # is told the manifest is damaged, and nothing is minted without the
+    # share there is for them.
+    @tag :capture_log
+    test "a catalyst whose stored manifest does not decode is skipped as damaged, and nothing " <>
+           "is minted",
+         %{ana: ana, admin: admin} do
+      component = ship_model!(ana)
+      share!(admin)
+      set_manifest!(component, "{not json")
+
+      assert Bootstrap.run(ana) ==
+               {:ok,
+                %{minted: [], revised: [], skipped: [{@model, {:corrupt, {:manifest, @model}}}]}}
+
+      assert no_profile?(ana)
+
+      assert Prima.Refusal.message({:corrupt, {:manifest, @model}}) ==
+               "The stored manifest is damaged."
+    end
+
+    # The walk keeps the row it read. Repairing storage before its later
+    # reads must not turn that unreadable snapshot into an unbound mint.
+    @tag :capture_log
+    test "a mint that read a damaged manifest skips even when storage is repaired before its " <>
+           "later reads, and the next run mints it bound",
+         %{ana: ana, admin: admin} do
+      component = ship_model!(ana)
+      shared = share!(admin)
+      set_manifest!(component, "{not json")
+      after_read!("components", fn -> set_manifest!(component, component.manifest) end)
+
+      assert Bootstrap.run(ana) ==
+               {:ok,
+                %{minted: [], revised: [], skipped: [{@model, {:corrupt, {:manifest, @model}}}]}}
+
+      assert no_profile?(ana)
+      assert Bootstrap.run(ana) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert_shared!(ana, shared)
+    end
+
+    test "a claim taken over after the administrator's shares are read mints no profile", %{
+      ana: ana,
+      admin: admin
+    } do
+      ship_model!(ana)
+      share!(admin)
+      actor = Sanctum.Context.actor(ana)
+      test = self()
+
+      {:ok, stale} =
+        Arca.ProvisioningClaims.claim(actor, "boot_elsewhere/own_walk", "sign_in", 1, :none)
+
+      # A claim as provisioning hands it on: with the slot it was taken under.
+      stale = Map.put(stale, :slot, :none)
+
+      after_read!("shares", fn ->
+        Prima.Test.Wait.wait_until(
+          fn -> not Arca.ProvisioningClaims.live?(stale) end,
+          2_000,
+          "the claim to expire before its takeover"
+        )
+
+        {:ok, successor} =
+          Arca.ProvisioningClaims.claim(
+            actor,
+            "boot_elsewhere/own_successor",
+            "sign_in",
+            60_000,
+            :none
+          )
+
+        send(test, {:claim_taken, successor})
+      end)
+
+      assert Bootstrap.run(ana, stale) == {:error, :claim_lost}
+      assert_receive {:claim_taken, successor}
+      assert successor.fence == stale.fence + 1
+      assert no_profile?(ana)
+      assert Arca.ProvisioningClaims.current(actor) == {:ok, successor}
+    end
+
+    test "an athanor provisioned before the administrator shared a key is not revised under " <>
+           "its people, and the share is the suggestion at the next grant",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      {:ok, _} = Bootstrap.run(ana)
+      {before, nil} = model_head!(ana)
+
+      shared = share!(admin)
+
+      assert {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ana)
+      assert {@model, :already_bootstrapped} in skipped
+      {head, vault} = model_head!(ana)
+      assert head.id == before.id and vault == nil
+
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ana, %{ref: @model})
+      row = Enum.find(plan.needs, &(&1.need == "api_key"))
+      assert row.suggested == %{share_id: shared.share.id}
+      assert row.source == "share"
+    end
+
+    # -------------------------------------------------------------------------
+    # Revisions of a head binding a share
+    # -------------------------------------------------------------------------
+
+    test "a revision under a person keeps the head's share while it is offered at its digest, " <>
+           "and binds none once its source was rebound",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+
+      # The release moves the shape: the bootstrap-only head is revised,
+      # and the share it bound, unchanged and still offered, stays bound.
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      assert Bootstrap.run(ana) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      assert_shared!(ana, shared, 2)
+
+      # Rebound since: the next revision binds none, and adds none back.
+      moved = ShareFixtures.rebind!(admin, shared.entry)
+      refute moved == shared.entry.binding_digest
+
+      ship_model!(ana, "1.2.0", %{"limits" => %{"timeout" => "3m"}})
+      # The rebind blocked the profile; a bootstrap revision is still the
+      # seed's to write over a bootstrap-only head.
+      assert Bootstrap.run(ana) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      {head, _vault} = model_head!(ana)
+      assert head.revision == 3
+      assert_unbound!(ana)
+    end
+
+    test "a revision under a person binds none once the share is revoked",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+
+      {:ok, _revoked} =
+        Arca.Shares.revoke(admin.actor, shared.share.id, Sanctum.Vault.blocked_profile_status())
+
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      assert Bootstrap.run(ana) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      {head, _vault} = model_head!(ana)
+      assert head.revision == 2
+      assert_unbound!(ana)
+    end
+
+    # A revision under a person keeps the head's share only once it read
+    # it: a read the store could not answer keeps the head as it stands,
+    # never revised without the share it bound.
+    @tag :capture_log
+    test "a revision under a person that cannot read the share its head binds keeps the head, " <>
+           "and a run once the store answers revises it bound",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+      held = head_rows!(ana)
+
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      after_read!("consent_vault_refs", fn -> away!("shares") end)
+      {unanswered, log} = with_log(fn -> Bootstrap.run(ana) end)
+      back!("shares")
+
+      assert unanswered ==
+               {:ok, %{minted: [], revised: [], skipped: [{@model, @shares_unavailable}]}}
+
+      assert log =~ "#{@model} skipped: Shares could not answer (:unavailable)"
+      assert head_rows!(ana) == held
+
+      assert Bootstrap.run(ana) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      assert_shared!(ana, shared, 2)
+    end
+
+    test "a boot's revision with no person carries the head's share as held, is refused by a " <>
+           "revoke landing after its read, and then binds none",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+      {first, bound} = model_head!(ana)
+      [first_row] = first.vault_refs
+
+      # A boot's seed sync runs under the server's own context: no person
+      # to read the offer as. The release moves the shape, and the revision
+      # carries the share, its digest, its key and its lifetime unchanged.
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      {head, vault} = model_head!(ana)
+      assert head.revision == 2
+
+      assert %{entry_id: id, binding_digest: digest, binding_key: key, scope: "share"} = vault
+
+      assert {id, digest, key} ==
+               {shared.share.id, shared.entry.binding_digest, bound.binding_key}
+
+      assert vault.destination == bound.destination
+      assert vault.attach.name == "Authorization"
+
+      assert [row] = head.vault_refs
+
+      assert Map.take(row, [:binding_key, :share_id, :binding_digest, :scope]) ==
+               Map.take(first_row, [:binding_key, :share_id, :binding_digest, :scope])
+
+      assert {row.lifetime_kind, row.expires_at} ==
+               {first_row.lifetime_kind, first_row.expires_at}
+
+      assert_bound!(seed(ana), {:share, shared.share.id}, shared.entry.binding_digest, 2)
+
+      # A revoke landing after the revision read the share as active: the
+      # revision's lock refuses the share, nothing is written, and the boot
+      # reports the source skipped with the refusal.
+      ship_model!(ana, "1.2.0", %{"limits" => %{"timeout" => "3m"}})
+      handler = {__MODULE__, :revoke_share_after_facts, System.unique_integer([:positive])}
+
+      revoke = fn ->
+        Arca.Shares.revoke(admin.actor, shared.share.id, Sanctum.Vault.blocked_profile_status())
+      end
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          &__MODULE__.revoke_share_after_facts/4,
+          %{test: self(), revoke: revoke}
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, %{revised: [], skipped: skipped}} = Bootstrap.run(seed(ana))
+      :telemetry.detach(handler)
+      assert {:ok, %{blocked: [_blocked]}} = Process.get(:share_revoked)
+      assert {@model, {:share_unavailable, "revoked"}} in skipped
+      {after_revoke, _vault} = model_head!(ana)
+      assert after_revoke.id == head.id
+
+      # Read as revoked, the share is carried no further: the next boot's
+      # revision binds none.
+      assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      {unbound, _vault} = model_head!(ana)
+      assert unbound.revision == 3
+      assert_unbound!(ana)
+    end
+
+    # A narrowing landing after a boot's revision read the share's facts:
+    # the revision's lock holds the share to the audience the facts named
+    # and refuses it, and the boot writes the revision again with no
+    # binding, as when the share is no longer carried.
+    test "a boot's revision with no person whose share is narrowed after its facts were " <>
+           "read is written without the share",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+      group = Arca.Test.Shares.group!([admin.user.id])
+
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "3m"}})
+      handler = {__MODULE__, :revoke_share_after_facts, System.unique_integer([:positive])}
+
+      narrow = fn ->
+        Arca.Shares.set_audience(
+          admin.actor,
+          shared.share.id,
+          Arca.Test.Shares.everyone(),
+          %{audience: "group", group_id: group.id}
+        )
+      end
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          &__MODULE__.revoke_share_after_facts/4,
+          %{test: self(), revoke: narrow}
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      :telemetry.detach(handler)
+      assert {:ok, %{audience: "group"}} = Process.get(:share_revoked)
+      assert_unbound!(ana)
+    end
+
+    test "a boot's revision with no person carries nothing once the share's source was " <>
+           "rebound past the head's digest",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+
+      # Still active, its destination still covering the need, but no
+      # longer at the digest the head bound: the revision binds none.
+      ShareFixtures.rebind!(admin, shared.entry)
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      {head, _vault} = model_head!(ana)
+      assert head.revision == 2
+      assert_unbound!(ana)
+    end
+
+    test "a boot's revision with no person carries nothing to a release whose need calls a " <>
+           "host the share's source misses",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+
+      ship_model!(ana, "1.1.0", %{}, ["api.anthropic.com"])
+      assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      {head, _vault} = model_head!(ana)
+      assert head.revision == 2
+      assert_unbound!(ana)
+    end
+
+    # A boot that cannot read the share decides nothing about it.
+    @tag :capture_log
+    test "a boot's revision with no person under a shares outage keeps the head, and a boot " <>
+           "once the store answers carries the share",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      shared = share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+      held = head_rows!(ana)
+
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      away!("shares")
+      {unanswered, log} = with_log(fn -> Bootstrap.run(seed(ana)) end)
+      back!("shares")
+
+      assert unanswered ==
+               {:ok, %{minted: [], revised: [], skipped: [{@model, @shares_unavailable}]}}
+
+      assert log =~ "#{@model} skipped: Shares could not answer (:unavailable)"
+      assert head_rows!(ana) == held
+
+      assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
+      assert_bound!(seed(ana), {:share, shared.share.id}, shared.entry.binding_digest, 2)
+    end
+
+    test "a boot's revision of a head whose share binding has no ref row is the profile " <>
+           "damaged, and the head is kept",
+         %{ana: ana, admin: admin} do
+      ship_model!(ana)
+      share!(admin)
+      {:ok, _} = Bootstrap.run(ana)
+      profile_id = head_profile_id(ana)
+      {head, [_bound]} = head_rows!(ana)
+      drop_refs!(head.id)
+
+      ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+
+      assert Bootstrap.run(seed(ana)) ==
+               {:ok,
+                %{
+                  minted: [],
+                  revised: [],
+                  skipped: [{@model, {:corrupt, {:profile, profile_id}}}]
+                }}
+
+      assert head_rows!(ana) == {head, []}
+    end
+
+    # -------------------------------------------------------------------------
+    # Revisions of a head binding an instance entry
+    # -------------------------------------------------------------------------
 
     # A revision under a person keeps the head's entry only once it read
     # it: a binding read the store could not answer keeps the head as it
@@ -554,33 +1054,33 @@ defmodule Sanctum.Consent.BootstrapTest do
          %{person: person} do
       ship_model!(person)
       offered = offer!()
-      {:ok, _} = Bootstrap.run(person)
+      instance_head!(person, offered)
       held = head_rows!(person)
 
       # The release moves the shape; the store goes once the head is read.
       ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
-      after_read!("consent_vault_refs", &entries_away!/0)
+      after_read!("consent_vault_refs", fn -> away!("instance_entries") end)
       {unanswered, log} = with_log(fn -> Bootstrap.run(person) end)
-      entries_back!()
+      back!("instance_entries")
 
-      assert unanswered == {:ok, %{minted: [], revised: [], skipped: [{@model, @unavailable}]}}
+      assert unanswered ==
+               {:ok, %{minted: [], revised: [], skipped: [{@model, @instance_unavailable}]}}
+
       assert log =~ "#{@model} skipped: Instance entries could not answer (:database_error)"
       assert head_rows!(person) == held
 
       assert Bootstrap.run(person) == {:ok, %{minted: [], revised: [@model], skipped: []}}
-      assert_bound!(person, offered, 2)
+      assert_offered!(person, offered, 2)
     end
 
-    # A boot's revision carries the head's instance binding as the head
-    # holds it, so a head it cannot read whole is damaged, not a head that
-    # bound nothing: the source is skipped with the head kept.
+    # A boot's revision carries the head's binding as the head holds it,
+    # so a head it cannot read whole is damaged, not a head that bound
+    # nothing: the source is skipped with the head kept.
     test "a boot's revision of a head whose policy does not parse is the profile damaged, " <>
            "and the head is kept",
          %{ctx: ctx, person: person} do
       ship_model!(person)
-      offer!()
-      {:ok, _} = Bootstrap.run(person)
-      profile_id = head_profile_id(person)
+      profile_id = instance_head!(person, offer!())
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(person, profile_id, resolved_policy: "{")
       damaged = head_rows!(person)
 
@@ -606,9 +1106,7 @@ defmodule Sanctum.Consent.BootstrapTest do
              "damaged profile and keeps the whole head",
            %{ctx: ctx, person: person, damaged_shape: damaged} do
         ship_model!(person)
-        offer!()
-        {:ok, _} = Bootstrap.run(person)
-        profile_id = head_profile_id(person)
+        profile_id = instance_head!(person, offer!())
         {head, [_bound]} = head_rows!(person)
         decoded = Jason.decode!(head.resolved_policy)
 
@@ -646,9 +1144,7 @@ defmodule Sanctum.Consent.BootstrapTest do
            "damaged, and the head is kept",
          %{ctx: ctx, person: person} do
       ship_model!(person)
-      offer!()
-      {:ok, _} = Bootstrap.run(person)
-      profile_id = head_profile_id(person)
+      profile_id = instance_head!(person, offer!())
       {head, [_bound]} = head_rows!(person)
       drop_refs!(head.id)
       assert head_rows!(person) == {head, []}
@@ -666,48 +1162,6 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert head_rows!(person) == {head, []}
     end
 
-    # The shape derivation refuses a source whose stored manifest does not
-    # decode, by the same term: whichever read meets it first, the person
-    # is told the manifest is damaged, and nothing is minted without the
-    # entry it is offered.
-    @tag :capture_log
-    test "a catalyst whose stored manifest does not decode is skipped as damaged, and nothing " <>
-           "is minted",
-         %{person: person} do
-      component = ship_model!(person)
-      offer!()
-      set_manifest!(component, "{not json")
-
-      assert Bootstrap.run(person) ==
-               {:ok,
-                %{minted: [], revised: [], skipped: [{@model, {:corrupt, {:manifest, @model}}}]}}
-
-      assert no_profile?(person)
-
-      assert Prima.Refusal.message({:corrupt, {:manifest, @model}}) ==
-               "The stored manifest is damaged."
-    end
-
-    # The walk keeps the row it read. Repairing storage before its later
-    # reads must not turn that unreadable snapshot into an unbound mint.
-    @tag :capture_log
-    test "a mint that read a damaged manifest skips even when storage is repaired before its " <>
-           "later reads, and the next run mints it bound",
-         %{person: person} do
-      component = ship_model!(person)
-      offered = offer!()
-      set_manifest!(component, "{not json")
-      after_read!("components", fn -> set_manifest!(component, component.manifest) end)
-
-      assert Bootstrap.run(person) ==
-               {:ok,
-                %{minted: [], revised: [], skipped: [{@model, {:corrupt, {:manifest, @model}}}]}}
-
-      assert no_profile?(person)
-      assert Bootstrap.run(person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
-      assert_bound!(person, offered)
-    end
-
     for mode <- [:person, :seed] do
       @tag :capture_log
       @tag revision_context: mode
@@ -716,7 +1170,7 @@ defmodule Sanctum.Consent.BootstrapTest do
            %{ctx: ctx, person: person, revision_context: mode} do
         ship_model!(person)
         offered = offer!()
-        {:ok, _} = Bootstrap.run(person)
+        instance_head!(person, offered)
         held = head_rows!(person)
 
         component = ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
@@ -737,76 +1191,16 @@ defmodule Sanctum.Consent.BootstrapTest do
         assert Bootstrap.run(revision_ctx) ==
                  {:ok, %{minted: [], revised: [@model], skipped: []}}
 
-        assert_bound!(revision_ctx, offered, 2)
+        assert_offered!(revision_ctx, offered, 2)
       end
     end
 
-    test "a claim taken over after the offered entries are read mints no profile", %{
-      person: person
-    } do
-      ship_model!(person)
-      offer!()
-      actor = Sanctum.Context.actor(person)
-      test = self()
-
-      {:ok, stale} =
-        Arca.ProvisioningClaims.claim(actor, "boot_elsewhere/own_walk", "sign_in", 1, :none)
-
-      # A claim as provisioning hands it on: with the slot it was taken under.
-      stale = Map.put(stale, :slot, :none)
-
-      after_read!("instance_entries", fn ->
-        Prima.Test.Wait.wait_until(
-          fn -> not Arca.ProvisioningClaims.live?(stale) end,
-          2_000,
-          "the claim to expire before its takeover"
-        )
-
-        {:ok, successor} =
-          Arca.ProvisioningClaims.claim(
-            actor,
-            "boot_elsewhere/own_successor",
-            "sign_in",
-            60_000,
-            :none
-          )
-
-        send(test, {:claim_taken, successor})
-      end)
-
-      assert Bootstrap.run(person, stale) == {:error, :claim_lost}
-      assert_receive {:claim_taken, successor}
-      assert successor.fence == stale.fence + 1
-      assert no_profile?(person)
-      assert Arca.ProvisioningClaims.current(actor) == {:ok, successor}
-    end
-
-    test "an athanor provisioned before an entry is offered is not revised under its people",
-         %{person: person} do
-      ship_model!(person)
-      {:ok, _} = Bootstrap.run(person)
-      {before, nil} = model_head!(person)
-
-      offered = offer!()
-
-      assert {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(person)
-      assert {@model, :already_bootstrapped} in skipped
-      {head, vault} = model_head!(person)
-      assert head.id == before.id and vault == nil
-
-      # The entry is the suggestion the next time the need is granted.
-      {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: @model})
-      row = Enum.find(plan.needs, &(&1.need == "api_key"))
-      assert row.suggested == %{instance_entry_id: offered.id}
-      assert row.source == "instance"
-    end
-
-    test "a revision keeps the head's binding while it is offered at its digest, and binds " <>
-           "none once it was rebound",
+    test "a revision keeps the head's instance binding while it is offered at its digest, and " <>
+           "binds none once it was rebound",
          %{person: person} do
       ship_model!(person)
       offered = offer!()
-      {:ok, _} = Bootstrap.run(person)
+      instance_head!(person, offered)
 
       # The release moves the shape: the bootstrap-only head is revised,
       # and the entry it bound, unchanged and still offered, stays bound.
@@ -815,6 +1209,7 @@ defmodule Sanctum.Consent.BootstrapTest do
       {head, vault} = model_head!(person)
       assert head.revision == 2
       assert vault.entry_id == offered.id
+      assert_offered!(person, offered, 2)
 
       # Rebound since: the next revision binds none, and adds none back.
       {:ok, _} =
@@ -839,12 +1234,12 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert vault == nil
     end
 
-    test "a boot's revision with no person carries the head's binding as held, is refused " <>
-           "by a revoke landing after its read, and then binds none",
+    test "a boot's revision with no person carries the head's instance binding as held, is " <>
+           "refused by a revoke landing after its read, and then binds none",
          %{ctx: ctx, person: person} do
       ship_model!(person)
       offered = offer!()
-      {:ok, _} = Bootstrap.run(person)
+      instance_head!(person, offered)
       {first, bound} = model_head!(person)
       assert bound.entry_id == offered.id
       [first_row] = first.vault_refs
@@ -911,7 +1306,7 @@ defmodule Sanctum.Consent.BootstrapTest do
          %{ctx: ctx, person: person} do
       ship_model!(person)
       offered = offer!()
-      {:ok, _} = Bootstrap.run(person)
+      instance_head!(person, offered)
       {_first, bound} = model_head!(person)
       assert bound.entry_id == offered.id
 
@@ -928,7 +1323,7 @@ defmodule Sanctum.Consent.BootstrapTest do
          %{ctx: ctx, person: person} do
       ship_model!(person)
       offered = offer!()
-      {:ok, _} = Bootstrap.run(person)
+      instance_head!(person, offered)
       {_first, bound} = model_head!(person)
       assert bound.binding_digest == offered.binding_digest
 
@@ -953,6 +1348,10 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert head.revision == 2
       assert vault == nil and head.vault_refs == []
     end
+
+    # -------------------------------------------------------------------------
+    # The automatic field map
+    # -------------------------------------------------------------------------
 
     @grok "catalyst:local.grok"
     @grok_unit Path.expand("../../../../../seed/components/catalysts/local/grok", __DIR__)
@@ -981,25 +1380,29 @@ defmodule Sanctum.Consent.BootstrapTest do
       {component, shipped}
     end
 
-    # An entry with no label offered to everyone, holding `field_names` and
-    # admitting POST under /v1/ on api.x.ai.
-    defp offer_xai!(field_names) do
-      offer!(%{provider_hint: "", field_names: Jason.encode!(field_names), destination: @xai})
+    # A key of the administrator's with no label shared with everyone,
+    # holding `field_names` and admitting POST under /v1/ on api.x.ai.
+    defp share_xai!(admin, field_names) do
+      share!(admin, %{
+        provider_hint: "",
+        field_names: Jason.encode!(field_names),
+        destination: @xai
+      })
     end
 
-    test "provisioning binds that entry at first sign-in with the automatic map, and a boot's " <>
-           "revision to a new release keeps it",
-         %{ctx: ctx, person: person} do
-      {first_release, shipped} = ship_grok!(person)
+    test "provisioning binds the administrator's share at first sign-in with the automatic " <>
+           "map, and a boot's revision to a new release keeps it",
+         %{ana: ana, admin: admin} do
+      {first_release, shipped} = ship_grok!(ana)
       assert %{"api_key" => %{"fields" => ["GROK_API_KEY"]}} = shipped["needs"]
-      offered = offer_xai!(["API key"])
+      shared = share_xai!(admin, ["API key"])
 
-      # The need's one field and the entry's one field: the automatic map.
-      assert {:ok, %{minted: minted}} = Bootstrap.run(person)
+      # The need's one field and the source's one field: the automatic map.
+      assert {:ok, %{minted: minted}} = Bootstrap.run(ana)
       assert @grok in minted
-      {first, bound} = model_head!(person, @grok)
+      {first, bound} = model_head!(ana, @grok)
       assert first.revision == 1
-      assert bound.entry_id == offered.id
+      assert {bound.scope, bound.entry_id} == {"share", shared.share.id}
       assert bound.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
 
       # A new release whose limits differ moves the shape, so a boot's seed
@@ -1007,30 +1410,45 @@ defmodule Sanctum.Consent.BootstrapTest do
       # skipping it as already bootstrapped.
       refute shipped["caps"]["limits"]["timeout"] == "7m"
       new_version = Version.parse!(first_release.version) |> Map.update!(:patch, &(&1 + 1))
-      ship_grok!(person, to_string(new_version), %{"timeout" => "7m"})
+      ship_grok!(ana, to_string(new_version), %{"timeout" => "7m"})
 
-      assert {:ok, %{revised: [@grok]}} = Bootstrap.run(seed(ctx))
-      {revised, kept} = model_head!(person, @grok)
+      assert {:ok, %{revised: [@grok]}} = Bootstrap.run(seed(ana))
+      {revised, kept} = model_head!(ana, @grok)
       assert revised.revision == 2
       refute revised.shape_digest == first.shape_digest
-      assert {kept.entry_id, kept.binding_digest} == {offered.id, offered.binding_digest}
+
+      assert {kept.entry_id, kept.binding_digest} ==
+               {shared.share.id, shared.entry.binding_digest}
+
       assert kept.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
     end
 
-    test "provisioning binds nothing where the entry's fields leave the need unmapped, and " <>
+    test "provisioning binds nothing where the share's fields leave the need unmapped, and " <>
            "still mints the consent",
-         %{person: person} do
-      ship_grok!(person)
-      offer_xai!(["key id", "secret"])
+         %{ana: ana, admin: admin} do
+      ship_grok!(ana)
+      share_xai!(admin, ["key id", "secret"])
 
-      {answer, log} = with_log(fn -> Bootstrap.run(person) end)
+      {answer, log} = with_log(fn -> Bootstrap.run(ana) end)
 
       assert {:ok, %{minted: minted, skipped: []}} = answer
       assert @grok in minted
-      assert log =~ ~s(no instance entry bound for #{@grok}: {:fields_unmapped, "api_key"})
-      {head, vault} = model_head!(person, @grok)
+      assert log =~ ~s(no key bound for #{@grok}: {:fields_unmapped, "api_key"})
+      {head, vault} = model_head!(ana, @grok)
       assert head.revision == 1
       assert vault == nil and head.vault_refs == []
+    end
+
+    test "an older share whose fields the need maps binds where the newest's leave it unmapped",
+         %{ana: ana, admin: admin} do
+      ship_grok!(ana)
+      mapped = share_xai!(admin, ["API key"])
+      _newest = share_xai!(admin, ["key id", "secret"])
+
+      assert {:ok, %{minted: minted}} = Bootstrap.run(ana)
+      assert @grok in minted
+      {_head, bound} = model_head!(ana, @grok)
+      assert {bound.scope, bound.entry_id} == {"share", mapped.share.id}
     end
 
     defp head_profile_id(ctx) do

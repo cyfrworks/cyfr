@@ -142,8 +142,13 @@ defmodule Prima.ConsentPreviewTest do
       assert item["binding_key"] ==
                Prima.Authority.Blob.binding_key(item["node"], item["edge"], item["connection"])
 
-      assert Enum.count(~w(entry_id instance_entry_id via), &Map.has_key?(item, &1)) == 1
+      assert Enum.count(~w(entry_id instance_entry_id share_id via), &Map.has_key?(item, &1)) ==
+               1
     end
+
+    # A share is removed by its id, its name the owner's words, as its row names it.
+    assert [%{"share_id" => "shr_old_market", "source" => "share", "name" => "Shared by Terry"}] =
+             Enum.filter(removed, &Map.has_key?(&1, "share_id"))
 
     # A need that cannot be told is null, never absent; an entry that
     # cannot be read names neither its name nor its source.
@@ -245,6 +250,18 @@ defmodule Prima.ConsentPreviewTest do
 
     assert [%{"fields" => %{"api_key" => "API key"}}] =
              Enum.filter(credentials, &(&1["source"] == "instance"))
+  end
+
+  test "a key another person shares is a credential of its own source, attached and never disclosed" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+
+    assert [%{"name" => "Shared by Terry", "disclosed" => false}] =
+             for(
+               %Row{kind: :credential, values: %{"source" => "share"} = values} <- rows,
+               do: values
+             )
+
+    assert "share" in Row.sources()
   end
 
   test "a credential whose fields are a list, or whose map names an empty field, is refused on its fields" do

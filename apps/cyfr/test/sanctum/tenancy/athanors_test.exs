@@ -283,6 +283,26 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
   end
 
+  describe "archive/2 and a person's shares" do
+    # An archive of a person's own athanor revokes its shares in its
+    # transaction, and each is announced once it committed. No person acts.
+    test "announces every share it revoked, once" do
+      terry = Arca.Test.Shares.owner!()
+      share = Arca.Test.Shares.share!(terry.actor, Arca.Test.Shares.entry!(terry.actor).id)
+
+      Sanctum.Test.ShareAnnouncements.listen()
+      assert {:ok, %{status: "archived"}} = Athanors.archive(terry.athanor, force: true)
+
+      share_id = share.id
+
+      assert_receive {:share_announced, :revoked,
+                      %{share_id: ^share_id, kind: :revoked, user_id: nil}}
+
+      refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
+      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
+    end
+  end
+
   describe "by_route_slug/1 and archive rules" do
     test "@namespace names a person, a bare slug a group; archived athanors do not resolve" do
       n = System.unique_integer([:positive])

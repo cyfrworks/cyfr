@@ -341,7 +341,7 @@ defmodule Cyfr.Boundaries do
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
-    Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
+    Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage Arca.Shares Arca.ShareUsage
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
@@ -456,7 +456,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
-        Sanctum.Session Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
+        Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -492,6 +492,11 @@ defmodule Cyfr.Boundaries do
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
           "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
+          "`Sanctum.Shares` is " <>
+          "`Cyfr.RetentionScheduler`'s periodic sweep of share usage days (`sweep_usage/0`), " <>
+          "which names no share and no person; and the composition root's announcement of " <>
+          "the shares a declared restore revoked, from what its transition answered " <>
+          "(`announce_each/3`). " <>
           "`Sanctum.Decisions` is `Cyfr.RetentionScheduler`'s purge of the host's own " <>
           "decisions, the rows without a tenant, under the platform's system actor " <>
           "(`purge_global/2`), which reaches no athanor's row, and the decision an entry " <>
@@ -2085,6 +2090,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
+    "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SignIn" => [
       link_ticket: 2,
       record_claim: 2,

@@ -56,6 +56,9 @@ tool_policy:
   notes.search: auto
   request_setup.open: auto
   schedule.list: auto
+  share.list: auto
+  share.offered: auto
+  share.usage: auto
   storage.delete: ask
   storage.list: auto
   storage.read: auto
@@ -142,6 +145,18 @@ whose result a canvas reads by the feed's name. `feed.list` lists the
 person's feeds with their result shapes and actions, never their values.
 Propose `feed.bind` or `feed.remove` and let the person say yes: a feed
 runs on its own, under a grant that admits runs on a schedule.
+
+## Shared keys
+
+A person can share a key: one of their own vault entries, offered to a
+group they are in or to everyone on this CYFR, which CYFR attaches to
+the requests of the components the people it is offered to grant it to,
+and shows to no one. `share.offered` lists the keys offered to the person,
+each with its owner, provider and destination; `share.list` lists the
+keys the person shares, with today's use, and `share.usage` who used one.
+Asked to share a key, change who a share reaches or revoke one, point the
+person to Share on the Vault page: those are theirs to do there, never
+yours.
 
 ---
 
