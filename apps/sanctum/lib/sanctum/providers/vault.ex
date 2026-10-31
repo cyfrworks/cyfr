@@ -546,6 +546,15 @@ defmodule Sanctum.Providers.Vault do
   defp fmt(:binding_moved),
     do: "binding_moved: the entry was rebound since you read it; re-read and retry"
 
+  # A rebind of an entry an active share names (`Arca.VaultStorage`): it
+  # stays shareable, attach-only and to named methods and paths.
+  defp fmt({:shared, _id}), do: "shared: this key is shared, so it stays attach-only"
+
+  defp fmt({:shared_destination_incomplete, _id}),
+    do:
+      "shared_destination_incomplete: this key is shared, so its destination must " <>
+        "name methods and paths"
+
   defp fmt({:entry_unavailable, status}),
     do: "entry_unavailable: the entry is #{status}"
 
