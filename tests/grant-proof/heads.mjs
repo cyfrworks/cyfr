@@ -169,3 +169,114 @@ export const revokedHeld = (answer, { consent, refusal, boundUs }) =>
   sameHead(answer.refused, { admitted: false, refusal }) &&
   answer.attempts === 1 && Number.isInteger(answer.refused_after_us) &&
   answer.refused_after_us >= 0 && answer.refused_after_us <= boundUs;
+
+// The share step's stored rows (`fixture.exs` `shared`), each field of each
+// table in one of three classes: exact, compared with the model's value;
+// derived, compared with a value the model derives from the request alone
+// (the binding digest the owner's request implies, `fixture.exs`
+// `requested`); bound, an id compared with the one its source showed, a
+// time held to the run's window, or a use row's day held to the database's
+// today. A field the table does not name fails as unclassified, and a named
+// field a row lacks fails as missing.
+export const SHARE_FIELDS = {
+  consent_vault_refs: {
+    exact: ["binding_key", "vault_entry_id", "via_label", "lifetime_kind", "expires_at", "consumed_by_root"],
+    derived: ["binding_digest"],
+    bound: { ids: ["consent_id", "athanor_id", "share_id"], times: [], days: [] },
+  },
+  shares: {
+    exact: ["audience", "group_id", "person_daily", "total_daily", "status"],
+    derived: [],
+    bound: { ids: ["id", "vault_entry_id", "athanor_id", "created_by"], times: ["inserted_at", "updated_at"], days: [] },
+  },
+  share_usage: {
+    exact: ["count"],
+    derived: [],
+    bound: { ids: ["athanor_id", "share_id", "user_id"], times: ["updated_at"], days: ["day"] },
+  },
+};
+
+const classified = (table) => {
+  const { exact, derived, bound } = SHARE_FIELDS[table];
+  return [...exact, ...derived, ...bound.ids, ...bound.times, ...bound.days];
+};
+
+// An ISO 8601 UTC time as microseconds since the epoch, or NaN.
+const ISO = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?Z$/;
+export const micros = (text) => {
+  const m = typeof text === "string" ? ISO.exec(text) : null;
+  if (!m) return NaN;
+  const seconds = Date.parse(`${m[1]}Z`);
+  return Number.isNaN(seconds) ? NaN : seconds * 1000 + Number((m[2] ?? "").padEnd(6, "0"));
+};
+
+// One stored row of `table` against the model's row: the same field names,
+// every exact, derived and id field equal to the model's, every time inside
+// `window` (`{ from, to }`, ISO times) and every day `window.today`.
+export const rowHeld = (table, row, model, window) => {
+  const fields = classified(table);
+  const { bound } = SHARE_FIELDS[table];
+  if (!isObject(row) || !isObject(model) || !sameSet(Object.keys(row), fields)) return false;
+  const from = micros(window.from);
+  const to = micros(window.to);
+  return fields.every((field) => {
+    if (bound.times.includes(field)) {
+      const at = micros(row[field]);
+      return !Number.isNaN(at) && at >= from && at <= to;
+    }
+    if (bound.days.includes(field)) return row[field] === window.today;
+    return Object.hasOwn(model, field) && row[field] === model[field];
+  });
+};
+
+// The stored rows of `table`, as a set, against the model's: as many, and
+// each model row held by exactly one stored row.
+export const rowsHeld = (table, rows, models, window) =>
+  Array.isArray(rows) && Array.isArray(models) && rows.length === models.length &&
+  models.every((model) => rows.filter((row) => rowHeld(table, row, model, window)).length === 1);
+
+// Copies of a set of stored rows, each of which `rowsHeld` must refuse: a
+// field added, a field missing, each classified field changed, each time
+// moved past the window, each day moved a day on, a row added and a row
+// removed.
+export const rowCopies = (table, rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [[{ also: true }]];
+  const { bound } = SHARE_FIELDS[table];
+  const changed = (value) => (value === null ? "changed" : typeof value === "number" ? value + 1 : `${value}-changed`);
+  const copies = [];
+  rows.forEach((row, i) => {
+    const swap = (copy) => rows.map((r, j) => (j === i ? copy : r));
+    copies.push(swap({ ...row, also: true }));
+    for (const field of classified(table)) {
+      const { [field]: _dropped, ...without } = row;
+      copies.push(swap(without));
+      if (bound.times.includes(field)) copies.push(swap({ ...row, [field]: "2999-01-01T00:00:00.000000Z" }));
+      else if (bound.days.includes(field)) copies.push(swap({ ...row, [field]: "2999-01-01" }));
+      else copies.push(swap({ ...row, [field]: changed(row[field]) }));
+    }
+  });
+  copies.push([...rows, rows[0]]);
+  copies.push(rows.slice(1));
+  return copies;
+};
+
+// What the component's attached request carried, whole (`fixture.exs`
+// `attach`): admitted under `consent`, and either the owner's key in the
+// rule's header, or `refusal` with nothing attached.
+export const attachHeld = (answer, { consent, header, refusal }) =>
+  isObject(answer) &&
+  (refusal === undefined
+    ? sameHead(answer, { admitted: true, consent_id: consent, attached: true, in: "header", header, owner_key: true })
+    : sameHead(answer, { admitted: true, consent_id: consent, attached: false, refusal }));
+
+// Copies of an attach answer its predicate must refuse.
+export const attachCopies = (answer) =>
+  changing(answer, [
+    { ...answer, admitted: false },
+    { ...answer, consent_id: "cons_other" },
+    { ...answer, attached: !answer.attached },
+    { ...answer, owner_key: false },
+    { ...answer, header: "authorization" },
+    { ...answer, refusal: "connection_not_granted" },
+    { ...answer, also: true },
+  ]);

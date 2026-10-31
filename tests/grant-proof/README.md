@@ -6,7 +6,15 @@ runs it names. The home is one `cyfr` release on a SQLite cell,
 `home.test`, behind the harness's HTTPS front (`browser_home`). One person
 is signed in by the release fixture's door (`tests/release-boot/fixture.exs`
 `person`), and their local tincture `grant-probe` (`tinctures/grant-probe/`)
-asks for two hosts, a folder and a key it can go without, and lets the folder's files reach one host and its notes the other. `proof.mjs`
+asks for two hosts, a folder and a key it can go without, attached by a
+header rule, and lets the folder's files reach one host and its notes the
+other. A second person, Olive, signs in through the same door once the
+person, the installation's platform administrator, opens it to newcomers
+(`fixture.exs` `door`), and shares a key for that need with everyone. Her
+key and its share are seeded through the store (`fixture.exs` `share`), the
+one thing this proof seeds: making a key and a share in Prism, under the
+confirmations a passkey proves, is the share proof's (`tests/share-proof/`),
+and what is proven here is the recipient's grant of it. `proof.mjs`
 drives the person in Chromium; it asks `run.sh` for the home's part of a
 step through its output directory (`ask-N.json`, answered `answer-N.json`):
 publishing a version, reading a grant's head and the consent walk's plan,
@@ -17,7 +25,13 @@ line (`cyfr call profile`, built from `apps/codex` with
 
 The harness runs no execution engine and no model, so `run.sh` never starts
 a run: an admission is the loader's answer
-(`Opus.authority_for/3`), not a dispatched execution.
+(`Opus.authority_for/3`), not a dispatched execution. Likewise the share
+step's attached request is the decision `Opus.Host.AttachedFetch` makes for
+it (`Sanctum.Attach.resolve/5`, handed the admitted root's default vault
+resource and the facts an attempt of that root holds), never a request
+sent: the value it attaches is compared inside the fixture with the owner's
+key and only the outcome leaves. The request itself, sent by a runner to an
+upstream, is the suite's (below).
 
 The release is built by hand, as `tests/release-boot/release.sh`'s
 `release_build` builds it but without fetching dependencies
@@ -37,6 +51,7 @@ the first row a later one rests on.
 | `background` | version 1.1.0 asks to keep running when hidden: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt shows the background row, starting from the origins the head admits (the sheet's ticked origins are, as a set, the head's); granted, the head is the first head one revision on (revision 2), under a new consent, the version's shape digest and the commit digest the command line previews for the decisions the re-grant commits (it opens from the head's narrowing, so it names the one flow kept as an exit), its profile and every other field held, and the run is admitted under it; a copy with another revision, a host or flow added or removed, or another digest is refused, and that preview is compared whole as `cli_digest`'s is |
 | `reworded` | version 1.2.0 only rewords its need's reason: the shape digest is the head's, the run is admitted under revision 2, and nothing is asked; the head holds every field it held, and a copy with another revision, or a host or flow added or removed, is refused |
 | `flows` | version 1.3.0 lets outside material reach the host the person kept: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt's exits row for that host names `outside` beside `files_by_grant`, the new flow unticked since a re-grant opens from the head's narrowing; ticked and granted, the head is revision 3 and holds exactly its granted flows and every other field of the head before it, under the digest the command line previews for the same decisions, and admits the run; copies with another revision, a host or flow added or removed, or another digest are refused, and that preview is compared whole as `cli_digest`'s is |
+| `share` | Olive signs in and shares her key with everyone, its destination `https` `alpha.grant.test`, `GET`, `/feed`; before the person grants it nothing changes, the run admitted under the flows head and the share's whole stored row the one seeded, with no use row; on the grant prompt the tincture's key need offers exactly one candidate, "Shared by Olive", which the person picks, until revoked; the head is the flows head one revision on (revision 4), under a new consent, the version's shape and the digest the command line previews for the same decisions with the share bound, every other field held, and that preview is held whole as `cli_digest`'s is; its one binding row, the share and its use rows are compared whole, each field exact, derived (the binding digest the owner's request implies, `fixture.exs` `requested`) or bound (an id its source showed, a time inside the run's window, a use row's day the database's today), and a field added, missing or changed fails; the tincture's attached request to `https://alpha.grant.test/feed` carries the owner's key in its rule's header (`x-feed-token`), one to another path is refused `destination_mismatch`, and one use is counted, the person's 1 and the day's 1; the run is admitted under the new head |
 | `revocation` | the profile revoked in the console: the first admission asked after the revocation's answer is refused, on the member that committed it, for want of a profile (`:no_profile`); the answer is compared whole: the admission before it admitted under the flows head's consent, one attempt, and the time to the refusal a whole number of microseconds within the bound `heads.mjs` names; a copy with a second attempt, another consent before it, another refusal, a time past the bound or another field is refused |
 
 ## Shown in the suite
@@ -50,4 +65,6 @@ has both:
 | a scheduled root refused until the grant names `schedule`, its child refused with it | `apps/cyfr/test/opus/schedules/scheduler_test.exs` ("a fire under a grant that does not name schedule invokes nothing until it does"); a child of a scheduled root carries `schedule`: `apps/cyfr/test/cyfr/admission_origin_test.exs` |
 | a programmatic turn queued, the cell restarted, the turn resumed and judged as `programmatic` | `apps/cyfr/test/aqua/runner_test.exs` ("the origin a turn resumes under", "a line under another origin") |
 | a narrowed grant refusing the domain it dropped | `apps/cyfr/test/sanctum/consent/blob_builder_test.exs` ("what is granted is what runs: the loaded edge refuses what was dropped") |
+| a run's attached request through a grant of a shared key sent to the upstream with its owner's key, a redirect never followed, a request off the destination refused with nothing counted | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` ("a request through a grant of a shared key carries its owner's key to the source's host, …") |
+| after a declared restore the share revoked and the recipient's run refused with no request sent, until the owner rotates the key, shares it again and the recipient grants it again and runs | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` ("after a declared restore a share is revoked and its run refused until the key is rotated, shared and granted again; …") |
 | an approval bound to one execution and one path refusing another path, another execution and a call after its deadline | `apps/cyfr/test/aqua/approvals_test.exs` ("a bounded standing approval"), `apps/sanctum/test/sanctum/tool_grants_test.exs` (`admits?/2`) |

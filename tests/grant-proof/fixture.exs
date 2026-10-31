@@ -42,6 +42,56 @@
 #       admission asked again until it refuses: the milliseconds from the
 #       revocation's answer to the first refusal, and how many admissions
 #       were asked.
+#
+#   door SESSION_TOKEN
+#       The door opened to newcomers by the person, the installation's
+#       platform administrator (`door.allow` of `*` through the gate, under
+#       the session), so a second person can sign in.
+#
+#   share OWNER_USER_ID DESTINATION_JSON
+#       Seeds the owner's key and its share, the one thing this proof seeds
+#       for its share step: an attach-only `api_key` entry of the provider
+#       `grant.test` in the owner's athanor, holding the one field `TOKEN`
+#       and bound to DESTINATION_JSON, sealed and stored as
+#       `Sanctum.Vault.create/2` stores one (`Sanctum.Vault.Payload`, the
+#       vault entry's AAD, `Sanctum.Cipher`, `Arca.VaultStorage.put/3`), and
+#       shared with everyone with no cap (`Arca.Shares.create/3`). Making a
+#       key and a share is the share proof's (`tests/share-proof/`), under
+#       the confirmations it proves with a passkey; here it is the
+#       recipient's grant that is proven. The key is random, made here, and
+#       never leaves this function. Answers the entry's and the share's ids.
+#
+#   requested DESTINATION_JSON
+#       What the owner's request implies the entry stores: the
+#       destination's canonical text (`Prima.Destination.canonical/1`) and
+#       the binding digest over it (`Sanctum.VaultReader.binding_digest/1`),
+#       from the request alone.
+#
+#   clock
+#       The database's time (`Arca.ServerMetaStorage.now!/0`): the start of
+#       a window a stored time is held to.
+#
+#   shared USER_ID REF SHARE_ID
+#       In one read, every row whole, every column as its schema reads it:
+#       the binding rows of the head of the person's active owner profile
+#       of REF (`consent_vault_refs`), the share SHARE_ID (`shares`) and
+#       every use row of it (`share_usage`); then the database's time and
+#       UTC date, the end of the window and the today a use row's day is.
+#
+#   attach SESSION_TOKEN REF OWNER_USER_ID ENTRY_ID URL METHOD
+#       What the component's attached request of METHOD to URL carries:
+#       the loader's admission of a run of REF under the context the
+#       person's session establishes at Prism, the one a run started there
+#       holds and its guest's calls run in, then the value `Opus.Host.AttachedFetch`
+#       attaches, decided as it decides it (`Sanctum.Attach.resolve/5`,
+#       handed the default vault resource of the admitted root's edge and
+#       the facts an attempt of that root holds), rendered by the rule it
+#       attaches by (`Prima.Manifest.Needs.render_attach/2`). The value is
+#       compared here with the owner's entry ENTRY_ID unsealed as its owner
+#       unseals it, and only the outcome leaves: whether the request
+#       carries the owner's key, in which header, or the refusal.
+
+require Ecto.Query
 
 fn args ->
   answer = fn map -> "GRANT=" <> Jason.encode!(map) end
@@ -75,6 +125,39 @@ fn args ->
       {:error, {tag, _payload}} when is_atom(tag) -> %{admitted: false, refusal: tag}
       {:error, reason} -> %{admitted: false, refusal: inspect(reason)}
     end
+  end
+
+  # What a refusal is called on the wire: its tag.
+  tag = fn
+    {tag, _payload} when is_atom(tag) -> Atom.to_string(tag)
+    tag when is_atom(tag) -> Atom.to_string(tag)
+    other -> Prima.LoggerContext.shape(other)
+  end
+
+  # Every row of `query`, every column as its schema reads it.
+  rows_of = fn query ->
+    query |> Arca.Repo.all() |> Enum.map(&Map.delete(Map.from_struct(&1), :__meta__))
+  end
+
+  provider = "grant.test"
+  field = "TOKEN"
+
+  # The binding an attach-only entry of the provider holding the one field
+  # and bound to `destination` stores, from the request alone.
+  requested = fn destination ->
+    {:ok, canonical} = Sanctum.Vault.destination_text(Jason.decode!(destination))
+
+    binding = %{
+      provider_hint: provider,
+      field_names: Jason.encode!([field]),
+      oauth_endpoints: nil,
+      oauth_scopes: nil,
+      destination: canonical,
+      attach_only: true
+    }
+
+    {:ok, digest} = Sanctum.VaultReader.binding_digest(binding)
+    {binding, digest}
   end
 
   case args do
@@ -195,5 +278,136 @@ fn args ->
         attempts: attempts,
         refused_after_us: System.monotonic_time(:microsecond) - revoked_at
       })
+
+    ["door", token] ->
+      {:ok, console} = Sanctum.Caller.establish({:session, token})
+
+      case PrismWeb.Ops.call_tool(%{console | origin: :interactive}, "door", %{
+             "action" => "allow",
+             "value" => "*"
+           }) do
+        {:ok, _entry} -> answer.(%{door: "*"})
+        {:error, reason} -> answer.(%{door: nil, refusal: tag.(reason)})
+      end
+
+    ["share", owner_id, destination] ->
+      ctx = person_ctx.(owner_id)
+      actor = Sanctum.Context.actor(ctx)
+      {binding, digest} = requested.(destination)
+      key = "gp-" <> Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+      {:ok, json} = Sanctum.Vault.Payload.encode_material(%{field => key}, nil)
+      id = Prima.UUID7.generate_id("vlt")
+      aad = Sanctum.CipherAAD.vault_entry(actor.athanor_id, id, provider)
+      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+
+      {:ok, entry} =
+        Arca.VaultStorage.put(
+          actor,
+          Map.merge(binding, %{
+            id: id,
+            name: "Probe feed",
+            kind: "api_key",
+            status: "active",
+            sealed_payload: sealed,
+            binding_digest: digest
+          })
+        )
+
+      {:ok, share} = Arca.Shares.create(actor, %{entry_id: entry.id, audience: "everyone"})
+      answer.(%{entry_id: entry.id, share_id: share.id})
+
+    ["requested", destination] ->
+      {binding, digest} = requested.(destination)
+      answer.(%{destination: binding.destination, binding_digest: digest})
+
+    ["clock"] ->
+      answer.(%{now: DateTime.to_iso8601(Arca.ServerMetaStorage.now!())})
+
+    ["shared", user_id, ref, share_id] ->
+      ctx = person_ctx.(user_id)
+
+      bindings =
+        case owner.(ctx, ref) do
+          nil ->
+            []
+
+          profile ->
+            {:ok, head} = Sanctum.Consent.head_consent(ctx, profile.id)
+
+            rows_of.(
+              Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef, where: r.consent_id == ^head.id)
+            )
+        end
+
+      share = rows_of.(Ecto.Query.from(s in Arca.Schemas.Share, where: s.id == ^share_id))
+
+      usage =
+        rows_of.(Ecto.Query.from(u in Arca.Schemas.ShareUsage, where: u.share_id == ^share_id))
+
+      now = Arca.ServerMetaStorage.now!()
+
+      answer.(%{
+        bindings: bindings,
+        shares: share,
+        usage: usage,
+        now: DateTime.to_iso8601(now),
+        today: Date.to_iso8601(DateTime.to_date(now))
+      })
+
+    ["attach", token, ref, owner_id, entry_id, url, method] ->
+      {:ok, console} = Sanctum.Caller.establish({:session, token})
+      ctx = %{console | origin: :interactive}
+
+      # The owner's key, unsealed as its owner unseals it; compared here
+      # and never answered.
+      owner_key = fn ->
+        athanor_id = person_ctx.(owner_id).athanor_id
+        %{athanor_id: ^athanor_id} = entry = Arca.Repo.get(Arca.Schemas.VaultEntry, entry_id)
+        aad = Sanctum.CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+        {:ok, plaintext} = Sanctum.Cipher.decrypt(entry.sealed_payload, aad)
+        {:ok, %{"fields" => %{^field => key}}} = Sanctum.Vault.Payload.decode(plaintext)
+        key
+      end
+
+      case Opus.authority_for(ctx, :default, ref) do
+        {:ok, authority} ->
+          {:ok, vault} = Prima.Authority.Blob.vault_for(authority.resources, nil)
+
+          facts = %{
+            root_execution_id: Prima.UUID7.execution_id(),
+            profile_id: authority.profile_id,
+            consent_id: authority.consent_id
+          }
+
+          request = %{uri: URI.parse(url), method: method}
+
+          case Sanctum.Attach.resolve(ctx, vault, "feed", request, facts) do
+            {:ok, %{value: value, attach: rule}} ->
+              key = owner_key.()
+
+              answer.(%{
+                admitted: true,
+                consent_id: authority.consent_id,
+                attached: true,
+                in: rule.in,
+                header: rule.name,
+                owner_key:
+                  value == key and
+                    Prima.Manifest.Needs.render_attach(rule, value) ==
+                      Prima.Manifest.Needs.render_attach(rule, key)
+              })
+
+            {:error, reason} ->
+              answer.(%{
+                admitted: true,
+                consent_id: authority.consent_id,
+                attached: false,
+                refusal: tag.(reason)
+              })
+          end
+
+        {:error, reason} ->
+          answer.(%{admitted: false, refusal: tag.(reason)})
+      end
   end
 end

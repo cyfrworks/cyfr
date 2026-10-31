@@ -10,7 +10,8 @@
       "fields": ["TOKEN"],
       "reason": "to read the probe's feed",
       "required": false,
-      "hosts": ["alpha.grant.test"]
+      "hosts": ["alpha.grant.test"],
+      "attach": {"in": "header", "name": "x-feed-token", "template": "{value}"}
     }
   },
   "caps": {
