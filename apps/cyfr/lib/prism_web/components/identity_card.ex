@@ -20,7 +20,7 @@ defmodule PrismWeb.IdentityCard do
   ended before they said their recovery code was saved. The card says
   "Registering" and asks `registry.register` in a task, whose answer it
   takes only for the focus it asked under (`CyfrWeb.ContextGuard.deliver/3`);
-  the drive moves their one enrollment on and claims its name: a silent cyfr.run offers Try again,
+  the drive registers their identity at cyfr.run and claims their name: a silent cyfr.run offers Try again,
   a name taken or kept by cyfr.run at the claim offers another name
   (`registry.register` with `name`), and a refused identity or a CYFR
   that reaches no cyfr.run is said, with no way on. Registered, "Show

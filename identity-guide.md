@@ -1,6 +1,6 @@
 # Identity and Recovery
 
-How a person gets the name and identifier every CYFR knows them by, how their keys are kept and rotated, how their recovery code brings them back on a fresh installation, and what each loss costs. The person's own settings page (**Settings → Your name**) shows all of it; every change there is an operation through CYFR's gate, and the command line reaches the same operations.
+How a person gets the name and identifier every CYFR knows them by, how their keys are kept and rotated, how their recovery code brings them back on a fresh installation, and what each loss costs. The person's own settings page (**Settings → Your name**) shows their name and identifier, adds another recovery code, says what losing it costs, finishes a name and recovery code left unfinished, and rotates the live key; a restore happens on the installation's own `/restore` page. Every change in Settings is an operation through CYFR's gate, and the command line reaches the same operations.
 
 ---
 

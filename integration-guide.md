@@ -48,7 +48,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, publishing an address, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead; each registry request among them is signed by the person's live key. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, registering a name, minting push tokens, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead; each registry request among them is signed by the person's live key. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 

@@ -13,7 +13,7 @@
 #       the one admission besides a restore that makes a first person,
 #       under a setup token put for the call and taken away after, with
 #       the identity a command line draws, named `identity-proof`, which
-#       opens their enrollment: `{admitted: user_id}` or `{refused:
+#       opens their registration: `{admitted: user_id}` or `{refused:
 #       reason}`. On a restore-reserved installation it is refused.
 #
 #   genesis USER_ID

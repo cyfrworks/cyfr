@@ -368,8 +368,8 @@ defmodule Emissary.Router do
       # Restore (`Sanctum.Recovery`): an identity brought back onto this
       # empty node from its recovery code, under the installation capability
       # (`CYFR_RESTORE_TOKEN`) in the authorization header; and, on a home
-      # restored from a backup, a recovering person's kit proof and the
-      # re-enables it admits. Its body is
+      # restored from a backup, the proof a recovering person's recovery code
+      # signs (the `/kit` routes keep their path) and the re-enables it admits. Its body is
       # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
       scope "/restore", Emissary.Web do
         pipe_through :restore
