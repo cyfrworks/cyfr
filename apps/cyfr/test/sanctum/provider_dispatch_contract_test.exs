@@ -15,7 +15,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
   alias Sanctum.Provider
 
   @tool_names ~w(session athanor member invitation door oauth key tincture_visibility webhook vault
-                  profile person pairing passkey confirmation instance_entry share)
+                  profile person pairing passkey confirmation share)
 
   @action_enums %{
     "session" => [
@@ -86,20 +86,6 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "pairing" => ["begin", "complete", "renew", "revoke", "list", "reenable"],
     "passkey" => ["register", "list", "revoke", "reenable", "recover_admin"],
     "confirmation" => ["confirm", "reauth", "pending", "cancel"],
-    "instance_entry" => [
-      "create",
-      "rotate",
-      "rebind",
-      "set_audience",
-      "set_component_policy",
-      "set_caps",
-      "revoke",
-      "delete",
-      "list",
-      "usage",
-      "offered",
-      "people"
-    ],
     "share" => ["create", "list", "set_audience", "set_caps", "revoke", "usage", "offered"]
   }
 
@@ -122,15 +108,12 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "pairing" => "Unknown action: pairing.___no_such_action___",
     "passkey" => "Unknown action: passkey.___no_such_action___",
     "confirmation" => "Unknown action: confirmation.___no_such_action___",
-    "instance_entry" =>
-      "Invalid instance_entry action. Use: create, rotate, rebind, set_audience, " <>
-        "set_component_policy, set_caps, revoke, delete, list, usage, offered, or people",
     "share" =>
       "Invalid share action. Use: create, list, set_audience, set_caps, revoke, usage, or offered"
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 17 tools, in order" do
+    test "exactly these 16 tools, in order" do
       assert Enum.map(Provider.tools(), & &1.name) == @tool_names
     end
 

@@ -243,42 +243,40 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
              Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
   end
 
-  test "an offered instance entry whose one field is `API key` is a candidate for the Grok " <>
-         "need with the map `GROK_API_KEY` to `API key`, commits with it, and attaches that " <>
-         "field's value as the Bearer header",
-       %{ctx: ctx} do
+  test "a shared key whose one field is `API key` is a candidate for the Grok need with the " <>
+         "map `GROK_API_KEY` to `API key`, commits with it, and attaches that field's value " <>
+         "as the Bearer header" do
     ref = "catalyst:local.grok"
-    secret = "xai-instance-never-handed"
-    register!(ctx, "grok", newest_shipped("catalysts", "grok"))
-    {person, _user} = Sanctum.TestContext.person!(ctx)
+    secret = "xai-shared-never-handed"
 
-    # The instance offers everyone a key for x.ai's API, with no label,
+    # Terry keeps a key for x.ai's API in his own vault, with no label,
     # whose one field is named as a person names it, not as the catalyst
-    # reads it.
-    params = %{
-      name: "xai-#{System.unique_integer([:positive])}",
-      kind: "api_key",
-      provider_hint: "",
-      fields: %{"API key" => secret},
-      destination: %{"hosts" => ["api.x.ai"], "methods" => ["POST"], "paths" => ["/v1/"]},
-      audience: "everyone"
-    }
+    # reads it, and shares it with everyone. Alice has the catalyst in her
+    # own athanor.
+    terry = person!("Terry")
+    alice = person!("Alice")
+    register!(alice.ctx, "grok", newest_shipped("catalysts", "grok"))
 
-    confirmed =
-      Sanctum.TestContext.confirmed(%{person | platform_admin: true}, :credential_entry, %{
-        operation: "instance_entry.create",
-        arguments: params,
-        resource: params.name
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(terry.ctx, %{
+        name: "xai-#{System.unique_integer([:positive])}",
+        kind: "api_key",
+        provider_hint: "",
+        fields: %{"API key" => secret},
+        destination: %{"hosts" => ["api.x.ai"], "methods" => ["POST"], "paths" => ["/v1/"]}
       })
 
-    {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+    {:ok, share} =
+      Sanctum.TestContext.confirming(
+        terry.ctx,
+        &Sanctum.Shares.create(&1, %{entry_id: entry.id, audience: "everyone"})
+      )
 
-    # The need's one field and the entry's one field: the automatic map.
-    {:ok, walk_plan} = Plan.plan(person, %{ref: ref})
+    # The need's one field and the shared key's one field: the automatic map.
+    {:ok, walk_plan} = Plan.plan(alice.ctx, %{ref: ref})
     row = Enum.find(walk_plan.needs, &(&1.need == "api_key"))
 
-    assert [candidate] =
-             Enum.filter(row.candidates, &(Map.get(&1, :instance_entry_id) == entry.id))
+    assert [candidate] = Enum.filter(row.candidates, &(Map.get(&1, :share_id) == share.id))
 
     assert {candidate.field_names, candidate.fields} ==
              {["API key"], %{"GROK_API_KEY" => "API key"}}
@@ -287,22 +285,19 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     assert {candidate.provider, candidate.fit, candidate.label_match} == {"", "exact", false}
 
     # A binding naming no map commits under the automatic one.
-    consent!(person, ref, %{instance_entry_id: entry.id})
+    consent!(alice.ctx, ref, %{share_id: share.id})
 
-    {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(person), ref)
-    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(person), profile.id)
+    alice_actor = Sanctum.Context.actor(alice.ctx)
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(alice_actor, ref)
+    {:ok, head} = Arca.ConsentStorage.head_consent(alice_actor, profile.id)
     {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
     {:ok, %{vault: vault}} = Prima.Authority.Blob.ingress(blob, ref)
-    assert {vault.scope, vault.entry_id} == {"instance", entry.id}
+    assert {vault.scope, vault.entry_id} == {"share", share.id}
     assert vault.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
 
-    # A run's request to the chat endpoint attaches the entry's `API key`
-    # as the need's Bearer header.
-    {:ok, component} = Compendium.Registry.get_latest(ctx, "grok", "local", "catalyst")
-
+    # A run's request to the chat endpoint attaches the shared key's
+    # `API key` as the need's Bearer header.
     facts = %{
-      node_ref: "#{ref}:#{component.version}",
-      activation_digest: Map.get(component, :release_digest),
       root_execution_id: "exec_root_#{System.unique_integer([:positive])}",
       profile_id: profile.id,
       consent_id: head.id
@@ -311,10 +306,27 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     request = %{uri: URI.parse("https://api.x.ai/v1/chat/completions"), method: "POST"}
 
     assert {:ok, %{value: ^secret, attach: attach}} =
-             Sanctum.Attach.resolve(person, vault, "api_key", request, facts)
+             Sanctum.Attach.resolve(alice.ctx, vault, "api_key", request, facts)
 
     assert {attach.in, attach.name} == {"header", "Authorization"}
     assert Needs.render_attach(attach, secret) == "Bearer " <> secret
+  end
+
+  # A person signed in at this CYFR with their own athanor, and their
+  # session's context there, admitted through Prism.
+  defp person!(name) do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "local|local|seed-#{String.downcase(name)}-#{n}",
+        provider: "local",
+        name: name
+      })
+
+    own = Sanctum.Test.People.athanor!(user)
+    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user.id, athanor_id: own.id}
+    %{user: user, ctx: ctx}
   end
 
   # Copy a shipped version in as a fill copies it, then register it.
@@ -338,9 +350,9 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     result
   end
 
-  # `ref`'s owner consent, binding the entry `identity` names
-  # (`entry_id` or `instance_entry_id`) to its `api_key` need through the
-  # consent walk, under the map the plan takes when the decision names none.
+  # `ref`'s owner consent, binding the entry or the share `identity` names
+  # (`entry_id` or `share_id`) to its `api_key` need through the consent
+  # walk, under the map the plan takes when the decision names none.
   defp consent!(ctx, ref, identity) do
     {:ok, walk_plan} = Plan.plan(ctx, %{ref: ref})
     decisions = %{ref: ref, bindings: [Map.put(identity, :need, "api_key")]}

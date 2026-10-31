@@ -2081,14 +2081,11 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # SQLite takes a check only inside CREATE TABLE and Postgres only as a
     # table constraint, so each rule is spelled once per adapter.
-    policy_known = known("instance_entries_policy_known", "component_policy", ~w(any shipped))
-    audience_known = known("instance_entries_audience_known", "audience", ~w(everyone listed))
-
+    #
     # A stored credential's statuses (`Arca.StatusTransitions`), and a
     # profile's.
     credential_statuses = ~w(active needs_reauth revoked tombstoned)
     vault_status = known("vault_entries_status_known", "status", credential_statuses)
-    instance_status = known("instance_entries_status_known", "status", credential_statuses)
     profile_status = known("profiles_status_known", "status", ~w(active needs_consent revoked))
 
     # A share's audience and statuses (`Arca.Schemas.Share`,
@@ -2104,27 +2101,17 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(audience = 'everyone' AND group_id IS NULL)"
     }
 
-    default_names_one = %{
-      name: "vault_defaults_names_one",
-      expr:
-        "(vault_entry_id IS NOT NULL AND instance_entry_id IS NULL) OR " <>
-          "(vault_entry_id IS NULL AND instance_entry_id IS NOT NULL)"
-    }
-
-    # A binding names exactly one of an athanor's entry, an instance entry,
-    # a share and a selection's label; an entry or a share is bound at a
-    # digest, and a selection pins one only when it was chosen against one.
+    # A binding names exactly one of an athanor's entry, a share and a
+    # selection's label; an entry or a share is bound at a digest, and a
+    # selection pins one only when it was chosen against one.
     ref_names_one = %{
       name: "consent_vault_refs_names_one",
       expr:
-        "(scope = 'athanor' AND vault_entry_id IS NOT NULL AND instance_entry_id IS NULL " <>
-          "AND share_id IS NULL AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
-          "(scope = 'instance' AND instance_entry_id IS NOT NULL AND vault_entry_id IS NULL " <>
-          "AND share_id IS NULL AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
-          "(scope = 'share' AND share_id IS NOT NULL AND vault_entry_id IS NULL " <>
-          "AND instance_entry_id IS NULL AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
-          "(scope = 'athanor' AND via_label IS NOT NULL AND vault_entry_id IS NULL " <>
-          "AND instance_entry_id IS NULL AND share_id IS NULL)"
+        "(vault_entry_id IS NOT NULL AND share_id IS NULL AND via_label IS NULL " <>
+          "AND binding_digest IS NOT NULL) OR " <>
+          "(share_id IS NOT NULL AND vault_entry_id IS NULL AND via_label IS NULL " <>
+          "AND binding_digest IS NOT NULL) OR " <>
+          "(via_label IS NOT NULL AND vault_entry_id IS NULL AND share_id IS NULL)"
     }
 
     ref_lifetime = %{
@@ -2168,89 +2155,9 @@ defmodule Arca.Repo.Migrations.Baseline do
              name: :vault_entries_active_name_index
            )
 
-    # The instance's own credentials (`Arca.InstanceEntries`): a vault
-    # entry's columns less the athanor, the OAuth endpoints and scopes and
-    # the disclosure, since an instance entry is never OAuth and is
-    # attach-only by definition, offered to the `audience` (`everyone`, or the `listed` people of
-    # `instance_entry_members`) under a component policy and two daily
-    # caps (`nil` takes the platform setting's default). No athanor owns
-    # one and no athanor's erasure touches one; a deleted one is a
-    # tombstone, so the consents that bound it keep their rows.
-    create table(:instance_entries, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :name, :string, null: false
-      add :provider_hint, :string, null: false, default: ""
-      add :kind, :string, null: false
-      add :field_names, :text, null: false, default: "[]"
-      add :binding_digest, :string
-      add :destination, :text, null: false
-
-      add :status, :string,
-        null: false,
-        default: "active",
-        check: if(sqlite?, do: instance_status)
-
-      add :payload_rev, :integer, null: false, default: 0
-      add :sealed_payload, :binary
-      add :last_used_at, :utc_datetime_usec
-      add :audience, :string, null: false, check: if(sqlite?, do: audience_known)
-      add :person_daily, :integer
-      add :total_daily, :integer
-
-      add :component_policy, :text,
-        null: false,
-        default: "any",
-        check: if(sqlite?, do: policy_known)
-
-      add :created_by, :string, null: false
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :instance_entries, [
-      policy_known,
-      audience_known,
-      instance_status
-    ])
-
-    create unique_index(:instance_entries, [:name],
-             where: "status != 'tombstoned'",
-             name: :instance_entries_active_name_index
-           )
-
-    # The listed people of an instance entry whose audience is `listed`.
-    create table(:instance_entry_members, primary_key: false) do
-      add :instance_entry_id, references(:instance_entries, column: :id, type: :string),
-        null: false
-
-      add :user_id, :string, null: false
-      add :inserted_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:instance_entry_members, [:instance_entry_id, :user_id])
-    create index(:instance_entry_members, [:user_id])
-
-    # Use of an instance entry, counted by the database's UTC day: one row
-    # per person and day, and the entry's own day total under the empty
-    # `user_id`. Rows older than the sweep's window go
-    # (`Arca.InstanceEntryUsage`).
-    create table(:instance_entry_usage, primary_key: false) do
-      add :instance_entry_id, references(:instance_entries, column: :id, type: :string),
-        null: false
-
-      add :user_id, :string, null: false
-      add :day, :date, null: false
-      add :count, :integer, null: false, default: 0
-      add :updated_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:instance_entry_usage, [:instance_entry_id, :user_id, :day])
-    create index(:instance_entry_usage, [:day])
-
     # The athanor's default entry per provider: one row per provider hint,
-    # naming either one of its own entries (the composite key keeps it the
-    # athanor's) or an instance entry. Written by one upsert, so a provider
-    # never has two.
+    # naming one of its own entries (the composite key keeps it the
+    # athanor's). Written by one upsert, so a provider never has two.
     create table(:vault_defaults, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -2258,18 +2165,13 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :vault_entry_id,
           references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
-          check: if(sqlite?, do: default_names_one)
-
-      add :instance_entry_id, references(:instance_entries, column: :id, type: :string)
+          null: false
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :vault_defaults, [default_names_one])
-
     create unique_index(:vault_defaults, [:athanor_id, :provider_hint])
     create index(:vault_defaults, [:vault_entry_id, :athanor_id])
-    create index(:vault_defaults, [:instance_entry_id])
 
     # One of an athanor's entries offered to an audience (`Arca.Shares`):
     # `everyone`, or the active members of the group `group_id` names, read
@@ -2385,22 +2287,22 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:consents, [:profile_id, :revision])
 
     # One row per binding of a revision, keyed by its `binding_key`
-    # (`<source node reference>|<edge key>|<slot>`): the entry it binds,
-    # the athanor's own or the instance's, the share it binds (a bare id:
-    # the share is another athanor's row), or the label of the profile a
-    # selection borrows from, and the binding's own lifetime. An entry may
-    # appear in several rows of one consent. `consumed_by_root` is the root
+    # (`<source node reference>|<edge key>|<slot>`): the athanor's own
+    # entry it binds, the share it binds (a bare id: the share is another
+    # athanor's row), or the label of the profile a selection borrows from,
+    # and the binding's own lifetime; the one that is set is the binding's
+    # scope (`Arca.Schemas.ConsentVaultRef.scope/1`). An entry may appear
+    # in several rows of one consent. `consumed_by_root` is the root
     # execution a `once` binding was consumed under.
     create table(:consent_vault_refs, primary_key: false) do
       add :consent_id, references(:consents, column: :id, type: :string), null: false
       add :athanor_id, :string, null: false
       add :binding_key, :text, null: false
-      add :scope, :string, null: false, check: if(sqlite?, do: ref_names_one)
 
       add :vault_entry_id,
-          references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id])
+          references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
+          check: if(sqlite?, do: ref_names_one)
 
-      add :instance_entry_id, references(:instance_entries, column: :id, type: :string)
       add :share_id, :string
       add :via_label, :string
       add :binding_digest, :string
@@ -2418,7 +2320,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:consent_vault_refs, [:consent_id, :binding_key])
     create index(:consent_vault_refs, [:vault_entry_id, :athanor_id])
-    create index(:consent_vault_refs, [:instance_entry_id])
     create index(:consent_vault_refs, [:share_id])
 
     # Single-use, delete-on-read. No foreign keys by design: a proof outlives

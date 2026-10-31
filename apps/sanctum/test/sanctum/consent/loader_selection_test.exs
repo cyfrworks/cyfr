@@ -93,7 +93,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         do: [
           %{
             binding_key: Blob.binding_key(source_ref, "@ingress", nil),
-            scope: vault["scope"],
             vault_entry_id: vault["entry_id"],
             binding_digest: vault["binding_digest"]
           }
@@ -171,7 +170,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     [
       %{
         binding_key: Blob.binding_key(from, edge, nil),
-        scope: "athanor",
         via_label: via["label"],
         binding_digest: via["binding_digest"]
       }
@@ -305,7 +303,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         put_formula!(ctx, bound, [:interactive], [
           %{
             binding_key: key,
-            scope: "athanor",
             vault_entry_id: "vault-anthropic",
             binding_digest: "sha256:anthropic",
             lifetime_kind: kind,
@@ -373,14 +370,14 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       assert {:error, {:blob_refs_mismatch, %{blob_only: blob_only, refs_only: refs_only}}} =
                load(ctx, profile)
 
-      assert blob_only == [{:via, "athanor", key, "default", "sha256:anthropic"}]
-      assert refs_only == [{:via, "athanor", key, stale.via_label, stale.binding_digest}]
+      assert blob_only == [{:via, key, "default", "sha256:anthropic"}]
+      assert refs_only == [{:via, key, stale.via_label, stale.binding_digest}]
     end
 
     # A selection with no row of its own is refused the same way.
     profile = put_formula!(ctx, selection, [:interactive], [])
 
-    assert {:error, {:blob_refs_mismatch, %{blob_only: [{:via, "athanor", ^key, _, _}]}}} =
+    assert {:error, {:blob_refs_mismatch, %{blob_only: [{:via, ^key, _, _}]}}} =
              load(ctx, profile)
   end
 
@@ -541,7 +538,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
           [
             %{
               binding_key: Blob.binding_key(@formula, @catalyst, nil),
-              scope: "athanor",
               vault_entry_id: "vault-anthropic",
               binding_digest: "sha256:anthropic"
             }

@@ -903,7 +903,7 @@ defmodule Locus.Runtime.ModelContractTest do
     share: share
   } do
     # The person's first sign-in bound the administrator's share.
-    assert [%{scope: "share", share_id: bound}] = fixture_refs(ctx)
+    assert [%{share_id: bound, vault_entry_id: nil, via_label: nil}] = fixture_refs(ctx)
     assert bound == share.id
 
     body = ~s({"model":"chat-fixture","messages":[{"role":"user","content":"hello"}]})

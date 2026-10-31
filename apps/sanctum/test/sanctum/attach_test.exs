@@ -9,143 +9,37 @@ defmodule Sanctum.AttachTest do
   the binding's lifetime at its `consent_vault_refs` row (a `once`
   consumed by its root, an expired `until` refused, a moved or blocked
   pin refused, a missing row refused), then an athanor's entry held to its
-  binding and destination, an instance entry held to the consented
-  digest, refused when it is OAuth, and resolved under its policy,
-  destination and caps, a share resolved through its owner's entry under
-  the digest the consent approved, refused when it is OAuth, or a
+  binding and destination, a share resolved through its owner's entry
+  under the digest the consent approved, refused when it is OAuth, or a
   publisher's provided value held to its destination. A refusal touches
-  nothing it comes before: no row is consumed, no cap claimed and nothing
+  nothing it comes before: no row is consumed, no use counted and nothing
   unsealed.
   """
 
-  # The component-facts port and the platform settings are node-wide.
   use ExUnit.Case, async: false
 
   import Ecto.Query
 
   alias Sanctum.Attach
-  alias Sanctum.Consent.Components
   alias Sanctum.Context
-  alias Sanctum.InstanceEntries
   alias Sanctum.Test.ConsentFixtures
   alias Sanctum.TestContext
-
-  defmodule Facts do
-    @moduledoc """
-    A component-facts port the cases write: the registry rows a node
-    reference names, and the release digest the install media ships for
-    each, by node key.
-    """
-    @behaviour Sanctum.Consent.Components
-
-    # Fills nothing: Sanctum's own build has no component domain.
-    @impl true
-    def fill(_athanor, _ctx, "provision"), do: {:error, :unavailable}
-    def fill(_athanor, _ctx, _entry_kind), do: :ok
-
-    @rows {__MODULE__, :rows}
-    @shipped {__MODULE__, :shipped}
-
-    def put(rows, shipped) do
-      :persistent_term.put(@rows, rows)
-      :persistent_term.put(@shipped, shipped)
-    end
-
-    def clear do
-      :persistent_term.erase(@rows)
-      :persistent_term.erase(@shipped)
-    end
-
-    @impl true
-    def resolve(_ctx, _component), do: {:error, :not_found}
-
-    @impl true
-    def resolve_verified(_ctx, _component), do: {:error, :not_found}
-
-    @impl true
-    def get_component(_ctx, name, version, publisher, type) do
-      case Map.fetch(:persistent_term.get(@rows, %{}), {type, publisher, name, version}) do
-        {:ok, row} -> {:ok, row}
-        :error -> {:error, :not_found}
-      end
-    end
-
-    @impl true
-    def agent_rows(_ctx), do: {:ok, []}
-
-    @impl true
-    def shipped_nodes(_ctx, rows) do
-      shipped = :persistent_term.get(@shipped, %{})
-
-      answered =
-        for row <- rows,
-            key = Prima.ComponentRow.node_key(row),
-            Map.has_key?(shipped, key),
-            into: %{},
-            do: {key, Map.fetch!(shipped, key)}
-
-      {:ok, answered}
-    end
-
-    @impl true
-    def newer_shipped(_ctx, _row), do: {:ok, nil}
-
-    @impl true
-    def tincture_placement(_ctx, _row), do: {:ok, nil}
-  end
 
   @secret "sk-attach-material"
   @rule %{in: "header", name: "x-api-key", template: "{value}"}
   @source "catalyst:local.attach-chat"
   @destination %{"hosts" => ["api.example.com"], "methods" => ["GET", "POST"]}
-  @instance_destination %{
-    "hosts" => ["api.openai.com"],
-    "methods" => ["GET", "POST"],
-    "paths" => ["/v1/chat/completions"]
-  }
   @share_destination %{
     "hosts" => ["api.example.com"],
     "methods" => ["GET"],
     "paths" => ["/v1/"]
   }
 
-  @custom %{node_ref: "catalyst:local.my-chat:1.0.0", activation_digest: "sha256:custom"}
-
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
 
-    previous =
-      try do
-        Components.impl!()
-      rescue
-        Components.NotInstalledError -> nil
-      end
-
-    Components.install!(Facts)
-
-    on_exit(fn ->
-      Facts.clear()
-
-      if previous,
-        do: Components.install!(previous),
-        else: Sanctum.TestContext.uninstall_port(Components)
-    end)
-
-    Facts.put(
-      %{
-        {"catalyst", "local", "my-chat", "1.0.0"} => %{
-          component_type: "catalyst",
-          publisher: "local",
-          name: "my-chat",
-          version: "1.0.0"
-        }
-      },
-      %{}
-    )
-
     {person, _user} = TestContext.person!(TestContext.local())
-    {admin, _admin} = TestContext.person!(%{TestContext.local() | platform_admin: true})
-    {:ok, ctx: person, admin: admin}
+    {:ok, ctx: person}
   end
 
   # ---------------------------------------------------------------------------
@@ -184,12 +78,7 @@ defmodule Sanctum.AttachTest do
 
     ref =
       Map.merge(
-        %{
-          binding_key: key,
-          scope: "athanor",
-          vault_entry_id: entry.id,
-          binding_digest: digest
-        },
+        %{binding_key: key, vault_entry_id: entry.id, binding_digest: digest},
         Keyword.get(opts, :lifetime, %{})
       )
 
@@ -231,9 +120,8 @@ defmodule Sanctum.AttachTest do
     {profile_id, consent_id}
   end
 
-  defp facts(profile_id, consent_id, root \\ "exec_root_one") do
-    Map.merge(@custom, %{root_execution_id: root, profile_id: profile_id, consent_id: consent_id})
-  end
+  defp facts(profile_id, consent_id, root \\ "exec_root_one"),
+    do: %{root_execution_id: root, profile_id: profile_id, consent_id: consent_id}
 
   defp ref_row(consent_id) do
     Arca.Repo.one!(from(r in Arca.Schemas.ConsentVaultRef, where: r.consent_id == ^consent_id))
@@ -242,65 +130,6 @@ defmodule Sanctum.AttachTest do
   defp last_used(ctx, entry) do
     {:ok, row} = Arca.VaultStorage.get(Context.actor(ctx), entry.id)
     row.last_used_at
-  end
-
-  defp instance!(admin, over \\ %{}) do
-    params =
-      Map.merge(
-        %{
-          name: "shared-#{System.unique_integer([:positive])}",
-          kind: "api_key",
-          provider_hint: "openai.com",
-          fields: %{"API_KEY" => @secret},
-          destination: @instance_destination,
-          audience: "everyone"
-        },
-        over
-      )
-
-    confirmed =
-      TestContext.confirmed(admin, :credential_entry, %{
-        operation: "instance_entry.create",
-        arguments: params,
-        resource: params.name
-      })
-
-    {:ok, entry} = InstanceEntries.create(confirmed, params)
-    entry
-  end
-
-  defp instance_bound!(ctx, entry, digest \\ nil) do
-    digest = digest || entry.binding_digest
-    key = Prima.Authority.Blob.binding_key(@source, Prima.Authority.Blob.ingress_key(), nil)
-
-    {profile_id, consent_id} =
-      head!(ctx, [
-        %{
-          binding_key: key,
-          scope: "instance",
-          instance_entry_id: entry.id,
-          binding_digest: entry.binding_digest
-        }
-      ])
-
-    {:ok, destination} = Prima.Destination.from_map(@instance_destination)
-
-    vault = %{
-      entry_id: entry.id,
-      binding_digest: digest,
-      scope: "instance",
-      binding_key: key,
-      destination: destination,
-      attach: @rule,
-      projection: %{fields: %{"API_KEY" => "API_KEY"}, scopes: []}
-    }
-
-    {vault, facts(profile_id, consent_id)}
-  end
-
-  defp usage(entry_id) do
-    {:ok, %{totals: totals}} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), entry_id, 1)
-    Enum.sum(Enum.map(totals, & &1.count))
   end
 
   # A person signed in at this CYFR, in their own athanor, where a share
@@ -348,7 +177,6 @@ defmodule Sanctum.AttachTest do
       head!(recipient, [
         %{
           binding_key: key,
-          scope: "share",
           share_id: share.id,
           binding_digest: approved,
           admitted: %{audience: share.audience, group_id: share.group_id}
@@ -594,7 +422,7 @@ defmodule Sanctum.AttachTest do
       key = "reagent:local.borrower|#{@source}|default"
 
       {profile_id, consent_id} =
-        head!(ctx, [%{binding_key: key, scope: "athanor", via_label: "default"}])
+        head!(ctx, [%{binding_key: key, via_label: "default"}])
 
       vault =
         Map.merge(lender_vault, %{
@@ -644,123 +472,6 @@ defmodule Sanctum.AttachTest do
 
       assert {:error, {:ambiguous, ["supabase"]}} =
                Attach.resolve(ctx, %{provided: two}, "supabase", url, facts)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # An instance entry
-  # ---------------------------------------------------------------------------
-
-  describe "an instance entry" do
-    test "under any, attaches for a consented custom node and counts one use", %{
-      ctx: ctx,
-      admin: admin
-    } do
-      entry = instance!(admin)
-      {vault, facts} = instance_bound!(ctx, entry)
-      url = request("https://api.openai.com/v1/chat/completions")
-
-      assert {:ok, %{value: @secret}} = Attach.resolve(ctx, vault, "api_key", url, facts)
-      assert usage(entry.id) == 1
-
-      # Outside its live destination: refused before any claim.
-      assert {:error, :destination_mismatch} =
-               Attach.resolve(
-                 ctx,
-                 vault,
-                 "api_key",
-                 request("https://api.openai.com/v1/files"),
-                 facts
-               )
-
-      assert usage(entry.id) == 1
-    end
-
-    test "the one field a key map names is the one attached", %{ctx: ctx, admin: admin} do
-      entry = instance!(admin, %{fields: %{"API key" => @secret}})
-      {vault, facts} = instance_bound!(ctx, entry)
-      vault = %{vault | projection: %{fields: %{"OPENAI_API_KEY" => "API key"}, scopes: []}}
-      url = request("https://api.openai.com/v1/chat/completions")
-
-      assert {:ok, %{value: @secret, masking: [@secret]}} =
-               Attach.resolve(ctx, vault, "api_key", url, facts)
-
-      absent = %{vault | projection: %{fields: %{"OPENAI_API_KEY" => "API_KEY"}, scopes: []}}
-
-      assert {:error, {:missing_field, "OPENAI_API_KEY"}} =
-               Attach.resolve(ctx, absent, "api_key", url, facts)
-    end
-
-    test "under shipped, a custom node is refused with no claim, before and after tightening", %{
-      ctx: ctx,
-      admin: admin
-    } do
-      entry = instance!(admin)
-      {vault, facts} = instance_bound!(ctx, entry)
-      url = request("https://api.openai.com/v1/chat/completions")
-
-      assert {:ok, _} = Attach.resolve(ctx, vault, "api_key", url, facts)
-      assert usage(entry.id) == 1
-
-      :ok = tighten!(entry)
-
-      assert {:error, :component_not_admitted} =
-               Attach.resolve(ctx, vault, "api_key", url, facts)
-
-      assert usage(entry.id) == 1
-    end
-
-    test "a binding rebound since the consent is stale, with no claim", %{
-      ctx: ctx,
-      admin: admin
-    } do
-      entry = instance!(admin)
-      {vault, facts} = instance_bound!(ctx, entry, "sha256:approved-elsewhere")
-
-      assert {:error, :binding_went_stale} =
-               Attach.resolve(
-                 ctx,
-                 vault,
-                 "api_key",
-                 request("https://api.openai.com/v1/chat/completions"),
-                 facts
-               )
-
-      assert usage(entry.id) == 0
-    end
-
-    test "an OAuth projection attaches nothing from one, with no claim", %{
-      ctx: ctx,
-      admin: admin
-    } do
-      # An instance entry holds a key or a bundle of fields, never a token.
-      entry = instance!(admin)
-      {vault, facts} = instance_bound!(ctx, entry)
-      vault = %{vault | projection: %{fields: %{}, scopes: ["scope.a"]}}
-
-      assert {:error, :no_oauth_material} =
-               Attach.resolve(
-                 ctx,
-                 vault,
-                 "api_key",
-                 request("https://api.openai.com/v1/chat/completions"),
-                 facts
-               )
-
-      assert usage(entry.id) == 0
-    end
-
-    test "at its cap, refused with the reset", %{ctx: ctx, admin: admin} do
-      entry = instance!(admin, %{person_daily: 1})
-      {vault, facts} = instance_bound!(ctx, entry)
-      url = request("https://api.openai.com/v1/chat/completions")
-
-      assert {:ok, _} = Attach.resolve(ctx, vault, "api_key", url, facts)
-
-      assert {:error, {:connection_cap, %DateTime{}}} =
-               Attach.resolve(ctx, vault, "api_key", url, facts)
-
-      assert usage(entry.id) == 1
     end
   end
 
@@ -850,10 +561,4 @@ defmodule Sanctum.AttachTest do
       assert last_used(terry, entry) == nil
     end
   end
-
-  # The stored policy moved to `shipped`, as an administrator narrowing it
-  # writes it.
-  defp tighten!(entry),
-    do:
-      Arca.InstanceEntries.set_component_policy(Prima.Actor.system(), entry.id, "any", "shipped")
 end

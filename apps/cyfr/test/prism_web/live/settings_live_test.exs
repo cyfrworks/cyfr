@@ -90,17 +90,22 @@ defmodule PrismWeb.SettingsLiveTest do
 
   # A key the platform administrator offers is shared from their own
   # vault; Settings holds no credential store of its own.
-  test "a platform administrator's Settings holds no instance entries", %{conn: conn} do
+  test "a platform administrator's Settings offers no place to enter or list a key",
+       %{conn: conn} do
     ops = test_user()
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
     {view, html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
 
     assert html =~ "Server allowlist"
-    refute html =~ "Instance entries"
-    refute html =~ "instance entry"
-    refute has_element?(view, ~s([data-test="instance-entries"]))
-    refute has_element?(view, ~s([data-test="instance-use"]))
-    refute has_element?(view, "#instance-create")
+
+    # No form makes a key: none names its kind or where it may go, and no
+    # field takes a value.
+    refute has_element?(view, ~s(select[name="kind"]))
+    refute has_element?(view, ~s([name="destination_hosts"]))
+    refute has_element?(view, ~s(input[type="password"]))
+
+    # No card lists one: nothing on the page says a key is attach-only.
+    refute html =~ "attach-only"
   end
 
   test "the allowlist allows and denies by name, shows each entry's name, and says why a name is refused",

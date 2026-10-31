@@ -50,7 +50,7 @@
               "Archive": {
                 "entry_id": "vault-entry-archive",
                 "binding_digest": "sha256:bind-archive",
-                "scope": "instance",
+                "scope": "athanor",
                 "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|dest|name:Archive",
                 "destination": {
                   "hosts": ["archive.supabase.co"],

@@ -128,7 +128,6 @@ defmodule Prima.Refusal do
     "disclosure_refused" => :forbidden,
     "not_offered" => :forbidden,
     "owner_not_standing" => :forbidden,
-    "component_not_admitted" => :forbidden,
     "provider_mismatch" => :invalid_argument,
     "credential_header_refused" => :invalid_argument,
     "endpoints_immutable" => :invalid_argument,
@@ -158,8 +157,6 @@ defmodule Prima.Refusal do
     # A share whose owner does not stand: the recipient learns nothing of
     # another person's account, only that the key is not there for them.
     owner_not_standing: {:forbidden, "This key is not available."},
-    component_not_admitted:
-      {:forbidden, "This instance entry requires an unmodified shipped component."},
     provider_mismatch: {:invalid_argument, "The entry is for another provider."},
     credential_header_refused:
       {:invalid_argument, "A request that names a connection carries no credential header."},
@@ -304,9 +301,9 @@ defmodule Prima.Refusal do
   @doc """
   The credential refusals' reasons, each a typed reason of this table and
   a guest error `type` a host call may answer: where a credential may go,
-  how it is disclosed, which provider and account it is for, how an
-  instance entry or a share is offered and capped, and whether the person
-  who shared a key stands to lend it.
+  how it is disclosed, which provider and account it is for, how a share
+  is offered and capped, and whether the person who shared a key stands
+  to lend it.
   """
   @spec credential_reasons() :: [atom()]
   def credential_reasons, do: @credential |> Map.keys() |> Enum.sort()

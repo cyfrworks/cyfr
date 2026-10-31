@@ -24,7 +24,6 @@ const (
 	Execution          = "execution"
 	Feed               = "feed"
 	File               = "file"
-	InstanceEntry      = "instance_entry"
 	Invitation         = "invitation"
 	Key                = "key"
 	Layout             = "layout"
@@ -58,282 +57,270 @@ const (
 
 // Actions, as tool then action.
 const (
-	ApprovalList                    = "list"
-	ApprovalResolve                 = "resolve"
-	AquaCreate                      = "create"
-	AquaDelete                      = "delete"
-	AquaGet                         = "get"
-	AquaList                        = "list"
-	AquaReset                       = "reset"
-	AquaSkillCreate                 = "skill_create"
-	AquaSkillDelete                 = "skill_delete"
-	AquaSkillGet                    = "skill_get"
-	AquaSkillList                   = "skill_list"
-	AquaSkillReset                  = "skill_reset"
-	AquaSkillUpdate                 = "skill_update"
-	AquaStatus                      = "status"
-	AquaUpdate                      = "update"
-	AthanorArchive                  = "archive"
-	AthanorCreate                   = "create"
-	AthanorDestroy                  = "destroy"
-	AthanorGet                      = "get"
-	AthanorList                     = "list"
-	AthanorPair                     = "pair"
-	AthanorProvision                = "provision"
-	AthanorPurge                    = "purge"
-	AthanorRename                   = "rename"
-	AthanorSettings                 = "settings"
-	AthanorUnarchive                = "unarchive"
-	BuildCompile                    = "compile"
-	BuildStatus                     = "status"
-	BuildToolchains                 = "toolchains"
-	BuildValidate                   = "validate"
-	CanvasActivate                  = "activate"
-	CanvasCatalog                   = "catalog"
-	CanvasRestore                   = "restore"
-	CanvasVersions                  = "versions"
-	CanvasWrite                     = "write"
-	ComponentCategories             = "categories"
-	ComponentCreate                 = "create"
-	ComponentDelete                 = "delete"
-	ComponentDeprecate              = "deprecate"
-	ComponentDiscover               = "discover"
-	ComponentFork                   = "fork"
-	ComponentGetBlob                = "get_blob"
-	ComponentInspect                = "inspect"
-	ComponentList                   = "list"
-	ComponentPull                   = "pull"
-	ComponentPush                   = "push"
-	ComponentReadResource           = "read_resource"
-	ComponentRegister               = "register"
-	ComponentReset                  = "reset"
-	ComponentSearch                 = "search"
-	ComponentSetupPlan              = "setup_plan"
-	ComponentStatus                 = "status"
-	ComponentYank                   = "yank"
-	ConfirmationCancel              = "cancel"
-	ConfirmationConfirm             = "confirm"
-	ConfirmationPending             = "pending"
-	ConfirmationReauth              = "reauth"
-	DecisionCorrelate               = "correlate"
-	DecisionGet                     = "get"
-	DecisionGetGlobal               = "get_global"
-	DecisionList                    = "list"
-	DecisionListGlobal              = "list_global"
-	DoorAllow                       = "allow"
-	DoorDeny                        = "deny"
-	DoorList                        = "list"
-	DoorRemove                      = "remove"
-	DoorRequests                    = "requests"
-	DoorResolve                     = "resolve"
-	ExecutionCancel                 = "cancel"
-	ExecutionForceRelease           = "force_release"
-	ExecutionList                   = "list"
-	ExecutionLogs                   = "logs"
-	ExecutionReadResource           = "read_resource"
-	ExecutionRun                    = "run"
-	ExecutionRunStream              = "run_stream"
-	ExecutionStatus                 = "status"
-	ExecutionUsage                  = "usage"
-	FeedBind                        = "bind"
-	FeedList                        = "list"
-	FeedPress                       = "press"
-	FeedRemove                      = "remove"
-	FileAccept                      = "accept"
-	FileDecline                     = "decline"
-	FileDelete                      = "delete"
-	FileList                        = "list"
-	FileOffer                       = "offer"
-	FileOffers                      = "offers"
-	FileRead                        = "read"
-	FileWithdraw                    = "withdraw"
-	FileWrite                       = "write"
-	InstanceEntryCreate             = "create"
-	InstanceEntryDelete             = "delete"
-	InstanceEntryList               = "list"
-	InstanceEntryOffered            = "offered"
-	InstanceEntryPeople             = "people"
-	InstanceEntryRebind             = "rebind"
-	InstanceEntryRevoke             = "revoke"
-	InstanceEntryRotate             = "rotate"
-	InstanceEntrySetAudience        = "set_audience"
-	InstanceEntrySetCaps            = "set_caps"
-	InstanceEntrySetComponentPolicy = "set_component_policy"
-	InstanceEntryUsage              = "usage"
-	InvitationCreate                = "create"
-	InvitationList                  = "list"
-	InvitationRevoke                = "revoke"
-	KeyCreate                       = "create"
-	KeyGet                          = "get"
-	KeyList                         = "list"
-	KeyReenable                     = "reenable"
-	KeyRevoke                       = "revoke"
-	KeyRotate                       = "rotate"
-	LayoutEdit                      = "edit"
-	LayoutGet                       = "get"
-	McpLogCorrelate                 = "correlate"
-	McpLogGet                       = "get"
-	McpLogList                      = "list"
-	McpLogStats                     = "stats"
-	McpServersCreate                = "create"
-	McpServersDelete                = "delete"
-	McpServersDisable               = "disable"
-	McpServersEnable                = "enable"
-	McpServersGet                   = "get"
-	McpServersList                  = "list"
-	McpServersRefresh               = "refresh"
-	McpServersRestart               = "restart"
-	McpServersTest                  = "test"
-	McpServersUpdate                = "update"
-	MemberAdd                       = "add"
-	MemberLeave                     = "leave"
-	MemberList                      = "list"
-	MemberRemove                    = "remove"
-	NotesEndorse                    = "endorse"
-	NotesForget                     = "forget"
-	NotesKeep                       = "keep"
-	NotesList                       = "list"
-	NotesPin                        = "pin"
-	NotesRead                       = "read"
-	NotesSearch                     = "search"
-	OauthDeleteClient               = "delete_client"
-	OauthList                       = "list"
-	OauthSetClient                  = "set_client"
-	PairingBegin                    = "begin"
-	PairingComplete                 = "complete"
-	PairingList                     = "list"
-	PairingReenable                 = "reenable"
-	PairingRenew                    = "renew"
-	PairingRevoke                   = "revoke"
-	PasskeyList                     = "list"
-	PasskeyRecoverAdmin             = "recover_admin"
-	PasskeyReenable                 = "reenable"
-	PasskeyRegister                 = "register"
-	PasskeyRevoke                   = "revoke"
-	PersonAssert                    = "assert"
-	PersonCarryBegin                = "carry_begin"
-	PersonCarryCancel               = "carry_cancel"
-	PersonCarryComplete             = "carry_complete"
-	PersonCarryList                 = "carry_list"
-	PersonCertify                   = "certify"
-	PersonCloseRecovery             = "close_recovery"
-	PersonLinkDoor                  = "link_door"
-	PersonRecoveryCode              = "recovery_code"
-	PersonRecoveryCodeAdd           = "recovery_code_add"
-	PersonRecoveryCodeSaved         = "recovery_code_saved"
-	PersonRenewCertificate          = "renew_certificate"
-	PersonRotate                    = "rotate"
-	PersonStatus                    = "status"
-	PersonUnlinkDoor                = "unlink_door"
-	PolicyLogCorrelate              = "correlate"
-	PolicyLogGet                    = "get"
-	PolicyLogList                   = "list"
-	ProfileCommit                   = "commit"
-	ProfileGrant                    = "grant"
-	ProfileGrants                   = "grants"
-	ProfileList                     = "list"
-	ProfilePlan                     = "plan"
-	ProfilePreview                  = "preview"
-	ProfilePublish                  = "publish"
-	ProfileRevoke                   = "revoke"
-	RecordGet                       = "get"
-	RecordList                      = "list"
-	RecordPayload                   = "payload"
-	RegistryAppeal                  = "appeal"
-	RegistryClaimPublisher          = "claim_publisher"
-	RegistryGetNamespace            = "get_namespace"
-	RegistryLegalAccept             = "legal_accept"
-	RegistryLegalPage               = "legal_page"
-	RegistryLegalVersion            = "legal_version"
-	RegistryListMyReports           = "list_my_reports"
-	RegistryMembersAdd              = "members_add"
-	RegistryMembersList             = "members_list"
-	RegistryMembersRemove           = "members_remove"
-	RegistryMembersUpdate           = "members_update"
-	RegistryRegister                = "register"
-	RegistryReport                  = "report"
-	RegistrySync                    = "sync"
-	RegistryTokensIssue             = "tokens_issue"
-	RegistryTokensList              = "tokens_list"
-	RegistryTokensRevoke            = "tokens_revoke"
-	RegistryVerifyPublisher         = "verify_publisher"
-	RegistryWhoami                  = "whoami"
-	ResourceRead                    = "read"
-	RetentionCleanup                = "cleanup"
-	RetentionGet                    = "get"
-	RetentionSet                    = "set"
-	ScheduleCreate                  = "create"
-	ScheduleDelete                  = "delete"
-	ScheduleGet                     = "get"
-	ScheduleList                    = "list"
-	SchedulePause                   = "pause"
-	ScheduleReResolve               = "re_resolve"
-	ScheduleResume                  = "resume"
-	ScheduleUpdate                  = "update"
-	SessionCliApprove               = "cli_approve"
-	SessionCliBegin                 = "cli_begin"
-	SessionCliCancel                = "cli_cancel"
-	SessionCliList                  = "cli_list"
-	SessionCliPoll                  = "cli_poll"
-	SessionCliRevoke                = "cli_revoke"
-	SessionDeviceInit               = "device_init"
-	SessionDevicePoll               = "device_poll"
-	SessionLogout                   = "logout"
-	SessionReadResource             = "read_resource"
-	SessionSetup                    = "setup"
-	SessionUse                      = "use"
-	SessionWhoami                   = "whoami"
-	SettingsList                    = "list"
-	SettingsReset                   = "reset"
-	SettingsSet                     = "set"
-	ShareCreate                     = "create"
-	ShareList                       = "list"
-	ShareOffered                    = "offered"
-	ShareRevoke                     = "revoke"
-	ShareSetAudience                = "set_audience"
-	ShareSetCaps                    = "set_caps"
-	ShareUsage                      = "usage"
-	SystemNotify                    = "notify"
-	SystemStatus                    = "status"
-	ThreadAloud                     = "aloud"
-	ThreadApprove                   = "approve"
-	ThreadAttach                    = "attach"
-	ThreadCreate                    = "create"
-	ThreadDecline                   = "decline"
-	ThreadDelete                    = "delete"
-	ThreadDiscard                   = "discard"
-	ThreadEvents                    = "events"
-	ThreadFollow                    = "follow"
-	ThreadGet                       = "get"
-	ThreadList                      = "list"
-	ThreadRestartForConsent         = "restart_for_consent"
-	ThreadRevokeGrant               = "revoke_grant"
-	ThreadSend                      = "send"
-	ThreadStop                      = "stop"
-	ThreadUnfollow                  = "unfollow"
-	TinctureInvokeProtected         = "invoke_protected"
-	TinctureInvokePublic            = "invoke_public"
-	TinctureVisibilityGet           = "get"
-	ToolsList                       = "list"
-	TurnRecover                     = "recover"
-	TurnSuspend                     = "suspend"
-	VaultAuthorize                  = "authorize"
-	VaultCreate                     = "create"
-	VaultDelete                     = "delete"
-	VaultList                       = "list"
-	VaultRebind                     = "rebind"
-	VaultRename                     = "rename"
-	VaultRevoke                     = "revoke"
-	VaultRotate                     = "rotate"
-	VaultSetDefault                 = "set_default"
-	VaultStatus                     = "status"
-	WebhookCreate                   = "create"
-	WebhookGet                      = "get"
-	WebhookList                     = "list"
-	WebhookReenable                 = "reenable"
-	WebhookRevoke                   = "revoke"
-	WebhookRotate                   = "rotate"
-	WebhookUpdate                   = "update"
+	ApprovalList            = "list"
+	ApprovalResolve         = "resolve"
+	AquaCreate              = "create"
+	AquaDelete              = "delete"
+	AquaGet                 = "get"
+	AquaList                = "list"
+	AquaReset               = "reset"
+	AquaSkillCreate         = "skill_create"
+	AquaSkillDelete         = "skill_delete"
+	AquaSkillGet            = "skill_get"
+	AquaSkillList           = "skill_list"
+	AquaSkillReset          = "skill_reset"
+	AquaSkillUpdate         = "skill_update"
+	AquaStatus              = "status"
+	AquaUpdate              = "update"
+	AthanorArchive          = "archive"
+	AthanorCreate           = "create"
+	AthanorDestroy          = "destroy"
+	AthanorGet              = "get"
+	AthanorList             = "list"
+	AthanorPair             = "pair"
+	AthanorProvision        = "provision"
+	AthanorPurge            = "purge"
+	AthanorRename           = "rename"
+	AthanorSettings         = "settings"
+	AthanorUnarchive        = "unarchive"
+	BuildCompile            = "compile"
+	BuildStatus             = "status"
+	BuildToolchains         = "toolchains"
+	BuildValidate           = "validate"
+	CanvasActivate          = "activate"
+	CanvasCatalog           = "catalog"
+	CanvasRestore           = "restore"
+	CanvasVersions          = "versions"
+	CanvasWrite             = "write"
+	ComponentCategories     = "categories"
+	ComponentCreate         = "create"
+	ComponentDelete         = "delete"
+	ComponentDeprecate      = "deprecate"
+	ComponentDiscover       = "discover"
+	ComponentFork           = "fork"
+	ComponentGetBlob        = "get_blob"
+	ComponentInspect        = "inspect"
+	ComponentList           = "list"
+	ComponentPull           = "pull"
+	ComponentPush           = "push"
+	ComponentReadResource   = "read_resource"
+	ComponentRegister       = "register"
+	ComponentReset          = "reset"
+	ComponentSearch         = "search"
+	ComponentSetupPlan      = "setup_plan"
+	ComponentStatus         = "status"
+	ComponentYank           = "yank"
+	ConfirmationCancel      = "cancel"
+	ConfirmationConfirm     = "confirm"
+	ConfirmationPending     = "pending"
+	ConfirmationReauth      = "reauth"
+	DecisionCorrelate       = "correlate"
+	DecisionGet             = "get"
+	DecisionGetGlobal       = "get_global"
+	DecisionList            = "list"
+	DecisionListGlobal      = "list_global"
+	DoorAllow               = "allow"
+	DoorDeny                = "deny"
+	DoorList                = "list"
+	DoorRemove              = "remove"
+	DoorRequests            = "requests"
+	DoorResolve             = "resolve"
+	ExecutionCancel         = "cancel"
+	ExecutionForceRelease   = "force_release"
+	ExecutionList           = "list"
+	ExecutionLogs           = "logs"
+	ExecutionReadResource   = "read_resource"
+	ExecutionRun            = "run"
+	ExecutionRunStream      = "run_stream"
+	ExecutionStatus         = "status"
+	ExecutionUsage          = "usage"
+	FeedBind                = "bind"
+	FeedList                = "list"
+	FeedPress               = "press"
+	FeedRemove              = "remove"
+	FileAccept              = "accept"
+	FileDecline             = "decline"
+	FileDelete              = "delete"
+	FileList                = "list"
+	FileOffer               = "offer"
+	FileOffers              = "offers"
+	FileRead                = "read"
+	FileWithdraw            = "withdraw"
+	FileWrite               = "write"
+	InvitationCreate        = "create"
+	InvitationList          = "list"
+	InvitationRevoke        = "revoke"
+	KeyCreate               = "create"
+	KeyGet                  = "get"
+	KeyList                 = "list"
+	KeyReenable             = "reenable"
+	KeyRevoke               = "revoke"
+	KeyRotate               = "rotate"
+	LayoutEdit              = "edit"
+	LayoutGet               = "get"
+	McpLogCorrelate         = "correlate"
+	McpLogGet               = "get"
+	McpLogList              = "list"
+	McpLogStats             = "stats"
+	McpServersCreate        = "create"
+	McpServersDelete        = "delete"
+	McpServersDisable       = "disable"
+	McpServersEnable        = "enable"
+	McpServersGet           = "get"
+	McpServersList          = "list"
+	McpServersRefresh       = "refresh"
+	McpServersRestart       = "restart"
+	McpServersTest          = "test"
+	McpServersUpdate        = "update"
+	MemberAdd               = "add"
+	MemberLeave             = "leave"
+	MemberList              = "list"
+	MemberRemove            = "remove"
+	NotesEndorse            = "endorse"
+	NotesForget             = "forget"
+	NotesKeep               = "keep"
+	NotesList               = "list"
+	NotesPin                = "pin"
+	NotesRead               = "read"
+	NotesSearch             = "search"
+	OauthDeleteClient       = "delete_client"
+	OauthList               = "list"
+	OauthSetClient          = "set_client"
+	PairingBegin            = "begin"
+	PairingComplete         = "complete"
+	PairingList             = "list"
+	PairingReenable         = "reenable"
+	PairingRenew            = "renew"
+	PairingRevoke           = "revoke"
+	PasskeyList             = "list"
+	PasskeyRecoverAdmin     = "recover_admin"
+	PasskeyReenable         = "reenable"
+	PasskeyRegister         = "register"
+	PasskeyRevoke           = "revoke"
+	PersonAssert            = "assert"
+	PersonCarryBegin        = "carry_begin"
+	PersonCarryCancel       = "carry_cancel"
+	PersonCarryComplete     = "carry_complete"
+	PersonCarryList         = "carry_list"
+	PersonCertify           = "certify"
+	PersonCloseRecovery     = "close_recovery"
+	PersonLinkDoor          = "link_door"
+	PersonRecoveryCode      = "recovery_code"
+	PersonRecoveryCodeAdd   = "recovery_code_add"
+	PersonRecoveryCodeSaved = "recovery_code_saved"
+	PersonRenewCertificate  = "renew_certificate"
+	PersonRotate            = "rotate"
+	PersonStatus            = "status"
+	PersonUnlinkDoor        = "unlink_door"
+	PolicyLogCorrelate      = "correlate"
+	PolicyLogGet            = "get"
+	PolicyLogList           = "list"
+	ProfileCommit           = "commit"
+	ProfileGrant            = "grant"
+	ProfileGrants           = "grants"
+	ProfileList             = "list"
+	ProfilePlan             = "plan"
+	ProfilePreview          = "preview"
+	ProfilePublish          = "publish"
+	ProfileRevoke           = "revoke"
+	RecordGet               = "get"
+	RecordList              = "list"
+	RecordPayload           = "payload"
+	RegistryAppeal          = "appeal"
+	RegistryClaimPublisher  = "claim_publisher"
+	RegistryGetNamespace    = "get_namespace"
+	RegistryLegalAccept     = "legal_accept"
+	RegistryLegalPage       = "legal_page"
+	RegistryLegalVersion    = "legal_version"
+	RegistryListMyReports   = "list_my_reports"
+	RegistryMembersAdd      = "members_add"
+	RegistryMembersList     = "members_list"
+	RegistryMembersRemove   = "members_remove"
+	RegistryMembersUpdate   = "members_update"
+	RegistryRegister        = "register"
+	RegistryReport          = "report"
+	RegistrySync            = "sync"
+	RegistryTokensIssue     = "tokens_issue"
+	RegistryTokensList      = "tokens_list"
+	RegistryTokensRevoke    = "tokens_revoke"
+	RegistryVerifyPublisher = "verify_publisher"
+	RegistryWhoami          = "whoami"
+	ResourceRead            = "read"
+	RetentionCleanup        = "cleanup"
+	RetentionGet            = "get"
+	RetentionSet            = "set"
+	ScheduleCreate          = "create"
+	ScheduleDelete          = "delete"
+	ScheduleGet             = "get"
+	ScheduleList            = "list"
+	SchedulePause           = "pause"
+	ScheduleReResolve       = "re_resolve"
+	ScheduleResume          = "resume"
+	ScheduleUpdate          = "update"
+	SessionCliApprove       = "cli_approve"
+	SessionCliBegin         = "cli_begin"
+	SessionCliCancel        = "cli_cancel"
+	SessionCliList          = "cli_list"
+	SessionCliPoll          = "cli_poll"
+	SessionCliRevoke        = "cli_revoke"
+	SessionDeviceInit       = "device_init"
+	SessionDevicePoll       = "device_poll"
+	SessionLogout           = "logout"
+	SessionReadResource     = "read_resource"
+	SessionSetup            = "setup"
+	SessionUse              = "use"
+	SessionWhoami           = "whoami"
+	SettingsList            = "list"
+	SettingsReset           = "reset"
+	SettingsSet             = "set"
+	ShareCreate             = "create"
+	ShareList               = "list"
+	ShareOffered            = "offered"
+	ShareRevoke             = "revoke"
+	ShareSetAudience        = "set_audience"
+	ShareSetCaps            = "set_caps"
+	ShareUsage              = "usage"
+	SystemNotify            = "notify"
+	SystemStatus            = "status"
+	ThreadAloud             = "aloud"
+	ThreadApprove           = "approve"
+	ThreadAttach            = "attach"
+	ThreadCreate            = "create"
+	ThreadDecline           = "decline"
+	ThreadDelete            = "delete"
+	ThreadDiscard           = "discard"
+	ThreadEvents            = "events"
+	ThreadFollow            = "follow"
+	ThreadGet               = "get"
+	ThreadList              = "list"
+	ThreadRestartForConsent = "restart_for_consent"
+	ThreadRevokeGrant       = "revoke_grant"
+	ThreadSend              = "send"
+	ThreadStop              = "stop"
+	ThreadUnfollow          = "unfollow"
+	TinctureInvokeProtected = "invoke_protected"
+	TinctureInvokePublic    = "invoke_public"
+	TinctureVisibilityGet   = "get"
+	ToolsList               = "list"
+	TurnRecover             = "recover"
+	TurnSuspend             = "suspend"
+	VaultAuthorize          = "authorize"
+	VaultCreate             = "create"
+	VaultDelete             = "delete"
+	VaultList               = "list"
+	VaultRebind             = "rebind"
+	VaultRename             = "rename"
+	VaultRevoke             = "revoke"
+	VaultRotate             = "rotate"
+	VaultSetDefault         = "set_default"
+	VaultStatus             = "status"
+	WebhookCreate           = "create"
+	WebhookGet              = "get"
+	WebhookList             = "list"
+	WebhookReenable         = "reenable"
+	WebhookRevoke           = "revoke"
+	WebhookRotate           = "rotate"
+	WebhookUpdate           = "update"
 )
 
 // Actions lists every action the catalog serves, per tool.
@@ -350,7 +337,6 @@ var Actions = map[string][]string{
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
-	"instance_entry":      {"create", "delete", "list", "offered", "people", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
 	"invitation":          {"create", "list", "revoke"},
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
@@ -384,9 +370,6 @@ var Actions = map[string][]string{
 
 // CredentialKinds lists every credential kind a manifest need may name.
 var CredentialKinds = []string{"api_key", "oauth", "bundle"}
-
-// InstanceCredentialKinds lists the credential kinds an instance entry holds.
-var InstanceCredentialKinds = []string{"api_key", "bundle"}
 
 // SignInProviders lists every sign-in provider.
 var SignInProviders = []string{"github", "google", "oidcc"}
@@ -1986,284 +1969,6 @@ func (args FileWriteArgs) MarshalJSON() ([]byte, error) {
 	}{Action: FileWrite, fields: fields(args)})
 }
 
-// InstanceEntryCreateArgs carries arguments for instance_entry.create.
-type InstanceEntryCreateArgs struct {
-	// Entry label — unique among living instance entries
-	Name string `json:"name"`
-	// What the entry holds: an API key or a bundle of fields; an OAuth account is an athanor's own entry
-	Kind string `json:"kind"`
-	// Immutable provider tag (e.g. 'openai.com'); set at create only
-	ProviderHint Field[string] `json:"provider_hint,omitzero"`
-	// Secret material as name → value
-	Fields Field[map[string]string] `json:"fields,omitzero"`
-	// Where the material may go, its methods and paths included
-	Destination InstanceEntryCreateArgsDestination `json:"destination"`
-	// Who it is offered to: everyone on the instance, or the listed people
-	Audience string `json:"audience"`
-	// The listed people, by person id; an everyone audience keeps none
-	Members Field[[]string] `json:"members,omitzero"`
-	// Which components may use it: any a person consents to (any), or only an unmodified shipped component (shipped)
-	ComponentPolicy Field[string] `json:"component_policy,omitzero"`
-	// Requests one person may make through it each day; 0 admits none, null takes instance_entry_person_daily
-	PersonDaily Field[*int] `json:"person_daily,omitzero"`
-	// Requests everyone together may make through it each day; 0 admits none, null takes instance_entry_total_daily
-	TotalDaily Field[*int] `json:"total_daily,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryCreateArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryCreateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryCreate, fields: fields(args)})
-}
-
-type InstanceEntryCreateArgsDestination struct {
-	// Hosts the material may go to: exact names, or *. and a name
-	Hosts []string `json:"hosts"`
-	// https unless http is stated
-	Scheme Field[string] `json:"scheme,omitzero"`
-	// The port; the scheme's default when absent
-	Port Field[int] `json:"port,omitzero"`
-	// HTTP methods admitted
-	Methods []string `json:"methods"`
-	// Path prefixes admitted, each beginning with /
-	Paths []string `json:"paths"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *InstanceEntryCreateArgsDestination) UnmarshalJSON(data []byte) error {
-	type fields InstanceEntryCreateArgsDestination
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = InstanceEntryCreateArgsDestination(value)
-	return nil
-}
-
-// InstanceEntryDeleteArgs carries arguments for instance_entry.delete.
-type InstanceEntryDeleteArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryDeleteArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryDeleteArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryDelete, fields: fields(args)})
-}
-
-// InstanceEntryListArgs carries arguments for instance_entry.list.
-type InstanceEntryListArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryListArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryList, fields: fields(args)})
-}
-
-// InstanceEntryOfferedArgs carries arguments for instance_entry.offered.
-type InstanceEntryOfferedArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryOfferedArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryOfferedArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryOffered, fields: fields(args)})
-}
-
-// InstanceEntryPeopleArgs carries arguments for instance_entry.people.
-type InstanceEntryPeopleArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryPeopleArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryPeopleArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryPeople, fields: fields(args)})
-}
-
-// InstanceEntryRebindArgs carries arguments for instance_entry.rebind.
-type InstanceEntryRebindArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-	// Where the material may go from now on
-	Destination InstanceEntryRebindArgsDestination `json:"destination"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryRebindArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryRebindArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryRebind, fields: fields(args)})
-}
-
-type InstanceEntryRebindArgsDestination struct {
-	// Hosts the material may go to: exact names, or *. and a name
-	Hosts []string `json:"hosts"`
-	// https unless http is stated
-	Scheme Field[string] `json:"scheme,omitzero"`
-	// The port; the scheme's default when absent
-	Port Field[int] `json:"port,omitzero"`
-	// HTTP methods admitted
-	Methods []string `json:"methods"`
-	// Path prefixes admitted, each beginning with /
-	Paths []string `json:"paths"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *InstanceEntryRebindArgsDestination) UnmarshalJSON(data []byte) error {
-	type fields InstanceEntryRebindArgsDestination
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = InstanceEntryRebindArgsDestination(value)
-	return nil
-}
-
-// InstanceEntryRevokeArgs carries arguments for instance_entry.revoke.
-type InstanceEntryRevokeArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryRevokeArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryRevokeArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryRevoke, fields: fields(args)})
-}
-
-// InstanceEntryRotateArgs carries arguments for instance_entry.rotate.
-type InstanceEntryRotateArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-	// Secret material as name → value; names mirror field_names
-	Fields map[string]string `json:"fields"`
-	// CAS token for rotate — the revision the caller last saw
-	ExpectedPayloadRev int `json:"expected_payload_rev"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryRotateArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryRotateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryRotate, fields: fields(args)})
-}
-
-// InstanceEntrySetAudienceArgs carries arguments for instance_entry.set_audience.
-type InstanceEntrySetAudienceArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-	// Who it is offered to: everyone on the instance, or the listed people
-	Audience string `json:"audience"`
-	// The listed people, by person id; an everyone audience keeps none
-	Members Field[[]string] `json:"members,omitzero"`
-	// The audience the change was decided against, as the caller saw it; a stored audience that differs is a conflict and nothing is saved
-	Expected InstanceEntrySetAudienceArgsExpected `json:"expected"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntrySetAudienceArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntrySetAudienceArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntrySetAudience, fields: fields(args)})
-}
-
-type InstanceEntrySetAudienceArgsExpected struct {
-	// The audience as the caller saw it: everyone, or the listed people
-	Audience string `json:"audience"`
-	// The people listed as the caller saw them, by person id, compared as a set; none for everyone
-	Members Field[[]string] `json:"members,omitzero"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *InstanceEntrySetAudienceArgsExpected) UnmarshalJSON(data []byte) error {
-	type fields InstanceEntrySetAudienceArgsExpected
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = InstanceEntrySetAudienceArgsExpected(value)
-	return nil
-}
-
-// InstanceEntrySetCapsArgs carries arguments for instance_entry.set_caps.
-type InstanceEntrySetCapsArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-	// Requests one person may make through it each day; 0 admits none, null takes instance_entry_person_daily
-	PersonDaily Field[*int] `json:"person_daily,omitzero"`
-	// Requests everyone together may make through it each day; 0 admits none, null takes instance_entry_total_daily
-	TotalDaily Field[*int] `json:"total_daily,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntrySetCapsArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntrySetCapsArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntrySetCaps, fields: fields(args)})
-}
-
-// InstanceEntrySetComponentPolicyArgs carries arguments for instance_entry.set_component_policy.
-type InstanceEntrySetComponentPolicyArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-	// Which components may use it: any a person consents to (any), or only an unmodified shipped component (shipped)
-	ComponentPolicy string `json:"component_policy"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntrySetComponentPolicyArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntrySetComponentPolicyArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntrySetComponentPolicy, fields: fields(args)})
-}
-
-// InstanceEntryUsageArgs carries arguments for instance_entry.usage.
-type InstanceEntryUsageArgs struct {
-	// Instance entry id (ine_…)
-	EntryId string `json:"entry_id"`
-	// Days of use to read, today included
-	Days int `json:"days"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args InstanceEntryUsageArgs) MarshalJSON() ([]byte, error) {
-	type fields InstanceEntryUsageArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: InstanceEntryUsage, fields: fields(args)})
-}
-
 // InvitationCreateArgs carries arguments for invitation.create.
 type InvitationCreateArgs struct {
 	// The group athanor the newcomer is seated in, which you hold a seat in. Left out, the invitation seats them in no group: the platform administrator's alone (create)
@@ -3558,7 +3263,7 @@ func (args PolicyLogListArgs) MarshalJSON() ([]byte, error) {
 
 // ProfileCommitArgs carries arguments for profile.commit.
 type ProfileCommitArgs struct {
-	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}], selections, override
+	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | share_id, name, lifetime, renew, fields, scopes}], selections, override
 	Decisions ProfileCommitArgsDecisions `json:"decisions"`
 	// From plan
 	PlanToken string `json:"plan_token"`
@@ -3585,7 +3290,7 @@ type ProfileCommitArgsDecisions struct {
 	Label      Field[string] `json:"label,omitzero"`
 	Scope      Field[string] `json:"scope,omitzero"`
 	InvokeMode Field[string] `json:"invoke_mode,omitzero"`
-	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | share_id, name, lifetime, renew, fields, scopes}]
 	Bindings       Field[[]ProfileCommitArgsDecisionsBindingsItem]    `json:"bindings,omitzero"`
 	Selections     Field[[]ProfileCommitArgsDecisionsSelectionsItem]  `json:"selections,omitzero"`
 	ToolServers    Field[[]ProfileCommitArgsDecisionsToolServersItem] `json:"tool_servers,omitzero"`
@@ -3612,11 +3317,9 @@ func (args *ProfileCommitArgsDecisions) UnmarshalJSON(data []byte) error {
 
 type ProfileCommitArgsDecisionsBindingsItem struct {
 	Need Field[string] `json:"need,omitzero"`
-	// An entry of the athanor (vlt_…); exactly one of entry_id, instance_entry_id and share_id
+	// An entry of the athanor (vlt_…); exactly one of entry_id and share_id
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you (ine_…); exactly one of entry_id, instance_entry_id and share_id
-	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
-	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id, instance_entry_id and share_id
+	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id and share_id
 	ShareId Field[string] `json:"share_id,omitzero"`
 	// The account name of a named binding beside the need's default; absent for the default
 	Name Field[string] `json:"name,omitzero"`
@@ -3660,12 +3363,10 @@ func (args *ProfileCommitArgsDecisionsBindingsItemLifetime) UnmarshalJSON(data [
 
 type ProfileCommitArgsDecisionsSelectionsItem struct {
 	Dep string `json:"dep"`
-	// The dependency's profile that lends its key; at most one of label, entry_id, instance_entry_id and share_id, label 'default' when none
+	// The dependency's profile that lends its key; at most one of label, entry_id and share_id, label 'default' when none
 	Label Field[string] `json:"label,omitzero"`
 	// An entry of the athanor bound on the dependency's edge
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you, bound on the edge
-	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
 	// A key shared with you, bound on the edge
 	ShareId Field[string] `json:"share_id,omitzero"`
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
@@ -3836,7 +3537,7 @@ func (args *ProfileCommitArgsDecisionsSubsetItemExitsItem) UnmarshalJSON(data []
 type ProfileGrantArgs struct {
 	// Profile id (grant/list/revoke)
 	ProfileId string `json:"profile_id"`
-	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | share_id, name, lifetime, renew, fields, scopes}]
 	Bindings Field[[]ProfileGrantArgsBindingsItem] `json:"bindings,omitzero"`
 	// The revision plan reported
 	ExpectedConsentRevision *int `json:"expected_consent_revision"`
@@ -3853,11 +3554,9 @@ func (args ProfileGrantArgs) MarshalJSON() ([]byte, error) {
 
 type ProfileGrantArgsBindingsItem struct {
 	Need Field[string] `json:"need,omitzero"`
-	// An entry of the athanor (vlt_…); exactly one of entry_id, instance_entry_id and share_id
+	// An entry of the athanor (vlt_…); exactly one of entry_id and share_id
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you (ine_…); exactly one of entry_id, instance_entry_id and share_id
-	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
-	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id, instance_entry_id and share_id
+	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id and share_id
 	ShareId Field[string] `json:"share_id,omitzero"`
 	// The account name of a named binding beside the need's default; absent for the default
 	Name Field[string] `json:"name,omitzero"`
@@ -3953,7 +3652,7 @@ func (args ProfilePlanArgs) MarshalJSON() ([]byte, error) {
 
 // ProfilePreviewArgs carries arguments for profile.preview.
 type ProfilePreviewArgs struct {
-	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}], selections, override
+	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | share_id, name, lifetime, renew, fields, scopes}], selections, override
 	Decisions ProfilePreviewArgsDecisions `json:"decisions"`
 }
 
@@ -3972,7 +3671,7 @@ type ProfilePreviewArgsDecisions struct {
 	Label      Field[string] `json:"label,omitzero"`
 	Scope      Field[string] `json:"scope,omitzero"`
 	InvokeMode Field[string] `json:"invoke_mode,omitzero"`
-	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id | share_id, name, lifetime, renew, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | share_id, name, lifetime, renew, fields, scopes}]
 	Bindings       Field[[]ProfilePreviewArgsDecisionsBindingsItem]    `json:"bindings,omitzero"`
 	Selections     Field[[]ProfilePreviewArgsDecisionsSelectionsItem]  `json:"selections,omitzero"`
 	ToolServers    Field[[]ProfilePreviewArgsDecisionsToolServersItem] `json:"tool_servers,omitzero"`
@@ -3999,11 +3698,9 @@ func (args *ProfilePreviewArgsDecisions) UnmarshalJSON(data []byte) error {
 
 type ProfilePreviewArgsDecisionsBindingsItem struct {
 	Need Field[string] `json:"need,omitzero"`
-	// An entry of the athanor (vlt_…); exactly one of entry_id, instance_entry_id and share_id
+	// An entry of the athanor (vlt_…); exactly one of entry_id and share_id
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you (ine_…); exactly one of entry_id, instance_entry_id and share_id
-	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
-	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id, instance_entry_id and share_id
+	// A key shared with you (shr_…), attached and never disclosed; exactly one of entry_id and share_id
 	ShareId Field[string] `json:"share_id,omitzero"`
 	// The account name of a named binding beside the need's default; absent for the default
 	Name Field[string] `json:"name,omitzero"`
@@ -4047,12 +3744,10 @@ func (args *ProfilePreviewArgsDecisionsBindingsItemLifetime) UnmarshalJSON(data 
 
 type ProfilePreviewArgsDecisionsSelectionsItem struct {
 	Dep string `json:"dep"`
-	// The dependency's profile that lends its key; at most one of label, entry_id, instance_entry_id and share_id, label 'default' when none
+	// The dependency's profile that lends its key; at most one of label, entry_id and share_id, label 'default' when none
 	Label Field[string] `json:"label,omitzero"`
 	// An entry of the athanor bound on the dependency's edge
 	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you, bound on the edge
-	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
 	// A key shared with you, bound on the edge
 	ShareId Field[string] `json:"share_id,omitzero"`
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
@@ -6026,10 +5721,8 @@ func (args VaultRotateArgs) MarshalJSON() ([]byte, error) {
 type VaultSetDefaultArgs struct {
 	// The provider whose default this becomes (e.g. 'openai.com')
 	ProviderHint string `json:"provider_hint"`
-	// An entry of the athanor (vlt_…); name exactly one of entry_id and instance_entry_id
-	EntryId Field[string] `json:"entry_id,omitzero"`
-	// An instance entry offered to you (ine_…); name exactly one of entry_id and instance_entry_id
-	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// The entry of the athanor that becomes the default (vlt_…)
+	EntryId string `json:"entry_id"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

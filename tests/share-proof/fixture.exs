@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The instance-entry proof's part in the running server, evaluated inside
-# it by `bin/cyfr rpc` (tests/instance-entry-proof/run.sh `entry_fixture`).
-# The file evaluates to a function of the argument list; each command
-# answers one line, `ENTRY=` and a JSON object of bounded, non-secret
-# facts. It calls the real paths named below and reads back what they
-# decided, and seeds one thing, a group of the administrator's holding
-# Bea (`group`), which the narrowing names. The administrator's keys and
-# their shares are made on the Vault page, in the browser. Material a
-# share unseals is discarded here and never serialized.
+# The share proof's part in the running server, evaluated inside it by
+# `bin/cyfr rpc` (tests/share-proof/run.sh `share_fixture`). The file
+# evaluates to a function of the argument list; each command answers one
+# line, `SHARE=` and a JSON object of bounded, non-secret facts. It calls
+# the real paths named below and reads back what they decided, and seeds
+# one thing, a group of the administrator's holding Bea (`group`), which
+# the narrowing names. The administrator's keys and their shares are made
+# on the Vault page, in the browser. Material a share unseals is discarded
+# here and never serialized.
 #
 #   clock
 #       The database's time (`Arca.ServerMetaStorage.now!/0`): the start of
@@ -21,14 +21,11 @@
 #       its own model after every step: every row of `vault_entries`
 #       (tombstoned ones too), its sealed payload replaced by the outcome of
 #       comparing it with the digest PAYLOAD_DIGESTS_JSON names for the
-#       entry's id (`sealed_payload` below); every row of
-#       `instance_entries`, `instance_entry_members` and
-#       `instance_entry_usage`, which nothing here makes; every row of
-#       `shares` and of `share_usage`; once Ana has signed in, every
-#       profile of catalyst:local.openai in her athanor, every consent of
-#       those profiles, every binding row of those consents, the instance
-#       entries offered to her (`Sanctum.InstanceEntries.offered/1`) and the
-#       shares (`Sanctum.Shares.offered/1`); once Bea has signed in, her row
+#       entry's id (`sealed_payload` below); every row of `shares` and of
+#       `share_usage`; once Ana has signed in, every profile of
+#       catalyst:local.openai in her athanor, every consent of those
+#       profiles, every binding row of those consents and the shares offered
+#       to her (`Sanctum.Shares.offered/1`); once Bea has signed in, her row
 #       (`users`) and the shares offered to her under the context she held
 #       (`held_claim` below), or the refusal; and, once every row is read, the database's time and its
 #       UTC date, the end of the window and the today a use row's day is
@@ -115,7 +112,7 @@
 require Ecto.Query
 
 fn args ->
-  answer = fn map -> "ENTRY=" <> Jason.encode!(map) end
+  answer = fn map -> "SHARE=" <> Jason.encode!(map) end
   openai = "catalyst:local.openai"
 
   # The person as their session establishes them, focused where it is.
@@ -341,16 +338,6 @@ fn args ->
           Map.put(entry, :sealed_payload, payload.(entry))
         end
 
-      # No instance entry is made here; one that is would be read whole but
-      # for its sealed payload, which only says whether it holds one.
-      entries =
-        for entry <- rows_of.(Arca.Schemas.InstanceEntry) do
-          held = if entry.sealed_payload in [nil, ""], do: "absent", else: "present"
-          Map.put(entry, :sealed_payload, held)
-        end
-
-      members = rows_of.(Arca.Schemas.InstanceEntryMember)
-      usage = rows_of.(Arca.Schemas.InstanceEntryUsage)
       shares = rows_of.(Arca.Schemas.Share)
       share_usage = rows_of.(Arca.Schemas.ShareUsage)
 
@@ -387,13 +374,10 @@ fn args ->
               )
             )
 
-          {:ok, offered} = Sanctum.InstanceEntries.offered(ctx)
-
           %{
             profiles: profiles,
             consents: consents,
             rows: rows,
-            offered: Enum.map(offered, & &1.id),
             shared: shared_with.(ctx)
           }
         end
@@ -414,9 +398,6 @@ fn args ->
         now: DateTime.to_iso8601(now),
         today: Date.to_iso8601(DateTime.to_date(now)),
         vault_entries: vault_entries,
-        entries: entries,
-        members: members,
-        usage: usage,
         shares: shares,
         share_usage: share_usage,
         ana: ana,
@@ -424,7 +405,7 @@ fn args ->
       })
 
     ["requested_digest", provider, field, destination] ->
-      {:ok, parsed} = Prima.Destination.new(Jason.decode!(destination), true)
+      {:ok, parsed} = Prima.Destination.from_map(Jason.decode!(destination))
       canonical = Prima.Destination.canonical(parsed)
 
       {:ok, digest} =
@@ -450,7 +431,7 @@ fn args ->
 
     ["derived_head", token, share_id, provider, field, destination] ->
       ctx = person_ctx.(token)
-      {:ok, parsed} = Prima.Destination.new(Jason.decode!(destination), true)
+      {:ok, parsed} = Prima.Destination.from_map(Jason.decode!(destination))
 
       {:ok, digest} =
         Sanctum.VaultReader.binding_digest(%{

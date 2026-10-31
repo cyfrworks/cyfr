@@ -13,7 +13,7 @@ defmodule PrismWeb.SystemLayer.Hook do
       (`PrismWeb.SystemLayer.relay/4`) goes back to that view
       (`PrismWeb.SystemLayer.relayed/2`);
     * the view's own — a report on a prompt the view placed itself and
-      follows by its id (a grant it asked for, a recovery or instance
+      follows by its id (a grant it asked for, a recovery or sharing
       prompt) is the view's `c:system_layer_report/3`, when it answers
       `{:noreply, socket}`;
     * the default — every other report is the view's held asks'

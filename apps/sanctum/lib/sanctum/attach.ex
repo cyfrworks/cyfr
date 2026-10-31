@@ -9,10 +9,10 @@ defmodule Sanctum.Attach do
   `resolve/5` takes the context the run's guest calls run in, the vault
   resource of the edge the running node reached its need through, the
   need's name, the request's `uri` and `method`, and what the attempt
-  knows of its own run (`t:facts/0`): the running node's reference and
-  trusted digest, its root execution, and the profile and consent the run
-  is pinned to. Nothing a guest's request carries stands in for any of
-  them. In order, nothing touched before a check that refuses:
+  knows of its own run (`t:facts/0`): its root execution and the profile
+  and consent the run is pinned to. Nothing a guest's request carries
+  stands in for any of them. In order, nothing touched before a check
+  that refuses:
 
     1. the resource names one value (`{:ambiguous, [key]}` otherwise): an
        OAuth projection, which names its `scopes`, the token dispensed for
@@ -27,18 +27,13 @@ defmodule Sanctum.Attach do
     3. the material: an athanor's entry through
        `Sanctum.VaultReader.load_and_unseal/2` (active, at the consented
        binding digest, unsealed), then its destination against the
-       request; an instance entry through `Sanctum.InstanceEntries`, held
-       first to the digest the consent approved (`:binding_went_stale`),
-       then resolved under its audience, component policy, destination
-       and caps (`Sanctum.InstanceEntries.resolve/4`); an instance entry
-       holds no token, so an OAuth projection of one attaches nothing
-       (`:no_oauth_material`); a share through `Sanctum.Shares.resolve/5`,
-       handed the digest the consent approved and the one field the
-       projection reads, which holds the share to its audience, its
-       owner's standing, that digest, its source's destination and its
-       caps before it unseals; a share offers no token either
-       (`:no_oauth_material`); a provided value from the resource itself,
-       held to its destination.
+       request; a share through `Sanctum.Shares.resolve/5`, handed the
+       digest the consent approved and the one field the projection
+       reads, which holds the share to its audience, its owner's
+       standing, that digest, its source's destination and its caps
+       before it unseals; a share offers no token, so an OAuth projection
+       of one attaches nothing (`:no_oauth_material`); a provided value
+       from the resource itself, held to its destination.
 
   An OAuth entry's value is the token `Sanctum.Vault.OAuth.dispense/5`
   answers for the projection's scopes. The answer's `masking` lists the
@@ -49,18 +44,13 @@ defmodule Sanctum.Attach do
   alias Prima.Authority
   alias Prima.Authority.Blob.Edge
   alias Sanctum.Context
-  alias Sanctum.InstanceEntries
   alias Sanctum.VaultReader
 
   @typedoc """
-  What the attempt knows of its own run: the running node's reference
-  (`node_ref`, the version it runs) and the digest it is trusted at
-  (`activation_digest`), the run's root execution, and the profile and
-  consent it is pinned to.
+  What the attempt knows of its own run: its root execution, and the
+  profile and consent it is pinned to.
   """
   @type facts :: %{
-          required(:node_ref) => String.t(),
-          required(:activation_digest) => String.t() | nil,
           required(:root_execution_id) => String.t(),
           required(:profile_id) => String.t() | nil,
           required(:consent_id) => String.t() | nil
@@ -121,12 +111,9 @@ defmodule Sanctum.Attach do
     do: {:error, :anonymous_denied}
 
   defp bound(ctx, vault, request, facts) do
-    use = Map.take(facts, [:root_execution_id, :profile_id, :consent_id])
-
     with {:ok, take} <- one_take(vault),
-         :ok <- lifetime(ctx, vault, use) do
+         :ok <- lifetime(ctx, vault, facts) do
       case vault do
-        %{scope: "instance"} -> instance(ctx, vault, take, request, facts)
         %{scope: "share"} -> share(ctx, vault, take, request)
         %{scope: "athanor"} -> athanor(ctx, vault, take, request)
         _other_scope -> {:error, :connection_not_granted}
@@ -174,34 +161,6 @@ defmodule Sanctum.Attach do
   end
 
   defp athanor_value(_ctx, _entry, _payload, :token, _vault), do: {:error, :no_oauth_material}
-
-  # An instance entry is the instance's: offered to the context's person,
-  # held to the digest the consent approved before any claim, and resolved
-  # under its live policy, destination and caps. An instance entry holds
-  # no token, so a projection naming scopes attaches nothing from one.
-  defp instance(ctx, vault, take, request, facts) do
-    with {:ok, view} <- InstanceEntries.binding(ctx, vault.entry_id),
-         :ok <- same_binding(view, vault),
-         {:ok, take} <- instance_field(take),
-         {:ok, _view, payload} <-
-           InstanceEntries.resolve(ctx, vault.entry_id, request, %{
-             node_ref: facts.node_ref,
-             activation_digest: facts.activation_digest
-           }),
-         {:ok, value} <- field_value(payload, take) do
-      {:ok, %{value: value, attach: vault.attach, masking: [value]}}
-    end
-  end
-
-  defp same_binding(%{binding_digest: live}, %{binding_digest: approved})
-       when is_binary(live) and is_binary(approved) do
-    if Plug.Crypto.secure_compare(live, approved), do: :ok, else: {:error, :binding_went_stale}
-  end
-
-  defp same_binding(_view, _vault), do: {:error, :binding_went_stale}
-
-  defp instance_field(:token), do: {:error, :no_oauth_material}
-  defp instance_field({:field, _need_field, _entry_field} = take), do: {:ok, take}
 
   # A share is its owner's entry, reached through the share the consent
   # names: the digest the consent approved travels into the resolution,

@@ -30,9 +30,9 @@ defmodule Prism.ConsentChoices do
 
   # The needs an entry meets; any other names a component.
   @credential_kinds Prima.CredentialKinds.all()
-  # What a choice of an entry binds: the athanor's own, an instance entry
-  # or a key shared with the person, each sent by its own id key.
-  @entry_sources ["own", "instance", "share"]
+  # What a choice of an entry binds: the athanor's own or a key shared
+  # with the person, each sent by its own id key.
+  @entry_sources ["own", "share"]
   # The furthest an until-lifetime reaches: the home refuses one more
   # than 24 hours after its commit.
   @horizon_s 24 * 3600
@@ -54,13 +54,13 @@ defmodule Prism.ConsentChoices do
           | {:account, edge(), String.t()}
 
   @typedoc """
-  What a slot is bound to: an entry of the athanor (`"own"`), an instance
-  entry (`"instance"`), a key another person shares (`"share"`) or a
-  lending profile's label (`"label"`); the
-  dependency's need it is for, where it must be named; its lifetime as
-  the wire spells it, the person's choice that made it, and `renew`. A
-  named account also carries its `name`, whether that name is `fixed`,
-  and the order it was added in (`seq`); its entry may not be chosen yet.
+  What a slot is bound to: an entry of the athanor (`"own"`), a key
+  another person shares (`"share"`) or a lending profile's label
+  (`"label"`); the dependency's need it is for, where it must be named;
+  its lifetime as the wire spells it, the person's choice that made it,
+  and `renew`. A named account also carries its `name`, whether that
+  name is `fixed`, and the order it was added in (`seq`); its entry may
+  not be chosen yet.
   A default switched from a lending profile names that profile
   (`lent_by`). A choice of an entry may carry the map it sends, from each
   field the need reads to the entry field that answers it (`fields`),
@@ -285,7 +285,7 @@ defmodule Prism.ConsentChoices do
   # account's name — and the need it was bound for, nil where that cannot
   # be told. A row the plan could not place reopens nowhere.
   defp placed(head) do
-    with source when source in ["own", "instance", "share", "label"] <- field(head, :source),
+    with source when source in ["own", "share", "label"] <- field(head, :source),
          id when is_binary(id) <- field(head, id_field(source)),
          node when is_binary(node) <- field(head, :node),
          edge when is_binary(edge) <- field(head, :edge) do
@@ -305,7 +305,6 @@ defmodule Prism.ConsentChoices do
   end
 
   defp id_field("own"), do: :entry_id
-  defp id_field("instance"), do: :instance_entry_id
   defp id_field("share"), do: :share_id
   defp id_field("label"), do: :label
 
@@ -379,8 +378,7 @@ defmodule Prism.ConsentChoices do
 
   defp holds?(need, id) do
     Enum.any?(candidates_of(need), fn candidate ->
-      field(candidate, :entry_id) == id or field(candidate, :instance_entry_id) == id or
-        field(candidate, :share_id) == id
+      field(candidate, :entry_id) == id or field(candidate, :share_id) == id
     end)
   end
 
@@ -572,7 +570,6 @@ defmodule Prism.ConsentChoices do
     |> put_renew(choice)
   end
 
-  defp id_key("instance"), do: "instance_entry_id"
   defp id_key("share"), do: "share_id"
   defp id_key("label"), do: "label"
   defp id_key(_own), do: "entry_id"
@@ -591,7 +588,6 @@ defmodule Prism.ConsentChoices do
   defp put_fields(choice, _none), do: choice
 
   defp suggested_choice(%{entry_id: id}, need), do: new_choice("own", id, need)
-  defp suggested_choice(%{instance_entry_id: id}, need), do: new_choice("instance", id, need)
   defp suggested_choice(%{share_id: id}, need), do: new_choice("share", id, need)
 
   def new_choice(source, id, need) do
@@ -633,7 +629,6 @@ defmodule Prism.ConsentChoices do
   defp held_slot(edge, _item, choice), do: {named_slot(edge, nil), choice}
 
   defp held_id(%{"entry_id" => id}) when is_binary(id), do: {"own", id}
-  defp held_id(%{"instance_entry_id" => id}) when is_binary(id), do: {"instance", id}
   defp held_id(%{"share_id" => id}) when is_binary(id), do: {"share", id}
   defp held_id(%{"label" => label}) when is_binary(label), do: {"label", label}
   defp held_id(_item), do: nil
@@ -796,7 +791,6 @@ defmodule Prism.ConsentChoices do
   defp candidate_id(candidate) do
     case candidate do
       %{entry_id: id} when is_binary(id) -> {"own", id}
-      %{instance_entry_id: id} when is_binary(id) -> {"instance", id}
       %{share_id: id} when is_binary(id) -> {"share", id}
       _other -> nil
     end
@@ -1115,7 +1109,6 @@ defmodule Prism.ConsentChoices do
   def suggested(need) do
     case field(need, :suggested) do
       %{entry_id: id} = suggested when is_binary(id) -> suggested
-      %{instance_entry_id: id} = suggested when is_binary(id) -> suggested
       %{share_id: id} = suggested when is_binary(id) -> suggested
       _none -> nil
     end

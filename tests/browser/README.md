@@ -202,7 +202,7 @@ and where the `browser` job of `.github/workflows/test.yml` runs it. The
 job is four shards, each a runner of its own (its matrix names each
 shard's proofs); a shard runs its proofs in this table's order, its first
 release-backed proof building the release and the rest reusing it
-(`RELEASE_BOOT_SKIP_BUILD=1`). The grant, instance-entry, approval and
+(`RELEASE_BOOT_SKIP_BUILD=1`). The grant, share, approval and
 file-offer proofs refuse to build one, so no shard opens with them, and the
 markdown proof starts no release. A
 passkey ceremony is Chromium's alone, whose virtual authenticator a proof
@@ -223,7 +223,7 @@ proof's own README holds how to run it and its steps.
 | identity | `tests/identity-proof/` | the homes `a.test`, `b.test`, `c.test`, `c2.test` and `c3.test`, and the directory `dir.test` | Chromium | b; Chromium |
 | join | `tests/join-proof/` | the homes `a.test`, `a2.test` and `h.test`, and the directories `dir.test` and `dir2.test` | Chromium; the sign-in at the hub, the carry and a second browser profile in Firefox and WebKit as well (`JOIN_PROOF_BROWSERS`) | b; Chromium |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium | d; Chromium |
-| instance entries | `tests/instance-entry-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 | d; Chromium, both viewports |
+| shares | `tests/share-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 | d; Chromium, both viewports |
 | approvals | `tests/approval-proof/` | one home, `home.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |
 | file offers | `tests/file-offer-proof/` | one home, `home.test`; offers, recipient acceptance and actual snapshot readback | Chromium, desktop (1280×900) and 720×720 | c; Chromium, both viewports |
 | canvas | `tests/canvas-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 | d; all three, both viewports |
@@ -240,7 +240,7 @@ In CI every proof writes its records under
 viewport, and each shard keeps its record files for 14 days as
 `proof-records-<shard>`, whether it passed or not. The three vault proofs
 fail their shard when any step fails.
-They start no execution worker or model: instance-entry claims count
+They start no execution worker or model: share claims count
 resolver uses, approval use checks admission and binding decisions, and
 the named-account prompt uses the announcement a turn would send. File
 acceptance really copies bytes. Their READMEs name the executing

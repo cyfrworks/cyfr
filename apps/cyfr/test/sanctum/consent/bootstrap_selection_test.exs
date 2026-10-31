@@ -85,12 +85,12 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     {_aqua, aqua_head, aqua_refs} = head!(ctx, @aqua)
 
     # Each selection is stored as its own binding's row: the lender's label,
-    # and no entry of the athanor's own or of the instance.
+    # and no entry of the athanor's own and no share.
     assert aqua_refs != []
     assert "#{@aqua}|#{@claude}|default" in Enum.map(aqua_refs, & &1.binding_key)
 
     for ref <- aqua_refs do
-      assert %{via_label: "default", vault_entry_id: nil, instance_entry_id: nil} = ref
+      assert %{via_label: "default", vault_entry_id: nil, share_id: nil} = ref
     end
 
     edge = edge!(aqua_head.resolved_policy, @aqua, @claude)

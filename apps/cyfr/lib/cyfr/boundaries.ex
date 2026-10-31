@@ -341,7 +341,7 @@ defmodule Cyfr.Boundaries do
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
-    Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage Arca.Shares Arca.ShareUsage
+    Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
@@ -454,7 +454,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
+        Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
         Sanctum.Session Sanctum.Shares Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
@@ -490,8 +490,6 @@ defmodule Cyfr.Boundaries do
           "roots at: its public-profile and private-access policy. " <>
           "`Sanctum.Carry` is `Cyfr.RetentionScheduler`'s periodic sweep of every " <>
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
-          "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
-          "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
           "`Sanctum.Shares` is " <>
           "`Cyfr.RetentionScheduler`'s periodic sweep of share usage days (`sweep_usage/0`), " <>
           "which names no share and no person; and the composition root's announcement of " <>
@@ -1206,7 +1204,7 @@ defmodule Cyfr.Boundaries do
           "and the company sign-ins in flight, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
           "and cached heads, passkeys, pending confirmations, the installation claim, " <>
-          "the pre-authentication rate windows, the instance's own entries and " <>
+          "the pre-authentication rate windows, shares and " <>
           "their use counts, the admission decisions and the request-log rows " <>
           "that project them, and the policy consultation log " <>
           "are security rows, and the security transitions retire, suspend and " <>
@@ -2034,7 +2032,6 @@ defmodule Cyfr.Boundaries do
       open_stream: 3
     ],
     "Sanctum.Handle" => [resolve: 1],
-    "Sanctum.InstanceEntries" => [sweep_usage: 0],
     "Sanctum.Invitations" => [code_hash: 1, lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],

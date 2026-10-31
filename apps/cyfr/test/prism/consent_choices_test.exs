@@ -200,8 +200,7 @@ defmodule Prism.ConsentChoicesTest do
       assert Map.get(decisions, "label") == label
 
       for item <- decisions["bindings"] ++ Map.get(decisions, "selections", []) do
-        assert Enum.count(~w(entry_id instance_entry_id share_id label), &Map.has_key?(item, &1)) ==
-                 1
+        assert Enum.count(~w(entry_id share_id label), &Map.has_key?(item, &1)) == 1
 
         assert %{"kind" => kind} = item["lifetime"]
         assert kind in ~w(standing once until)

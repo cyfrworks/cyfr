@@ -149,6 +149,46 @@ defmodule Arca.ShareUsageTest do
     end
   end
 
+  describe "used_today/3" do
+    test "a person's use today is their own day row of that share, and no one else's",
+         %{terry: terry, share: share} do
+      other = share!(terry.actor, entry!(terry.actor).id)
+
+      assert {:ok, 0} = ShareUsage.used_today(terry.actor, share.id, "usr_alice")
+
+      for _ <- 1..2,
+          do: {:ok, _} = ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
+
+      {:ok, _} = ShareUsage.claim(terry.actor, share.id, "usr_bea", @everyone)
+      {:ok, _} = ShareUsage.claim(terry.actor, other.id, "usr_alice", @everyone)
+
+      # Alice's two on this share: not Bea's, not the share's total of
+      # three, and not her use of the other share.
+      assert {:ok, 2} = ShareUsage.used_today(terry.actor, share.id, "usr_alice")
+      assert {:ok, 1} = ShareUsage.used_today(terry.actor, share.id, "usr_bea")
+      assert {:ok, 1} = ShareUsage.used_today(terry.actor, other.id, "usr_alice")
+      assert {:ok, 0} = ShareUsage.used_today(terry.actor, other.id, "usr_bea")
+
+      # A count of an earlier day is not today's.
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.ShareUsage, [
+          %{
+            athanor_id: terry.athanor.id,
+            share_id: other.id,
+            user_id: "usr_bea",
+            day: Date.add(today(), -1),
+            count: 7,
+            updated_at: DateTime.utc_now()
+          }
+        ])
+
+      assert {:ok, 0} = ShareUsage.used_today(terry.actor, other.id, "usr_bea")
+
+      # The share's total is keyed by no person, and is never read as one.
+      refute match?({:ok, _}, ShareUsage.used_today(terry.actor, share.id, ""))
+    end
+  end
+
   describe "sweep/1" do
     test "deletes the days past the window in every athanor, and keeps the rest",
          %{terry: terry, share: share} do
@@ -176,5 +216,84 @@ defmodule Arca.ShareUsageTest do
                :count
              ) == 2
     end
+  end
+end
+
+defmodule Arca.ShareUsageRaceTest do
+  @moduledoc """
+  Claims on connections of their own: inside the sandbox one shared
+  connection would serialize the claims the cases are about. Every row a
+  case writes is removed when it ends.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+
+  alias Arca.ShareUsage
+  alias Arca.Test.Shares, as: Fixture
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @everyone %{audience: "everyone", group_id: nil}
+
+  # The purge is registered before the owner is made, so a case stopped at
+  # its timeout leaves nothing behind.
+  setup do
+    {:ok, made} = Agent.start(fn -> nil end)
+
+    on_exit(fn ->
+      with %{} = owner <- Agent.get(made, & &1), do: unboxed(fn -> purge!(owner) end)
+      Agent.stop(made)
+    end)
+
+    terry = unboxed(&Fixture.owner!/0)
+    :ok = Agent.update(made, fn _ -> terry end)
+    share = unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
+    {:ok, terry: terry, share: share}
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp purge!(%{athanor: athanor, user: user}) do
+    {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
+    Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
+    Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id))
+    Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user.id))
+  end
+
+  defp capped!(terry, share, person, total) do
+    {:ok, _} = unboxed(fn -> Arca.Shares.set_caps(terry.actor, share.id, person, total) end)
+    :ok
+  end
+
+  # One claim per person named, each on its own connection, all at once.
+  defp racing(terry, share, people) do
+    for person <- people do
+      Task.async(fn ->
+        unboxed(fn -> ShareUsage.claim(terry.actor, share.id, person, @everyone) end)
+      end)
+    end
+    |> Task.await_many(30_000)
+  end
+
+  test "two claims for the last request of a person's day admit one",
+       %{terry: terry, share: share} do
+    :ok = capped!(terry, share, 1, nil)
+    results = racing(terry, share, ["usr_alice", "usr_alice"])
+
+    assert [{:error, {:connection_cap, _}}, {:ok, %{person: 1, total: 1}}] =
+             Enum.sort_by(results, &match?({:ok, _}, &1))
+  end
+
+  test "two people racing for the last request of the share's day admit one",
+       %{terry: terry, share: share} do
+    :ok = capped!(terry, share, nil, 1)
+    results = racing(terry, share, ["usr_alice", "usr_bea"])
+
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &match?({:error, {:connection_cap, _}}, &1)) == 1
+
+    assert {:ok, %{totals: [%{count: 1}]}} =
+             unboxed(fn -> ShareUsage.usage(terry.actor, share.id, 1) end)
   end
 end

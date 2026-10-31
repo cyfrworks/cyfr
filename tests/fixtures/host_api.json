@@ -660,13 +660,6 @@
           "why": "the key's request cap for today is reached"
         },
         {
-          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"This instance entry requires an unmodified shipped component.\",\"type\":\"component_not_admitted\"}",
-          "answer_iv_hex": "a1a2a3a4a5a6a7a8a9aaab04",
-          "answer_sealed": "oaKjpKWmp6ipqqsEVAVU8zLdXHpTmG96Tm5ZjqE_enT3gri1is2Psk9lccCubUYPfhi-pY2ZC9RnfcBEEe7Z9RgZodcd2tNRvD6-0Px_noQlbG0YksjfTczzwoZkWL0VVCtloLcz3Mdburml4DhiUHujlKMci_MzehsgNn92f3WtojYuNA5H5LS03NXfG7iPFJPI73_7KQwoTh6CPR-EH4h6FMKF4YP0clWKu47VFmCLnAbaXXeetnuuIu_7UFxbE-2h3qHK",
-          "call_id": "EBESExQVFhcYGRobHB0eHw",
-          "why": "the instance entry's stored policy is shipped and the running node is no unmodified shipped component: host state, never a request member"
-        },
-        {
           "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"HTTP egress refused: api.example.com is not in the egress domains\",\"type\":\"domain_blocked\"}",
           "answer_iv_hex": "a1a2a3a4a5a6a7a8a9aaab05",
           "answer_sealed": "oaKjpKWmp6ipqqsFrKcrkGrzuhu9s5JX_zJJ3qFkKCkdHN4JO8942ZTemGkDG-A219re1AjCpeacZRcV_n-hfQqmFesZIrwRMIR02NYZMqaYktCB5El2c20kSVf_lno1YwRMnHR53tGfe2p4_MpD1BC35hqiRBzhhsua-TsIufdmNy2U3acAl1FnArIDvHT2REEBNCkVLcihcLWZ3NCHsXr5G3FhlOaocr49zWtrmv7cV-WYn1YcahMWyfq0UqocRtk",

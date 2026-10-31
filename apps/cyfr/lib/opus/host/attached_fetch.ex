@@ -44,9 +44,8 @@ defmodule Opus.Host.AttachedFetch do
        (`private_ip_blocked`, `dns_error`, `invalid_request`);
     6. the `http:` rate of the node is taken once (`rate_limited`);
     7. `Sanctum.Attach.resolve/5` decides the value (the binding's
-       lifetime, the entry, the instance entry's audience, policy and
-       caps, the share's audience, its owner's standing and its caps, or
-       the publisher's provided value).
+       lifetime, the entry, the share's audience, its owner's standing
+       and its caps, or the publisher's provided value).
 
   Each refusal is a guest error naming the request's call id, answered
   before anything is emitted, and recorded as a denial of the attempt's
@@ -177,7 +176,7 @@ defmodule Opus.Host.AttachedFetch do
          :ok <- request_size(chain.limits, request),
          {:ok, pin} <- pin(caller, request, uri),
          :ok <- rate(caller, chain),
-         {:ok, attached} <- resolve(chain, vault, request, uri, granted),
+         {:ok, attached} <- resolve(chain, vault, request, uri),
          :ok <- audit(caller, chain, vault, request.connection, uri),
          :ok <- masked(caller, attached.value) do
       {:ok, %{pin: pin, uri: uri, attached: attached}}
@@ -208,7 +207,7 @@ defmodule Opus.Host.AttachedFetch do
          {:ok, manifest} <- Prima.Manifest.decode_strict(component["manifest"]),
          needs when is_list(needs) <- Needs.from_manifest(manifest),
          [%{name: ^connection}] <- Enum.filter(needs, &attaches_by?(&1, rule)) do
-      {:ok, %{rule: rule, digest: digest}}
+      {:ok, %{rule: rule}}
     else
       _not_granted -> refuse(:connection_not_granted, :denied)
     end
@@ -394,10 +393,8 @@ defmodule Opus.Host.AttachedFetch do
   end
 
   # 7. The vault decides, from what the attempt knows of its own run.
-  defp resolve(chain, vault, request, uri, granted) do
+  defp resolve(chain, vault, request, uri) do
     facts = %{
-      node_ref: chain.component_ref,
-      activation_digest: granted.digest,
       root_execution_id: chain.root_execution_id,
       profile_id: chain.authority.profile_id,
       consent_id: chain.authority.consent_id

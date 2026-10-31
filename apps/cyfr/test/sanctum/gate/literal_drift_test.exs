@@ -77,7 +77,6 @@ defmodule Sanctum.Gate.LiteralDriftTest do
 
     assert Enum.map(rosters, &elem(&1, 2)) == [
              Prima.CredentialKinds.all(),
-             Prima.CredentialKinds.instance(),
              Prima.SignInProviders.all(),
              Prima.SignInProviders.device_flow()
            ]

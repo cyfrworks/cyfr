@@ -372,7 +372,6 @@ const FIELDS = {
     athanor_id: minted(SIGN_IN),
     provider_hint: exact,
     vault_entry_id: minted(VAULT_PAGE),
-    instance_entry_id: exact,
     inserted_at: clock,
     updated_at: clock,
   },
@@ -409,9 +408,7 @@ const FIELDS = {
     consent_id: minted(ADMISSION),
     athanor_id: minted(SIGN_IN),
     binding_key: exact,
-    scope: exact,
     vault_entry_id: minted(VAULT_PAGE),
-    instance_entry_id: exact,
     share_id: exact,
     via_label: exact,
     binding_digest: derived(REQUESTED),
@@ -855,7 +852,7 @@ async function main() {
     };
     const defaultRow = (provider, spec) => ({
       id: DEFAULT_ID, athanor_id: person.athanor_id, provider_hint: provider, vault_entry_id: ids[spec.name],
-      instance_entry_id: null, inserted_at: IN_WINDOW, updated_at: IN_WINDOW,
+      inserted_at: IN_WINDOW, updated_at: IN_WINDOW,
     });
     const profileRow = (head) => ({
       id: profileId, athanor_id: person.athanor_id, source_ref: APP, kind: "owner", label: "default", status: "active",
@@ -874,8 +871,8 @@ async function main() {
     // A binding row: the entry the key binds, at the digest its request
     // implies, with its lifetime.
     const bindingRow = (consentId, key, spec, kind = "standing", expires = null, consumed = null) => ({
-      consent_id: consentId, athanor_id: person.athanor_id, binding_key: key, scope: "athanor",
-      vault_entry_id: ids[spec.name], instance_entry_id: null, share_id: null, via_label: null,
+      consent_id: consentId, athanor_id: person.athanor_id, binding_key: key,
+      vault_entry_id: ids[spec.name], share_id: null, via_label: null,
       binding_digest: implied[spec.name].binding_digest, lifetime_kind: kind, expires_at: expires,
       consumed_by_root: consumed,
     });
@@ -1381,9 +1378,9 @@ async function main() {
       revision: 2,
       granted_via: "interactive",
       refs: [{
-        binding_key: grokKey, scope: "athanor", vault_entry_id: ids[XAI.name], instance_entry_id: null,
-        via_label: null, binding_digest: implied[XAI.name].binding_digest, lifetime_kind: "standing",
-        expires_at: null, consumed_by_root: null,
+        binding_key: grokKey, vault_entry_id: ids[XAI.name], via_label: null,
+        binding_digest: implied[XAI.name].binding_digest, lifetime_kind: "standing", expires_at: null,
+        consumed_by_root: null,
       }],
       vault: {
         entry_id: ids[XAI.name], binding_digest: implied[XAI.name].binding_digest, scope: "athanor",

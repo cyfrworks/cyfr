@@ -49,8 +49,6 @@ defmodule Arca.SchemaVocabularyTest do
       {"profiles", "profiles_status_known", "status", Arca.StatusTransitions.statuses(:profiles)},
       {"vault_entries", "vault_entries_status_known", "status",
        Arca.StatusTransitions.statuses(:credentials)},
-      {"instance_entries", "instance_entries_status_known", "status",
-       Arca.StatusTransitions.statuses(:credentials)},
       {"shares", "shares_status_known", "status", Arca.StatusTransitions.statuses(:shares)},
       {"shares", "shares_audience_known", "audience", Arca.Schemas.Share.audiences()},
       # `Arca.PairingInvitations` writes the kind of the confirmer it reads
@@ -88,10 +86,6 @@ defmodule Arca.SchemaVocabularyTest do
     test "names the sets the schemas validate with" do
       assert Arca.Schemas.Execution.statuses() == Prima.ExecutionState.statuses()
       assert Arca.Execution.statuses() == Prima.ExecutionState.statuses()
-
-      assert Arca.Schemas.InstanceEntry.statuses() ==
-               Arca.StatusTransitions.statuses(:credentials)
-
       assert Arca.Schemas.Profile.statuses() == Arca.StatusTransitions.statuses(:profiles)
     end
   end
@@ -181,15 +175,13 @@ defmodule Arca.SchemaVocabularyTest do
       refused!("consumer_receipts", receipt(ctx, "bogus"), "consumer_receipts_outcome_known")
     end
 
-    test "lands every credential status in both stores and refuses any other", ctx do
+    test "lands every credential status and refuses any other", ctx do
       for status <- ~w(active needs_reauth revoked tombstoned) do
         assert {1, _} = insert!("vault_entries", vault_entry(ctx, status))
-        assert {1, _} = insert!("instance_entries", instance_entry(ctx, status))
       end
 
       for status <- ~w(bogus needs_consent) do
         refused!("vault_entries", vault_entry(ctx, status), "vault_entries_status_known")
-        refused!("instance_entries", instance_entry(ctx, status), "instance_entries_status_known")
       end
     end
   end
@@ -726,20 +718,6 @@ defmodule Arca.SchemaVocabularyTest do
       vault_entry_id: entry.id,
       audience: audience,
       status: status,
-      created_by: "user_vocab",
-      inserted_at: now(),
-      updated_at: now()
-    }
-  end
-
-  defp instance_entry(_ctx, status) do
-    %{
-      id: id("inst"),
-      name: id("entry"),
-      kind: "api_key",
-      destination: ~s({"hosts":["api.example.com"]}),
-      status: status,
-      audience: "everyone",
       created_by: "user_vocab",
       inserted_at: now(),
       updated_at: now()

@@ -899,10 +899,9 @@ defmodule Sanctum.Recovery do
   @doc """
   The person's restore checklist while they recover from a declared
   restore (`ARCHITECTURE.md` §6.9): every key, webhook, paired device and
-  passkey of theirs held suspended, every profile to re-consent and every
-  vault entry to rotate in the athanors they sit in, and every instance
-  entry to rotate when they administer the platform
-  (`Arca.SecurityTransitions.restore_checklist/3`). `{:ok, nil}` for a
+  passkey of theirs held suspended, and every profile to re-consent and
+  every vault entry to rotate in the athanors they sit in
+  (`Arca.SecurityTransitions.restore_checklist/2`). `{:ok, nil}` for a
   person no declared restore found, whose blocked profiles and entries are
   none of a restore's doing, and for one who has recovered with nothing
   left on it.
@@ -910,9 +909,7 @@ defmodule Sanctum.Recovery do
   @spec checklist(Context.t()) :: {:ok, map() | nil} | {:error, term()}
   def checklist(%Context{} = ctx) do
     with {:ok, user_id} <- person(ctx) do
-      case Arca.SecurityTransitions.restore_checklist(system(), user_id,
-             platform_admin: ctx.platform_admin == true
-           ) do
+      case Arca.SecurityTransitions.restore_checklist(system(), user_id) do
         {:ok, list} -> {:ok, if(empty_checklist?(list), do: nil, else: list)}
         {:error, _unanswered} -> {:error, :unavailable}
       end
@@ -930,8 +927,7 @@ defmodule Sanctum.Recovery do
           :paired_clients,
           :passkeys,
           :profiles,
-          :vault_entries,
-          :instance_entries
+          :vault_entries
         ],
         &(Map.fetch!(list, &1) == [])
       )

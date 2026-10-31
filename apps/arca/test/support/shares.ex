@@ -170,7 +170,6 @@ defmodule Arca.Test.Shares do
   def share_ref(share_id, digest \\ "sha256:d0", admitted \\ everyone()) do
     %{
       binding_key: "formula:local.consumer|@ingress|default",
-      scope: "share",
       share_id: share_id,
       binding_digest: digest,
       admitted: admitted

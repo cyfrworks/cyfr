@@ -244,7 +244,7 @@ defmodule Sanctum.Consent.FlowTest do
                  vault_entry_id: ^entry_id,
                  binding_digest: ^digest,
                  via_label: nil,
-                 instance_entry_id: nil,
+                 share_id: nil,
                  lifetime_kind: "standing"
                }
              ] = consent.vault_refs

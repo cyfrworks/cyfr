@@ -366,12 +366,12 @@ defmodule Sanctum.ProviderVaultProfileTest do
       Enum.find(Sanctum.Providers.Vault.definition().operations, &(&1.action == "set_default"))
 
     assert Enum.map(args, & &1.name) |> Enum.sort() ==
-             ["entry_id", "instance_entry_id", "provider_hint"]
+             ["entry_id", "provider_hint"]
   end
 
   test "the profile tool decodes the extended decisions, and refuses what it cannot keep",
        %{ctx: ctx} do
-    # A person of this home: an instance entry is offered to people.
+    # The walk as a person of this home makes it.
     {ctx, _user} = Sanctum.TestContext.person!(ctx)
 
     {:ok, _} =
@@ -455,11 +455,6 @@ defmodule Sanctum.ProviderVaultProfileTest do
              ])
 
     assert why =~ "The binding for api_key"
-
-    assert {:error, "not_offered: " <> why} =
-             preview.([%{"need" => "api_key", "instance_entry_id" => "ine_missing"}])
-
-    assert why =~ "api_key"
   end
 
   test "the profile tool binds a key shared with the person by its share id, on the app's " <>

@@ -519,53 +519,6 @@ defmodule Sanctum.Consent.CommitTest do
                })
     end
 
-    test "an instance entry's map is checked against its field names", %{ctx: ctx} do
-      {person, _user} = Sanctum.TestContext.person!(ctx)
-      ref = custom!(person, "commit-map-instance")
-      single = instance!(%{field_names: ~s(["API key"])})
-      pair = instance!(%{field_names: ~s(["primary","secondary"])})
-      none = instance!(%{field_names: ~s([])})
-
-      bind = fn entry, over ->
-        Commit.preview(person, %{
-          ref: ref,
-          bindings: [Map.merge(%{need: "api_key", instance_entry_id: entry.id}, over)]
-        })
-      end
-
-      # The automatic map, from the instance entry's one field.
-      assert {:ok, preview} = bind.(single, %{})
-      assert credential_fields(preview) == [%{"OPENAI_API_KEY" => "API key"}]
-
-      # A name the instance entry does not hold, though the need reads it.
-      assert bind.(single, %{fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}}) ==
-               {:error, {:invalid_field_map, "api_key"}}
-
-      assert bind.(pair, %{}) == {:error, {:fields_unmapped, "api_key"}}
-      assert {:ok, preview} = bind.(pair, %{fields: %{"OPENAI_API_KEY" => "secondary"}})
-      assert credential_fields(preview) == [%{"OPENAI_API_KEY" => "secondary"}]
-
-      # An instance entry holding no field meets no map.
-      assert bind.(none, %{}) == {:error, {:fields_unmapped, "api_key"}}
-
-      assert bind.(none, %{fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}}) ==
-               {:error, {:invalid_field_map, "api_key"}}
-
-      {:ok, %{profile_id: profile_id}} =
-        walk!(person, ref, %{
-          bindings: [
-            %{
-              need: "api_key",
-              instance_entry_id: pair.id,
-              fields: %{"OPENAI_API_KEY" => "secondary"}
-            }
-          ]
-        })
-
-      assert %{fields: %{"OPENAI_API_KEY" => "secondary"}, scopes: []} =
-               bound_projection(person, profile_id, ref)
-    end
-
     test "a change to the map alone changes the commit digest, and a proof minted before it " <>
            "is refused",
          %{ctx: ctx} do
@@ -1248,17 +1201,6 @@ defmodule Sanctum.Consent.CommitTest do
                ])
 
       assert named =~ "named accounts"
-
-      {person, _user} = Sanctum.TestContext.person!(ctx)
-      offered = instance!()
-
-      {:ok, %{profile_id: owner}} =
-        walk!(person, ref, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
-
-      assert {:error, {:invalid_argument, instance}} =
-               Commit.stage_publish(person, %{profile_id: owner, need_ids: ["@ingress"]})
-
-      assert instance =~ "instance entry is offered to people"
     end
 
     test "keeps the owner's flows its edges still bind: a need's only beside its binding",
@@ -1421,11 +1363,10 @@ defmodule Sanctum.Consent.CommitTest do
   end
 
   # ===========================================================================
-  # Matching, instance entries, named accounts and lifetimes
+  # Matching, named accounts and lifetimes
   # ===========================================================================
 
   @attach %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
-  @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
 
   # A component whose one need attaches an openai.com key.
   defp keyed_manifest(over \\ %{}) do
@@ -1461,29 +1402,6 @@ defmodule Sanctum.Consent.CommitTest do
         over
       )
     )
-  end
-
-  defp instance!(over \\ %{}) do
-    {:ok, entry} =
-      Arca.InstanceEntries.put(
-        Arca.Test.Actor.platform(),
-        Map.merge(
-          %{
-            name: "instance-#{System.unique_integer([:positive])}",
-            kind: "api_key",
-            provider_hint: "openai.com",
-            field_names: ~s(["OPENAI_API_KEY"]),
-            destination: @inference,
-            sealed_payload: "sealed",
-            binding_digest: "sha256:instance-#{System.unique_integer([:positive])}",
-            audience: "everyone",
-            created_by: "usr_admin"
-          },
-          over
-        )
-      )
-
-    entry
   end
 
   defp rows_by_key(ctx, profile_id) do
@@ -1754,15 +1672,15 @@ defmodule Sanctum.Consent.CommitTest do
         assert why =~ "api_key"
       end
 
-      # Neither or both of an entry and an instance entry.
+      # Neither or both of an entry and a share.
       for binding <- [
             %{need: "api_key"},
-            %{need: "api_key", entry_id: a.id, instance_entry_id: "ine_x"}
+            %{need: "api_key", entry_id: a.id, share_id: "shr_x"}
           ] do
         assert {:error, {:invalid_argument, why}} =
                  Commit.preview(ctx, %{ref: ref, bindings: [binding]})
 
-        assert why =~ "exactly one of entry_id, instance_entry_id and share_id"
+        assert why =~ "exactly one of entry_id and share_id"
       end
     end
 
@@ -2305,10 +2223,11 @@ defmodule Sanctum.Consent.CommitTest do
     end
   end
 
-  describe "instance entries" do
-    setup %{ctx: ctx} do
-      {person, _user} = Sanctum.TestContext.person!(ctx)
-      {:ok, person: person}
+  describe "shares" do
+    alias Cyfr.Test.ShareFixtures
+
+    setup do
+      ShareFixtures.traders!()
     end
 
     # A component of the person's own: the install media does not ship it.
@@ -2331,203 +2250,55 @@ defmodule Sanctum.Consent.CommitTest do
       "reagent:local.#{name}"
     end
 
-    # A component the install media ships, unmodified.
-    defp shipped!(ctx, name) do
-      Cyfr.Test.SeedBundle.isolate!()
-
-      {:ok, _} =
-        Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", name, "1.0.0",
-          manifest:
-            Map.merge(keyed_manifest(), %{
-              "name" => name,
-              "type" => "reagent",
-              "version" => "1.0.0",
-              "publisher" => "local"
-            }),
-          wasm: @wasm
-        )
-
-      "reagent:local.#{name}"
-    end
-
-    defp bind_instance(person, ref, entry),
-      do:
-        Commit.preview(person, %{
-          ref: ref,
-          bindings: [%{need: "api_key", instance_entry_id: entry.id}]
-        })
-
-    # A revoke of `entry_id` landing as the revision's transaction commits:
-    # armed once the revision's binding rows are written, run at the
-    # transaction's commit. The commit is logged after the connection is
-    # checked in, so the revoke runs wholly after the revision and before
-    # anything the commit does next.
-    def revoke_on_commit(_event, _measurements, meta, %{test: test, entry_id: entry_id}) do
-      if self() == test do
-        cond do
-          meta[:source] == "consent_vault_refs" and
-              String.starts_with?(meta[:query] || "", "INSERT") ->
-            Process.put(:a0_refs_written, true)
-
-          Process.get(:a0_refs_written) == true and meta[:query] == "commit" ->
-            Process.delete(:a0_refs_written)
-
-            revoked =
-              Task.async(fn ->
-                Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), entry_id, "needs_consent")
-              end)
-              |> Task.await(30_000)
-
-            Process.put(:a0_revoked, revoked)
-
-          true ->
-            :ok
-        end
-      end
-    end
-
-    test "is bound as a source of its own, scoped instance, and its row names it", %{
-      person: person
-    } do
-      ref = custom!(person, "commit-instance")
-      offered = instance!()
-
-      {:ok, preview} = bind_instance(person, ref, offered)
-
-      assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
-      assert values["source"] == "instance"
-      assert values["disclosed"] == false
-      assert values["name"] == offered.name
-      assert values["suggested"] == true
-
-      {:ok, %{profile_id: profile_id}} =
-        walk!(person, ref, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
-
-      assert [%{scope: "instance", instance_entry_id: id, vault_entry_id: nil}] =
-               head!(person, profile_id).vault_refs
-
-      assert id == offered.id
-    end
-
-    test "any admits a person's own component; shipped admits only the unmodified shipped one",
-         %{person: person} do
-      custom = custom!(person, "commit-custom")
-      shipped = shipped!(person, "commit-shipped")
-      any = instance!(%{component_policy: "any"})
-      only_shipped = instance!(%{component_policy: "shipped"})
-
-      assert {:ok, _} = bind_instance(person, custom, any)
-      assert {:ok, _} = bind_instance(person, shipped, any)
-      assert {:ok, _} = bind_instance(person, shipped, only_shipped)
-
-      assert {:error, {:component_not_admitted, "api_key"}} =
-               bind_instance(person, custom, only_shipped)
-    end
-
-    test "a policy tightened after preview is read again at commit", %{person: person} do
-      ref = custom!(person, "commit-tightened")
-      entry = instance!(%{component_policy: "any"})
-      decisions = %{ref: ref, bindings: [%{need: "api_key", instance_entry_id: entry.id}]}
-
-      {:ok, plan} = Plan.plan(person, %{ref: ref})
-      {:ok, preview} = Commit.preview(person, decisions)
-
-      :ok =
-        Arca.InstanceEntries.set_component_policy(
-          Arca.Test.Actor.platform(),
-          entry.id,
-          "any",
-          "shipped"
-        )
-
-      assert {:error, {:component_not_admitted, "api_key"}} =
-               Commit.commit(person, %{
-                 decisions: decisions,
-                 plan_token: plan.plan_token,
-                 proof: preview.proof,
-                 commit_digest: preview.commit_digest,
-                 expected_consent_revision: plan.expected_consent_revision
-               })
-    end
-
-    test "an entry not offered to the person, not active, whose destination misses the need, " <>
-           "or bound where the component reads the value, is refused",
-         %{person: person} do
-      ref = custom!(person, "commit-refusals")
-
-      listed = instance!(%{audience: "listed"})
-      assert {:error, {:not_offered, "api_key"}} = bind_instance(person, ref, listed)
-
-      revoked = instance!()
-
-      {:ok, _} =
-        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), revoked.id, "needs_consent")
-
-      assert {:error, {:entry_unavailable, id, "revoked"}} = bind_instance(person, ref, revoked)
-      assert id == revoked.id
-
-      elsewhere =
-        instance!(%{
-          destination:
-            ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
-        })
-
-      assert {:error, {:entry_mismatch, "api_key"}} = bind_instance(person, ref, elsewhere)
-
-      publish!(person, "commit-instance-reads", "1.0.0", keyed_manifest(%{"disclose" => true}))
-
-      assert {:error, {:disclosure_refused, "api_key"}} =
-               bind_instance(person, "reagent:local.commit-instance-reads", instance!())
-    end
-
-    test "a revoke landing as a revision commits blocks the profile, and the commit never " <>
-           "unblocks it after",
-         %{person: person} do
-      ref = custom!(person, "commit-revoke-race")
-      entry = instance!()
-      bindings = [%{need: "api_key", instance_entry_id: entry.id}]
-      {:ok, %{profile_id: profile_id, revision: 1}} = walk!(person, ref, %{bindings: bindings})
-
-      handler = {__MODULE__, :revoke_on_commit, System.unique_integer([:positive])}
-
-      :ok =
-        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_on_commit/4, %{
-          test: self(),
-          entry_id: entry.id
-        })
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      assert {:ok, %{revision: 2}} =
-               walk!(person, ref, %{bindings: bindings, origins: [:interactive, :programmatic]})
-
-      :telemetry.detach(handler)
-
-      # The revoke saw the new head and blocked its profile.
-      assert {:ok, affected} = Process.get(:a0_revoked)
-      assert {person.athanor_id, profile_id} in affected
-      assert [%{instance_entry_id: id}] = head!(person, profile_id).vault_refs
-      assert id == entry.id
-
-      # And the block stands: nothing after the revision unblocks it.
-      assert {:ok, %{status: "needs_consent"}} =
-               Arca.ProfileStorage.get(Sanctum.Context.actor(person), profile_id)
-    end
-  end
-
-  describe "shares" do
-    alias Cyfr.Test.ShareFixtures
-
-    setup do
-      ShareFixtures.traders!()
-    end
-
     defp bind_share(person, ref, share),
       do:
         Commit.preview(person.ctx, %{
           ref: ref,
           bindings: [%{need: "api_key", share_id: share.id}]
         })
+
+    # Terry's attach-only openai.com key holding `field_names`, or going
+    # where `destination` names, shared with Traders, stored at the digest
+    # its binding columns derive.
+    defp shared_key!(terry, traders, field_names, destination \\ ShareFixtures.destination()) do
+      attrs = %{
+        kind: "api_key",
+        provider_hint: "openai.com",
+        field_names: Jason.encode!(field_names),
+        destination: destination,
+        attach_only: true
+      }
+
+      {:ok, digest} =
+        Sanctum.VaultReader.binding_digest(
+          Map.merge(attrs, %{oauth_endpoints: nil, oauth_scopes: nil})
+        )
+
+      entry = Arca.Test.Shares.entry!(terry.actor, Map.put(attrs, :binding_digest, digest))
+      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+    end
+
+    # Terry's revoke landing as Alice's revision commits: armed once the
+    # revision's binding rows are written, run at the transaction's
+    # commit. The commit is logged after the connection is checked in, so
+    # the revoke runs wholly after the revision and before anything the
+    # commit does next.
+    def revoke_on_commit(_event, _measurements, meta, %{test: test, revoke: revoke}) do
+      if self() == test do
+        cond do
+          meta[:source] == "consent_vault_refs" and
+              String.starts_with?(meta[:query] || "", "INSERT") ->
+            Process.put(:refs_written, true)
+
+          Process.get(:refs_written) == true and meta[:query] == "commit" ->
+            Process.delete(:refs_written)
+            Process.put(:share_revoked, Task.async(revoke) |> Task.await(30_000))
+
+          true ->
+            :ok
+        end
+      end
+    end
 
     # Terry's binding move, landing just after Alice's commit read the share
     # and its source (`Arca.Shares.get_for_source/2`, outside any
@@ -2589,7 +2360,6 @@ defmodule Sanctum.Consent.CommitTest do
                  scope: "share",
                  share_id: share_id,
                  vault_entry_id: nil,
-                 instance_entry_id: nil,
                  via_label: nil,
                  binding_digest: digest
                }
@@ -2724,7 +2494,106 @@ defmodule Sanctum.Consent.CommitTest do
       assert chosen == share.id
     end
 
-    test "a binding names exactly one of an entry, an instance entry and a share",
+    test "a share's map is checked against its source's field names",
+         %{alice: alice, terry: terry, traders: traders} do
+      ref = custom!(alice.ctx, "commit-map-share")
+      single = shared_key!(terry, traders, ["API key"])
+      pair = shared_key!(terry, traders, ["primary", "secondary"])
+      none = shared_key!(terry, traders, [])
+
+      bind = fn share, over ->
+        Commit.preview(alice.ctx, %{
+          ref: ref,
+          bindings: [Map.merge(%{need: "api_key", share_id: share.id}, over)]
+        })
+      end
+
+      # The automatic map, from the source's one field.
+      assert {:ok, preview} = bind.(single, %{})
+      assert credential_fields(preview) == [%{"OPENAI_API_KEY" => "API key"}]
+
+      # A name the source does not hold, though the need reads it.
+      assert bind.(single, %{fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}}) ==
+               {:error, {:invalid_field_map, "api_key"}}
+
+      assert bind.(pair, %{}) == {:error, {:fields_unmapped, "api_key"}}
+      assert {:ok, preview} = bind.(pair, %{fields: %{"OPENAI_API_KEY" => "secondary"}})
+      assert credential_fields(preview) == [%{"OPENAI_API_KEY" => "secondary"}]
+
+      # A source holding no field meets no map.
+      assert bind.(none, %{}) == {:error, {:fields_unmapped, "api_key"}}
+
+      assert bind.(none, %{fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}}) ==
+               {:error, {:invalid_field_map, "api_key"}}
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(alice.ctx, ref, %{
+          bindings: [
+            %{need: "api_key", share_id: pair.id, fields: %{"OPENAI_API_KEY" => "secondary"}}
+          ]
+        })
+
+      assert %{fields: %{"OPENAI_API_KEY" => "secondary"}, scopes: []} =
+               bound_projection(alice.ctx, profile_id, ref)
+    end
+
+    test "a share whose source's destination misses the need is refused",
+         %{alice: alice, terry: terry, traders: traders} do
+      elsewhere =
+        shared_key!(
+          terry,
+          traders,
+          ["OPENAI_API_KEY"],
+          ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+        )
+
+      assert {:error, {:entry_mismatch, "api_key"}} =
+               bind_share(alice, custom!(alice.ctx, "commit-share-elsewhere"), elsewhere)
+    end
+
+    test "a revoke landing as a revision commits blocks the profile, and the commit never " <>
+           "unblocks it after",
+         %{alice: alice, terry: terry, share: share} do
+      ref = custom!(alice.ctx, "commit-share-revoke-race")
+      bindings = [%{need: "api_key", share_id: share.id}]
+
+      {:ok, %{profile_id: profile_id, revision: 1}} =
+        walk!(alice.ctx, ref, %{bindings: bindings})
+
+      handler = {__MODULE__, :revoke_on_commit, System.unique_integer([:positive])}
+
+      revoke = fn ->
+        Arca.Shares.revoke(terry.actor, share.id, Sanctum.Vault.blocked_profile_status())
+      end
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_on_commit/4, %{
+          test: self(),
+          revoke: revoke
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, %{revision: 2}} =
+               walk!(alice.ctx, ref, %{
+                 bindings: bindings,
+                 origins: [:interactive, :programmatic]
+               })
+
+      :telemetry.detach(handler)
+
+      # The revoke saw the new head and blocked its profile.
+      assert {:ok, %{blocked: blocked}} = Process.get(:share_revoked)
+      assert {alice.ctx.athanor_id, profile_id} in blocked
+      assert [%{share_id: id}] = head!(alice.ctx, profile_id).vault_refs
+      assert id == share.id
+
+      # And the block stands: nothing after the revision unblocks it.
+      assert {:ok, %{status: "needs_consent"}} =
+               Arca.ProfileStorage.get(Sanctum.Context.actor(alice.ctx), profile_id)
+    end
+
+    test "a binding names exactly one of an entry and a share",
          %{alice: alice, share: share} do
       ref = custom!(alice.ctx, "commit-share-one")
 
@@ -2734,7 +2603,7 @@ defmodule Sanctum.Consent.CommitTest do
                  bindings: [%{need: "api_key", share_id: share.id, entry_id: "vlt_x"}]
                })
 
-      assert why =~ "exactly one of entry_id, instance_entry_id and share_id"
+      assert why =~ "exactly one of entry_id and share_id"
     end
 
     test "a public profile refuses a share, whose callers are anonymous",
@@ -3281,8 +3150,8 @@ defmodule Sanctum.Consent.CommitTest do
                  "database; an edge carries one need's credentials"
     end
 
-    test "a named selection is held to its need: a provided need, a destination it misses, an " <>
-           "instance entry not offered",
+    test "a named selection is held to its need: a provided need, a destination it misses, a " <>
+           "share not offered",
          %{ctx: ctx} do
       publish!(ctx, "commit-named-provided-db", "1.0.0", %{
         "needs" => %{
@@ -3352,31 +3221,27 @@ defmodule Sanctum.Consent.CommitTest do
 
       assert accounts.(preview) == [{"Work", "own"}]
 
-      {person, _user} = Sanctum.TestContext.person!(ctx)
-      person_two = two_deps!(person)
-      person_default = %{dep: @dep_a, entry_id: key!(person).id}
-      listed = instance!(%{audience: "listed"})
+      # A key shared with Traders, as an account beside each person's own
+      # default.
+      %{alice: alice, share: share} = Cyfr.Test.ShareFixtures.traders!()
+      sam = Cyfr.Test.ShareFixtures.person!("Sam")
 
-      assert {:error, {:not_offered, "api_key"}} =
-               Commit.preview(person, %{
-                 ref: person_two,
-                 selections: [
-                   person_default,
-                   %{dep: @dep_a, instance_entry_id: listed.id, name: "Work"}
-                 ]
-               })
-
-      # One offered to the person is.
-      {:ok, preview} =
-        Commit.preview(person, %{
-          ref: person_two,
+      shared = fn person ->
+        Commit.preview(person.ctx, %{
+          ref: two_deps!(person.ctx),
           selections: [
-            person_default,
-            %{dep: @dep_a, instance_entry_id: instance!().id, name: "Work"}
+            %{dep: @dep_a, entry_id: key!(person.ctx).id},
+            %{dep: @dep_a, share_id: share.id, name: "Work"}
           ]
         })
+      end
 
-      assert accounts.(preview) == [{"Work", "instance"}]
+      # Sam is in no group Terry shared with.
+      assert {:error, {:share_not_offered, "api_key"}} = shared.(sam)
+
+      # Alice is: the share is taken as the account.
+      {:ok, preview} = shared.(alice)
+      assert accounts.(preview) == [{"Work", "share"}]
     end
 
     test "a named once is consumed apart from its default, carried across a revision and a " <>

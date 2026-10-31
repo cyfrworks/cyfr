@@ -27,13 +27,12 @@ import (
 func init() {
 	profileGrantCmd.Flags().StringSlice("entry", nil,
 		"Bind a need of the app: need[|account]=id[:lifetime] (repeatable). An id beginning "+
-			"ine_ is an instance entry, shr_ a key shared with you, any other an entry of the "+
-			"athanor; |account names an "+
+			"shr_ is a key shared with you, any other an entry of the athanor; |account names an "+
 			"account beside the need's default; the lifetime is standing (the default), 5m, 1h, "+
 			"session or once")
 	profileGrantCmd.Flags().StringSlice("selection", nil,
 		"Fill a dependency's credential: dep[|account]=id[:lifetime] (repeatable). An id "+
-			"beginning vlt_, ine_ or shr_ names an entry, anything else the label of the dependency's "+
+			"beginning vlt_ or shr_ names an entry, anything else the label of the dependency's "+
 			"profile that lends its key; |account names an account beside the edge's default, "+
 			"which names an entry; the lifetime is as --entry's")
 	profileGrantCmd.Flags().Bool("get-head-only", false,
@@ -163,8 +162,7 @@ var profileGrantCmd = &cobra.Command{
 		"that version asks for.",
 	Example: `  cyfr profile grant c:moonmoon69.gmail
   cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123
-  cyfr profile grant c:local.model --entry api_key=ine_abc123:1h
-  cyfr profile grant c:local.model --entry api_key=shr_abc123
+  cyfr profile grant c:local.model --entry api_key=shr_abc123:1h
   cyfr profile grant f:local.report --selection reagent:local.db=vlt_def456:once
   cyfr profile grant f:local.report --selection 'reagent:local.db|Supabase 2=vlt_def789'
   cyfr profile grant f:local.daily-report --origin interactive --origin schedule`,
@@ -427,7 +425,7 @@ func parseSlotFlag(flag, pair string) (slotFlag, error) {
 	}
 	if named && flag == "--selection" && selectionChoice(value).label {
 		return slotFlag{}, fmt.Errorf("%s %q names the account %s by a profile's label; a named "+
-			"account names an entry, an id beginning vlt_, ine_ or shr_", flag, pair, account)
+			"account names an entry, an id beginning vlt_ or shr_", flag, pair, account)
 	}
 	return slotFlag{target: target, account: account, value: value, choice: choice}, nil
 }
@@ -553,27 +551,20 @@ func lifetimeOf(choice string, chooser grantChooser) (string, string, error) {
 }
 
 // idChoice is what a binding or selection names: an entry of the athanor,
-// an instance entry, a key shared with the person, or (a selection only)
-// a lending profile's label.
+// a key shared with the person, or (a selection only) a lending profile's
+// label.
 type idChoice struct {
-	value    string
-	instance bool
-	share    bool
-	label    bool
+	value string
+	share bool
+	label bool
 }
 
 func entryChoice(id string) idChoice {
-	return idChoice{
-		value:    id,
-		instance: strings.HasPrefix(id, "ine_"),
-		share:    strings.HasPrefix(id, "shr_"),
-	}
+	return idChoice{value: id, share: strings.HasPrefix(id, "shr_")}
 }
 
 func selectionChoice(value string) idChoice {
 	switch {
-	case strings.HasPrefix(value, "ine_"):
-		return idChoice{value: value, instance: true}
 	case strings.HasPrefix(value, "shr_"):
 		return idChoice{value: value, share: true}
 	case strings.HasPrefix(value, "vlt_"):
@@ -586,8 +577,6 @@ func selectionChoice(value string) idChoice {
 func bindingItem(need string, id idChoice, kind, until string) ops.ProfilePreviewArgsDecisionsBindingsItem {
 	item := ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(need)}
 	switch {
-	case id.instance:
-		item.InstanceEntryId = ops.Value(id.value)
 	case id.share:
 		item.ShareId = ops.Value(id.value)
 	default:
@@ -609,8 +598,6 @@ func selectionItem(row depRow, need string, id idChoice, kind, until string) ops
 	switch {
 	case id.label:
 		item.Label = ops.Value(id.value)
-	case id.instance:
-		item.InstanceEntryId = ops.Value(id.value)
 	case id.share:
 		item.ShareId = ops.Value(id.value)
 	default:
@@ -667,8 +654,6 @@ func readNeed(raw any) (needRow, bool) {
 	if suggested, ok := m["suggested"].(map[string]any); ok {
 		if id := str(suggested["entry_id"]); id != "" {
 			row.suggested = &idChoice{value: id}
-		} else if id := str(suggested["instance_entry_id"]); id != "" {
-			row.suggested = &idChoice{value: id, instance: true}
 		} else if id := str(suggested["share_id"]); id != "" {
 			row.suggested = &idChoice{value: id, share: true}
 		}
@@ -724,10 +709,10 @@ func (d depRow) provided() bool {
 	return false
 }
 
-// candidateID is the id a candidate is chosen by: its entry's, its
-// instance entry's or its share's.
+// candidateID is the id a candidate is chosen by: its entry's or its
+// share's.
 func candidateID(c map[string]any) string {
-	for _, key := range []string{"entry_id", "instance_entry_id", "share_id"} {
+	for _, key := range []string{"entry_id", "share_id"} {
 		if id := str(c[key]); id != "" {
 			return id
 		}
@@ -773,8 +758,6 @@ func readHeads(plan map[string]any) []headBinding {
 		switch {
 		case str(m["entry_id"]) != "":
 			head.id = idChoice{value: str(m["entry_id"])}
-		case str(m["instance_entry_id"]) != "":
-			head.id = idChoice{value: str(m["instance_entry_id"]), instance: true}
 		case str(m["share_id"]) != "":
 			head.id = idChoice{value: str(m["share_id"]), share: true}
 		case str(m["label"]) != "":
@@ -1133,8 +1116,6 @@ func askEntry(need needRow, lenders []map[string]any, chooser grantChooser) (*id
 		}
 		if id := str(c["entry_id"]); id != "" {
 			options = append(options, prompt.Option{Label: label, Value: "vlt:" + id})
-		} else if id := str(c["instance_entry_id"]); id != "" {
-			options = append(options, prompt.Option{Label: label, Value: "ine:" + id})
 		} else if id := str(c["share_id"]); id != "" {
 			options = append(options, prompt.Option{Label: label, Value: "shr:" + id})
 		}
@@ -1157,8 +1138,6 @@ func askEntry(need needRow, lenders []map[string]any, chooser grantChooser) (*id
 	switch kind {
 	case "vlt":
 		return &idChoice{value: id}, nil
-	case "ine":
-		return &idChoice{value: id, instance: true}, nil
 	case "shr":
 		return &idChoice{value: id, share: true}, nil
 	case "label":
@@ -1737,8 +1716,6 @@ func removalLine(item map[string]any) string {
 		entry = str(item["name"])
 	case str(item["entry_id"]) != "":
 		entry = str(item["entry_id"])
-	case str(item["instance_entry_id"]) != "":
-		entry = str(item["instance_entry_id"])
 	case str(item["share_id"]) != "":
 		entry = str(item["share_id"])
 	default:
@@ -1782,15 +1759,12 @@ func credentialSentence(node string, values map[string]any) string {
 }
 
 // sourceWords says whose credential a binding is: the athanor's own entry,
-// an entry the instance offers, a key another person shares (its name
-// already says whose: "Shared by" its owner), or the public configuration
-// the publisher of node ships.
+// a key another person shares (its name already says whose: "Shared by"
+// its owner), or the public configuration the publisher of node ships.
 func sourceWords(source, node string) string {
 	switch source {
 	case "own":
 		return "an entry of this athanor"
-	case "instance":
-		return "provided by this instance"
 	case "share":
 		return "a key shared with you"
 	case "provided":

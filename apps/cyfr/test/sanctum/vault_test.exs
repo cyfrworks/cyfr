@@ -146,7 +146,6 @@ defmodule Sanctum.VaultTest do
         [
           %{
             binding_key: consumer <> "|@ingress|default",
-            scope: "athanor",
             vault_entry_id: entry_id,
             binding_digest: binding_digest
           }
@@ -527,28 +526,8 @@ defmodule Sanctum.VaultTest do
       assert {:ok, [_, _]} = Arca.VaultDefaults.list(theirs)
     end
 
-    test "a default naming an instance entry is answered as one", %{ctx: ctx} do
-      {:ok, instance} =
-        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-          name: "instance-#{System.unique_integer([:positive])}",
-          kind: "api_key",
-          provider_hint: "openai.com",
-          destination:
-            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-          sealed_payload: "sealed",
-          binding_digest: "sha256:instance",
-          audience: "everyone",
-          created_by: "usr_admin"
-        })
-
-      {:ok, _default} =
-        Arca.VaultDefaults.set(actor(ctx), "openai.com", %{instance_entry_id: instance.id})
-
-      assert {:ok, %{"openai.com" => %{instance_entry_id: instance.id}}} == Vault.defaults(ctx)
-    end
-
-    test "set_default moves a provider's default to an entry of the athanor or an offered " <>
-           "instance entry, and moves no consent",
+    test "set_default moves a provider's default to an entry of the athanor, and moves no " <>
+           "consent",
          %{ctx: ctx} do
       {person, _user} = Sanctum.TestContext.person!(ctx)
       first = create!(person, %{provider_hint: "openai.com"})
@@ -559,27 +538,6 @@ defmodule Sanctum.VaultTest do
 
       assert id == second.id
       assert {:ok, %{"openai.com" => %{vault_entry_id: ^id}}} = Vault.defaults(person)
-
-      {:ok, instance} =
-        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-          name: "instance-#{System.unique_integer([:positive])}",
-          kind: "api_key",
-          provider_hint: "openai.com",
-          destination:
-            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-          sealed_payload: "sealed",
-          binding_digest: "sha256:instance",
-          audience: "everyone",
-          created_by: "usr_admin"
-        })
-
-      assert {:ok, %{provider_hint: "openai.com", instance_entry_id: instance_id}} =
-               Vault.set_default(person, %{
-                 provider_hint: "openai.com",
-                 instance_entry_id: instance.id
-               })
-
-      assert instance_id == instance.id
 
       # A profile bound to the first entry stays bound to it.
       profile = mint_profile_with_ref(person, first.id, "sha256:bound")
@@ -594,8 +552,8 @@ defmodule Sanctum.VaultTest do
       assert bound == first.id
     end
 
-    test "set_default refuses an entry of another provider, one not offered or not active, " <>
-           "and a request naming neither or both",
+    test "set_default refuses an entry of another provider or not active, a share and the " <>
+           "entry it names, and a request naming no provider or no entry",
          %{ctx: ctx} do
       {person, _user} = Sanctum.TestContext.person!(ctx)
       anthropic = create!(person, %{provider_hint: "anthropic.com"})
@@ -606,7 +564,6 @@ defmodule Sanctum.VaultTest do
 
       for params <- [
             %{provider_hint: "openai.com"},
-            %{provider_hint: "openai.com", entry_id: openai.id, instance_entry_id: "ine_x"},
             %{provider_hint: "", entry_id: openai.id},
             %{entry_id: openai.id}
           ] do
@@ -614,24 +571,17 @@ defmodule Sanctum.VaultTest do
                "#{inspect(params)} was accepted"
       end
 
-      {:ok, listed} =
-        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-          name: "listed-#{System.unique_integer([:positive])}",
-          kind: "api_key",
-          provider_hint: "openai.com",
-          destination:
-            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-          sealed_payload: "sealed",
-          binding_digest: "sha256:listed",
-          audience: "listed",
-          created_by: "usr_admin"
-        })
+      # A share is never a provider default: neither the share offered to
+      # Alice nor the entry it names is an entry of her athanor.
+      %{alice: alice, entry: shared, share: share} = Cyfr.Test.ShareFixtures.traders!()
 
-      assert {:error, :not_offered} =
-               Vault.set_default(person, %{
-                 provider_hint: "openai.com",
-                 instance_entry_id: listed.id
-               })
+      for entry_id <- [share.id, shared.id] do
+        assert {:error, :not_found} =
+                 Vault.set_default(alice.ctx, %{provider_hint: "openai.com", entry_id: entry_id})
+      end
+
+      assert {:ok, alice_defaults} = Vault.defaults(alice.ctx)
+      refute Map.has_key?(alice_defaults, "openai.com")
 
       {:ok, _} = Vault.revoke(person, openai.id)
 

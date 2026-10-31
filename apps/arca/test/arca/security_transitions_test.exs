@@ -733,29 +733,12 @@ defmodule Arca.SecurityTransitionsTest do
       assert change.member_user_ids[pair.id] == [peer.id]
     end
 
-    test "removes the person from every instance audience and ends their offers both ways" do
+    test "ends their offers both ways" do
       {user, own} = owner!()
       shared = group!()
       peer = person!()
       seat!(shared.id, user.id)
       seat!(shared.id, peer.id)
-
-      {:ok, listed} =
-        Arca.InstanceEntries.put(
-          server(),
-          %{
-            name: "listed-#{uniq()}",
-            kind: "api_key",
-            provider_hint: "openai.com",
-            destination:
-              ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
-            sealed_payload: "sealed",
-            binding_digest: "sha256:i0",
-            audience: "listed",
-            created_by: "usr_admin"
-          },
-          [user.id, peer.id]
-        )
 
       mine = %Prima.Actor{athanor_id: own.id, user_id: user.id}
       theirs = %Prima.Actor{athanor_id: shared.id, user_id: peer.id}
@@ -780,16 +763,8 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
-      assert change.instance_audiences_left == 1
       assert change.ended_offer_ids == Enum.sort([sent, incoming])
       refute Map.has_key?(change, :ended_offers)
-
-      # The peer stays listed; the denied person is offered nothing.
-      assert {:ok, [%{members: [member]}]} = Arca.InstanceEntries.list(server())
-      assert member == peer.id
-      assert {:ok, []} = Arca.InstanceEntries.offered(mine, [])
-      assert {:ok, [_]} = Arca.InstanceEntries.offered(%Prima.Actor{user_id: peer.id}, [])
-      assert listed.audience == "listed"
 
       assert {:ok, [%{status: "withdrawn"}]} = Arca.FileOffers.outbox(mine)
       assert {:ok, [%{status: "declined"}]} = Arca.FileOffers.inbox(mine)

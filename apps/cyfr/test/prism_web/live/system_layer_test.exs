@@ -4436,15 +4436,14 @@ defmodule PrismWeb.SystemLayerTest do
   # ---------------------------------------------------------------------------
 
   describe "a page's repeat the operation refuses" do
-    setup :asking_admin
+    setup :asking_person
 
     @withdraw_failed "The approval could not be withdrawn; it ends at its expiry."
 
-    # A platform administrator on a page that asks for changes through its
-    # layer and repeats each once confirmed (`Asker`).
-    defp asking_admin(%{conn: conn}) do
+    # A person on a page that asks for changes through its layer and
+    # repeats each once confirmed (`Asker`), in their own athanor.
+    defp asking_person(%{conn: conn}) do
       user = test_user()
-      {:ok, _} = Sanctum.TestContext.ensure_platform(user.user_id)
       conn = log_in_user(conn, user)
       athanor = seated_athanor()
 
@@ -4453,37 +4452,31 @@ defmodule PrismWeb.SystemLayerTest do
           session: %{"athanor_id" => athanor.id, "test" => self()}
         )
 
-      %{view: view, ctx: %{person_context(user, athanor) | platform_admin: true}, user: user}
+      %{view: view, ctx: person_context(user, athanor), user: user}
     end
 
-    # An instance entry under the platform's own actor, its creation proven.
-    defp made_entry!(ctx, over) do
-      params =
-        Map.merge(
-          %{
-            name: "refused-repeat-#{System.unique_integer([:positive])}",
-            kind: "api_key",
-            provider_hint: "example.com",
-            fields: %{"API_KEY" => "sk-refused-repeat"},
-            destination: %{
-              "hosts" => ["api.example.com"],
-              "methods" => ["GET"],
-              "paths" => ["/v1/models"]
-            },
-            audience: "everyone"
-          },
-          over
+    # A key of the person's own athanor shared with a group they sit in
+    # (`first`), and a second group of theirs (`second`).
+    defp made_share!(ctx) do
+      actor = Context.actor(ctx)
+      [first, second] = for _group <- 1..2, do: Arca.Test.Shares.group!([ctx.user_id])
+      entry = Arca.Test.Shares.entry!(actor)
+      share = Arca.Test.Shares.share!(actor, entry.id, %{audience: "group", group_id: first.id})
+      %{share: share, first: first, second: second}
+    end
+
+    # The share's stored audience moved to its second group, as another
+    # session of the person moves it, with no record of this page's.
+    defp moved!(ctx, %{share: share, first: first, second: second}) do
+      {:ok, _moved} =
+        Arca.Shares.set_audience(
+          Context.actor(ctx),
+          share.id,
+          %{audience: "group", group_id: first.id},
+          %{audience: "group", group_id: second.id}
         )
 
-      confirmed =
-        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
-          operation: "instance_entry.create",
-          arguments: params,
-          resource: params.name
-        })
-
-      {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
-      entry
+      :ok
     end
 
     defp open_records(ctx) do
@@ -4519,24 +4512,36 @@ defmodule PrismWeb.SystemLayerTest do
       :sys.resume(view.pid)
     end
 
-    # A widening of an entry's policy, asked by the page and proven, whose
-    # entry is deleted before the page repeats it: the repeat is refused
-    # before the operation asks for its proof.
-    defp refused_policy_repeat!(view, ctx, also \\ fn -> :ok end) do
-      entry = made_entry!(ctx, %{component_policy: "shipped"})
-      tag = {:policy, entry.id}
-      args = %{"entry_id" => entry.id, "component_policy" => "any"}
-      ref = asked!(view, ctx, tag, "instance_entry/set_component_policy", args)
+    # A widening of a share's audience to everyone, which the page asks
+    # for and holds, its share made first.
+    defp asked_widening!(view, ctx) do
+      made = made_share!(ctx)
+      tag = {:audience, made.share.id}
+
+      args = %{
+        "share_id" => made.share.id,
+        "audience" => "everyone",
+        "expected" => %{"audience" => "group", "group_id" => made.first.id}
+      }
+
+      Map.merge(made, %{tag: tag, ref: asked!(view, ctx, tag, "share/set_audience", args)})
+    end
+
+    # A widening of a share's audience, asked by the page and proven, whose
+    # stored audience moves before the page repeats it: the repeat is
+    # refused before the operation asks for its proof.
+    defp refused_widening_repeat!(view, ctx, also \\ fn -> :ok end) do
+      %{tag: tag, ref: ref} = made = asked_widening!(view, ctx)
 
       proven_with!(view, ctx, ref, fn ->
-        {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+        moved!(ctx, made)
         also.()
       end)
 
       # The page's answer is the operation's own, whatever became of the
-      # record: the entry is gone.
-      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
-      %{ref: ref, sentence: escaped(PrismWeb.Ops.error_message(:not_found))}
+      # record: the audience it was decided against moved.
+      assert_receive {:asker, ^tag, {:error, {:conflict, _sentence} = reason}}, 3_000
+      %{ref: ref, sentence: escaped(PrismWeb.Ops.error_message(reason))}
     end
 
     defp escaped(text), do: text |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
@@ -4638,7 +4643,7 @@ defmodule PrismWeb.SystemLayerTest do
     test "the record is cancelled, the prompt shows the refusal, the secret leaves the page, " <>
            "and the page's answer is the operation's",
          %{view: view, ctx: ctx} do
-      %{ref: ref, sentence: sentence} = refused_policy_repeat!(view, ctx)
+      %{ref: ref, sentence: sentence} = refused_widening_repeat!(view, ctx)
 
       wait_until(fn -> record_state(ctx, ref) == "cancelled" end, 2_000, "the record cancelled")
       refute page_state(view) =~ "cnf_", "the page still holds the secret of a refused repeat"
@@ -4654,18 +4659,19 @@ defmodule PrismWeb.SystemLayerTest do
     test "a cancel answered not_pending, the record spent before the refusal, shows the " <>
            "refusal alone",
          %{view: view, ctx: ctx} do
-      entry = made_entry!(ctx, %{audience: "listed", members: [ctx.user_id]})
-      typed = "nobody-#{System.unique_integer([:positive])}@example.com"
-      tag = {:audience, entry.id}
+      %{share: share, first: first} = made_share!(ctx)
+      # A group the person does not sit in.
+      elsewhere = Arca.Test.Shares.group!()
+      tag = {:audience, share.id}
 
       args = %{
-        "entry_id" => entry.id,
-        "audience" => "listed",
-        "members" => [ctx.user_id, typed],
-        "expected" => %{"audience" => "listed", "members" => [ctx.user_id]}
+        "share_id" => share.id,
+        "audience" => "group",
+        "group_id" => elsewhere.id,
+        "expected" => %{"audience" => "group", "group_id" => first.id}
       }
 
-      ref = asked!(view, ctx, tag, "instance_entry/set_audience", args)
+      ref = asked!(view, ctx, tag, "share/set_audience", args)
       Sanctum.TestContext.prove!(ctx, ref)
 
       # The proof is spent by the widening, which the store then refuses:
@@ -4677,7 +4683,7 @@ defmodule PrismWeb.SystemLayerTest do
       render(view)
       html = render(view)
       assert html =~ "Refused: " <> escaped(PrismWeb.Ops.error_message(reason))
-      assert html =~ "person_unknown"
+      assert html =~ "not_member"
       refute html =~ "could not be withdrawn"
     end
 
@@ -4685,7 +4691,7 @@ defmodule PrismWeb.SystemLayerTest do
            "its expiry; the page's answer is unchanged",
          %{view: view, ctx: ctx} do
       %{ref: ref, sentence: sentence} =
-        refused_policy_repeat!(view, ctx, &hide_confirmations!/0)
+        refused_widening_repeat!(view, ctx, &hide_confirmations!/0)
 
       wait_until(
         fn -> render(view) =~ @withdraw_failed end,
@@ -4711,7 +4717,7 @@ defmodule PrismWeb.SystemLayerTest do
         handler = order_the_release!(view_pid, order)
         on_exit(fn -> :telemetry.detach(handler) end)
 
-        %{ref: ref, sentence: sentence} = refused_policy_repeat!(view, ctx)
+        %{ref: ref, sentence: sentence} = refused_widening_repeat!(view, ctx)
         assert_receive {:ordered, ^order, ^ref}, 5_000
         :ok = :telemetry.detach(handler)
 
@@ -4769,26 +4775,23 @@ defmodule PrismWeb.SystemLayerTest do
       do:
         Arca.Repo.query!("ALTER TABLE pending_confirmations_gone RENAME TO pending_confirmations")
 
-    # A policy widening the page asks for and holds, its entry made first.
+    # A widening the page asks for and holds, with its record's row.
     defp held_widening!(view, ctx) do
-      entry = made_entry!(ctx, %{component_policy: "shipped"})
-      tag = {:policy, entry.id}
-      args = %{"entry_id" => entry.id, "component_policy" => "any"}
-      ref = asked!(view, ctx, tag, "instance_entry/set_component_policy", args)
+      %{ref: ref} = made = asked_widening!(view, ctx)
       {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
-      %{entry: entry, tag: tag, ref: ref, row: row}
+      Map.put(made, :row, row)
     end
 
     test "a release whose cancel failed never replaces the cancelled fact the prompt already " <>
            "shows",
          %{view: view, ctx: ctx} do
-      %{entry: entry, tag: tag, ref: ref, row: row} = held_widening!(view, ctx)
+      %{tag: tag, ref: ref, row: row} = made = held_widening!(view, ctx)
       cancelled = cancelled_fact(view, row)
 
       # Held still, the page is proven; the stream's confirmed fact is
       # queued for it, and then the record's cancelled fact behind it. The
-      # entry goes, so the repeat is refused, and the store's records go,
-      # so the release's cancel fails, and not as `not_pending`.
+      # share's audience moves, so the repeat is refused, and the store's
+      # records go, so the release's cancel fails, and not as `not_pending`.
       :sys.suspend(view.pid)
       Sanctum.TestContext.prove!(ctx, ref)
 
@@ -4798,14 +4801,14 @@ defmodule PrismWeb.SystemLayerTest do
         "the confirmed fact queued"
       )
 
-      {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+      moved!(ctx, made)
       hide_confirmations!()
       deliver!(view, cancelled)
       :sys.resume(view.pid)
 
       # The page repeats once approved; the repeat is refused, and its
       # release's outcome reaches the prompt after the cancelled fact did.
-      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+      assert_receive {:asker, ^tag, {:error, {:conflict, _sentence}}}, 3_000
 
       wait_until(
         fn -> is_nil(queued(view.pid, outcome_for(ref))) end,
@@ -4827,17 +4830,17 @@ defmodule PrismWeb.SystemLayerTest do
     test "a record's cancelled fact heard after a release whose cancel failed replaces what " <>
            "the prompt says",
          %{view: view, ctx: ctx} do
-      %{entry: entry, tag: tag, ref: ref, row: row} = held_widening!(view, ctx)
+      %{tag: tag, ref: ref, row: row} = made = held_widening!(view, ctx)
       cancelled = cancelled_fact(view, row)
 
       proven_with!(view, ctx, ref, fn ->
-        {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+        moved!(ctx, made)
         hide_confirmations!()
       end)
 
       # The repeat is refused and its cancel fails: the prompt says the
       # approval ends at its expiry.
-      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+      assert_receive {:asker, ^tag, {:error, {:conflict, _sentence}}}, 3_000
 
       wait_until(
         fn -> render(view) =~ @withdraw_failed end,
@@ -4878,15 +4881,15 @@ defmodule PrismWeb.SystemLayerTest do
       assert {:ok, %{subject: %{name: "n", field: "API_KEY"} = subject}} = Prompt.validate(vault)
       refute Map.has_key?(subject, :target)
 
-      instance = %{
-        target: :instance,
+      elsewhere = %{
+        target: :elsewhere,
         operation: :create,
         arguments: %{"name" => "n", "provider_hint" => "openai.com"}
       }
 
       for subject <- [
-            Map.merge(vault.subject, instance),
-            Map.put(vault.subject, :target, :instance),
+            Map.merge(vault.subject, elsewhere),
+            Map.put(vault.subject, :target, :elsewhere),
             Map.put(vault.subject, :target, :vault)
           ] do
         assert {:error, :invalid_prompt} = Prompt.validate(%{vault | subject: subject}),

@@ -446,7 +446,6 @@ defmodule Cyfr.Test.AttemptFixtures do
     consent_id =
       head!(ctx, profile.id, source, %{
         binding_key: binding_key,
-        scope: "athanor",
         vault_entry_id: entry.id,
         binding_digest: digest,
         lifetime: lifetime

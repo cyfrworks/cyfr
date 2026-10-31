@@ -10,9 +10,8 @@ defmodule Sanctum.Providers.Vault do
   (`used_by`, `null` when they cannot be read), beside the athanor's
   default per provider, an object keyed by provider hint naming one entry
   by id, and
-  `set_default` makes one of the athanor's entries, or an instance entry
-  offered to the caller, a provider's default: what a consent suggests,
-  binding nothing. `status`
+  `set_default` makes one of the athanor's entries a provider's default:
+  what a consent suggests, binding nothing. `status`
   answers each living entry's name, kind, status, created and updated
   times and whether a consent binds it, under no consent class, and never
   a value or a field.
@@ -104,14 +103,8 @@ defmodule Sanctum.Providers.Vault do
               description: "The provider whose default this becomes (e.g. 'openai.com')"
             ),
             Arg.new("entry_id", :string,
-              description:
-                "An entry of the athanor (vlt_…); name exactly one of entry_id and " <>
-                  "instance_entry_id"
-            ),
-            Arg.new("instance_entry_id", :string,
-              description:
-                "An instance entry offered to you (ine_…); name exactly one of entry_id and " <>
-                  "instance_entry_id"
+              required: true,
+              description: "The entry of the athanor that becomes the default (vlt_…)"
             )
           ],
           kind: :write,
@@ -317,12 +310,11 @@ defmodule Sanctum.Providers.Vault do
   end
 
   # The default a consent suggests for a provider: one of the athanor's
-  # entries or an offered instance entry. It binds nothing.
+  # entries. It binds nothing.
   def handle(%Context{} = ctx, %{"action" => "set_default"} = args) do
     params =
       %{provider_hint: args["provider_hint"]}
       |> Prima.MapUtil.put_present(:entry_id, args["entry_id"])
-      |> Prima.MapUtil.put_present(:instance_entry_id, args["instance_entry_id"])
 
     case Vault.set_default(ctx, params) do
       {:ok, default} -> {:ok, %{status: "default_set", default: default}}
@@ -530,8 +522,6 @@ defmodule Sanctum.Providers.Vault do
   defp fmt({:provider_mismatch, hint}) when is_binary(hint),
     do: "provider_mismatch: the entry is not of the provider #{hint}"
 
-  defp fmt(:not_offered), do: "not_offered: that instance entry is not offered to you"
-
   # The caller's standing, refused where the entry is written
   # (`Sanctum.Issuance`, held from a paired device): a standing refusal in
   # its own sentence, never an unavailable store.
@@ -627,7 +617,6 @@ defmodule Sanctum.Providers.Vault do
   defp destination_refusal({:invalid_list, field}), do: "#{field} is a list"
   defp destination_refusal({:empty, field}), do: "#{field}, when present, is not empty"
   defp destination_refusal({:too_many, field}), do: "#{field} names too many entries"
-  defp destination_refusal({:required, field}), do: "#{field} is required"
   defp destination_refusal(_other), do: "it is outside the destination grammar"
 
   defp action_enum, do: Prima.Provider.action_enum(definition())

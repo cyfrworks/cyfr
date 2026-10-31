@@ -43,18 +43,6 @@ defmodule PrismWeb.VaultLive do
   neither. The MCP servers that read an entry through a `vault:` header
   are named on its row too.
 
-  "Provided by this instance" lists the instance entries offered to the
-  person (`instance_entry.offered`): each one's provider, destination and
-  component policy, and how many requests the person made through it
-  today, never anyone else's count; when that reached the person's own
-  daily cap, it says the limit is reached and resets at midnight UTC,
-  when the day a claim counts on ends. "Use by default for <provider>" makes
-  one the athanor's default for its provider (`vault.set_default`), which
-  a consent of that provider then suggests in this athanor alone. The
-  section reads again on every `Cyfr.Bus.instance_entries/0`
-  announcement, which names an entry and a kind and nothing the person
-  is not offered.
-
   Share, on an entry the store would share (`Arca.Shares.eligible/1`'s
   rule: active, attach-only, of a kind in
   `Prima.CredentialKinds.shareable/0`, with a destination naming its
@@ -108,7 +96,6 @@ defmodule PrismWeb.VaultLive do
     if connected?(socket) do
       actor = Sanctum.Context.actor(socket.assigns[:context])
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.vault_changed(actor))
-      Cyfr.Bus.subscribe_global(Cyfr.Bus.instance_entries())
       Cyfr.Bus.subscribe_global(Cyfr.Bus.shares())
     end
 
@@ -118,8 +105,6 @@ defmodule PrismWeb.VaultLive do
       |> assign(:active_nav, "vault")
       |> assign(:entries, [])
       |> assign(:defaults, %{})
-      |> assign(:offered, [])
-      |> assign(:offered_error, nil)
       |> assign(:shares, [])
       |> assign(:shares_error, nil)
       |> assign(:shared_with_you, [])
@@ -400,28 +385,6 @@ defmodule PrismWeb.VaultLive do
   end
 
   # ---------------------------------------------------------------------------
-  # Events — provided by this instance
-  # ---------------------------------------------------------------------------
-
-  # The athanor's default for the provider becomes this instance entry: a
-  # consent of that provider here suggests it, and binds nothing until the
-  # person commits it.
-  def handle_event("use_by_default", %{"id" => id, "provider" => provider}, socket) do
-    args = %{"provider_hint" => provider, "instance_entry_id" => id}
-
-    case call_tool(socket, "vault/set_default", args) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> fetch_entries()
-         |> put_flash(:info, "Used by default for #{provider} in this athanor.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Not made the default: #{fmt(reason)}")}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # PubSub — the callback landing an OAuth grant refreshes the list
   # ---------------------------------------------------------------------------
 
@@ -448,7 +411,6 @@ defmodule PrismWeb.VaultLive do
     {:noreply,
      socket
      |> fetch_entries()
-     |> fetch_offered()
      |> fetch_groups()
      |> fetch_shares()
      |> fetch_shared_with_you()
@@ -459,13 +421,6 @@ defmodule PrismWeb.VaultLive do
 
   def handle_info(%Cyfr.Bus.VaultEntryChanged{}, socket) do
     {:noreply, socket |> fetch_entries() |> assign(:pending_grant, nil)}
-  end
-
-  # An instance entry changed somewhere on this instance: what is offered
-  # to this person is read again under their own context, and the
-  # defaults with it, since a deleted entry is no athanor's default.
-  def handle_info(%Cyfr.Bus.InstanceEntryChanged{}, socket) do
-    {:noreply, socket |> fetch_offered() |> fetch_entries()}
   end
 
   # A share changed somewhere on this CYFR: the announcement names it and
@@ -555,20 +510,6 @@ defmodule PrismWeb.VaultLive do
       {:error, reason} ->
         Logger.warning("[VaultLive] vault/list failed: #{fmt(reason)}")
         assign(socket, entries: [], defaults: %{})
-    end
-  end
-
-  # The instance entries offered to this person, with their own use today:
-  # an entry not offered to them is never read, so never shown. A read that
-  # failed says so, and is never drawn as nothing offered.
-  defp fetch_offered(socket) do
-    case fetch_list(socket, "instance_entry/offered", :entries) do
-      {:ok, offered} ->
-        assign(socket, offered: offered, offered_error: nil)
-
-      {:error, message} ->
-        Logger.warning("[VaultLive] instance_entry/offered failed: #{message}")
-        assign(socket, offered: [], offered_error: message)
     end
   end
 
@@ -884,10 +825,6 @@ defmodule PrismWeb.VaultLive do
     do: Map.get(defaults, provider) == target
 
   defp default?(_defaults, _provider, _target), do: false
-
-  defp policy_label("any"), do: "Any consented component"
-  defp policy_label("shipped"), do: "Unmodified shipped components"
-  defp policy_label(other), do: to_string(other)
 
   defp shared_provider(%{provider_hint: provider}) when provider not in [nil, ""], do: provider
   defp shared_provider(_offer), do: "A shared key"
@@ -1317,79 +1254,6 @@ defmodule PrismWeb.VaultLive do
               <div class="text-xs text-gray-500" data-test="shared-use">
                 Your use: {used_today(offer.used_today)}
               </div>
-            </li>
-          </ul>
-        </section>
-      </.card>
-
-      <%!-- Provided by this instance: the instance entries offered to this person --%>
-      <.card>
-        <section data-test="instance-offered" class="space-y-2">
-          <h3 class="text-sm font-medium text-gray-400">Provided by this instance</h3>
-          <p class="text-xs text-gray-500">
-            Accounts this instance's administrator offers to you. Each is attach-only: its value
-            is never handed to a component, and CYFR attaches it to requests bound for its
-            destination. Your use today counts your own requests alone.
-          </p>
-          <p
-            :if={@offered_error}
-            role="alert"
-            class="text-xs text-red-400"
-            data-test="instance-offered-unread"
-          >
-            This instance's entries could not be read: {@offered_error}
-          </p>
-          <div
-            :if={!@loading && is_nil(@offered_error) && @offered == []}
-            class="text-xs text-gray-500"
-          >
-            This instance offers you no entry.
-          </div>
-          <ul :if={@offered != []} class="divide-y divide-gray-800">
-            <li
-              :for={offer <- @offered}
-              class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
-              data-test="offered-entry"
-              data-id={offer.id}
-            >
-              <div class="space-y-1">
-                <div>
-                  <span class="font-medium">{offer.name}</span>
-                  <span class="text-xs text-gray-500">· {offer.provider_hint}</span>
-                </div>
-                <div class="font-mono text-xs" data-test="offered-destination">
-                  {destination_line(offer.destination)}
-                </div>
-                <div class="text-xs text-gray-500" data-test="offered-policy">
-                  {policy_label(offer.component_policy)}
-                </div>
-                <div class="text-xs text-gray-500" data-test="offered-use">
-                  Your use: {used_today(offer.used_today)}
-                  <span :if={offer.cap_reached} data-test="offered-cap-reached">
-                    Your daily limit is reached; it resets at midnight UTC.
-                  </span>
-                </div>
-              </div>
-              <span
-                :if={default?(@defaults, offer.provider_hint, %{instance_entry_id: offer.id})}
-                class="text-xs text-emerald-400"
-                data-test="offered-default"
-              >
-                default for {offer.provider_hint}
-              </span>
-              <.button
-                :if={
-                  offer.provider_hint not in [nil, ""] and
-                    not default?(@defaults, offer.provider_hint, %{instance_entry_id: offer.id})
-                }
-                variant="ghost"
-                phx-click="use_by_default"
-                phx-value-id={offer.id}
-                phx-value-provider={offer.provider_hint}
-                data-test="offered-use-by-default"
-              >
-                Use by default for {offer.provider_hint}
-              </.button>
             </li>
           </ul>
         </section>

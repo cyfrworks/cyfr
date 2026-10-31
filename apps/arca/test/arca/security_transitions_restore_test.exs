@@ -298,24 +298,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     id
   end
 
-  defp instance!(status) do
-    id = Prima.UUID7.generate_id("ine")
-
-    insert!(Schemas.InstanceEntry, %{
-      id: id,
-      name: "i#{uniq()}",
-      kind: "api_key",
-      destination: destination(),
-      audience: "everyone",
-      created_by: "usr_admin",
-      status: status,
-      inserted_at: now(),
-      updated_at: now()
-    })
-
-    id
-  end
-
   defp consent!(athanor_id, profile_id) do
     id = Prima.UUID7.generate_id("cns")
 
@@ -346,7 +328,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       consent_id: consent_id,
       athanor_id: athanor_id,
       binding_key: key,
-      scope: "athanor",
       vault_entry_id: vault_id,
       binding_digest: "sha256:binding",
       lifetime_kind: lifetime,
@@ -580,10 +561,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       blocked_vault: vault!(own.id, "needs_reauth"),
       revoked_vault: vault!(own.id, "revoked"),
       tombstoned_vault: vault!(own.id, "tombstoned"),
-      instance: instance!("active"),
-      blocked_instance: instance!("needs_reauth"),
-      revoked_instance: instance!("revoked"),
-      tombstoned_instance: instance!("tombstoned"),
       share: share!(own.id, vault),
       revoked_share: share!(own.id, vault, "revoked"),
       open_turn: open_turn,
@@ -743,10 +720,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.VaultEntry, fixture.blocked_vault).status == "needs_reauth"
       assert get(Schemas.VaultEntry, fixture.revoked_vault).status == "revoked"
       assert get(Schemas.VaultEntry, fixture.tombstoned_vault).status == "tombstoned"
-      assert get(Schemas.InstanceEntry, fixture.instance).status == "needs_reauth"
-      assert get(Schemas.InstanceEntry, fixture.blocked_instance).status == "needs_reauth"
-      assert get(Schemas.InstanceEntry, fixture.revoked_instance).status == "revoked"
-      assert get(Schemas.InstanceEntry, fixture.tombstoned_instance).status == "tombstoned"
 
       # Every active share is revoked, and nothing comes back on its own;
       # a revoked one stays the row it was.
@@ -1077,12 +1050,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert Enum.map(list.passkeys, & &1.id) == [f.passkey]
       assert f.profile in Enum.map(list.profiles, & &1.id)
       assert f.vault in Enum.map(list.vault_entries, & &1.id)
-      assert list.instance_entries == []
-
-      assert {:ok, %{instance_entries: entries}} =
-               SecurityTransitions.restore_checklist(server(), f.alice.id, platform_admin: true)
-
-      assert f.instance in Enum.map(entries, & &1.id)
 
       # Another person's checklist holds nothing of hers.
       assert {:ok, bob} = SecurityTransitions.restore_checklist(server(), f.bob.id)

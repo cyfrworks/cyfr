@@ -637,7 +637,7 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the forty stores and the transitions, each a module" do
+    test "the security-row roster is exactly the thirty-seven stores and the transitions, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -648,9 +648,8 @@ defmodule Cyfr.BoundariesTest do
                  Arca.PersonIdentities Arca.IdentityAttempts
                  Arca.IdentityLog Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
-                 Arca.InstallationClaims Arca.RequestRateWindows Arca.InstanceEntries
-                 Arca.InstanceEntryUsage Arca.Shares Arca.ShareUsage Arca.DecisionLog
-                 Arca.McpLog Arca.PolicyLog
+                 Arca.InstallationClaims Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
+                 Arca.DecisionLog Arca.McpLog Arca.PolicyLog
                  Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations
                  Arca.CompanyLoginAttempts Arca.SecurityTransitions
                ))
@@ -954,34 +953,6 @@ defmodule Cyfr.BoundariesTest do
                  "#{module}.#{function}/#{arity} is not exported"
         end
       end
-    end
-
-    # The instance's own credentials are Sanctum's to administer and resolve
-    # through declared operations and its own attach path: the host reaches
-    # them for the retention cycle's usage sweep alone, which names no entry
-    # and no person.
-    test "the host reaches the instance's entries for the usage sweep alone" do
-      assert Boundaries.sanctum_exports()["Sanctum.InstanceEntries"] == [sweep_usage: 0]
-
-      reached =
-        for {"Sanctum.InstanceEntries", function, arity} <- host_sanctum_reaches(),
-            uniq: true,
-            do: {function, arity}
-
-      assert reached == [sweep_usage: 0]
-
-      assert [row] =
-               for(
-                 %{into: "Sanctum", allow: allow} = row <- Boundaries.surfaces(),
-                 "Sanctum.InstanceEntries" in allow,
-                 do: row
-               )
-
-      assert "apps/cyfr/lib/cyfr/**/*.ex" in row.from
-
-      assert row.reason =~
-               "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
-                 "instance-entry usage days (`sweep_usage/0`), which names no entry and no person"
     end
 
     # A share is Sanctum's to administer and resolve through declared

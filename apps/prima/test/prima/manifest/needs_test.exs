@@ -319,7 +319,7 @@ defmodule Prima.Manifest.NeedsTest do
         assert length(read.hosts) == 32 and length(read.paths) == 32
 
         assert {:ok, %Prima.Destination{}} =
-                 Prima.Destination.new(%{"hosts" => read.hosts, "paths" => read.paths}, false)
+                 Prima.Destination.from_map(%{"hosts" => read.hosts, "paths" => read.paths})
       end
 
       assert Prima.Destination.max_entries() == 32

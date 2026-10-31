@@ -77,7 +77,6 @@ defmodule Arca.VaultStorageTest do
         [
           %{
             binding_key: "formula:local.consumer|@ingress|default",
-            scope: "athanor",
             vault_entry_id: entry_id,
             binding_digest: "sha256:d0"
           }
@@ -343,8 +342,7 @@ defmodule Arca.VaultStorageTest do
       _second = put!(actor, %{provider_hint: "openai.com"})
       _unnamed = put!(actor, %{provider_hint: ""})
 
-      assert {:ok, %{vault_entry_id: id, instance_entry_id: nil}} =
-               Arca.VaultDefaults.get(actor, "openai.com")
+      assert {:ok, %{vault_entry_id: id}} = Arca.VaultDefaults.get(actor, "openai.com")
 
       assert id == first.id
       assert {:ok, [%{provider_hint: "openai.com"}]} = Arca.VaultDefaults.list(actor)

@@ -7,11 +7,9 @@ defmodule Arca.VaultDefaults do
   when several entries of that provider would satisfy a need.
 
   One row per `(athanor_id, provider_hint)` (`vault_defaults`), naming
-  exactly one of the athanor's own vault entries (`vault_entry_id`, kept
-  the athanor's by the composite key) or an instance entry
-  (`instance_entry_id`). Two athanors choose their defaults
-  independently, and an instance entry needs no row of its own to be
-  chosen. Moving a default moves no existing consent.
+  one of the athanor's own vault entries (`vault_entry_id`, kept the
+  athanor's by the composite key). Two athanors choose their defaults
+  independently. Moving a default moves no existing consent.
 
   Every function takes the actor first and works on the actor's athanor;
   an actor whose athanor is not a resolved id is refused
@@ -24,28 +22,19 @@ defmodule Arca.VaultDefaults do
   wrote. `Arca.VaultStorage.put/3` makes an athanor's first entry of a
   provider its default (`put_new!/3`, inside its transaction), and its
   `tombstone/2` removes every default naming the entry
-  (`drop_entry!/2`); `Arca.InstanceEntries` removes every default naming
-  an instance entry it tombstones, in every athanor.
+  (`drop_entry!/2`).
   """
 
   import Ecto.Query
 
-  alias Arca.Schemas.InstanceEntry
   alias Arca.Schemas.VaultDefault
   alias Arca.Schemas.VaultEntry
 
-  @typedoc """
-  One default as callers see it: the provider and exactly one of the two
-  entry ids, the other nil.
-  """
-  @type default :: %{
-          provider_hint: String.t(),
-          vault_entry_id: String.t() | nil,
-          instance_entry_id: String.t() | nil
-        }
+  @typedoc "One default as callers see it: the provider and the entry it names."
+  @type default :: %{provider_hint: String.t(), vault_entry_id: String.t()}
 
-  @typedoc "What a default names: one of the athanor's entries or an instance entry."
-  @type target :: %{vault_entry_id: String.t()} | %{instance_entry_id: String.t()}
+  @typedoc "What a default names: one of the athanor's entries."
+  @type target :: %{vault_entry_id: String.t()}
 
   @type refusal :: {:error, :no_athanor | :database_error}
 
@@ -85,11 +74,9 @@ defmodule Arca.VaultDefaults do
   Make `target` the actor's athanor's default for `provider_hint`, moving
   any default the provider had, in one upsert.
 
-  `target` names exactly one of `vault_entry_id` (a living entry of the
-  actor's athanor) and `instance_entry_id` (a living instance entry);
-  naming both or neither is `{:error, :invalid_target}`, and an entry
-  that is not living there `{:error, :not_found}`. Whether an instance
-  entry is offered to the athanor's people is the caller's to decide.
+  `target` names `vault_entry_id`, a living entry of the actor's athanor,
+  and nothing else; any other target is `{:error, :invalid_target}`, and
+  an entry that is not living there `{:error, :not_found}`.
   """
   @spec set(Prima.Actor.t(), String.t(), target()) ::
           {:ok, default()} | {:error, :invalid_target | :not_found} | refusal()
@@ -149,7 +136,6 @@ defmodule Arca.VaultDefaults do
           athanor_id: athanor_id,
           provider_hint: provider_hint,
           vault_entry_id: entry_id,
-          instance_entry_id: nil,
           inserted_at: now,
           updated_at: now
         }
@@ -176,31 +162,11 @@ defmodule Arca.VaultDefaults do
     :ok
   end
 
-  @doc false
-  # Inside `Arca.InstanceEntries.tombstone/3`'s transaction: no athanor's
-  # default names an instance entry that is gone.
-  @spec drop_instance_entry!(String.t()) :: :ok
-  # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
-  # arca:unscoped-ok an instance entry is offered to every athanor on the
-  # instance, so the defaults naming one are found in every athanor; the
-  # delete removes nothing but the rows naming that entry.
-  def drop_instance_entry!(instance_entry_id) when is_binary(instance_entry_id) do
-    {_count, _} =
-      from(d in VaultDefault, where: d.instance_entry_id == ^instance_entry_id)
-      |> Arca.Repo.delete_all()
-
-    :ok
-  end
-
   # ---------------------------------------------------------------------------
 
   defp target_columns(%{vault_entry_id: id} = target)
-       when is_binary(id) and id != "" and not is_map_key(target, :instance_entry_id),
-       do: {:ok, %{vault_entry_id: id, instance_entry_id: nil}}
-
-  defp target_columns(%{instance_entry_id: id} = target)
-       when is_binary(id) and id != "" and not is_map_key(target, :vault_entry_id),
-       do: {:ok, %{vault_entry_id: nil, instance_entry_id: id}}
+       when is_binary(id) and id != "" and map_size(target) == 1,
+       do: {:ok, %{vault_entry_id: id}}
 
   defp target_columns(_target), do: {:error, :invalid_target}
 
@@ -210,15 +176,6 @@ defmodule Arca.VaultDefaults do
   defp living(athanor_id, %{vault_entry_id: id}) when is_binary(id) do
     from(v in VaultEntry, where: v.id == ^id and v.status != "tombstoned", select: v.id)
     |> Arca.QueryHelpers.where_athanor(athanor_id)
-    |> Arca.QueryHelpers.for_update()
-    |> Arca.Repo.one()
-    |> found()
-  end
-
-  # An instance entry belongs to no athanor: it is read by its id alone,
-  # and answers only whether it is living.
-  defp living(_athanor_id, %{instance_entry_id: id}) when is_binary(id) do
-    from(i in InstanceEntry, where: i.id == ^id and i.status != "tombstoned", select: i.id)
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.one()
     |> found()
@@ -242,24 +199,15 @@ defmodule Arca.VaultDefaults do
 
     {1, _} =
       Arca.Repo.insert_all(VaultDefault, [row],
-        on_conflict: {:replace, [:vault_entry_id, :instance_entry_id, :updated_at]},
+        on_conflict: {:replace, [:vault_entry_id, :updated_at]},
         conflict_target: [:athanor_id, :provider_hint]
       )
 
-    %{
-      provider_hint: provider_hint,
-      vault_entry_id: columns.vault_entry_id,
-      instance_entry_id: columns.instance_entry_id
-    }
+    %{provider_hint: provider_hint, vault_entry_id: columns.vault_entry_id}
   end
 
-  defp view(%VaultDefault{} = row) do
-    %{
-      provider_hint: row.provider_hint,
-      vault_entry_id: row.vault_entry_id,
-      instance_entry_id: row.instance_entry_id
-    }
-  end
+  defp view(%VaultDefault{} = row),
+    do: %{provider_hint: row.provider_hint, vault_entry_id: row.vault_entry_id}
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

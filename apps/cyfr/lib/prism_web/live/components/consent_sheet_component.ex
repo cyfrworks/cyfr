@@ -537,7 +537,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, {:account, _edge, _ref} = slot} <- slot_of(token),
            %{} = held <- Map.get(socket.assigns.choices, slot),
-           {:ok, source, id} when source in ["own", "instance", "share"] <- picked(params),
+           {:ok, source, id} when source in ["own", "share"] <- picked(params),
            true <- {source, id} in candidate_picks(account_need(socket.assigns.plan, slot, held)) do
         choice = held |> rebound(source, id) |> Map.merge(%{source: source, id: id, renew: false})
 
@@ -860,12 +860,9 @@ defmodule PrismWeb.ConsentSheetComponent do
     end)
   end
 
-  # What a pick names: an entry of the athanor, an instance entry, a key
-  # shared with the person, or a lending profile's label.
+  # What a pick names: an entry of the athanor, a key shared with the
+  # person, or a lending profile's label.
   defp picked(%{"entry_id" => id}) when is_binary(id) and id != "", do: {:ok, "own", id}
-
-  defp picked(%{"instance_entry_id" => id}) when is_binary(id) and id != "",
-    do: {:ok, "instance", id}
 
   defp picked(%{"share_id" => id}) when is_binary(id) and id != "", do: {:ok, "share", id}
 
@@ -1280,7 +1277,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp candidate_pick(candidate) do
     case candidate do
       %{entry_id: id} when is_binary(id) -> {"own", id}
-      %{instance_entry_id: id} when is_binary(id) -> {"instance", id}
       %{share_id: id} when is_binary(id) -> {"share", id}
       _other -> nil
     end
@@ -2060,7 +2056,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp pick_values(candidate) do
     case candidate_pick(candidate) do
       {"own", id} -> %{"phx-value-entry_id" => id}
-      {"instance", id} -> %{"phx-value-instance_entry_id" => id}
       {"share", id} -> %{"phx-value-share_id" => id}
       nil -> %{}
     end
@@ -2068,7 +2063,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   # The entry a slot holds for this need, as a candidate's pick.
   defp chosen_pick(%{source: source, id: id} = choice, need, several)
-       when source in ["own", "instance", "share"] do
+       when source in ["own", "share"] do
     if not several or Map.get(choice, :need) in [nil, field(need, :need)],
       do: {source, id}
   end
@@ -2081,7 +2076,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp suggested_pick(need) do
     case suggested(need) do
       %{entry_id: id} -> {"own", id}
-      %{instance_entry_id: id} -> {"instance", id}
       %{share_id: id} -> {"share", id}
       nil -> nil
     end
@@ -2515,7 +2509,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp removed_entry(%{"name" => name}) when is_binary(name), do: name
   defp removed_entry(%{"entry_id" => id}), do: id
-  defp removed_entry(%{"instance_entry_id" => id}), do: id
   defp removed_entry(%{"share_id" => id}), do: id
   defp removed_entry(%{"via" => label}), do: "the key its '#{label}' profile lent"
 
@@ -2622,12 +2615,10 @@ defmodule PrismWeb.ConsentSheetComponent do
       disclosure_label(values["disclosed"])
   end
 
-  # Whose credential a binding is: the athanor's own entry, an entry the
-  # instance offers, a key another person shares (its name already says
-  # whose, "Shared by" its owner), or the public configuration the app's
-  # publisher ships.
+  # Whose credential a binding is: the athanor's own entry, a key another
+  # person shares (its name already says whose, "Shared by" its owner), or
+  # the public configuration the app's publisher ships.
   defp source_words("own", _node), do: "an entry of this athanor"
-  defp source_words("instance", _node), do: "provided by this instance"
   defp source_words("share", _node), do: "a key shared with you"
 
   defp source_words("provided", node),

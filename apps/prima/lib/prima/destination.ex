@@ -25,16 +25,14 @@ defmodule Prima.Destination do
       segment by segment: `/v1/models` admits `/v1/models` and
       `/v1/models/…`, never `/v1/models-x`; absent admits any path.
 
-  `methods` and `paths` are optional on an athanor's entry and required,
-  non-empty, on an instance entry: `new/2`'s second argument says which.
-  An athanor's entry is shared only when its destination names both
-  (`Arca.Shares`): a key that people other than its owner use goes to
-  named methods and paths alone. A present `methods` or `paths` is never
-  empty.
+  `methods` and `paths` are optional. An athanor's entry is shared only
+  when its destination names both (`Arca.Shares.eligible/1`): a key that
+  people other than its owner use goes to named methods and paths alone.
+  A present `methods` or `paths` is never empty.
 
   ## Canonical form
 
-  `new/2` normalizes: hosts lower-cased, de-duplicated and sorted; the
+  `from_map/1` normalizes: hosts lower-cased, de-duplicated and sorted; the
   scheme lower-cased, `https` when omitted; methods upper-cased,
   de-duplicated and sorted; paths de-duplicated and sorted. `to_map/1`
   answers string keys, `hosts` and `scheme` always and `port`, `methods`
@@ -79,7 +77,6 @@ defmodule Prima.Destination do
           | {:invalid_path, term()}
           | {:empty, String.t()}
           | {:too_many, String.t()}
-          | {:required, String.t()}
 
   @type error :: {:invalid_destination, reason()}
 
@@ -112,38 +109,24 @@ defmodule Prima.Destination do
   def max_entries, do: @max_entries
 
   @doc """
-  The destination `map` spells, normalized, or why it is refused.
-  `require_methods_and_paths` is true for an instance entry, whose
-  destination names both; a shared entry's must name both too, which the
-  share checks on the stored destination.
+  The destination `map` spells (`to_map/1`'s form), normalized, or why it
+  is refused.
   """
-  @spec new(term(), boolean()) :: {:ok, t()} | {:error, error()}
-  def new(map, require_methods_and_paths)
-
-  def new(map, required) when is_map(map) and not is_struct(map) and is_boolean(required) do
+  @spec from_map(term()) :: {:ok, t()} | {:error, error()}
+  def from_map(map) when is_map(map) and not is_struct(map) do
     with :ok <- known_keys(map),
          {:ok, hosts} <- hosts(Map.get(map, "hosts")),
          {:ok, scheme} <- scheme(Map.get(map, "scheme")),
          {:ok, port} <- port(Map.get(map, "port")),
          {:ok, methods} <- optional_list(map, "methods", &method/1),
-         {:ok, paths} <- optional_list(map, "paths", &path/1),
-         :ok <- required(required, "methods", methods),
-         :ok <- required(required, "paths", paths) do
+         {:ok, paths} <- optional_list(map, "paths", &path/1) do
       {:ok, %__MODULE__{hosts: hosts, scheme: scheme, port: port, methods: methods, paths: paths}}
     else
       {:error, reason} -> {:error, {:invalid_destination, reason}}
     end
   end
 
-  def new(_map, required) when is_boolean(required),
-    do: {:error, {:invalid_destination, :not_a_map}}
-
-  @doc """
-  The destination a wire map spells (`to_map/1`'s form), held to the
-  athanor-entry grammar: methods and paths optional.
-  """
-  @spec from_map(term()) :: {:ok, t()} | {:error, error()}
-  def from_map(map), do: new(map, false)
+  def from_map(_map), do: {:error, {:invalid_destination, :not_a_map}}
 
   @doc "The destination as its canonical string-keyed map."
   @spec to_map(t()) :: %{String.t() => term()}
@@ -370,9 +353,6 @@ defmodule Prima.Destination do
 
   defp bounded(field, list) when length(list) > @max_entries, do: {:error, {:too_many, field}}
   defp bounded(_field, list), do: {:ok, list}
-
-  defp required(true, field, nil), do: {:error, {:required, field}}
-  defp required(_required, _field, _value), do: :ok
 
   defp set(list), do: list |> Enum.uniq() |> Enum.sort()
 

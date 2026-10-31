@@ -183,11 +183,14 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     )
   end
 
-  defp offered(id, name) do
+  # A key another person shares, as the plan answers it: named for its
+  # owner.
+  defp shared(id, owner) do
     %{
-      source: "instance",
-      instance_entry_id: id,
-      name: name,
+      source: "share",
+      share_id: id,
+      name: "Shared by " <> owner,
+      owner: owner,
       kind: "api_key",
       provider: "service.example",
       destination: %{"hosts" => ["api.service.example"], "scheme" => "https"},
@@ -263,7 +266,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     |> Enum.flat_map(fn element ->
       LazyHTML.attribute(element, "data-lifetime") ++
         LazyHTML.attribute(element, "phx-value-entry_id") ++
-        LazyHTML.attribute(element, "phx-value-instance_entry_id") ++
+        LazyHTML.attribute(element, "phx-value-share_id") ++
         LazyHTML.attribute(element, "phx-value-label")
     end)
   end
@@ -274,7 +277,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     |> LazyHTML.query(~s([data-test="grant-pick"]))
     |> Enum.flat_map(fn element ->
       LazyHTML.attribute(element, "phx-value-entry_id") ++
-        LazyHTML.attribute(element, "phx-value-instance_entry_id") ++
+        LazyHTML.attribute(element, "phx-value-share_id") ++
         LazyHTML.attribute(element, "phx-value-label")
     end)
   end
@@ -299,7 +302,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         key_need(
           "optional",
           "an optional key",
-          [own("vlt_a", "A key"), offered("ine_b", "B key")],
+          [own("vlt_a", "A key"), shared("shr_b", "Terry")],
           required: false,
           suggested: %{entry_id: "vlt_a"}
         ),
@@ -1039,7 +1042,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     source =
       cond do
         Map.has_key?(head, :entry_id) -> "own"
-        Map.has_key?(head, :instance_entry_id) -> "instance"
         Map.has_key?(head, :label) -> "label"
       end
 

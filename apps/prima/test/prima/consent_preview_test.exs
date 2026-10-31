@@ -142,8 +142,7 @@ defmodule Prima.ConsentPreviewTest do
       assert item["binding_key"] ==
                Prima.Authority.Blob.binding_key(item["node"], item["edge"], item["connection"])
 
-      assert Enum.count(~w(entry_id instance_entry_id share_id via), &Map.has_key?(item, &1)) ==
-               1
+      assert Enum.count(~w(entry_id share_id via), &Map.has_key?(item, &1)) == 1
     end
 
     # A share is removed by its id, its name the owner's words, as its row names it.
@@ -249,7 +248,7 @@ defmodule Prima.ConsentPreviewTest do
     for values <- credentials, do: assert(is_map(values["fields"]), inspect(values["fields"]))
 
     assert [%{"fields" => %{"api_key" => "API key"}}] =
-             Enum.filter(credentials, &(&1["source"] == "instance"))
+             Enum.filter(credentials, &(&1["connection"] == "Geo account"))
   end
 
   test "a key another person shares is a credential of its own source, attached and never disclosed" do
@@ -281,7 +280,7 @@ defmodule Prima.ConsentPreviewTest do
     credentials = for %Row{kind: :credential, values: values} <- rows, do: values
 
     assert Enum.map(credentials, & &1["source"]) |> Enum.sort() ==
-             Enum.sort(ConsentPreview.Row.sources() ++ ["own"])
+             Enum.sort(ConsentPreview.Row.sources() ++ ["own", "own"])
 
     assert Enum.map(credentials, & &1["lifetime"]["kind"]) |> Enum.uniq() |> Enum.sort() ==
              Enum.sort(ConsentPreview.Row.lifetimes())

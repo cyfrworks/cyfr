@@ -1009,24 +1009,22 @@ defmodule Emissary.External.BackendsTest do
              Arca.VaultStorage.get(Sanctum.Context.actor(ctx), disclosed.id)
   end
 
-  # An instance entry is never disclosed nor named by a definition a member
-  # wrote (`Sanctum.VaultReader`): an env naming one by name finds no
-  # athanor entry of that name, and the instance entry is neither unsealed
-  # nor used.
-  test "an env naming only an instance entry is unresolved and reads nothing of it", %{
-    ctx: ctx,
-    fake: fake
-  } do
+  # A definition a member wrote names an entry of its own athanor and
+  # nothing else (`Sanctum.VaultReader`): an env naming, by name, only an
+  # entry another person's athanor holds and shares with everyone finds no
+  # entry of that name, and the shared entry is neither unsealed nor used.
+  test "an env naming only another athanor's shared entry is unresolved and reads nothing of it",
+       %{ctx: ctx, fake: fake} do
     start_controller(fake)
-    entry_name = "instance-only-#{System.unique_integer([:positive])}"
-    entry = instance_entry!(ctx, entry_name)
+    entry_name = "shared-only-#{System.unique_integer([:positive])}"
+    shared = shared_entry!(entry_name)
 
     assert {:error, :not_found} =
              Arca.VaultStorage.get_by_name(Sanctum.Context.actor(ctx), entry_name)
 
-    before = instance_state(entry.id)
-    assert {%{status: "active"}, _usage} = before
-    row = stdio_row(ctx, "instance-named", %{"GITHUB_TOKEN" => "vault:" <> entry_name})
+    before = shared_state(shared)
+    assert {%{status: "active", last_used_at: nil}, %{status: "active"}, _usage} = before
+    row = stdio_row(ctx, "shared-named", %{"GITHUB_TOKEN" => "vault:" <> entry_name})
 
     assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
              Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
@@ -1034,10 +1032,11 @@ defmodule Emissary.External.BackendsTest do
     refute_receive {:control, "sync", _sync, _fields}, 200
     refute_received {:sealed_env, _server, _env}
 
-    # The reader the sync would unseal through, asked directly: no athanor
-    # entry, nothing unsealed. The sync above refuses before it reaches it.
+    # The reader the sync would unseal through, asked directly: no entry of
+    # the athanor, nothing unsealed. The sync above refuses before it
+    # reaches it.
     assert {:error, :not_found} = Sanctum.VaultReader.unseal_disclosed(ctx.athanor_id, entry_name)
-    assert instance_state(entry.id) == before
+    assert shared_state(shared) == before
   end
 
   test "get reports what the service runs for a stdio server", %{ctx: ctx, fake: fake} do
@@ -1392,32 +1391,46 @@ defmodule Emissary.External.BackendsTest do
     end)
   end
 
-  # An instance entry offered to everyone, at the destination these cases'
-  # entries name.
-  defp instance_entry!(ctx, entry_name) do
-    params = %{
-      name: entry_name,
-      kind: "api_key",
-      fields: %{"token" => @secret},
-      destination: Map.merge(@destination, %{"methods" => ["POST"], "paths" => ["/mcp"]}),
-      audience: "everyone"
-    }
+  # An attach-only entry named `entry_name` in another person's own vault,
+  # at the destination these cases' entries name, and the owner's share of
+  # it with everyone: the owner's context, the entry and the share.
+  defp shared_entry!(entry_name) do
+    n = System.unique_integer([:positive])
 
-    confirmed =
-      Sanctum.TestContext.confirmed(%{ctx | platform_admin: true}, :credential_entry, %{
-        operation: "instance_entry.create",
-        arguments: params,
-        resource: params.name
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "local|local|backends-owner-#{n}",
+        provider: "local",
+        name: "Owner #{n}"
       })
 
-    {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
-    entry
+    own = Sanctum.Test.People.athanor!(user)
+    owner = %{Sanctum.TestContext.local(:prism) | user_id: user.id, athanor_id: own.id}
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(owner, %{
+        name: entry_name,
+        kind: "api_key",
+        fields: %{"token" => @secret},
+        destination: Map.merge(@destination, %{"methods" => ["POST"], "paths" => ["/mcp"]})
+      })
+
+    {:ok, share} =
+      Sanctum.TestContext.confirming(
+        owner,
+        &Sanctum.Shares.create(&1, %{entry_id: entry.id, audience: "everyone"})
+      )
+
+    %{owner: owner, entry: entry, share: share}
   end
 
-  # The instance entry's stored row and its use today.
-  defp instance_state(id) do
-    {:ok, row} = Arca.InstanceEntries.get(Prima.Actor.system(), id)
-    {:ok, usage} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), id, 1)
-    {row, usage}
+  # The shared entry's stored row, the share's, and the share's use today,
+  # as their owner reads them.
+  defp shared_state(%{owner: owner, entry: entry, share: share}) do
+    actor = Sanctum.Context.actor(owner)
+    {:ok, entry_row} = Arca.VaultStorage.get(actor, entry.id)
+    {:ok, share_row} = Arca.Shares.get(actor, share.id)
+    {:ok, usage} = Arca.ShareUsage.usage(actor, share.id, 1)
+    {entry_row, share_row, usage}
   end
 end

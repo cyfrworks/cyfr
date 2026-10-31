@@ -405,11 +405,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "confirmation_seconds" =>
       "How long a pending confirmation of a sensitive change stays open, in seconds.",
     "reauth_seconds" =>
-      "How recently a local person must have signed in through a linked method to register their first passkey with no fresh method, in seconds.",
-    "instance_entry_person_daily" =>
-      "Requests one person may make each day through an instance entry whose own per-person cap is unset; 0 admits no use.",
-    "instance_entry_total_daily" =>
-      "Requests everyone together may make each day through an instance entry whose own total cap is unset; 0 admits no use."
+      "How recently a local person must have signed in through a linked method to register their first passkey with no fresh method, in seconds."
   }
 
   @doc "Every platform setting, in the order the boot reads them."
@@ -749,12 +745,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         whole(1..3_600, "seconds"),
         :confirmation
       ),
-      identity(:reauth_seconds, :duration_s, 300, whole(1..3_600, "seconds"), :confirmation),
-
-      # ——— instance entries: the default day caps an unset cap takes, read at
-      # each attach (Sanctum.InstanceEntries) and refused stale ———
-      instance_cap(:instance_entry_person_daily, 1_000),
-      instance_cap(:instance_entry_total_daily, 2_000)
+      identity(:reauth_seconds, :duration_s, 300, whole(1..3_600, "seconds"), :confirmation)
     ]
     |> Enum.map(&%{&1 | doc: Map.fetch!(@setting_docs, &1.key)})
   end
@@ -818,22 +809,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       default: default,
       validator: validator,
       group: group,
-      scope: :live,
-      stale: :refuse
-    }
-  end
-
-  # A default day cap of an instance entry. 0 is a value here, and admits
-  # no use, as an entry's own 0 does: no claim is uncapped.
-  defp instance_cap(key, default) do
-    %Entry{
-      key: Atom.to_string(key),
-      app: :sanctum,
-      variable: "CYFR_" <> String.upcase(Atom.to_string(key)),
-      type: :integer,
-      default: default,
-      validator: whole(0..1_000_000_000, "requests"),
-      group: :instance_entries,
       scope: :live,
       stale: :refuse
     }

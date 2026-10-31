@@ -169,7 +169,6 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   defp entry_ref(node, edge, entry),
     do: %{
       binding_key: Prima.Authority.Blob.binding_key(node, edge, nil),
-      scope: "athanor",
       vault_entry_id: entry,
       binding_digest: "sha256:binding"
     }
@@ -195,7 +194,6 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
     row = %{
       binding_key: Prima.Authority.Blob.binding_key(ref, borrowed_edge(), nil),
-      scope: "athanor",
       via_label: via["label"],
       binding_digest: via["binding_digest"]
     }

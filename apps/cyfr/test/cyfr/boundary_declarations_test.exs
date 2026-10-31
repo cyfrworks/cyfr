@@ -94,10 +94,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   @export_additions %{
     Arca => [
       {~w(ApiKeyStorage Athanors ConsentProofStorage ConsentStorage DecisionLog
-          DecisionLog.AuditFailure Doors FrameCredentials InstanceEntries InstanceEntryUsage
-          McpLog Members PairedClients ProfileStorage ProviderCredentialStorage
-          RegistryTokenStorage SessionStorage ShareUsage Shares ToolGrantStorage Users
-          VaultStorage WebhookStorage),
+          DecisionLog.AuditFailure Doors FrameCredentials McpLog Members PairedClients
+          ProfileStorage ProviderCredentialStorage RegistryTokenStorage SessionStorage
+          ShareUsage Shares ToolGrantStorage Users VaultStorage WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions CliSignIns CompanyAuthorizations CompanyLoginAttempts

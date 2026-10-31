@@ -15,7 +15,7 @@ behind the harness's HTTPS front (`browser_home`). One person
 (`tests/release-boot/fixture.exs` `person`). `proof.mjs` drives her in
 Chromium's full build, every entry she makes confirmed with the passkey
 Chromium's virtual authenticator makes and registers first, as
-`tests/instance-entry-proof/` confirms its administrator's. It asks
+`tests/share-proof/` confirms its administrator's. It asks
 `run.sh` for the home's part of a step through its output directory
 (`ask-N.json`, answered `answer-N.json`), and `fixture.exs` answers it by
 calling the real paths and returning bounded facts. A question longer than
@@ -178,10 +178,10 @@ either fails whole, and their columns need no class.
 | Table | Exact | Derived | Bound |
 |---|---|---|---|
 | `vault_entries` | `name`, `provider_hint`, `kind`, `field_names`, `oauth_endpoints`, `oauth_scopes`, `attach_only`, `status`, `payload_rev` | `binding_digest`, `destination`: what her request implies (`requested`); `sealed_payload`: the value she typed, compared inside the fixture | `id`: the Vault page's; `athanor_id`: the sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
-| `vault_defaults` | `provider_hint`, `instance_entry_id` | | `id`: a default's own id; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's; `inserted_at`, `updated_at`: times |
+| `vault_defaults` | `provider_hint` | | `id`: a default's own id; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's; `inserted_at`, `updated_at`: times |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
 | `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `shape_digest`, `commit_digest`, `blob_digest`, `resolved_policy`, `activation`: what a commit of her decisions writes (`derived`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
-| `consent_vault_refs` | `binding_key`, `scope`, `instance_entry_id`, `via_label`, `lifetime_kind`, `consumed_by_root` | `binding_digest`: `requested`; `expires_at`: the until the preview showed her | `consent_id`: the admission's; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's |
+| `consent_vault_refs` | `binding_key`, `share_id`, `via_label`, `lifetime_kind`, `consumed_by_root` | `binding_digest`: `requested`; `expires_at`: the until the preview showed her | `consent_id`: the admission's; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's |
 
 The bounds:
 
@@ -280,7 +280,7 @@ in the tree.
 
 | Claim | Test file | Test | Owner |
 |---|---|---|---|
-| Real own/provided/instance attached requests reach only the admitted destination, with current instance policy enforced | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream"; "any admits a consented custom component only within its destination and egress"; "tightening to shipped refuses the next custom component request before claim or upstream contact" | `Opus.Host.AttachedFetch`, `Sanctum.Attach` |
+| Real own/provided attached requests reach only the admitted destination | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream" | `Opus.Host.AttachedFetch`, `Sanctum.Attach` |
 | Named account reaches an actually executed child | `apps/cyfr/test/integration/runtime/formula_handler_test.exs` | "a real formula runs two named-account children with distinct upstream credentials" | `Sanctum.Attach` |
 | A new grant cannot widen the live turn | `apps/cyfr/test/aqua/loop/loop_test.exs` | "a named-account grant leaves the running turn pinned and only a new turn uses it" | `Aqua.Loop` |
 | Once, expiry, scheduled/webhook fire and revocation at use | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs`; `apps/cyfr/test/opus/schedules/scheduler_test.exs`; `apps/cyfr/test/integration/webhook_flow_test.exs` | "once expiry and revocation refuse subsequent roots before an upstream request"; "a scheduled attached request succeeds before expiry and is refused after it"; "a webhook attached request succeeds before expiry and is refused after it" | `Sanctum.Attach` |

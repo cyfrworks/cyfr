@@ -141,11 +141,9 @@ defmodule Sanctum.Vault do
 
   @typedoc """
   The caller's athanor's default entry per provider, keyed by provider
-  hint: one of its own entries or an instance entry, named by id alone.
+  hint: one of its own entries, named by id alone.
   """
-  @type defaults_view :: %{
-          String.t() => %{vault_entry_id: String.t()} | %{instance_entry_id: String.t()}
-        }
+  @type defaults_view :: %{String.t() => %{vault_entry_id: String.t()}}
 
   @doc """
   The caller's athanor's default entry per provider, as stored
@@ -162,17 +160,14 @@ defmodule Sanctum.Vault do
 
   @doc """
   Make an entry the caller's athanor's default for a provider
-  (`params`: `:provider_hint`, and exactly one of `:entry_id`, an active
-  entry of the athanor, and `:instance_entry_id`, an instance entry
-  offered to the caller and active, `Sanctum.InstanceEntries.binding/2`).
-  The entry must be of that provider (`{:error, {:provider_mismatch,
-  hint}}`); an empty provider, or both ids or neither, is
+  (`params`: `:provider_hint` and `:entry_id`, an active entry of the
+  athanor). The entry must be of that provider (`{:error,
+  {:provider_mismatch, hint}}`); an empty provider, or no entry, is
   `{:error, {:invalid_argument, sentence}}`. One upsert
   (`Arca.VaultDefaults.set/3`): the provider's earlier default, if any,
   is replaced. A default only suggests: moving it moves no consent.
   Interactive consent class, the session alone. Answers
-  `%{provider_hint: hint, vault_entry_id: id}` or
-  `%{provider_hint: hint, instance_entry_id: id}`.
+  `%{provider_hint: hint, vault_entry_id: id}`.
   """
   @spec set_default(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def set_default(%Context{} = ctx, params) when is_map(params) do
@@ -196,31 +191,22 @@ defmodule Sanctum.Vault do
     do: {:error, {:invalid_argument, "A default names the provider it is the default of"}}
 
   defp default_target(params) do
-    case {Map.get(params, :entry_id), Map.get(params, :instance_entry_id)} do
-      {id, nil} when is_binary(id) and id != "" -> {:ok, %{vault_entry_id: id}}
-      {nil, id} when is_binary(id) and id != "" -> {:ok, %{instance_entry_id: id}}
-      _neither_or_both -> {:error, default_target_refusal()}
+    case Map.get(params, :entry_id) do
+      id when is_binary(id) and id != "" -> {:ok, %{vault_entry_id: id}}
+      _absent -> {:error, default_target_refusal()}
     end
   end
 
   defp default_target_refusal,
-    do: {:invalid_argument, "A default names exactly one of entry_id and instance_entry_id"}
+    do: {:invalid_argument, "A default names its entry (entry_id)"}
 
-  # The entry is one the caller's athanor may use, and of the provider it
-  # is made the default of.
+  # The entry is one of the caller's athanor's own, active, and of the
+  # provider it is made the default of.
   defp default_of_provider(ctx, %{vault_entry_id: id}, hint) do
     case Arca.VaultStorage.get(Context.actor(ctx), id) do
       {:ok, %{status: "active", provider_hint: ^hint}} -> :ok
       {:ok, %{status: "active"}} -> {:error, {:provider_mismatch, hint}}
       {:ok, %{status: status}} -> {:error, {:entry_unavailable, status}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp default_of_provider(ctx, %{instance_entry_id: id}, hint) do
-    case Sanctum.InstanceEntries.binding(ctx, id) do
-      {:ok, %{provider_hint: ^hint}} -> :ok
-      {:ok, _other_provider} -> {:error, {:provider_mismatch, hint}}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -559,20 +545,18 @@ defmodule Sanctum.Vault do
     end
   end
 
-  @doc false
   # The confirmation a rebind of `entry` to `rebound`, whose binding digest
   # is `digest`, needs, as the options of its binding move
-  # (`Arca.VaultStorage.move_binding/6`, `Arca.InstanceEntries.move_binding/6`):
-  # none when it narrows or keeps what the entry admits (`rebind_widens?/2`);
-  # when it widens, the `credential_entry` confirmation of `operation`,
-  # asked here (`Authz.check/3`) and spent as the move's `verify:` step
+  # (`Arca.VaultStorage.move_binding/6`): none when it narrows or keeps
+  # what the entry admits (`rebind_widens?/2`); when it widens, the
+  # `credential_entry` confirmation of `operation`, asked here
+  # (`Authz.check/3`) and spent as the move's `verify:` step
   # (`Authz.consume/2`). The change binds the entry, the digest it was read
   # at and the one it moves to, and its preview shows the binding it moves
   # to and what each moved part was (`rebind_details/2`).
-  # `Sanctum.InstanceEntries` decides its rebind here too.
   @spec rebind_confirmation(Context.t(), String.t(), map(), map(), String.t()) ::
           {:ok, keyword()} | {:error, term()}
-  def rebind_confirmation(%Context{} = ctx, operation, entry, rebound, digest) do
+  defp rebind_confirmation(%Context{} = ctx, operation, entry, rebound, digest) do
     if rebind_widens?(entry, rebound) do
       change = %{
         operation: operation,
@@ -743,12 +727,8 @@ defmodule Sanctum.Vault do
     }
   end
 
-  # A stored default names exactly one of the two entries.
   defp default_view(%{provider_hint: hint, vault_entry_id: id}) when is_binary(id),
     do: {hint, %{vault_entry_id: id}}
-
-  defp default_view(%{provider_hint: hint, instance_entry_id: id}) when is_binary(id),
-    do: {hint, %{instance_entry_id: id}}
 
   defp required_name(%{name: name}) when is_binary(name) and name != "", do: {:ok, name}
   defp required_name(_), do: {:error, :name_required}

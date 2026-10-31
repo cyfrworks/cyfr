@@ -11,18 +11,15 @@ defmodule Locus.Runtime.AttachedFetchTest do
 
   The credential reaches the upstream, attached by CYFR, and nothing of it
   reaches the runner: for an athanor's own attach-only entry, for a value
-  an app provides its dependency, for an instance entry offered to
-  everyone, bound to a component of the person's own while the entry's
-  component policy is `any`, and for a key another person shares with a
-  group the person is in, bound to a component of the person's own. A
-  redirect through a shared key is answered and never followed. A URL
-  outside the entry's destination, or outside the grant's egress, reaches
-  no upstream and counts no use; tightening the entry to `shipped`
-  refuses the next root before any claim or upstream contact. A
-  credential the upstream reflects is masked across the answer's frames,
-  in the guest's output and everywhere the execution leaves a trace. A
-  `once` binding, an `until` binding past its instant and a revoked entry
-  each refuse the next root before an upstream request.
+  an app provides its dependency, and for a key another person shares
+  with a group the person is in, bound to a component of the person's
+  own. A redirect through a shared key is answered and never followed. A
+  URL outside the entry's destination, or outside the grant's egress,
+  reaches no upstream and counts no use. A credential the upstream
+  reflects is masked across the answer's frames, in the guest's output
+  and everywhere the execution leaves a trace. A `once` binding, an
+  `until` binding past its instant and a revoked entry each refuse the
+  next root before an upstream request.
   """
 
   use ExUnit.Case, async: false
@@ -42,7 +39,6 @@ defmodule Locus.Runtime.AttachedFetchTest do
   @nested Path.expand("support/test_wasm/nested_probe/nested_probe.wasm", __DIR__)
 
   @secret "sk-attached-e1-canary-7f3a9c21d0"
-  @instance_secret "sk-instance-e1-canary-2c8d5e14"
   @shared_secret "sk-shared-e1-canary-5a7e2b90d4"
   @rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
 
@@ -242,37 +238,6 @@ defmodule Locus.Runtime.AttachedFetchTest do
     entry
   end
 
-  # An instance entry a platform administrator offers everyone, under the
-  # `any` component policy it is created with, to the upstream's two paths.
-  defp instance!(ctx, port) do
-    admin = %{ctx | platform_admin: true}
-
-    params = %{
-      name: "shared-#{System.unique_integer([:positive])}",
-      kind: "api_key",
-      provider_hint: "upstream.test",
-      fields: %{"KEY" => @instance_secret},
-      destination: %{
-        "hosts" => ["127.0.0.1", "upstream.test"],
-        "scheme" => "http",
-        "port" => port,
-        "methods" => ["GET", "POST"],
-        "paths" => ["/hello", "/echo"]
-      },
-      audience: "everyone"
-    }
-
-    confirmed =
-      Sanctum.TestContext.confirmed(admin, :credential_entry, %{
-        operation: "instance_entry.create",
-        arguments: params,
-        resource: params.name
-      })
-
-    {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
-    entry
-  end
-
   # A person made as an open admission makes one, signed in under `name`
   # to their own athanor through Prism: `%{user: _, athanor: _, actor: _,
   # ctx: _}`.
@@ -337,12 +302,6 @@ defmodule Locus.Runtime.AttachedFetchTest do
   defp share_used(owner, share) do
     {:ok, %{people: people}} = Arca.ShareUsage.usage(owner.actor, share.id, 1)
     Map.new(people, &{&1.user_id, &1.count})
-  end
-
-  # The requests claimed against an instance entry's caps today.
-  defp usage(entry_id) do
-    {:ok, %{totals: totals}} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), entry_id, 1)
-    Enum.sum(Enum.map(totals, & &1.count))
   end
 
   # `ref`'s owner consent, binding `bindings`, through the consent walk.
@@ -544,60 +503,9 @@ defmodule Locus.Runtime.AttachedFetchTest do
     refute_received {:upstream, _request}
   end
 
-  test "any admits a consented custom component only within its destination and egress", %{
-    ctx: ctx,
-    port: port
-  } do
-    entry = instance!(ctx, port)
-    probe = publish_probe!(ctx)
-    consent!(ctx, probe, [%{need: "api_key", instance_entry_id: entry.id}])
-
-    assert %{"status" => 200, "body" => "hello from upstream"} =
-             output!(run!(ctx, probe, request(port, "/hello")))
-
-    assert header(upstream!(), "x-api-key") == [@instance_secret]
-    assert usage(entry.id) == 1
-
-    # A method or path outside the entry's destination, or a host outside
-    # the grant's egress, is refused before the cap is claimed.
-    for {input, type} <- [
-          {request(port, "/hello", %{"method" => "DELETE"}), "destination_mismatch"},
-          {request(port, "/elsewhere"), "destination_mismatch"},
-          {request(port, "/hello", %{"url" => "http://upstream.test:#{port}/hello"}),
-           "domain_blocked"}
-        ] do
-      assert refused!(run!(ctx, probe, input), type)
-    end
-
-    refute_received {:upstream, _request}
-    assert usage(entry.id) == 1
-  end
-
-  test "tightening to shipped refuses the next custom component request before claim or upstream contact",
-       %{ctx: ctx, port: port} do
-    entry = instance!(ctx, port)
-    probe = publish_probe!(ctx)
-    consent!(ctx, probe, [%{need: "api_key", instance_entry_id: entry.id}])
-
-    assert %{"status" => 200} = output!(run!(ctx, probe, request(port, "/hello")))
-    assert header(upstream!(), "x-api-key") == [@instance_secret]
-    assert usage(entry.id) == 1
-
-    :ok =
-      Arca.InstanceEntries.set_component_policy(Prima.Actor.system(), entry.id, "any", "shipped")
-
-    played = run!(ctx, probe, request(port, "/hello"))
-
-    assert refused!(played, "component_not_admitted") ==
-             Prima.Refusal.message(:component_not_admitted)
-
-    refute_received {:upstream, _request}
-    assert usage(entry.id) == 1
-  end
-
   test "a request through a grant of a shared key carries its owner's key to the source's " <>
          "host, a redirect is answered and never followed, and a request off the destination " <>
-         "is refused with nothing counted",
+         "or the grant's egress is refused with nothing counted",
        %{port: port} do
     # Terry and Alice, each in their own athanor, are in the group Traders,
     # and Terry shares his key with it. Alice grants her own component the
@@ -636,14 +544,29 @@ defmodule Locus.Runtime.AttachedFetchTest do
     assert_never_in_runner(played, @shared_secret)
     assert share_used(terry, share) == %{alice.user.id => 2}
 
-    # Off the source's destination, a path it does not name or another
-    # port, the request is refused before anything is counted or sent.
-    for input <- [request(port, "/elsewhere"), request(port + 1, "/hello")] do
+    # Off the source's destination, a path, a method or a port it does not
+    # name, the request is refused before anything is counted or sent.
+    for input <- [
+          request(port, "/elsewhere"),
+          request(port, "/hello", %{"method" => "DELETE"}),
+          request(port + 1, "/hello")
+        ] do
       played = run!(alice.ctx, probe, input)
 
       assert refused!(played, "destination_mismatch") ==
                Prima.Refusal.message(:destination_mismatch)
     end
+
+    # Inside the source's destination, outside the grant's egress: refused
+    # by the runner's own check, never sent and never counted.
+    played =
+      run!(
+        alice.ctx,
+        probe,
+        request(port, "/hello", %{"url" => "http://upstream.test:#{port}/hello"})
+      )
+
+    assert refused!(played, "domain_blocked") =~ "upstream.test"
 
     refute_received {:upstream, _request}
     assert share_used(terry, share) == %{alice.user.id => 2}

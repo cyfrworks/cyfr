@@ -415,21 +415,16 @@ defmodule Sanctum.Consent.Loader do
 
   # A selection is resolved within the borrowing consent's own athanor.
   defp edge_refs(node_ref, edge_key, %{via: via}),
-    do: [
-      {:via, "athanor", Blob.binding_key(node_ref, edge_key, nil), via.label, via.binding_digest}
-    ]
+    do: [{:via, Blob.binding_key(node_ref, edge_key, nil), via.label, via.binding_digest}]
 
   defp edge_refs(_node_ref, _edge_key, _vault), do: []
 
-  defp bound_identity(%{scope: "instance"} = bound),
-    do: {:instance, "instance", bound.binding_key, bound.entry_id, bound.binding_digest}
-
   # A share's bound resource names the share as its entry.
   defp bound_identity(%{scope: "share"} = bound),
-    do: {:share, "share", bound.binding_key, bound.entry_id, bound.binding_digest}
+    do: {:share, bound.binding_key, bound.entry_id, bound.binding_digest}
 
   defp bound_identity(bound),
-    do: {:entry, bound.scope, bound.binding_key, bound.entry_id, bound.binding_digest}
+    do: {:entry, bound.binding_key, bound.entry_id, bound.binding_digest}
 
   defp stored_ref(ref), do: Arca.ConsentStorage.row_identity(ref)
 
@@ -585,18 +580,9 @@ defmodule Sanctum.Consent.Loader do
       not parse (`{:lender_corrupt, target, profile_id}`, a damaged
       profile row of the target refusing a selection by label);
       and a lender the store could not answer, its profiles or its head
-      (`{:lender_unavailable, target}`). A lent instance entry is read
-      live as an instance row is, so a refusal of the offer or a rebind is
-      the selection's `{:error, reason}`; a lent share is read live as a
+      (`{:lender_unavailable, target}`). A lent share is read live as a
       share row is, its refusal the selection's
       `{:error, {:share, reason}}`;
-    * `{:instance, instance_entry_id, result}` — an instance entry, read
-      live as the context's person is offered it
-      (`Sanctum.InstanceEntries.binding/2`): `{:ok, view}` while it stands
-      at the digest the row was approved at, `{:error, :binding_went_stale}`
-      when it was rebound since, and the offer's own refusal otherwise
-      (`:not_offered`, `{:entry_unavailable, status}`, `:denied`,
-      `:anonymous_denied`);
     * `{:share, share_id, result}` — a share, read live as the context's
       person is offered it (`Sanctum.Shares.binding/2`): `{:ok, view}`
       while its source stands at the digest the row was approved at,
@@ -613,43 +599,21 @@ defmodule Sanctum.Consent.Loader do
   @spec row_binding(Context.t(), map(), map()) ::
           {:entry, String.t(), String.t()}
           | {:selection, String.t(), {:ok, map()} | {:error, term()}}
-          | {:instance, String.t(), {:ok, map()} | {:error, term()}}
           | {:share, String.t(), {:ok, map()} | {:error, term()}}
           | :malformed
   def row_binding(%Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref) do
     case Arca.ConsentStorage.row_identity(ref) do
-      {:entry, _scope, _key, entry_id, digest} ->
+      {:entry, _key, entry_id, digest} ->
         {:entry, entry_id, digest}
 
-      {:instance, _scope, _key, instance_entry_id, digest} ->
-        {:instance, instance_entry_id, live_instance(ctx, instance_entry_id, digest)}
-
-      {:share, _scope, _key, share_id, digest} ->
+      {:share, _key, share_id, digest} ->
         {:share, share_id, live_share(ctx, share_id, digest)}
 
-      {:via, _scope, key, label, _digest} ->
+      {:via, key, label, _digest} ->
         {:selection, label, resolve_row_selection(ctx, consent, key)}
 
       :none ->
         :malformed
-    end
-  end
-
-  # An instance row's liveness: the entry as the loading context's person
-  # is offered it, at the digest the row names, as an athanor's entry is
-  # held to its row's.
-  defp live_instance(ctx, instance_entry_id, digest) do
-    case Sanctum.InstanceEntries.binding(ctx, instance_entry_id) do
-      {:ok, %{binding_digest: live} = view} when is_binary(live) and is_binary(digest) ->
-        if Plug.Crypto.secure_compare(live, digest),
-          do: {:ok, view},
-          else: {:error, :binding_went_stale}
-
-      {:ok, _undigested} ->
-        {:error, :binding_went_stale}
-
-      {:error, _} = refused ->
-        refused
     end
   end
 
@@ -684,18 +648,9 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  # A lent instance entry, held as an instance row is: offered to this
-  # person and at the digest the lender bound it at.
-  defp live_lent({:ok, %{scope: "instance", entry_id: id, binding_digest: digest} = vault}, ctx) do
-    case live_instance(ctx, id, digest) do
-      {:ok, _view} -> {:ok, vault}
-      {:error, _} = refused -> refused
-    end
-  end
-
   # A lent share, held as a share row is: offered to this person and its
   # source at the digest the lender bound it at. Its refusal is tagged so
-  # a reader tells a share's answer from an instance entry's.
+  # a reader tells a share's answer from the selection's own.
   defp live_lent({:ok, %{scope: "share", entry_id: id, binding_digest: digest} = vault}, ctx) do
     case live_share(ctx, id, digest) do
       {:ok, _view} -> {:ok, vault}

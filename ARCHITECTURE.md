@@ -73,7 +73,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 - Identity, sessions, doors, keys, devices, passkeys, recovery and fresh confirmation.
 - Membership, tenancy, caps and the caller context (`Sanctum.Caller`).
-- Consent, the vault, the instance's entries, credential attachment and the credentials tinctures are served under.
+- Consent, the vault and its shares, credential attachment and the credentials tinctures are served under.
 - The gate: the operation table (`Sanctum.Catalog`), its entries (`Sanctum.Gate`, `Sanctum.Streams`), discovery, the request log and the decision record (`Sanctum.Decisions`).
 - No Ecto and no broadcast; it alone reads security rows, and its internal strategies are behaviours selected by configuration.
 
@@ -180,6 +180,7 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 - The athanor is the one tenancy unit, a person's or a group's, and every active member holds the same authority.
 - Tenant identity comes from the authenticated actor, never from a guest's argument, and ownership travels with rows, blobs, events and cache keys.
+- An athanor's rows stay its own. The one widening across athanors is a share, an entry its owner offers to everyone or to one group: a person in its audience sees the entry only through the share, never its material, and a recipient uses it only through the share their own consent names, read under the owner's athanor (`Sanctum.Shares`).
 - A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions and archived athanors, never an athanor's decisions. The installation's first person, made by its setup or by a restore onto it empty, is its platform administrator, and no other grant exists.
 - Outsiders learn nothing of an athanor: anyone without a current seat gets the answer a missing athanor gets.
 - Nothing lands in an athanor its members did not accept.
@@ -198,7 +199,7 @@ A consent binds to the exact action and resources its preview showed, and a vers
 
 ### 5.5 Credentials
 
-CYFR attaches a credential to the request it is bound to, which goes once to its pinned address, and the component never holds it unless its consent names that disclosure. Each entry is bound to its destination, and material that must never leave the vault is used only through Sanctum's signing. Masking and log redaction are defence in depth, not the bound. *Not built yet:* Sanctum signing with a vault-held key.
+CYFR attaches a credential to the request it is bound to, which goes once to its pinned address, and the component never holds it unless its consent names that disclosure. Each entry is bound to its destination, and material that must never leave the vault is used only through Sanctum's signing. A credential lives in one vault entry, and a share is the only way it reaches another athanor (§5.1). A shared entry is used attach-only, to its own destination, under the share's audience and caps, and only while its owner stands and the entry stands at the digest the recipient approved. Masking and log redaction are defence in depth, not the bound. *Not built yet:* Sanctum signing with a vault-held key.
 
 ### 5.6 Egress
 
@@ -253,7 +254,7 @@ The access mode is a deployment setting: one value in the deployment file (`CYFR
 ### 6.9 Backup, runtime and budgets
 
 - A backup is a stopped cell's database, storage, keyring and deployment file. An update is a ceremony the platform administrator runs from a signed release manifest, and a failure leaves the cell stopped with its snapshot.
-- A restore is declared: the boot consumes its marker before the gate opens and, in one transition, retires every session, suspends every API key, webhook secret, device and passkey, asks again for every grant and raises every standing, so nothing admitted under the backup stands and restored authority never re-enables itself. *Not built yet:* an outside rollback floor against an undeclared restore.
+- A restore is declared: the boot consumes its marker before the gate opens and, in one transition, retires every session, suspends every API key, webhook secret, device and passkey, revokes every share, asks again for every grant and raises every standing, so nothing admitted under the backup stands and restored authority never re-enables itself. *Not built yet:* an outside rollback floor against an undeclared restore.
 - A storage reserve keeps headroom to take authority away (`Cyfr.StorageReserve`): below it the gate admits only reads, the operations declared `reduces_authority` and the confirmations they need, restore by a recovery code keeps its own ingress, and the cell's renewal and shutdown never refuse.
 - Startup and shutdown run in dependency order, and a cell-wide claim whose job the shutdown kills, such as the retention sweep's, is kept until a peer takes it over when it lapses.
 - Each workload has a latency budget with its measurement; the canvas proof holds a frame open and a canvas validation to theirs. *Not built yet:* an overload budget for any workload; the latency budgets of an admission at concurrency, a first token, a feed fire, a device intent and a console page; and the measurements of a feed fire and a console page.
@@ -282,7 +283,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 - A home is the one installation that decides for an athanor. Home, glass, hub, cell, node and door are this document's words: what a person reads, the setup pages, the command line, Prism, the README and the guides, says CYFR for the installation and Aqua for the assistant, device or browser for the glass, the CYFR you join for a hub, cluster for a cell and server for a member of it, machine or server or CYFR for a node by its sense, and sign-in method for a door, and never these words.
 - Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and their journal, and home transfer; a node is the home of every athanor its store holds.
 - The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, a device's own first proof, the pairing of a key it holds with the setup token authorizing the first, for a home that a carried device with its own screen and no phone runs, and push delivery.
-- A hub is the always-on home of shared athanors and an instance that offers entries to its people. Any home may require a company's sign-in of every person there: a standing condition, checked last wherever a person's standing is read, and never a door or the person's identity (`Sanctum.CompanyLogin`). *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored.
+- A hub is the always-on home of shared athanors, where people, its platform administrator among them, share keys from their own vaults with a group or with everyone (§5.5). Any home may require a company's sign-in of every person there: a standing condition, checked last wherever a person's standing is read, and never a door or the person's identity (`Sanctum.CompanyLogin`). *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored.
 - Every wire between homes names its version, and CYFR has no relay.
 
 **Why.** A decision about an athanor is made in one place, so no node acts for a home because a lease looks expired or a clock says it is lost.
@@ -312,7 +313,7 @@ People talk by sharing an athanor whose home is always on; there is no messaging
 Consented work runs unattended under its grant; a person is asked only about what no grant covers, and an uncovered external or destructive proposal is approved once, never banked.
 
 - Component grants and standing approvals are the two kinds of grant, under one set of rules.
-- A preview is typed rows bound by a digest; narrowing is validated by its owner, and widening is interactive. *Not built yet:* an instance entry's use cap on the preview's credential row.
+- A preview is typed rows bound by a digest; narrowing is validated by its owner, and widening is interactive. *Not built yet:* a share's caps on the preview's credential row.
 - Every run carries the origin its admission path set, and a grant names the origins it admits.
 - **A standing approval is bounded.** It ends with its lifecycle or deadline and holds to its resource constraint, and an external or destructive action never takes a standing allow.
 - Every turn records the source classes it read (`Prima.Source`), and every send to an exit is held to the flows its grant declares, which `Prima.Flow` decides.

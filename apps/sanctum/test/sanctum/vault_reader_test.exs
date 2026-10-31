@@ -318,7 +318,6 @@ defmodule Sanctum.VaultReaderTest do
             Map.merge(
               %{
                 binding_key: key,
-                scope: "athanor",
                 vault_entry_id: resource.entry_id,
                 binding_digest: resource.binding_digest
               },
