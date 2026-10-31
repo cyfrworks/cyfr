@@ -36,7 +36,8 @@ defmodule Sanctum.Consent.Plan do
   rather than quietly dropping one; `head_bindings`, each binding the head
   holds as `%{binding_key, lifetime: %{kind, until}, consumed}`, the
   field map its blob holds at that key (`fields`, absent for a lent
-  binding and for one the blob does not hold), what it binds (`entry_id`, `instance_entry_id` or a lending profile's
+  binding and for one the blob does not hold), what it binds (`entry_id`,
+  `instance_entry_id`, `share_id` or a lending profile's
   `label`) from its `consent_vault_refs` row (`consumed` when a root has
   used a `once` binding), placed as the commit reads it (`source`, `node`,
   `edge`, `dep`, `connection` and the `need` it was bound for,
@@ -68,13 +69,16 @@ defmodule Sanctum.Consent.Plan do
   Every row of `needs`, and every need of a `dependency_needs` row,
   answers what can meet it and what the plan suggests (`need_choice/4`):
 
-    * `candidates` — the athanor's active entries and the instance
+    * `candidates` — the athanor's active entries, the instance
       entries offered to the person (`Sanctum.InstanceEntries.offered/1`)
+      and the shares offered to them (`Sanctum.Shares.offered/1`)
       of the need's kind whose destination covers the hosts and paths the
       need declares (`entry_fit/2`), whatever their label, each
-      `%{source: "own" | "instance", entry_id | instance_entry_id, name,
-      kind, provider, destination, disclosed, fit, label_match,
-      field_names, fields}`, an OAuth one holding exactly the need's
+      `%{source: "own" | "instance" | "share", entry_id | instance_entry_id
+      | share_id, name, kind, provider, destination, disclosed, fit,
+      label_match, field_names, fields}`, a share's also naming its
+      `owner` (the owner's display name), its `name` "Shared by" the
+      owner; an OAuth one holding exactly the need's
       scopes, as above, and one holding at least one field when the need
       reads one. `provider` is the entry's label, `""` for none; `fit` is
       `"exact"` when every need host is one of the entry's hosts as
@@ -86,17 +90,20 @@ defmodule Sanctum.Consent.Plan do
       when the person must choose it. An
       instance entry is a candidate only where its component policy
       admits the node the need is bound on (`admits?/3`, with the node's
-      release digest in the closure). A need the component reads itself —
+      release digest in the closure); a share has no component policy and
+      is a candidate wherever it fits. A need the component reads itself —
       a disclose-only need, which declares no `attach`, the `@ingress`
       slot of a manifest declaring no needs, and a `disclose: true` need —
       is met by a disclosed entry of the athanor alone, never by an
-      instance entry. Candidates are ranked: a label equal to the need's
-      qualifier first, then an exact fit before a wildcard one, then the
-      athanor's own entry before an instance entry, then by name and id.
-    * `suggested` — `%{entry_id: id}` or `%{instance_entry_id: id}`: the
-      athanor's default of the need's qualifier (`Arca.VaultDefaults`)
-      when it is a candidate, else the only candidate, else nil. A
-      default suggests; it never binds.
+      instance entry or a share. Candidates are ranked: a label equal to
+      the need's qualifier first, then an exact fit before a wildcard one,
+      then the athanor's own entry, an instance entry and a share in that
+      order, then by name and id.
+    * `suggested` — `%{entry_id: id}`, `%{instance_entry_id: id}` or
+      `%{share_id: id}`: the athanor's default of the need's qualifier
+      (`Arca.VaultDefaults`) when it is a candidate, else the only
+      candidate, else nil. A share is never a default. A default
+      suggests; it never binds.
     * `choice_required` — true only when several candidates match and
       none is suggested.
     * `attach_only_held` — for a need the component reads itself, true
@@ -184,7 +191,7 @@ defmodule Sanctum.Consent.Plan do
   One binding of the profile's head, as its `consent_vault_refs` row holds
   it, and, where its key and binding can be read, placed as the commit
   reads it (`Sanctum.Consent.Commit.head_place/2`): `source`, which of
-  `entry_id`, `instance_entry_id` and `label` it binds; the `node` and
+  `entry_id`, `instance_entry_id`, `share_id` and `label` it binds; the `node` and
   `edge` its key names, the dependency the edge reaches (`dep`) and its
   account's name (`connection`); and the `need` it was bound for, absent
   when that cannot be told.
@@ -196,6 +203,7 @@ defmodule Sanctum.Consent.Plan do
           optional(:fields) => %{optional(String.t()) => String.t()},
           optional(:entry_id) => String.t(),
           optional(:instance_entry_id) => String.t(),
+          optional(:share_id) => String.t(),
           optional(:label) => String.t(),
           optional(:source) => String.t(),
           optional(:node) => String.t(),
@@ -225,9 +233,9 @@ defmodule Sanctum.Consent.Plan do
 
     * a profile list, a lender's head, or the entry a lender's head binds,
       that could not be read refuses the plan `{:lender_unavailable, dep}`
-      (for the entry, any refusal of `Sanctum.VaultReader.usable/3` or
-      `Sanctum.InstanceEntries.binding/2` that is not one of the answers
-      below);
+      (for the entry, any refusal of `Sanctum.VaultReader.usable/3`,
+      `Sanctum.InstanceEntries.binding/2` or `Sanctum.Shares.binding/2`
+      that is not one of the answers below);
     * a profile row, a lender's head, or a head's policy that does not
       decode, or whose bytes fail their digest, refuses it
       `{:lender_corrupt, dep, profile_id}`.
@@ -237,8 +245,8 @@ defmodule Sanctum.Consent.Plan do
   entry its reader answers is missing (`:not_found`), not usable
   (`{:entry_unavailable, …}`, `{:binding_mismatch, …}`), rebound, not
   offered to this person or not theirs to use (`:not_offered`,
-  `:denied`, `:anonymous_denied`, `:no_person`), or of a component its
-  policy does not admit.
+  `:denied`, `:anonymous_denied`, `:no_person`, and for a share
+  `:owner_not_standing`), or of a component its policy does not admit.
 
   The plan's own reads refuse on their terms, as `Prima.Refusal` rows
   them, so an outage never reads as an absence: a component the athanor
@@ -246,9 +254,10 @@ defmodule Sanctum.Consent.Plan do
   that could not answer is that store unavailable, `{:unavailable,
   "Components"}` for the component's rows and its closure, `{:unavailable,
   "Consent profiles"}` for its profiles and head, `{:unavailable,
-  "Vault"}` for the entries and defaults a need is met from, and
+  "Vault"}` for the entries and defaults a need is met from,
   `{:unavailable, "Instance entries"}` for the entries offered to the
-  person; a source whose stored manifest does not decode is `{:corrupt,
+  person and `{:unavailable, "Shares"}` for the shares offered to them;
+  a source whose stored manifest does not decode is `{:corrupt,
   {:manifest, source_ref}}`; and a profile's head row that does not
   decode is `{:corrupt, {:profile, profile_id}}`, as a head whose policy
   fails its digest or does not parse is. A dependency whose stored
@@ -582,6 +591,7 @@ defmodule Sanctum.Consent.Plan do
 
   defp suggested_source(%{suggested: %{entry_id: _}}), do: "own"
   defp suggested_source(%{suggested: %{instance_entry_id: _}}), do: "instance"
+  defp suggested_source(%{suggested: %{share_id: _}}), do: "share"
   defp suggested_source(_choice), do: nil
 
   # A required credential need nothing can meet is satisfiable only after
@@ -625,25 +635,35 @@ defmodule Sanctum.Consent.Plan do
   # A need's choice
   # ---------------------------------------------------------------------------
 
-  @typedoc "What a need's choice reads: the athanor's active entries, the offered instance entries, the defaults."
-  @type choice_sources :: %{own: [map()], offered: [map()], defaults: map()}
+  @typedoc """
+  What a need's choice reads: the athanor's active entries, the offered
+  instance entries, the shares offered to the person, the defaults.
+  """
+  @type choice_sources :: %{
+          own: [map()],
+          offered: [map()],
+          shares: [Sanctum.Shares.binding_view()],
+          defaults: map()
+        }
 
   @doc false
   # Read once per plan or preview: the athanor's active entries, the
-  # instance entries offered to the context's person (none for a context
-  # with no person) and the athanor's default per provider. A store that
-  # could not answer the offered entries is `{:unavailable, "Instance
-  # entries"}`: read as none offered, the walk would offer to connect a
-  # key over entries that exist.
+  # instance entries and the shares offered to the context's person (none
+  # for a context with no person) and the athanor's default per provider.
+  # A store that could not answer what is offered is `{:unavailable,
+  # "Instance entries"}` or `{:unavailable, "Shares"}`: read as none
+  # offered, the walk would offer to connect a key over keys that exist.
   @spec choice_sources(Context.t()) :: {:ok, choice_sources()} | {:error, term()}
   def choice_sources(ctx) do
     with {:ok, entries} <- Sanctum.Vault.list(ctx),
          {:ok, defaults} <- Sanctum.Vault.defaults(ctx),
-         {:ok, offered} <- offered(ctx) do
+         {:ok, offered} <- offered(ctx),
+         {:ok, shares} <- shares(ctx) do
       {:ok,
        %{
          own: Enum.filter(entries, &(&1.status == "active")),
          offered: offered,
+         shares: shares,
          defaults: defaults
        }}
     end
@@ -656,6 +676,21 @@ defmodule Sanctum.Consent.Plan do
       {:error, _no_person} -> {:ok, []}
     end
   end
+
+  # A person who does not stand, or no person, is offered no share.
+  defp shares(ctx) do
+    case Sanctum.Shares.offered(ctx) do
+      {:ok, shares} -> {:ok, shares}
+      {:error, outage} when outage in @outages -> {:error, {:unavailable, "Shares"}}
+      {:error, _no_person} -> {:ok, []}
+    end
+  end
+
+  @doc false
+  # What a person reads a key shared with them as: whose it is, never the
+  # owner's name for the entry.
+  @spec shared_name(String.t()) :: String.t()
+  def shared_name(owner), do: "Shared by " <> owner
 
   @doc false
   # The node facts an instance entry's component policy is read against:
@@ -696,7 +731,8 @@ defmodule Sanctum.Consent.Plan do
   def need_choice(ctx, sources, need, facts) do
     candidates =
       (Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
-         Enum.flat_map(sources.offered, &instance_candidate(ctx, &1, need, facts)))
+         Enum.flat_map(sources.offered, &instance_candidate(ctx, &1, need, facts)) ++
+         Enum.flat_map(sources.shares, &share_candidate(&1, need)))
       |> Enum.sort_by(&rank/1)
 
     suggested = suggestion(candidates, sources, need)
@@ -756,6 +792,30 @@ defmodule Sanctum.Consent.Plan do
        else: []
   end
 
+  # A share has no component policy: it meets any need it fits, on any
+  # node, and never one the component reads itself, since it is attach-only.
+  defp share_candidate(_share, nil), do: []
+
+  defp share_candidate(share, need) do
+    candidate =
+      %{
+        source: "share",
+        share_id: share.id,
+        name: shared_name(share.owner),
+        owner: share.owner,
+        kind: share.kind,
+        provider: share.provider_hint,
+        destination: canonical_destination(share.destination),
+        disclosed: false
+      }
+      |> with_fields(share.field_names, need)
+      |> with_fit(share, need)
+
+    if not reads_itself?(need) and meets?(candidate, [], need) and mappable?(candidate, need),
+      do: [candidate],
+      else: []
+  end
+
   # The `@ingress` slot of a manifest declaring no needs names no kind or
   # destination: any disclosed entry may meet it.
   defp meets?(_candidate, _scopes, nil), do: true
@@ -778,12 +838,21 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # The offer's order: the need's own label first, an exact fit before a
-  # wildcard one, the athanor's entry before an instance entry, then name
-  # and id, so the order is total.
+  # wildcard one, the athanor's entry before an instance entry before a
+  # share, then name and id, so the order is total.
   defp rank(candidate) do
-    {not candidate.label_match, candidate.fit == "wildcard", candidate.source != "own",
-     candidate.name, Map.get(candidate, :entry_id) || Map.get(candidate, :instance_entry_id)}
+    {not candidate.label_match, candidate.fit == "wildcard", source_rank(candidate.source),
+     candidate.name, candidate_id(candidate)}
   end
+
+  defp source_rank("own"), do: 0
+  defp source_rank("instance"), do: 1
+  defp source_rank("share"), do: 2
+
+  defp candidate_id(candidate),
+    do:
+      Map.get(candidate, :entry_id) || Map.get(candidate, :instance_entry_id) ||
+        Map.get(candidate, :share_id)
 
   @doc """
   How `entry` can serve the declared credential `need` by where it may
@@ -885,6 +954,7 @@ defmodule Sanctum.Consent.Plan do
 
   defp identity(%{source: "own", entry_id: id}), do: %{entry_id: id}
   defp identity(%{source: "instance", instance_entry_id: id}), do: %{instance_entry_id: id}
+  defp identity(%{source: "share", share_id: id}), do: %{share_id: id}
 
   # What the profile's head holds: the origins it admits and its bindings.
   # A first grant, or a profile with no head, holds none.
@@ -1256,9 +1326,10 @@ defmodule Sanctum.Consent.Plan do
     do: head_narrowing(profile_id, head, source_ref, asked)
 
   # A head row as a re-grant reopens it: its key, what it binds (the
-  # athanor's entry, the instance entry or the lending profile's label,
-  # never material), its lifetime and whether a root consumed it, and, as
-  # the commit reads the row (`Commit.head_place/2`), which of the three it
+  # athanor's entry, the instance entry, the share or the lending
+  # profile's label, never material), its lifetime and whether a root
+  # consumed it, and, as the commit reads the row (`Commit.head_place/2`),
+  # which of these it
   # binds (`source`), where it sits and the need it was bound for. A row
   # whose key or binding cannot be read is placed nowhere.
   defp head_binding(ref, held, reads) do
@@ -1270,6 +1341,7 @@ defmodule Sanctum.Consent.Plan do
     |> Prima.MapUtil.put_present(:fields, if(is_nil(ref.via_label), do: held[ref.binding_key]))
     |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id)
     |> Prima.MapUtil.put_present(:instance_entry_id, ref.instance_entry_id)
+    |> Prima.MapUtil.put_present(:share_id, ref.share_id)
     |> Prima.MapUtil.put_present(:label, ref.via_label)
     |> Map.merge(placed(reads, ref))
   end
@@ -1677,6 +1749,8 @@ defmodule Sanctum.Consent.Plan do
   # digest the lender bound: the athanor's own, or an instance entry as it
   # is offered to the person (`Sanctum.InstanceEntries.binding/2`) whose
   # component policy admits the dependency node, as the commit holds it.
+  # A share is read as the person is offered it (`Sanctum.Shares.binding/2`),
+  # its source at the digest the lender bound; it has no component policy.
   # `:absent` is the reader's own answer about the entry (a moved binding
   # and a component not admitted among them), `:unread` any other refusal.
   defp lent_entry(ctx, %{scope: "instance", entry_id: id, binding_digest: digest}, facts) do
@@ -1691,6 +1765,19 @@ defmodule Sanctum.Consent.Plan do
 
       {:error, reason} ->
         if instance_entry_answer?(reason), do: :absent, else: :unread
+    end
+  end
+
+  defp lent_entry(ctx, %{scope: "share", entry_id: id, binding_digest: digest}, _facts) do
+    case Sanctum.Shares.binding(ctx, id) do
+      {:ok, %{binding_digest: ^digest} = view} ->
+        {:ok, %{source: "share", id: view.id, name: shared_name(view.owner)}}
+
+      {:ok, _moved} ->
+        :absent
+
+      {:error, reason} ->
+        if share_answer?(reason), do: :absent, else: :unread
     end
   end
 
@@ -1716,6 +1803,16 @@ defmodule Sanctum.Consent.Plan do
 
   defp instance_entry_answer?({:entry_unavailable, _status}), do: true
   defp instance_entry_answer?(_unread), do: false
+
+  # `Sanctum.Shares.binding/2`'s answers about the share, its owner, its
+  # source and the person; a damaged source and a store that could not
+  # answer are reads that failed.
+  defp share_answer?(reason)
+       when reason in [:not_offered, :owner_not_standing, :denied, :anonymous_denied],
+       do: true
+
+  defp share_answer?({:entry_unavailable, _status}), do: true
+  defp share_answer?(_unread), do: false
 
   defp mint_token(ctx, shape_digest, profile_id, expected_revision) do
     bindings =
