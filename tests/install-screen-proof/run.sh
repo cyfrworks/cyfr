@@ -187,9 +187,9 @@ clean_install() {
   sleep 25
   check "screenshot screen-setup.png" guest_screenshot screen-setup.png
   guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
-  guest_ssh 'ps -eo args; ls -A ~/cyfr/.cyfr/screen' >"$GUEST_DIR/processes.txt" 2>&1
+  guest_ssh 'ps -eo args' >"$GUEST_DIR/processes.txt" 2>&1
   check "the setup token is in no process's arguments" sh -c '[ -s "$1" ] && ! grep -qF "$(cat "$1")" "$2"' sh "$WORK/token" "$GUEST_DIR/processes.txt"
-  check "the page that held the token is gone" sh -c '! grep -qx open.html "$1"' sh "$GUEST_DIR/processes.txt"
+  check "the page that holds the token is the account's alone" guest_ssh '[ "$(stat -c %a ~/cyfr/.cyfr/screen/open.html)" = 600 ]'
 
   step "cyfr down, then a reboot: CYFR stays down and the screen says why"
   guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"

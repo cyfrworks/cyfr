@@ -119,6 +119,39 @@ func TestScreenOnRefuses(t *testing.T) {
 	}
 }
 
+// A project path goes into the service's unit as it is, so one that could
+// carry a directive of its own refuses before anything is written or asked.
+func TestScreenOnRefusesAPathTheUnitCouldNotHold(t *testing.T) {
+	for name, dir := range map[string]string{
+		"a line of its own": "project\nUser=root\n#",
+		"a space":           "my project",
+		"a percent":         "100%h",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := screenProject(t)
+			top, _ := os.Getwd()
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range []string{"docker-compose.yml", ".env"} {
+				if err := os.Rename(f, filepath.Join(dir, f)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Chdir(filepath.Join(top, dir))
+			askInput = strings.NewReader("yes\n")
+			var out bytes.Buffer
+			err := screenOn(context.Background(), true, &out)
+			if err == nil || !strings.HasPrefix(err.Error(), "`cyfr screen` needs a project path of letters, digits and / . _ - alone") {
+				t.Fatalf("err = %v", err)
+			}
+			if s.applied != nil || fileExists(screenDir) || out.Len() != 0 {
+				t.Errorf("applied %v, wrote %v, out %q", s.applied, fileExists(screenDir), out.String())
+			}
+		})
+	}
+}
+
 // A no changes nothing as root, and a failed sudo says to run it again.
 func TestScreenOnDeclinedOrFailed(t *testing.T) {
 	s := screenProject(t)

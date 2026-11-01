@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,9 @@ const (
 	screenAptLine = "/etc/apt/apt.conf.d/52cyfr-screen"
 	chromeDeb     = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 )
+
+// screenPath is a project path the service's unit can hold as it is.
+var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 
 var screenCmd = &cobra.Command{
 	Use:   "screen",
@@ -97,6 +101,9 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
+	}
+	if !screenPath.MatchString(dir) {
+		return fmt.Errorf("`cyfr screen` needs a project path of letters, digits and / . _ - alone, and this one is %q", dir)
 	}
 	account, err := user.Current()
 	if err != nil {

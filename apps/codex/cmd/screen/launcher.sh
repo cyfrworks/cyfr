@@ -7,7 +7,7 @@
 # on the waiting page until CYFR answers, then on the setup link, which goes
 # to Prism once setup is done. It never starts or stops CYFR. `cyfr screen
 # on` fills in the address and port. The setup token stays out of arguments:
-# a private page holds it, and goes once Chrome has opened it.
+# a page beside .env, as private as it is, holds it.
 screen=$PWD/.cyfr/screen
 @PROXY@
 
@@ -27,7 +27,6 @@ while :; do
         token=$(sed -n 's/^CYFR_SETUP_TOKEN=//p' .env)
         (umask 077 && printf '<script>location.replace("%s")</script>\n' "@ADDRESS@/setup#$token" >"$screen/$page")
         chrome "$@"
-        (sleep 10 && rm -f "$screen/$page") &
         wait "$browser"
     else
         page=waiting.html
