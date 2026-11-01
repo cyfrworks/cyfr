@@ -71,8 +71,8 @@ A construct the plan cannot run as CI does fails it, naming the step:
 an expression beyond the matrix, runner.temp, github.workspace, the status
 functions, contains(), ==, !=, !, && and || (and, in a build's
 build-args, a step's output), an unknown action or `with:` input, a
-`shell:` other than bash, continue-on-error, a job container or services,
-or a step that writes GITHUB_ENV or GITHUB_PATH.
+`shell:` other than bash, continue-on-error other than WORLD_CHECK, a job
+container or services, or a step that writes GITHUB_ENV or GITHUB_PATH.
 """
 
 import glob
@@ -120,6 +120,9 @@ TRIVY_INPUTS = {"version", "scan-type", "scan-ref", "image-ref", "scanners", "fo
                 "severity", "ignore-unfixed", "trivyignores"}
 BUILD_INPUTS = {"context", "file", "build-args", "load", "tags", "cache-from", "cache-to"}
 UPLOAD_INPUTS = {"name", "path", "retention-days", "if-no-files-found", "compression-level", "overwrite"}
+# A world check's condition. scripts/ci/world-checks.sh leaves it false
+# outside a pull request, so here, as on a push, the check blocks.
+WORLD_CHECK = "${{ steps.world.outputs.informational == 'true' }}"
 # The caller's selections a runner never has: a step's own come from the
 # workflow alone.
 UNSET = ["MIX_ENV", "MIX_BUILD_PATH", "MIX_TEST_PARTITION", "CYFR_DATABASE", "CYFR_DATABASE_URL",
@@ -1077,7 +1080,7 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
         try:
             if name in excepts or (only and name != only):
                 continue
-            if "continue-on-error" in step:
+            if step.get("continue-on-error", WORLD_CHECK) != WORLD_CHECK:
                 raise Refused("it sets continue-on-error")
             when = runs(step.get("if"), ctx)
             if when == "never":

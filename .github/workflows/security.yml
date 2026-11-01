@@ -64,6 +64,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
 
       - uses: ./.github/actions/setup-elixir
         with:
@@ -77,9 +79,14 @@ jobs:
       - name: Compile
         run: mix compile
 
+      - name: Whether the advisory checks block this run
+        id: world
+        run: scripts/ci/world-checks.sh
+
       - name: Check retired and vulnerable dependencies
         # The audits and their one suppression live in the script, which
         # scripts/release.sh runs again right before it tags.
+        continue-on-error: ${{ steps.world.outputs.informational == 'true' }}
         run: scripts/dependency-audit.sh
 
       - name: Check unused dependencies

@@ -925,6 +925,18 @@ for spec in 'docker build -treview-extra:ci . => gives an image the name review-
     "$scratch/images/u$n" --image-namespace cyfr-gate-1 2>"$scratch/images-q$n.err" || fail "the planner ran a step that runs ${spec%% => *}"
   grep -qF -- "${spec#* => }" "$scratch/images-q$n.err" || fail "the planner refused ${spec%% => *} without its reason: $(cat "$scratch/images-q$n.err")"
 done
+# A world check's condition is the one continue-on-error the planner takes.
+plant_dir continues
+python3 -I - "$scratch/images-continues/.github/workflows/test.yml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "continue-on-error: ${{ steps.world.outputs.informational == 'true' }}\n"
+assert s.count(old) == 2
+open(p, "w").write(s.replace(old, "continue-on-error: true\n"))
+PY
+! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-continues" test.yml builder-image "$scratch/images/c1" "$scratch/images/c2" \
+  --image-namespace cyfr-gate-1 2>"$scratch/images-c1.err" || fail 'the planner ran a step that may fail outright'
+grep -qF 'it sets continue-on-error' "$scratch/images-c1.err" || fail "the planner refused continue-on-error without its reason: $(cat "$scratch/images-c1.err")"
 # A step that only pulls or inspects an image names it as CI does.
 plant_step pull 'docker pull alpine:3 && docker image inspect alpine:3 >/dev/null'
 python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-pull" test.yml builder-image "$scratch/images/p3" "$scratch/images/t3" \
@@ -1334,7 +1346,7 @@ for leg in go audit boot; do
 done
 for job in 'go.codex_test: codex-ci.yml test: 6 steps' 'go.keeper: keeper-ci.yml keeper: 5 steps' \
   'audit.spdx: license-lint.yml spdx-headers: 2 steps' 'audit.govuln_codex: security.yml go-audit tree=apps/codex: 2 steps' \
-  'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 4 steps' \
+  'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 5 steps' \
   'audit.npm_audit: security.yml npm-audit: 1 step'; do
   grep -qxF "    $job passed" "$scratch/pass.out" || fail "the passing gate did not report $job passed: $(cat "$scratch/pass.out")"
 done
@@ -1434,7 +1446,7 @@ framed close "$gate_pid" 0
 ct="$scratch/close.trace" ns="cyfr-gate-$gate_pid"
 has_line '^==> harness +ok ' "$scratch/close.out" || fail "the harness leg did not pass: $(cat "$scratch/close.out")"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
-  'builder_image: test.yml builder-image: 8 steps' 'runtime_image: test.yml locus-runtime-image: 7 steps' \
+  'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
   'backends_image: test.yml locus-backends-image: 22 steps' 'browser_a: test.yml browser shard=a: 6 steps' \
   'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 4 steps' \
   'browser_d: test.yml browser shard=d: 6 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
@@ -2212,7 +2224,7 @@ gate_status "$gate_pid"
 [ "$gate_rc" = 1 ] || fail "a harness leg whose trivy did not install exited $gate_rc"
 has_line '^trivy_install=1$' "$scratch/badsum.log/harness.summary" || fail 'a trivy that failed its checksum was installed'
 no_line '^installed\|' "$scratch/badsum.trace/trivy.calls" 2>/dev/null || fail 'a trivy that failed its checksum ran'
-has_line 'is not 0\.[0-9.]+, the version the step pins' "$scratch/badsum.log/harness.builder_image_10.log" || fail "a scan ran without the pinned trivy: $(cat "$scratch/badsum.log/harness.builder_image_10.log")"
+has_line 'is not 0\.[0-9.]+, the version the step pins' "$scratch/badsum.log/harness.builder_image_11.log" || fail "a scan ran without the pinned trivy: $(cat "$scratch/badsum.log/harness.builder_image_11.log")"
 same_store badsum || fail "the harness leg changed the host's images: $(cat "$scratch/badsum.trace/docker.images")"
 gate_free badsum
 echo 'ok: trivy is installed only as its release checksums it, and a scan needs that one'
