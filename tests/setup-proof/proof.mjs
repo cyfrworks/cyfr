@@ -7,8 +7,8 @@
 // <the home's CYFR_PORT>`. Each screen is held to the handheld's checks
 // (tests/browser/handheld.mjs) and photographed into /out; a console error
 // or a page error on the pages fails the case. The join's link, its
-// machine, its approval, the home through Serve and setup's status route
-// are asked of run.sh (lib.mjs `ask`). Writes setup-proof-<case>.json to /out and exits
+// machine, its approval and the home through Serve are asked of run.sh
+// (lib.mjs `ask`). Writes setup-proof-<case>.json to /out and exits
 // non-zero when a check fails.
 
 import { writeFileSync } from "node:fs";
@@ -24,16 +24,6 @@ function check(what, holds, detail = {}) {
   record.checks.push({ what, holds, ...detail });
   if (!holds) throw new Error(`${what}: ${JSON.stringify(detail)}`);
 }
-
-// Whether `reply`, one of run.sh's answers of the status route, is exactly
-// the wire's answer `state` at 200.
-const reads = (reply, state) => {
-  if (reply?.status !== 200) return false;
-  const { version, state: read, ...rest } = JSON.parse(reply.body);
-  return version === 1 && read === state && Object.keys(rest).length === 0;
-};
-// Whether `reply` is the route's refusal of a request that is not local.
-const refused = (reply) => reply?.status === 403 && JSON.parse(reply.body || "{}").code === "forbidden";
 
 const browser = await chromium.launch();
 let page;
@@ -127,15 +117,6 @@ try {
     const create = page.locator('[data-test="admission-create"]');
     check("Create a passkey stays enabled while cyfr.run is silent", await create.isEnabled());
     await page.screenshot({ path: `${OUT}/${kind}-setup-name.png` });
-
-    // Before the first person: the route says what a launcher opens.
-    {
-      const status = await ask({ op: "status" }, { outDir: OUT, timeoutMs: 60_000, refuseError: true });
-      check("before the first person the setup token reads open", reads(status.setup, "open"), { status });
-      check("before the first person an invalid token reads closed", reads(status.invalid, "closed"), { status });
-      check("a browser's Origin is refused the status route", refused(status.origin), { status });
-      check("reading the status made no one", status.people === 0, { status });
-    }
     await create.tap();
 
     // The second screen: the person is made, and their registration meets
@@ -168,21 +149,11 @@ try {
     const fresh = await browser.newContext(HANDHELD);
     const again = await fresh.newPage();
     await again.goto(setupLink);
-    await again.locator('[data-test="setup-closed"]').waitFor({ timeout: 60_000 });
-    check("the link again, once the first person holds a passkey, says setup is closed and starts no ceremony",
+    await again.waitForURL((url) => url.pathname !== "/setup", { timeout: 60_000 });
+    check("the link again, once the first person holds a passkey, goes on to CYFR and starts no ceremony",
       (await again.locator('[data-test="admission-create"]').count()) === 0);
     await again.screenshot({ path: `${OUT}/${kind}-setup-closed.png` });
     await fresh.close();
-
-    // After it: the same token reads closed, as any other does, and the
-    // person stands.
-    {
-      const status = await ask({ op: "status" }, { outDir: OUT, timeoutMs: 60_000, refuseError: true });
-      check("once the person holds a passkey the setup token reads closed", reads(status.setup, "closed"), { status });
-      check("an invalid token still reads closed, as the spent one does", status.invalid.body === status.setup.body && status.invalid.status === status.setup.status, { status });
-      check("a browser's Origin is still refused the status route", refused(status.origin), { status });
-      check("reading the status kept the first person, and them alone", status.people === 1, { status });
-    }
   } else {
     const link = page.locator("[data-link]");
     await link.waitFor({ state: "visible", timeout: 300_000 });
@@ -221,10 +192,6 @@ try {
     check("the pages do not move the browser to a ts.net address", new URL(page.url()).origin === pagesOrigin, { url: page.url() });
     const served = await ask({ op: "served", name: approved.name }, { outDir: OUT, timeoutMs: 120_000, refuseError: true });
     check("the home answers through Serve at its name", served.status === 200, { served });
-    const route = await ask({ op: "status_serve", name: approved.name }, { outDir: OUT, timeoutMs: 120_000, refuseError: true });
-    check("the setup token reads open on the loopback listener", reads(route.local, "open"), { route });
-    check("that token is refused through Serve, on the proxy listener", refused(route.plain), { route });
-    check("headers claiming loopback change nothing there", refused(route.claimed), { route });
   }
 
   const failing = unmet(record.screens);

@@ -127,7 +127,8 @@ defmodule Cyfr.Application do
     # known to export through the configured exporter.
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
       ensure_configured_traces_exporter!()
-      attach_tracing()
+      OpentelemetryBandit.setup()
+      OpentelemetryPhoenix.setup(adapter: :bandit)
     end
 
     # Every deployment signs people in, so it names the cross-origin
@@ -145,6 +146,11 @@ defmodule Cyfr.Application do
 
     # Say (don't block) how a CYFR with no person yet is set up.
     notice_if_no_person()
+
+    # Attach OTEL tenant handler if OpenTelemetry is enabled
+    if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
+      Cyfr.OtelTenantHandler.attach()
+    end
 
     # Webhook verify-failed → log at :warning. Operators can disable by
     # detaching `"cyfr-webhook-verify-failed-log"` if they prefer an
@@ -967,19 +973,6 @@ defmodule Cyfr.Application do
       &__MODULE__.log_webhook_verify_failed/4,
       nil
     )
-  end
-
-  @doc """
-  The tracing a deployment runs under OpenTelemetry: the listener's and
-  the router's spans and their tenant attributes. The one definition of
-  what they record of a request, which
-  `Emissary.Web.SetupStatusControllerTest` holds to no credential.
-  """
-  @spec attach_tracing() :: :ok
-  def attach_tracing do
-    OpentelemetryBandit.setup()
-    OpentelemetryPhoenix.setup(adapter: :bandit)
-    Cyfr.OtelTenantHandler.attach()
   end
 
   @doc false

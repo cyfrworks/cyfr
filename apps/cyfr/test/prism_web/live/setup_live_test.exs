@@ -59,6 +59,12 @@ defmodule PrismWeb.SetupLiveTest do
     {browser, view}
   end
 
+  # The page goes to the root as soon as it hands over the token.
+  defp closed!(conn, token \\ @token) do
+    {_browser, view} = opened(conn, token)
+    assert_redirect(view, ~p"/")
+  end
+
   # Screen 1 with `name` typed and the passkey made: screen 2, driven.
   defp created(conn, name) do
     {browser, view} = opened(conn)
@@ -122,27 +128,12 @@ defmodule PrismWeb.SetupLiveTest do
       assert people() == 0
     end
 
-    test "a wrong token, a missing one and a CYFR with no setup token are one answer, and start no ceremony",
+    test "a wrong token, a missing one and a CYFR with no setup token go to the root and start no ceremony",
          %{conn: conn} do
-      for token <- [String.duplicate("0f", 32), "", "not-hex"] do
-        {_browser, view} = opened(conn, token)
-
-        assert has_element?(
-                 view,
-                 ~s([data-test="setup-closed"]),
-                 "not valid, or setup is complete"
-               )
-
-        refute has_element?(view, ~s([data-test="admission-create"]))
-        refute_vocabulary(render(view))
-
-        render_hook(view, "setup_start", %{})
-        assert_reply(view, %{error: true})
-      end
+      for token <- [String.duplicate("0f", 32), "", "not-hex"], do: closed!(conn, token)
 
       Prima.Test.Env.delete_app_env(:sanctum, :setup_token)
-      {_browser, view} = opened(conn)
-      assert has_element?(view, ~s([data-test="setup-closed"]))
+      closed!(conn)
       assert people() == 0
     end
 
@@ -200,7 +191,7 @@ defmodule PrismWeb.SetupLiveTest do
       refute_vocabulary(render(view))
     end
 
-    test "a second tab after setup is sent to sign in, and its ceremony writes nothing", %{
+    test "a second tab after setup goes to the root, and its ceremony writes nothing", %{
       conn: conn
     } do
       directory!()
@@ -216,14 +207,14 @@ defmodule PrismWeb.SetupLiveTest do
 
       # The open tab's registration is refused at the admission, which
       # holds the person's passkey now.
-      admit!(second, "setup", second_credential)
-      assert has_element?(second, ~s([data-test="setup-closed"]))
-      assert has_element?(second, ~s(a[href="/login"]))
+      newcomers = Sanctum.Test.Newcomers
+      identity = newcomers.identity() |> newcomers.fields() |> Map.delete("name")
+      render_hook(second, "setup_passkey", Map.put(identity, "credential", second_credential))
+      assert_redirect(second, ~p"/")
       assert {people(), passkeys()} == {1, 1}
 
-      # A tab opened now is told so before any ceremony.
-      {_browser, third} = opened(conn)
-      assert has_element?(third, ~s([data-test="setup-closed"]))
+      # A tab opened now goes to the root before any ceremony.
+      closed!(conn)
     end
   end
 
@@ -477,8 +468,7 @@ defmodule PrismWeb.SetupLiveTest do
       assert get_session(browser, :sanctum_session_token) == nil
 
       # The page reloaded: setup is complete, and the person signs in.
-      {_browser, again} = opened(conn)
-      assert has_element?(again, ~s([data-test="setup-closed"]))
+      closed!(conn)
 
       %{id: user_id} = person()
 
@@ -518,8 +508,7 @@ defmodule PrismWeb.SetupLiveTest do
       assert code!(view) == first_code
 
       # The passkey closes setup.
-      {_browser, again} = opened(conn)
-      assert has_element?(again, ~s([data-test="setup-closed"]))
+      closed!(conn)
     end
   end
 end

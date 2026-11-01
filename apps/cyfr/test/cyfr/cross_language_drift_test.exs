@@ -469,10 +469,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/identity_test.exs",
        ~w(chains directory entries identifiers keys kinds kits locate max_entry_bytes prefix protocol requests)}
     ],
-    "install_prerequisites.json" => [
-      {"apps/codex/internal/install/vector_test.go", ~w(systems universe sudo init)},
-      {"tests/install-verify-test.sh", ~w(systems universe bootstrap sudo)}
-    ],
     "keeper_protocol.json" => [
       {"apps/cyfr/test/emissary/external/backend_definition_test.exs", ~w(reserved_env_prefixes)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",
@@ -587,12 +583,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(attempt initial_credit exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
-    ],
-    "setup_status.json" => [
-      {"apps/codex/internal/setup/status_test.go",
-       ~w(path version max_body_bytes request exchanges answers)},
-      {"apps/cyfr/test/emissary/web/controllers/setup_status_controller_test.exs",
-       ~w(path version max_body_bytes request exchanges)}
     ],
     "tincture_wire.json" => [
       {"apps/cyfr/assets/test/canvas/hook.test.mjs", ~w(shell shell_invalid canvas.handshake)},

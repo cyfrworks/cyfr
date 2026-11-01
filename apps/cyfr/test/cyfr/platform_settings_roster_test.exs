@@ -792,6 +792,10 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   end
 
   describe "unknown/2" do
+    test "the install proof's cache is a foreign process variable" do
+      assert Roster.unknown([], ["CYFR_PROOF_CACHE"]) == []
+    end
+
     test "a file may name only the server's variables; the process may name another program's too" do
       assert Roster.unknown(["CYFR_HOST", "CYFR_MAX_ATHANORS", "CYFR_CPU_LIMIT", "PATH"], []) ==
                []

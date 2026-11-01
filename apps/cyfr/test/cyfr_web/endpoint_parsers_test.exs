@@ -85,7 +85,6 @@ defmodule CyfrWeb.EndpointParsersTest do
   def request(method, url, body, content_type) do
     method
     |> Plug.Test.conn(url, body)
-    |> Sanctum.ClientIp.put_ingress(:loopback)
     |> put_req_header("content-type", content_type)
     |> put_req_header("accept", "application/json")
     |> CountingBody.wrap()

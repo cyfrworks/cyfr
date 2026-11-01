@@ -8,209 +8,289 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/cyfr/codex/internal/install"
-	"github.com/cyfr/codex/internal/install/fake"
-	"github.com/cyfr/codex/internal/version"
 )
 
-// standInMachine makes cyfr init see m as alice, a process without the
-// docker group, and run the root entry as entry (a shell script),
-// recording each interactive flag the entry was asked for and each time
-// sudo's login was forgotten.
+// standIn is a machine for prepareMachine, a fresh Ubuntu 26.04 unless a
+// test says otherwise, recording what it applied.
 type standIn struct {
-	m          *fake.Machine
-	entryCalls []bool
-	forgotten  int
+	supported, running, reachableAfter bool
+	reachable                          bool
+	installed, member, process         []string
+	applied                            [][]string
+	applyErr                           error
+	forgotten                          int
 }
 
-func standInMachine(t *testing.T, m *fake.Machine, entry string) *standIn {
+func standInMachine(t *testing.T) *standIn {
 	t.Helper()
-	s := &standIn{m: m}
-	observe, entryOf, forget := machine.observe, machine.entry, machine.forget
-	t.Cleanup(func() { machine.observe, machine.entry, machine.forget = observe, entryOf, forget })
-	machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
-		return m.Facts(install.Account{Name: "alice", UID: 1000}, false), nil
-	}
-	machine.entry = func(_ install.Policy, root, interactive bool) ([]string, error) {
-		s.entryCalls = append(s.entryCalls, interactive)
-		if entry == "" {
-			return nil, errNoSudo
+	s := &standIn{supported: true}
+	saved, savedTerminal, savedInput, savedSg := machine, askTerminal, askInput, sgProgram
+	t.Cleanup(func() { machine, askTerminal, askInput, sgProgram = saved, savedTerminal, savedInput, savedSg })
+	// No test reaches the real sg, which would run this test binary again.
+	sgProgram = "/bin/false"
+	askTerminal = func() bool { return true }
+	askInput = strings.NewReader("yes\n")
+	machine.supported = func() bool { return s.supported }
+	machine.reachable = func() bool { return s.reachable }
+	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
+	machine.running = func() bool { return s.running }
+	machine.groups = func(account string) []string {
+		if account == "" {
+			return s.process
 		}
-		// The stand-in reads the plan on its standard input, as the
-		// entry does.
-		return []string{"/bin/sh", "-c", entry}, nil
+		return s.member
+	}
+	machine.apply = func(commands []string) error {
+		s.applied = append(s.applied, commands)
+		s.reachable = s.reachableAfter
+		return s.applyErr
 	}
 	machine.forget = func() { s.forgotten++ }
 	return s
 }
 
-// event is one line of the root entry's output.
-func event(t *testing.T, ev install.Event) string {
-	t.Helper()
-	line, err := json.Marshal(ev)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(line)
-}
-
-func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-
-// TestInitAsksNothingOfAMachineThatHasEverything prepares a project on a
-// machine that has Docker and the group: nothing is shown or asked, and
-// nothing runs as root.
-func TestInitAsksNothingOfAMachineThatHasEverything(t *testing.T) {
-	newInitProject(t)
-	p := install.Load()
-	m := fake.New(p)
-	m.Packages = map[string]string{"docker.io": "installed", "docker-compose-v2": "installed", "apparmor": "installed"}
-	m.Service, m.Enabled, m.Members = "active", true, []string{"alice"}
-	s := standInMachine(t, m, "")
-	machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
-		return m.Facts(install.Account{Name: "alice", UID: 1000}, true), nil
-	}
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("3\n")
-	var out bytes.Buffer
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(out.String(), "Install these requirements") || len(s.entryCalls) != 0 || s.forgotten != 0 || len(m.Ran) != 0 {
-		t.Fatalf("a satisfied machine was asked or changed (entry %v, forgotten %d, ran %v):\n%s", s.entryCalls, s.forgotten, m.Ran, out.String())
-	}
-	if !fileExists(".env") {
-		t.Fatal("init did not prepare the project")
-	}
-}
-
-// TestInitDeclinedOrUnagreedChangesNothing shows the exact commands, and
-// a person who answers no, or a run with no terminal and no --yes, gets
-// the sentence saying so, with nothing run as root and nothing written.
-func TestInitDeclinedOrUnagreedChangesNothing(t *testing.T) {
-	p := install.Load()
-	for name, c := range map[string]struct {
-		terminal bool
-		input    string
-		want     string
-	}{
-		"declined":    {true, "no\n", "You chose not to install docker.io, docker-compose-v2, the running Docker service and alice's membership of the docker group. Nothing was installed. Run `cyfr init` again when you want to continue."},
-		"no terminal": {false, "", "Installing docker.io, docker-compose-v2, the running Docker service and alice's membership of the docker group needs your agreement in a terminal. Nothing was installed."},
-	} {
-		t.Run(name, func(t *testing.T) {
-			newInitProject(t)
-			s := standInMachine(t, fake.New(p), "exit 99")
-			askTerminal = func() bool { return c.terminal }
-			askInput = strings.NewReader(c.input)
-			var out bytes.Buffer
-			err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
-			if err == nil || !strings.HasPrefix(err.Error(), c.want) {
-				t.Fatalf("runInit = %v, want %q", err, c.want)
-			}
-			for _, line := range []string{"  apt-get update\n", "  apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends docker.io docker-compose-v2\n", "  systemctl enable --now docker.service\n", "  usermod -aG docker alice\n", "Members of the docker group control Docker"} {
-				if !strings.Contains(out.String(), line) {
-					t.Errorf("the preview lacks %q:\n%s", line, out.String())
-				}
-			}
-			if len(s.entryCalls) != 0 || s.forgotten != 0 {
-				t.Errorf("the root entry ran (%v) or sudo was touched (%d)", s.entryCalls, s.forgotten)
-			}
-			nothingWritten(t, ".env.example")
-		})
-	}
-}
-
-// sgStandIn records the sg cyfr init continues through: its arguments, its
-// directory and whether its standard input is the process's, and answers
-// status after printing a line.
-func sgStandIn(t *testing.T, status int) string {
+// sgStandIn records the sg cyfr init continues through and answers status.
+func sgStandIn(t *testing.T, status string) string {
 	t.Helper()
 	record := filepath.Join(t.TempDir(), "sg")
 	script := filepath.Join(t.TempDir(), "sg.sh")
-	body := "#!/bin/sh\n{ pwd; printf '%s\\n' \"$@\"; } >" + shQuote(record) + "\necho 'the continued init ran'\nexit " + strconv.Itoa(status) + "\n"
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" >'" + record + "'\nexit " + status + "\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	saved := sgProgram
-	t.Cleanup(func() { sgProgram = saved })
 	sgProgram = script
 	return record
 }
 
-// TestInitInstallsThroughOneEntryAndContinues agrees, runs the root entry
-// once with the agreed plan on its input, shows its actions, then goes on
-// as this same program's init through sg docker, in this directory with
-// the person's flags quoted for sh, offers newgrp before `cyfr up`, and
-// forgets sudo's login.
-func TestInitInstallsThroughOneEntryAndContinues(t *testing.T) {
-	dir := newInitProject(t)
-	p := install.Load()
-	m := fake.New(p)
-	planFile := filepath.Join(t.TempDir(), "plan.json")
-	entry := "cat >" + shQuote(planFile) + "; " +
-		"echo " + shQuote(event(t, install.Event{Event: install.EventStart, Action: &install.Action{Kind: install.AptUpdate}})) + "; exit 0"
-	s := standInMachine(t, m, entry)
-	calls := 0
-	machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
-		calls++
-		if calls > 1 { // the entry added alice to the group
-			m.Members = []string{"alice"}
-		}
-		return m.Facts(install.Account{Name: "alice", UID: 1000}, false), nil
-	}
-	record := sgStandIn(t, 0)
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("yes\n")
+func prepare(t *testing.T) (bool, string, error) {
+	t.Helper()
 	var out bytes.Buffer
-	args := []string{"--no-pull=true", "--hostname=it's $HOME"}
-	err := runInit(context.Background(), initOptions{noPull: true, continuation: args}, &out, &out)
+	continued, err := prepareMachine(context.Background(), []string{"--access=local"}, &out, &out)
+	return continued, out.String(), err
+}
+
+// No terminal, another system, and a Docker this account reaches ask
+// nothing and change nothing.
+func TestInitLeavesAMachineAlone(t *testing.T) {
+	for name, set := range map[string]func(s *standIn){
+		"no terminal":    func(*standIn) { askTerminal = func() bool { return false } },
+		"another system": func(s *standIn) { s.supported = false },
+		"Docker answers": func(s *standIn) { s.reachable = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := standInMachine(t)
+			set(s)
+			continued, out, err := prepare(t)
+			if continued || err != nil || out != "" || s.applied != nil {
+				t.Fatalf("continued %t, err %v, applied %v, out %q", continued, err, s.applied, out)
+			}
+		})
+	}
+}
+
+// A fresh machine shows the plain commands, asks once, runs them all
+// through one sudo, forgets the login and goes on through sg docker with
+// the flags given.
+func TestInitInstallsThroughOneSudoAndContinues(t *testing.T) {
+	s := standInMachine(t)
+	record := sgStandIn(t, "0")
+	u, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.entryCalls) != 1 || !s.entryCalls[0] || s.forgotten != 1 {
-		t.Fatalf("entry calls %v, forgotten %d", s.entryCalls, s.forgotten)
+	continued, out, err := prepare(t)
+	if !continued || err != nil {
+		t.Fatalf("continued %t, err %v\n%s", continued, err, out)
 	}
-	var plan install.Plan
-	raw, _ := os.ReadFile(planFile)
-	if err := json.Unmarshal(raw, &plan); err != nil {
-		t.Fatalf("the entry read %q: %v", raw, err)
+	want := []string{
+		"apt-get update",
+		"apt-get install -y --no-install-recommends docker.io docker-compose-v2 apparmor",
+		"systemctl enable --now docker",
+		"usermod -aG docker " + u.Username,
 	}
-	want := install.Decide(p, fake.New(p).Facts(install.Account{Name: "alice", UID: 1000}, false)).Actions
-	if !slices.EqualFunc(plan.Actions, want, func(a, b install.Action) bool {
-		return a.Kind == b.Kind && slices.Equal(a.Packages, b.Packages) && a.Account == b.Account
-	}) || plan.Account != "alice" || plan.UID != 1000 {
-		t.Fatalf("the entry was sent %+v", plan)
+	if len(s.applied) != 1 || !slices.Equal(s.applied[0], want) {
+		t.Fatalf("applied %q, want one %q", s.applied, want)
 	}
-	self, _ := os.Executable()
-	got, _ := os.ReadFile(record)
-	wantSg := strings.Join([]string{dir, "docker", "-c", shellQuote(append([]string{self, "init"}, args...))}, "\n") + "\n"
-	if string(got) != wantSg {
-		t.Errorf("sg ran in and with\n%s\nwant\n%s", got, wantSg)
+	if s.forgotten != 1 {
+		t.Errorf("sudo's login was forgotten %d times", s.forgotten)
 	}
-	text := out.String()
-	for _, line := range []string{"→ apt-get update\n", "the continued init ran\n", "Run `newgrp docker` here, or log out and in again, before `cyfr up`."} {
-		if !strings.Contains(text, line) {
-			t.Errorf("the output lacks %q:\n%s", line, text)
+	for _, c := range want {
+		if !strings.Contains(out, "\n  "+c+"\n") {
+			t.Errorf("the preview lacks %q:\n%s", c, out)
 		}
 	}
-	// The continued init prepared the project; this process did not.
-	nothingWritten(t, ".env.example")
+	if !strings.Contains(out, "Install these requirements? (yes/no)") || !strings.Contains(out, "Run `newgrp docker` here, or log out and in again, before `cyfr up`.") {
+		t.Errorf("output:\n%s", out)
+	}
+	self, _ := os.Executable()
+	sg, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(sg), "docker\n-c\n"+shellQuote([]string{self, "init", "--access=local"})+"\n"; got != want {
+		t.Errorf("sg ran %q, want %q", got, want)
+	}
+}
+
+// Only what is missing is run.
+func TestInitRunsOnlyWhatIsMissing(t *testing.T) {
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		set  func(s *standIn)
+		want []string
+	}{
+		"one package missing": {func(s *standIn) {
+			s.installed, s.running, s.member = []string{"docker.io", "apparmor"}, true, []string{"docker"}
+		}, []string{"apt-get update", "apt-get install -y --no-install-recommends docker-compose-v2"}},
+		"the service stopped": {func(s *standIn) {
+			s.installed, s.member = dockerPackages, []string{"docker"}
+		}, []string{"systemctl enable --now docker"}},
+		"the group": {func(s *standIn) {
+			s.installed, s.running = dockerPackages, true
+		}, []string{"usermod -aG docker " + u.Username}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := standInMachine(t)
+			sgStandIn(t, "0")
+			c.set(s)
+			if _, out, err := prepare(t); err != nil || len(s.applied) != 1 || !slices.Equal(s.applied[0], c.want) {
+				t.Fatalf("applied %q, want %q, err %v\n%s", s.applied, c.want, err, out)
+			}
+		})
+	}
+}
+
+// A machine that has everything, in a terminal older than the group, asks
+// nothing and goes on through sg.
+func TestInitContinuesInATerminalOlderThanTheGroup(t *testing.T) {
+	s := standInMachine(t)
+	s.installed, s.running, s.member = dockerPackages, true, []string{"docker"}
+	record := sgStandIn(t, "0")
+	continued, _, err := prepare(t)
+	if !continued || err != nil || s.applied != nil || s.forgotten != 0 {
+		t.Fatalf("continued %t, err %v, applied %v, forgotten %d", continued, err, s.applied, s.forgotten)
+	}
+	if _, err := os.Stat(record); err != nil {
+		t.Errorf("sg did not run: %v", err)
+	}
+}
+
+// Installing and reaching Docker needs no continuation, and a process that
+// has the group and still cannot reach Docker goes on as it is: a
+// continuation would land here again, and again.
+func TestInitNeedsNoContinuation(t *testing.T) {
+	t.Run("Docker answers after the install", func(t *testing.T) {
+		s := standInMachine(t)
+		s.reachableAfter = true
+		if continued, _, err := prepare(t); continued || err != nil || len(s.applied) != 1 {
+			t.Fatalf("continued %t, err %v, applied %v", continued, err, s.applied)
+		}
+	})
+	t.Run("the process has the group", func(t *testing.T) {
+		s := standInMachine(t)
+		s.installed, s.running, s.member, s.process = dockerPackages, true, []string{"docker"}, []string{"docker"}
+		if continued, _, err := prepare(t); continued || err != nil || s.applied != nil {
+			t.Fatalf("continued %t, err %v, applied %v", continued, err, s.applied)
+		}
+	})
+}
+
+// A daemon that stops right after a successful start leaves a process that
+// has the group where it was, and sg would give it nothing: init goes on.
+func TestInitDoesNotRepeatSgWithTheSameGroup(t *testing.T) {
+	s := standInMachine(t)
+	s.installed = dockerPackages
+	s.member, s.process = []string{"docker"}, []string{"docker"}
+	sgStandIn(t, "0")
+	for attempt := 1; attempt <= 2; attempt++ {
+		askInput = strings.NewReader("yes\n")
+		continued, out, err := prepare(t)
+		if err != nil {
+			t.Fatalf("attempt %d: %v\n%s", attempt, err, out)
+		}
+		if continued {
+			t.Errorf("attempt %d went through sg with the group it has; applied %q", attempt, s.applied)
+		}
+	}
+}
+
+// The real apply and forget: sudo -k follows a failed install.
+func TestInitForgetsTheLoginWithTheRealSudo(t *testing.T) {
+	production := machine
+	standInMachine(t)
+	machine.apply, machine.forget = production.apply, production.forget
+	dir := t.TempDir()
+	record := filepath.Join(dir, "calls")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >>'" + record + "'\n[ \"$1\" = -k ] && exit 0\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if continued, _, err := prepare(t); continued || err == nil {
+		t.Fatalf("continued = %t, err = %v", continued, err)
+	}
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "sh -c apt-get update && ") || lines[1] != "-k" {
+		t.Fatalf("sudo ran %q", lines)
+	}
+}
+
+// Declining changes nothing and says so.
+func TestInitDeclined(t *testing.T) {
+	s := standInMachine(t)
+	askInput = strings.NewReader("no\n")
+	_, _, err := prepare(t)
+	if err == nil || err.Error() != "Nothing was installed. Run `cyfr init` again when you want to continue" {
+		t.Fatalf("err = %v", err)
+	}
+	if s.applied != nil || s.forgotten != 0 {
+		t.Errorf("applied %v, forgotten %d", s.applied, s.forgotten)
+	}
+}
+
+// A failed install forgets the login and gives its one line; apt's own
+// words are already on the terminal.
+func TestInitInstallFails(t *testing.T) {
+	s := standInMachine(t)
+	s.applyErr = errors.New("exit status 100")
+	continued, _, err := prepare(t)
+	if continued || err == nil || err.Error() != "Installing the requirements failed. Fix what is shown above, then run `cyfr init` again" {
+		t.Fatalf("continued %t, err %v", continued, err)
+	}
+	if s.forgotten != 1 {
+		t.Errorf("sudo's login was forgotten %d times", s.forgotten)
+	}
+}
+
+// A continued init's status is init's.
+func TestInitAnswersTheContinuationsStatus(t *testing.T) {
+	s := standInMachine(t)
+	s.installed, s.running, s.member = dockerPackages, true, []string{"docker"}
+	sgStandIn(t, "7")
+	if _, _, err := prepare(t); ExitStatus(err) != 7 {
+		t.Fatalf("err = %v, status %d", err, ExitStatus(err))
+	}
 }
 
 // TestShellQuoteReadsBackWordForWord runs shellQuote's line through sh, as
 // sg does: every word comes back as it was, nothing expanded or run.
 func TestShellQuoteReadsBackWordForWord(t *testing.T) {
-	words := []string{"/usr/local/bin/cyfr", "init", "--hostname=it's", "--domain=$HOME", "a b", ";touch injected", "`id`", "", "--x=\\'\"'"}
+	words := []string{"/usr/local/bin/cyfr", "init", "--hostname=it's", "--domain=$HOME", "a b", ";touch x"}
 	out, err := exec.Command("/bin/sh", "-c", shellQuote(append([]string{"printf", "%s\\n"}, words...))).Output()
 	if err != nil {
 		t.Fatal(err)
@@ -218,375 +298,4 @@ func TestShellQuoteReadsBackWordForWord(t *testing.T) {
 	if got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"); !slices.Equal(got, words) {
 		t.Errorf("sh read back %q, want %q", got, words)
 	}
-}
-
-// TestInitWordsWhatTheEntryLeftFromWhatItObserves reports the entry's
-// failure with what the machine shows was completed, and forgets sudo's
-// login on every way out: a lock, sudo refusing, a continuation's own
-// failure.
-func TestInitWordsWhatTheEntryLeftFromWhatItObserves(t *testing.T) {
-	p := install.Load()
-	lock := event(t, install.Event{Event: install.EventFailed, Failure: install.Fail(install.LockError{Lock: install.LockDpkg})})
-	for name, c := range map[string]struct {
-		entry   string
-		install bool // the machine shows docker.io installed afterwards
-		want    string
-		status  int
-		joined  bool // and alice in the docker group
-	}{
-		"a held dpkg lock": {"cat >/dev/null; echo " + shQuote(lock) + "; exit 4", false,
-			"A package installation is still running after 60 seconds. Nothing was installed. Let it finish, then run `cyfr init` again.", 1, false},
-		"a lock after packages": {"cat >/dev/null; echo " + shQuote(lock) + "; exit 4", true,
-			"A package installation is still running after 60 seconds. CYFR installed docker.io and docker-compose-v2 and started the Docker service. Let it finish, then run `cyfr init` again.", 1, false},
-		"sudo refused": {"echo 'Sorry, user alice may not run sudo' >&2; exit 1", false,
-			"This account cannot run sudo, so CYFR cannot install docker.io, docker-compose-v2, the running Docker service and alice's membership of the docker group. Nothing was installed. Run `cyfr init` from an account that can install software.", 1, false},
-		"no sudo": {"", false,
-			"This account cannot run sudo, so CYFR cannot install", 1, false},
-		"the continuation failed": {"cat >/dev/null; echo " + shQuote(event(t, install.Event{Event: install.EventStart, Action: &install.Action{Kind: install.GroupAdd, Account: "alice"}})) + "; exit 0", true,
-			"the updated cyfr exited with status 7", 7, true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			newInitProject(t)
-			m := fake.New(p)
-			s := standInMachine(t, m, c.entry)
-			calls := 0
-			machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
-				calls++
-				if calls > 1 && c.install {
-					m.Packages["docker.io"], m.Packages["docker-compose-v2"] = "installed", "installed"
-					m.Service, m.Enabled = "active", true
-				}
-				if calls > 1 && c.joined {
-					m.Members = []string{"alice"}
-				}
-				return m.Facts(install.Account{Name: "alice", UID: 1000}, false), nil
-			}
-			sgStandIn(t, 7)
-			askTerminal = func() bool { return false }
-			var out bytes.Buffer
-			err := runInit(context.Background(), initOptions{noPull: true, yes: true}, &out, &out)
-			if err == nil || !strings.HasPrefix(err.Error(), c.want) || ExitStatus(err) != c.status {
-				t.Fatalf("runInit = %v (status %d), want %q (status %d)", err, ExitStatus(err), c.want, c.status)
-			}
-			if len(s.entryCalls) != 1 || s.entryCalls[0] {
-				t.Errorf("--yes without a terminal asked the entry for %v, want one non-interactive sudo", s.entryCalls)
-			}
-			if c.entry != "" && s.forgotten != 1 {
-				t.Errorf("sudo's login was forgotten %d times", s.forgotten)
-			}
-		})
-	}
-}
-
-// TestRootRunsTheEntryWithoutTheOuterSudosAccount runs `sudo cyfr init`'s
-// entry as root itself, without the SUDO_ variables that name the account
-// sudo was run from, so the entry takes root for the plan's account.
-func TestRootRunsTheEntryWithoutTheOuterSudosAccount(t *testing.T) {
-	newInitProject(t)
-	p := install.Load()
-	m := fake.New(p)
-	envFile := filepath.Join(t.TempDir(), "env")
-	s := standInMachine(t, m, "cat >/dev/null; env >"+shQuote(envFile)+"; exit 0")
-	machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
-		return m.Facts(install.Account{Name: "root", UID: 0, Root: true}, true), nil
-	}
-	t.Setenv("SUDO_UID", "1000")
-	t.Setenv("SUDO_USER", "alice")
-	t.Setenv("LC_ALL", "de_DE.UTF-8")
-	askTerminal = func() bool { return false }
-	var out bytes.Buffer
-	_ = runInit(context.Background(), initOptions{noPull: true, yes: true}, &out, &out)
-	if len(s.entryCalls) != 1 {
-		t.Fatalf("entry calls %v:\n%s", s.entryCalls, out.String())
-	}
-	raw, err := os.ReadFile(envFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "SUDO_") {
-		t.Errorf("root's entry ran with the outer sudo's variables:\n%s", raw)
-	}
-	// sudo, and so the entry, run in the C locale, whose words the policy
-	// names.
-	if lines := strings.Split(string(raw), "\n"); !slices.Contains(lines, "LC_ALL=C") || slices.Contains(lines, "LC_ALL=de_DE.UTF-8") {
-		t.Errorf("the entry's locale is not C alone:\n%s", raw)
-	}
-}
-
-// TestRootEntryArgvIsExact holds the argv a person's sudo sees: sudo -k
-// (no cached login, even if init is killed), -n only without a terminal,
-// then the installed program's fixed entry; root runs this program itself.
-func TestRootEntryArgvIsExact(t *testing.T) {
-	saved := entryChecks
-	t.Cleanup(func() { entryChecks = saved })
-	entryChecks.sudo = func() (string, error) { return "/usr/bin/sudo", nil }
-	entryChecks.installed = func(install.Policy) error { return nil }
-	p := install.Load()
-	for _, c := range []struct {
-		interactive bool
-		want        []string
-	}{
-		{true, []string{"/usr/bin/sudo", "-k", "--", "/usr/local/bin/cyfr", "internal", "install-apply"}},
-		{false, []string{"/usr/bin/sudo", "-k", "-n", "--", "/usr/local/bin/cyfr", "internal", "install-apply"}},
-	} {
-		argv, err := rootEntry(p, false, c.interactive)
-		if err != nil || !slices.Equal(argv, c.want) {
-			t.Errorf("interactive=%t: %q, %v; want %q", c.interactive, argv, err, c.want)
-		}
-	}
-	self, _ := os.Executable()
-	if argv, err := rootEntry(p, true, false); err != nil || !slices.Equal(argv, []string{self, "internal", "install-apply"}) {
-		t.Errorf("root: %q, %v", argv, err)
-	}
-	entryChecks.sudo = func() (string, error) { return "", errors.New("not found") }
-	if _, err := rootEntry(p, false, true); !errors.Is(err, errNoSudo) {
-		t.Errorf("no sudo: %v", err)
-	}
-}
-
-// TestInitUnderSudoRefusesWhereItWouldInstall refuses `sudo cyfr init`
-// that would install requirements, before anything is shown, run or
-// written, and leaves one on a machine that has everything to go on.
-func TestInitUnderSudoRefusesWhereItWouldInstall(t *testing.T) {
-	newInitProject(t)
-	p := install.Load()
-	m := fake.New(p)
-	s := standInMachine(t, m, "exit 99")
-	machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
-		return m.Facts(install.Account{Name: "root", UID: 0, Root: true, SudoUser: "alice"}, true), nil
-	}
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("yes\n")
-	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
-	want := "`sudo cyfr init` would install docker.io, docker-compose-v2 and the running Docker service and set CYFR up for root, not for alice. Nothing was changed. Run `cyfr init` without sudo: it asks for the administrator password itself when it needs one."
-	if err == nil || err.Error() != want {
-		t.Fatalf("runInit = %v\nwant %s", err, want)
-	}
-	if len(s.entryCalls) != 0 || strings.Contains(out.String(), "Install these requirements") {
-		t.Errorf("it asked or elevated: entry %v\n%s", s.entryCalls, out.String())
-	}
-	nothingWritten(t, ".env.example")
-
-	// A machine that has everything: init goes on as it always has.
-	m.Packages = map[string]string{"docker.io": "installed", "docker-compose-v2": "installed", "apparmor": "installed"}
-	m.Service, m.Enabled = "active", true
-	askInput = strings.NewReader("3\n")
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("a satisfied machine under sudo: %v", err)
-	}
-}
-
-// TestInitNamesWhySudoRanNothing words a sudo that wanted a password
-// nobody could type, or refused the one typed, by that cause.
-func TestInitNamesWhySudoRanNothing(t *testing.T) {
-	p := install.Load()
-	for name, c := range map[string]struct {
-		entry    string
-		terminal bool
-		want     string
-	}{
-		"no terminal for the password": {"echo 'sudo: interactive authentication is required' >&2; exit 1", false,
-			"sudo needs this account's password, and without a terminal there is nowhere to type it, so CYFR cannot install"},
-		"the password refused": {"echo 'sudo: Authentication failed, try again.' >&2; echo 'sudo: maximum 3 incorrect authentication attempts' >&2; exit 1", true,
-			"sudo did not accept the password, so CYFR cannot install"},
-		"not allowed": {"echo \"sudo: I'm sorry alice. I'm afraid I can't do that\" >&2; exit 1", true,
-			"This account cannot run sudo, so CYFR cannot install"},
-		// Words no policy entry names say nothing of a password, with a
-		// terminal or without one.
-		"unknown words without a terminal": {"echo 'sudo: account validation failure, is your account locked?' >&2; exit 1", false,
-			"sudo did not run CYFR's installer, so CYFR cannot install"},
-		"unknown words with a terminal": {"echo 'sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.' >&2; exit 1", true,
-			"sudo did not run CYFR's installer, so CYFR cannot install"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			newInitProject(t)
-			standInMachine(t, fake.New(p), c.entry)
-			askTerminal = func() bool { return c.terminal }
-			askInput = strings.NewReader("yes\n")
-			var out, errOut bytes.Buffer
-			err := runInit(context.Background(), initOptions{noPull: true, yes: true}, &out, &errOut)
-			if err == nil || !strings.HasPrefix(err.Error(), c.want) {
-				t.Fatalf("runInit = %v, want %q", err, c.want)
-			}
-		})
-	}
-}
-
-// TestInitGoesOnWhenTheEntryFoundNothingToDo takes an entry that ended
-// well without an action, as root's own look at a machine that needs
-// nothing more ends it, for success: init looks at the machine again and
-// prepares the project.
-func TestInitGoesOnWhenTheEntryFoundNothingToDo(t *testing.T) {
-	newInitProject(t)
-	p := install.Load()
-	m := fake.New(p)
-	s := standInMachine(t, m, "cat >/dev/null; exit 0")
-	calls := 0
-	machine.observe = func(context.Context, install.Policy) (install.Facts, error) {
-		calls++
-		if calls > 1 { // what the agreement needed is there by the time root looks
-			m.Packages = map[string]string{"docker.io": "installed", "docker-compose-v2": "installed", "apparmor": "installed"}
-			m.Service, m.Enabled, m.Members = "active", true, []string{"alice"}
-		}
-		return m.Facts(install.Account{Name: "alice", UID: 1000}, calls > 1), nil
-	}
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("yes\n3\n")
-	var out bytes.Buffer
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("runInit = %v\n%s", err, out.String())
-	}
-	if len(s.entryCalls) != 1 || !fileExists(".env") {
-		t.Fatalf("entry calls %v, .env %t:\n%s", s.entryCalls, fileExists(".env"), out.String())
-	}
-}
-
-// TestExitStatusOfASignalledChild gives a child a signal ended the status
-// a shell gives it, 128 and the signal, not -1.
-func TestExitStatusOfASignalledChild(t *testing.T) {
-	err := exec.Command("/bin/sh", "-c", "kill -TERM $$").Run()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exitStatus(exit) != 143 {
-		t.Fatalf("a child ended by TERM: %v, status %d", err, exitStatus(exit))
-	}
-	err = exec.Command("/bin/sh", "-c", "exit 7").Run()
-	if !errors.As(err, &exit) || exitStatus(exit) != 7 {
-		t.Fatalf("a child that exited 7: %v", err)
-	}
-}
-
-// TestInstallCommandNamesAPreRelease gives the install script's command
-// with CYFR_VERSION for a pre-release, which the script installs only
-// when named.
-func TestInstallCommandNamesAPreRelease(t *testing.T) {
-	saved := version.Version
-	t.Cleanup(func() { version.Version = saved })
-	version.Version = "0.6.0-alpha.5"
-	if got := installCommand(); got != "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.5 sh" {
-		t.Errorf("pre-release: %s", got)
-	}
-	version.Version = "0.6.0"
-	if got := installCommand(); got != "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh" {
-		t.Errorf("release: %s", got)
-	}
-}
-
-// TestRootEntryRefusesAProgramTheAccountCouldChange refuses to run, as
-// root, a program at the install path that is missing or that the
-// account itself could rewrite.
-func TestRootEntryRefusesAProgramTheAccountCouldChange(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("run as root, every file is root's")
-	}
-	p := install.Load()
-	if _, err := os.Stat("/usr/bin/sudo"); err != nil {
-		t.Skip("no sudo here")
-	}
-	p.InstallPath = filepath.Join(t.TempDir(), "cyfr")
-	if _, err := rootEntry(p, false, true); err == nil || !strings.Contains(err.Error(), "there is no") {
-		t.Errorf("a missing program: %v", err)
-	}
-	if err := os.WriteFile(p.InstallPath, []byte("#!/bin/sh\necho cyfr version dev\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rootEntry(p, false, true); err == nil || !strings.Contains(err.Error(), "not a program only root can change") {
-		t.Errorf("the account's own program: %v", err)
-	}
-	argv, err := rootEntry(p, true, false)
-	if self, _ := os.Executable(); err != nil || argv[0] != self {
-		t.Errorf("root's entry = %v, %v", argv, err)
-	}
-}
-
-// installApplyRun runs the root entry in this process as root through
-// sudo for the account running the test, over m.
-func installApplyRun(t *testing.T, m *fake.Machine, plan string) (int, []install.Event, string) {
-	t.Helper()
-	u, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SUDO_UID", u.Uid)
-	t.Setenv("SUDO_USER", u.Username)
-	saved := effectiveUID
-	t.Cleanup(func() { effectiveUID = saved })
-	effectiveUID = func() int { return 0 }
-	var out bytes.Buffer
-	status := installApply(context.Background(), m.Host(), strings.NewReader(plan), &out)
-	var events []install.Event
-	rest := out.String()
-	for rest != "" {
-		line, tail, _ := strings.Cut(rest, "\n")
-		var ev install.Event
-		if json.Unmarshal([]byte(line), &ev) != nil {
-			break
-		}
-		events = append(events, ev)
-		rest = tail
-	}
-	return status, events, rest
-}
-
-func me(t *testing.T) (string, int) {
-	u, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	uid, _ := strconv.Atoi(u.Uid)
-	return u.Username, uid
-}
-
-// TestInstallApplyAppliesAndEnds runs the plan, reports each action as
-// it starts and ends, and ends there: the root entry runs nothing as the
-// account.
-func TestInstallApplyAppliesAndEnds(t *testing.T) {
-	name, uid := me(t)
-	if uid == 0 {
-		t.Skip("the plan's account is the test's, which must not be root")
-	}
-	p := install.Load()
-	m := fake.New(p)
-	d := install.Decide(p, m.Facts(install.Account{Name: name, UID: uid}, false))
-	body, _ := json.Marshal(install.Plan{Version: install.PlanVersion, Account: name, UID: uid, Actions: d.Actions})
-	status, events, rest := installApplyRun(t, m, string(body))
-	if status != 0 || rest != "" {
-		t.Fatalf("status %d, output after the events %q", status, rest)
-	}
-	var started, done []install.Kind
-	for _, ev := range events {
-		switch ev.Event {
-		case install.EventStart:
-			started = append(started, ev.Action.Kind)
-		case install.EventDone:
-			done = append(done, ev.Action.Kind)
-		default:
-			t.Errorf("event %+v", ev)
-		}
-	}
-	all := []install.Kind{install.AptUpdate, install.AptInstall, install.DockerEnable, install.GroupAdd}
-	if !slices.Equal(started, all) || !slices.Equal(done, all) || !slices.Contains(m.Members, name) {
-		t.Fatalf("started %v, done %v, members %v", started, done, m.Members)
-	}
-}
-
-// TestInstallApplyRefusesBeforeChangingAnything refuses a plan it does
-// not take, and runs nothing.
-func TestInstallApplyRefusesBeforeChangingAnything(t *testing.T) {
-	name, uid := me(t)
-	p := install.Load()
-	for label, plan := range map[string]install.Plan{
-		"a package outside the policy": {Version: 1, Account: name, UID: uid, Actions: []install.Action{{Kind: install.AptUpdate}, {Kind: install.AptInstall, Packages: []string{"openssh-server"}}}},
-		"another account":              {Version: 1, Account: name + "x", UID: uid + 1, Actions: []install.Action{{Kind: install.DockerEnable}}},
-	} {
-		t.Run(label, func(t *testing.T) {
-			m := fake.New(p)
-			body, _ := json.Marshal(plan)
-			status, events, _ := installApplyRun(t, m, string(body))
-			if status != applyRefused || len(events) != 1 || events[0].Event != install.EventFailed || events[0].Failure.Kind != "invalid" || len(m.Ran) != 0 {
-				t.Fatalf("status %d, events %+v, ran %v", status, events, m.Ran)
-			}
-		})
-	}
-
 }

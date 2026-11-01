@@ -140,24 +140,12 @@ jobs:
   installer-verify:
     name: Installer Verification Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The install script's policy block is generated from
-      # apps/codex/internal/install/policy.json; a hand edit to either side
-      # alone fails here.
-      - name: The install script's policy is the generated one
-        run: python3 -I scripts/generate-install-policy.py --check
-
       - name: Run install.sh verification tests
         run: sh tests/install-verify-test.sh
-
-      - name: Run the install proof's cleanup tests
-        run: bash tests/install-screen-proof/cleanup-test.sh
-
-      - name: Run the install proof's evidence predicates tests
-        run: bash tests/install-screen-proof/predicates-test.sh
 
   repo-scan:
     name: Trivy (secrets + IaC misconfig)
