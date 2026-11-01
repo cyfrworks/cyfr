@@ -58,7 +58,7 @@ defmodule Sanctum.MixProject do
       {:prima, in_umbrella: true},
       # The layer edges as compile errors: the Boundary compiler checks
       # every `use Boundary` declaration in this application.
-      {:boundary, "~> 0.11.0", runtime: false},
+      {:boundary, "~> 0.12.0", runtime: false},
       {:arca, in_umbrella: true},
       {:jason, "~> 1.4"},
       # Contexts are established at the authentication boundary, which is
