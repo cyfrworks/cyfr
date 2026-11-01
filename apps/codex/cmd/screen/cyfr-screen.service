@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+[Unit]
+Description=CYFR on this machine's own screen
+After=systemd-user-sessions.service
+Conflicts=getty@tty1.service
+
+[Service]
+User=@ACCOUNT@
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+WorkingDirectory=@DIR@
+ExecStart=/usr/bin/dbus-run-session /usr/bin/labwc -C @DIR@/.cyfr/screen -s @DIR@/.cyfr/screen/launcher.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

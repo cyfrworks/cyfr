@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 CYFR Works Inc. -->
+<!-- Naming a keybinding keeps labwc's defaults, its terminal among them, out. -->
+<labwc_config>
+  <keyboard>
+    <keybind key="A-F4"><action name="Close"/></keybind>
+  </keyboard>
+  <windowRules>
+    <windowRule identifier="*" serverDecoration="no">
+      <action name="Maximize"/>
+    </windowRule>
+  </windowRules>
+</labwc_config>

@@ -6,8 +6,9 @@
 # inside a container built from this directory's Dockerfile, so the
 # verification host installs nothing and joins no group. A person's terminal
 # on the guest's own screen runs the install script as `curl ... | sh` pipes
-# it, with production trust, then `cyfr init` and `cyfr up`, and CYFR answers
-# on its port:
+# it, with production trust, then `cyfr init`, `cyfr screen on` and `cyfr up`,
+# and CYFR answers on its port. After a reboot labwc and Chrome run on tty1
+# and show CYFR's setup page (screen-setup.png):
 #
 #   tests/install-screen-proof/run.sh [--out DIR]
 #
@@ -99,8 +100,19 @@ echo "install proof: prefix $PROOF_PREFIX, evidence in $OUT"
 
 transcript_has() { grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
 
+# Whether labwc runs on tty1 and Chrome beside it, within two minutes; the
+# record is GUEST_DIR/screen.txt.
+screen_runs() {
+  GUEST_SSH_TIMEOUT=130 guest_ssh 'for n in $(seq 1 120); do
+      pgrep -u proof -t tty1 -x labwc >/dev/null && pgrep -u proof -f /opt/google/chrome/chrome >/dev/null && break
+      sleep 1
+    done
+    systemctl is-active cyfr-screen; ps -o user=,tty=,args= -C labwc; pgrep -u proof -f /opt/google/chrome/chrome | wc -l
+    pgrep -u proof -t tty1 -x labwc >/dev/null && pgrep -u proof -f /opt/google/chrome/chrome >/dev/null' >"$GUEST_DIR/screen.txt" 2>&1
+}
+
 clean_install() {
-  local code
+  local code closes
   candidate_build
   guest_boot clean 8192 40G
   tty1_login
@@ -120,13 +132,26 @@ clean_install() {
   step "cyfr init on a machine without Docker"
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
   pane_step init 'export PATH="$HOME/.local/bin:$PATH"; mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1200 \
-    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1, 2 or 3' 3
+    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1, 2 or 3' 3 'Choose 1 or 2' 2
   check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
   check "sudo asks at most one password (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" -le 1
   check "init goes on through the docker group and asks how CYFR is reached" transcript_has init 'How will you reach CYFR\?'
   check "init says what the terminal needs before cyfr up" transcript_has init 'Run `newgrp docker` here, or log out and in again, before `cyfr up`\.'
   pane_step_end init
+
+  step "cyfr screen on, before CYFR runs"
+  # The guest's virtio display has no 3D; the product sets no renderer.
+  guest_root 'mkdir -p /etc/systemd/system/cyfr-screen.service.d && printf "[Service]\nEnvironment=WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1\n" >/etc/systemd/system/cyfr-screen.service.d/proof.conf' ||
+    fail "the guest's renderer was not set ($GUEST_DIR/root.txt)"
+  pane_step screen-on 'cd ~/cyfr && cyfr screen on' 900 'Show CYFR on this screen\? \(yes/no\)' yes "$SUDO_PROMPT" @password
+  check "cyfr screen on exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "it asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
+  check "it shows the commands" transcript_has screen-on '^  systemctl enable --now cyfr-screen$'
+  pane_step_end screen-on
+  screen_runs || fail "labwc and Chrome did not start on tty1 ($GUEST_DIR/screen.txt)"
+  sleep 15
+  check "screenshot screen-waiting.png" guest_screenshot screen-waiting.png
 
   step "newgrp docker, then cyfr up"
   pane_type 'newgrp docker' || fail "newgrp was not typed"
@@ -137,6 +162,27 @@ clean_install() {
   code=$(guest_ssh "curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/" 2>&1)
   check "CYFR answers on its port (HTTP $code)" sh -c '[ "$1" -ge 200 ] && [ "$1" -lt 400 ]' sh "$code"
   check "screenshot ready.png" guest_screenshot ready.png
+
+  step "a reboot: the screen comes back by itself"
+  guest_root 'systemd-run --on-active=2 systemctl reboot' || fail "the guest was not rebooted ($GUEST_DIR/root.txt)"
+  sleep 15
+  budget 300 || fail "the case's deadline came before the guest came back"
+  closes=$((SECONDS + BUDGET))
+  until guest_ssh true 2>/dev/null; do
+    [ "$SECONDS" -lt "$closes" ] || fail "the guest's SSH did not come back within $BUDGET s"
+    sleep 2
+  done
+  screen_runs || fail "labwc and Chrome did not come back on tty1 ($GUEST_DIR/screen.txt)"
+  # CYFR's own restart, then the launcher's next look, then the page.
+  guest_ssh "for n in \$(seq 1 90); do curl -s -o /dev/null --max-time 2 http://localhost:4000/ && exit 0; sleep 2; done; exit 1" ||
+    fail "CYFR did not come back after the reboot"
+  sleep 25
+  check "screenshot screen-setup.png" guest_screenshot screen-setup.png
+  check "the setup page is on the screen, not the waiting page" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-waiting.png" "$GUEST_DIR/screen-setup.png"
+  guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
+  guest_ssh 'ps -eo args; ls -A ~/cyfr/.cyfr/screen' >"$GUEST_DIR/processes.txt" 2>&1
+  check "the setup token is in no process's arguments" sh -c '[ -s "$1" ] && ! grep -qF "$(cat "$1")" "$2"' sh "$WORK/token" "$GUEST_DIR/processes.txt"
+  check "the page that held the token is gone" sh -c '! grep -qx open.html "$1"' sh "$GUEST_DIR/processes.txt"
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict clean

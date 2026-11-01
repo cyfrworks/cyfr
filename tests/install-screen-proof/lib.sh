@@ -511,6 +511,12 @@ candidate_build() {
   ok "built the candidate, $(sed -n 's/^sha256: //p' "$OUT/candidate.txt")"
 }
 
+# guest_root COMMAND: COMMAND as root over SSH, the harness's own setup, the
+# password on sudo's standard input.
+guest_root() {
+  { cat "$WORK/password"; printf '\n'; } | guest_ssh_in "sudo -S -k -p '' sh -c $(printf '%q' "$1")" >>"$GUEST_DIR/root.txt" 2>&1
+}
+
 # The boot's journal and apt's history, read once nothing else is to be
 # observed: reading the system journal takes root, so this is the run's
 # one elevation outside the terminal, its password on sudo's standard

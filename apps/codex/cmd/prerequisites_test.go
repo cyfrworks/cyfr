@@ -22,7 +22,7 @@ import (
 // test says otherwise, recording what it applied.
 type standIn struct {
 	supported, running, reachableAfter bool
-	reachable                          bool
+	reachable, displayManager          bool
 	installed, member, process         []string
 	applied                            [][]string
 	applyErr                           error
@@ -42,6 +42,7 @@ func standInMachine(t *testing.T) *standIn {
 	machine.reachable = func() bool { return s.reachable }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
 	machine.running = func() bool { return s.running }
+	machine.displayManager = func() bool { return s.displayManager }
 	machine.groups = func(account string) []string {
 		if account == "" {
 			return s.process

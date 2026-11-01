@@ -490,7 +490,8 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	case continued:
 		return nil
 	}
-	return initProject(ctx, o, initFace{
+	fresh := !fileExists(".env")
+	err := initProject(ctx, o, initFace{
 		answers: func(ctx context.Context) (accessChoice, error) {
 			choice, err := chooseAccess(ctx, o, askTerminal(), bufio.NewReader(askInput), out)
 			if err != nil {
@@ -505,6 +506,10 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 			}, out)
 		},
 	}, out, errOut)
+	if err != nil || !fresh {
+		return err
+	}
+	return offerScreen(ctx, out)
 }
 
 // initProject is cyfr init in the working directory, meeting its person

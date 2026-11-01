@@ -37,6 +37,8 @@ var machine = struct {
 	// groups lists the groups of account, or of this process when account
 	// is empty.
 	groups func(account string) []string
+	// displayManager is whether a display manager has the screen.
+	displayManager func() bool
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// forget invalidates sudo's cached login.
@@ -53,6 +55,9 @@ var machine = struct {
 		return err == nil && string(out) == "installed"
 	},
 	running: func() bool { return exec.Command("systemctl", "is-active", "--quiet", "docker").Run() == nil },
+	displayManager: func() bool {
+		return exec.Command("systemctl", "is-active", "--quiet", "display-manager").Run() == nil
+	},
 	groups: func(account string) []string {
 		args := []string{"-nG"}
 		if account != "" {
