@@ -14,8 +14,7 @@
 # (tests/commit-gate-test.sh) traces each --name made from it to the run
 # prefix. proof_own records a container or volume before it is made, and
 # refuses, recording nothing, without such a prefix or for a name outside
-# it; proof_watch records a background process. The
-# teardown removes what was recorded and nothing else: not another run's
+# it. The teardown removes what was recorded and nothing else: not another run's
 # names, nor a name the run did not record, nor the proof image the
 # containers run, which every run shares (prepare.sh).
 #
@@ -78,11 +77,6 @@ proof_own() {
       return 1
       ;;
   esac
-}
-
-# Records the background process $1, stopped before any guest.
-proof_watch() {
-  PROOF_WATCHERS+=("$1")
 }
 
 # Runs "$@" as a background job, its standard input the caller's, and

@@ -309,6 +309,7 @@ defmodule Cyfr.Platform.Settings.Roster do
      "the installer: installs without cosign or the release's signature, on the checksum alone"},
     {"CYFR_VERSION", "the installer: the release it installs"},
     {"CYFR_IMAGE", "the test harness: the app image the backends image suite runs"},
+    {"CYFR_PROOF_CACHE", "the test harness: where the install proof keeps its base image"},
     {"CYFR_RESTORE_INCOMPLETE",
      "the Codex CLI and the image's entrypoint: the restore's bar, which `cyfr restore` sets in the project's `.env` (the cyfr service's `env_file`) until the restore is declared and sets empty for its own offline evals; the entrypoint refuses to start anything while it is non-empty"},
     {"CYFR_TEST_*", "the test harness: its partition, run root and object-store fixtures"},

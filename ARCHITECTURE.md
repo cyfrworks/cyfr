@@ -116,12 +116,12 @@ The order describes dependencies, not a request's path. Only Host's composition 
 - The `cyfr` binary, speaking MCP to Emissary with an API key or a session; its operation catalog is generated from the gate's table.
 - The access engine (`apps/codex/internal/access`), which `cyfr init`, `setup`, `access`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
 - Two faces of the one program on the machine: the terminal, and the setup pages `cyfr setup` serves on the machine's loopback before the stack runs, for a device's own screen. The pages drive `cyfr init`'s sequence and `cyfr up`'s start, no second setup, and only the machine reaches them; Prism is never a setup surface.
+- The machine's own requirements: on Ubuntu 26.04, at a terminal, `cyfr init` installs Docker when this account cannot reach it, through one `sudo` of the commands it shows; `cyfr` itself never runs as root. `init` prepares and `up` starts, on every system.
 
 ### Locus: where untrusted things run
 
 - The runtime's OS runners, with no network of their own, and the build and backend services, each signed with its own key.
 - The keeper, `cyfr-locus`, which runs every child under a uid and bounds of its own and scrubs it on release.
-- The machine's own requirements: on Ubuntu 26.04, at a terminal, `cyfr init` installs Docker when this account cannot reach it, through one `sudo` of the commands it shows; `cyfr` itself never runs as root. `init` prepares and `up` starts, on every system.
 - Perception bodies on a device. *Not built yet:* perception bodies.
 - Opus, Compendium and Emissary decide what runs; Locus only runs it.
 

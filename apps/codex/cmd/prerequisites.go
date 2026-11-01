@@ -107,9 +107,6 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 		return false, err
 	}
 	commands := requirementCommands(account.Username)
-	if len(commands) == 0 && slices.Contains(machine.groups(""), dockerGroup) {
-		return false, nil
-	}
 	if len(commands) > 0 {
 		fmt.Fprintln(out, "CYFR needs Docker on this machine. These commands install it, as root:")
 		for _, c := range commands {
@@ -130,6 +127,11 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 		if machine.reachable() {
 			return false, nil
 		}
+	}
+	// A process with the group has nothing to gain from sg, whose child
+	// would land here again.
+	if slices.Contains(machine.groups(""), dockerGroup) {
+		return false, nil
 	}
 	return true, continueWithGroup(args, account.Username, out, errOut)
 }

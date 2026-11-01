@@ -208,13 +208,6 @@ guest_ssh_in() {
 }
 guest_ssh() { guest_ssh_in "$1" </dev/null; }
 
-# Ends the shared connection, so the next call logs in afresh: a login
-# reads the account's groups once, and a session of the shared connection
-# keeps those of the login that opened it.
-guest_ssh_relogin() {
-  timeout 10 ssh -F /dev/null -o "ControlPath=$WORK/ssh-$GUEST_PART" -O exit guest >/dev/null 2>&1 || true
-}
-
 # guest_copy_in SOURCE DEST: the host file SOURCE as DEST in the guest,
 # relative to the test account's home.
 guest_copy_in() {

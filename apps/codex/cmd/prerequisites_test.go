@@ -206,6 +206,50 @@ func TestInitNeedsNoContinuation(t *testing.T) {
 	})
 }
 
+// A daemon that stops right after a successful start leaves a process that
+// has the group where it was, and sg would give it nothing: init goes on.
+func TestInitDoesNotRepeatSgWithTheSameGroup(t *testing.T) {
+	s := standInMachine(t)
+	s.installed = dockerPackages
+	s.member, s.process = []string{"docker"}, []string{"docker"}
+	sgStandIn(t, "0")
+	for attempt := 1; attempt <= 2; attempt++ {
+		askInput = strings.NewReader("yes\n")
+		continued, out, err := prepare(t)
+		if err != nil {
+			t.Fatalf("attempt %d: %v\n%s", attempt, err, out)
+		}
+		if continued {
+			t.Errorf("attempt %d went through sg with the group it has; applied %q", attempt, s.applied)
+		}
+	}
+}
+
+// The real apply and forget: sudo -k follows a failed install.
+func TestInitForgetsTheLoginWithTheRealSudo(t *testing.T) {
+	production := machine
+	standInMachine(t)
+	machine.apply, machine.forget = production.apply, production.forget
+	dir := t.TempDir()
+	record := filepath.Join(dir, "calls")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >>'" + record + "'\n[ \"$1\" = -k ] && exit 0\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if continued, _, err := prepare(t); continued || err == nil {
+		t.Fatalf("continued = %t, err = %v", continued, err)
+	}
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "sh -c apt-get update && ") || lines[1] != "-k" {
+		t.Fatalf("sudo ran %q", lines)
+	}
+}
+
 // Declining changes nothing and says so.
 func TestInitDeclined(t *testing.T) {
 	s := standInMachine(t)
