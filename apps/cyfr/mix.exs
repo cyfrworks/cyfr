@@ -61,7 +61,7 @@ defmodule Cyfr.App.MixProject do
       {:prima, in_umbrella: true},
       # The layer edges as compile errors: the Boundary compiler checks
       # every `use Boundary` declaration in this application.
-      {:boundary, "~> 0.11.0", runtime: false},
+      {:boundary, "~> 0.12.0", runtime: false},
       # Persistence and the auth domain, each its own application: Arca
       # owns every row, blob and lease; Sanctum owns identity, tenancy,
       # authority, consent and the vault, and reaches Arca downward.

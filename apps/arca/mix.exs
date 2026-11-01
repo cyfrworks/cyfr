@@ -49,7 +49,7 @@ defmodule Arca.MixProject do
       {:prima, in_umbrella: true},
       # The layer edges as compile errors: the Boundary compiler checks
       # every `use Boundary` declaration in this application.
-      {:boundary, "~> 0.11.0", runtime: false},
+      {:boundary, "~> 0.12.0", runtime: false},
       {:ecto_sql, "~> 3.12"},
       {:ecto_sqlite3, "~> 0.26.0"},
       {:exqlite, "~> 0.43.0"},
