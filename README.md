@@ -75,7 +75,7 @@ On other systems, install Docker first. The install script and Homebrew cask ins
 # LTS it offers to install it, elsewhere install it yourself
 # (`brew install cosign`); without it, CYFR_ALLOW_UNVERIFIED=1 verifies the
 # archive's checksum alone.
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.5 sh
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.6 sh
 
 # Or via Homebrew (macOS), which installs the newest release that is not a pre-release
 brew tap cyfrworks/cyfr
@@ -416,7 +416,7 @@ Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `
 ```bash
 # Install the CLI (on Ubuntu 26.04 LTS the installer offers to install
 # cosign to verify it; elsewhere it installs the CLI only):
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.5 sh
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.6 sh
 #   …or:  brew tap cyfrworks/cyfr && brew install --cask cyfr
 
 mkdir my-cyfr && cd my-cyfr
