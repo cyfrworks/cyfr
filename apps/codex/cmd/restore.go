@@ -285,7 +285,7 @@ func putScaffoldBack(dir string, names []string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil {
+		if err := scaffold.MakeDir(filepath.Dir(name)); err != nil {
 			return err
 		}
 		if err := scaffold.ReplaceFile(name, data, 0644); err != nil {

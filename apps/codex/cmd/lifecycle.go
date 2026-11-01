@@ -639,7 +639,7 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	// scaffold tarball is a no-op. The container's entrypoint seeds aqua/
 	// from /app/aqua-defaults on first start if it's empty.
 	_ = os.MkdirAll("data", 0755)
-	_ = os.MkdirAll("aqua", 0755)
+	_ = scaffold.MakeDir("aqua")
 
 	// The mode the home was asked for, applied as a switch of its stopped
 	// stack; a refusal or a join that ends without the machine leaves it
