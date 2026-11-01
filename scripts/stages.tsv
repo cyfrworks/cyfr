@@ -8,7 +8,7 @@ save	format	none	-	always	mix format --check-formatted
 save	credo	scoped	600	apps/**,config/**	mix credo --strict
 save	compile	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors
 save	tests	scoped	1800	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
-save	go-install	scoped	1200	apps/codex/**,tests/fixtures/install_prerequisites.json	cd apps/codex && go test ./internal/install/... ./cmd/...
+save	go-cmd	scoped	1200	apps/codex/**	cd apps/codex && go test ./cmd/...
 
 handoff	format	none	-	always	mix format --check-formatted
 handoff	credo	scoped	600	apps/**,config/**	mix credo --strict
@@ -46,20 +46,14 @@ handoff	containerd-store-test	scoped	600	scripts/ci/containerd-image-store.sh,te
 handoff	release-graph	scoped	600	.github/workflows/release.yml,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
 handoff	ci-publish-test	exclusive	1800	.github/workflows/release.yml,tests/ci-publish-test.sh	bash tests/ci-publish-test.sh
 handoff	security-scan-test	scoped	600	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh
-handoff	install-policy	scoped	600	apps/codex/internal/install/policy.json,scripts/install.sh,scripts/generate-install-policy.py	python3 -I scripts/generate-install-policy.py --check
-handoff	install-verify-test	exclusive	900	scripts/install.sh,scripts/generate-install-policy.py,apps/codex/internal/install/policy.json,tests/install-verify-test.sh,tests/fixtures/install_prerequisites.json	sh tests/install-verify-test.sh
+handoff	install-verify-test	exclusive	900	scripts/install.sh,tests/install-verify-test.sh	sh tests/install-verify-test.sh
 handoff	go-checks	scoped	1200	apps/codex/**	cd apps/codex && test -z "$(gofmt -l .)" && go vet ./... && go build ./...
 handoff	go-test	exclusive	2700	apps/codex/**,tests/fixtures/**	cd apps/codex && go test ./... -race
-handoff	install-screen-proof-test	exclusive	900	tests/install-screen-proof/**,scripts/lib/run-names.sh,scripts/image.sh	bash tests/install-screen-proof/cleanup-test.sh && bash tests/install-screen-proof/predicates-test.sh
-# The install-screen proof's VM cases boot from the base image in the host's
-# cache and run the proof image, which tests/install-screen-proof/prepare.sh
-# fetches and builds outside any lane; without them a case exits 69 and names
-# that command. Cases 2 and 3 run this tree's cyfr, built from the whole Go
-# module; cases 1 and 4 run the install script.
-handoff	install-screen-proof-1	proof	3600	tests/install-screen-proof/**,scripts/install.sh,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 1
-handoff	install-screen-proof-2	proof	3600	tests/install-screen-proof/**,apps/codex/**,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 2
-handoff	install-screen-proof-3	proof	3600	tests/install-screen-proof/**,apps/codex/**,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 3
-handoff	install-screen-proof-4	proof	3600	tests/install-screen-proof/**,scripts/install.sh,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh --case 4
+# The install proof's VM boots from the base image in the host's cache and
+# runs the proof image, which tests/install-screen-proof/prepare.sh fetches
+# and builds outside any lane; without them it exits 69 and names that
+# command.
+handoff	install-screen-proof	proof	3600	tests/install-screen-proof/**,apps/codex/**,scripts/install.sh,scripts/lib/run-names.sh,scripts/image.sh	tests/install-screen-proof/run.sh
 
 pull-request	gate	exclusive	2700	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
 

@@ -12,8 +12,8 @@ defmodule PrismWeb.SetupLive do
   (`system_layer/index.js`, the `SystemLayer` hook in its `setup` mode),
   and the page asks whether it opens setup (`Sanctum.Newcomer.setup_open/1`)
   before any ceremony starts. A token that is not this CYFR's, or a CYFR
-  set up already, is one answer: the link is not valid or setup is
-  complete, with the way to sign in. A browser that already holds a
+  set up already, is one answer: the page goes to `/`, so the setup link
+  can always be opened, whoever opens it. A browser that already holds a
   session that stands goes into CYFR.
 
   Otherwise the person meets the two screens (`PrismWeb.AdmissionCard`):
@@ -27,8 +27,7 @@ defmodule PrismWeb.SetupLive do
   nothing. Then screen 2 registers them at cyfr.run, shows their
   recovery code, and "I saved it" signs them in.
 
-  Its root carries `setup-closed` (the link is not valid, or setup is
-  complete); the screens carry their own `data-test` names.
+  The screens carry their own `data-test` names.
   """
 
   use PrismWeb, :live_view
@@ -41,7 +40,6 @@ defmodule PrismWeb.SetupLive do
   @starts 30
   @window_ms 60_000
 
-  @closed "This setup link is not valid, or setup is complete."
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
 
   @impl true
@@ -81,7 +79,7 @@ defmodule PrismWeb.SetupLive do
       when is_binary(token) do
     case Sanctum.Newcomer.setup_open(token) do
       :ok -> {:noreply, assign(socket, step: :passkey, token: token, error: nil)}
-      {:error, :setup_closed} -> {:noreply, assign(socket, :step, :closed)}
+      {:error, :setup_closed} -> {:noreply, redirect(socket, to: ~p"/")}
       {:error, reason} -> {:noreply, assign(socket, :error, PrismWeb.Ops.error_message(reason))}
     end
   end
@@ -157,15 +155,13 @@ defmodule PrismWeb.SetupLive do
     end
   end
 
-  defp refused(socket, :setup_closed), do: assign(socket, step: :closed, admission_error: nil)
+  defp refused(socket, :setup_closed), do: redirect(socket, to: ~p"/")
 
   defp refused(socket, reason),
     do: assign(socket, :admission_error, AdmissionCard.refusal(reason))
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :closed, @closed)
-
     ~H"""
     <.flash_group flash={@flash} />
     <div class="min-h-screen flex items-center justify-center bg-gray-950 px-4 py-8">
@@ -209,16 +205,6 @@ defmodule PrismWeb.SetupLive do
               name={@admission_name}
               error={@admission_error}
             />
-          </div>
-
-          <div :if={@step == :closed} data-test="setup-closed" class="space-y-4">
-            <p class="text-sm text-gray-300">{@closed}</p>
-            <.link
-              navigate={~p"/login"}
-              class="block w-full text-center px-4 py-3 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg"
-            >
-              Sign in
-            </.link>
           </div>
         </div>
       </div>

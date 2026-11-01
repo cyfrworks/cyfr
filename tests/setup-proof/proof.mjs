@@ -149,8 +149,8 @@ try {
     const fresh = await browser.newContext(HANDHELD);
     const again = await fresh.newPage();
     await again.goto(setupLink);
-    await again.locator('[data-test="setup-closed"]').waitFor({ timeout: 60_000 });
-    check("the link again, once the first person holds a passkey, says setup is closed and starts no ceremony",
+    await again.waitForURL((url) => url.pathname !== "/setup", { timeout: 60_000 });
+    check("the link again, once the first person holds a passkey, goes on to CYFR and starts no ceremony",
       (await again.locator('[data-test="admission-create"]').count()) === 0);
     await again.screenshot({ path: `${OUT}/${kind}-setup-closed.png` });
     await fresh.close();

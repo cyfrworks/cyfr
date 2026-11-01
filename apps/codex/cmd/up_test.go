@@ -400,14 +400,17 @@ func TestUpRefusesThroughTheRealEngine(t *testing.T) {
 
 // Every docker child a command starts runs through the engine's runner
 // (access.Engine.Docker), under the lock with the watchdog and the
-// sanitized environment, but for the one launcher listed here with its
-// reason. A new exec of docker anywhere else in the commands fails here.
+// sanitized environment, but for the launchers listed here with their
+// reasons. A new exec of docker anywhere else in the commands fails here.
 func TestEveryDockerCallRunsThroughTheEngine(t *testing.T) {
 	allowed := map[string]string{
 		// The warm pull of a new project's images, in the sequence both
 		// of init's faces run: outside the lock, and a pull changes
 		// nothing of the stack.
 		"initProject": "init's warm pull",
+		// Whether this account reaches Docker, before any project exists;
+		// it changes nothing.
+		"dockerAnswers": "init's look at the machine",
 	}
 	sources, err := filepath.Glob("*.go")
 	if err != nil {

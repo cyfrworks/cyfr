@@ -469,10 +469,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/identity_test.exs",
        ~w(chains directory entries identifiers keys kinds kits locate max_entry_bytes prefix protocol requests)}
     ],
-    "install_prerequisites.json" => [
-      {"apps/codex/internal/install/vector_test.go", ~w(systems universe sudo init)},
-      {"tests/install-verify-test.sh", ~w(systems universe bootstrap sudo)}
-    ],
     "keeper_protocol.json" => [
       {"apps/cyfr/test/emissary/external/backend_definition_test.exs", ~w(reserved_env_prefixes)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",

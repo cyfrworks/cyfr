@@ -1741,7 +1741,6 @@ STARTS = re.compile(r"\bdocker\s+(?:container\s+)?(?:run|create)\b")
 ROSTER = {
     "tests/commit-gate-test.sh": "the gate's own test, against a stand-in for docker",
     "tests/compose-proof/cleanup-test.sh": "the Compose proof's teardown test, against a stand-in docker function",
-    "tests/install-screen-proof/cleanup-test.sh": "the install-screen proof's teardown test, whose containers a stand-in docker makes: it starts no real container",
     "tests/ci-publish-test.sh": "test.yml static's tag pipeline image publication, which the gate leaves out",
     "tests/tailnet-real/run.sh": "the real tailnet's proof, run by hand",
 }
@@ -1934,8 +1933,7 @@ done
 # found and refused.
 mkdir -p "$scratch/names-tree/scripts/lib" "$scratch/names-tree/tests"
 cp "$root/scripts/lib/workflow_plan.py" "$scratch/names-tree/scripts/lib/"
-for f in tests/commit-gate-test.sh tests/compose-proof/cleanup-test.sh tests/install-screen-proof/cleanup-test.sh \
-  tests/ci-publish-test.sh tests/tailnet-real/run.sh; do
+for f in tests/commit-gate-test.sh tests/compose-proof/cleanup-test.sh tests/ci-publish-test.sh tests/tailnet-real/run.sh; do
   mkdir -p "$scratch/names-tree/$(dirname "$f")"
   cp "$root/$f" "$scratch/names-tree/$f"
 done

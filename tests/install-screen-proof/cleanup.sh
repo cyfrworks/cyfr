@@ -3,8 +3,7 @@
 # shellcheck shell=bash
 #
 # The install-and-screen proof's ownership, exit traps and teardown,
-# sourced by tests/install-screen-proof/run.sh and by its regression
-# (tests/install-screen-proof/cleanup-test.sh), after
+# sourced by tests/install-screen-proof/run.sh, after
 # scripts/lib/run-names.sh. It reads PROOF_PREFIX, which starts as
 # PROOF_RUN_PREFIX, and PROOF_WORK, and calls docker.
 #

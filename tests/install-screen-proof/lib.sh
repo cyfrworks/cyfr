@@ -2,8 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 # shellcheck shell=bash
 #
-# The install-and-screen proof's helpers, sourced by run.sh after
-# cleanup.sh. A case is one function made of them: proof_image_use,
+# The install proof's helpers, sourced by run.sh after cleanup.sh. The
+# case is one function made of them: proof_image_use,
 # proof_kvm_preflight, proof_base_verify and proof_seed once per run, then
 # per guest guest_boot, which starts a fresh guest and records that it runs
 # under KVM and reached its login prompt; tty1_login, which signs the test
@@ -11,9 +11,8 @@
 # there; the pane_ helpers, which type into that terminal and read it back
 # over SSH, so what a case types reaches the program under test through the
 # guest's terminal as a person's typing does; guest_ssh and guest_copy_in
-# for evidence and files apart from the terminal; guest_root for the
-# harness's own root actions; guest_screenshot; and proof_guest_stop
-# (cleanup.sh). check records each verdict.
+# for evidence and files apart from the terminal; guest_screenshot; and
+# proof_guest_stop (cleanup.sh). check records each verdict.
 #
 # They read PROOF_PREFIX, VOLUME, WORK, OUT, HERE and ROOT, which run.sh
 # sets, and set IMAGE, and GUEST and GUEST_DIR for the guest under way. A
@@ -22,9 +21,6 @@
 # The guests' base and the host's cache of it (CLOUD_*, BASE_DIR).
 # shellcheck source=base-image.sh
 . "$HERE/base-image.sh"
-# The predicates over the evidence (SUDO_REFUSAL, probe_refused, ...).
-# shellcheck source=predicates.sh
-. "$HERE/predicates.sh"
 
 PROOF_USER=proof
 # A password prompt of sudo-rs or of sudo, which run.sh's cases read.
@@ -110,7 +106,6 @@ kvm_gid() {
 # QEMU in the container creates a KVM machine before any guest is booted.
 # Without it nothing later can run, and the host is left as it is.
 proof_kvm_preflight() {
-  local why
   step "KVM inside the container"
   proof_own container "${PROOF_PREFIX}kvm" || fail "the container ${PROOF_PREFIX}kvm cannot be the run's"
   {
@@ -124,11 +119,9 @@ proof_kvm_preflight() {
   if ! proof_fg timeout 120 docker run --rm --init --name "${PROOF_PREFIX}kvm" --network none --device /dev/kvm --group-add "$(kvm_gid)" "$IMAGE" \
     /proof/kvm-check.sh >>"$OUT/kvm-preflight.txt" 2>&1; then
     cat "$OUT/kvm-preflight.txt" >&2
-    why=$(kvm_diagnosis "$OUT/kvm-preflight.txt")
-    fail "KVM did not start inside the container: /dev/kvm must be usable by Docker's containers, and $why. No later case can run, and nothing on the host was changed ($OUT/kvm-preflight.txt)"
+    fail "KVM did not start inside the container: /dev/kvm must be usable by Docker's containers. Nothing on the host was changed ($OUT/kvm-preflight.txt)"
   fi
-  qmp_says_kvm "$OUT/kvm-preflight.txt" ||
-    fail "QEMU in the container opened /dev/kvm and started without KVM; $(kvm_diagnosis "$OUT/kvm-preflight.txt") ($OUT/kvm-preflight.txt)"
+  qmp_says_kvm "$OUT/kvm-preflight.txt" || fail "QEMU in the container started without KVM ($OUT/kvm-preflight.txt)"
   ok "QEMU in the container runs with KVM: $(grep -m 1 '^QEMU emulator' "$OUT/kvm-preflight.txt")"
 }
 
@@ -236,11 +229,6 @@ guest_screenshot() {
     [ "$(od -An -N8 -tx1 "$GUEST_DIR/$name" | tr -d ' \n')" = 89504e470d0a1a0a ]
 }
 
-# guest_packages FILE: every package dpkg knows, its version and state.
-guest_packages() {
-  guest_ssh 'dpkg-query -W -f "\${binary:Package}\t\${Version}\t\${db:Status-Abbrev}\n" | sort' >"$GUEST_DIR/$1"
-}
-
 # guest_boot PART MEMORY_MIB DISK_SIZE: a fresh guest named for PART, its
 # evidence in OUT/PART, up until its tty1 waits at the login prompt.
 guest_boot() {
@@ -291,15 +279,11 @@ guest_boot() {
     lscpu | grep -i -E "^(hypervisor vendor|virtualization type)"
     echo "sudo: $(readlink -f /usr/bin/sudo)"; sudo --version 2>&1 | head -n 1
     echo "id: $(id)"; echo "sudoers.d:"; ls -la /etc/sudoers.d
-    echo "getty@tty1: $(systemctl is-active getty@tty1.service)"
-    sudo -n true 2>&1; echo "sudo -n true status: $?"' >"$GUEST_DIR/guest.txt" 2>&1
+    echo "getty@tty1: $(systemctl is-active getty@tty1.service)"' >"$GUEST_DIR/guest.txt" 2>&1
   check "$part: the guest is Ubuntu 26.04" grep -qx 'VERSION_ID="26.04"' "$GUEST_DIR/guest.txt"
   check "$part: the guest runs under KVM (systemd-detect-virt)" grep -qx 'virt: kvm' "$GUEST_DIR/guest.txt"
   check "$part: the test account is in its own group and sudo alone" \
     grep -qE '^id: uid=[0-9]+\(proof\) gid=[0-9]+\(proof\) groups=[0-9]+\(proof\),[0-9]+\(sudo\)$' "$GUEST_DIR/guest.txt"
-  check "$part: no sudoers rule lets the account skip its password (sudo -n true is sudo's refusal: exit 1, $SUDO_REFUSAL)" \
-    sh -c 'grep -qx "sudo -n true status: 1" "$1" && grep -qE "$2" "$1"' sh "$GUEST_DIR/guest.txt" "$SUDO_REFUSAL"
-  check "$part: cloud-init wrote no sudoers file (the listing of /etc/sudoers.d was read)" no_cloud_sudoers "$GUEST_DIR/guest.txt"
   check "$part: tty1's getty runs" grep -qx 'getty@tty1: active' "$GUEST_DIR/guest.txt"
 
   budget 60 || BUDGET=0
@@ -510,41 +494,12 @@ pane_step() {
   pane_save "transcript-$name.txt"
 }
 
-# The pane probe NAME: `sudo -n true` typed into the pane, which never
-# asks for a password; its status, the prompts the pane showed and what
-# sudo said go to GUEST_DIR/sudo-probe.txt, which probe_refused and
-# probe_allowed (predicates.sh) read.
-pane_sudo_probe() {
-  pane_step "$1" 'sudo -n true' 30 "$SUDO_PROMPT" @password
-  echo "$1: sudo -n true exited $PANE_STATUS after ${PANE_ANSWERED[0]} password prompts; sudo said: $(grep -m 1 -E '^sudo[-a-z]*: ' "$GUEST_DIR/transcript-$1.txt")" >>"$GUEST_DIR/sudo-probe.txt"
-  pane_step_end "$1"
-}
-
-# The pane step NAME of the sudo command LINE, recorded in sudo-probe.txt;
-# sudo_step_was NAME STATUS PROMPTS (predicates.sh) checks what it
-# recorded.
-pane_sudo_step() {
-  pane_step "$1" "$2" 60 "$SUDO_PROMPT" @password
-  echo "$1: $2 exited $PANE_STATUS after ${PANE_ANSWERED[0]} password prompts ($(grep -cE -- "$SUDO_PROMPT" "$GUEST_DIR/transcript-$1.txt") in the transcript)" >>"$GUEST_DIR/sudo-probe.txt"
-  pane_step_end "$1"
-}
-
-# sudo -n true over SSH, without a terminal, recorded in sudo-probe.txt as
-# NAME; answers whether it was sudo's own refusal (exit 1 and its words),
-# not SSH's failure (255) or the harness's timeout (124).
-ssh_sudo_refused() {
-  local said status=0
-  said=$(guest_ssh 'sudo -n true' 2>&1) || status=$?
-  echo "$1: over SSH, sudo -n true exited $status; sudo said: $said" >>"$GUEST_DIR/sudo-probe.txt"
-  sudo_refused "$status" "$said"
-}
-
 # This tree's cyfr for the guests, built once per run, stamped as the
 # published release INSTALL_VERSION so that cyfr init fetches and verifies
 # that release's scaffold under production trust. Its own bytes are not a
-# signed release: cases that use it are stand-ins for the candidate's
-# delivery, which case 1 proves through the installer, and say so in
-# candidate.txt and in each results.txt.
+# signed release: the case runs it in place of the program the installer
+# put down, a stand-in for a signed candidate, and says so in candidate.txt
+# and in results.txt.
 CANDIDATE_BIN=""
 candidate_build() {
   [ -z "$CANDIDATE_BIN" ] || return 0
@@ -553,7 +508,7 @@ candidate_build() {
   proof_fg timeout 300 env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C "$ROOT/apps/codex" -trimpath \
     -ldflags "-s -w -X github.com/cyfr/codex/internal/version.Version=$INSTALL_VERSION -X github.com/cyfr/codex/internal/version.Commit=$(git -C "$ROOT" rev-parse --short HEAD)" \
     -o "$CANDIDATE_BIN" . >"$OUT/candidate-build.log" 2>&1 || fail "the candidate did not build within 300 s ($OUT/candidate-build.log)"
-  STAND_IN="stand-in: /usr/local/bin/cyfr is this tree's cyfr, built here and stamped $INSTALL_VERSION, which the harness installs itself, not a signed release's delivery"
+  STAND_IN="stand-in: after the installer ran, cyfr is this tree's, built here and stamped $INSTALL_VERSION, not a signed release's delivery"
   {
     echo "$STAND_IN"
     echo "built from $ROOT at $(git -C "$ROOT" rev-parse HEAD), with these changes:"
@@ -563,38 +518,10 @@ candidate_build() {
   ok "built the candidate, $(sed -n 's/^sha256: //p' "$OUT/candidate.txt")"
 }
 
-# guest_root COMMAND: COMMAND as root over SSH, the harness's own setup or
-# its holders of locks, the password on sudo's standard input, its output
-# in GUEST_DIR/root.txt. It leaves the terminal's sudo logins as they are:
-# sudo-rs keeps a login per terminal, or per parent process without one,
-# so this call, over SSH without a terminal in a shell of its own, can
-# neither give tty1's terminal a login nor take one away. Cases 2 and 3
-# check that premise in the pane before they read what the product left
-# (c2-probe-start, c3-probe-start and c3-probe-login).
-guest_root() {
-  echo "== $1" >>"$GUEST_DIR/root.txt"
-  { cat "$WORK/password"; printf '\n'; } | guest_ssh_in "sudo -S -k -p '' sh -c $(printf '%q' "$1")" >>"$GUEST_DIR/root.txt" 2>&1
-  local status=$?
-  echo "== status $status" >>"$GUEST_DIR/root.txt"
-  return "$status"
-}
-
-# The candidate at /usr/local/bin/cyfr, root's and mode 0755, where the
-# installer puts it on this system, labelled a stand-in in results.txt.
-guest_provision_candidate() {
-  candidate_build
-  guest_copy_in "$CANDIDATE_BIN" cyfr-candidate || fail "the candidate was not copied into the guest"
-  guest_root "install -o root -g root -m 0755 /home/$PROOF_USER/cyfr-candidate /usr/local/bin/cyfr && rm /home/$PROOF_USER/cyfr-candidate" ||
-    fail "the candidate was not installed at /usr/local/bin/cyfr"
-  printf '%s (%s)\n' "$STAND_IN" "$OUT/candidate.txt" | tee -a "$GUEST_DIR/results.txt"
-  guest_ssh '/usr/local/bin/cyfr --version' >"$GUEST_DIR/cyfr.txt" 2>&1
-  check "$GUEST_PART: /usr/local/bin/cyfr is the candidate, reporting $INSTALL_VERSION" grep -qF "$INSTALL_VERSION" "$GUEST_DIR/cyfr.txt"
-}
-
 # The boot's journal and apt's history, read once nothing else is to be
 # observed: reading the system journal takes root, so this is the run's
 # one elevation outside the terminal, its password on sudo's standard
-# input, after every probe of cached authorization.
+# input.
 guest_journal() {
   { cat "$WORK/password"; printf '\n'; } |
     guest_ssh_in 'sudo -S -k journalctl -b --no-pager -o short-iso' >"$GUEST_DIR/journal.txt" 2>"$GUEST_DIR/journal.err" || true
@@ -602,14 +529,8 @@ guest_journal() {
   guest_ssh 'cat /var/log/apt/history.log' >"$GUEST_DIR/apt-history.log" 2>&1 || true
 }
 
-# Whether dpkg and PATH both lack cosign in the guest.
-guest_cosign_absent() {
-  guest_ssh '! command -v cosign >/dev/null && ! dpkg-query -W -f "\${db:Status-Abbrev}" cosign 2>/dev/null | grep -q "^ii"'
-}
-
 # part_verdict PART: the part's verdict in OUT/results.txt, with the
-# stand-in's label when the part ran one (cases 2 and 3); 1 when a check
-# failed.
+# stand-in's label; 1 when a check failed.
 part_verdict() {
   local label=""
   [ -z "$STAND_IN" ] || label=" ($STAND_IN)"
