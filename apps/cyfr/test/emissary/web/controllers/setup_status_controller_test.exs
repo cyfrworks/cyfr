@@ -24,6 +24,9 @@ defmodule Emissary.Web.SetupStatusControllerTest do
   @vectors @fixture |> File.read!() |> Jason.decode!()
   @path @vectors["path"]
 
+  # Where a request's events are, for every handler of them whatever its id.
+  @request_events [[:phoenix], [:bandit], [:plug], [:thousand_island]]
+
   @token String.duplicate("5e", 32)
   @other String.duplicate("a7", 32)
 
@@ -103,7 +106,7 @@ defmodule Emissary.Web.SetupStatusControllerTest do
   defp bearer(conn, "none"), do: conn
 
   defp bearer(conn, "unconfigured") do
-    Application.delete_env(:sanctum, :setup_token)
+    Prima.Test.Env.delete_app_env(:sanctum, :setup_token)
     bearer(conn, "setup")
   end
 
@@ -154,14 +157,10 @@ defmodule Emissary.Web.SetupStatusControllerTest do
       hold(exchange["store"])
       before = rows()
 
-      previous = Logger.level()
-      on_exit(fn -> Logger.configure(level: previous) end)
-      Logger.configure(level: :debug)
-
       {response, log} =
-        ExUnit.CaptureLog.with_log([level: :debug], fn -> request(exchange) end)
-
-      Logger.configure(level: previous)
+        Prima.Test.Env.with_logger([level: :debug], fn ->
+          ExUnit.CaptureLog.with_log([level: :debug], fn -> request(exchange) end)
+        end)
 
       assert response.status == exchange["status"]
 
@@ -356,9 +355,7 @@ defmodule Emissary.Web.SetupStatusControllerTest do
         for id <- handlers() -- known, do: :telemetry.detach(id)
       end)
 
-      OpentelemetryBandit.setup()
-      OpentelemetryPhoenix.setup(adapter: :bandit)
-      Cyfr.OtelTenantHandler.attach()
+      Cyfr.Application.attach_tracing()
 
       on_exit(fn ->
         ExUnit.CaptureLog.capture_log(fn -> :otel_batch_processor.set_exporter(:none) end)
@@ -366,14 +363,12 @@ defmodule Emissary.Web.SetupStatusControllerTest do
 
       :otel_batch_processor.set_exporter(:otel_exporter_pid, self())
 
-      previous = Logger.level()
-      on_exit(fn -> Logger.configure(level: previous) end)
-      Logger.configure(level: :debug)
+      Prima.Test.Env.configure_logger(level: :debug)
       :ok
     end
 
     defp handlers do
-      for event <- [[:phoenix], [:bandit]], %{id: id} <- :telemetry.list_handlers(event), do: id
+      for prefix <- @request_events, %{id: id} <- :telemetry.list_handlers(prefix), do: id
     end
 
     defp listening(ingress) do
@@ -443,15 +438,43 @@ defmodule Emissary.Web.SetupStatusControllerTest do
 
   # ---- the instrumentation's own roster -------------------------------------------
 
-  # A release adds the three the real listeners' setup above attaches. A new
-  # handler on these events fails here, and belongs in that setup.
-  test "nothing but Phoenix's own log lines listens to a request otherwise" do
-    owners =
-      for prefix <- [[:phoenix], [:bandit]],
-          %{id: {owner, _event}} <- :telemetry.list_handlers(prefix),
+  describe "the handlers of a request's events" do
+    # A deployment's tracing (`Cyfr.Application.attach_tracing/0`) is held
+    # by the real listeners' test above, whose setup detaches it again. A
+    # new handler fails here, whatever its id, and belongs in that definition.
+    defp unrostered do
+      for prefix <- @request_events,
+          %{id: id} <- :telemetry.list_handlers(prefix),
+          not rostered?(id),
           uniq: true,
-          do: owner
+          do: id
+    end
 
-    assert Enum.sort(owners) == [Phoenix.LiveView.Logger, Phoenix.Logger]
+    defp rostered?({owner, _event}) when owner in [Phoenix.Logger, Phoenix.LiveView.Logger],
+      do: true
+
+    defp rostered?(_id), do: false
+
+    def unknown_handler(_event, _measurements, _metadata, _config), do: :ok
+
+    test "are Phoenix's own log lines and nothing else" do
+      assert unrostered() == []
+    end
+
+    for {shape, id} <- [
+          {"a string", "an-unrostered-handler"},
+          {"a tuple", {__MODULE__, :unrostered}},
+          {"an atom", :an_unrostered_handler}
+        ] do
+      test "refuse an unknown handler whose id is #{shape}" do
+        id = unquote(Macro.escape(id))
+        on_exit(fn -> :telemetry.detach(id) end)
+
+        :ok =
+          :telemetry.attach(id, [:phoenix, :endpoint, :stop], &__MODULE__.unknown_handler/4, nil)
+
+        assert id in unrostered()
+      end
+    end
   end
 end

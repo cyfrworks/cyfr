@@ -231,8 +231,9 @@ status_report() {
   setup="$(status_local "$token")"
   invalid="$(status_local "$(printf '%064d' 0)")"
   origin="$(status_local "$token" -H "Origin: http://localhost:$(env_value "$CASE_PROJECT" CYFR_PORT)")"
+  # The runtime prints its own warnings beside the answer, so it is marked.
   people="$(docker exec -u app "$(compose_in "$CASE_PROJECT" ps -q cyfr)" /app/bin/cyfr rpc \
-    'IO.puts(Arca.Repo.aggregate(Arca.Schemas.User, :count))')"
+    'IO.puts("PEOPLE=#{Arca.Repo.aggregate(Arca.Schemas.User, :count)}")' 2>/dev/null | sed -n 's/^PEOPLE=//p' || true)"
   printf '{"setup":%s,"invalid":%s,"origin":%s,"people":%s}\n' "$setup" "$invalid" "$origin" "${people:-null}"
 }
 
