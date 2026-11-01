@@ -320,6 +320,8 @@ served() {
 # The proof.mjs case `$1` against the pages at `$2`, the home's port `$3`,
 # its asks answered here.
 proof_case() {
+  # Each case's asks number from 1, so a case left none of its own to read.
+  rm -f "$OUT"/ask-*.json "$OUT"/answer-*.json
   playwright_run setup-proof proof.mjs "$@" &
   PROOF_PID=$!
   proof_await dispatch
