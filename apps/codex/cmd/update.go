@@ -267,11 +267,6 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return errors.New("cyfr update needs docker on PATH to update the stack; nothing was changed")
 	}
-	if !plan.onRelease() {
-		if err := refuseUnwritableAqua(); err != nil {
-			return err
-		}
-	}
 	if done, err := u.offer(yes); done || err != nil {
 		return err
 	}
@@ -300,37 +295,6 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 	}
 	u.engine, u.head = e, head
 	return u.run()
-}
-
-// aquaDir is the home's AQUA tree, which the update writes as this account.
-const aquaDir = "aqua"
-
-// refuseUnwritableAqua refuses an update that could not write the shipped
-// AQUA files, before anything is asked or stopped: it writes them only
-// after the stack is down, where a refusal would leave it down. A CYFR
-// image older than this release gave the tree to its own account at every
-// start. Every directory is tried by making a file in it, the write the
-// update itself makes.
-func refuseUnwritableAqua() error {
-	err := filepath.WalkDir(aquaDir, func(dir string, entry fs.DirEntry, err error) error {
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			return nil
-		case err != nil:
-			return err
-		case !entry.IsDir():
-			return nil
-		}
-		f, err := os.CreateTemp(dir, ".cyfr-update-check-*")
-		if err != nil {
-			return err
-		}
-		return errors.Join(f.Close(), os.Remove(f.Name()))
-	})
-	if err != nil {
-		return fmt.Errorf("cyfr update cannot write %s (%v), which an older CYFR image gave to its own account. Nothing was changed and the running stack was not touched. Run `sudo chown -R \"$USER\" %s && chmod -R a+rX %s` in this directory, then run `cyfr update` again", aquaDir, err, aquaDir, aquaDir)
-	}
-	return nil
 }
 
 // scaffoldRelease is a release's scaffold fetched and verified, nothing of

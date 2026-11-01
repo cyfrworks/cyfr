@@ -69,8 +69,7 @@ func TestMakeDirRefusesAnExistingFileWithoutChangingIt(t *testing.T) {
 	}
 }
 
-// A directory that exists keeps its mode, and is not chmodded: an older
-// image may hold it, where a chmod would fail.
+// A directory that exists keeps its mode.
 func TestMakeDirLeavesWhatExists(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if err := os.Mkdir("narrow", 0o700); err != nil {
