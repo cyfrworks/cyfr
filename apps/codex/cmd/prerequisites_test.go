@@ -22,7 +22,8 @@ import (
 // test says otherwise, recording what it applied.
 type standIn struct {
 	supported, running, reachableAfter bool
-	reachable                          bool
+	reachable, displayManager          bool
+	arch                               string
 	installed, member, process         []string
 	applied                            [][]string
 	applyErr                           error
@@ -31,7 +32,7 @@ type standIn struct {
 
 func standInMachine(t *testing.T) *standIn {
 	t.Helper()
-	s := &standIn{supported: true}
+	s := &standIn{supported: true, arch: "amd64"}
 	saved, savedTerminal, savedInput, savedSg := machine, askTerminal, askInput, sgProgram
 	t.Cleanup(func() { machine, askTerminal, askInput, sgProgram = saved, savedTerminal, savedInput, savedSg })
 	// No test reaches the real sg, which would run this test binary again.
@@ -39,9 +40,11 @@ func standInMachine(t *testing.T) *standIn {
 	askTerminal = func() bool { return true }
 	askInput = strings.NewReader("yes\n")
 	machine.supported = func() bool { return s.supported }
+	machine.arch = func() string { return s.arch }
 	machine.reachable = func() bool { return s.reachable }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
 	machine.running = func() bool { return s.running }
+	machine.displayManager = func() bool { return s.displayManager }
 	machine.groups = func(account string) []string {
 		if account == "" {
 			return s.process

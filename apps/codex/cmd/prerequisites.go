@@ -28,6 +28,8 @@ var dockerPackages = []string{"docker.io", "docker-compose-v2", "apparmor"}
 var machine = struct {
 	// supported is Ubuntu 26.04, run by an account that is not root.
 	supported func() bool
+	// arch is this program's architecture.
+	arch func() string
 	// reachable is whether Docker answers this process.
 	reachable func() bool
 	// installed is whether dpkg holds the package installed.
@@ -37,6 +39,8 @@ var machine = struct {
 	// groups lists the groups of account, or of this process when account
 	// is empty.
 	groups func(account string) []string
+	// displayManager is whether a display manager has the screen.
+	displayManager func() bool
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// forget invalidates sudo's cached login.
@@ -47,12 +51,16 @@ var machine = struct {
 		lines := strings.Split(string(raw), "\n")
 		return runtime.GOOS == "linux" && os.Geteuid() != 0 && slices.Contains(lines, "ID=ubuntu") && slices.Contains(lines, `VERSION_ID="26.04"`)
 	},
+	arch:      func() string { return runtime.GOARCH },
 	reachable: dockerAnswers,
 	installed: func(pkg string) bool {
 		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", pkg).Output()
 		return err == nil && string(out) == "installed"
 	},
 	running: func() bool { return exec.Command("systemctl", "is-active", "--quiet", "docker").Run() == nil },
+	displayManager: func() bool {
+		return exec.Command("systemctl", "is-active", "--quiet", "display-manager").Run() == nil
+	},
 	groups: func(account string) []string {
 		args := []string{"-nG"}
 		if account != "" {
