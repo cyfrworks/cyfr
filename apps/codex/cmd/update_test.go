@@ -2636,6 +2636,70 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 	}
 }
 
+// An aqua directory this account cannot write, as an older image leaves
+// the tree at any depth, refuses before anything is asked or run, the
+// running stack untouched, and names the command that clears it.
+func TestUpdateRefusesAnAquaItCannotWrite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes past a directory's mode")
+	}
+	for _, dir := range []string{"aqua", "aqua/skills/shipped"} {
+		t.Run(dir, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			askWith(t, true, strings.NewReader("yes\n"))
+			if err := os.MkdirAll(filepath.Join(s.project, "aqua", "skills", "shipped"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			locked := filepath.Join(s.project, dir)
+			t.Cleanup(func() { _ = os.Chmod(locked, 0755) })
+			if err := os.Chmod(locked, 0555); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err := runHomeUpdate(context.Background(), &out, &out, false)
+			want := "which an older CYFR image gave to its own account. Nothing was changed and the running stack was not touched. Run `sudo chown -R \"$USER\" aqua` in this directory, then run `cyfr update` again"
+			if err == nil || !strings.HasPrefix(err.Error(), "cyfr update cannot write aqua (") || !strings.HasSuffix(err.Error(), want) {
+				t.Fatalf("the update answered %v:\n%s", err, out.String())
+			}
+			if strings.Contains(out.String(), "Update this CYFR?") {
+				t.Errorf("the update asked before it refused:\n%s", out.String())
+			}
+			s.nothingRan()
+		})
+	}
+}
+
+// A tree this account can write passes, and the check leaves nothing in it.
+func TestUpdateChecksAquaWithoutLeavingAnything(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	dir := filepath.Join(s.project, "aqua", "skills")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseUnwritableAqua(); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{dir, filepath.Dir(dir)} {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				t.Errorf("the check left %s in %s", e.Name(), d)
+			}
+		}
+	}
+}
+
+// A home with no aqua tree has nothing to refuse: the update makes it.
+func TestUpdateChecksNoAquaThatIsAbsent(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := refuseUnwritableAqua(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // digestOld is an older release's cyfr digest.
 var digestOld = "sha256:" + strings.Repeat("c", 64)
 

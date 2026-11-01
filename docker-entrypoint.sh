@@ -25,9 +25,11 @@ if [ -d /app/aqua-defaults ] && [ ! -f /app/seed/aqua/aqua.md ]; then
     cp -r /app/aqua-defaults/. /app/seed/aqua/
 fi
 
-# Fix ownership of bind-mounted data directories.
-# No-op when using Docker named volumes; needed for host bind mounts on Linux.
-chown -R app:app /app/data /app/seed/aqua 2>/dev/null || true
+# Fix ownership of the bind-mounted data directory.
+# No-op when using a Docker named volume; needed for a host bind mount on Linux.
+# /app/seed/aqua stays its owner's: the server only reads it, and it is the
+# operator's to edit and `cyfr update`'s to write.
+chown -R app:app /app/data 2>/dev/null || true
 
 # Drop to the non-root user (util-linux's setpriv, part of the base image)
 # and exec the release command.

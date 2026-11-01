@@ -84,7 +84,7 @@ func (r *Release) Managed() []string {
 func (r *Release) Write(overwriteManaged bool) error {
 	for _, e := range r.entries {
 		if e.dir {
-			if err := os.MkdirAll(e.name, 0755); err != nil {
+			if err := MakeDir(e.name); err != nil {
 				return fmt.Errorf("mkdir %s: %w", e.name, err)
 			}
 			continue
@@ -96,7 +96,7 @@ func (r *Release) Write(overwriteManaged bool) error {
 				continue
 			}
 		}
-		if err := os.MkdirAll(filepath.Dir(e.name), 0755); err != nil {
+		if err := MakeDir(filepath.Dir(e.name)); err != nil {
 			return fmt.Errorf("mkdir parent %s: %w", e.name, err)
 		}
 		if managed {
@@ -124,6 +124,25 @@ func (r *Release) Write(overwriteManaged bool) error {
 		}
 	}
 	return nil
+}
+
+// MakeDir makes the directory name and any missing parent with the mode
+// 0755, not the umask's narrowing of it: the stack's containers read the
+// scaffold's trees as an account of their own. A directory that exists
+// keeps its owner and mode.
+func MakeDir(name string) error {
+	if info, err := os.Stat(name); err == nil && info.IsDir() {
+		return nil
+	}
+	if parent := filepath.Dir(name); parent != name {
+		if err := MakeDir(parent); err != nil {
+			return err
+		}
+	}
+	if err := os.Mkdir(name, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.Chmod(name, 0755)
 }
 
 // ReplaceFile writes data over the file at name, mode, through a synced
@@ -237,7 +256,7 @@ func Fetch(version string) (*Release, error) {
 	// against the release's checksums.txt, itself verified as signed by
 	// the release workflow for this version, before downloading or
 	// extracting a byte of it. `cyfr update` verifies the CLI's archive
-	// the same way (release.FetchBinary).
+	// the same way (release.FetchArtifact).
 	want, err := fetchScaffoldChecksum(client, version)
 	if err != nil {
 		return nil, err

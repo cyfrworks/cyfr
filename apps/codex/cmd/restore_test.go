@@ -1198,6 +1198,30 @@ func TestEntrypointRefusesWhileTheRestoreIsBarred(t *testing.T) {
 	}
 }
 
+// The image's entrypoint chowns the data mount and no other: ./aqua is
+// the operator's to edit and cyfr update's to write, and the server only
+// reads it.
+func TestEntrypointLeavesTheAquaMountToItsOwner(t *testing.T) {
+	bin := t.TempDir()
+	chowned := filepath.Join(bin, "chowned")
+	for name, body := range map[string]string{
+		"setpriv": "#!/bin/sh\nexit 0\n",
+		"chown":   "#!/bin/sh\necho \"$@\" >> " + chowned + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("sh", filepath.Join("..", "..", "..", "docker-entrypoint.sh"), "bin/cyfr", "start")
+	cmd.Env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the entrypoint answered %v:\n%s", err, out)
+	}
+	if got, want := read(t, chowned), "-R app:app /app/data\n"; got != want {
+		t.Errorf("the entrypoint chowned %q, want %q", got, want)
+	}
+}
+
 // The staged configuration is read as compose will read it in place: with
 // the project's override file after it. COMPOSE_FILE in cyfr's environment
 // names nothing, since the engine's runner takes every COMPOSE_* out of a
