@@ -613,24 +613,28 @@ if [ "$code" -eq 64 ] && [ ! -e "$scratch/output" ]; then pass "$label"; else fa
 # --- retry ---
 
 retry="$root/scripts/ci/retry.sh"
-export RETRY_GAP_S=0
+# Its gaps are recorded in $scratch/slept and not waited.
+mkdir -p "$scratch/retry-bin"
+printf '#!/bin/sh\necho "$1" >> "%s/slept"\n' "$scratch" > "$scratch/retry-bin/sleep"
+chmod +x "$scratch/retry-bin/sleep"
+run_retry() { PATH="$scratch/retry-bin:$PATH" run "$retry" "$@"; }
 # A command that fails until it has been run $2 times, counting in $1.
 flaky="c=\$(cat \"\$1\" 2>/dev/null || echo 0); echo \$((c + 1)) > \"\$1\"; [ \"\$c\" -ge \"\$2\" ]"
 
 for passes_on in 1 2 3; do
   label="retry: a fetch that passes on attempt $passes_on ends 0 after $passes_on"
   rm -f "$scratch/count"
-  run "$retry" bash -c "$flaky" - "$scratch/count" "$((passes_on - 1))"
+  run_retry bash -c "$flaky" - "$scratch/count" "$((passes_on - 1))"
   if [ "$code" -eq 0 ] && [ "$(cat "$scratch/count")" = "$passes_on" ]; then pass "$label"; else fail "$label"; fi
 done
 
-label="retry: a fetch that never passes ends with its own status after three"
-rm -f "$scratch/count"
-run "$retry" bash -c 'echo x >> "$1"; exit 7' - "$scratch/count"
-if [ "$code" -eq 7 ] && [ "$(wc -l < "$scratch/count")" -eq 3 ]; then pass "$label"; else fail "$label"; fi
+label="retry: a fetch that never passes ends with its own status after three, 30 s apart"
+rm -f "$scratch/count" "$scratch/slept"
+run_retry bash -c 'echo x >> "$1"; exit 7' - "$scratch/count"
+if [ "$code" -eq 7 ] && [ "$(wc -l < "$scratch/count")" -eq 3 ] && [ "$(tr '\n' ' ' < "$scratch/slept")" = '30 30 ' ]; then pass "$label"; else fail "$label"; fi
 
 label="retry: no command is refused"
-run "$retry"
+run_retry
 if [ "$code" -eq 64 ]; then pass "$label"; else fail "$label"; fi
 
 # --- scripts/release.sh runs the seed guard against the last tag ---
