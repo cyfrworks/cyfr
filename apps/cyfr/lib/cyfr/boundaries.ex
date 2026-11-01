@@ -515,8 +515,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
-        Sanctum.Network Sanctum.Newcomer Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals
-        Sanctum.Resources Sanctum.RunningTasks Sanctum.TinctureAccess
+        Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
+        Sanctum.RunningTasks Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
         Sanctum.Visibility Sanctum.Webhook
@@ -536,10 +536,7 @@ defmodule Cyfr.Boundaries do
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
           "process as a JSON-RPC refusal. The HTTP adapters read the bearer token, " <>
           "the caller and the session, the tincture credentials and access policy, the " <>
-          "vault's OAuth grant and a webhook's row. `Sanctum.Newcomer` is the setup " <>
-          "status route's read of whether a token opens setup now (`setup_open/1`), " <>
-          "which grants nothing: the admission decides again in its transaction. " <>
-          "`Sanctum.Consent` is the tincture " <>
+          "vault's OAuth grant and a webhook's row. `Sanctum.Consent` is the tincture " <>
           "data routes' read of the grant revision a frame credential names " <>
           "(`Sanctum.Consent.profiles/2`, `head_consent/2`), read as the shell reads it " <>
           "when it mints, and `Sanctum.Consent.Loader` their read of that head's grant as " <>
@@ -2353,14 +2350,6 @@ defmodule Cyfr.Boundaries do
           "authorization header, checked in constant time before any kit is read, any key " <>
           "staged or any outbound call made (`Sanctum.Recovery`); no session and no CSRF " <>
           "token, since no cross-site form sets the header and no CORS answer admits one"
-    },
-    setup_token: %{
-      admits: :credential,
-      why:
-        "a setup-token bearer checked by `Sanctum.Newcomer.setup_open/1` in constant time, " <>
-          "on the loopback listener alone (`Emissary.Web.Plugs.LocalOnly`), for a read only: " <>
-          "it answers whether setup is open, without a session or an admission, and an " <>
-          "invalid token answers closed as a spent one does"
     },
     restore_kit_proof: %{
       admits: :credential,

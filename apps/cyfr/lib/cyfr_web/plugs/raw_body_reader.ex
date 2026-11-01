@@ -39,8 +39,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   bytes are not cached. The restore ingress (`/restore…`), which takes a
   recovery code before any person exists, is bounded the same way, and so
   is a certified device's renewal (`/certify…`), which a device sends
-  holding no session. The setup status read takes one small request
-  (`Prima.SetupStatus.max_body_bytes/0`).
+  holding no session.
 
   ## A caller no pipeline has authenticated
 
@@ -128,8 +127,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   authenticated, the attachment allowance (28 MB) for one its pipeline
   has; never more than the webhook cap under `/hooks/*`, nor the
   directory's 16 KiB write-body limit under `/directory/*`, `/restore*`
-  and `/certify/*`, nor the setup status request's own at its path, as
-  the router decodes it (`Prima.SetupStatus.path?/1`). `{:error, message}` when the webhook cap's
+  and `/certify/*`. `{:error, message}` when the webhook cap's
   configuration is out of its range.
   """
   @spec cap(Plug.Conn.t()) :: {:ok, pos_integer()} | {:error, String.t()}
@@ -140,8 +138,7 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
          @max_body_bytes,
          unauthenticated_cap(conn),
          webhook_cap,
-         directory_cap(conn),
-         setup_status_cap(conn)
+         directory_cap(conn)
        ])}
     end
   end
@@ -233,12 +230,6 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   # The directory's routes take no body past their largest entry.
   defp directory_cap(conn),
     do: if(directory_path?(conn), do: @directory_max_body_bytes, else: @max_body_bytes)
-
-  defp setup_status_cap(%Plug.Conn{path_info: path_info}) do
-    if Prima.SetupStatus.path?(path_info),
-      do: Prima.SetupStatus.max_body_bytes(),
-      else: @max_body_bytes
-  end
 
   # No body past a host call's from a caller no pipeline has authenticated.
   defp unauthenticated_cap(conn),

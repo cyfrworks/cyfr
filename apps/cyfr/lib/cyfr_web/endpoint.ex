@@ -205,10 +205,6 @@ defmodule CyfrWeb.Endpoint do
   # composition router serves is one of theirs.
   plug(CyfrWeb.MetricsPlug)
   plug(Plug.RequestId)
-  # Before the fence and the parsers: every answer of this one route, a
-  # refusal of either among them, carries `no-store`, and a malformed
-  # request counts against its limit.
-  plug(Emissary.Web.Plugs.SetupStatusFront)
   # A boot that lost the control plane serves nothing but health.
   plug(CyfrWeb.Plugs.ControlPlaneOwnership)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
@@ -229,7 +225,7 @@ defmodule CyfrWeb.Endpoint do
   # therefore not parsed, and a multipart request is refused 415 before
   # any byte of its body is read: every body the parsers read passes
   # RawBodyReader, whose caps hold for webhooks, the directory, the
-  # restore ingress, a renewal and the setup status read.
+  # restore ingress and a renewal.
   #
   # `/mcp`'s body is not read here. Its pipeline (`Emissary.Router`)
   # parses it under the same options, answered in JSON-RPC, only after

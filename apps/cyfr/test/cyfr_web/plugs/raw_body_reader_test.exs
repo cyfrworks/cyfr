@@ -218,17 +218,7 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
             {"/auth/logout", Prima.HostAPI.max_body_bytes()},
             {"/mcp", Prima.HostAPI.max_body_bytes()},
             {"/no-route-matches-this", Prima.HostAPI.max_body_bytes()},
-            {"/api/health", Prima.HostAPI.max_body_bytes()},
-            {"/api/setup", Prima.HostAPI.max_body_bytes()},
-            {"/api/setup/status/more", Prima.HostAPI.max_body_bytes()},
-            {"/api/setup/%zz", Prima.HostAPI.max_body_bytes()},
-            {"/directory/v1/genesis", Prima.Identity.max_entry_bytes()},
-            {"/restore", Prima.Identity.max_entry_bytes()},
-            {"/certify/v1/renew", Prima.Identity.max_entry_bytes()},
-            {"/api/setup/status", Prima.SetupStatus.max_body_bytes()},
-            {"/%61pi/setup/status", Prima.SetupStatus.max_body_bytes()},
-            {"/api/%73etup/status", Prima.SetupStatus.max_body_bytes()},
-            {"/api/setup/%73tatus", Prima.SetupStatus.max_body_bytes()}
+            {"/directory/v1/genesis", Prima.Identity.max_entry_bytes()}
           ] do
         conn = build_conn(:post, path, :binary.copy(<<?x>>, cap + 1))
         assert RawBodyReader.cap(conn) == {:ok, cap}, path

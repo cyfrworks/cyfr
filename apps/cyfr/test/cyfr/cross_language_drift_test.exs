@@ -588,12 +588,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/runner_relay_test.exs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
-    "setup_status.json" => [
-      {"apps/codex/internal/setup/status_test.go",
-       ~w(path version max_body_bytes request exchanges answers)},
-      {"apps/cyfr/test/emissary/web/controllers/setup_status_controller_test.exs",
-       ~w(path version max_body_bytes request exchanges)}
-    ],
     "tincture_wire.json" => [
       {"apps/cyfr/assets/test/canvas/hook.test.mjs", ~w(shell shell_invalid canvas.handshake)},
       {"apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs", ~w(stream_rejections)},
