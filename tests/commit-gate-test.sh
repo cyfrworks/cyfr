@@ -2224,7 +2224,7 @@ gate_status "$gate_pid"
 [ "$gate_rc" = 1 ] || fail "a harness leg whose trivy did not install exited $gate_rc"
 has_line '^trivy_install=1$' "$scratch/badsum.log/harness.summary" || fail 'a trivy that failed its checksum was installed'
 no_line '^installed\|' "$scratch/badsum.trace/trivy.calls" 2>/dev/null || fail 'a trivy that failed its checksum ran'
-has_line 'is not 0\.[0-9.]+, the version the step pins' "$scratch/badsum.log/harness.builder_image_10.log" || fail "a scan ran without the pinned trivy: $(cat "$scratch/badsum.log/harness.builder_image_10.log")"
+has_line 'is not 0\.[0-9.]+, the version the step pins' "$scratch/badsum.log/harness.builder_image_11.log" || fail "a scan ran without the pinned trivy: $(cat "$scratch/badsum.log/harness.builder_image_11.log")"
 same_store badsum || fail "the harness leg changed the host's images: $(cat "$scratch/badsum.trace/docker.images")"
 gate_free badsum
 echo 'ok: trivy is installed only as its release checksums it, and a scan needs that one'
