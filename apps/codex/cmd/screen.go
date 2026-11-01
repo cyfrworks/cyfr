@@ -82,10 +82,10 @@ func offerScreen(ctx context.Context, out io.Writer) error {
 	return screenOn(ctx, false, out)
 }
 
-// screenOn writes what shows CYFR into the project, then installs and
-// starts it through one sudo, asking first when confirm says to. The service
-// conflicts with tty1's getty, so systemd takes the screen over as the
-// last step whatever becomes of a terminal on tty1.
+// screenOn writes what shows CYFR into the project, then installs it through
+// one sudo, asking first when confirm says to. It starts nothing, so the
+// terminal it runs in is never taken away, on tty1 included: the screen
+// starts at the next boot.
 func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	switch {
 	case !screenPossible():
@@ -129,21 +129,27 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err != nil {
 		return errors.New("Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again")
 	}
+	fmt.Fprintln(out, "The screen starts at the next boot. Run `cyfr up`, then `sudo reboot`.")
 	return nil
 }
 
 // screenCommands are the commands `cyfr screen on` runs, the packages'
 // only if needed.
 func screenCommands(dir string) []string {
+	base, chrome := machine.installed("labwc") && machine.installed("wvkbd"), machine.installed("google-chrome-stable")
 	var commands []string
-	if !machine.installed("labwc") || !machine.installed("wvkbd") {
+	if !base || !chrome {
+		commands = append(commands, "apt-get update")
+	}
+	if !base {
 		commands = append(commands, "apt-get install -y --no-install-recommends labwc wvkbd")
 	}
-	if !machine.installed("google-chrome-stable") {
+	if !chrome {
 		commands = append(commands,
 			"deb=$(mktemp --suffix=.deb)",
 			"curl -fsSL -o \"$deb\" "+chromeDeb,
-			"apt-get install -y \"$deb\"")
+			"apt-get install -y \"$deb\"",
+			"rm -f \"$deb\"")
 	}
 	files := shellQuote([]string{filepath.Join(dir, screenDir)})
 	return append(commands,
@@ -151,7 +157,7 @@ func screenCommands(dir string) []string {
 		"install -m 0644 "+files+"/cyfr-screen.service "+screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
-		"systemctl enable --now cyfr-screen")
+		"systemctl enable cyfr-screen")
 }
 
 // screenOff leaves the packages, Chrome's profile and the project.

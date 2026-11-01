@@ -41,13 +41,14 @@ func screenCommandsIn(dir string, tail ...string) []string {
 		"install -m 0644 " + files + "/cyfr-screen.service " + screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
-		"systemctl enable --now cyfr-screen",
+		"systemctl enable cyfr-screen",
 	}, tail...)
 }
 
 // `cyfr screen on` shows the plain commands, asks once and runs them
-// through one sudo, then forgets the login; packages it has are not
-// installed again.
+// through one sudo, starting nothing, then forgets the login and says what
+// is next; packages it has are not installed again, and with none to
+// install it reads no package lists.
 func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	s := screenProject(t)
 	askInput = strings.NewReader("yes\n")
@@ -57,16 +58,21 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	want := append([]string{
+		"apt-get update",
 		"apt-get install -y --no-install-recommends labwc wvkbd",
 		"deb=$(mktemp --suffix=.deb)",
 		`curl -fsSL -o "$deb" ` + chromeDeb,
 		`apt-get install -y "$deb"`,
+		`rm -f "$deb"`,
 	}, screenCommandsIn(dir)...)
 	if len(s.applied) != 1 || !slices.Equal(s.applied[0], want) {
 		t.Fatalf("applied %q, want one %q", s.applied, want)
 	}
 	if s.forgotten != 1 {
 		t.Errorf("sudo's login was forgotten %d times", s.forgotten)
+	}
+	if !strings.HasSuffix(out.String(), "The screen starts at the next boot. Run `cyfr up`, then `sudo reboot`.\n") {
+		t.Errorf("the output does not end on the next step:\n%s", out.String())
 	}
 	for _, c := range want {
 		if !strings.Contains(out.String(), "\n  "+c+"\n") {

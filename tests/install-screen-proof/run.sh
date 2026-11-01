@@ -8,7 +8,9 @@
 # on the guest's own screen runs the install script as `curl ... | sh` pipes
 # it, with production trust, then `cyfr init`, `cyfr screen on` and `cyfr up`,
 # and CYFR answers on its port. After a reboot labwc and Chrome run on tty1
-# and show CYFR's setup page (screen-setup.png):
+# and show CYFR's setup page (screen-setup.png); after `cyfr down` and another
+# reboot CYFR stays down, the screen says why (screen-waiting.png), and
+# Ctrl+Alt+F2 reaches a terminal:
 #
 #   tests/install-screen-proof/run.sh [--out DIR]
 #
@@ -111,8 +113,21 @@ screen_runs() {
     pgrep -u proof -t tty1 -x labwc >/dev/null && pgrep -u proof -f /opt/google/chrome/chrome >/dev/null' >"$GUEST_DIR/screen.txt" 2>&1
 }
 
+# Reboots the guest and waits for its SSH.
+guest_reboot() {
+  local closes
+  guest_root 'systemd-run --on-active=2 systemctl reboot' || fail "the guest was not rebooted ($GUEST_DIR/root.txt)"
+  sleep 15
+  budget 300 || fail "the case's deadline came before the guest came back"
+  closes=$((SECONDS + BUDGET))
+  until guest_ssh true 2>/dev/null; do
+    [ "$SECONDS" -lt "$closes" ] || fail "the guest's SSH did not come back within $BUDGET s"
+    sleep 2
+  done
+}
+
 clean_install() {
-  local code closes
+  local code
   candidate_build
   guest_boot clean 8192 40G
   tty1_login
@@ -140,18 +155,18 @@ clean_install() {
   check "init says what the terminal needs before cyfr up" transcript_has init 'Run `newgrp docker` here, or log out and in again, before `cyfr up`\.'
   pane_step_end init
 
-  step "cyfr screen on, before CYFR runs"
+  step "cyfr screen on"
   # The guest's virtio display has no 3D; the product sets no renderer.
   guest_root 'mkdir -p /etc/systemd/system/cyfr-screen.service.d && printf "[Service]\nEnvironment=WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1\n" >/etc/systemd/system/cyfr-screen.service.d/proof.conf' ||
     fail "the guest's renderer was not set ($GUEST_DIR/root.txt)"
   pane_step screen-on 'cd ~/cyfr && cyfr screen on' 900 'Show CYFR on this screen\? \(yes/no\)' yes "$SUDO_PROMPT" @password
   check "cyfr screen on exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "it asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
-  check "it shows the commands" transcript_has screen-on '^  systemctl enable --now cyfr-screen$'
+  check "it shows the commands" transcript_has screen-on '^  systemctl enable cyfr-screen$'
+  check "it gives the next step" transcript_has screen-on 'The screen starts at the next boot\. Run `cyfr up`, then `sudo reboot`\.'
+  check "nothing took the terminal: tty1's getty runs and the screen does not" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-active --quiet cyfr-screen'
+  check "Chrome's package left no .deb behind" guest_ssh '! ls /tmp/*.deb'
   pane_step_end screen-on
-  screen_runs || fail "labwc and Chrome did not start on tty1 ($GUEST_DIR/screen.txt)"
-  sleep 15
-  check "screenshot screen-waiting.png" guest_screenshot screen-waiting.png
 
   step "newgrp docker, then cyfr up"
   pane_type 'newgrp docker' || fail "newgrp was not typed"
@@ -163,26 +178,36 @@ clean_install() {
   check "CYFR answers on its port (HTTP $code)" sh -c '[ "$1" -ge 200 ] && [ "$1" -lt 400 ]' sh "$code"
   check "screenshot ready.png" guest_screenshot ready.png
 
-  step "a reboot: the screen comes back by itself"
-  guest_root 'systemd-run --on-active=2 systemctl reboot' || fail "the guest was not rebooted ($GUEST_DIR/root.txt)"
-  sleep 15
-  budget 300 || fail "the case's deadline came before the guest came back"
-  closes=$((SECONDS + BUDGET))
-  until guest_ssh true 2>/dev/null; do
-    [ "$SECONDS" -lt "$closes" ] || fail "the guest's SSH did not come back within $BUDGET s"
-    sleep 2
-  done
-  screen_runs || fail "labwc and Chrome did not come back on tty1 ($GUEST_DIR/screen.txt)"
+  step "a reboot: the screen starts"
+  guest_reboot
+  screen_runs || fail "labwc and Chrome did not start on tty1 ($GUEST_DIR/screen.txt)"
   # CYFR's own restart, then the launcher's next look, then the page.
   guest_ssh "for n in \$(seq 1 90); do curl -s -o /dev/null --max-time 2 http://localhost:4000/ && exit 0; sleep 2; done; exit 1" ||
     fail "CYFR did not come back after the reboot"
   sleep 25
   check "screenshot screen-setup.png" guest_screenshot screen-setup.png
-  check "the setup page is on the screen, not the waiting page" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-waiting.png" "$GUEST_DIR/screen-setup.png"
   guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
   guest_ssh 'ps -eo args; ls -A ~/cyfr/.cyfr/screen' >"$GUEST_DIR/processes.txt" 2>&1
   check "the setup token is in no process's arguments" sh -c '[ -s "$1" ] && ! grep -qF "$(cat "$1")" "$2"' sh "$WORK/token" "$GUEST_DIR/processes.txt"
   check "the page that held the token is gone" sh -c '! grep -qx open.html "$1"' sh "$GUEST_DIR/processes.txt"
+
+  step "cyfr down, then a reboot: CYFR stays down and the screen says why"
+  guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"
+  guest_reboot
+  screen_runs || fail "labwc and Chrome did not come back on tty1 ($GUEST_DIR/screen.txt)"
+  sleep 20
+  check "screenshot screen-waiting.png" guest_screenshot screen-waiting.png
+  check "the waiting page is on the screen, not the setup page" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-waiting.png" "$GUEST_DIR/screen-setup.png"
+  check "cyfr down stayed effective: no container runs" guest_ssh '[ -z "$(docker ps -q)" ]'
+  check "CYFR does not answer" guest_ssh '! curl -s -o /dev/null --max-time 2 http://localhost:4000/'
+  guest_ssh 'cat /sys/class/tty/tty0/active' >"$GUEST_DIR/vt-before.txt" 2>&1
+  check "the screen is on tty1" grep -qx tty1 "$GUEST_DIR/vt-before.txt"
+  guest_qmp send-key '{"keys": [{"type": "qcode", "data": "ctrl"}, {"type": "qcode", "data": "alt"}, {"type": "qcode", "data": "f2"}]}' >/dev/null || fail "QMP did not send the keys"
+  sleep 5
+  guest_ssh 'cat /sys/class/tty/tty0/active; systemctl is-active getty@tty2' >"$GUEST_DIR/vt-after.txt" 2>&1
+  check "Ctrl+Alt+F2 reaches a terminal on tty2" sh -c '[ "$(cat "$1")" = "tty2
+active" ]' sh "$GUEST_DIR/vt-after.txt"
+  check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
   guest_journal
   proof_guest_stop "$GUEST" "$GUEST_DIR"
   part_verdict clean
