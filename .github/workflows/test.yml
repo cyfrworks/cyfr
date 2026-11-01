@@ -1116,6 +1116,8 @@ jobs:
     needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
       # The service bounds every build with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -1191,8 +1193,13 @@ jobs:
       - name: A tincture builds from its lockfile, its install scripts with no credential
         run: python3 tests/builder-image/lockfile.py cyfr-locus:smoke
 
+      - name: Whether the advisory checks block this run
+        id: world
+        run: scripts/ci/world-checks.sh
+
       # The same scan release.yml runs before publishing the Locus image.
       - name: Scan the image
+        continue-on-error: ${{ steps.world.outputs.informational == 'true' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.75.0
@@ -1210,6 +1217,8 @@ jobs:
     needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
       # The service bounds every runner with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -1289,9 +1298,14 @@ jobs:
       - name: The credential canary
         run: python3 tests/locus-runtime-image/canary.py cyfr-locus:runtime
 
+      - name: Whether the advisory checks block this run
+        id: world
+        run: scripts/ci/world-checks.sh
+
       # The same scan release.yml runs before publishing the Locus image, here
       # on the image the runtime role ran.
       - name: Scan the image
+        continue-on-error: ${{ steps.world.outputs.informational == 'true' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.75.0

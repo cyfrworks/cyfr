@@ -9,8 +9,9 @@
 # passing only when it exits 0. Both compare mix.lock with feeds that
 # change independently of the tree, so a tree that passed can fail later
 # with no change of its own: security.yml's elixir-audit job runs this on
-# every change, the commit gate replays that job, and scripts/release.sh
-# runs it again right before it tags.
+# every change, blocking unless scripts/ci/world-checks.sh says otherwise,
+# the commit gate replays that job, and scripts/release.sh runs it again
+# right before it tags.
 #
 # Suppressed: the cowlib advisory that has no fixed release: 2.21.0 is the
 # newest and still carries it. cowlib is test-only here — it arrives

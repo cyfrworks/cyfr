@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Regression cases for scripts/ci/seed-guard.sh, scripts/ci/config-seam.sh and
-# scripts/ci/storage-diagrams.py, and for scripts/release.sh's use of the seed
-# guard.
+# Regression cases for scripts/ci/seed-guard.sh, scripts/ci/config-seam.sh,
+# scripts/ci/world-checks.sh and scripts/ci/storage-diagrams.py, and for
+# scripts/release.sh's use of the seed guard.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -542,6 +542,72 @@ if [ "$code" -eq 1 ] && out_has 'no @layout table or no @tenant_roots comprehens
 label="storage-diagrams exits 64 without a guide"
 run_diagrams --layout storage.ex
 if [ "$code" -eq 64 ] && [ ! -s "$scratch/out" ]; then pass "$label"; else fail "$label"; fi
+
+# --- world-checks ---
+
+world_checks="$root/scripts/ci/world-checks.sh"
+
+# A merge commit of a branch that writes $1 onto a base, as a pull request's
+# run checks out.
+merge_repo() {
+  new_repo
+  printf 'x\n' > base.txt
+  commit base
+  git checkout -q -b change
+  mkdir -p "$(dirname "$1")"
+  printf 'x\n' > "$1"
+  commit change
+  git checkout -q main
+  printf 'y\n' > moved.txt
+  commit moved
+  git merge -q --no-ff -m merge change
+}
+run_world() {
+  : > "$scratch/output"
+  env "$@" GITHUB_OUTPUT="$scratch/output" bash "$world_checks" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+}
+
+for changed in src/app.ex README.md mix.lock.bak; do
+  label="world-checks: a pull request that changes $changed is informational"
+  merge_repo "$changed"
+  run_world GITHUB_EVENT_NAME=pull_request
+  if [ "$code" -eq 0 ] && [ "$(cat "$scratch/output")" = informational=true ]; then pass "$label"; else fail "$label"; fi
+done
+
+for changed in mix.lock package-lock.json apps/x/assets/package-lock.json Dockerfile Dockerfile.locus \
+  tests/y/Dockerfile docker-compose.yml docker-compose.dev.yml; do
+  label="world-checks: a pull request that changes $changed blocks"
+  merge_repo "$changed"
+  run_world GITHUB_EVENT_NAME=pull_request
+  if [ "$code" -eq 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+done
+
+for event in push schedule workflow_dispatch; do
+  label="world-checks: a $event blocks"
+  merge_repo src/app.ex
+  run_world GITHUB_EVENT_NAME=$event
+  if [ "$code" -eq 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+done
+
+label="world-checks: no event, as in the commit gate, blocks"
+merge_repo src/app.ex
+run_world -u GITHUB_EVENT_NAME
+if [ "$code" -eq 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+
+label="world-checks: a checkout with no parent to compare blocks"
+new_repo
+printf 'x\n' > base.txt
+commit base
+run_world GITHUB_EVENT_NAME=pull_request
+if [ "$code" -eq 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+
+label="world-checks: an argument is refused"
+merge_repo src/app.ex
+rm -f "$scratch/output"
+GITHUB_EVENT_NAME=pull_request GITHUB_OUTPUT="$scratch/output" bash "$world_checks" x > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 64 ] && [ ! -e "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
 
 # --- scripts/release.sh runs the seed guard against the last tag ---
 
