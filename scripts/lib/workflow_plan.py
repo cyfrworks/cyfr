@@ -107,7 +107,7 @@ NAMESPACE = None
 # A step whose whole script is one of these fetches what this checkout
 # already holds, so it is setup too: the gate runs the prebuilt binary
 # fetch itself before any leg.
-SETUP_RUNS = {"mix deps.get\nscripts/fetch-prebuilt-binaries.sh"}
+SETUP_RUNS = {"scripts/ci/retry.sh mix deps.get\nscripts/fetch-prebuilt-binaries.sh"}
 SETUP_ACTIONS = {
     "actions/checkout", "actions/setup-go", "actions/setup-node", "./.github/actions/setup-elixir",
     "actions/cache", "actions/download-artifact", "docker/setup-buildx-action",

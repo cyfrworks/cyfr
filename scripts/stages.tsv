@@ -18,6 +18,7 @@ handoff	compile-postgres	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env MIX_
 handoff	generated	scoped	600	apps/**,config/**	mix ops.gen.cli --check && mix cyfr.gen.configuration_guide --check
 handoff	tests-sqlite	scoped	2700	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
 handoff	tests-postgres	scoped	2700	tests	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors $STAGE_TESTS
+handoff	rosters	scoped	2700	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs
 handoff	arca-sqlite	scoped	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test
 handoff	arca-postgres	scoped	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test
 handoff	dialyzer	scoped	2400	apps/*/lib/**	mix dialyzer

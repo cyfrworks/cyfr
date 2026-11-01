@@ -705,7 +705,7 @@ async function restore(chromium, state) {
   // glass here holds: it only waits for its confirmation.
   const someKey = createHash("sha256").update(randomBytes(32)).digest("base64url");
   await passkeyPage.locator(`${layer} [data-test="pairing-key-input"]`).fill(someKey);
-  await passkeyPage.locator(`${layer} [data-test="pairing-begin"]`).click();
+  await pressInLayer(passkeyPage, '[data-test="pairing-begin"]');
   await passkeyPage.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 });
   state.passkeySession = { passkeyContext, passkeyPage };
 
@@ -846,7 +846,7 @@ async function viewport(chromium, state) {
   await open(page, shellAt(H, "pair"));
   await page.locator("#shell-devices").click();
   await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
-  await page.locator(`${layer} [data-test="pairing-revoke"]`).last().click();
+  const revoke = await pressInLayer(page, '[data-test="pairing-revoke"]');
   const shown = await phone.waitForSelector('[data-test="glass-prompt"]', { timeout: 60_000 }).then(() => true).catch(() => false);
   if (shown) measured.glass_prompt = await measure(phone, "#glass");
   await confirmHere(page);
@@ -858,7 +858,7 @@ async function viewport(chromium, state) {
   // console page is measured and recorded as a finding.
   const { other_home: otherHome, ...held } = measured;
   const failures = unmet(held);
-  record.viewport = { measured: held, glass_prompt_shown: shown, failures, finding_other_home_console: otherHome, press: paired.press };
+  record.viewport = { measured: held, glass_prompt_shown: shown, failures, finding_other_home_console: otherHome, press: paired.press, revoke };
   return row("viewport", "chromium", paired.stored.device && shown && failures.length === 0,
     "at 720×720: pairing, reconnecting, switching homes, revocation and a consent read and confirmed in the system layer, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);

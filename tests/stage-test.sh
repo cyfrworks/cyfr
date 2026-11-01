@@ -562,6 +562,20 @@ grep -v $'^handoff\tcontain-test\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short
 # --self-check alone. A table without its row is caught.
 grep -v $'^handoff\trelease-graph\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 [ "$(guard "$S/stages-short.tsv")" = tests/ci-release-graph.py ] || fail "a table without the release-graph row was not caught: $(guard "$S/stages-short.tsv")"
+# The roster tests are application tests, which the guard does not read:
+# their row runs always, whatever a change touches, in the scoped lane.
+rosters_held() { # TABLE: answers whether its rosters row runs both tests always and scoped
+  awk -F'\t' '$1 == "handoff" && $2 == "rosters" && $3 == "scoped" && $5 == "always" &&
+    index($6, "apps/cyfr/test/cyfr/restore_order_test.exs") && index($6, "apps/cyfr/test/cyfr/cross_language_drift_test.exs") { held = 1 }
+    END { exit !held }' "$1"
+}
+rosters_held "$ROOT/scripts/stages.tsv" || fail 'no handoff row runs the two roster tests always and scoped'
+grep -v $'^handoff\trosters\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
+! rosters_held "$S/stages-short.tsv" || fail 'a table without the rosters row was not caught'
+sed $'/^handoff\trosters\t/s/\talways\t/\ttests\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
+! rosters_held "$S/stages-short.tsv" || fail 'a rosters row that does not run always was not caught'
+sed $'/^handoff\trosters\t/s/\tscoped\t/\texclusive\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
+! rosters_held "$S/stages-short.tsv" || fail 'a rosters row in another lane was not caught'
 # A command counts where the shell runs it: not in a comment, an echo's
 # arguments or a heredoc's body, and a real one with a comment after it
 # does. An image suite, given its image, is no self-test.

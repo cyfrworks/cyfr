@@ -119,6 +119,8 @@ curl -fsS "http://$reg/v2/" > /dev/null 2>&1 || die "the registry did not answer
 # networking lets BuildKit reach the registry on the host's loopback, and
 # plain HTTP is allowed for this registry alone.
 printf '[registry."%s"]\n  http = true\n' "$reg" > "$scratch/buildkitd.toml"
+"$root/scripts/ci/retry.sh" docker pull -q moby/buildkit:buildx-stable-1 > /dev/null 2> "$scratch/err" ||
+  die "cannot pull BuildKit's image"
 docker buildx create --name "$name" --driver docker-container --driver-opt network=host \
   --buildkitd-config "$scratch/buildkitd.toml" --bootstrap > /dev/null 2> "$scratch/err" ||
   die "cannot create a docker-container builder"
