@@ -294,7 +294,7 @@ export async function pressInLayer(page, selector) {
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   const misses = [];
   while (true) {
-    const control = page.locator(`${layer} ${selector}`);
+    const control = page.locator(`${layer} ${selector}`).last();
     await control.evaluate((element) => {
       window.__layerPress = false;
       element.addEventListener("click", () => { window.__layerPress = true; }, { capture: true, once: true });
