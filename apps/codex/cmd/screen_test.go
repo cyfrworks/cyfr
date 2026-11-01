@@ -99,6 +99,7 @@ func TestScreenOnRefuses(t *testing.T) {
 	}{
 		"no terminal":     {func(*standIn) { askTerminal = func() bool { return false } }, "`cyfr screen` runs at a terminal"},
 		"another system":  {func(s *standIn) { s.supported = false }, "`cyfr screen` runs at a terminal"},
+		"arm64":           {func(s *standIn) { s.arch = "arm64" }, "`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS on amd64"},
 		"a desktop":       {func(s *standIn) { s.displayManager = true }, "This machine's display manager has the screen."},
 		"no project here": {func(*standIn) { _ = os.Remove("docker-compose.yml") }, "There is no CYFR in this directory."},
 		"no .env":         {func(*standIn) { _ = os.Remove(".env") }, "There is no CYFR in this directory."},

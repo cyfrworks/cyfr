@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -62,7 +61,7 @@ func init() {
 
 // screenPossible is a machine `cyfr screen on` runs on.
 func screenPossible() bool {
-	return askTerminal() && machine.supported() && runtime.GOARCH == "amd64"
+	return askTerminal() && machine.supported() && machine.arch() == "amd64"
 }
 
 // offerScreen is init's question, on a new project on a machine that can
