@@ -7,7 +7,8 @@ defmodule Emissary.Router do
   vault's OAuth grant callback, tincture serving, a canvas's page and
   the tincture data routes (a canvas's among them), health, the
   execution-events stream, inbound webhooks, the identity directory, a
-  certified device's renewal and the restore ingress.
+  certified device's renewal, the restore ingress and the setup status
+  read.
 
   The composition router invokes `routes/0` where the adapter's routes
   stand, so its `__routes__/0` stays the total table. The quoted calls
@@ -186,6 +187,20 @@ defmodule Emissary.Router do
           window_ms: 60_000
       end
 
+      # The setup status read (`Emissary.Web.SetupStatusController`), for a
+      # program on this machine: no session and no call identity, so
+      # neither an answer nor a refusal of the route's writes a row. The
+      # ownership fence every route stands behind still applies: a member
+      # that lost its slot refuses, and that refusal's record is the
+      # server's own audit, not setup state. The rate limit and the first
+      # `LocalOnly` run earlier, before that fence and the parsers
+      # (`Emissary.Web.Plugs.SetupStatusFront`).
+      pipeline :setup_status do
+        plug CyfrWeb.Plugs.ApiSecurityHeaders
+        plug Emissary.Web.Plugs.LocalOnly
+        plug :accepts, ["json"]
+      end
+
       # The identity directory's routes (`Sanctum.Directory`), which decide
       # every request and record their own refusals: a directory request is
       # admitted by the identifier's own chain, never by a person of this
@@ -315,6 +330,14 @@ defmodule Emissary.Router do
 
         get "/health", HealthController, :check, metadata: %{auth: :public_health}
         get "/health/ready", HealthController, :ready, metadata: %{auth: :public_health}
+      end
+
+      # Whether setup is still open. Its body is bounded before it is decoded
+      # (`CyfrWeb.Plugs.RawBodyReader`).
+      scope "/api", Emissary.Web do
+        pipe_through :setup_status
+
+        post "/setup/status", SetupStatusController, :status, metadata: %{auth: :setup_token}
       end
 
       # Execution event SSE stream. The controller reads the execution within the

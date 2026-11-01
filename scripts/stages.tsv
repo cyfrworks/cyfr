@@ -9,6 +9,7 @@ save	credo	scoped	600	apps/**,config/**	mix credo --strict
 save	compile	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors
 save	tests	scoped	1800	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
 save	go-install	scoped	1200	apps/codex/**,tests/fixtures/install_prerequisites.json	cd apps/codex && go test ./internal/install/... ./cmd/...
+save	go-setup	scoped	1200	apps/codex/internal/setup/**,tests/fixtures/setup_status.json	cd apps/codex && go test ./internal/setup/...
 
 handoff	format	none	-	always	mix format --check-formatted
 handoff	credo	scoped	600	apps/**,config/**	mix credo --strict

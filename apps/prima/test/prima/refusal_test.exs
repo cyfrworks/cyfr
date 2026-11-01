@@ -285,6 +285,7 @@ defmodule Prima.RefusalTest do
     {:auth_provider_error, :unavailable},
     {:origin_rejected, :forbidden},
     {:frame_request, :forbidden},
+    {:local_only, :forbidden},
     {:parse_error, :invalid_argument},
     {:invalid_request, :invalid_argument},
     {:header_mismatch, :invalid_argument},
