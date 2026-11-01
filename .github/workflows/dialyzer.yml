@@ -52,7 +52,7 @@ jobs:
         with:
           cache-key-prefix: dialyzer
       - run: |
-          mix deps.get
+          scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
       - run: mix compile --warnings-as-errors
       - name: Build PLT

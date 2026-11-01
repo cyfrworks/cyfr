@@ -113,7 +113,7 @@ def invocations(lines, words):
             if m.start() not in free:
                 continue
             before = text[:m.start()].rstrip()
-            if before == "" or before.endswith(("&&", ";", "|", "run:")) or re.search(r"(?:^|\s)RUN$", before):
+            if before == "" or before.endswith(("&&", ";", "|", "run:", "scripts/ci/retry.sh")) or re.search(r"(?:^|\s)RUN$", before):
                 found.append((n, m.start(), m.end()))
     return found
 
@@ -151,7 +151,7 @@ NOT = [
     '    refuse.("no locked dep in #{deps} calls `use RustlerPrecompiled`: run mix deps.get first, or drop this part of the script once no dep needs it")',
     "      # The fetch every job runs after mix deps.get names the file and URL",
     "- After `mix deps.get` in a fresh checkout, and after a change to",
-    'SETUP_RUNS = {"mix deps.get\\nscripts/fetch-prebuilt-binaries.sh"}',
+    'SETUP_RUNS = {"scripts/ci/retry.sh mix deps.get\\nscripts/fetch-prebuilt-binaries.sh"}',
     "mix deps.getter",
     "echo then mix deps.get",
     '      "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"]',
@@ -167,6 +167,7 @@ NOT = [
 IS = [
     "mix deps.get",
     "          mix deps.get",
+    "          scripts/ci/retry.sh mix deps.get",
     "      - run: mix deps.get",
     "RUN mix deps.get --only prod && mix deps.compile",
     'cd "$root" && mix deps.get',

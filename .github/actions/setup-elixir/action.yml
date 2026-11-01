@@ -51,6 +51,10 @@ runs:
         otp-version: '29.1.1'
         version-type: strict
         elixir-version: '1.20.4'
+        # Tried in order, so an answer of 500 from the first is no red run.
+        hexpm-mirrors: |
+          https://builds.hex.pm
+          https://cdn.jsdelivr.net/hex
     - name: Cache deps and build
       if: inputs.build-cache == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

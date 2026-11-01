@@ -73,7 +73,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          mix deps.get
+          scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
 
       - name: Compile

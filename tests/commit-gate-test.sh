@@ -517,7 +517,7 @@ SETUP_ACTIONS = {
 # image loaded and tagged.
 SETUP_COMMANDS = [
     r"set -euo pipefail",
-    r"mix deps\.get",
+    r"scripts/ci/retry\.sh mix deps\.get",
     r"scripts/fetch-prebuilt-binaries\.sh",
     r"sudo scripts/ci/containerd-image-store\.sh",
     r"rustup (?:target add|toolchain install) [^;&|<>`$()]*(?:\"\$[A-Z_]+\"[^;&|<>`()]*)*",
@@ -666,21 +666,21 @@ import sys
 p = sys.argv[1]; s = open(p).read()
 anchor = "      - name: Compile with warnings as errors\n"
 assert anchor in s
-step = "      - run: |\n          mix deps.get\n          test -f newly-required-ci-asset\n"
+step = "      - run: |\n          scripts/ci/retry.sh mix deps.get\n          test -f newly-required-ci-asset\n"
 open(p, "w").write(s.replace(anchor, step + anchor, 1))
 PY
 ! ci_roster "$gate" "$scratch/roster/unnamed" 2>"$scratch/roster/unnamed.err" ||
   fail 'an unnamed CI check behind a setup command passed as setup'
-has_line "^test.yml static: 'run: mix deps.get; test -f newly-required-ci-asset' is neither run by the gate nor on its list" \
+has_line "^test.yml static: 'run: scripts/ci/retry.sh mix deps.get; test -f newly-required-ci-asset' is neither run by the gate nor on its list" \
   "$scratch/roster/unnamed.err" || fail "an unnamed CI check failed without its reason: $(cat "$scratch/roster/unnamed.err")"
 mkdir -p "$scratch/roster/named"
 cp "$root"/.github/workflows/*.yml "$scratch/roster/named/"
 python3 -I - "$scratch/roster/named/test.yml" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-setup = "      - name: Install dependencies\n        run: |\n          mix deps.get\n          scripts/fetch-prebuilt-binaries.sh\n"
+setup = "      - name: Install dependencies\n        run: |\n          scripts/ci/retry.sh mix deps.get\n          scripts/fetch-prebuilt-binaries.sh\n"
 assert setup in s
-named = "      - name: Install dependencies\n        run: |\n          mix deps.get\n          scripts/fetch-prebuilt-binaries.sh\n          test -f newly-required-ci-asset\n"
+named = "      - name: Install dependencies\n        run: |\n          scripts/ci/retry.sh mix deps.get\n          scripts/fetch-prebuilt-binaries.sh\n          test -f newly-required-ci-asset\n"
 open(p, "w").write(s.replace(setup, named, 1))
 PY
 ! ci_roster "$gate" "$scratch/roster/named" 2>"$scratch/roster/named.err" ||

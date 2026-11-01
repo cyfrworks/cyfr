@@ -177,6 +177,7 @@ done
 # forwarding to the registry's listener.
 REGISTRY_FRONT_NAME="$RUN-front-registry"
 front_token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+browser_image || fail "the Playwright image could not be pulled"
 docker run -d --name "$REGISTRY_FRONT_NAME" --network host -u 0 \
   -v "$BROWSER_AUTHORITY:/authority:ro" -v "$ROOT/tests/identity-proof:/front:ro" \
   "$PLAYWRIGHT_IMAGE" \

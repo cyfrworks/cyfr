@@ -62,6 +62,7 @@ identity_front_start() {
   token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$token" =~ ^[0-9a-f]{32}$ ]] || fail "no token for the front of $host"
   docker rm -f "$name" >/dev/null 2>&1 || true
+  browser_image || fail "the Playwright image could not be pulled"
   docker run -d --name "$name" --network host -u 0 \
     -v "$BROWSER_AUTHORITY:/authority:ro" -v "$ROOT/tests/identity-proof:/front:ro" \
     "$PLAYWRIGHT_IMAGE" \

@@ -307,6 +307,13 @@ proof_await() {
 # The browsers
 # ---------------------------------------------------------------------------
 
+# The Playwright image, pulled first, so that a registry's passing 500 or 503
+# is tried again and does not end the run in `docker run`'s own pull.
+browser_image() {
+  docker image inspect "$PLAYWRIGHT_IMAGE" >/dev/null 2>&1 ||
+    "$ROOT/scripts/ci/retry.sh" docker pull -q "$PLAYWRIGHT_IMAGE" >/dev/null
+}
+
 # Playwright's library, installed from tests/browser/package-lock.json with
 # its scripts off once for each lockfile and image, into the checkout's
 # ignored build output, and the directory it is in printed. Two runs that
@@ -318,6 +325,7 @@ browser_node_modules() {
   local base="$ROOT/_build/browser-node-modules" key dir
   key="$(printf '%s\0%s' "$(sha256sum <"$BROWSER_HOME/package-lock.json")" "$PLAYWRIGHT_IMAGE" | sha256sum | cut -c1-64)"
   dir="$base/$key"
+  browser_image || { echo "::error::the Playwright image could not be pulled" >&2; return 1; }
   if [ ! -f "$dir/complete" ] && ! {
     mkdir -p "$base" &&
       (
