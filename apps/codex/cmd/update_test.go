@@ -2657,7 +2657,7 @@ func TestUpdateRefusesAnAquaItCannotWrite(t *testing.T) {
 			}
 			var out bytes.Buffer
 			err := runHomeUpdate(context.Background(), &out, &out, false)
-			want := "which an older CYFR image gave to its own account. Nothing was changed and the running stack was not touched. Run `sudo chown -R \"$USER\" aqua` in this directory, then run `cyfr update` again"
+			want := "which an older CYFR image gave to its own account. Nothing was changed and the running stack was not touched. Run `sudo chown -R \"$USER\" aqua && chmod -R a+rX aqua` in this directory, then run `cyfr update` again"
 			if err == nil || !strings.HasPrefix(err.Error(), "cyfr update cannot write aqua (") || !strings.HasSuffix(err.Error(), want) {
 				t.Fatalf("the update answered %v:\n%s", err, out.String())
 			}

@@ -50,6 +50,25 @@ func TestWriteKeepsTheTreeReadableUnderAnyUmask(t *testing.T) {
 	}
 }
 
+// A file at the name is the operator's: MakeDir answers the conflict and
+// leaves the file's mode, there and for a directory beneath it.
+func TestMakeDirRefusesAnExistingFileWithoutChangingIt(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("held", []byte("operator data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"held", "held/below"} {
+		err := MakeDir(name)
+		info, statErr := os.Stat("held")
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		if err == nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("MakeDir(%s) answered %v and left mode %o", name, err, info.Mode().Perm())
+		}
+	}
+}
+
 // A directory that exists keeps its mode, and is not chmodded: an older
 // image may hold it, where a chmod would fail.
 func TestMakeDirLeavesWhatExists(t *testing.T) {

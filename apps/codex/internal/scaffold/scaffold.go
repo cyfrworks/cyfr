@@ -129,7 +129,7 @@ func (r *Release) Write(overwriteManaged bool) error {
 // MakeDir makes the directory name and any missing parent with the mode
 // 0755, not the umask's narrowing of it: the stack's containers read the
 // scaffold's trees as an account of their own. A directory that exists
-// keeps its owner and mode.
+// keeps its owner and mode, and anything else at the name is an error.
 func MakeDir(name string) error {
 	if info, err := os.Stat(name); err == nil && info.IsDir() {
 		return nil
@@ -139,7 +139,14 @@ func MakeDir(name string) error {
 			return err
 		}
 	}
-	if err := os.Mkdir(name, 0755); err != nil && !os.IsExist(err) {
+	err := os.Mkdir(name, 0755)
+	if os.IsExist(err) {
+		if info, statErr := os.Stat(name); statErr == nil && info.IsDir() {
+			return nil
+		}
+		return err
+	}
+	if err != nil {
 		return err
 	}
 	return os.Chmod(name, 0755)

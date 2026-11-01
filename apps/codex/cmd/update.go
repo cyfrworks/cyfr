@@ -328,7 +328,7 @@ func refuseUnwritableAqua() error {
 		return errors.Join(f.Close(), os.Remove(f.Name()))
 	})
 	if err != nil {
-		return fmt.Errorf("cyfr update cannot write %s (%v), which an older CYFR image gave to its own account. Nothing was changed and the running stack was not touched. Run `sudo chown -R \"$USER\" %s` in this directory, then run `cyfr update` again", aquaDir, err, aquaDir)
+		return fmt.Errorf("cyfr update cannot write %s (%v), which an older CYFR image gave to its own account. Nothing was changed and the running stack was not touched. Run `sudo chown -R \"$USER\" %s && chmod -R a+rX %s` in this directory, then run `cyfr update` again", aquaDir, err, aquaDir, aquaDir)
 	}
 	return nil
 }
