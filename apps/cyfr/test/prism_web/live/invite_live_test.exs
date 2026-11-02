@@ -4,9 +4,10 @@
 defmodule PrismWeb.InviteLiveTest do
   @moduledoc """
   `/invite`: the link's code, handed over from the fragment, names who
-  invited and to which athanor, and opens the two screens, the name field
-  filled with the name the invitation carries. The passkey makes the
-  person, seated in the group, and their enrollment; screen 2 registers
+  invited and to which shared thread, by its title, and opens the two
+  screens, the name field filled with the name the invitation carries.
+  The passkey makes the person, seated in the thread, and their
+  enrollment; screen 2 registers
   them at cyfr.run, pushes their recovery code once, and "I saved it"
   signs them in. Each answer of cyfr.run leaves screen 2 in its state. An
   expired, a redeemed and a revoked code read `invitation_invalid`'s
@@ -19,21 +20,20 @@ defmodule PrismWeb.InviteLiveTest do
   import Ecto.Query, only: [from: 2]
   import PrismWeb.AdmissionScreens
 
-  alias Arca.Schemas.{IdentityAttempt, Invitation, Membership, Passkey, User}
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Arca.Schemas.{IdentityAttempt, Invitation, Passkey, SharedThreadMember, User}
   alias Sanctum.TestContext.Authenticator
 
   setup do
     issuer = test_user(%{name: "Ada Issuer"})
-    {:ok, group} = Athanors.create_group(issuer.user_id, "Garden #{issuer.namespace}")
-    %{issuer: issuer, group: group}
+    {:ok, thread} = Sanctum.SharedThreads.create(issuer.user_id, "Garden #{issuer.namespace}")
+    %{issuer: issuer, thread: thread}
   end
 
-  defp invite!(%{issuer: issuer, group: group}, name \\ nil) do
+  defp invite!(%{issuer: issuer, thread: thread}, name \\ nil) do
     ctx = Sanctum.TestContext.session!(issuer.user_id)
 
     {:ok, %{invitation: invitation, code: code}} =
-      Sanctum.Invitations.create(ctx, group.id, name)
+      Sanctum.Invitations.create(ctx, thread.id, name)
 
     {invitation.id, code}
   end
@@ -41,8 +41,9 @@ defmodule PrismWeb.InviteLiveTest do
   defp people, do: Arca.Repo.aggregate(User, :count)
   defp passkeys, do: Arca.Repo.aggregate(Passkey, :count)
 
-  defp seats(group),
-    do: Arca.Repo.aggregate(from(m in Membership, where: m.athanor_id == ^group.id), :count)
+  defp seats(thread),
+    do:
+      Arca.Repo.aggregate(from(m in SharedThreadMember, where: m.thread_id == ^thread.id), :count)
 
   defp attempt(user_id),
     do: Arca.Repo.get_by!(IdentityAttempt, user_id: user_id, kind: "enrollment")
@@ -56,8 +57,8 @@ defmodule PrismWeb.InviteLiveTest do
     {browser, view}
   end
 
-  test "names who invited and to which athanor; the two screens make the person in the group and sign them in",
-       %{conn: conn, group: group} = ctx do
+  test "names who invited and to which thread; the two screens make the person in the thread and sign them in",
+       %{conn: conn, thread: thread} = ctx do
     directory!()
     registry!()
     {id, code} = invite!(ctx)
@@ -65,10 +66,10 @@ defmodule PrismWeb.InviteLiveTest do
 
     assert has_element?(view, "h1", "You are invited to CYFR")
     assert has_element?(view, ~s([data-test="invite-from"]), "Ada Issuer")
-    assert has_element?(view, ~s([data-test="invite-athanor"]), group.name)
+    assert has_element?(view, ~s([data-test="invite-thread"]), thread.title)
 
     assert render(view) =~
-             ~r/invited you to\s+<span[^>]*>\s*#{Regex.escape(group.name)}\s*<\/span>\s+on this CYFR\.\s+This CYFR keeps your identity\./
+             ~r/invited you to\s+<span[^>]*>\s*#{Regex.escape(thread.title)}\s*<\/span>\s+on this CYFR\.\s+This CYFR keeps your identity\./
 
     assert has_element?(view, ~s([data-test="invite-expires"]), "The invitation can be used once")
 
@@ -101,7 +102,11 @@ defmodule PrismWeb.InviteLiveTest do
     assert %User{admission: "invitation", namespace: "mira"} =
              Arca.Repo.get!(User, user_id)
 
-    assert Members.member?(user_id, group.id)
+    assert Arca.Repo.get_by(SharedThreadMember,
+             thread_id: thread.id,
+             user_id: user_id,
+             status: "active"
+           )
 
     assert screen_2?(view, :code)
     attempt = attempt(user_id)
@@ -126,17 +131,17 @@ defmodule PrismWeb.InviteLiveTest do
     assert %{phase: "completed"} = attempt(user_id)
   end
 
-  test "an invitation's name fills the field, checked at once; with no athanor it names this CYFR",
+  test "an invitation's name fills the field, checked at once; with no thread it names this CYFR",
        %{conn: conn, issuer: issuer} do
     directory!()
     registry!(%{"held" => :taken})
-    # An invitation to no athanor is the platform administrator's.
+    # An invitation naming no thread is the platform administrator's.
     {:ok, _} = Sanctum.TestContext.ensure_platform(issuer.user_id)
     ctx = Sanctum.TestContext.session!(issuer.user_id)
     {:ok, %{code: code}} = Sanctum.Invitations.create(ctx, nil, "nova")
     {_browser, view} = opened(conn, code)
 
-    refute has_element?(view, ~s([data-test="invite-athanor"]))
+    refute has_element?(view, ~s([data-test="invite-thread"]))
 
     assert render(view) =~
              ~r/invited you to\s+this CYFR\.\s+This CYFR keeps your identity\./
@@ -195,7 +200,7 @@ defmodule PrismWeb.InviteLiveTest do
   end
 
   test "an expired, a redeemed and a revoked code say so, start no ceremony and create nothing",
-       %{conn: conn, issuer: issuer, group: group} = ctx do
+       %{conn: conn, issuer: issuer, thread: thread} = ctx do
     directory!()
     {expired, expired_code} = invite!(ctx)
 
@@ -219,7 +224,7 @@ defmodule PrismWeb.InviteLiveTest do
     {:ok, _} =
       Sanctum.Invitations.revoke(Sanctum.TestContext.session!(issuer.user_id), revoked)
 
-    before = {people(), passkeys(), seats(group)}
+    before = {people(), passkeys(), seats(thread)}
     sentence = Prima.Refusal.message(:invitation_invalid)
 
     for code <- [expired_code, redeemed_code, revoked_code] do
@@ -234,28 +239,28 @@ defmodule PrismWeb.InviteLiveTest do
       assert_reply(view, %{error: true})
     end
 
-    assert {people(), passkeys(), seats(group)} == before
+    assert {people(), passkeys(), seats(thread)} == before
   end
 
   test "a code revoked after the page read it creates nothing when its passkey arrives",
-       %{conn: conn, issuer: issuer, group: group} = ctx do
+       %{conn: conn, issuer: issuer, thread: thread} = ctx do
     directory!()
     registry!()
     {id, code} = invite!(ctx)
     {_browser, view} = opened(conn, code)
     name!(view, "mira")
     credential = ceremony(view, "invite")
-    before = {people(), passkeys(), seats(group)}
+    before = {people(), passkeys(), seats(thread)}
 
     {:ok, _} = Sanctum.Invitations.revoke(Sanctum.TestContext.session!(issuer.user_id), id)
 
     admit!(view, "invite", credential)
     assert has_element?(view, ~s([data-test="invite-refused"]))
-    assert {people(), passkeys(), seats(group)} == before
+    assert {people(), passkeys(), seats(thread)} == before
   end
 
   test "a cancelled ceremony writes nothing and the passkey can be created again",
-       %{conn: conn, group: group} = ctx do
+       %{conn: conn, thread: thread} = ctx do
     directory!()
     registry!()
     {_id, code} = invite!(ctx)
@@ -278,6 +283,6 @@ defmodule PrismWeb.InviteLiveTest do
     admit!(view, "invite")
     assert screen_2?(view, :code)
     assert people() == before + 1
-    assert seats(group) == 2
+    assert seats(thread) == 2
   end
 end

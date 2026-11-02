@@ -185,7 +185,7 @@ export const SHARE_FIELDS = {
     bound: { ids: ["consent_id", "athanor_id", "share_id"], times: [], days: [] },
   },
   shares: {
-    exact: ["audience", "group_id", "person_daily", "total_daily", "status"],
+    exact: ["audience", "thread_id", "person_daily", "total_daily", "status"],
     derived: [],
     bound: { ids: ["id", "vault_entry_id", "athanor_id", "created_by"], times: ["inserted_at", "updated_at"], days: [] },
   },

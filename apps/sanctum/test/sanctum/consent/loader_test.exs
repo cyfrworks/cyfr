@@ -439,12 +439,22 @@ defmodule Sanctum.Consent.LoaderTest do
     test "a share row is read live as the person is offered it, its source held to its digest" do
       terry = Arca.Test.Shares.owner!()
       alice = Arca.Test.Shares.owner!()
-      traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+      server = Prima.Actor.system()
+
+      {:ok, traders} =
+        Arca.SharedThreads.create(server, %{title: "Traders", created_by: terry.user.id})
+
+      {:ok, _seat} =
+        Arca.SharedThreadMembers.seat(server, traders.id, alice.user.id, terry.user.id)
+
       entry = Arca.Test.Shares.entry!(terry.actor, %{field_names: ~s(["KEY"])})
       {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
 
       share =
-        Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+        Arca.Test.Shares.share!(terry.actor, entry.id, %{
+          audience: "thread",
+          thread_id: traders.id
+        })
 
       person =
         Context.build(
@@ -472,11 +482,8 @@ defmodule Sanctum.Consent.LoaderTest do
       assert {:share, _, {:error, :binding_went_stale}} =
                Loader.row_binding(person, %{}, row.("sha256:approved-earlier"))
 
-      # Alice leaves the group: no longer offered to her.
-      {:ok, _left} =
-        Arca.SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(traders.id), alice.user.id,
-          verify: fn _ -> :ok end
-        )
+      # Alice leaves the thread: no longer offered to her.
+      {:ok, _left} = Arca.SharedThreadMembers.leave(server, traders.id, alice.user.id)
 
       assert {:share, _, {:error, :not_offered}} = Loader.row_binding(person, %{}, row.(digest))
     end

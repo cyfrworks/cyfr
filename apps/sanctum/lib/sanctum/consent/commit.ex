@@ -1919,7 +1919,7 @@ defmodule Sanctum.Consent.Commit do
            scope: "share",
            # The audience the share was offered under, which the
            # revision's lock holds its row to (`Arca.ConsentStorage`).
-           admitted: %{audience: view.audience, group_id: view.group_id},
+           admitted: %{audience: view.audience, thread_id: view.thread_id},
            kind: view.kind,
            provider: view.provider_hint,
            disclosed: false,

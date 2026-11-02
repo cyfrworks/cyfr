@@ -23,14 +23,20 @@ defmodule Arca.SharedThreads do
   write runs under this member's slot (`Arca.Repo.owned/2`; `:not_owner`
   once another member holds it). The people a write seats are locked first
   and the thread after them, the order a person's standing transitions
-  take (`Arca.SecurityTransitions`). Renaming, archiving and reopening
+  take (`Arca.SecurityTransitions`). A creation counts the threads its
+  creator made that stand active against `max_shared_threads_per_person`,
+  and a new pair the active pairs each of its two sits in against
+  `max_pairs_per_person`, under those people's locks
+  (`Prima.Caps.check_counted/3`); a pair found is not counted. Renaming,
+  archiving and reopening
   each lock the thread, then make one write conditional on its kind and
   status, whose row count is its answer; archiving or reopening a thread
   raises its `security_generation` by one in the same statement.
 
   A row crosses as a plain map (`Arca.Data`). A refusal is `:not_found`,
   `:pair` (a pair has no title and stays ended once archived),
-  `{:invalid, %{field => [message]}}`, `:cross_tenant`, `:not_owner` or
+  `{:invalid, %{field => [message]}}`, a cap's `{:limit_reached, key, cap}`
+  or `{:cap_unverifiable, key}`, `:cross_tenant`, `:not_owner` or
   `:database_error`.
   """
 
@@ -51,23 +57,26 @@ defmodule Arca.SharedThreads do
   """
   @spec create(Prima.Actor.t(), map()) :: {:ok, row()} | {:error, {:invalid, map()}} | refusal()
   # arca:unscoped-ok a shared thread is no athanor's; it is written with its first seat.
-  def create(%Prima.Actor{scope: :platform}, attrs) when is_map(attrs) do
+  def create(%Prima.Actor{scope: :platform} = actor, attrs) when is_map(attrs) do
     title = attrs[:title]
     by = attrs[:created_by]
 
     with :ok <- valid([{:title, title?(title)}, {:created_by, Prima.PersonId.person?(by)}]) do
       Arca.Repo.owned("Arca.SharedThreads.create", fn ->
         SharedThreadMembers.hold_people!([by])
-        now = Arca.ServerMetaStorage.now!()
-        id = Prima.UUID7.generate_id("sth")
 
-        {1, _} =
-          Arca.Repo.insert_all(SharedThread, [
-            %{id: id, kind: "shared", title: title, created_by: by, created_at: now}
-          ])
+        with :ok <- Prima.Caps.check_counted(actor, :max_shared_threads_per_person, created(by)) do
+          now = Arca.ServerMetaStorage.now!()
+          id = Prima.UUID7.generate_id("sth")
 
-        :ok = SharedThreadMembers.seat!(id, by, by, now)
-        {:ok, Arca.Repo.get!(SharedThread, id)}
+          {1, _} =
+            Arca.Repo.insert_all(SharedThread, [
+              %{id: id, kind: "shared", title: title, created_by: by, created_at: now}
+            ])
+
+          :ok = SharedThreadMembers.seat!(id, by, by, now)
+          {:ok, Arca.Repo.get!(SharedThread, id)}
+        end
       end)
     end
   end
@@ -82,7 +91,7 @@ defmodule Arca.SharedThreads do
   """
   @spec pair(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, row()} | {:error, {:invalid, map()}} | refusal()
-  def pair(%Prima.Actor{scope: :platform}, by, other) do
+  def pair(%Prima.Actor{scope: :platform} = actor, by, other) do
     two? = Prima.PersonId.person?(by) and Prima.PersonId.person?(other) and by != other
 
     with :ok <- valid([{:people, two?}]) do
@@ -92,14 +101,51 @@ defmodule Arca.SharedThreads do
         SharedThreadMembers.hold_people!([by, other])
 
         case active_pair(pair_of) do
-          %SharedThread{} = found -> {:ok, found}
-          nil -> make_pair(pair_of, by, other)
+          %SharedThread{} = found ->
+            {:ok, found}
+
+          nil ->
+            with :ok <- pairs_cap(actor, by),
+                 :ok <- pairs_cap(actor, other),
+                 do: make_pair(pair_of, by, other)
         end
       end)
     end
   end
 
   def pair(%Prima.Actor{}, _by, _other), do: {:error, :cross_tenant}
+
+  # The threads `by` made that stand active, counted under their lock.
+  # arca:unscoped-ok a shared thread is no athanor's; a person's are counted by their creator.
+  defp created(by) do
+    fn ->
+      {:ok,
+       Arca.Repo.one(
+         from(t in SharedThread,
+           where: t.created_by == ^by and t.kind == "shared" and t.status == "active",
+           select: count(t.id)
+         )
+       )}
+    end
+  end
+
+  # The active pairs `user_id` sits in, counted under their lock.
+  # arca:unscoped-ok a pair is no athanor's; a person's are counted by their seats.
+  defp pairs_cap(actor, user_id) do
+    Prima.Caps.check_counted(actor, :max_pairs_per_person, fn ->
+      {:ok,
+       Arca.Repo.one(
+         from(t in SharedThread,
+           join: m in SharedThreadMember,
+           on: m.thread_id == t.id,
+           where:
+             t.kind == "pair" and t.status == "active" and m.user_id == ^user_id and
+               m.status == "active",
+           select: count(t.id)
+         )
+       )}
+    end)
+  end
 
   # The pair is written only when no active pair holds `pair_of`; a pair
   # another transaction committed first leaves this insert a no-op, and the

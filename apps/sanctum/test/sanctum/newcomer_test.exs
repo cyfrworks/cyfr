@@ -19,17 +19,21 @@ defmodule Sanctum.NewcomerTest do
   the door's `*` and passes the athanor caps, and a refusal anywhere in
   its transaction leaves no person, no athanor and no passkey. An
   invitation admits without the door, under its own checks and the same
-  caps, and seats its person in the group it names in the transaction
-  that redeems it, so a refusal leaves no person and the code unredeemed;
-  one whose issuer's standing moved since it was issued, a declared
-  restore's raise among them, admits no one.
+  caps, and seats its person in the shared thread it names in the
+  transaction that redeems it, so a refusal, the thread's people cap and
+  a declared restore's hold on the thread among them, leaves no person
+  and the code unredeemed; one whose issuer's standing moved since it was
+  issued, a declared restore's raise among them, admits no one.
   A remote
   newcomer is admitted by the door's verdict on their identifier, with no
-  keys and no athanor, and a directory that cannot be read writes no row;
-  one whose sign-in carried an invitation is admitted by it unless a deny
-  names them, with the redemption, their seat and their identifier's allow
-  in the admission's transaction, so a deny committed after the check
-  rolls the whole admission back.
+  keys and their own athanor, whose fill follows the commit, under the
+  open admission's athanor cap and mint rate, and a directory that cannot
+  be read writes no row; their identifier's invitations into shared
+  threads become their seats; one whose sign-in carried an invitation is
+  admitted by it unless a deny names them, with the redemption, their
+  seat in its thread and their identifier's allow in the admission's
+  transaction, so a deny committed after the check rolls the whole
+  admission back.
   A killed admission and a member that lost its slot write nothing.
   """
 
@@ -47,12 +51,14 @@ defmodule Sanctum.NewcomerTest do
     Membership,
     Passkey,
     PersonIdentity,
+    RestorePerson,
     Session,
+    SharedThreadMember,
     User
   }
 
   alias Sanctum.Door.Store
-  alias Sanctum.Newcomer
+  alias Sanctum.{Newcomer, SharedThreads}
   alias Sanctum.Tenancy.{Athanors, Members}
   alias Sanctum.Test.{DirectoryServer, Newcomers, Settings}
   alias Sanctum.TestContext.Authenticator
@@ -150,6 +156,26 @@ defmodule Sanctum.NewcomerTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
   end
+
+  defp thread!(creator) do
+    {:ok, thread} =
+      SharedThreads.create(creator.id, "Invited #{System.unique_integer([:positive])}")
+
+    thread
+  end
+
+  # The person's seat in the thread, as its row of people.
+  defp seat(user_id, thread_id) do
+    Arca.Repo.one(
+      from(m in SharedThreadMember,
+        where: m.thread_id == ^thread_id and m.user_id == ^user_id and m.status == "active"
+      )
+    )
+  end
+
+  defp people_rows(thread),
+    do:
+      Arca.Repo.aggregate(from(m in SharedThreadMember, where: m.thread_id == ^thread.id), :count)
 
   describe "setup" do
     test "makes the first person with their keys, athanor and passkey, signs them in, and grants the platform role" do
@@ -728,8 +754,8 @@ defmodule Sanctum.NewcomerTest do
     setup do
       %{person: admin} = setup!()
       issuer = member!()
-      group = group!(issuer)
-      %{admin: admin, issuer: issuer, group: group}
+      thread = thread!(issuer)
+      %{admin: admin, issuer: issuer, thread: thread}
     end
 
     defp member! do
@@ -744,16 +770,9 @@ defmodule Sanctum.NewcomerTest do
       user
     end
 
-    defp group!(creator) do
-      {:ok, group} =
-        Athanors.create_group(creator.id, "Invited #{System.unique_integer([:positive])}")
-
-      group
-    end
-
-    defp invite!(issuer, athanor_id) do
+    defp invite!(issuer, thread_id) do
       ctx = Sanctum.TestContext.session!(issuer.id)
-      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, athanor_id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, thread_id)
       {invitation.id, code}
     end
 
@@ -766,9 +785,9 @@ defmodule Sanctum.NewcomerTest do
         )
     end
 
-    test "makes a local person with keys, an athanor, a passkey and the seat it names, redeemed by them, without the door",
-         %{issuer: issuer, group: group} do
-      {id, code} = invite!(issuer, group.id)
+    test "makes a local person with keys, an athanor, a passkey and the seat in the thread it names, redeemed by them, without the door",
+         %{issuer: issuer, thread: thread} do
+      {id, code} = invite!(issuer, thread.id)
 
       assert {:ok,
               %{
@@ -793,8 +812,9 @@ defmodule Sanctum.NewcomerTest do
       assert [%Passkey{state: "active"}] =
                Arca.Repo.all(from(p in Passkey, where: p.user_id == ^person.id))
 
-      assert {:ok, %{added_by: added_by}} = Members.active_seat(person.id, group.id)
+      assert %SharedThreadMember{added_by: added_by} = seat(person.id, thread.id)
       assert added_by == issuer.id
+      assert {:ok, %{status: "active"}} = SharedThreads.get(person.id, thread.id)
       assert %{redeemed_by: redeemed_by, redeemed_at: %DateTime{}} = invitation_row(id)
       assert redeemed_by == person.id
       assert {:ok, %{user_id: _}} = Sanctum.Session.get(token)
@@ -805,7 +825,7 @@ defmodule Sanctum.NewcomerTest do
                Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
     end
 
-    test "one naming no athanor seats its person in no group", %{admin: admin} do
+    test "one naming no thread seats its person in none", %{admin: admin} do
       {_id, code} = invite!(admin, nil)
 
       assert {:ok, %{person: person}} =
@@ -814,25 +834,26 @@ defmodule Sanctum.NewcomerTest do
       own = Sanctum.Test.People.athanor!(person)
       assert {:ok, [%{athanor_id: athanor_id}]} = Members.list_by_user(person.id)
       assert athanor_id == own.id
+      assert {:ok, []} = SharedThreads.list(person.id)
     end
 
     test "an expired, a redeemed and a revoked code admit no one: no person, no passkey, no seat",
-         %{issuer: issuer, group: group} do
-      {expired, expired_code} = invite!(issuer, group.id)
+         %{issuer: issuer, thread: thread} do
+      {expired, expired_code} = invite!(issuer, thread.id)
 
       {1, _} =
         Arca.Repo.update_all(from(i in Invitation, where: i.id == ^expired),
           set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
         )
 
-      {_redeemed, redeemed_code} = invite!(issuer, group.id)
+      {_redeemed, redeemed_code} = invite!(issuer, thread.id)
 
       {:ok, _} =
         Newcomer.admit({:invitation, redeemed_code}, {:passkey, registration(), identity()})
 
-      {revoked, revoked_code} = invite!(issuer, group.id)
+      {revoked, revoked_code} = invite!(issuer, thread.id)
       {:ok, _} = Sanctum.Invitations.revoke(Sanctum.TestContext.session!(issuer.id), revoked)
-      before = {people(), passkeys(), Members.count_by_athanor(group.id)}
+      before = {people(), passkeys(), people_rows(thread)}
       watch_person_inserts!()
 
       for code <- [expired_code, redeemed_code, revoked_code] do
@@ -841,20 +862,22 @@ defmodule Sanctum.NewcomerTest do
       end
 
       refute_received :person_inserted
-      assert {people(), passkeys(), Members.count_by_athanor(group.id)} == before
+      assert {people(), passkeys(), people_rows(thread)} == before
 
       for id <- [expired, revoked],
           do: assert(%{redeemed_by: nil} = invitation_row(id))
     end
 
-    test "an issuer who lost their seat, and one who was denied, admit no one",
-         %{issuer: issuer, group: group} do
+    test "an issuer who left the thread, and one who was denied, admit no one",
+         %{issuer: issuer, thread: thread} do
       leaver = member!()
-      {:ok, :added} = Members.add(group, [user_id: leaver.id], issuer.id)
-      {left, left_code} = invite!(leaver, group.id)
-      {denied, denied_code} = invite!(issuer, group.id)
+      stayer = member!()
+      {:ok, :added} = SharedThreads.add(issuer.id, thread.id, user_id: leaver.id)
+      {:ok, :added} = SharedThreads.add(issuer.id, thread.id, user_id: stayer.id)
+      {left, left_code} = invite!(leaver, thread.id)
+      {denied, denied_code} = invite!(issuer, thread.id)
 
-      :ok = Members.remove_member(group, user_id: leaver.id)
+      {:ok, %{ended: false}} = SharedThreads.leave(leaver.id, thread.id)
       {:ok, _} = Sanctum.Tenancy.Users.deny(issuer)
       before = {people(), passkeys()}
 
@@ -869,17 +892,17 @@ defmodule Sanctum.NewcomerTest do
 
     test "an invitation issued before a declared restore admits no one after it, " <>
            "even one the restore's revocation missed: no person, no passkey, no seat",
-         %{admin: admin, issuer: issuer, group: group} do
+         %{admin: admin, issuer: issuer, thread: thread} do
       {admin_invitation, admin_code} = invite!(admin, nil)
-      {group_invitation, group_code} = invite!(issuer, group.id)
-      ids = [admin_invitation, group_invitation]
+      {thread_invitation, thread_code} = invite!(issuer, thread.id)
+      ids = [admin_invitation, thread_invitation]
 
       {:ok, _} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
       assert {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
-      before = {people(), passkeys(), Members.count_by_athanor(group.id)}
+      before = {people(), passkeys(), people_rows(thread)}
       watch_person_inserts!()
 
-      for code <- [admin_code, group_code] do
+      for code <- [admin_code, thread_code] do
         assert {:error, :invitation_invalid} =
                  Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
       end
@@ -889,7 +912,7 @@ defmodule Sanctum.NewcomerTest do
       {2, _} =
         Arca.Repo.update_all(from(i in Invitation, where: i.id in ^ids), set: [revoked_at: nil])
 
-      for code <- [admin_code, group_code] do
+      for code <- [admin_code, thread_code] do
         assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
 
         assert {:error, :invitation_invalid} =
@@ -897,25 +920,25 @@ defmodule Sanctum.NewcomerTest do
       end
 
       refute_received :person_inserted
-      assert {people(), passkeys(), Members.count_by_athanor(group.id)} == before
+      assert {people(), passkeys(), people_rows(thread)} == before
       for id <- ids, do: assert(%{redeemed_by: nil} = invitation_row(id))
     end
 
     test "an issuer whose standing moved since issue admits no one, though every other check holds",
-         %{admin: admin, issuer: issuer, group: group} do
+         %{admin: admin, issuer: issuer, thread: thread} do
       {admin_invitation, admin_code} = invite!(admin, nil)
-      {group_invitation, group_code} = invite!(issuer, group.id)
+      {thread_invitation, thread_code} = invite!(issuer, thread.id)
 
-      for code <- [admin_code, group_code],
+      for code <- [admin_code, thread_code],
           do: assert({:ok, _shown} = Sanctum.Invitations.lookup(code))
 
       # Each issuer stays active, the administrator still administers and
-      # the member is still seated: only the generation moves.
+      # the issuer is still seated: only the generation moves.
       for person <- [admin, issuer], do: raise_generation!(person.id)
-      before = {people(), passkeys(), Members.count_by_athanor(group.id)}
+      before = {people(), passkeys(), people_rows(thread)}
       watch_person_inserts!()
 
-      for code <- [admin_code, group_code] do
+      for code <- [admin_code, thread_code] do
         assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
 
         assert {:error, :invitation_invalid} =
@@ -923,35 +946,60 @@ defmodule Sanctum.NewcomerTest do
       end
 
       refute_received :person_inserted
-      assert {people(), passkeys(), Members.count_by_athanor(group.id)} == before
+      assert {people(), passkeys(), people_rows(thread)} == before
 
-      for id <- [admin_invitation, group_invitation],
+      for id <- [admin_invitation, thread_invitation],
           do: assert(%{redeemed_by: nil, revoked_at: nil} = invitation_row(id))
 
       # One issued at the standing they hold now admits.
-      {_id, code} = invite!(issuer, group.id)
+      {_id, code} = invite!(issuer, thread.id)
 
       assert {:ok, _} =
                Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
     end
 
-    test "the group's member cap refused leaves no person, no passkey and the code unredeemed",
-         %{issuer: issuer, group: group} do
-      {id, code} = invite!(issuer, group.id)
-      Settings.put("max_members_per_group", 1)
+    test "the thread's people cap reached leaves no person, no passkey and the code unredeemed",
+         %{issuer: issuer, thread: thread} do
+      {id, code} = invite!(issuer, thread.id)
+      Settings.put("max_people_per_thread", 1)
       before = {people(), passkeys()}
 
-      assert {:error, {:limit_reached, :max_members_per_group, 1}} =
+      assert {:error, {:limit_reached, :max_people_per_thread, 1}} =
                Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
 
       assert {people(), passkeys()} == before
       assert %{redeemed_by: nil, redeemed_at: nil} = invitation_row(id)
-      assert Members.count_by_athanor(group.id) == {:ok, 1}
+      assert people_rows(thread) == 1
+    end
+
+    test "a thread a declared restore holds admits no one by its invitation, and the code stays unredeemed",
+         %{issuer: issuer, thread: thread} do
+      peer = member!()
+      {:ok, :added} = SharedThreads.add(issuer.id, thread.id, user_id: peer.id)
+      {id, code} = invite!(issuer, thread.id)
+
+      # The peer still recovers from a declared restore, so the thread
+      # admits no one new.
+      Arca.Repo.insert!(%RestorePerson{
+        restore_id: Prima.UUID7.generate_id("rst"),
+        user_id: peer.id,
+        open: true
+      })
+
+      before = {people(), passkeys()}
+
+      assert {:error, :recovering_from_restore} =
+               Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
+
+      assert {people(), passkeys()} == before
+      assert %{redeemed_by: nil, redeemed_at: nil} = invitation_row(id)
+      assert people_rows(thread) == 2
+      assert :ok = Sanctum.Invitations.redeemable(code)
     end
 
     test "the athanor cap refuses before the person's row, and the code stays unredeemed",
-         %{issuer: issuer, group: group} do
-      {id, code} = invite!(issuer, group.id)
+         %{issuer: issuer, thread: thread} do
+      {id, code} = invite!(issuer, thread.id)
       {:ok, athanors} = Athanors.count()
       Settings.put("max_athanors", athanors)
       watch_person_inserts!()
@@ -965,9 +1013,9 @@ defmodule Sanctum.NewcomerTest do
 
     test "takes a passkey only, and a code that is no code is :invitation_invalid", %{
       issuer: issuer,
-      group: group
+      thread: thread
     } do
-      {_id, code} = invite!(issuer, group.id)
+      {_id, code} = invite!(issuer, thread.id)
 
       for credential <- [{:command_line, "laptop", identity()}, :none] do
         assert {:error, {:invalid_argument, _}} = Newcomer.admit({:invitation, code}, credential)
@@ -996,6 +1044,24 @@ defmodule Sanctum.NewcomerTest do
       }
     end
 
+    # An identity of the directory's, its head cached and the door's allow
+    # on its identifier: one a remote admission admits.
+    defp allowed!(directory) do
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      DirectoryServer.cached!(identity)
+      {:ok, _} = Store.allow("identifier", identity.identifier, "ops")
+      identity
+    end
+
+    # The fill an admission asks for its person's athanor, told to the
+    # asking process by a facts port that fills nothing, installed for the
+    # case and put back.
+    defp watch_fills! do
+      previous = Sanctum.Consent.Components.impl!()
+      on_exit(fn -> Sanctum.Consent.Components.install!(previous) end)
+      Sanctum.Consent.Components.install!(Sanctum.NewcomerTest.FillWatch)
+    end
+
     test "with the directory unreachable is :identity_stale, and no row is written", %{
       directory: directory
     } do
@@ -1020,14 +1086,10 @@ defmodule Sanctum.NewcomerTest do
       assert people() == 1
     end
 
-    test "is made with no keys and no athanor, linked to their CYFR identity, and their invitations activate",
-         %{directory: directory, first: first} do
-      identity = DirectoryServer.identity!(directory.dir, directory.url)
-      DirectoryServer.cached!(identity)
-      {:ok, _} = Store.allow("identifier", identity.identifier, "ops")
-
-      {:ok, group} = Athanors.create_group(first.id, "Invited")
-      {:ok, :invited} = Members.add(group, [identifier: identity.identifier], first.id)
+    test "is made with no keys and their own athanor, whose fill is asked, linked to their CYFR identity",
+         %{directory: directory} do
+      identity = allowed!(directory)
+      watch_fills!()
 
       assert {:ok, %{person: person, readmitted: false} = admitted} =
                Newcomer.admit({:remote, remote(identity)}, :none)
@@ -1041,28 +1103,96 @@ defmodule Sanctum.NewcomerTest do
       assert [%ExternalIdentity{provider: "cyfr"}] =
                Arca.Repo.all(from(i in ExternalIdentity, where: i.user_id == ^person.id))
 
-      assert Sanctum.Tenancy.Users.personal_athanor_id(person.id) == :none
-      assert Members.member?(person.id, group.id)
+      # Their own athanor, of kind person, owned by them and recorded on
+      # their row; its fill asked once the admission committed.
+      assert {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(person.id)
+
+      assert {:ok, %{id: ^athanor_id, kind: "person", owner_user_id: owner}} =
+               Athanors.get_by_owner(person.id)
+
+      assert owner == person.id
+      assert Members.member?(person.id, athanor_id)
+      assert_received {:fill_asked, ^athanor_id, "sign_in"}
       refute Sanctum.Tenancy.platform_admin?(person.id)
 
-      # Admitted again, the identity names the person made first.
+      # Admitted again, the identity names the person made first, and the
+      # athanor they hold already.
       assert {:ok, %{person: %{id: same}}} = Newcomer.admit({:remote, remote(identity)}, :none)
       assert same == person.id
       assert people() == 2
+      assert athanors(person.id) == 1
     end
 
-    test "with an invitation, is admitted by it: the redemption, the seat and the allow in one transaction",
+    test "is refused at the athanor cap before the person's row, as an open admission is", %{
+      directory: directory
+    } do
+      identity = allowed!(directory)
+      {:ok, athanors} = Athanors.count()
+      Settings.put("max_athanors", athanors)
+      watch_person_inserts!()
+
+      assert {:error, {:limit_reached, :max_athanors, ^athanors}} =
+               Newcomer.admit({:remote, remote(identity)}, :none)
+
+      refute_received :person_inserted
+      assert people() == 1
+      refute Arca.Repo.get_by(PersonIdentity, identifier: identity.identifier)
+    end
+
+    test "is refused past the mint rate before the person's row, as an open admission is", %{
+      directory: directory
+    } do
+      {:ok, _} = Newcomer.admit({:remote, remote(allowed!(directory))}, :none)
+      identity = allowed!(directory)
+      Settings.put("mint_per_hour", 1)
+      watch_person_inserts!()
+
+      assert {:error, {:limit_reached, :mint_per_hour, 1}} =
+               Newcomer.admit({:remote, remote(identity)}, :none)
+
+      refute_received :person_inserted
+      assert people() == 2
+      refute Arca.Repo.get_by(PersonIdentity, identifier: identity.identifier)
+    end
+
+    test "their identifier's invitations become their seats once admitted",
+         %{directory: directory, first: first} do
+      identity = allowed!(directory)
+      thread = thread!(first)
+      {:ok, :added} = SharedThreads.add(first.id, thread.id, identifier: identity.identifier)
+      {:ok, group} = Athanors.create_group(first.id, "Invited")
+      {:ok, :invited} = Members.add(group, [identifier: identity.identifier], first.id)
+
+      assert [%SharedThreadMember{status: "invited"}] =
+               Arca.Repo.all(
+                 from(m in SharedThreadMember,
+                   where: m.person_identifier == ^identity.identifier
+                 )
+               )
+
+      assert {:ok, %{person: person}} = Newcomer.admit({:remote, remote(identity)}, :none)
+
+      assert %SharedThreadMember{status: "active"} = seat(person.id, thread.id)
+      assert people_rows(thread) == 2
+      assert {:ok, [%{id: thread_id}]} = SharedThreads.list(person.id)
+      assert thread_id == thread.id
+      assert Members.member?(person.id, group.id)
+    end
+
+    test "with an invitation, is admitted by it: the redemption, the seat in its thread and the allow in one transaction",
          %{directory: directory, first: first} do
       identity = DirectoryServer.identity!(directory.dir, directory.url)
       DirectoryServer.cached!(identity)
-      {:ok, group} = Athanors.create_group(first.id, "Invited remotely")
-      {invitation, hash} = invitation!(first, group)
+      thread = thread!(first)
+      {invitation, hash} = invitation!(first, thread)
 
       assert {:ok, %{person: person}} =
                Newcomer.admit({:remote, Map.put(remote(identity), :invitation, hash)}, :none)
 
       assert person.admission == "remote"
-      assert Members.member?(person.id, group.id)
+      assert %SharedThreadMember{added_by: seated_by} = seat(person.id, thread.id)
+      assert seated_by == first.id
+      assert {:ok, _own} = Sanctum.Tenancy.Users.personal_athanor_id(person.id)
       assert Arca.Repo.get!(Invitation, invitation.id).redeemed_by == person.id
       note = "invitation " <> invitation.id
       added_by = first.id
@@ -1078,8 +1208,8 @@ defmodule Sanctum.NewcomerTest do
          %{directory: directory, first: first} do
       identity = DirectoryServer.identity!(directory.dir, directory.url)
       DirectoryServer.cached!(identity)
-      {:ok, group} = Athanors.create_group(first.id, "Denied remotely")
-      {invitation, hash} = invitation!(first, group)
+      thread = thread!(first)
+      {invitation, hash} = invitation!(first, thread)
       {:ok, deny} = Store.deny("identifier", identity.identifier, "ops")
 
       assert {:error, {:door, :denied}} =
@@ -1088,14 +1218,15 @@ defmodule Sanctum.NewcomerTest do
       assert people() == 1
       assert %{redeemed_at: nil} = Arca.Repo.get!(Invitation, invitation.id)
       assert door(identity.identifier) == [deny]
+      assert people_rows(thread) == 1
     end
 
     test "with an invitation that can no longer be used, no one is admitted and nothing written",
          %{directory: directory, first: first} do
       identity = DirectoryServer.identity!(directory.dir, directory.url)
       DirectoryServer.cached!(identity)
-      {:ok, group} = Athanors.create_group(first.id, "Spent remotely")
-      {invitation, hash} = invitation!(first, group)
+      thread = thread!(first)
+      {invitation, hash} = invitation!(first, thread)
       {:ok, _} = Sanctum.Invitations.revoke(Sanctum.TestContext.session!(first.id), invitation.id)
 
       assert {:error, :invitation_invalid} =
@@ -1110,23 +1241,24 @@ defmodule Sanctum.NewcomerTest do
          %{directory: directory, first: first} do
       identity = DirectoryServer.identity!(directory.dir, directory.url)
       DirectoryServer.cached!(identity)
-      {:ok, group} = Athanors.create_group(first.id, "Full remotely")
-      {invitation, hash} = invitation!(first, group)
-      Settings.put("max_members_per_group", 1)
+      thread = thread!(first)
+      {invitation, hash} = invitation!(first, thread)
+      Settings.put("max_people_per_thread", 1)
 
-      assert {:error, {:limit_reached, :max_members_per_group, 1}} =
+      assert {:error, {:limit_reached, :max_people_per_thread, 1}} =
                Newcomer.admit({:remote, Map.put(remote(identity), :invitation, hash)}, :none)
 
       assert people() == 1
       assert %{redeemed_at: nil} = Arca.Repo.get!(Invitation, invitation.id)
       assert door(identity.identifier) == []
+      assert people_rows(thread) == 1
       refute Arca.Repo.get_by(PersonIdentity, identifier: identity.identifier)
     end
   end
 
-  defp invitation!(issuer, group) do
+  defp invitation!(issuer, thread) do
     ctx = Sanctum.TestContext.session!(issuer.id)
-    {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+    {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, thread.id)
     {:ok, hash} = Sanctum.Invitations.code_hash(code)
     {invitation, hash}
   end
@@ -1283,8 +1415,8 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
   admissions of one code released together make one person, an
   admission killed after its redemption and before its commit leaves no
   person and the code unredeemed, and, on PostgreSQL, an issuer who
-  leaves the group after the admission's first check is read again under
-  the group's lock the seat takes, so the admission makes no one.
+  leaves the thread after the admission's first check is read again under
+  the thread's lock the seat takes, so the admission makes no one.
 
   The two racers are released against the installation claims' order row,
   which every mint locks first, held by the test: each has passed the
@@ -1292,7 +1424,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
   PostgreSQL; on SQLite behind the write lock the holder's transaction
   takes), so the redemption's own transaction decides between them.
 
-  The issuer, their group and the invitation are committed; every row a
+  The issuer, their shared thread and the invitation are committed; every row a
   case makes is deleted outside the sandbox when it ends. The athanor's
   fill that follows an admission is the suite's port that fills nothing
   (`Sanctum.Test.Components`), installed for the case and put back.
@@ -1314,6 +1446,8 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     PersonIdentity,
     ServerMeta,
     Session,
+    SharedThread,
+    SharedThreadMember,
     User
   }
 
@@ -1335,19 +1469,19 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     newcomers = Enum.map(registrations, &elem(&1, 0))
     on_exit(fn -> unboxed(fn -> cleanup!(key, newcomers) end) end)
 
-    {issuer, group, invitation, code} =
+    {issuer, thread, invitation, code} =
       unboxed(fn ->
         {:ok, issuer} = Sanctum.Test.People.linked(%{id: key, provider: "github"})
-        {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Unboxed #{issuer.id}")
+        {:ok, thread} = Sanctum.SharedThreads.create(issuer.id, "Unboxed #{issuer.id}")
         ctx = Sanctum.Context.build(user_id: issuer.id)
-        {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
-        {issuer, group, invitation, code}
+        {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, thread.id)
+        {issuer, thread, invitation, code}
       end)
 
     {:ok,
      key: key,
      issuer: issuer,
-     group: group,
+     thread: thread,
      invitation: invitation,
      code: code,
      registrations: registrations}
@@ -1416,7 +1550,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  defp rows(ids, group_id, invitation_id) do
+  defp rows(ids, thread_id, invitation_id) do
     unboxed(fn ->
       %{
         people: Arca.Repo.all(from(u in User, where: u.id in ^ids, select: u.id)),
@@ -1424,7 +1558,9 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
         passkeys: Arca.Repo.aggregate(from(p in Passkey, where: p.user_id in ^ids), :count),
         seats:
           Arca.Repo.aggregate(
-            from(m in Membership, where: m.user_id in ^ids and m.athanor_id == ^group_id),
+            from(m in SharedThreadMember,
+              where: m.user_id in ^ids and m.thread_id == ^thread_id
+            ),
             :count
           ),
         redeemed_by: Arca.Repo.get!(Invitation, invitation_id).redeemed_by
@@ -1433,7 +1569,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
   end
 
   test "two admissions of one code released together make one person", %{
-    group: group,
+    thread: thread,
     invitation: invitation,
     code: code,
     registrations: [{first_id, first}, {second_id, second}]
@@ -1483,7 +1619,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     assert [{:error, :invitation_invalid}, {:ok, %{person: %{id: winner}}}] =
              racers |> Enum.map(&Task.await(&1, 30_000)) |> Enum.sort()
 
-    assert rows([first_id, second_id], group.id, invitation.id) == %{
+    assert rows([first_id, second_id], thread.id, invitation.id) == %{
              people: [winner],
              keys: 1,
              passkeys: 1,
@@ -1494,7 +1630,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
 
   test "an admission killed after its redemption and before its commit leaves no person and the code unredeemed",
        %{
-         group: group,
+         thread: thread,
          invitation: invitation,
          code: code,
          registrations: [{person_id, credential} | _]
@@ -1505,7 +1641,7 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     Process.exit(admitting, :kill)
     assert_receive {:DOWN, ^ref, :process, ^admitting, :killed}, 5_000
 
-    assert rows([person_id], group.id, invitation.id) == %{
+    assert rows([person_id], thread.id, invitation.id) == %{
              people: [],
              keys: 0,
              passkeys: 0,
@@ -1515,10 +1651,10 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
   end
 
   @tag :postgres
-  test "an issuer who leaves the group after the admission's first check admits no one", %{
+  test "an issuer who leaves the thread after the admission's first check admits no one", %{
     key: key,
     issuer: issuer,
-    group: group,
+    thread: thread,
     invitation: invitation,
     code: code,
     registrations: [{person_id, credential} | _]
@@ -1526,20 +1662,18 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     # A second member, so the issuer's leave archives nothing.
     unboxed(fn ->
       {:ok, peer} = Sanctum.Test.People.linked(%{id: key <> "-peer", provider: "github"})
-      {:ok, :added} = Sanctum.Tenancy.Members.add(group, [user_id: peer.id], issuer.id)
+      {:ok, :added} = Sanctum.SharedThreads.add(issuer.id, thread.id, user_id: peer.id)
     end)
 
     admission = paused_admission(code, credential)
 
-    assert :ok =
-             unboxed(fn ->
-               Sanctum.Tenancy.Members.remove_member(group, user_id: issuer.id)
-             end)
+    assert {:ok, %{ended: false}} =
+             unboxed(fn -> Sanctum.SharedThreads.leave(issuer.id, thread.id) end)
 
     send(admission.pid, :go)
     assert {:error, :invitation_invalid} = Task.await(admission, 30_000)
 
-    assert rows([person_id], group.id, invitation.id) == %{
+    assert rows([person_id], thread.id, invitation.id) == %{
              people: [],
              keys: 0,
              passkeys: 0,
@@ -1549,8 +1683,8 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
   end
 
   # Every row the case made: the people its identity keys name, the
-  # newcomers its registrations were drawn for, their athanors, the group,
-  # and the invitation.
+  # newcomers its registrations were drawn for, their athanors, the
+  # thread with its people, and the invitation.
   defp cleanup!(key, newcomers) do
     issuers =
       Arca.Repo.all(
@@ -1568,6 +1702,15 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
       )
 
     Arca.Repo.delete_all(from(i in Invitation, where: i.issued_by in ^issuers))
+
+    threads =
+      Arca.Repo.all(from(t in SharedThread, where: t.created_by in ^issuers, select: t.id))
+
+    Arca.Repo.delete_all(
+      from(m in SharedThreadMember, where: m.thread_id in ^threads or m.user_id in ^people)
+    )
+
+    Arca.Repo.delete_all(from(t in SharedThread, where: t.id in ^threads))
     Arca.Repo.delete_all(from(s in Session, where: s.user_id in ^people))
     Arca.Repo.delete_all(from(p in Passkey, where: p.user_id in ^people))
     Arca.Repo.delete_all(from(a in IdentityAttempt, where: a.user_id in ^people))
@@ -1588,7 +1731,8 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
   A remote admission with an invitation, and a deny of the identifier that
   commits on another connection after the admission's check of the door
   and before its transaction writes the allow: the admission rolls back
-  whole, making no person, with the invitation unspent and no seat.
+  whole, making no person, with the invitation unspent and no seat in its
+  thread.
   """
 
   use ExUnit.Case, async: false
@@ -1602,6 +1746,8 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
     Invitation,
     Membership,
     PersonIdentity,
+    SharedThread,
+    SharedThreadMember,
     User
   }
 
@@ -1629,9 +1775,9 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
     unboxed(fn ->
       DirectoryServer.cached!(identity)
       {:ok, issuer} = Sanctum.Test.People.linked(%{id: key, provider: "github"})
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Remote race #{issuer.id}")
+      {:ok, thread} = Sanctum.SharedThreads.create(issuer.id, "Remote race #{issuer.id}")
       ctx = Sanctum.Context.build(user_id: issuer.id)
-      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, thread.id)
       {:ok, hash} = Sanctum.Invitations.code_hash(code)
 
       remote = %{
@@ -1642,7 +1788,7 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
         invitation: hash
       }
 
-      {:ok, remote: remote, remote_key: remote_key, group: group, invitation: invitation}
+      {:ok, remote: remote, remote_key: remote_key, thread: thread, invitation: invitation}
     end)
   end
 
@@ -1676,7 +1822,7 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
   test "a deny committed between the check and the allow rolls the admission back", %{
     remote: remote,
     remote_key: remote_key,
-    group: group,
+    thread: thread,
     invitation: invitation
   } do
     pause_after_check!()
@@ -1710,7 +1856,7 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
                redeemed_by: Arca.Repo.get!(Invitation, invitation.id).redeemed_by,
                seats:
                  Arca.Repo.aggregate(
-                   from(m in Membership, where: m.athanor_id == ^group.id),
+                   from(m in SharedThreadMember, where: m.thread_id == ^thread.id),
                    :count
                  ),
                door:
@@ -1737,6 +1883,15 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
     Arca.Repo.delete_all(from(h in DirectoryHead, where: h.identifier == ^identifier))
     Arca.Repo.delete_all(from(i in Invitation, where: i.issued_by in ^people))
 
+    threads =
+      Arca.Repo.all(from(t in SharedThread, where: t.created_by in ^people, select: t.id))
+
+    Arca.Repo.delete_all(
+      from(m in SharedThreadMember, where: m.thread_id in ^threads or m.user_id in ^people)
+    )
+
+    Arca.Repo.delete_all(from(t in SharedThread, where: t.id in ^threads))
+
     Arca.Repo.delete_all(
       from(m in Membership, where: m.user_id in ^people or m.athanor_id in ^athanors)
     )
@@ -1745,5 +1900,38 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
     Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))
     Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^athanors))
     Arca.Repo.delete_all(from(u in User, where: u.id in ^people))
+  end
+end
+
+defmodule Sanctum.NewcomerTest.FillWatch do
+  @moduledoc """
+  A component-facts port that fills nothing and tells the process that
+  asked for a fill which athanor it asked for, and why; every other fact
+  answers as `Sanctum.Test.Components` answers it.
+  """
+
+  @behaviour Sanctum.Consent.Components
+
+  alias Sanctum.Test.Components
+
+  @impl true
+  defdelegate resolve(ctx, component), to: Components
+  @impl true
+  defdelegate resolve_verified(ctx, component), to: Components
+  @impl true
+  defdelegate get_component(ctx, name, version, publisher, type), to: Components
+  @impl true
+  defdelegate agent_rows(ctx), to: Components
+  @impl true
+  defdelegate shipped_nodes(ctx, rows), to: Components
+  @impl true
+  defdelegate newer_shipped(ctx, row), to: Components
+  @impl true
+  defdelegate tincture_placement(ctx, row), to: Components
+
+  @impl true
+  def fill(%{id: athanor_id}, _ctx, entry_kind) do
+    send(self(), {:fill_asked, athanor_id, entry_kind})
+    :ok
   end
 end

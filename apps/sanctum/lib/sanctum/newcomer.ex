@@ -11,9 +11,9 @@ defmodule Sanctum.Newcomer do
   | Admission | Checked | Makes |
   |---|---|---|
   | `{:setup, token}` | the token equals the configured setup token (constant-time); in the mint's transaction, under the installation claims' order row, no person exists and no restore holds the installation | a local person, their keys, their athanor, the platform grant |
-  | `{:invitation, code}` | in the mint's transaction before the person's row, the code's invitation is unexpired, unredeemed and unrevoked, its issuer still an active person here at the standing they issued it under and, when it names a group athanor, still seated there with the group active and open, or else still the platform administrator (`Sanctum.Invitations.redeemable/1`), then the mint rate and the athanor cap; redeemed by one conditional write after the person's row | a local person, their keys, their athanor, and the seat the invitation names, counted against the group's member cap |
+  | `{:invitation, code}` | in the mint's transaction before the person's row, the code's invitation is unexpired, unredeemed and unrevoked, its issuer still an active person here at the standing they issued it under and, when it names a shared thread, still seated there with the thread active, or else still the platform administrator (`Sanctum.Invitations.redeemable/1`), then the mint rate and the athanor cap; redeemed by one conditional write after the person's row | a local person, their keys, their athanor, and the seat in the thread the invitation names, counted against the thread's people cap |
   | `:open` | the door's `*` admits; the mint rate and the athanor cap, in the mint's transaction before the person's row | a local person, their keys, their athanor |
-  | `{:remote, remote}` | the door admits the identifier (`Sanctum.Door.sign_in_identifier/1`), or, with an invitation, no deny names it and the invitation is redeemable (`Sanctum.Invitations.redeemable_hash/1`); the head the CYFR sign-in verified is still fresh | a remote person row with no keys and no athanor; pending identifier invitations activate; with an invitation, its redemption, its seat and the identifier's allow |
+  | `{:remote, remote}` | the door admits the identifier (`Sanctum.Door.sign_in_identifier/1`), or, with an invitation, no deny names it and the invitation is redeemable (`Sanctum.Invitations.redeemable_hash/1`); the head the CYFR sign-in verified is still fresh; in the mint's transaction before the person's row, the invitation again and the mint rate and the athanor cap | a remote person row with no keys, their athanor; pending identifier invitations activate; with an invitation, its redemption, its seat and the identifier's allow |
   | `{:restore, restore}` | the restore's installation claim, in the mint's transaction (`Arca.InstallationClaims`) | the restored person, their athanor, the platform grant |
 
   The installation's first person is its platform administrator: the mint
@@ -30,7 +30,7 @@ defmodule Sanctum.Newcomer do
   is not asked. Its code is checked before the passkey is verified, so a
   code that admits no one starts nothing, and decided again in the mint's
   transaction, where its redemption commits with the person or not at
-  all: a refused cap, a member cap the group has reached, a redemption
+  all: a refused cap, a people cap the thread has reached, a redemption
   another admission won first and a killed process each leave no person
   and the code unredeemed. Every refusal of the invitation itself is
   `:invitation_invalid`. Its athanor caps are the open admission's: the
@@ -45,10 +45,20 @@ defmodule Sanctum.Newcomer do
   admitted by the invitation in place of the door's allow rule: no deny
   may name their identifier, and the invitation must be redeemable, read
   before the transaction and again inside it. The mint's transaction
-  then redeems it, seats them and writes their identifier's allow
-  (`Sanctum.Invitations.redeem_hash/2`), so a deny committed after the
-  first read rolls the whole admission back, makes no person and leaves
-  the invitation unspent.
+  then mints their athanor, redeems the invitation, seats them and
+  writes their identifier's allow (`Sanctum.Invitations.redeem_hash/2`),
+  so a deny committed after the first read rolls the whole admission
+  back, makes no person and leaves the invitation unspent.
+
+  ## A remote person's athanor
+
+  Everyone admitted here has their own athanor here, a remote person
+  too: their sessions, paired clients, device certificates, frame
+  credentials and confirmations are rows of it, as a local person's are.
+  So the remote admission is held to the open admission's rate and
+  ceiling (`Sanctum.Provisioning.personal_admissible/0`) in the mint's
+  transaction, mints the athanor there (`Sanctum.Provisioning.mint_personal/1`)
+  and asks its fill once the person commits.
 
   ## The setup token's re-admission
 
@@ -112,9 +122,9 @@ defmodule Sanctum.Newcomer do
 
   ## One transaction
 
-  The person's row, their keys (`Sanctum.Person.mint_keys/1`), their
-  athanor (`Sanctum.Provisioning.mint_personal/1`), the grant and the
-  passkey commit together or not at all: a process killed mid-admission
+  The person's row, their keys (`Sanctum.Person.mint_keys/1`, a local
+  person's), their athanor (`Sanctum.Provisioning.mint_personal/1`), the
+  grant and the passkey commit together or not at all: a process killed mid-admission
   and a member whose slot was lost leave no row. An open admission's caps
   are counted in the same transaction before the person's row
   (`Sanctum.Provisioning.personal_admissible/0`), so one refused at a cap
@@ -494,7 +504,14 @@ defmodule Sanctum.Newcomer do
     ]
 
   defp verify({:remote, %{invitation: invitation}}) when is_binary(invitation),
-    do: [verify: fn -> Sanctum.Invitations.redeemable_hash(invitation) end]
+    do: [
+      verify: fn ->
+        with :ok <- Sanctum.Invitations.redeemable_hash(invitation),
+             do: Sanctum.Provisioning.personal_admissible()
+      end
+    ]
+
+  defp verify({:remote, _remote}), do: [verify: &Sanctum.Provisioning.personal_admissible/0]
 
   defp verify(_admission), do: []
 
@@ -524,10 +541,10 @@ defmodule Sanctum.Newcomer do
   defp also({:invitation, code}, steps, person) do
     with {:ok, invitation} <- Sanctum.Invitations.redeem(code, person.id),
          :ok <- local(person, steps),
-         do: seated(invitation, person)
+         do: Sanctum.Invitations.invited_seat(invitation, person.id)
   end
 
-  defp also({:remote, remote}, _write, %{id: user_id}) do
+  defp also({:remote, remote}, _write, %{id: user_id} = person) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
            user_id: user_id,
            provenance: "remote",
@@ -536,7 +553,7 @@ defmodule Sanctum.Newcomer do
            genesis_hash: remote[:genesis_hash],
            head_hash: remote[:head_hash]
          }) do
-      {:ok, _row} -> invited(remote, user_id)
+      {:ok, _row} -> with :ok <- athanor(person), do: invited(remote, user_id)
       {:error, reason} -> {:error, reason}
     end
   end
@@ -573,24 +590,6 @@ defmodule Sanctum.Newcomer do
     end
   end
 
-  # The seat the invitation names, under the group's lock: its issuer
-  # still seated there, read again under that lock, and the group's member
-  # cap counted as an add counts it.
-  defp seated(%{athanor_id: nil}, _person), do: :ok
-
-  defp seated(%{athanor_id: athanor_id, issued_by: issuer} = invitation, %{id: user_id}) do
-    case Members.create(
-           %{user_id: user_id, scope: "athanor", athanor_id: athanor_id, added_by: issuer},
-           reserve: fn ->
-             with :ok <- Sanctum.Invitations.issuer_seated(invitation),
-                  do: Members.member_cap(athanor_id)
-           end
-         ) do
-      {:ok, _seat} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   # The credential written in the transaction: a passkey. A session needs
   # the committed person, so it follows the commit.
   defp written(%{id: user_id}, {:passkey, _registration, _identity}, verified),
@@ -603,20 +602,24 @@ defmodule Sanctum.Newcomer do
 
   # ---- after the commit -----------------------------------------------------
 
-  defp committed({:remote, remote}, person, readmitted, :none) do
+  defp committed({:remote, remote} = admission, person, readmitted, :none) do
     if is_binary(remote[:invitation]),
       do: Sanctum.Invitations.announce(remote.invitation, person.id)
 
-    case Members.activate_invited(person) do
-      {:ok, _n} ->
-        :ok
+    for activate <- [&Members.activate_invited/1, &Sanctum.SharedThreads.activate_invited/1] do
+      case activate.(person) do
+        {:ok, _n} ->
+          :ok
 
-      {:error, reason} ->
-        Logger.error(
-          "[Sanctum.Newcomer] activate_invited failed for #{person.id}: #{inspect(reason)}"
-        )
+        {:error, reason} ->
+          Logger.error(
+            "[Sanctum.Newcomer] an invitation's activation failed for #{person.id}: " <>
+              inspect(reason)
+          )
+      end
     end
 
+    filled(admission, person)
     answered(person, readmitted)
   end
 
@@ -646,15 +649,11 @@ defmodule Sanctum.Newcomer do
 
   defp granted(_admission, _person, _readmitted), do: :ok
 
-  # The group an invitation seated the person in is told of its new member.
-  defp joined({:invitation, code}, %{id: user_id}) do
+  # The thread an invitation seated the person in is told of its new member.
+  defp joined({:invitation, code}, _person) do
     case Sanctum.Invitations.seat(code) do
-      {:ok, athanor_id} ->
-        Members.broadcast_change(user_id, athanor_id, :joined)
-        Sanctum.Notify.member_changed(athanor_id)
-
-      :none ->
-        :ok
+      {:ok, thread_id} -> Sanctum.SharedThreads.joined(thread_id)
+      :none -> :ok
     end
   end
 

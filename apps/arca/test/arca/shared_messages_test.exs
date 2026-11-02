@@ -5,8 +5,10 @@ defmodule Arca.SharedMessagesTest do
   @moduledoc """
   The messages of a shared thread: appended at the next `seq`, dense from
   1, with their author, text and payload, each setting the thread's
-  `last_message_at`; refused in an archived or unknown thread and for an
-  author who is not a person; read oldest first, after a `seq` and by the
+  `last_message_at`, under the id the caller drew when it gave one;
+  refused in an archived or unknown thread, for an author who is not a
+  person or not seated in the thread, and for an id that is not a
+  message's; read oldest first, after a `seq` and by the
   page. The baseline holds one message per `seq` in a thread, and many
   appending at once each land on a `seq` of their own
   (`Arca.SharedMessagesRaceTest`). Every function is the platform's and
@@ -15,7 +17,7 @@ defmodule Arca.SharedMessagesTest do
 
   use ExUnit.Case, async: true
 
-  alias Arca.{SharedMessages, SharedThreads}
+  alias Arca.{SharedMessages, SharedThreadMembers, SharedThreads}
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -75,6 +77,40 @@ defmodule Arca.SharedMessagesTest do
                  content: 7,
                  payload: ["x"]
                })
+
+      assert {:ok, []} = SharedMessages.list(server(), thread.id)
+    end
+  end
+
+  describe "append/3, its author and its id" do
+    test "refuses an author not seated in the thread, writing nothing", %{by: by, thread: thread} do
+      left = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+      {:ok, _} = SharedThreadMembers.seat(server(), thread.id, left, by)
+      {:ok, _} = SharedThreadMembers.remove(server(), thread.id, left)
+
+      for author <- [Prima.UUID7.generate_id(Prima.PersonId.prefix()), left] do
+        assert {:error, :not_member} =
+                 SharedMessages.append(server(), thread.id, %{author: author, content: "x"})
+      end
+
+      assert {:ok, []} = SharedMessages.list(server(), thread.id)
+      assert {:ok, %{last_message_at: nil}} = SharedThreads.get(server(), thread.id)
+    end
+
+    test "writes the message under the id the caller gives", %{by: by, thread: thread} do
+      id = Prima.UUID7.generate_id("shm")
+
+      assert {:ok, %{id: ^id, seq: 1, content: "drawn"}} =
+               SharedMessages.append(server(), thread.id, %{id: id, author: by, content: "drawn"})
+
+      assert {:ok, [%{id: ^id}]} = SharedMessages.list(server(), thread.id)
+    end
+
+    test "refuses an id that is not a message's, writing nothing", %{by: by, thread: thread} do
+      for id <- ["msg_x", Prima.UUID7.generate_id("sth"), 7] do
+        assert {:error, {:invalid, %{id: [_]}}} =
+                 SharedMessages.append(server(), thread.id, %{id: id, author: by})
+      end
 
       assert {:ok, []} = SharedMessages.list(server(), thread.id)
     end

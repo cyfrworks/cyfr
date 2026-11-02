@@ -6,7 +6,7 @@ defmodule Sanctum.Providers.ShareTest do
   The `share` tool through the gate: what each action declares, on which
   plane each is reached, what the owner's verbs answer, and what the
   people a share is offered to read. Terry shares one of his own
-  attach-only entries; Alice sits with him in the Traders group.
+  attach-only entries; Alice sits with him in the shared thread Traders.
   """
 
   use ExUnit.Case, async: false
@@ -29,7 +29,7 @@ defmodule Sanctum.Providers.ShareTest do
 
     terry = person!("Terry")
     alice = person!("Alice")
-    traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id], %{name: "Traders"})
+    traders = Cyfr.Test.ShareFixtures.thread!([terry.user.id, alice.user.id], "Traders")
 
     entry =
       Arca.Test.Shares.entry!(Sanctum.Context.actor(terry.ctx), %{
@@ -79,15 +79,6 @@ defmodule Sanctum.Providers.ShareTest do
   defp stored(owner) do
     {:ok, shares} = Arca.Shares.list(Sanctum.Context.actor(owner.ctx))
     shares
-  end
-
-  defp leave!(group, person) do
-    {:ok, _} =
-      Arca.SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group.id), person.user.id,
-        verify: fn _ -> :ok end
-      )
-
-    :ok
   end
 
   # A chain authority whose ingress edge grants exactly `tools`.
@@ -147,7 +138,7 @@ defmodule Sanctum.Providers.ShareTest do
                {[], [:outside], [:outside]}
 
       assert Enum.sort(Enum.map(operation("create").args, & &1.name)) ==
-               Enum.sort(~w(entry_id audience group_id person_daily total_daily))
+               Enum.sort(~w(entry_id audience thread_id person_daily total_daily))
 
       for action <- ~w(create set_caps), name <- ~w(person_daily total_daily) do
         cap = Enum.find(operation(action).args, &(&1.name == name))
@@ -158,13 +149,13 @@ defmodule Sanctum.Providers.ShareTest do
       end
 
       audience = Enum.find(operation("create").args, &(&1.name == "audience"))
-      assert {audience.required, audience.enum} == {true, ~w(everyone group)}
+      assert {audience.required, audience.enum} == {true, ~w(everyone thread)}
 
       args = Map.new(operation("set_audience").args, &{&1.name, &1})
-      assert Enum.sort(Map.keys(args)) == ~w(audience expected group_id share_id)
+      assert Enum.sort(Map.keys(args)) == ~w(audience expected share_id thread_id)
       assert {:record, fields} = args["expected"].type
       assert args["expected"].required
-      assert Enum.sort(Enum.map(fields, & &1.name)) == ~w(audience group_id)
+      assert Enum.sort(Enum.map(fields, & &1.name)) == ~w(audience thread_id)
 
       days = Enum.find(operation("usage").args, &(&1.name == "days"))
       assert {days.required, days.min, days.max} == {true, 1, Arca.ShareUsage.kept_days()}
@@ -202,8 +193,8 @@ defmodule Sanctum.Providers.ShareTest do
       create = %{
         "action" => "create",
         "entry_id" => entry.id,
-        "audience" => "group",
-        "group_id" => traders.id,
+        "audience" => "thread",
+        "thread_id" => traders.id,
         "person_daily" => 5
       }
 
@@ -221,15 +212,15 @@ defmodule Sanctum.Providers.ShareTest do
       assert Map.take(share, [
                :entry_id,
                :audience,
-               :group_id,
+               :thread_id,
                :person_daily,
                :total_daily,
                :status
              ]) ==
                %{
                  entry_id: entry.id,
-                 audience: "group",
-                 group_id: traders.id,
+                 audience: "thread",
+                 thread_id: traders.id,
                  person_daily: 5,
                  total_daily: nil,
                  status: "active"
@@ -249,20 +240,20 @@ defmodule Sanctum.Providers.ShareTest do
         "action" => "set_audience",
         "share_id" => share.id,
         "audience" => "everyone",
-        "expected" => %{"audience" => "group", "group_id" => traders.id}
+        "expected" => %{"audience" => "thread", "thread_id" => traders.id}
       }
 
       assert {:error, {:confirmation_required, %{operation: "share.set_audience"}}} =
                call(terry.ctx, widen)
 
       assert {:ok, %{changed: true}} = TestContext.confirming(terry.ctx, &call(&1, widen))
-      assert [%{audience: "everyone", group_id: nil}] = stored(terry)
+      assert [%{audience: "everyone", thread_id: nil}] = stored(terry)
 
       narrow = %{
         "action" => "set_audience",
         "share_id" => share.id,
-        "audience" => "group",
-        "group_id" => traders.id,
+        "audience" => "thread",
+        "thread_id" => traders.id,
         "expected" => %{"audience" => "everyone"}
       }
 
@@ -274,7 +265,7 @@ defmodule Sanctum.Providers.ShareTest do
               {:conflict, "The audience changed since it was shown, so nothing was saved."}} =
                call(terry.ctx, narrow)
 
-      assert [%{audience: "group"}] = stored(terry)
+      assert [%{audience: "thread"}] = stored(terry)
 
       assert {:ok, %{status: "revoked", share_id: id} = revoked} =
                call(terry.ctx, %{"action" => "revoke", "share_id" => share.id})
@@ -287,8 +278,10 @@ defmodule Sanctum.Providers.ShareTest do
     end
 
     test "a key is shared, and its shares read, from the person's own athanor alone",
-         %{terry: terry, alice: alice, traders: traders, entry: entry} do
-      in_group = %{terry.ctx | athanor_id: traders.id}
+         %{terry: terry, alice: alice, entry: entry} do
+      # A group athanor Terry sits in: an athanor of his, not his own.
+      group = Arca.Test.Shares.group!([terry.user.id])
+      in_group = %{terry.ctx | athanor_id: group.id}
 
       for args <- [
             %{"action" => "create", "entry_id" => entry.id, "audience" => "everyone"},
@@ -311,10 +304,10 @@ defmodule Sanctum.Providers.ShareTest do
   end
 
   describe "the people a share is offered to" do
-    test "Alice, in the group Terry shared with, sees his share with its owner, and after " <>
-           "she leaves the group the same read omits it",
+    test "Alice, in the thread Terry shared with, sees his share with its owner, and after " <>
+           "she leaves the thread the same read omits it",
          %{terry: terry, alice: alice, traders: traders, entry: entry} do
-      share = share!(terry, entry, %{"audience" => "group", "group_id" => traders.id})
+      share = share!(terry, entry, %{"audience" => "thread", "thread_id" => traders.id})
 
       assert {:ok, %{shares: [offer]}} = call(alice.ctx, %{"action" => "offered"})
 
@@ -341,7 +334,7 @@ defmodule Sanctum.Providers.ShareTest do
       # A share is never offered to its own owner.
       assert {:ok, %{shares: []}} = call(terry.ctx, %{"action" => "offered"})
 
-      :ok = leave!(traders, alice)
+      :ok = Cyfr.Test.ShareFixtures.leave!(traders, alice)
       assert {:ok, %{shares: []}} = call(alice.ctx, %{"action" => "offered"})
     end
 
@@ -356,7 +349,7 @@ defmodule Sanctum.Providers.ShareTest do
               {:ok, _} =
                 Arca.ShareUsage.claim(owner, share.id, alice.user.id, %{
                   audience: "everyone",
-                  group_id: nil
+                  thread_id: nil
                 })
             )
 

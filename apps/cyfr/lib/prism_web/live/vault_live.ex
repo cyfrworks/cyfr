@@ -48,8 +48,8 @@ defmodule PrismWeb.VaultLive do
   `Prima.CredentialKinds.shareable/0`, with a destination naming its
   methods and paths), opens the system layer's sharing sheet
   (`PrismWeb.SystemLayer.Share`) for it, offering everyone and the
-  groups the person is an active member of (`athanor.list`, each named
-  as the person reads it, a DM as the other person), which makes the
+  shared threads the person sits in (`shared_thread.list`, each named by
+  its title, a pair as the other person), which makes the
   share through `share.create` under its fresh confirmation. "Shared by
   you" lists the person's shares (`share.list`), each in one line: the
   entry, its audience, today's use and its caps, or that it is revoked;
@@ -61,12 +61,13 @@ defmodule PrismWeb.VaultLive do
   and destination, "Shared by" its owner's name, and the person's own use
   today. Both sections read again on every `Cyfr.Bus.shares/0`
   announcement, which names a share and a kind and nothing else, and on
-  every change to the person's own seats (`Cyfr.Bus.Membership`), since
-  leaving a group ends what it was offered and writes nothing to a share.
+  every change to a shared thread they sit in (`Cyfr.Bus.SharedThreadChanged`),
+  since leaving a thread ends what it was offered and writes nothing to a
+  share.
   A read that failed says so, and is never drawn as nothing shared. A
   key is shared, and a share granted, from the person's own athanor
   alone, so Share and both sections are drawn on its Vault page and on
-  no group's.
+  no other.
 
   Entering material — an entry, its rotation, an OAuth grant, an OAuth
   app's client credentials — is a sensitive change: the page asks for a
@@ -97,6 +98,9 @@ defmodule PrismWeb.VaultLive do
       actor = Sanctum.Context.actor(socket.assigns[:context])
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.vault_changed(actor))
       Cyfr.Bus.subscribe_global(Cyfr.Bus.shares())
+
+      if is_binary(actor.user_id),
+        do: Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(actor.user_id))
     end
 
     socket =
@@ -109,7 +113,7 @@ defmodule PrismWeb.VaultLive do
       |> assign(:shares_error, nil)
       |> assign(:shared_with_you, [])
       |> assign(:shared_with_you_error, nil)
-      |> assign(:groups, [])
+      |> assign(:threads, [])
       |> assign(:own, own_vault?(socket.assigns[:context]))
       |> assign(:used_by, %{})
       |> assign(:clients, [])
@@ -325,19 +329,19 @@ defmodule PrismWeb.VaultLive do
   # Events — sharing
   # ---------------------------------------------------------------------------
 
-  # The sheet is the system layer's: it reads the groups as they are now,
+  # The sheet is the system layer's: it reads the threads as they are now,
   # and makes the share under its own confirmation.
   def handle_event("share", %{"id" => id}, socket) do
     case Enum.find(socket.assigns.entries, &(&1.id == id)) do
       %{} = entry ->
         if socket.assigns.own and shareable?(entry) do
-          socket = fetch_groups(socket)
+          socket = fetch_threads(socket)
 
           SystemLayer.show(SystemLayer.layer_id(), %{
             id: share_prompt(id),
             kind: :share,
             action: :credential_sharing,
-            subject: %{entry_id: id, name: entry.name, groups: socket.assigns.groups}
+            subject: %{entry_id: id, name: entry.name, threads: socket.assigns.threads}
           })
 
           {:noreply, socket}
@@ -359,12 +363,12 @@ defmodule PrismWeb.VaultLive do
   def handle_event("share_audience", %{"share_id" => id, "audience" => chosen} = params, socket) do
     expected =
       case params["expected_audience"] do
-        "group" -> %{"audience" => "group", "group_id" => params["expected_group_id"]}
+        "thread" -> %{"audience" => "thread", "thread_id" => params["expected_thread_id"]}
         audience -> %{"audience" => audience}
       end
 
     with false <- chosen == Share.audience_value(expected),
-         {:ok, audience} <- Share.audience(chosen, socket.assigns.groups) do
+         {:ok, audience} <- Share.audience(chosen, socket.assigns.threads) do
       args = Map.merge(audience, %{"share_id" => id, "expected" => expected})
       share_call(socket, {:share_audience, id}, "share/set_audience", args)
     else
@@ -411,7 +415,7 @@ defmodule PrismWeb.VaultLive do
     {:noreply,
      socket
      |> fetch_entries()
-     |> fetch_groups()
+     |> fetch_threads()
      |> fetch_shares()
      |> fetch_shared_with_you()
      |> fetch_used_by()
@@ -430,11 +434,16 @@ defmodule PrismWeb.VaultLive do
     {:noreply, socket |> fetch_shares() |> fetch_shared_with_you()}
   end
 
-  # The person's seats changed: a group joined or left offers more or less,
-  # with nothing written to any share.
-  def handle_info(%Cyfr.Bus.Membership{}, socket) do
-    {:noreply, socket |> fetch_groups() |> fetch_shared_with_you()}
+  # A thread the person sits in changed: one joined or left offers more or
+  # less, with nothing written to any share.
+  def handle_info(%Cyfr.Bus.SharedThreadChanged{kind: :changed}, socket) do
+    {:noreply, socket |> fetch_threads() |> fetch_shared_with_you()}
   end
+
+  def handle_info(%Cyfr.Bus.SharedThreadChanged{}, socket), do: {:noreply, socket}
+
+  # The context guard's standing announcements reach every LiveView.
+  def handle_info(%Cyfr.Bus.Membership{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -541,28 +550,28 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  # The groups the person is an active member of, DMs included, each named
-  # as the person reads it: the audiences a share of theirs may name. A
-  # list that cannot be read offers everyone alone.
-  defp fetch_groups(%{assigns: %{own: false}} = socket), do: socket
+  # The active shared threads the person sits in, pairs included, each
+  # named as the person reads it: the audiences a share of theirs may name.
+  # A list that cannot be read offers everyone alone.
+  defp fetch_threads(%{assigns: %{own: false}} = socket), do: socket
 
-  defp fetch_groups(socket) do
-    groups =
-      case fetch_list(socket, "athanor/list", :athanors) do
-        {:ok, athanors} ->
-          for %{kind: "group", status: "active"} = athanor <- athanors,
-              do: %{
-                id: athanor.id,
-                name: PrismWeb.Athanors.label(athanor, socket.assigns.context)
-              }
+  defp fetch_threads(socket) do
+    threads =
+      case fetch_list(socket, "shared_thread/list", :threads) do
+        {:ok, threads} ->
+          for %{status: "active"} = thread <- threads,
+              do: %{id: thread.id, name: thread_name(thread)}
 
         {:error, message} ->
-          Logger.warning("[VaultLive] athanor/list failed: #{message}")
+          Logger.warning("[VaultLive] shared_thread/list failed: #{message}")
           []
       end
 
-    assign(socket, :groups, groups)
+    assign(socket, :threads, threads)
   end
+
+  defp thread_name(%{kind: "pair", with: %{name: name}}), do: name
+  defp thread_name(%{title: title}), do: title
 
   defp share_prompt(entry_id), do: "share-" <> entry_id
 
@@ -606,7 +615,7 @@ defmodule PrismWeb.VaultLive do
 
   # One share as its owner reads it: the entry, who it is shared with, and
   # today's use and the caps, or that it is revoked.
-  defp share_line(share, entries, groups) do
+  defp share_line(share, entries, threads) do
     entry =
       case Enum.find(entries, &(&1.id == share.entry_id)) do
         %{name: name} -> name
@@ -615,20 +624,20 @@ defmodule PrismWeb.VaultLive do
 
     case share.status do
       "active" ->
-        "#{entry}, #{audience_words(share, groups)}, #{share.used_today} today, " <>
+        "#{entry}, #{audience_words(share, threads)}, #{share.used_today} today, " <>
           caps_words(share.person_daily, share.total_daily)
 
       status ->
-        "#{entry}, #{audience_words(share, groups)}, #{status}"
+        "#{entry}, #{audience_words(share, threads)}, #{status}"
     end
   end
 
-  defp audience_words(%{audience: "everyone"}, _groups), do: "shared with everyone"
+  defp audience_words(%{audience: "everyone"}, _threads), do: "shared with everyone"
 
-  defp audience_words(%{group_id: id}, groups) do
-    case Enum.find(groups, &(&1.id == id)) do
+  defp audience_words(%{thread_id: id}, threads) do
+    case Enum.find(threads, &(&1.id == id)) do
       %{name: name} -> "shared with #{name}"
-      nil -> "shared with a group you are no longer in"
+      nil -> "shared with a thread you are no longer in"
     end
   end
 
@@ -1130,7 +1139,7 @@ defmodule PrismWeb.VaultLive do
               data-status={share.status}
             >
               <div class="flex flex-wrap items-center justify-between gap-2">
-                <span data-test="share-line">{share_line(share, @entries, @groups)}</span>
+                <span data-test="share-line">{share_line(share, @entries, @threads)}</span>
                 <.button
                   :if={share.status == "active"}
                   variant="ghost"
@@ -1151,7 +1160,7 @@ defmodule PrismWeb.VaultLive do
                 >
                   <input type="hidden" name="share_id" value={share.id} />
                   <input type="hidden" name="expected_audience" value={share.audience} />
-                  <input type="hidden" name="expected_group_id" value={share.group_id || ""} />
+                  <input type="hidden" name="expected_thread_id" value={share.thread_id || ""} />
                   <label class="block text-xs text-gray-500">
                     Shared with
                     <select
@@ -1162,11 +1171,13 @@ defmodule PrismWeb.VaultLive do
                         Everyone on this CYFR
                       </option>
                       <option
-                        :for={group <- @groups}
-                        value={Share.audience_value(%{"audience" => "group", "group_id" => group.id})}
-                        selected={share.group_id == group.id}
+                        :for={thread <- @threads}
+                        value={
+                          Share.audience_value(%{"audience" => "thread", "thread_id" => thread.id})
+                        }
+                        selected={share.thread_id == thread.id}
                       >
-                        {group.name}
+                        {thread.name}
                       </option>
                     </select>
                   </label>

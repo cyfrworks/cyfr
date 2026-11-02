@@ -9,14 +9,18 @@ defmodule Sanctum.SignInTest do
   a claim the provider proved, and no person is ever made — an identity
   no person holds is `:no_person` and leaves no door request. A method is
   linked to a standing person under a fresh proof, and their last one
-  goes only while they keep a way in.
+  goes only while they keep a way in. Each admitted sign-in turns the
+  invitations the person's identifier holds into their seats, a shared
+  thread's among them, except where a declared restore still holds the
+  thread: that invitation waits for the first sign-in after the hold
+  lifts.
   """
 
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.PersonIdentity
+  alias Arca.Schemas.{PersonIdentity, RestorePerson, SharedThreadMember}
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Members, Users}
   alias Sanctum.Test.People
@@ -75,6 +79,30 @@ defmodule Sanctum.SignInTest do
       })
 
     %{user: user, key: key, identifier: identifier}
+  end
+
+  # A shared thread `owner` made, holding an invitation for `identifier`
+  # written before its person signed in here again.
+  defp invited_thread!(owner, identifier) do
+    {:ok, thread} = Sanctum.SharedThreads.create(owner.id, "Invited #{identifier}")
+
+    {:ok, _invitation} =
+      Arca.SharedThreadMembers.invite(Prima.Actor.system(), thread.id, identifier, owner.id)
+
+    thread
+  end
+
+  # What the thread holds for the person: their seat, their identifier's
+  # invitation, or neither.
+  defp held(thread, user_id, identifier) do
+    Arca.Repo.all(
+      from(m in SharedThreadMember,
+        where:
+          m.thread_id == ^thread.id and
+            (m.user_id == ^user_id or m.person_identifier == ^identifier),
+        select: m.status
+      )
+    )
   end
 
   describe "unlock/1" do
@@ -162,6 +190,50 @@ defmodule Sanctum.SignInTest do
       refute Members.member?(user.id, group.id)
       assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
       assert Members.member?(user.id, group.id)
+    end
+
+    test "a returning person's invitation into a shared thread becomes their seat at their next sign-in" do
+      n = System.unique_integer([:positive])
+      {:ok, owner} = People.linked(info(n))
+      %{user: user, key: key, identifier: identifier} = remote!(n)
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identifier, "ops")
+      thread = invited_thread!(owner, identifier)
+      assert held(thread, user.id, identifier) == ["invited"]
+
+      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
+
+      assert held(thread, user.id, identifier) == ["active"]
+      assert {:ok, %{status: "active"}} = Sanctum.SharedThreads.get(user.id, thread.id)
+    end
+
+    test "an invitation a declared restore holds stays one at sign-in, and becomes the seat at the first sign-in after the hold lifts" do
+      n = System.unique_integer([:positive])
+      {:ok, owner} = People.linked(info(n))
+      %{user: user, key: key, identifier: identifier} = remote!(n)
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identifier, "ops")
+      thread = invited_thread!(owner, identifier)
+
+      # The thread's owner still recovers from a declared restore, so the
+      # thread admits no one new.
+      Arca.Repo.insert!(%RestorePerson{
+        restore_id: Prima.UUID7.generate_id("rst"),
+        user_id: owner.id,
+        open: true
+      })
+
+      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
+      assert held(thread, user.id, identifier) == ["invited"]
+      assert {:error, {:not_found, "Thread", _}} = Sanctum.SharedThreads.get(user.id, thread.id)
+
+      # The owner's recovery closes; the next sign-in seats the person.
+      assert {:ok, [_restore_id]} =
+               Arca.Repo.locking_transaction(fn ->
+                 Arca.SecurityTransitions.close_restore!(owner.id)
+               end)
+
+      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
+      assert held(thread, user.id, identifier) == ["active"]
+      assert {:ok, %{status: "active"}} = Sanctum.SharedThreads.get(user.id, thread.id)
     end
   end
 

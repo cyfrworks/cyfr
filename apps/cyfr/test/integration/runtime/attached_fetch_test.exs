@@ -12,7 +12,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
   The credential reaches the upstream, attached by CYFR, and nothing of it
   reaches the runner: for an athanor's own attach-only entry, for a value
   an app provides its dependency, and for a key another person shares
-  with a group the person is in, bound to a component of the person's
+  with a thread the person sits in, bound to a component of the person's
   own. A redirect through a shared key is answered and never followed. A
   URL outside the entry's destination, or outside the grant's egress,
   reaches no upstream and counts no use. A credential the upstream
@@ -280,9 +280,9 @@ defmodule Locus.Runtime.AttachedFetchTest do
   end
 
   # Terry's attach-only key of the probe's provider, to the upstream's
-  # paths a shared key's requests use, shared with `group` under the
+  # paths a shared key's requests use, shared with `thread` under the
   # confirmation a share asks.
-  defp shared!(terry, port, group) do
+  defp shared!(terry, port, thread) do
     {:ok, entry} =
       Sanctum.TestContext.create_vault(terry.ctx, %{
         name: "shared-#{System.unique_integer([:positive])}",
@@ -298,7 +298,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
         }
       })
 
-    params = %{entry_id: entry.id, audience: "group", group_id: group.id}
+    params = %{entry_id: entry.id, audience: "thread", thread_id: thread.id}
 
     {:ok, share} =
       Sanctum.TestContext.confirming(terry.ctx, &Sanctum.Shares.create(&1, params))
@@ -515,12 +515,12 @@ defmodule Locus.Runtime.AttachedFetchTest do
          "host, a redirect is answered and never followed, and a request off the destination " <>
          "or the grant's egress is refused with nothing counted",
        %{port: port} do
-    # Terry and Alice, each in their own athanor, are in the group Traders,
+    # Terry and Alice, each in their own athanor, are in the thread Traders,
     # and Terry shares his key with it. Alice grants her own component the
     # share through the consent walk.
     terry = person!("Terry")
     alice = person!("Alice")
-    traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+    traders = Cyfr.Test.ShareFixtures.thread!([terry.user.id, alice.user.id])
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, alice.athanor.id) end)
     Sanctum.TestContext.ready!(alice.athanor.id)
 
@@ -729,12 +729,12 @@ defmodule Locus.Runtime.AttachedFetchTest do
     ship_model!()
 
     # Terry, the platform administrator, shares his key to the upstream
-    # with Traders, Alice's group and his, and his model key with
+    # with Traders, Alice's thread and his, and his model key with
     # everyone. Alice grants her own component his share and runs it.
     terry = person!("Terry")
     {:ok, _seat} = Sanctum.TestContext.ensure_platform(terry.user.id)
     alice = person!("Alice")
-    traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+    traders = Cyfr.Test.ShareFixtures.thread!([terry.user.id, alice.user.id])
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, alice.athanor.id) end)
     Sanctum.TestContext.ready!(alice.athanor.id)
 
@@ -812,7 +812,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
     # Terry shares the key with Traders again: a new share, offered to
     # Alice. Her grant still names the one the restore revoked, so her run
     # is refused until she grants the new one.
-    again = share_again!(terry, entry, %{"audience" => "group", "group_id" => traders.id})
+    again = share_again!(terry, entry, %{"audience" => "thread", "thread_id" => traders.id})
     refute again == share.id
 
     assert share_statuses(terry) == %{

@@ -570,7 +570,7 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # The audience a share was read at, which the revision's lock holds its
   # row to.
-  defp admitted(read), do: %{audience: read.audience, group_id: read.group_id}
+  defp admitted(read), do: %{audience: read.audience, thread_id: read.thread_id}
 
   defp automatic_map(need, field_names) do
     case Sanctum.Consent.Plan.field_map(need, field_names) do

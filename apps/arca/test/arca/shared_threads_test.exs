@@ -7,8 +7,9 @@ defmodule Arca.SharedThreadsTest do
   id and listed by the people seated in it, renamed, archived and reopened
   with its generation raised each time; and a pair of two people, made once
   and found by either of them, which two callers asking at once cannot both
-  make (`Arca.SharedThreadsRaceTest`). Every function is the platform's
-  and refuses an athanor's actor.
+  make (`Arca.SharedThreadsRaceTest`). The caps on threads and pairs are
+  `Arca.SharedThreadsCapsTest`'s. Every function is the platform's and
+  refuses an athanor's actor.
   """
 
   use ExUnit.Case, async: true
@@ -121,8 +122,8 @@ defmodule Arca.SharedThreadsTest do
       {:ok, _} = SharedThreads.archive(server(), ended.id)
       {:ok, _} = SharedMessages.append(server(), busy.id, %{author: by, content: "hi"})
 
-      {other, _} = thread!("Not theirs")
-      {:ok, _} = SharedThreadMembers.invite(server(), other.id, "per_#{by}", person())
+      {other, other_by} = thread!("Not theirs")
+      {:ok, _} = SharedThreadMembers.invite(server(), other.id, "per_#{by}", other_by)
 
       assert {:ok, threads} = SharedThreads.list_for(server(), by)
       assert hd(threads).id == busy.id
@@ -204,6 +205,105 @@ defmodule Arca.SharedThreadsTest do
         from(t in SharedThread, where: t.pair_of == ^pair_of and t.status == "active"),
         :count
       )
+end
+
+defmodule Arca.SharedThreadsCapsTest do
+  @moduledoc """
+  The caps a shared thread's making counts: `max_shared_threads_per_person`
+  bounds the threads a person made that stand active, and
+  `max_pairs_per_person` the active pairs each of a new pair's two sits
+  in, while a pair found again is not counted. The suite's cap port admits
+  everything (`Arca.Test.Caps`), so these cases install one of their own
+  that holds the ceiling a case names; sync, because the port is one
+  process-wide term, put back after each case.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.SharedThreads
+  alias Arca.Schemas.SharedThread
+
+  defmodule Ceilings do
+    @moduledoc false
+    # The cap port these cases install: the ceiling the calling process
+    # put for a key, counted as `Sanctum.Tenancy.Caps` counts it; no
+    # ceiling otherwise.
+    @behaviour Prima.Caps
+
+    def put(key, cap), do: Process.put({__MODULE__, key}, cap)
+
+    @impl Prima.Caps
+    def check_counted(%Prima.Actor{}, key, count) do
+      case Process.get({__MODULE__, key}) do
+        nil ->
+          :ok
+
+        cap ->
+          {:ok, held} = count.()
+          if held < cap, do: :ok, else: {:error, {:limit_reached, key, cap}}
+      end
+    end
+
+    @impl Prima.Caps
+    def check_storage(%Prima.Actor{}, _incoming), do: :ok
+  end
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    installed = Prima.Caps.impl!()
+    on_exit(fn -> Prima.Caps.install!(installed) end)
+    Prima.Caps.install!(Ceilings)
+    :ok
+  end
+
+  defp server, do: Prima.Actor.system()
+  defp person, do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+  defp made_by(by),
+    do: Arca.Repo.aggregate(from(t in SharedThread, where: t.created_by == ^by), :count)
+
+  test "a person at max_shared_threads_per_person makes no more, and an archived one frees its place" do
+    by = person()
+    Ceilings.put(:max_shared_threads_per_person, 2)
+    {:ok, first} = SharedThreads.create(server(), %{title: "One", created_by: by})
+    {:ok, _} = SharedThreads.create(server(), %{title: "Two", created_by: by})
+
+    assert {:error, {:limit_reached, :max_shared_threads_per_person, 2}} =
+             SharedThreads.create(server(), %{title: "Three", created_by: by})
+
+    assert made_by(by) == 2
+
+    # Another person's threads are theirs to count, and a pair is no thread
+    # of people.
+    assert {:ok, _} = SharedThreads.create(server(), %{title: "Theirs", created_by: person()})
+    assert {:ok, _} = SharedThreads.pair(server(), by, person())
+
+    {:ok, _} = SharedThreads.archive(server(), first.id)
+
+    assert {:ok, %{title: "Three"}} =
+             SharedThreads.create(server(), %{title: "Three", created_by: by})
+  end
+
+  test "a new pair is refused when either of its two is at max_pairs_per_person, " <>
+         "and a pair found again is not counted" do
+    [a, b, c, d] = for _ <- 1..4, do: person()
+    Ceilings.put(:max_pairs_per_person, 1)
+    {:ok, pair} = SharedThreads.pair(server(), a, b)
+
+    assert {:error, {:limit_reached, :max_pairs_per_person, 1}} =
+             SharedThreads.pair(server(), a, c)
+
+    assert {:error, {:limit_reached, :max_pairs_per_person, 1}} =
+             SharedThreads.pair(server(), c, a)
+
+    assert made_by(c) == 0
+
+    assert {:ok, ^pair} = SharedThreads.pair(server(), b, a)
+    assert {:ok, ^pair} = SharedThreads.pair(server(), a, b)
+    assert {:ok, %{kind: "pair"}} = SharedThreads.pair(server(), c, d)
+  end
 end
 
 defmodule Arca.SharedThreadsRaceTest do

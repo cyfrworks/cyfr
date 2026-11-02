@@ -15,8 +15,8 @@ defmodule PrismWeb.SystemLayerShareTest do
 
   alias PrismWeb.SystemLayer.Share
 
-  @groups [%{id: "ath_traders", name: "Traders"}, %{id: "ath_dm", name: "Alice"}]
-  @subject %{entry_id: "vlt_1", name: "market key", groups: @groups}
+  @threads [%{id: "sth_traders", name: "Traders"}, %{id: "sth_pair", name: "Alice"}]
+  @subject %{entry_id: "vlt_1", name: "market key", threads: @threads}
   @prompt %{id: "share-vlt_1", kind: :share, action: :credential_sharing, subject: @subject}
 
   defp sheet(administrator),
@@ -36,7 +36,7 @@ defmodule PrismWeb.SystemLayerShareTest do
   end
 
   describe "the sheet" do
-    test "offers everyone and the person's groups, a DM by its name, and no list of people" do
+    test "offers everyone and the person's threads, a pair by its name, and no list of people" do
       html = sheet(false)
 
       assert text(html, ~s([data-test="share-audience"] label)) ==
@@ -48,7 +48,7 @@ defmodule PrismWeb.SystemLayerShareTest do
         |> LazyHTML.query(~s(input[name="audience"]))
         |> Enum.flat_map(&LazyHTML.attribute(&1, "value"))
 
-      assert values == ["everyone", "group:ath_traders", "group:ath_dm"]
+      assert values == ["everyone", "shared_thread:sth_traders", "shared_thread:sth_pair"]
       refute html =~ ~s(type="checkbox")
       refute html =~ "checked"
     end
@@ -100,14 +100,22 @@ defmodule PrismWeb.SystemLayerShareTest do
   end
 
   describe "args/2" do
-    test "an audience of everyone, or of one of the prompt's groups" do
+    test "an audience of everyone, or of one of the prompt's threads" do
       assert Share.args(@subject, %{"audience" => "everyone"}) ==
                {:ok, %{"entry_id" => "vlt_1", "audience" => "everyone"}}
 
-      assert Share.args(@subject, %{"audience" => "group:ath_dm"}) ==
-               {:ok, %{"entry_id" => "vlt_1", "audience" => "group", "group_id" => "ath_dm"}}
+      assert Share.args(@subject, %{"audience" => "shared_thread:sth_pair"}) ==
+               {:ok, %{"entry_id" => "vlt_1", "audience" => "thread", "thread_id" => "sth_pair"}}
 
-      for chosen <- [nil, "", "group:ath_elsewhere", "group:", "listed", "ath_traders"] do
+      for chosen <- [
+            nil,
+            "",
+            "shared_thread:sth_elsewhere",
+            "shared_thread:",
+            "group:sth_traders",
+            "listed",
+            "sth_traders"
+          ] do
         assert {:error, "Choose who it is shared with" <> _} =
                  Share.args(@subject, %{"audience" => chosen}),
                inspect(chosen)
@@ -153,9 +161,9 @@ defmodule PrismWeb.SystemLayerShareTest do
     test "an audience reads back as the choice that names it" do
       for audience <- [
             %{"audience" => "everyone"},
-            %{"audience" => "group", "group_id" => "ath_traders"}
+            %{"audience" => "thread", "thread_id" => "sth_traders"}
           ] do
-        assert {:ok, ^audience} = Share.audience(Share.audience_value(audience), @groups)
+        assert {:ok, ^audience} = Share.audience(Share.audience_value(audience), @threads)
       end
     end
   end

@@ -4,8 +4,8 @@
 defmodule Arca.Test.Shares do
   @moduledoc """
   The rows a share test acts on, written through the storage facades as
-  the layer above writes them: people, their own athanors, groups and
-  seats, vault entries, shares, and profiles in another athanor whose head
+  the layer above writes them: people, their own athanors and seats,
+  shared threads and their people, vault entries, shares, and profiles in another athanor whose head
   binds a share.
   """
 
@@ -96,6 +96,22 @@ defmodule Arca.Test.Shares do
     athanor
   end
 
+  @doc """
+  A shared thread its first member (a person id) made, with the others
+  seated in it by them.
+  """
+  @spec thread!([String.t(), ...]) :: map()
+  def thread!([first | others]) do
+    {:ok, thread} =
+      Arca.SharedThreads.create(server(), %{title: "T#{uniq()}", created_by: first})
+
+    for user_id <- others do
+      {:ok, _seat} = Arca.SharedThreadMembers.seat(server(), thread.id, user_id, first)
+    end
+
+    thread
+  end
+
   @doc "Seat the person `user_id` in the athanor `athanor_id`."
   @spec seat!(String.t(), String.t()) :: map()
   def seat!(athanor_id, user_id) do
@@ -178,7 +194,7 @@ defmodule Arca.Test.Shares do
 
   @doc "The audience `everyone`, as a write or a writer names it."
   @spec everyone() :: map()
-  def everyone, do: %{audience: "everyone", group_id: nil}
+  def everyone, do: %{audience: "everyone", thread_id: nil}
 
   @doc "The attributes of revision `revision` of the profile `profile_id`."
   @spec revision_attrs(String.t(), String.t(), pos_integer()) :: map()

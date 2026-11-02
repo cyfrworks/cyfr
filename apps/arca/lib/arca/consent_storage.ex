@@ -164,7 +164,7 @@ defmodule Arca.ConsentStorage do
   selection, an entry without its digest, an `until` without
   `expires_at`, any other lifetime with one, a share binding that does
   not name the audience it was admitted under (`admitted`,
-  `%{audience: _, group_id: _}`, which is held to the share's row under
+  `%{audience: _, thread_id: _}`, which is held to the share's row under
   its lock and never stored), or a key twice is refused
   `{:error, {:invalid, %{vault_refs: [why]}}}` with nothing written
   (`Arca.Schemas.ConsentVaultRef.changeset/1`). The profile row is locked
@@ -465,7 +465,7 @@ defmodule Arca.ConsentStorage do
       from(s in Arca.Schemas.Share,
         where: s.id in ^ids,
         order_by: s.id,
-        select: {s.id, {s.status, %{audience: s.audience, group_id: s.group_id}}}
+        select: {s.id, {s.status, %{audience: s.audience, thread_id: s.thread_id}}}
       )
       |> Arca.QueryHelpers.for_share()
       |> Arca.Repo.all()

@@ -25,14 +25,18 @@ defmodule Arca.SharedMessages do
   while it is active, under its row lock, so a message never lands in a
   thread an archive committed first.
 
+  The author is seated in the thread, read in the same transaction
+  (`:not_member` otherwise).
+
   A row crosses as a plain map (`Arca.Data`), its payload decoded. A
-  refusal is `:not_found`, `:archived`, `{:invalid, %{field => [message]}}`,
+  refusal is `:not_found`, `:archived`, `:not_member`,
+  `{:invalid, %{field => [message]}}`,
   `:cross_tenant`, `:not_owner` or `:database_error`.
   """
 
   import Ecto.Query
 
-  alias Arca.Schemas.{SharedMessage, SharedThread}
+  alias Arca.Schemas.{SharedMessage, SharedThread, SharedThreadMember}
 
   @typedoc "A message, as a plain map with its payload decoded."
   @type row :: map()
@@ -45,7 +49,9 @@ defmodule Arca.SharedMessages do
 
   @doc """
   Append a message to the thread: `attrs` names its `:author`, a person,
-  and optionally its `:content` (default `""`) and `:payload`, a map.
+  and optionally its `:id` (a `shm_` id the caller drew, under which its
+  attachments are already stored; drawn here otherwise), its `:content`
+  (default `""`) and `:payload`, a map.
   """
   @spec append(Prima.Actor.t(), String.t(), map()) ::
           {:ok, row()}
@@ -59,7 +65,7 @@ defmodule Arca.SharedMessages do
         case Arca.Repo.get(SharedThread, thread_id) do
           nil -> {:error, :not_found}
           %SharedThread{status: "archived"} -> {:error, :archived}
-          %SharedThread{} -> write(thread_id, fields, Arca.ServerMetaStorage.now!())
+          %SharedThread{} -> seated_write(thread_id, fields)
         end
       end)
       |> decoded()
@@ -68,9 +74,23 @@ defmodule Arca.SharedMessages do
 
   def append(%Prima.Actor{}, _thread_id, _attrs), do: {:error, :cross_tenant}
 
+  # The author is seated in the thread, read in the appending transaction.
+  # arca:unscoped-ok a shared thread is no athanor's; its author's seat is read by thread and person.
+  defp seated_write(thread_id, fields) do
+    seated =
+      from(m in SharedThreadMember,
+        where: m.thread_id == ^thread_id and m.user_id == ^fields.author and m.status == "active"
+      )
+
+    if Arca.Repo.exists?(seated),
+      do: write(thread_id, fields, Arca.ServerMetaStorage.now!()),
+      else: {:error, :not_member}
+  end
+
   # arca:unscoped-ok a shared thread is no athanor's; its message is written by its id.
   defp write(thread_id, fields, now) do
-    id = Prima.UUID7.generate_id("shm")
+    {id, fields} = Map.pop(fields, :id)
+    id = id || Prima.UUID7.generate_id("shm")
     last = from(m in SharedMessage, where: m.thread_id == ^thread_id, select: max(m.seq))
     row = Map.merge(fields, %{id: id, thread_id: thread_id, inserted_at: now})
 
@@ -79,7 +99,7 @@ defmodule Arca.SharedMessages do
            conflict_target: [:thread_id, :seq]
          ) do
       {1, _} -> touch(thread_id, id, now)
-      {0, _} -> write(thread_id, fields, now)
+      {0, _} -> write(thread_id, Map.put(fields, :id, id), now)
     end
   end
 
@@ -126,6 +146,7 @@ defmodule Arca.SharedMessages do
 
   defp fields(attrs) do
     author = attrs[:author]
+    id = attrs[:id]
     content = Map.get(attrs, :content, "")
     payload = attrs[:payload]
 
@@ -139,6 +160,7 @@ defmodule Arca.SharedMessages do
     errors =
       [
         {:author, Prima.PersonId.person?(author)},
+        {:id, is_nil(id) or (is_binary(id) and String.starts_with?(id, "shm_"))},
         {:content, is_binary(content)},
         {:payload, match?({:ok, _}, encoded)}
       ]
@@ -147,7 +169,7 @@ defmodule Arca.SharedMessages do
 
     if errors == %{} do
       {:ok, json} = encoded
-      {:ok, %{author: author, content: content, payload: json}}
+      {:ok, %{id: id, author: author, content: content, payload: json}}
     else
       {:error, {:invalid, errors}}
     end

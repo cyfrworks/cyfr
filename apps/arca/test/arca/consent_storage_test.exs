@@ -380,7 +380,7 @@ defmodule Arca.ConsentStorageTest do
             Map.put(ref, :via_label, "default"),
             Map.delete(ref, :binding_digest),
             Map.delete(ref, :admitted),
-            Map.put(ref, :admitted, %{audience: "group", group_id: nil})
+            Map.put(ref, :admitted, %{audience: "thread", thread_id: nil})
           ] do
         assert {_profile, {:error, {:invalid, %{vault_refs: [_ | _]}}}} =
                  share_revision(alice.athanor.id, [bad]),
@@ -421,13 +421,13 @@ defmodule Arca.ConsentStorageTest do
     test "a share whose audience moved from the one its binding was admitted under is " <>
            "refused under the lock, and the audience it holds is admitted",
          %{terry: terry, share: share, alice: alice} do
-      group = Arca.Test.Shares.group!([terry.user.id])
-      narrowed = %{audience: "group", group_id: group.id}
+      thread = Arca.Test.Shares.thread!([terry.user.id])
+      narrowed = %{audience: "thread", thread_id: thread.id}
 
       {:ok, _} =
         Arca.Shares.set_audience(terry.actor, share.id, Arca.Test.Shares.everyone(), narrowed)
 
-      for admitted <- [Arca.Test.Shares.everyone(), %{narrowed | group_id: "ath_other"}] do
+      for admitted <- [Arca.Test.Shares.everyone(), %{narrowed | thread_id: "sth_other"}] do
         ref = Arca.Test.Shares.share_ref(share.id, "sha256:d0", admitted)
 
         assert {_profile, {:error, {:audience_changed, id}}} =

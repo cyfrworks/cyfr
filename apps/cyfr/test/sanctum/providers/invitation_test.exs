@@ -13,7 +13,6 @@ defmodule Sanctum.Providers.InvitationTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -31,8 +30,8 @@ defmodule Sanctum.Providers.InvitationTest do
       end
 
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
-    {:ok, group} = Athanors.create_group(alice, "Invitation tool #{n}")
-    {:ok, alice: alice, ops: ops, group: group}
+    {:ok, thread} = Sanctum.SharedThreads.create(alice, "Invitation tool #{n}")
+    {:ok, alice: alice, ops: ops, thread: thread}
   end
 
   defp call(ctx, args), do: Sanctum.Gate.call_external("invitation", ctx, args)
@@ -58,13 +57,13 @@ defmodule Sanctum.Providers.InvitationTest do
   defp nulls(_value), do: []
 
   test "create answers the code once with its link, and list and revoke answer the invitation without it",
-       %{alice: alice, group: group} do
+       %{alice: alice, thread: thread} do
     assert {:ok, %{invitation: invitation, code: code, invitation_url: link} = created} =
-             call(ctx(alice), %{"action" => "create", "athanor_id" => group.id})
+             call(ctx(alice), %{"action" => "create", "thread_id" => thread.id})
 
     assert link == Sanctum.Person.home() <> "/invite#" <> code
-    assert %{state: "pending", athanor_id: athanor_id, athanor_name: name} = invitation
-    assert {athanor_id, name} == {group.id, group.name}
+    assert %{state: "pending", thread_id: thread_id, thread_title: title} = invitation
+    assert {thread_id, title} == {thread.id, thread.title}
     assert nulls(created) == []
 
     refute inspect(Prima.Sanitizer.sanitize(created)) =~ code
@@ -83,9 +82,9 @@ defmodule Sanctum.Providers.InvitationTest do
   end
 
   test "create keeps the name it offers, which the invitation page reads, and refuses one that is no name",
-       %{alice: alice, group: group} do
+       %{alice: alice, thread: thread} do
     assert {:ok, %{invitation: invitation, code: code}} =
-             call(ctx(alice), %{"action" => "create", "athanor_id" => group.id, "name" => "mira"})
+             call(ctx(alice), %{"action" => "create", "thread_id" => thread.id, "name" => "mira"})
 
     assert Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).name == "mira"
     assert {:ok, %{name: "mira"}} = Sanctum.Invitations.lookup(code)
@@ -93,7 +92,7 @@ defmodule Sanctum.Providers.InvitationTest do
     assert {:error, reason} =
              call(ctx(alice), %{
                "action" => "create",
-               "athanor_id" => group.id,
+               "thread_id" => thread.id,
                "name" => "Not A Name"
              })
 
@@ -101,20 +100,23 @@ defmodule Sanctum.Providers.InvitationTest do
     assert Arca.Repo.aggregate(Arca.Schemas.Invitation, :count) == 1
   end
 
-  test "an invitation naming no athanor carries no athanor keys and no null", %{ops: ops} do
+  test "an invitation naming no thread carries no thread keys and no null", %{ops: ops} do
     assert {:ok, %{invitation: invitation} = created} =
              call(ctx(ops, platform_admin: true), %{"action" => "create"})
 
-    refute Map.has_key?(invitation, :athanor_id)
-    refute Map.has_key?(invitation, :athanor_name)
+    refute Map.has_key?(invitation, :thread_id)
+    refute Map.has_key?(invitation, :thread_title)
     assert nulls(created) == []
   end
 
-  test "an API key is refused every action, and nothing is written", %{alice: alice, group: group} do
-    key = ctx(alice, athanor_id: group.id, auth_method: :api_key)
+  test "an API key is refused every action, and nothing is written", %{
+    alice: alice,
+    thread: thread
+  } do
+    key = ctx(alice, auth_method: :api_key)
 
     for args <- [
-          %{"action" => "create", "athanor_id" => group.id},
+          %{"action" => "create", "thread_id" => thread.id},
           %{"action" => "list"},
           %{"action" => "revoke", "invitation_id" => "inv_any"}
         ] do

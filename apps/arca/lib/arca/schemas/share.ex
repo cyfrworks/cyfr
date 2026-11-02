@@ -4,7 +4,7 @@
 defmodule Arca.Schemas.Share do
   @moduledoc """
   One of an athanor's vault entries offered to an audience: `everyone`,
-  or the active members of the group `group_id` names. A share holds no
+  or the people seated in the shared thread `thread_id` names. A share holds no
   material and no name; it is the entry and the audience, and one active
   share per entry and audience is its natural key. `person_daily` and
   `total_daily` are its daily caps, each absent for no limit, `0` for no
@@ -21,13 +21,13 @@ defmodule Arca.Schemas.Share do
   # The caps are 32-bit integers on PostgreSQL; a larger one is refused
   # here on both adapters rather than by one driver alone.
   @max_cap 2_147_483_647
-  @audiences ~w(everyone group)
+  @audiences ~w(everyone thread)
 
   schema "shares" do
     field :athanor_id, :string
     field :vault_entry_id, :string
     field :audience, :string
-    field :group_id, :string
+    field :thread_id, :string
     field :person_daily, :integer
     field :total_daily, :integer
     field :status, :string, default: "active"
@@ -51,7 +51,7 @@ defmodule Arca.Schemas.Share do
 
   @doc """
   A new row: its athanor, entry and creator; an audience in the
-  vocabulary with `group_id` exactly when it is `group`; each cap absent
+  vocabulary with `thread_id` exactly when it is `thread`; each cap absent
   or an integer within `max_cap/0`, as given. The status is the column's `active`.
   """
   @spec changeset(map()) :: Ecto.Changeset.t()
@@ -62,7 +62,7 @@ defmodule Arca.Schemas.Share do
       :athanor_id,
       :vault_entry_id,
       :audience,
-      :group_id,
+      :thread_id,
       :person_daily,
       :total_daily,
       :created_by
@@ -73,26 +73,26 @@ defmodule Arca.Schemas.Share do
   end
 
   @doc """
-  An audience as a write names it, `%{audience: _, group_id: _}`, held to
-  the same rule: `everyone` with no group, or `group` with one.
+  An audience as a write names it, `%{audience: _, thread_id: _}`, held to
+  the same rule: `everyone` with no thread, or `thread` with one.
   """
   @spec audience_valid?(term()) :: boolean()
-  def audience_valid?(%{audience: "everyone", group_id: nil}), do: true
+  def audience_valid?(%{audience: "everyone", thread_id: nil}), do: true
 
-  def audience_valid?(%{audience: "group", group_id: group_id}),
-    do: is_binary(group_id) and group_id != ""
+  def audience_valid?(%{audience: "thread", thread_id: thread_id}),
+    do: is_binary(thread_id) and thread_id != ""
 
   def audience_valid?(_other), do: false
 
   defp validate_audience(changeset) do
     audience = %{
       audience: get_field(changeset, :audience),
-      group_id: get_field(changeset, :group_id)
+      thread_id: get_field(changeset, :thread_id)
     }
 
     if audience_valid?(audience),
       do: changeset,
-      else: add_error(changeset, :audience, "is everyone with no group, or group with one")
+      else: add_error(changeset, :audience, "is everyone with no thread, or thread with one")
   end
 
   # Held to the value as given, not as cast: a cap is an integer, and a

@@ -530,7 +530,7 @@ end
 defmodule Arca.SecurityTransitionsTest do
   @moduledoc """
   The five standing transitions, each one transaction: what a denial
-  retires, what an allow restores and what it never does, archive and
+  retires, its seats and invitations in shared threads included, what an allow restores and what it never does, archive and
   reopen, leaving one athanor and the retirement of a remote person it
   leaves with no membership here, the generation every real change
   raises, and a failed statement rolling back everything — the injected
@@ -542,6 +542,7 @@ defmodule Arca.SecurityTransitionsTest do
 
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Arca.SecurityTransitions.Fixtures
 
   alias Arca.SecurityTransitions
@@ -676,6 +677,32 @@ defmodule Arca.SecurityTransitionsTest do
     :ok
   end
 
+  # A shared thread `by` made, with `others` seated in it by them.
+  defp shared_thread!(by, others \\ []) do
+    {:ok, thread} =
+      Arca.SharedThreads.create(server(), %{title: "T#{uniq()}", created_by: by})
+
+    for other <- others,
+        do: {:ok, _} = Arca.SharedThreadMembers.seat(server(), thread.id, other, by)
+
+    thread
+  end
+
+  defp shared_thread(id) do
+    {:ok, thread} = Arca.SharedThreads.get(server(), id)
+    thread
+  end
+
+  # The person's seats and their identifier's invitations, in any shared
+  # thread.
+  defp shared_rows(user_id, identifier) do
+    Arca.Repo.all(
+      from(m in Arca.Schemas.SharedThreadMember,
+        where: m.user_id == ^user_id or m.person_identifier == ^identifier
+      )
+    )
+  end
+
   describe "deny_user/3" do
     test "retires every credential, seat, invitation and follow, and archives what it must" do
       {user, own} = owner!()
@@ -731,6 +758,51 @@ defmodule Arca.SecurityTransitionsTest do
       assert invitation_id == invitation.id
       assert change.unfollowed == 1
       assert change.member_user_ids[pair.id] == [peer.id]
+    end
+
+    test "takes their seats and invitations in shared threads, and ends a pair or a thread left empty" do
+      user = person!()
+      peer = person!()
+      host = person!()
+      identifier = enrolled!(user.id)
+
+      {:ok, pair} = Arca.SharedThreads.pair(server(), user.id, peer.id)
+      alone = shared_thread!(user.id)
+      kept = shared_thread!(peer.id, [user.id])
+      ended = shared_thread!(user.id, [peer.id])
+      {:ok, _} = Arca.SharedThreads.archive(server(), ended.id)
+      invited = shared_thread!(host.id)
+      {:ok, _} = Arca.SharedThreadMembers.invite(server(), invited.id, identifier, host.id)
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert change.left_shared_thread_ids ==
+               Enum.sort([pair.id, alone.id, kept.id, ended.id])
+
+      # The pair they sat in and the thread they leave empty end, one
+      # generation up; one a peer still sits in stands, and one archived
+      # already keeps its generation.
+      assert change.archived_shared_thread_ids == Enum.sort([pair.id, alone.id])
+
+      for thread <- [pair, alone],
+          do: assert(%{status: "archived", security_generation: 2} = shared_thread(thread.id))
+
+      assert %{status: "active", security_generation: 1} = shared_thread(kept.id)
+      assert %{status: "archived", security_generation: 2} = shared_thread(ended.id)
+      assert %{status: "active", security_generation: 1} = shared_thread(invited.id)
+
+      assert shared_rows(user.id, identifier) == []
+
+      assert {:ok, %{user_id: peer_id}} =
+               Arca.SharedThreadMembers.find(server(), kept.id, peer.id)
+
+      assert peer_id == peer.id
+      assert {:ok, [%{user_id: host_id}]} = Arca.SharedThreadMembers.list(server(), invited.id)
+      assert host_id == host.id
+
+      # A repeated denial finds no seat left to take.
+      assert {:ok, again} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert again.left_shared_thread_ids == [] and again.archived_shared_thread_ids == []
     end
 
     test "ends their offers both ways" do

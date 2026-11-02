@@ -45,6 +45,7 @@ const (
 	Session            = "session"
 	Settings           = "settings"
 	Share              = "share"
+	SharedThread       = "shared_thread"
 	System             = "system"
 	Thread             = "thread"
 	Tincture           = "tincture"
@@ -280,6 +281,21 @@ const (
 	ShareSetAudience        = "set_audience"
 	ShareSetCaps            = "set_caps"
 	ShareUsage              = "usage"
+	SharedThreadAdd         = "add"
+	SharedThreadArchive     = "archive"
+	SharedThreadAttach      = "attach"
+	SharedThreadCreate      = "create"
+	SharedThreadGet         = "get"
+	SharedThreadLeave       = "leave"
+	SharedThreadList        = "list"
+	SharedThreadMessages    = "messages"
+	SharedThreadPair        = "pair"
+	SharedThreadPeople      = "people"
+	SharedThreadPost        = "post"
+	SharedThreadRemove      = "remove"
+	SharedThreadRename      = "rename"
+	SharedThreadUnarchive   = "unarchive"
+	SharedThreadWithdraw    = "withdraw"
 	SystemNotify            = "notify"
 	SystemStatus            = "status"
 	ThreadAloud             = "aloud"
@@ -358,6 +374,7 @@ var Actions = map[string][]string{
 	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "setup", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
+	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
 	"tincture":            {"invoke_protected", "invoke_public"},
@@ -1971,8 +1988,8 @@ func (args FileWriteArgs) MarshalJSON() ([]byte, error) {
 
 // InvitationCreateArgs carries arguments for invitation.create.
 type InvitationCreateArgs struct {
-	// The group athanor the newcomer is seated in, which you hold a seat in. Left out, the invitation seats them in no group: the platform administrator's alone (create)
-	AthanorId Field[string] `json:"athanor_id,omitzero"`
+	// The shared thread the newcomer is seated in, which you sit in. Left out, the invitation seats them in no thread: the platform administrator's alone (create)
+	ThreadId Field[string] `json:"thread_id,omitzero"`
 	// The name offered to the newcomer, filled in on their invitation page; they may choose another (create)
 	Name Field[string] `json:"name,omitzero"`
 }
@@ -4830,10 +4847,10 @@ func (args SettingsSetArgs) MarshalJSON() ([]byte, error) {
 type ShareCreateArgs struct {
 	// Vault entry id (vlt_…) of your own athanor
 	EntryId string `json:"entry_id"`
-	// Who it is offered to: everyone on this CYFR, or the active members of one group
+	// Who it is offered to: everyone on this CYFR, or the people of one shared thread
 	Audience string `json:"audience"`
-	// The group a group audience names, one you are an active member of; none for everyone
-	GroupId Field[string] `json:"group_id,omitzero"`
+	// The shared thread a thread audience names, one you sit in; none for everyone
+	ThreadId Field[string] `json:"thread_id,omitzero"`
 	// Requests one person may make through it each day; 0 admits none; omitted or null is no limit
 	PersonDaily Field[*int] `json:"person_daily,omitzero"`
 	// Requests everyone together may make through it each day; 0 admits none; omitted or null is no limit
@@ -4894,10 +4911,10 @@ func (args ShareRevokeArgs) MarshalJSON() ([]byte, error) {
 type ShareSetAudienceArgs struct {
 	// Share id (shr_…)
 	ShareId string `json:"share_id"`
-	// Who it is offered to: everyone on this CYFR, or the active members of one group
+	// Who it is offered to: everyone on this CYFR, or the people of one shared thread
 	Audience string `json:"audience"`
-	// The group a group audience names, one you are an active member of; none for everyone
-	GroupId Field[string] `json:"group_id,omitzero"`
+	// The shared thread a thread audience names, one you sit in; none for everyone
+	ThreadId Field[string] `json:"thread_id,omitzero"`
 	// The audience the change was decided against, as the caller saw it; a stored audience that differs is a conflict and nothing is saved
 	Expected ShareSetAudienceArgsExpected `json:"expected"`
 }
@@ -4912,10 +4929,10 @@ func (args ShareSetAudienceArgs) MarshalJSON() ([]byte, error) {
 }
 
 type ShareSetAudienceArgsExpected struct {
-	// The audience as the caller saw it: everyone, or a group
+	// The audience as the caller saw it: everyone, or a thread
 	Audience string `json:"audience"`
-	// The group as the caller saw it; none for everyone
-	GroupId Field[string] `json:"group_id,omitzero"`
+	// The thread as the caller saw it; none for everyone
+	ThreadId Field[string] `json:"thread_id,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -4963,6 +4980,270 @@ func (args ShareUsageArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ShareUsage, fields: fields(args)})
+}
+
+// SharedThreadAddArgs carries arguments for shared_thread.add.
+type SharedThreadAddArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+	// The person's user id, when already on this CYFR (add, remove)
+	UserId Field[string] `json:"user_id,omitzero"`
+	// The person's identifier (per_…), in place of a user id (add, remove)
+	Identifier Field[string] `json:"identifier,omitzero"`
+	// The person's handle at the registry (@name or name), in place of a user id or identifier (add)
+	Handle Field[string] `json:"handle,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadAddArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadAddArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadAdd, fields: fields(args)})
+}
+
+// SharedThreadArchiveArgs carries arguments for shared_thread.archive.
+type SharedThreadArchiveArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadArchiveArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadArchiveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadArchive, fields: fields(args)})
+}
+
+// SharedThreadAttachArgs carries arguments for shared_thread.attach.
+type SharedThreadAttachArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+	// attach: words to go with the files
+	Content Field[string] `json:"content,omitzero"`
+	// attach: the files as {filename, media_type, data} with base64 data, posted as one message
+	Files []SharedThreadAttachArgsFilesItem `json:"files"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadAttachArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadAttachArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadAttach, fields: fields(args)})
+}
+
+type SharedThreadAttachArgsFilesItem struct {
+	Filename  string `json:"filename"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *SharedThreadAttachArgsFilesItem) UnmarshalJSON(data []byte) error {
+	type fields SharedThreadAttachArgsFilesItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = SharedThreadAttachArgsFilesItem(value)
+	return nil
+}
+
+// SharedThreadCreateArgs carries arguments for shared_thread.create.
+type SharedThreadCreateArgs struct {
+	// The thread's title (create, rename)
+	Title string `json:"title"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadCreateArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadCreateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadCreate, fields: fields(args)})
+}
+
+// SharedThreadGetArgs carries arguments for shared_thread.get.
+type SharedThreadGetArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadGetArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadGetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadGet, fields: fields(args)})
+}
+
+// SharedThreadLeaveArgs carries arguments for shared_thread.leave.
+type SharedThreadLeaveArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadLeaveArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadLeaveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadLeave, fields: fields(args)})
+}
+
+// SharedThreadListArgs carries arguments for shared_thread.list.
+type SharedThreadListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadListArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadList, fields: fields(args)})
+}
+
+// SharedThreadMessagesArgs carries arguments for shared_thread.messages.
+type SharedThreadMessagesArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+	// messages: only those after this seq (default 0)
+	AfterSeq Field[int] `json:"after_seq,omitzero"`
+	// messages: page size (default and ceiling 500)
+	Limit Field[int] `json:"limit,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadMessagesArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadMessagesArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadMessages, fields: fields(args)})
+}
+
+// SharedThreadPairArgs carries arguments for shared_thread.pair.
+type SharedThreadPairArgs struct {
+	// pair: the other person's user id — someone you already share a thread with
+	User string `json:"user"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadPairArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadPairArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadPair, fields: fields(args)})
+}
+
+// SharedThreadPeopleArgs carries arguments for shared_thread.people.
+type SharedThreadPeopleArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadPeopleArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadPeopleArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadPeople, fields: fields(args)})
+}
+
+// SharedThreadPostArgs carries arguments for shared_thread.post.
+type SharedThreadPostArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+	// post: the words
+	Content string `json:"content"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadPostArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadPostArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadPost, fields: fields(args)})
+}
+
+// SharedThreadRemoveArgs carries arguments for shared_thread.remove.
+type SharedThreadRemoveArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+	// The person's user id, when already on this CYFR (add, remove)
+	UserId Field[string] `json:"user_id,omitzero"`
+	// The person's identifier (per_…), in place of a user id (add, remove)
+	Identifier Field[string] `json:"identifier,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadRemoveArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadRemoveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadRemove, fields: fields(args)})
+}
+
+// SharedThreadRenameArgs carries arguments for shared_thread.rename.
+type SharedThreadRenameArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+	// The thread's title (create, rename)
+	Title string `json:"title"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadRenameArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadRenameArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadRename, fields: fields(args)})
+}
+
+// SharedThreadUnarchiveArgs carries arguments for shared_thread.unarchive.
+type SharedThreadUnarchiveArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadUnarchiveArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadUnarchiveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadUnarchive, fields: fields(args)})
+}
+
+// SharedThreadWithdrawArgs carries arguments for shared_thread.withdraw.
+type SharedThreadWithdrawArgs struct {
+	// The shared thread's id (sth_…)
+	Thread string `json:"thread"`
+	// withdraw: the identifier (per_…) whose invitation goes
+	Identifier string `json:"identifier"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SharedThreadWithdrawArgs) MarshalJSON() ([]byte, error) {
+	type fields SharedThreadWithdrawArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SharedThreadWithdraw, fields: fields(args)})
 }
 
 // SystemNotifyArgs carries arguments for system.notify.

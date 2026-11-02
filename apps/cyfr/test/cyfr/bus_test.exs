@@ -117,6 +117,7 @@ defmodule Cyfr.BusTest do
                "sanctum:sessions",
                "sanctum:frame_credentials:<user_id>",
                "sanctum:memberships:<user_id>",
+               "sanctum:shared_threads:<user_id>",
                "platform:notify",
                "health_check:<nonce>",
                "cyfr:schedule_completions",

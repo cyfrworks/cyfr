@@ -69,6 +69,7 @@ defmodule Cyfr.Bus do
     Session,
     SettingsChanged,
     ShareChanged,
+    SharedThreadChanged,
     ThreadEvent,
     Tinctures,
     VaultEntryChanged,
@@ -394,6 +395,18 @@ defmodule Cyfr.Bus do
       reason: "the subject is the person, not an athanor: which athanors they may now reach"
     },
     %{
+      key: :shared_threads,
+      scope: :global,
+      struct: SharedThreadChanged,
+      match: {:prefix, "sanctum:shared_threads:"},
+      template: "sanctum:shared_threads:<user_id>",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["PrismWeb.VaultLive"],
+      reason:
+        "the subject is the person: a shared thread is no athanor's, so its change is told " <>
+          "to each of its people on their own topic"
+    },
+    %{
       key: :platform_notify,
       scope: :global,
       struct: Notify,
@@ -715,6 +728,11 @@ defmodule Cyfr.Bus do
   @spec memberships(String.t()) :: String.t()
   def memberships(user_id) when is_binary(user_id) and user_id != "",
     do: "sanctum:memberships:" <> user_id
+
+  @doc "The shared threads one person sits in (`Cyfr.Bus.SharedThreadChanged`)."
+  @spec shared_threads(String.t()) :: String.t()
+  def shared_threads(user_id) when is_binary(user_id) and user_id != "",
+    do: "sanctum:shared_threads:" <> user_id
 
   @doc "One person's frame credentials suspended or revoked (`Cyfr.Bus.FrameCredential`)."
   @spec frame_credentials(String.t()) :: String.t()

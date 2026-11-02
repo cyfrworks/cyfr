@@ -366,7 +366,7 @@ defmodule Sanctum.TenancyTest do
       {:ok, directory: directory, identity: identity}
     end
 
-    test "an invite names an identifier with no directory read; the cyfr sign-in claims it; a removal retires the person here; recovered, they sign in to nothing",
+    test "an invite names an identifier with no directory read; the cyfr sign-in claims it; a removal takes the seat and its session; recovered, they sign in to their own athanor alone",
          %{directory: directory, identity: identity} do
       group = group!("join")
       {:ok, peer} = Sanctum.Test.People.linked(github("peer"))
@@ -395,12 +395,13 @@ defmodule Sanctum.TenancyTest do
 
       assert :ok = Members.remove_member(group, user_id: user.id)
 
-      # The seat, their head here and every session of theirs are gone
-      # together; their person row, identity row and door entry stand.
+      # The seat and the session bound to the group go together. A remote
+      # person holds their own athanor here, as everyone admitted does, so
+      # a removal is no last leave: their head here, their person row,
+      # identity row and door entry stand.
       refute Members.member?(user.id, group.id)
 
-      assert {:error, :not_found} =
-               Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
+      assert {:ok, _head} = Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
 
       assert {:error, _} = Arca.SessionStorage.get_session(session.hash)
       assert {:ok, %{status: "active"}} = Sanctum.Tenancy.Users.get(user.id)
@@ -413,19 +414,19 @@ defmodule Sanctum.TenancyTest do
       assert Members.member?(peer.id, group.id)
 
       # Recovered at their own home: their identity is current, and the
-      # cyfr door admits them again as the same person — to nothing here.
+      # cyfr door admits them again as the same person — to their own
+      # athanor alone.
       identity = DirectoryServer.recover!(directory.dir, identity)
       assert %{id: same} = cyfr_sign_in!(identity, key)
       assert same == user.id
       refute Members.member?(user.id, group.id)
 
-      # Their new session stands, and opens nothing: they hold no athanor
-      # here, and the one they were removed from refuses them.
+      # Their new session stands and opens their own athanor; the one they
+      # were removed from refuses them.
+      {:ok, own} = Sanctum.Tenancy.Users.personal_athanor_id(user.id)
       again = session!(user.id, nil)
       assert {:ok, _} = Arca.SessionStorage.get_session(again.hash)
-
-      assert {:error, :no_athanor} =
-               Sanctum.Caller.establish(again.token, focus: group.id, refresh: false)
+      assert {:ok, %{athanor_id: ^own}} = Sanctum.Caller.establish(again.token, refresh: false)
 
       ctx =
         Context.build(

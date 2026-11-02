@@ -1398,10 +1398,10 @@ defmodule Sanctum.VaultTest do
 
     test "a rotation announces rotated for each active share of the entry, and no other",
          %{ctx: ctx, terry: terry, view: view, share: share} do
-      traders = Arca.Test.Shares.group!([terry.user.id])
+      traders = Cyfr.Test.ShareFixtures.thread!([terry.user.id])
 
       revoked =
-        Arca.Test.Shares.share!(terry.actor, view.id, %{audience: "group", group_id: traders.id})
+        Arca.Test.Shares.share!(terry.actor, view.id, %{audience: "thread", thread_id: traders.id})
 
       {:ok, _} = Arca.Shares.revoke(terry.actor, revoked.id, Vault.blocked_profile_status())
 

@@ -58,7 +58,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # security bound on how fast strangers are minted an athanor; the other
   # rate limits, stream limits and cache bounds serve one.
   @refuse ~w(max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
-             max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
+             max_shared_threads_per_person max_people_per_thread max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
              max_external_servers_per_athanor mint_per_hour athanor_storage_bytes session_ttl_hours
              webhook_max_skew_seconds webhook_idempotency_ttl_seconds
              directory_serve directory_max_identities directory_log_bytes
@@ -293,6 +293,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert Enum.sort(Enum.map(Roster.entries(), & &1.key)) ==
                Enum.sort(~w(
                  max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
+                 max_shared_threads_per_person max_people_per_thread
                  max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
                  max_external_servers_per_athanor mint_per_hour athanor_storage_bytes
                  opus_max_concurrent opus_max_concurrent_per_tenant
@@ -349,13 +350,16 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
 
     # Sanctum's ceilings on the server's athanors and a group's seats ship
-    # with a generous default, and 0 removes each; an athanor's bytes ship
-    # with no ceiling, which an administrator sets.
-    test "the server's athanors and a group's seats ship bounded, an athanor's bytes unbounded" do
+    # with a generous default, and 0 removes each; an athanor's bytes, the
+    # shared threads a person makes and the people in one ship with no
+    # ceiling, which an administrator sets.
+    test "the server's athanors and a group's seats ship bounded; an athanor's bytes and a shared thread's ceilings unbounded" do
       for {key, default, said} <- [
             {"max_athanors", 10_000, "Unset, 10,000, and 0 removes the ceiling"},
             {"max_members_per_group", 1_000, "unset, 1,000, and 0 removes the ceiling"},
-            {"athanor_storage_bytes", nil, "Unset, no ceiling, and 0 is the same"}
+            {"athanor_storage_bytes", nil, "Unset, no ceiling, and 0 is the same"},
+            {"max_shared_threads_per_person", nil, "unset, no ceiling, and 0 is the same"},
+            {"max_people_per_thread", nil, "unset, no ceiling, and 0 is the same"}
           ] do
         {:ok, entry} = Roster.fetch(key)
 

@@ -54,9 +54,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
     * `:sign_in` — optionally `message`, a sentence saying why;
     * `:share` — the sharing sheet (`PrismWeb.SystemLayer.Share`), under
       the action `:credential_sharing`: `entry_id` and `name`, the
-      person's own vault entry it shares, and `groups`, the groups the
-      person is an active member of, each `%{id, name}` with the name the
-      person reads (a DM's is the other person's), which the sheet offers
+      person's own vault entry it shares, and `threads`, the shared
+      threads the person sits in, each `%{id, name}` with the name the
+      person reads (a pair's is the other person's), which the sheet offers
       beside everyone as the share's audience. It creates the share
       through `share.create`;
     * `:pairing` — nothing: the prompt reads the person's paired clients
@@ -230,10 +230,10 @@ defmodule PrismWeb.SystemLayer.Prompt do
        else: {:error, :invalid_prompt}
   end
 
-  defp subject(:share, %{entry_id: entry_id, name: name, groups: groups} = subject)
+  defp subject(:share, %{entry_id: entry_id, name: name, threads: threads} = subject)
        when map_size(subject) == 3 and is_binary(entry_id) and entry_id != "" and
-              is_binary(name) and name != "" and is_list(groups) do
-    if Enum.all?(groups, &group?/1),
+              is_binary(name) and name != "" and is_list(threads) do
+    if Enum.all?(threads, &thread?/1),
       do: {:ok, subject},
       else: {:error, :invalid_prompt}
   end
@@ -270,10 +270,10 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp subject(_kind, _subject), do: {:error, :invalid_prompt}
 
-  defp group?(%{id: id, name: name} = group),
-    do: map_size(group) == 2 and ref?(id) and is_binary(name) and name != ""
+  defp thread?(%{id: id, name: name} = thread),
+    do: map_size(thread) == 2 and ref?(id) and is_binary(name) and name != ""
 
-  defp group?(_group), do: false
+  defp thread?(_thread), do: false
 
   # What a credential entry raised for a need is prefilled from, and the
   # grant it returns to: all of them or none.

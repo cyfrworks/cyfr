@@ -4,8 +4,8 @@
 defmodule PrismWeb.SettingsLive do
   @moduledoc """
   Settings: the person's own identity, sign-in doors and passkeys, their
-  lite/dev preference, and, for a platform admin, the door and the
-  platform settings.
+  lite/dev preference, and, for a platform admin, the door, the
+  invitations to this CYFR and the platform settings.
 
   Every change is an operation through the gate, and every read of the
   person's identity is one too (`person.status`, `passkey.list`). A change
@@ -31,6 +31,11 @@ defmodule PrismWeb.SettingsLive do
     * **Passkeys** — registered through `passkey.register` and the system
       layer's `webauthn:create` ceremony, listed, and revoked through
       `passkey.revoke`.
+    * **Invite to this CYFR** — the platform administrator's invitation
+      links naming no thread (`invitation.create` with no `thread_id`): a
+      link is shown once with a copy control, and every one naming no
+      thread is listed (`invitation.list`) and, while pending, revoked
+      (`invitation.revoke`). A thread's own links belong to its people.
 
   The refusals each change can meet, the last door and the last passkey
   among them, are shown as the refusal's own sentence.
@@ -40,7 +45,8 @@ defmodule PrismWeb.SettingsLive do
   `door-link-github`, `door-link-google`, `door-link-oidcc`,
   `door-link-flow`, `door-link-code`, `door-link-cancel`; `passkeys`,
   `passkey` (with `data-id` and `data-state`), `passkey-register` and
-  `passkey-revoke`.
+  `passkey-revoke`; `invite-cyfr`, `invitation-create`, `invitation-new`,
+  `invitation-link`, `invitation-copy` and `invitation-revoke`.
   """
 
   use PrismWeb, :live_view
@@ -50,6 +56,7 @@ defmodule PrismWeb.SettingsLive do
 
   require Logger
 
+  alias Phoenix.LiveView.JS
   alias PrismWeb.{IdentityCard, SystemLayer}
   alias Sanctum.Auth.DeviceFlow
 
@@ -79,6 +86,8 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:door_requests, [])
       |> assign(:door_value, "")
       |> assign(:door_note, "")
+      |> assign(:invitations, [])
+      |> assign(:new_link, nil)
       |> assign(:platform_settings, [])
       |> assign(:settings_revision, nil)
       |> assign(:settings_members, [])
@@ -145,6 +154,28 @@ defmodule PrismWeb.SettingsLive do
 
   def handle_event("door_resolve", %{"id" => id, "decision" => decision}, socket) do
     door_call(socket, "door/resolve", %{"id" => id, "decision" => decision}, "Request resolved.")
+  end
+
+  # An invitation to this CYFR, naming no thread: the administrator's.
+  def handle_event("invitation_create", _params, socket) do
+    case call_tool(socket, "invitation/create", %{}) do
+      {:ok, %{invitation_url: link}} ->
+        {:noreply, socket |> assign(:new_link, link) |> load_invitations()}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not create the link: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("invitation_revoke", %{"id" => id}, socket) do
+    case call_tool(socket, "invitation/revoke", %{"invitation_id" => id}) do
+      {:ok, _} ->
+        {:noreply, socket |> load_invitations() |> put_flash(:info, "Invitation link revoked.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not revoke: #{error_message(reason)}")}
+    end
   end
 
   # A change is made against the store revision the card was listed at,
@@ -258,6 +289,7 @@ defmodule PrismWeb.SettingsLive do
       |> load_system_status()
       |> load_log_stats()
       |> load_door()
+      |> load_invitations()
       |> load_settings()
       |> load_prefs()
       |> load_identity()
@@ -373,6 +405,30 @@ defmodule PrismWeb.SettingsLive do
   # A socket whose capability went since it read the door drops what it read.
   defp load_door(socket),
     do: assign(socket, door_entries: [], door_names: %{}, door_requests: [])
+
+  # The invitations to this CYFR that name no thread, newest first: the
+  # administrator's section. A thread's own are its people's.
+  defp load_invitations(%{assigns: %{context: %{platform_admin: true}}} = socket) do
+    invitations =
+      case call_tool(socket, "invitation/list", %{}) do
+        {:ok, %{invitations: invitations}} ->
+          Enum.reject(invitations, &Map.has_key?(&1, :thread_id))
+
+        _ ->
+          []
+      end
+
+    assign(socket, :invitations, invitations)
+  end
+
+  defp load_invitations(socket), do: assign(socket, invitations: [], new_link: nil)
+
+  defp until(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, at, _offset} -> Calendar.strftime(at, "%-d %b %Y, %H:%M UTC")
+      _unparsed -> iso
+    end
+  end
 
   # The name each person an entry names holds here, by their id; an entry
   # made from a name shows its label instead.
@@ -898,6 +954,65 @@ defmodule PrismWeb.SettingsLive do
                 </.button>
               </div>
             </form>
+          </section>
+        </.card>
+
+        <%!-- Invitations to this CYFR, naming no thread (platform admins) --%>
+        <.card :if={@context.platform_admin}>
+          <section id="invite-cyfr" data-test="invite-cyfr">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Invite to this CYFR</h3>
+            <p class="text-xs text-gray-500 mb-4">
+              A link makes someone new a person here, with their own athanor. Someone who
+              already has a CYFR name signs in with it from the same link. It works once and
+              expires after seven days. To bring someone into a thread, invite them from the
+              thread.
+            </p>
+
+            <div :if={@new_link} data-test="invitation-new" class="mb-4 space-y-2">
+              <p class="text-xs text-gray-400">
+                Send this link to the person you invite. It is shown only now.
+              </p>
+              <div class="flex gap-2 items-center">
+                <code
+                  data-test="invitation-link"
+                  class="flex-1 text-xs text-gray-200 bg-gray-800 rounded px-2 py-2 break-all"
+                >
+                  {@new_link}
+                </code>
+                <.button
+                  variant="ghost"
+                  data-test="invitation-copy"
+                  phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_link})}
+                >
+                  Copy
+                </.button>
+              </div>
+            </div>
+
+            <.table :if={@invitations != []} id="invitation-rows" rows={@invitations}>
+              <:col :let={i} label="State">
+                <.badge color={if i[:state] == "pending", do: "green", else: "yellow"}>
+                  {i[:state]}
+                </.badge>
+              </:col>
+              <:col :let={i} label="Expires">{until(i[:expires_at])}</:col>
+              <:col :let={i} label="Actions">
+                <.button
+                  :if={i[:state] == "pending"}
+                  variant="ghost"
+                  phx-click="invitation_revoke"
+                  phx-value-id={i[:id]}
+                  data-test="invitation-revoke"
+                  data-confirm="Revoke this link? It will admit no one."
+                >
+                  Revoke
+                </.button>
+              </:col>
+            </.table>
+
+            <.button class="mt-4" phx-click="invitation_create" data-test="invitation-create">
+              Create an invitation link
+            </.button>
           </section>
         </.card>
 

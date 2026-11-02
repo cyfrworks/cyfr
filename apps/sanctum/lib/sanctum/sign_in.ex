@@ -123,14 +123,17 @@ defmodule Sanctum.SignIn do
   # sign-in: a pending invitation activates on the next one, and a fill's
   # failure lands on its athanor's row.
   defp unlocked(user_id) do
-    case Members.activate_invited(%{id: user_id}) do
-      {:ok, _n} ->
-        :ok
+    for activate <- [&Members.activate_invited/1, &Sanctum.SharedThreads.activate_invited/1] do
+      case activate.(%{id: user_id}) do
+        {:ok, _n} ->
+          :ok
 
-      {:error, reason} ->
-        Logger.error(
-          "[Sanctum.SignIn] activate_invited failed for #{user_id}: #{inspect(reason)}"
-        )
+        {:error, reason} ->
+          Logger.error(
+            "[Sanctum.SignIn] an invitation's activation failed for #{user_id}: " <>
+              inspect(reason)
+          )
+      end
     end
 
     :ok = Sanctum.Provisioning.after_sign_in(user_id)

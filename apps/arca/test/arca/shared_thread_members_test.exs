@@ -4,18 +4,23 @@
 defmodule Arca.SharedThreadMembersTest do
   @moduledoc """
   The people of a shared thread: a person seated once and an identifier
-  invited once, each only into an active thread; the invitations an
-  identifier holds turned into that person's seats at their sign-in,
-  except where they sit already or the thread is archived; an invitation
-  withdrawn and a seat removed, whatever the thread's status, and
-  neither once an activation or another removal changed the row first
-  (`Arca.SharedThreadMembersRaceTest`). Every function is the platform's
+  invited once, each only into an active thread, by someone seated there,
+  and never while one of its people recovers from a declared restore; the
+  invitations an identifier holds turned into that person's seats at
+  their sign-in, except where they sit already, the thread is archived or
+  a restore holds it; an invitation withdrawn and a seat removed,
+  whatever the thread's status, and neither once an activation or another
+  removal changed the row first (`Arca.SharedThreadMembersRaceTest`); a
+  person leaving, which ends a pair or a thread left empty; and whether
+  two people sit in one active thread. The people cap is
+  `Arca.SharedThreadMembersCapsTest`'s. Every function is the platform's
   and refuses an athanor's actor.
   """
 
   use ExUnit.Case, async: true
 
-  alias Arca.{SharedThreadMembers, SharedThreads}
+  alias Arca.{SecurityTransitions, SharedThreadMembers, SharedThreads}
+  alias Arca.Schemas.RestorePerson
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -33,7 +38,40 @@ defmodule Arca.SharedThreadMembersTest do
     :ok
   end
 
-  describe "seat/4" do
+  defp people(thread) do
+    {:ok, people} = SharedThreadMembers.list(server(), thread.id)
+    people
+  end
+
+  defp generation(thread) do
+    {:ok, %{security_generation: generation}} = SharedThreads.get(server(), thread.id)
+    generation
+  end
+
+  # A person with a row, seated in the thread by `by`, whose open
+  # `restore_people` row a declared restore left: the thread is held until
+  # they recover.
+  defp recovering!(thread, by) do
+    user = Arca.Test.Shares.person!()
+    {:ok, _} = SharedThreadMembers.seat(server(), thread.id, user.id, by)
+
+    Arca.Repo.insert!(%RestorePerson{
+      restore_id: Prima.UUID7.generate_id("rst"),
+      user_id: user.id,
+      open: true
+    })
+
+    user
+  end
+
+  defp recovered!(user) do
+    {:ok, [_]} =
+      Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(user.id) end)
+
+    :ok
+  end
+
+  describe "seat/5" do
     test "seats a person once", %{by: by, thread: thread} do
       who = person()
 
@@ -67,6 +105,65 @@ defmodule Arca.SharedThreadMembersTest do
       who = person()
       assert {:error, :archived} = SharedThreadMembers.seat(server(), thread.id, who, by)
       assert {:error, :not_found} = SharedThreadMembers.find(server(), thread.id, who)
+    end
+  end
+
+  describe "seat/5 and invite/4" do
+    test "refuse someone adding who is not seated in the thread, writing nothing",
+         %{by: by, thread: thread} do
+      left = person()
+      {:ok, _} = SharedThreadMembers.seat(server(), thread.id, left, by)
+      {:ok, _} = SharedThreadMembers.remove(server(), thread.id, left)
+      before = people(thread)
+
+      for adder <- [person(), left] do
+        assert {:error, :not_member} =
+                 SharedThreadMembers.seat(server(), thread.id, person(), adder)
+
+        assert {:error, :not_member} =
+                 SharedThreadMembers.invite(server(), thread.id, identifier(), adder)
+      end
+
+      assert people(thread) == before
+    end
+
+    test "refuse while one of the thread's people recovers from a restore, and admit once they have",
+         %{by: by, thread: thread} do
+      user = recovering!(thread, by)
+      before = people(thread)
+      who = person()
+      id = identifier()
+
+      assert {:error, :recovering_from_restore} =
+               SharedThreadMembers.seat(server(), thread.id, who, by)
+
+      assert {:error, :recovering_from_restore} =
+               SharedThreadMembers.invite(server(), thread.id, id, by)
+
+      assert people(thread) == before
+
+      :ok = recovered!(user)
+      assert {:ok, %{user_id: ^who}} = SharedThreadMembers.seat(server(), thread.id, who, by)
+
+      assert {:ok, %{person_identifier: ^id}} =
+               SharedThreadMembers.invite(server(), thread.id, id, by)
+    end
+
+    test "a refusal of the verify: option writes nothing and is answered",
+         %{by: by, thread: thread} do
+      who = person()
+      before = people(thread)
+
+      assert {:error, :issuer_gone} =
+               SharedThreadMembers.seat(server(), thread.id, who, by,
+                 verify: fn -> {:error, :issuer_gone} end
+               )
+
+      assert people(thread) == before
+      assert {:error, :not_found} = SharedThreadMembers.find(server(), thread.id, who)
+
+      assert {:ok, %{user_id: ^who}} =
+               SharedThreadMembers.seat(server(), thread.id, who, by, verify: fn -> :ok end)
     end
   end
 
@@ -140,6 +237,27 @@ defmodule Arca.SharedThreadMembersTest do
                Enum.reject(ended_people, &(&1.user_id == by))
     end
 
+    test "keeps an invitation to a thread a restore holds an invitation until its people recover",
+         %{by: by, thread: thread} do
+      id = identifier()
+      who = person()
+      {:ok, invitation} = SharedThreadMembers.invite(server(), thread.id, id, by)
+      user = recovering!(thread, by)
+
+      assert {:ok, []} = SharedThreadMembers.activate(server(), who, id)
+      assert invitation in people(thread)
+      assert {:error, :not_found} = SharedThreadMembers.find(server(), thread.id, who)
+
+      :ok = recovered!(user)
+      thread_id = thread.id
+      assert {:ok, [^thread_id]} = SharedThreadMembers.activate(server(), who, id)
+
+      assert {:ok, %{user_id: ^who, added_by: ^by}} =
+               SharedThreadMembers.find(server(), thread.id, who)
+
+      refute invitation in people(thread)
+    end
+
     test "refuses someone who is not a person or an empty identifier" do
       assert {:error, {:invalid, %{user_id: [_]}}} =
                SharedThreadMembers.activate(server(), "system", identifier())
@@ -181,6 +299,111 @@ defmodule Arca.SharedThreadMembersTest do
     end
   end
 
+  describe "withdraw/3 and remove/3 under a restore" do
+    test "are admitted while one of the thread's people recovers", %{by: by, thread: thread} do
+      id = identifier()
+      who = person()
+      {:ok, invitation} = SharedThreadMembers.invite(server(), thread.id, id, by)
+      {:ok, seat} = SharedThreadMembers.seat(server(), thread.id, who, by)
+      _user = recovering!(thread, by)
+
+      assert {:ok, ^invitation} = SharedThreadMembers.withdraw(server(), thread.id, id)
+      assert {:ok, ^seat} = SharedThreadMembers.remove(server(), thread.id, who)
+      refute invitation in people(thread) or seat in people(thread)
+    end
+  end
+
+  describe "leave/3" do
+    test "removes the seat and leaves a thread others still sit in active",
+         %{by: by, thread: thread} do
+      who = person()
+      {:ok, seat} = SharedThreadMembers.seat(server(), thread.id, who, by)
+
+      assert {:ok, %{seat: ^seat, ended: false}} =
+               SharedThreadMembers.leave(server(), thread.id, who)
+
+      assert {:error, :not_found} = SharedThreadMembers.find(server(), thread.id, who)
+
+      assert {:ok, %{status: "active", security_generation: 1}} =
+               SharedThreads.get(server(), thread.id)
+    end
+
+    test "archives the thread its last seat leaves, one generation up", %{by: by, thread: thread} do
+      id = identifier()
+      {:ok, invitation} = SharedThreadMembers.invite(server(), thread.id, id, by)
+
+      assert {:ok, %{seat: %{user_id: ^by}, ended: true}} =
+               SharedThreadMembers.leave(server(), thread.id, by)
+
+      assert {:ok, %{status: "archived", security_generation: 2, archived_at: %DateTime{}}} =
+               SharedThreads.get(server(), thread.id)
+
+      # An invitation is no one seated: it stays, in an archived thread.
+      assert people(thread) == [invitation]
+    end
+
+    test "ends a pair when either of its two leaves", %{by: by} do
+      other = person()
+      {:ok, pair} = SharedThreads.pair(server(), by, other)
+
+      assert {:ok, %{seat: %{user_id: ^other}, ended: true}} =
+               SharedThreadMembers.leave(server(), pair.id, other)
+
+      assert {:ok, %{status: "archived", security_generation: 2}} =
+               SharedThreads.get(server(), pair.id)
+
+      assert [%{user_id: ^by}] = people(pair)
+    end
+
+    test "leaves an archived thread archived, its generation unmoved", %{by: by, thread: thread} do
+      :ok = archived!(thread)
+
+      assert {:ok, %{seat: %{user_id: ^by}, ended: false}} =
+               SharedThreadMembers.leave(server(), thread.id, by)
+
+      assert generation(thread) == 2
+      assert people(thread) == []
+    end
+
+    test "answers not_found for someone not seated there, writing nothing",
+         %{by: by, thread: thread} do
+      id = identifier()
+      {:ok, _} = SharedThreadMembers.invite(server(), thread.id, id, by)
+      before = people(thread)
+
+      for who <- [person(), id] do
+        assert {:error, :not_found} = SharedThreadMembers.leave(server(), thread.id, who)
+      end
+
+      assert {:error, :not_found} = SharedThreadMembers.leave(server(), "sth_nobody", by)
+      assert people(thread) == before
+
+      assert {:ok, %{status: "active", security_generation: 1}} =
+               SharedThreads.get(server(), thread.id)
+    end
+  end
+
+  describe "together?/3" do
+    test "is true only for two people seated in one active thread", %{by: by, thread: thread} do
+      who = person()
+      stranger = person()
+      id = identifier()
+      {:ok, _} = SharedThreadMembers.seat(server(), thread.id, who, by)
+      {:ok, _} = SharedThreadMembers.invite(server(), thread.id, id, by)
+
+      assert {:ok, true} = SharedThreadMembers.together?(server(), by, who)
+      assert {:ok, true} = SharedThreadMembers.together?(server(), who, by)
+      assert {:ok, false} = SharedThreadMembers.together?(server(), by, stranger)
+      assert {:ok, false} = SharedThreadMembers.together?(server(), by, id)
+
+      :ok = archived!(thread)
+      assert {:ok, false} = SharedThreadMembers.together?(server(), by, who)
+
+      {:ok, _pair} = SharedThreads.pair(server(), by, who)
+      assert {:ok, true} = SharedThreadMembers.together?(server(), who, by)
+    end
+  end
+
   describe "list/2" do
     test "names the thread's seats and invitations, oldest first", %{by: by, thread: thread} do
       who = person()
@@ -205,13 +428,90 @@ defmodule Arca.SharedThreadMembersTest do
           fn -> SharedThreadMembers.activate(actor, person(), id) end,
           fn -> SharedThreadMembers.withdraw(actor, thread.id, id) end,
           fn -> SharedThreadMembers.remove(actor, thread.id, by) end,
+          fn -> SharedThreadMembers.leave(actor, thread.id, by) end,
           fn -> SharedThreadMembers.find(actor, thread.id, by) end,
+          fn -> SharedThreadMembers.together?(actor, by, by) end,
           fn -> SharedThreadMembers.list(actor, thread.id) end
         ] do
       assert {:error, :cross_tenant} = call.()
     end
 
     assert {:ok, [%{user_id: ^by}]} = SharedThreadMembers.list(server(), thread.id)
+  end
+end
+
+defmodule Arca.SharedThreadMembersCapsTest do
+  @moduledoc """
+  The people cap of a shared thread, `max_people_per_thread`: its seats
+  and its invitations both count, and a seat or an invitation past it is
+  refused, writing nothing. The suite's cap port admits everything
+  (`Arca.Test.Caps`), so these cases install one of their own that holds
+  the ceiling a case names; sync, because the port is one process-wide
+  term, put back after each case.
+  """
+
+  use ExUnit.Case, async: false
+
+  alias Arca.{SharedThreadMembers, SharedThreads}
+
+  defmodule Ceilings do
+    @moduledoc false
+    # The cap port these cases install: the ceiling the calling process
+    # put for a key, counted as `Sanctum.Tenancy.Caps` counts it; no
+    # ceiling otherwise.
+    @behaviour Prima.Caps
+
+    def put(key, cap), do: Process.put({__MODULE__, key}, cap)
+
+    @impl Prima.Caps
+    def check_counted(%Prima.Actor{}, key, count) do
+      case Process.get({__MODULE__, key}) do
+        nil ->
+          :ok
+
+        cap ->
+          {:ok, held} = count.()
+          if held < cap, do: :ok, else: {:error, {:limit_reached, key, cap}}
+      end
+    end
+
+    @impl Prima.Caps
+    def check_storage(%Prima.Actor{}, _incoming), do: :ok
+  end
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    installed = Prima.Caps.impl!()
+    on_exit(fn -> Prima.Caps.install!(installed) end)
+    Prima.Caps.install!(Ceilings)
+    :ok
+  end
+
+  defp server, do: Prima.Actor.system()
+  defp person, do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
+  defp identifier, do: "per_#{System.unique_integer([:positive])}"
+
+  test "counts a thread's seats and invitations, and refuses one more past the cap" do
+    by = person()
+    {:ok, thread} = SharedThreads.create(server(), %{title: "Plans", created_by: by})
+    Ceilings.put(:max_people_per_thread, 3)
+
+    {:ok, _} = SharedThreadMembers.seat(server(), thread.id, person(), by)
+    id = identifier()
+    {:ok, _} = SharedThreadMembers.invite(server(), thread.id, id, by)
+    {:ok, before} = SharedThreadMembers.list(server(), thread.id)
+
+    assert {:error, {:limit_reached, :max_people_per_thread, 3}} =
+             SharedThreadMembers.seat(server(), thread.id, person(), by)
+
+    assert {:error, {:limit_reached, :max_people_per_thread, 3}} =
+             SharedThreadMembers.invite(server(), thread.id, identifier(), by)
+
+    assert {:ok, ^before} = SharedThreadMembers.list(server(), thread.id)
+
+    # A withdrawn invitation frees its place.
+    {:ok, _} = SharedThreadMembers.withdraw(server(), thread.id, id)
+    assert {:ok, _} = SharedThreadMembers.seat(server(), thread.id, person(), by)
   end
 end
 

@@ -899,7 +899,7 @@ defmodule Sanctum.Consent.PlanTest do
     defp traders! do
       terry = Cyfr.Test.ShareFixtures.person!("Terry")
       alice = Cyfr.Test.ShareFixtures.person!("Alice")
-      traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+      traders = Cyfr.Test.ShareFixtures.thread!([terry.user.id, alice.user.id])
       %{terry: terry, alice: alice, traders: traders}
     end
 
@@ -925,7 +925,7 @@ defmodule Sanctum.Consent.PlanTest do
         )
 
       entry = Arca.Test.Shares.entry!(terry.actor, Map.put(attrs, :binding_digest, digest))
-      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
     end
 
     defp need_row!(ctx, ref, name) do

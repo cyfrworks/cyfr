@@ -53,6 +53,7 @@ defmodule Cyfr.TelemetryBridge do
     ScheduleRun,
     Session,
     ShareChanged,
+    SharedThreadChanged,
     Tinctures,
     VaultEntryChanged,
     Webhooks
@@ -276,6 +277,18 @@ defmodule Cyfr.TelemetryBridge do
        when is_binary(user_id) and user_id != "" do
     membership = Membership.new(:changed, user_id, meta[:athanor_id], meta[:change])
     [{:global, Bus.memberships(user_id), membership}]
+  end
+
+  # A shared thread's change, on the own topic of each person it names:
+  # its people, and anyone the change took from it.
+  defp messages([:cyfr, :sanctum, :shared_thread, kind], _measurements, %{
+         thread_id: thread_id,
+         user_ids: user_ids
+       })
+       when is_binary(thread_id) and is_list(user_ids) do
+    for user_id <- user_ids, is_binary(user_id) and user_id != "" do
+      {:global, Bus.shared_threads(user_id), SharedThreadChanged.new(kind, user_id, thread_id)}
+    end
   end
 
   # Two topics, one announcement: the athanor's own, and the deliberately

@@ -11,7 +11,9 @@ defmodule Arca.SecurityTransitions do
   a denial marks the person denied, archives their own athanor, every
   frozen athanor they sit in and every group they leave empty, removes
   their memberships, the invitations their identifier still
-  holds and their thread follows, deletes their sessions and revokes the
+  holds and their thread follows, removes their seats in shared threads
+  and the invitations their identifier holds there, archives every pair
+  they sit in and every shared thread they leave empty, deletes their sessions and revokes the
   keys they created and the keys of every athanor it archives, the frame
   credentials (`Arca.FrameCredentials`), paired clients
   (`Arca.PairedClients`), device certificates (`Arca.DeviceCertificates`)
@@ -76,7 +78,8 @@ defmodule Arca.SecurityTransitions do
 
   Every transition, and every credential issuance, takes its row locks in
   one order: people sorted by id, athanors sorted by id, then
-  memberships, invitations and follows, then cached identity heads, then
+  memberships, invitations and follows, then shared threads sorted by id
+  (`Arca.SharedThreads`) and their people, then cached identity heads, then
   sessions, then API keys, then frame credentials, then paired clients,
   then device certificates, pairing invitations, admission invitations
   (`Arca.Invitations`), passkeys and pending confirmations, then file
@@ -194,6 +197,8 @@ defmodule Arca.SecurityTransitions do
     ServerMeta,
     Session,
     Share,
+    SharedThread,
+    SharedThreadMember,
     StorageWriteIntent,
     ThreadSubscription,
     ToolGrant,
@@ -247,7 +252,9 @@ defmodule Arca.SecurityTransitions do
           required(:unfollowed) => non_neg_integer(),
           required(:dropped_head_identifier) => String.t() | nil,
           required(:ended_offer_ids) => [String.t()],
-          required(:revoked_share_ids) => [String.t()]
+          required(:revoked_share_ids) => [String.t()],
+          required(:left_shared_thread_ids) => [String.t()],
+          required(:archived_shared_thread_ids) => [String.t()]
         }
 
   @doc """
@@ -405,6 +412,7 @@ defmodule Arca.SecurityTransitions do
            peers = lock_peers(user_id, group_ids(athanors)),
            identifier = identifier_of(user_id),
            invitations = lock_invitations(identifier),
+           threads = lock_shared_threads(user_id),
            retire = to_retire(user, athanors, rows, peers),
            :ok <-
              decide(verify, %{
@@ -440,6 +448,7 @@ defmodule Arca.SecurityTransitions do
           by_passkeys = PendingConfirmations.void_confirmed_by!(:passkey, passkey_ids)
           own = void_confirmations(from(c in PendingConfirmation, where: c.user_id == ^user_id))
           ended_offers = Arca.FileOffers.end_for_person!(user_id, retire)
+          {left, ended} = leave_shared_threads(user_id, identifier, threads, now)
 
           with {:ok, share_ids} <- revoke_shares(retire),
                :ok <- deny_holds(user_id, retire) do
@@ -472,7 +481,9 @@ defmodule Arca.SecurityTransitions do
                 unfollowed: unfollowed,
                 ended_offer_ids:
                   ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort(),
-                revoked_share_ids: share_ids
+                revoked_share_ids: share_ids,
+                left_shared_thread_ids: left,
+                archived_shared_thread_ids: ended
             }
             |> Map.put(:ended_offers, ended_offers)
           end
@@ -480,6 +491,70 @@ defmodule Arca.SecurityTransitions do
       end
 
     committed_change(result)
+  end
+
+  # The shared threads the person sits in, locked in id order after the
+  # athanors and their memberships, as the standing order takes them. A
+  # new seat of theirs waits for the person's lock the denial took first.
+  # arca:unscoped-ok a shared thread is no athanor's; a person's are locked by their seats.
+  defp lock_shared_threads(user_id) do
+    from(t in SharedThread,
+      where:
+        t.id in subquery(
+          from(m in SharedThreadMember,
+            where: m.user_id == ^user_id and m.status == "active",
+            select: m.thread_id
+          )
+        ),
+      order_by: [asc: t.id]
+    )
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.all()
+  end
+
+  # The person's seats in the shared threads `threads` holds, and the
+  # invitations their identifier holds in any, removed; then every active
+  # pair among them and every thread with no one left seated archived,
+  # one more `security_generation` each. Answers the threads they left and
+  # the ones it archived, each sorted.
+  # arca:unscoped-ok a shared thread is no athanor's; a person's seats there are theirs.
+  defp leave_shared_threads(user_id, identifier, threads, now) do
+    Arca.Repo.delete_all(
+      from(m in SharedThreadMember, where: m.user_id == ^user_id and m.status == "active")
+    )
+
+    if is_binary(identifier) and identifier != "" do
+      Arca.Repo.delete_all(
+        from(m in SharedThreadMember,
+          where: m.person_identifier == ^identifier and m.status == "invited"
+        )
+      )
+    end
+
+    ids = Enum.map(threads, & &1.id)
+
+    occupied =
+      from(m in SharedThreadMember,
+        where: m.thread_id in ^ids and m.status == "active",
+        distinct: true,
+        select: m.thread_id
+      )
+      |> Arca.Repo.all()
+      |> MapSet.new()
+
+    ended =
+      for %SharedThread{status: "active"} = thread <- threads,
+          thread.kind == "pair" or not MapSet.member?(occupied, thread.id),
+          do: thread.id
+
+    {_count, _} =
+      Arca.Repo.update_all(
+        from(t in SharedThread, where: t.id in ^ended and t.status == "active"),
+        set: [status: "archived", archived_at: now],
+        inc: [security_generation: 1]
+      )
+
+    {Enum.sort(ids), Enum.sort(ended)}
   end
 
   # Every share of the athanors `athanor_ids` revoked and their dependents
@@ -690,6 +765,7 @@ defmodule Arca.SecurityTransitions do
       from(u in User, where: u.id == ^user_id and u.status != "denied"),
       from(s in Session, where: s.user_id == ^user_id),
       from(m in Membership, where: m.user_id == ^user_id),
+      from(m in SharedThreadMember, where: m.user_id == ^user_id),
       from(k in ApiKey,
         where: k.revoked == false and (k.created_by == ^user_id or k.athanor_id in ^athanor_ids)
       ),
@@ -1238,7 +1314,8 @@ defmodule Arca.SecurityTransitions do
   nothing, and a crash before commit leaves the marker for the next boot.
 
   The membership freeze is what those rows mean: a group athanor with a
-  member whose row is open admits no new member (`restore_frozen?/1`).
+  member whose row is open admits no new member (`restore_frozen?/1`),
+  and neither does a shared thread with one (`frozen_shared_threads/0`).
 
   Every statement's postcondition is read before commit; a survivor rolls
   the whole transition back as `:postcondition_failed`. A lost slot is
@@ -1360,6 +1437,22 @@ defmodule Arca.SecurityTransitions do
   # caller runs as a subquery in its own transaction: an invitation's
   # activation reads it where it seats (`Arca.Members.activate_invited/4`).
   def frozen_athanors, do: select(frozen_members(), [m], m.athanor_id)
+
+  @doc false
+  @spec frozen_shared_threads() :: Ecto.Query.t()
+  # The ids of every shared thread a declared restore holds: one of its
+  # people still has an open `restore_people` row. A query the caller runs
+  # in its own transaction under the thread's lock, as a seat, an
+  # invitation and an activation do (`Arca.SharedThreadMembers`), so no one
+  # new is seated in such a thread by any path until each has recovered.
+  def frozen_shared_threads do
+    from(m in SharedThreadMember,
+      join: r in RestorePerson,
+      on: r.user_id == m.user_id and r.open == true,
+      where: m.status == "active",
+      select: m.thread_id
+    )
+  end
 
   @doc """
   The person's restore checklist: the open restore, whether any declared
@@ -2203,7 +2296,9 @@ defmodule Arca.SecurityTransitions do
       unfollowed: 0,
       dropped_head_identifier: nil,
       revoked_share_ids: [],
-      ended_offer_ids: []
+      ended_offer_ids: [],
+      left_shared_thread_ids: [],
+      archived_shared_thread_ids: []
     }
   end
 end

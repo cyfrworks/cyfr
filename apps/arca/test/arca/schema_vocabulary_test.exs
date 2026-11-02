@@ -204,6 +204,25 @@ defmodule Arca.SchemaVocabularyTest do
       refused!("shares", share(ctx, "needs_reauth", "everyone"), "shares_status_known")
       refused!("shares", share(ctx, "active", "listed"), "shares_audience_known")
     end
+
+    test "names a shared thread exactly when its audience is one", ctx do
+      thread = %{thread_id: id("sth")}
+      assert {1, _} = insert!("shares", Map.merge(share(ctx, "active", "thread"), thread))
+
+      refused!("shares", share(ctx, "active", "thread"), "shares_thread_named")
+
+      refused!(
+        "shares",
+        Map.merge(share(ctx, "active", "thread"), %{thread_id: ""}),
+        "shares_thread_named"
+      )
+
+      refused!(
+        "shares",
+        Map.merge(share(ctx, "active", "everyone"), thread),
+        "shares_thread_named"
+      )
+    end
   end
 
   describe "a person's admission" do
@@ -800,14 +819,13 @@ defmodule Arca.SchemaVocabularyTest do
     }
   end
 
-  defp invitation(%{athanor: athanor}, ending) do
+  defp invitation(_ctx, ending) do
     Map.merge(
       %{
         id: id("inv"),
         code_hash: id("hash"),
         issued_by: id("usr"),
         issuer_generation: 1,
-        athanor_id: athanor,
         expires_at: now(),
         inserted_at: now(),
         updated_at: now()

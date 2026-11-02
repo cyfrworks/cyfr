@@ -4,8 +4,8 @@
 defmodule Sanctum.Shares do
   @moduledoc """
   The rules of sharing a key: one attach-only entry of a person's own
-  athanor offered to an audience, `everyone` or the active members of one
-  group, with the owner's caps. The rows are `Arca.Shares`' and the day
+  athanor offered to an audience, `everyone` or the people seated in one
+  shared thread, with the owner's caps. The rows are `Arca.Shares`' and the day
   counts `Arca.ShareUsage`'s; who may share, who may bind, and every
   confirmation are decided here. A share holds no material: every reader
   reaches its source entry through it, and only while its owner stands.
@@ -13,7 +13,7 @@ defmodule Sanctum.Shares do
   This is the one module that reads across athanors for a share. Each
   crossing is one of the store's named reads, by the key it is asked
   for: `Arca.Shares.offered_to/2` (the shares whose audience holds the
-  person), `Arca.Shares.member?/3` (one group membership, read at use),
+  person), `Arca.Shares.member?/3` (one seat in a shared thread, read at use),
   `Arca.Shares.get_for_source/2` (one share and its source, by the id a
   binding names) and `Arca.Shares.administrator_shares/1` (a first
   sign-in's candidates). The use count and the unseal read the owner's
@@ -27,7 +27,7 @@ defmodule Sanctum.Shares do
   made from the person's own athanor (`{:error, :not_own_athanor}`
   otherwise) on the interactive consent class
   (`Sanctum.Consent.Authz.authorize_interactive/1`). Creating a share and
-  widening its audience, from a group to everyone or to another group,
+  widening its audience, from a thread to everyone or to another thread,
   confirm `credential_sharing`; a creation spends its confirmation in the
   store's transaction (`Arca.Shares.create/3`), under the locks it takes,
   so the proof and the share commit together. A narrowing, an unchanged
@@ -46,8 +46,8 @@ defmodule Sanctum.Shares do
   person, and `offered/1` every share offered to them, each with the
   owner's display name and the source entry's binding facts, never its
   name or material. A share answers only while it is active, its audience
-  includes the person (everyone, or an active member of an active group,
-  read now), the person is not its owner, the person and the owner stand
+  includes the person (everyone, or a person seated in an active shared
+  thread, read now), the person is not its owner, the person and the owner stand
   (`Sanctum.Caller.stands?/1`), and the source is active and attach-only.
   `binding_facts/1` answers the source's facts for any active share to a
   boot's revision that has no person, and `administrator_shares/1` the
@@ -84,7 +84,7 @@ defmodule Sanctum.Shares do
           id: String.t(),
           entry_id: String.t(),
           audience: String.t(),
-          group_id: String.t() | nil,
+          thread_id: String.t() | nil,
           person_daily: non_neg_integer() | nil,
           total_daily: non_neg_integer() | nil,
           status: String.t(),
@@ -95,7 +95,7 @@ defmodule Sanctum.Shares do
   @typedoc """
   A share as a consent binds it for a person: the source entry's binding
   facts, the digest derived from them, the owner's display name, and the
-  audience the share was read at (`audience`, `group_id`), which a
+  audience the share was read at (`audience`, `thread_id`), which a
   revision binding it is held to under its lock. No name of the entry and
   no material.
   """
@@ -103,7 +103,7 @@ defmodule Sanctum.Shares do
           id: String.t(),
           owner: String.t(),
           audience: String.t(),
-          group_id: String.t() | nil,
+          thread_id: String.t() | nil,
           kind: String.t(),
           provider_hint: String.t(),
           field_names: [String.t()],
@@ -119,7 +119,7 @@ defmodule Sanctum.Shares do
   """
   @type binding_facts :: %{
           audience: String.t(),
-          group_id: String.t() | nil,
+          thread_id: String.t() | nil,
           kind: String.t(),
           provider_hint: String.t(),
           field_names: [String.t()],
@@ -129,7 +129,7 @@ defmodule Sanctum.Shares do
         }
 
   @typedoc "An audience as a write names it."
-  @type audience :: %{audience: String.t(), group_id: String.t() | nil}
+  @type audience :: %{audience: String.t(), thread_id: String.t() | nil}
 
   # ---------------------------------------------------------------------------
   # The owner's verbs
@@ -137,8 +137,8 @@ defmodule Sanctum.Shares do
 
   @doc """
   Share the entry `params.entry_id` of the context's own athanor with
-  `params.audience`, `"everyone"` or `"group"` with `params.group_id`, a
-  group the person is an active member of, and the optional caps
+  `params.audience`, `"everyone"` or `"thread"` with `params.thread_id`, a
+  shared thread the person sits in, and the optional caps
   `params.person_daily` and `params.total_daily`, each absent for no
   limit. The entry is active, attach-only, of a kind in
   `Prima.CredentialKinds.shareable/0` and has a destination naming its
@@ -220,13 +220,13 @@ defmodule Sanctum.Shares do
 
   @doc """
   Move a share of the context's own athanor to another audience
-  (`params`: `:share_id`, `:audience` and `:group_id` as `create/2` names
-  them, and `:expected`, the `%{audience: _, group_id: _}` the caller
+  (`params`: `:share_id`, `:audience` and `:thread_id` as `create/2` names
+  them, and `:expected`, the `%{audience: _, thread_id: _}` the caller
   saw). `expected` is compared with the stored audience before anything
   is decided: one that moved is `{:error, {:conflict, sentence}}`, with
   nothing written and no confirmation asked. Then a change to everyone,
-  or from one group to another, confirms `credential_sharing`, its proof
-  binding `expected`; a narrowing to a group needs the session; an
+  or from one thread to another, confirms `credential_sharing`, its proof
+  binding `expected`; a narrowing to a thread needs the session; an
   unchanged audience writes and announces nothing. The write is the
   store's compare-and-set on `expected` (`Arca.Shares.set_audience/4`),
   never retried.
@@ -401,7 +401,7 @@ defmodule Sanctum.Shares do
   The facts a boot's revision with no person holds a carried share
   binding to (`Sanctum.Consent.Bootstrap`): the source's `kind`,
   `provider_hint`, `field_names`, `status` and derived `binding_digest`,
-  and the share's `audience` and `group_id`, which the revision's lock
+  and the share's `audience` and `thread_id`, which the revision's lock
   holds the share to, for any active share. A share absent or revoked is
   `{:error, :not_offered}`, a source no longer active
   `{:error, {:entry_unavailable, status}}`, and a damaged source
@@ -523,7 +523,7 @@ defmodule Sanctum.Shares do
   # read under that lock and refuses it too. Either way the share is no
   # longer offered.
   defp claim(owner, share, user_id) do
-    admitted = %{audience: share.audience, group_id: share.group_id}
+    admitted = %{audience: share.audience, thread_id: share.thread_id}
 
     case Usage.claim(Context.actor(owner), share.id, user_id, admitted) do
       {:ok, counted} -> {:ok, counted}
@@ -628,8 +628,8 @@ defmodule Sanctum.Shares do
 
   defp in_audience(_ctx, %{audience: "everyone"}), do: :ok
 
-  defp in_audience(ctx, %{audience: "group", group_id: group_id}) when is_binary(group_id) do
-    case Store.member?(Context.actor(ctx), group_id, ctx.user_id) do
+  defp in_audience(ctx, %{audience: "thread", thread_id: thread_id}) when is_binary(thread_id) do
+    case Store.member?(Context.actor(ctx), thread_id, ctx.user_id) do
       {:ok, true} -> :ok
       {:ok, false} -> {:error, :not_offered}
       {:error, _unanswered} -> {:error, :unavailable}
@@ -674,7 +674,7 @@ defmodule Sanctum.Shares do
          id: share.id,
          owner: display_name(owner),
          audience: share.audience,
-         group_id: share.group_id,
+         thread_id: share.thread_id,
          kind: source.kind,
          provider_hint: source.provider_hint || "",
          field_names: decode_list(source.field_names),
@@ -760,14 +760,14 @@ defmodule Sanctum.Shares do
 
   defp same_share?(share, entry_id, audience) do
     share.status == "active" and share.vault_entry_id == entry_id and
-      %{audience: share.audience, group_id: share.group_id} == audience
+      %{audience: share.audience, thread_id: share.thread_id} == audience
   end
 
   defp entry_param(%{entry_id: id}) when is_binary(id) and id != "", do: {:ok, id}
   defp entry_param(_params), do: {:error, :entry_required}
 
   defp audience_param(params) do
-    audience = %{audience: Map.get(params, :audience), group_id: Map.get(params, :group_id)}
+    audience = %{audience: Map.get(params, :audience), thread_id: Map.get(params, :thread_id)}
 
     if Store.audience_valid?(audience),
       do: {:ok, audience},
@@ -775,7 +775,7 @@ defmodule Sanctum.Shares do
   end
 
   defp expected_param(%{expected: %{} = expected}) do
-    audience = %{audience: Map.get(expected, :audience), group_id: Map.get(expected, :group_id)}
+    audience = %{audience: Map.get(expected, :audience), thread_id: Map.get(expected, :thread_id)}
 
     if Store.audience_valid?(audience),
       do: {:ok, audience},
@@ -785,15 +785,15 @@ defmodule Sanctum.Shares do
   defp expected_param(_params), do: {:error, :invalid_expected}
 
   defp as_expected(share, expected) do
-    if %{audience: share.audience, group_id: share.group_id} == expected,
+    if %{audience: share.audience, thread_id: share.thread_id} == expected,
       do: :ok,
       else: {:error, {:conflict, @audience_conflict}}
   end
 
-  # Widening: the audience becomes everyone, or another group.
+  # Widening: the audience becomes everyone, or another thread.
   defp widens?(%{audience: "everyone"}, _requested), do: false
   defp widens?(_held, %{audience: "everyone"}), do: true
-  defp widens?(%{group_id: held}, %{group_id: requested}), do: held != requested
+  defp widens?(%{thread_id: held}, %{thread_id: requested}), do: held != requested
 
   # Each cap absent for no limit, else an integer from 0 to the share's
   # maximum; a text or a float is refused, never cast.
@@ -855,7 +855,7 @@ defmodule Sanctum.Shares do
       id: share.id,
       entry_id: share.vault_entry_id,
       audience: share.audience,
-      group_id: share.group_id,
+      thread_id: share.thread_id,
       person_daily: share.person_daily,
       total_daily: share.total_daily,
       status: share.status,

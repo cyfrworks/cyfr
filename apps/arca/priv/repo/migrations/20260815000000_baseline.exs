@@ -17,12 +17,13 @@ defmodule Arca.Repo.Migrations.Baseline do
   silently truncates on SQLite, so every composite is a two-column pair and
   its parent carries a unique `(id, athanor_id)` index created first.
 
-  The four nullable `athanor_id` columns are `memberships` (a platform
+  The three nullable `athanor_id` columns are `memberships` (a platform
   assignment has no athanor), `sessions` (a session exists before its
-  athanor is resolved), `decision_logs` (a call refused before any
-  tenant was resolved is the host's record, not a tenant's) and
-  `invitations` (an administrator's invitation may seat its newcomer in
-  no group). `server_meta`, `registry_tokens`,
+  athanor is resolved) and `decision_logs` (a call refused before any
+  tenant was resolved is the host's record, not a tenant's).
+  `invitations` is no athanor's: an invitation is to this CYFR, and the
+  shared thread it may seat its newcomer in is no athanor's either.
+  `server_meta`, `registry_tokens`,
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
@@ -291,7 +292,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # An invitation to become a person here (`Arca.Invitations`): the hash
     # of its code (the lowercase hex SHA-256 of its 32 bytes, never the
     # code), the person who issued it and their `security_generation` when
-    # they did, the group athanor it seats its newcomer in or none, the
+    # they did, the shared thread it seats its newcomer in or none, the
     # name the issuer offered the newcomer or none, and its expiry. It ends
     # once, redeemed by the person it made or revoked, each by a conditional
     # write on an open row, and the two ends exclude each other. No default
@@ -306,7 +307,7 @@ defmodule Arca.Repo.Migrations.Baseline do
         null: false,
         check: if(sqlite?, do: invitation_generation)
 
-      add :athanor_id, :string
+      add :thread_id, :string
       add :name, :text
       add :expires_at, :utc_datetime_usec, null: false
       add :redeemed_by, :string, check: if(sqlite?, do: Enum.at(invitation_ends, 0))
@@ -319,7 +320,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     checked(sqlite?, :invitations, [invitation_generation | invitation_ends])
     create unique_index(:invitations, [:code_hash])
     create index(:invitations, [:issued_by])
-    create index(:invitations, [:athanor_id])
+    create index(:invitations, [:thread_id])
   end
 
   # ==========================================================================
@@ -2092,16 +2093,16 @@ defmodule Arca.Repo.Migrations.Baseline do
     profile_status = known("profiles_status_known", "status", ~w(active needs_consent revoked))
 
     # A share's audience and statuses (`Arca.Schemas.Share`,
-    # `Arca.StatusTransitions`), and the group it names exactly when its
-    # audience is one.
-    share_audience = known("shares_audience_known", "audience", ~w(everyone group))
+    # `Arca.StatusTransitions`), and the shared thread it names exactly
+    # when its audience is one.
+    share_audience = known("shares_audience_known", "audience", ~w(everyone thread))
     share_status = known("shares_status_known", "status", ~w(active revoked))
 
-    share_group = %{
-      name: "shares_group_named",
+    share_thread = %{
+      name: "shares_thread_named",
       expr:
-        "(audience = 'group' AND group_id IS NOT NULL AND group_id != '') OR " <>
-          "(audience = 'everyone' AND group_id IS NULL)"
+        "(audience = 'thread' AND thread_id IS NOT NULL AND thread_id != '') OR " <>
+          "(audience = 'everyone' AND thread_id IS NULL)"
     }
 
     # A binding names exactly one of an athanor's entry, a share and a
@@ -2177,11 +2178,11 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:vault_defaults, [:vault_entry_id, :athanor_id])
 
     # One of an athanor's entries offered to an audience (`Arca.Shares`):
-    # `everyone`, or the active members of the group `group_id` names, read
-    # at use. It holds no material and no name; the composite key keeps
-    # the entry its own athanor's, and one active share per entry and
-    # audience is its natural key (the index reads an absent group as the
-    # empty one, since a unique index takes NULLs as distinct). A revoked
+    # `everyone`, or the people seated in the shared thread `thread_id`
+    # names, read at use. It holds no material and no name; the composite
+    # key keeps the entry its own athanor's, and one active share per entry
+    # and audience is its natural key (the index reads an absent thread as
+    # the empty one, since a unique index takes NULLs as distinct). A revoked
     # share stays, so a consent that bound it reads it no longer offered.
     # `person_daily` and `total_daily` are the share's caps, `nil` for no
     # limit.
@@ -2194,7 +2195,7 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :audience, :string, null: false, check: if(sqlite?, do: share_audience)
-      add :group_id, :string, check: if(sqlite?, do: share_group)
+      add :thread_id, :string, check: if(sqlite?, do: share_thread)
       add :person_daily, :integer
       add :total_daily, :integer
       add :status, :string, null: false, default: "active", check: if(sqlite?, do: share_status)
@@ -2203,13 +2204,13 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :shares, [share_audience, share_group, share_status])
+    checked(sqlite?, :shares, [share_audience, share_thread, share_status])
 
     create unique_index(:shares, [:athanor_id, :id])
 
     create unique_index(
              :shares,
-             [:athanor_id, :vault_entry_id, :audience, "COALESCE(group_id, '')"],
+             [:athanor_id, :vault_entry_id, :audience, "COALESCE(thread_id, '')"],
              where: "status = 'active'",
              name: :shares_active_audience_index
            )

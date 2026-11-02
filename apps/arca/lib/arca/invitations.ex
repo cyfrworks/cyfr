@@ -6,7 +6,7 @@ defmodule Arca.Invitations do
   Invitations to become a person here (`Arca.Schemas.Invitation`): each
   stored by the hash of its code (`code_hash`, the lowercase hex SHA-256
   of the code's 32 bytes) and never the code, with the person who issued
-  it, the group athanor it seats its newcomer in or none, the name it
+  it, the shared thread it seats its newcomer in or none, the name it
   offers its newcomer or none, and its expiry.
   Who may issue, revoke or redeem one is `Sanctum.Invitations`'.
 
@@ -19,14 +19,12 @@ defmodule Arca.Invitations do
 
   ## The first argument
 
-  `insert/2` writes in the actor's athanor: an athanor-scoped actor's
-  invitation names that athanor, and the platform scope's names none. The
-  athanor comes from the actor, never from an argument. Every other
-  function matches `scope: :platform` and refuses an athanor-scoped actor
-  with `{:error, :cross_tenant}`: an invitation is found by its code before
-  anyone is signed in, listed by its issuer across every athanor it names,
-  and redeemed by the admission of a person who holds no athanor yet, so
-  none of them can be filtered by one athanor.
+  Every function matches `scope: :platform` and refuses an athanor-scoped
+  actor with `{:error, :cross_tenant}`: an invitation is to this CYFR and
+  names at most a shared thread, which no athanor holds; it is found by
+  its code before anyone is signed in, listed by its issuer, and redeemed
+  by the admission of a person who holds no athanor yet, so none of them
+  can be filtered by one athanor.
 
   ## Ends
 
@@ -42,8 +40,7 @@ defmodule Arca.Invitations do
   A row crosses as a plain map (`Arca.Data`). A refusal is `:not_found`,
   `:redeemed`, `:conflict` (the code's hash is taken),
   `{:invalid, %{field => [message]}}` (an issuer naming no person here
-  among them), `:no_athanor`, `:cross_tenant`, `:not_owner` or
-  `:database_error`.
+  among them), `:cross_tenant`, `:not_owner` or `:database_error`.
   """
 
   import Ecto.Query
@@ -55,10 +52,10 @@ defmodule Arca.Invitations do
   @type row :: map()
 
   @doc """
-  Write an invitation in the actor's athanor (the module doc): `attrs`
-  names its `:code_hash`, the person it is `:issued_by`, its
-  `:lifetime_ms`, from which its expiry is set on the database's clock,
-  and optionally the `:name` it offers its newcomer. The issuer's
+  Write an invitation: `attrs` names its `:code_hash`, the person it is
+  `:issued_by`, its `:lifetime_ms`, from which its expiry is set on the
+  database's clock, and optionally the shared thread (`:thread_id`) it
+  seats its newcomer in and the `:name` it offers them. The issuer's
   generation is read from their row (the module doc).
 
   An invitation widens who reaches this CYFR, so it is written only by
@@ -66,10 +63,10 @@ defmodule Arca.Invitations do
   """
   @spec insert(Prima.Actor.t(), map()) ::
           {:ok, row()}
-          | {:error, :conflict | {:invalid, map()} | :no_athanor | :not_owner | :database_error}
-  def insert(%Prima.Actor{} = actor, attrs) when is_map(attrs) do
-    with {:ok, athanor_id} <- athanor(actor),
-         {:ok, fields} <- fields(Map.new(attrs)) do
+          | {:error, :conflict | {:invalid, map()} | :cross_tenant | :not_owner | :database_error}
+  # arca:unscoped-ok an invitation is to this CYFR; it names at most a shared thread.
+  def insert(%Prima.Actor{scope: :platform}, attrs) when is_map(attrs) do
+    with {:ok, fields} <- fields(Map.new(attrs)) do
       Arca.Repo.owned("Arca.Invitations.insert", fn ->
         with {:ok, generation} <- issuer_generation(fields.issued_by) do
           now = Arca.ServerMetaStorage.now!()
@@ -79,7 +76,7 @@ defmodule Arca.Invitations do
             code_hash: fields.code_hash,
             issued_by: fields.issued_by,
             issuer_generation: generation,
-            athanor_id: athanor_id,
+            thread_id: Map.get(fields, :thread_id),
             name: Map.get(fields, :name),
             expires_at: DateTime.add(now, fields.lifetime_ms, :millisecond),
             inserted_at: now,
@@ -95,12 +92,13 @@ defmodule Arca.Invitations do
     end
   end
 
+  def insert(%Prima.Actor{}, _attrs), do: {:error, :cross_tenant}
+
   @doc "The invitation `id` names."
   @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
   # arca:unscoped-ok an invitation is read by its id for its issuer or the
-  # platform administrator, whom `Sanctum.Invitations` decides; it may name
-  # no athanor at all.
+  # platform administrator, whom `Sanctum.Invitations` decides.
   def get(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Invitations.get", fn ->
       found(Arca.Repo.get(Invitation, id))
@@ -135,8 +133,8 @@ defmodule Arca.Invitations do
   """
   @spec list(Prima.Actor.t(), keyword()) ::
           {:ok, [row()]} | {:error, :cross_tenant | :database_error}
-  # arca:unscoped-ok an issuer's invitations are listed across every
-  # athanor they name, and the platform administrator lists them all.
+  # arca:unscoped-ok an issuer's invitations are listed by their issuer,
+  # and the platform administrator lists them all.
   def list(%Prima.Actor{scope: :platform}, opts) when is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("Arca.Invitations.list", fn ->
       query = from(i in Invitation, order_by: [desc: i.inserted_at, desc: i.id])
@@ -282,10 +280,6 @@ defmodule Arca.Invitations do
     end
   end
 
-  defp athanor(%Prima.Actor{scope: :platform, athanor_id: nil}), do: {:ok, nil}
-  defp athanor(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp athanor(%Prima.Actor{}), do: {:error, :no_athanor}
-
   defp fields(attrs) do
     lifetime = attrs[:lifetime_ms]
 
@@ -294,15 +288,19 @@ defmodule Arca.Invitations do
         {:code_hash, is_binary(attrs[:code_hash]) and attrs[:code_hash] =~ ~r/\A[0-9a-f]{64}\z/},
         {:issued_by, Prima.PersonId.person?(attrs[:issued_by])},
         {:lifetime_ms, is_integer(lifetime) and lifetime > 0},
+        {:thread_id, thread?(attrs[:thread_id])},
         {:name, is_nil(attrs[:name]) or (is_binary(attrs[:name]) and attrs[:name] != "")}
       ]
       |> Enum.reject(&elem(&1, 1))
       |> Map.new(fn {field, _ok} -> {field, ["is required or malformed"]} end)
 
     if errors == %{},
-      do: {:ok, Map.take(attrs, [:code_hash, :issued_by, :lifetime_ms, :name])},
+      do: {:ok, Map.take(attrs, [:code_hash, :issued_by, :lifetime_ms, :thread_id, :name])},
       else: {:error, {:invalid, errors}}
   end
+
+  defp thread?(nil), do: true
+  defp thread?(id), do: is_binary(id) and String.starts_with?(id, "sth_")
 
   defp found(nil), do: {:error, :not_found}
   defp found(%Invitation{} = invitation), do: {:ok, invitation}

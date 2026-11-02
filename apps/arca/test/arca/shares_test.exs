@@ -42,11 +42,9 @@ defmodule Arca.SharesTest do
     Enum.map(offered, & &1.share.id)
   end
 
-  defp leave!(athanor_id, user_id) do
-    {:ok, _} =
-      Arca.SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(athanor_id), user_id,
-        verify: fn _ -> :ok end
-      )
+  defp leave!(thread_id, user_id) do
+    {:ok, %{ended: false}} =
+      Arca.SharedThreadMembers.leave(Prima.Actor.system(), thread_id, user_id)
 
     :ok
   end
@@ -67,7 +65,7 @@ defmodule Arca.SharesTest do
                :athanor_id,
                :vault_entry_id,
                :audience,
-               :group_id,
+               :thread_id,
                :person_daily,
                :total_daily,
                :status,
@@ -76,7 +74,7 @@ defmodule Arca.SharesTest do
                athanor_id: terry.athanor.id,
                vault_entry_id: entry.id,
                audience: "everyone",
-               group_id: nil,
+               thread_id: nil,
                person_daily: 5,
                total_daily: nil,
                status: "active",
@@ -84,36 +82,33 @@ defmodule Arca.SharesTest do
              }
 
       assert Enum.sort(Map.keys(share)) ==
-               Enum.sort(~w(id athanor_id vault_entry_id audience group_id person_daily
+               Enum.sort(~w(id athanor_id vault_entry_id audience thread_id person_daily
                             total_daily status created_by inserted_at updated_at)a)
 
       assert {:ok, [^share]} = Shares.list(terry.actor)
       assert {:ok, ^share} = Shares.get(terry.actor, share.id)
     end
 
-    test "a group audience names a group its creator is an active member of",
+    test "a thread audience names an active shared thread its creator is seated in",
          %{terry: terry, entry: entry} do
-      traders = group!([terry.user.id])
+      traders = thread!([terry.user.id])
 
-      assert {:ok, %{audience: "group", group_id: group_id}} =
+      assert {:ok, %{audience: "thread", thread_id: thread_id}} =
                Shares.create(terry.actor, %{
                  entry_id: entry.id,
-                 audience: "group",
-                 group_id: traders.id
+                 audience: "thread",
+                 thread_id: traders.id
                })
 
-      assert group_id == traders.id
+      assert thread_id == traders.id
     end
 
     test "every refusal writes nothing", %{terry: terry, entry: entry} do
       stranger = owner!()
-      outsiders = group!([stranger.user.id])
-      archived = group!([terry.user.id])
-
-      {:ok, _} =
-        Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), archived.id,
-          verify: fn _ -> :ok end
-        )
+      group = group!([stranger.user.id])
+      outsiders = thread!([stranger.user.id])
+      archived = thread!([terry.user.id])
+      {:ok, _} = Arca.SharedThreads.archive(Prima.Actor.system(), archived.id)
 
       disclosed = entry!(terry.actor, %{attach_only: false})
       oauth = entry!(terry.actor, %{kind: "oauth"})
@@ -121,15 +116,15 @@ defmodule Arca.SharesTest do
       revoked = entry!(terry.actor)
       {:ok, _} = Arca.VaultStorage.set_status(terry.actor, revoked.id, "revoked")
       theirs = entry!(stranger.actor)
-      group_actor = %Prima.Actor{athanor_id: outsiders.id, user_id: stranger.user.id}
+      group_actor = %Prima.Actor{athanor_id: group.id, user_id: stranger.user.id}
       not_owner = %{terry.actor | user_id: stranger.user.id}
 
       for {actor, attrs, refusal} <- [
             {group_actor, %{entry_id: entry.id}, :not_own_athanor},
             {not_owner, %{entry_id: entry.id}, :not_own_athanor},
-            {terry.actor, %{entry_id: entry.id, audience: "group", group_id: outsiders.id},
+            {terry.actor, %{entry_id: entry.id, audience: "thread", thread_id: outsiders.id},
              :not_member},
-            {terry.actor, %{entry_id: entry.id, audience: "group", group_id: archived.id},
+            {terry.actor, %{entry_id: entry.id, audience: "thread", thread_id: archived.id},
              :not_member},
             {terry.actor, %{entry_id: disclosed.id}, :disclosed_not_shareable},
             {terry.actor, %{entry_id: oauth.id}, :kind_not_shareable},
@@ -159,9 +154,9 @@ defmodule Arca.SharesTest do
     test "a row outside the share's rules is refused before any query",
          %{terry: terry, entry: entry} do
       for attrs <- [
-            %{audience: "group"},
-            %{audience: "group", group_id: ""},
-            %{audience: "everyone", group_id: "ath_x"},
+            %{audience: "thread"},
+            %{audience: "thread", thread_id: ""},
+            %{audience: "everyone", thread_id: "sth_x"},
             %{audience: "listed"},
             %{audience: "everyone", person_daily: -1},
             %{audience: "everyone", total_daily: Arca.Schemas.Share.max_cap() + 1}
@@ -176,10 +171,10 @@ defmodule Arca.SharesTest do
 
     test "a second active share of one entry to one audience is refused, everyone included",
          %{terry: terry, entry: entry} do
-      traders = group!([terry.user.id])
-      pair = group!([terry.user.id])
+      traders = thread!([terry.user.id])
+      other = thread!([terry.user.id])
       everyone = share!(terry.actor, entry.id)
-      group = share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+      to_traders = share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
 
       assert {:error, :already_shared} =
                Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
@@ -187,17 +182,17 @@ defmodule Arca.SharesTest do
       assert {:error, :already_shared} =
                Shares.create(terry.actor, %{
                  entry_id: entry.id,
-                 audience: "group",
-                 group_id: traders.id
+                 audience: "thread",
+                 thread_id: traders.id
                })
 
-      # Another group is another audience, and a revoked share is no
+      # Another thread is another audience, and a revoked share is no
       # longer the key's holder.
       assert {:ok, _} =
                Shares.create(terry.actor, %{
                  entry_id: entry.id,
-                 audience: "group",
-                 group_id: pair.id
+                 audience: "thread",
+                 thread_id: other.id
                })
 
       assert {:ok, _} = Shares.revoke(terry.actor, everyone.id, "needs_consent")
@@ -206,7 +201,7 @@ defmodule Arca.SharesTest do
                Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"})
 
       assert again.id != everyone.id
-      assert share_status(terry.actor, group.id) == "active"
+      assert share_status(terry.actor, to_traders.id) == "active"
     end
 
     test "the caller's check runs under the locks and its refusal writes nothing",
@@ -254,8 +249,8 @@ defmodule Arca.SharesTest do
                Shares.set_audience(
                  other.actor,
                  share.id,
-                 %{audience: "everyone", group_id: nil},
-                 %{audience: "everyone", group_id: nil}
+                 %{audience: "everyone", thread_id: nil},
+                 %{audience: "everyone", thread_id: nil}
                )
 
       assert share_status(terry.actor, share.id) == "active"
@@ -265,12 +260,12 @@ defmodule Arca.SharesTest do
   describe "set_audience/4" do
     test "moves the audience the caller saw, and refuses one it did not",
          %{terry: terry, entry: entry} do
-      traders = group!([terry.user.id])
-      share = share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
-      seen = %{audience: "group", group_id: traders.id}
-      everyone = %{audience: "everyone", group_id: nil}
+      traders = thread!([terry.user.id])
+      share = share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
+      seen = %{audience: "thread", thread_id: traders.id}
+      everyone = %{audience: "everyone", thread_id: nil}
 
-      assert {:ok, %{audience: "everyone", group_id: nil}} =
+      assert {:ok, %{audience: "everyone", thread_id: nil}} =
                Shares.set_audience(terry.actor, share.id, seen, everyone)
 
       # The caller's read is stale now.
@@ -278,20 +273,20 @@ defmodule Arca.SharesTest do
       assert {:ok, %{audience: "everyone"}} = Shares.get(terry.actor, share.id)
     end
 
-    test "a group its creator does not sit in, an audience another share holds, and a revoked " <>
+    test "a thread its creator does not sit in, an audience another share holds, and a revoked " <>
            "share are refused",
          %{terry: terry, entry: entry} do
-      outsiders = group!([owner!().user.id])
-      traders = group!([terry.user.id])
-      everyone = %{audience: "everyone", group_id: nil}
-      to_traders = %{audience: "group", group_id: traders.id}
+      outsiders = thread!([owner!().user.id])
+      traders = thread!([terry.user.id])
+      everyone = %{audience: "everyone", thread_id: nil}
+      to_traders = %{audience: "thread", thread_id: traders.id}
       _held = share!(terry.actor, entry.id)
-      share = share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+      share = share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
 
       assert {:error, :not_member} =
                Shares.set_audience(terry.actor, share.id, to_traders, %{
-                 audience: "group",
-                 group_id: outsiders.id
+                 audience: "thread",
+                 thread_id: outsiders.id
                })
 
       assert {:error, :already_shared} =
@@ -304,8 +299,8 @@ defmodule Arca.SharesTest do
 
       assert {:error, {:invalid, _}} =
                Shares.set_audience(terry.actor, share.id, to_traders, %{
-                 audience: "group",
-                 group_id: nil
+                 audience: "thread",
+                 thread_id: nil
                })
     end
   end
@@ -398,13 +393,13 @@ defmodule Arca.SharesTest do
   end
 
   describe "offered_to/2" do
-    test "everyone is every active person but the owner; a group is its active members",
+    test "everyone is every active person but the owner; a thread is the people seated in it",
          %{terry: terry, entry: entry} do
       alice = owner!()
       bob = owner!()
-      traders = group!([terry.user.id, alice.user.id])
+      traders = thread!([terry.user.id, alice.user.id])
       to_everyone = share!(terry.actor, entry.id)
-      to_traders = share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+      to_traders = share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
 
       assert offered_ids(alice.user.id) == [to_traders.id, to_everyone.id]
       assert offered_ids(bob.user.id) == [to_everyone.id]
@@ -420,13 +415,14 @@ defmodule Arca.SharesTest do
       assert {:ok, []} = Shares.offered_to(alice.actor, provider_hint: "other.example")
     end
 
-    test "a person who left the group, an archived group, a denied person and a revoked share " <>
+    test "a person who left the thread, an archived thread, a denied person and a revoked share " <>
            "are offered nothing",
          %{terry: terry, entry: entry} do
       alice = owner!()
       bob = owner!()
-      traders = group!([terry.user.id, alice.user.id, bob.user.id])
-      share = share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+      dora = owner!()
+      traders = thread!([terry.user.id, alice.user.id, bob.user.id, dora.user.id])
+      share = share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
 
       assert share.id in offered_ids(alice.user.id)
       :ok = leave!(traders.id, alice.user.id)
@@ -441,6 +437,11 @@ defmodule Arca.SharesTest do
 
       assert offered_ids(bob.user.id) == []
       assert {:ok, false} = Shares.member?(bob.actor, traders.id, bob.user.id)
+
+      assert share.id in offered_ids(dora.user.id)
+      {:ok, _} = Arca.SharedThreads.archive(Prima.Actor.system(), traders.id)
+      assert offered_ids(dora.user.id) == []
+      assert {:ok, false} = Shares.member?(dora.actor, traders.id, dora.user.id)
 
       carol = owner!()
       to_everyone = share!(terry.actor, entry.id)
@@ -458,7 +459,7 @@ defmodule Arca.SharesTest do
     end
 
     test "member? is the person's own question or the platform's", %{terry: terry} do
-      traders = group!([terry.user.id])
+      traders = thread!([terry.user.id])
       assert {:ok, true} = Shares.member?(Prima.Actor.system(), traders.id, terry.user.id)
 
       assert {:error, :cross_tenant} =
@@ -491,10 +492,10 @@ defmodule Arca.SharesTest do
       second = share!(admin.actor, entry!(admin.actor).id)
       revoked = share!(admin.actor, entry!(admin.actor).id)
       {:ok, _} = Shares.revoke(admin.actor, revoked.id, "needs_consent")
-      staff = group!([admin.user.id])
+      staff = thread!([admin.user.id])
 
       _to_staff =
-        share!(admin.actor, entry!(admin.actor).id, %{audience: "group", group_id: staff.id})
+        share!(admin.actor, entry!(admin.actor).id, %{audience: "thread", thread_id: staff.id})
 
       # A member's share to everyone is never a newcomer's candidate.
       _members = share!(terry.actor, entry.id)
@@ -538,7 +539,7 @@ defmodule Arca.SharesConcurrencyTest do
   alias Arca.Test.Shares, as: Fixture
   alias Ecto.Adapters.SQL.Sandbox
 
-  @everyone %{audience: "everyone", group_id: nil}
+  @everyone %{audience: "everyone", thread_id: nil}
 
   setup do
     {:ok, made} = Agent.start(fn -> [] end)
@@ -560,7 +561,22 @@ defmodule Arca.SharesConcurrencyTest do
     owner
   end
 
+  # A shared thread one of those people made, recorded for the purge.
+  defp threaded!(made, people) do
+    thread = unboxed(fn -> Fixture.thread!(people) end)
+    :ok = Agent.update(made, &[%{thread: thread} | &1])
+    thread
+  end
+
   defp purge!(made) do
+    for %{thread: thread} <- made do
+      Arca.Repo.delete_all(
+        from(m in Arca.Schemas.SharedThreadMember, where: m.thread_id == ^thread.id)
+      )
+
+      Arca.Repo.delete_all(from(t in Arca.Schemas.SharedThread, where: t.id == ^thread.id))
+    end
+
     for %{athanor: athanor, user: user} <- made do
       {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
       Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
@@ -655,6 +671,34 @@ defmodule Arca.SharesConcurrencyTest do
     assert {:ok, {:ok, %{affected: [], rebound_share_ids: []}}} = release(held)
     assert Task.await(create, 15_000) == {:error, :disclosed_not_shareable}
     assert unboxed(fn -> Arca.Shares.list(terry.actor) end) == {:ok, []}
+  end
+
+  test "an audience moved onto a thread an archive holds waits, then sees the thread archived",
+       %{made: made} do
+    terry = owned!(made)
+    thread = threaded!(made, [terry.user.id])
+
+    share =
+      unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
+
+    held = holding(fn -> Arca.SharedThreads.archive(Prima.Actor.system(), thread.id) end)
+
+    move =
+      waiting(
+        fn ->
+          Arca.Shares.set_audience(terry.actor, share.id, @everyone, %{
+            audience: "thread",
+            thread_id: thread.id
+          })
+        end,
+        ["shared_threads", "FOR UPDATE"]
+      )
+
+    assert {:ok, {:ok, %{status: "archived"}}} = release(held)
+    assert Task.await(move, 15_000) == {:error, :not_member}
+
+    assert {:ok, %{audience: "everyone", thread_id: nil}} =
+             unboxed(fn -> Arca.Shares.get(terry.actor, share.id) end)
   end
 
   test "a claim holding the share delays its revoke, which then lands", %{made: made} do

@@ -273,8 +273,10 @@ defmodule Sanctum.Tenancy.Users do
   (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
   session and API key they created, archive their own athanor, every
   frozen athanor they sit in and every group they leave empty (revoking
-  those athanors' keys), and remove their memberships, the invitations
-  their identifier still holds and their thread follows. Either all of it
+  those athanors' keys), remove their memberships, the invitations
+  their identifier still holds and their thread follows, and remove their
+  seats and invitations in shared threads, archiving every pair they sit
+  in and every shared thread they leave empty. Either all of it
   commits or none of it does, and a failure is answered, never reported
   as an eject. The door entry that keeps them out is written by the
   caller (`Sanctum.Door.Store.deny/4`).
@@ -294,6 +296,7 @@ defmodule Sanctum.Tenancy.Users do
       Athanors.announce_archived(change.archived_athanor_ids, change)
       Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
       Members.announce_removed(user_id, change)
+      Sanctum.SharedThreads.announce_denied(user_id, change)
 
       :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
         user_id: user_id,

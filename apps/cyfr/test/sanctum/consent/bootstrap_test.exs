@@ -461,20 +461,20 @@ defmodule Sanctum.Consent.BootstrapTest do
     # share's audience: the mint's lock holds the share to the audience the
     # walk read it at and refuses it, and the walk mints the catalyst
     # without it in the same run, as when no share fits.
-    test "a share narrowed after the walk read it, to a group the person is not in, is " <>
+    test "a share narrowed after the walk read it, to a thread the person is not in, is " <>
            "refused under the mint's lock, and the catalyst is minted without it",
          %{ana: ana, admin: admin} do
       ship_model!(ana)
       shared = share!(admin)
-      group = Arca.Test.Shares.group!([admin.user.id])
+      thread = ShareFixtures.thread!([admin.user.id])
 
       after_read!("shares", fn ->
         {:ok, _narrowed} =
           Arca.Shares.set_audience(
             admin.actor,
             shared.share.id,
-            Arca.Test.Shares.everyone(),
-            %{audience: "group", group_id: group.id}
+            %{audience: "everyone", thread_id: nil},
+            %{audience: "thread", thread_id: thread.id}
           )
       end)
 
@@ -779,7 +779,7 @@ defmodule Sanctum.Consent.BootstrapTest do
       ship_model!(ana)
       shared = share!(admin)
       {:ok, _} = Bootstrap.run(ana)
-      group = Arca.Test.Shares.group!([admin.user.id])
+      thread = ShareFixtures.thread!([admin.user.id])
 
       ship_model!(ana, "1.1.0", %{"limits" => %{"timeout" => "3m"}})
       handler = {__MODULE__, :revoke_share_after_facts, System.unique_integer([:positive])}
@@ -788,8 +788,8 @@ defmodule Sanctum.Consent.BootstrapTest do
         Arca.Shares.set_audience(
           admin.actor,
           shared.share.id,
-          Arca.Test.Shares.everyone(),
-          %{audience: "group", group_id: group.id}
+          %{audience: "everyone", thread_id: nil},
+          %{audience: "thread", thread_id: thread.id}
         )
       end
 
@@ -805,7 +805,7 @@ defmodule Sanctum.Consent.BootstrapTest do
 
       assert Bootstrap.run(seed(ana)) == {:ok, %{minted: [], revised: [@model], skipped: []}}
       :telemetry.detach(handler)
-      assert {:ok, %{audience: "group"}} = Process.get(:share_revoked)
+      assert {:ok, %{audience: "thread"}} = Process.get(:share_revoked)
       assert_unbound!(ana)
     end
 
