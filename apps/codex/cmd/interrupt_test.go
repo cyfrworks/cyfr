@@ -119,10 +119,10 @@ func TestAccessQuestionsEndOnAnInterrupt(t *testing.T) {
 }
 
 // The process prints an interrupted question's sentence alone, on stderr,
-// and exits 130.
+// and exits 130. The question is init's screen question, on a stand-in
+// machine that asks it whatever the host is.
 func TestAnInterruptedQuestionPrintsItsSentence(t *testing.T) {
-	newInitProject(t)
-	useFakeEngine(t)
+	initProjectOnScreen(t)
 	t.Cleanup(func() { _ = initCmd.Flags().Set("no-pull", "false") })
 	in, asked := blockAfter(t)
 	askTerminal = func() bool { return true }
