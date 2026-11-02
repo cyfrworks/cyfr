@@ -153,7 +153,6 @@ clean_install() {
   check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
   check "sudo asks at most one password (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" -le 1
   check "init goes on through the docker group and asks how CYFR is reached" transcript_has init 'How will you reach CYFR\?'
-  check "init says what the terminal needs before cyfr up" transcript_has init 'Run `newgrp docker` here, or log out and in again, before `cyfr up`\.'
   pane_step_end init
 
   step "cyfr screen on"
@@ -169,9 +168,7 @@ clean_install() {
   check "Chrome's package left no .deb behind" guest_ssh '! ls /tmp/*.deb'
   pane_step_end screen-on
 
-  step "newgrp docker, then cyfr up"
-  pane_type 'newgrp docker' || fail "newgrp was not typed"
-  pane_wait '\$ *$' 30 || true
+  step "cyfr up in the terminal that started before the group"
   pane_step up 'cd ~/cyfr && cyfr up' 900
   check "cyfr up exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   pane_step_end up

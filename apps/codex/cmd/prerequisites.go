@@ -136,12 +136,21 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			return false, nil
 		}
 	}
-	// A process with the group has nothing to gain from sg, whose child
-	// would land here again.
-	if slices.Contains(machine.groups(""), dockerGroup) {
+	return continueWithGroup("init", args, account.Username, out, errOut)
+}
+
+// upWithGroup is cyfr up's first step, in a terminal older than the
+// account's docker group: the same cyfr up, through sg, so no person has to
+// refresh the terminal. It answers true when that run did the work.
+func upWithGroup(args []string, out, errOut io.Writer) (bool, error) {
+	if !machine.supported() {
 		return false, nil
 	}
-	return true, continueWithGroup(args, account.Username, out, errOut)
+	account, err := user.Current()
+	if err != nil {
+		return false, err
+	}
+	return continueWithGroup("up", args, account.Username, out, errOut)
 }
 
 // sgProgram runs a command with a group the account's processes do not
@@ -149,27 +158,31 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 // tests stand in for it.
 var sgProgram = "/usr/bin/sg"
 
-// continueWithGroup runs the rest of cyfr init, this same program with the
-// flags the person gave, through sg with the docker group, keeping this
-// process's terminal, environment and directory. The terminal it was
-// started from still lacks the group, and is told how to get it.
-func continueWithGroup(args []string, account string, out, errOut io.Writer) error {
+// continueWithGroup runs cyfr subcommand again, with the flags the person
+// gave, through sg with the docker group, keeping this process's terminal,
+// environment and directory. It answers false, having run nothing, when
+// /etc/group does not list the account in the group, and when this process
+// already has it: sg would give it nothing, and its child would land here
+// again.
+func continueWithGroup(subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
+	if !slices.Contains(machine.groups(account), dockerGroup) || slices.Contains(machine.groups(""), dockerGroup) {
+		return false, nil
+	}
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("cyfr init could not find its own program to go on with the docker group (%v). Run `newgrp docker`, or log out and in again, then run `cyfr init` again", err)
+		return true, fmt.Errorf("cyfr %s could not find its own program to go on with the docker group (%v). Run `newgrp docker`, or log out and in again, then run `cyfr %s` again", subcommand, err, subcommand)
 	}
-	cmd := exec.Command(sgProgram, dockerGroup, "-c", shellQuote(append([]string{self, "init"}, args...)))
+	cmd := exec.Command(sgProgram, dockerGroup, "-c", shellQuote(append([]string{self, subcommand}, args...)))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, out, errOut
 	err = cmd.Run()
-	fmt.Fprintf(out, "\nThis terminal started before %s joined the docker group. Run `newgrp docker` here, or log out and in again, before `cyfr up`.\n", account)
 	var exit *exec.ExitError
 	switch {
 	case errors.As(err, &exit):
-		return handedOver{exit.ExitCode()}
+		return true, handedOver{exit.ExitCode()}
 	case err != nil:
-		return fmt.Errorf("cyfr init could not go on with the docker group (%v). Run `newgrp docker`, or log out and in again, then run `cyfr init` again", err)
+		return true, fmt.Errorf("cyfr %s could not go on with the docker group (%v). Run `newgrp docker`, or log out and in again, then run `cyfr %s` again", subcommand, err, subcommand)
 	}
-	return nil
+	return true, nil
 }
 
 // shellQuote joins argv as one command line for sh -c: each word in single
@@ -183,8 +196,8 @@ func shellQuote(argv []string) string {
 	return strings.Join(words, " ")
 }
 
-// continuationArgs are the arguments of the init run a continuation
-// starts: each flag the person gave, as --name=value.
+// continuationArgs are the arguments of the run a continuation starts:
+// each flag the person gave, as --name=value.
 func continuationArgs(c *cobra.Command) []string {
 	var args []string
 	c.Flags().Visit(func(f *pflag.Flag) {
