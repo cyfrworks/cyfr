@@ -186,6 +186,9 @@ func TestInitFollowsTheTemplatesPort(t *testing.T) {
 	if !strings.Contains(out.String(), "CYFR is reached from this machine, at http://localhost:4123.\n") || !strings.Contains(out.String(), setupLinkLine(t, "http://localhost:4123")) {
 		t.Errorf("init does not print the home's address and setup link at its port:\n%s", out.String())
 	}
+	if strings.Contains(out.String(), "CYFR is reached as:") {
+		t.Errorf("init describes how CYFR is reached before its ending, which says it:\n%s", out.String())
+	}
 }
 
 // A switch the setup pages' answer made, whose start left the home on

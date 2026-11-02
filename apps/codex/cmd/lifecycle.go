@@ -764,12 +764,6 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 		fmt.Fprintln(out, "  .gitignore already exists (skipped).")
 	}
 	fmt.Fprintln(out, "  data/, aqua/ created")
-	if envCreated {
-		fmt.Fprintln(out, "  CYFR is reached as:")
-		for _, line := range access.Describe(head).Sentences() {
-			fmt.Fprintln(out, "    "+line)
-		}
-	}
 
 	if !releaseBuild {
 		fmt.Fprintln(out, "")
