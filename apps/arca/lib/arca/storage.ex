@@ -48,7 +48,7 @@ defmodule Arca.Storage do
     `seed/aqua` the AQUA template; `seed_roots/0` is the roster). Read in
     place from the one seed tree (`:seed_path`), reachable only by
     system contexts, never stored through an adapter.
-  - **Global paths**: `cache`, `system` → stored at root level
+  - **Global paths**: `cache`, `system`, `shared` → stored at root level
   - **Tenant-scoped paths**: the closed roster in `tenant_roots/0` →
     stored verbatim under the context's athanor (see `tenant_segments/1`).
     Naming another athanor's tree is structurally impossible — there is no
@@ -86,6 +86,7 @@ defmodule Arca.Storage do
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/                       # blobs/sha256/{hex}; manifests/{registry}/{repo}/{tag}.json
       ├── system/                        # Global: server-internal scratch (health probe)
+      ├── shared/{thread_id}/            # Global: a shared thread's attachments
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
@@ -267,7 +268,11 @@ defmodule Arca.Storage do
     {"objects", :tenant_reserved, nil, nil, :system},
     {"data", :tenant, "data", nil, :open},
     {"cache", :global, nil, nil, :system},
-    {"system", :global, nil, nil, :system}
+    {"system", :global, nil, nil, :system},
+    # A shared thread's attachments, `shared/{thread_id}/…`: no athanor's,
+    # opened by the system actor alone, as `cache/` and `system/` are.
+    # Who may read or write one is the thread's seat check in Sanctum.
+    {"shared", :global, nil, nil, :system}
   ]
 
   @doc """
@@ -291,6 +296,7 @@ defmodule Arca.Storage do
   - `cache` — global cache (OCI blobs, etc.) under `data/cache/`
   - `system` — server-internal scratch (the storage health probe) under
     `data/system/`
+  - `shared` — a shared thread's attachments under `data/shared/{thread_id}/`
 
   The AQUA soul, roles and scrolls (`aqua/aqua.md`, `aqua/roles/*.md`,
   `aqua/skills/*/SKILL.md`) are the athanor's own — an ordinary tenant
@@ -426,7 +432,7 @@ defmodule Arca.Storage do
 
   @doc """
   Classify a logical path by its first segment: `:seed` (install media),
-  `:global` (`cache/`, `system/`), `:tenant` (the closed roster in
+  `:global` (`cache/`, `system/`, `shared/`), `:tenant` (the closed roster in
   `tenant_roots/0`, plus the empty path — the athanor's whole tree), or
   `:invalid` (everything else — refused at the `Arca` gate).
 
@@ -628,7 +634,7 @@ defmodule Arca.Storage do
   Everything an athanor owns lives under `athanors/{athanor_id}/`, logical
   segments verbatim — and the athanor is always the context's, never named
   in the path. The empty path is the athanor's whole tree (the storage
-  cap's one walk). Globals (`cache/`, `system/`) stay at the root. Seed
+  cap's one walk). Globals (`cache/`, `system/`, `shared/`) stay at the root. Seed
   media never reaches an adapter (`Arca` routes each root to its
   configured directory). There is no all-athanors location — roster-driven
   code enumerates athanor rows and works inside each one's context.
@@ -667,7 +673,8 @@ defmodule Arca.Storage do
   athanor's tree. What this gate refuses is (a) the server's own reserved
   vocabularies for every actor that is not the system itself — the seed
   media `seed/…` (the shipped defaults) and the global roots `cache/`
-  (OCI blobs) and `system/` (health probes) — and (b) any first segment
+  (OCI blobs), `system/` (health probes) and `shared/` (shared threads'
+  attachments) — and (b) any first segment
   outside the closed rosters, for everyone: an unknown root is a typo or
   an invented subtree, never storage. `Arca` runs this before dispatching
   to any adapter. Writability is a separate gate — seed media is

@@ -301,7 +301,7 @@ defmodule Arca.StorageTest do
       assert Enum.sort(Storage.tenant_roots()) ==
                ~w(aqua components data notes objects payloads staging threads)
 
-      assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
+      assert Enum.sort(Storage.global_prefixes()) == ~w(cache shared system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
       assert Enum.sort(Storage.overlay_roots()) == ~w(aqua components)
       assert Storage.reserved_roots() == ~w(payloads staging objects)
@@ -327,6 +327,7 @@ defmodule Arca.StorageTest do
       assert Storage.tier("payloads") == :system
       assert Storage.tier("staging") == :system
       assert Storage.tier("cache") == :system
+      assert Storage.tier("shared") == :system
       assert Storage.tier("data") == :open
       assert Storage.tier("guest") == nil
       assert Storage.tier("nope") == nil

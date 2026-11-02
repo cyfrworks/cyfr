@@ -17,7 +17,8 @@ defmodule Arca.Adapters.S3 do
   against one decodes identically against the other —
   `<prefix>/athanors/{athanor_id}/<scope>/<rest>` for every tenant scope
   in `Arca.Storage.tenant_roots/0` (`components/`, `data/`, `aqua/`, …)
-  and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
+  and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`,
+  `<prefix>/shared/<rest>`.
 
   A guest object's bytes are keyed by generation,
   `<prefix>/athanors/{athanor_id}/objects/<generation>/data/<rest>`

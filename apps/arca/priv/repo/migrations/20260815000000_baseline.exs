@@ -32,7 +32,9 @@ defmodule Arca.Repo.Migrations.Baseline do
   people's logs, the installation claim and the pre-authentication rate
   windows are not an athanor's either (`people/0`), and neither is a
   command line's pending sign-in (`identity/0`), which no one owns until
-  the session its approval mints.
+  the session its approval mints. A shared thread, its people and its
+  messages are no athanor's (`shared_threads/0`): a place several people
+  talk in, which none of their athanors holds.
 
   This file is the schema's single source: a change edits it, and
   `Arca.SchemaFingerprint` refuses a database built from a different
@@ -68,6 +70,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     outbox()
     threads()
     turns()
+    shared_threads()
     record_fingerprint()
   end
 
@@ -3059,6 +3062,130 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:approvals, [:athanor_id, :turn_id])
     create index(:approvals, [:athanor_id, :thread_id, :status])
     create index(:approvals, [:athanor_id, :status, :expires_at])
+  end
+
+  # ==========================================================================
+  # Shared threads
+  # ==========================================================================
+
+  # A shared thread is a place people talk in, no athanor's
+  # (`Arca.SharedThreads`): a title and its people, or a pair of two people,
+  # fixed at its birth and named by `pair_of`, the two user ids sorted and
+  # joined. Its people are `shared_thread_members`: a person's seat, or an
+  # identifier's invitation that becomes one at that person's sign-in
+  # (`Arca.SharedThreadMembers`). Its messages are `shared_messages`, in
+  # `seq` order (`Arca.SharedMessages`). Archiving or reopening one raises
+  # its `security_generation` by one, as an athanor's does.
+  defp shared_threads do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    kind = known("shared_threads_kind_known", "kind", ~w(shared pair))
+    status = known("shared_threads_status_known", "status", ~w(active archived))
+
+    # A thread of people has a title and no pair; a pair has its pair and
+    # no title, since each of its two people sees the other's name.
+    whole = %{
+      name: "shared_threads_kind_whole",
+      expr:
+        "(kind <> 'shared' OR (pair_of IS NULL AND title IS NOT NULL)) AND " <>
+          "(kind <> 'pair' OR (pair_of IS NOT NULL AND title IS NULL))"
+    }
+
+    generation = %{
+      name: "shared_threads_security_generation_positive",
+      expr: "security_generation > 0"
+    }
+
+    create table(:shared_threads, primary_key: false) do
+      add :id, :string, primary_key: true, null: false
+      add :kind, :string, null: false, check: if(sqlite?, do: kind)
+      add :pair_of, :string
+      add :title, :text, check: if(sqlite?, do: whole)
+      add :status, :string, null: false, default: "active", check: if(sqlite?, do: status)
+      # Attribution: the person who made it. Its people hold it alike.
+      add :created_by, :string, null: false
+      add :created_at, :utc_datetime_usec, null: false
+      add :archived_at, :utc_datetime_usec
+      add :last_message_at, :utc_datetime_usec
+
+      add :security_generation, :bigint,
+        null: false,
+        default: 1,
+        check: if(sqlite?, do: generation)
+    end
+
+    checked(sqlite?, :shared_threads, [kind, status, whole, generation])
+
+    # One active pair of two people: of two callers making it at once, one
+    # writes it and the other finds it. An archived pair frees the name.
+    create unique_index(:shared_threads, [:pair_of], where: "status = 'active'")
+
+    member_status = known("shared_thread_members_status_known", "status", ~w(active invited))
+
+    # A seat names its person and no identifier; an invitation names the
+    # identifier it waits for and no person yet.
+    seat_whole = %{
+      name: "shared_thread_members_seat_whole",
+      expr:
+        "(status <> 'active' OR (user_id IS NOT NULL AND person_identifier IS NULL)) AND " <>
+          "(status <> 'invited' OR (user_id IS NULL AND person_identifier IS NOT NULL))"
+    }
+
+    create table(:shared_thread_members, primary_key: false) do
+      add :id, :string, primary_key: true, null: false
+
+      add :thread_id,
+          references(:shared_threads, type: :string, on_delete: :delete_all),
+          null: false
+
+      add :user_id, :string, check: if(sqlite?, do: seat_whole)
+      add :person_identifier, :string
+
+      add :status, :string,
+        null: false,
+        default: "active",
+        check: if(sqlite?, do: member_status)
+
+      add :added_by, :string, null: false
+      add :created_at, :utc_datetime_usec, null: false
+    end
+
+    checked(sqlite?, :shared_thread_members, [member_status, seat_whole])
+
+    # One seat per person per thread, and one invitation per identifier per
+    # thread.
+    create unique_index(:shared_thread_members, [:thread_id, :user_id],
+             where: "status = 'active'"
+           )
+
+    create unique_index(:shared_thread_members, [:thread_id, :person_identifier],
+             where: "status = 'invited'"
+           )
+
+    create index(:shared_thread_members, [:user_id])
+    create index(:shared_thread_members, [:person_identifier])
+
+    create table(:shared_messages, primary_key: false) do
+      add :id, :string, primary_key: true, null: false
+
+      add :thread_id,
+          references(:shared_threads, type: :string, on_delete: :delete_all),
+          null: false
+
+      # Position in the thread, dense from 1.
+      add :seq, :integer, null: false
+      # The person who wrote it.
+      add :author, :string, null: false
+      add :content, :text, null: false, default: ""
+      # JSON: the attachment refs (bytes under shared/{thread_id}/) and the
+      # provenance of a line said aloud.
+      add :payload, :text
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    # Two appenders that read the same last `seq` cannot both write the
+    # next one: the loser writes nothing and takes the one after.
+    create unique_index(:shared_messages, [:thread_id, :seq])
   end
 
   # ==========================================================================

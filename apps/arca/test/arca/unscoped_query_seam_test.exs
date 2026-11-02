@@ -497,7 +497,16 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.CliSignIn" =>
       "a command line's pending sign-in, keyed by the hashes of its approval secret and " <>
         "its session token; no person or athanor owns it until its approval mints a " <>
-        "session, which carries both"
+        "session, which carries both",
+    "Arca.Schemas.SharedThread" =>
+      "a place several people talk in, keyed by its id, or a pair by its two people; " <>
+        "no athanor holds it",
+    "Arca.Schemas.SharedThreadMember" =>
+      "a person's seat or an identifier's invitation in a shared thread, keyed by the " <>
+        "thread and the person or identifier; deleted with the thread, never with an athanor",
+    "Arca.Schemas.SharedMessage" =>
+      "a message in a shared thread, keyed by the thread and its seq; deleted with the " <>
+        "thread, never with an athanor"
   }
 
   test "every schema without an athanor column is classified" do

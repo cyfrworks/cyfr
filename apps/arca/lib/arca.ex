@@ -36,7 +36,8 @@ defmodule Arca do
   - `["seed", root | rest]` → seed media (the component bundle, the AQUA
     template — `Arca.Storage.seed_roots/0`), read in place from local disk
     whatever storage adapter is configured — and read-only at this seam
-  - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix)
+  - `["cache" | rest]`, `["system" | rest]`, `["shared" | rest]` → global
+    (no tenant prefix), opened by the system actor alone
   - the other tenant scopes (`Arca.Storage.tenant_roots/0`) → verbatim
     under the context's athanor (`namespace` is identity-only and not
     part of the path)
@@ -206,6 +207,9 @@ defmodule Arca do
       ServerMetaStorage,
       SessionStorage,
       ShareUsage,
+      SharedMessages,
+      SharedThreadMembers,
+      SharedThreads,
       Shares,
       Storage,
       Storage.UnitLocator,

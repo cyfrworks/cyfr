@@ -13,6 +13,7 @@ defmodule Arca.StorageAuthorizePathTest do
 
   use ExUnit.Case, async: false
 
+  alias Arca.Storage
   alias Prima.Actor
 
   setup tags do
@@ -210,6 +211,35 @@ defmodule Arca.StorageAuthorizePathTest do
     # And the bytes the system wrote are still what it wrote.
     assert {:ok, "bytes"} = Arca.get(system, blob)
     assert :ok = Arca.delete(system, blob)
+  end
+
+  test "a shared thread's blobs are a global root's: the system actor's, and no tenant's or guest's",
+       %{a: a, seed: seed} do
+    system = Actor.system()
+    blob = ["shared", "sth_authz", "msg_1", "0-notes.txt"]
+
+    assert :ok = Arca.put(system, blob, "bytes")
+    assert {:ok, "bytes"} = Arca.get(system, blob)
+    assert Storage.physical_segments(system, blob) == blob
+
+    # A tenant actor is refused: `shared` is neither a tenant root nor a
+    # guest scope, so no tenant path and no guest name reaches the bytes.
+    assert {:error, :forbidden} = Arca.get(a, blob)
+    assert {:error, :forbidden} = Arca.put(a, blob, "mine")
+    refute "shared" in Storage.tenant_roots()
+    refute "shared" in Map.keys(Storage.guest_scopes())
+    refute "shared" in Map.values(Storage.guest_scopes())
+
+    platform_only = %{Actor.in_athanor("ath_a") | scope: :platform}
+    assert {:error, :forbidden} = Arca.get(platform_only, blob)
+
+    # The system's authority narrowed to an athanor still opens it, as it
+    # opens `cache/`: `system`, not `scope`, is what the gate reads.
+    assert {:ok, "bytes"} = Arca.get(seed, blob)
+
+    assert {:ok, "bytes"} = Arca.get(system, blob)
+    assert :ok = Arca.delete(system, blob)
+    assert {:error, :not_found} = Arca.get(system, blob)
   end
 
   test "tenant-prefixed data paths are untouched by the pin", %{a: a, b: b} do

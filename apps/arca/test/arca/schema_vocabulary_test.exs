@@ -22,7 +22,10 @@ defmodule Arca.SchemaVocabularyTest do
   is a pairing invitation's confirmer, whose kind and id are set together
   or not at all, an invitation's end, whose redeemer and time are set
   together and never beside a revocation, and an invitation's issuer
-  generation, which is positive.
+  generation, which is positive. So are a shared thread's kind, which has
+  a title or a pair and never both, and its positive generation, and a
+  shared thread's row of people, a seat naming its person or an
+  invitation naming its identifier.
   """
 
   use ExUnit.Case, async: false
@@ -65,6 +68,11 @@ defmodule Arca.SchemaVocabularyTest do
       # `Arca.CliSignIns` approves or cancels a command line's pending
       # sign-in, and nothing leaves either.
       {"cli_sign_ins", "cli_sign_ins_state_known", "state", Arca.Schemas.CliSignIn.states()},
+      {"shared_threads", "shared_threads_kind_known", "kind", Arca.Schemas.SharedThread.kinds()},
+      {"shared_threads", "shared_threads_status_known", "status",
+       Arca.Schemas.SharedThread.statuses()},
+      {"shared_thread_members", "shared_thread_members_status_known", "status",
+       Arca.Schemas.SharedThreadMember.statuses()},
       # How a person was made here (`Arca.Users.mint/4`), written once.
       {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()}
     ]
@@ -292,6 +300,83 @@ defmodule Arca.SchemaVocabularyTest do
         invitation(ctx, %{issuer_generation: 0}),
         "invitations_issuer_generation_positive"
       )
+    end
+  end
+
+  describe "a shared thread" do
+    test "is a titled thread of people or an untitled pair, and refuses either half of the other" do
+      assert {1, _} = insert!("shared_threads", shared_thread("shared", "Plans", nil))
+      assert {1, _} = insert!("shared_threads", shared_thread("pair", nil, id("usr")))
+
+      refused!(
+        "shared_threads",
+        shared_thread("bogus", "Plans", nil),
+        "shared_threads_kind_known"
+      )
+
+      for {kind, title, pair_of} <- [
+            {"shared", nil, nil},
+            {"shared", "Plans", id("usr")},
+            {"pair", nil, nil},
+            {"pair", "Plans", id("usr")}
+          ] do
+        refused!(
+          "shared_threads",
+          shared_thread(kind, title, pair_of),
+          "shared_threads_kind_whole"
+        )
+      end
+    end
+
+    test "lands every status and a positive generation, and refuses any other" do
+      for status <- ~w(active archived) do
+        assert {1, _} =
+                 insert!("shared_threads", %{
+                   shared_thread("shared", "Plans", nil)
+                   | status: status
+                 })
+      end
+
+      refused!(
+        "shared_threads",
+        %{shared_thread("shared", "Plans", nil) | status: "bogus"},
+        "shared_threads_status_known"
+      )
+
+      refused!(
+        "shared_threads",
+        Map.put(shared_thread("shared", "Plans", nil), :security_generation, 0),
+        "shared_threads_security_generation_positive"
+      )
+    end
+
+    test "seats a person or invites an identifier, and refuses a row that is both or neither" do
+      thread = shared_thread("shared", "Plans", nil)
+      assert {1, _} = insert!("shared_threads", thread)
+
+      assert {1, _} = insert!("shared_thread_members", seat(thread.id, "active", id("usr"), nil))
+      assert {1, _} = insert!("shared_thread_members", seat(thread.id, "invited", nil, id("per")))
+
+      refused!(
+        "shared_thread_members",
+        seat(thread.id, "bogus", id("usr"), nil),
+        "shared_thread_members_status_known"
+      )
+
+      for {status, user, identifier} <- [
+            {"active", nil, id("per")},
+            {"active", id("usr"), id("per")},
+            {"active", nil, nil},
+            {"invited", id("usr"), nil},
+            {"invited", id("usr"), id("per")},
+            {"invited", nil, nil}
+          ] do
+        refused!(
+          "shared_thread_members",
+          seat(thread.id, status, user, identifier),
+          "shared_thread_members_seat_whole"
+        )
+      end
     end
   end
 
@@ -618,6 +703,30 @@ defmodule Arca.SchemaVocabularyTest do
       scheduled_for: NaiveDateTime.add(now(), System.unique_integer([:positive]), :second),
       state: state,
       claimed_at: now()
+    }
+  end
+
+  defp shared_thread(kind, title, pair_of) do
+    %{
+      id: id("sth"),
+      kind: kind,
+      title: title,
+      pair_of: pair_of,
+      status: "active",
+      created_by: id("usr"),
+      created_at: now()
+    }
+  end
+
+  defp seat(thread_id, status, user_id, identifier) do
+    %{
+      id: id("stm"),
+      thread_id: thread_id,
+      status: status,
+      user_id: user_id,
+      person_identifier: identifier,
+      added_by: id("usr"),
+      created_at: now()
     }
   end
 
