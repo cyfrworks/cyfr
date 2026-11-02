@@ -168,16 +168,17 @@ defmodule Arca.SharedMessagesRaceTest do
     hold_slot!()
     by = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
-    {:ok, thread} =
-      unboxed(fn -> SharedThreads.create(server(), %{title: "Race", created_by: by}) end)
-
     on_exit(fn ->
       unboxed(fn ->
-        Arca.Repo.delete_all(from(m in SharedMessage, where: m.thread_id == ^thread.id))
-        Arca.Repo.delete_all(from(m in SharedThreadMember, where: m.thread_id == ^thread.id))
-        Arca.Repo.delete_all(from(t in SharedThread, where: t.id == ^thread.id))
+        ids = from(t in SharedThread, where: t.created_by == ^by, select: t.id)
+        Arca.Repo.delete_all(from(m in SharedMessage, where: m.thread_id in subquery(ids)))
+        Arca.Repo.delete_all(from(m in SharedThreadMember, where: m.thread_id in subquery(ids)))
+        Arca.Repo.delete_all(from(t in SharedThread, where: t.created_by == ^by))
       end)
     end)
+
+    {:ok, thread} =
+      unboxed(fn -> SharedThreads.create(server(), %{title: "Race", created_by: by}) end)
 
     answers =
       1..@appenders

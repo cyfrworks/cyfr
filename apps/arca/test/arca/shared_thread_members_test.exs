@@ -7,8 +7,10 @@ defmodule Arca.SharedThreadMembersTest do
   invited once, each only into an active thread; the invitations an
   identifier holds turned into that person's seats at their sign-in,
   except where they sit already or the thread is archived; an invitation
-  withdrawn and a seat removed, whatever the thread's status. Every
-  function is the platform's and refuses an athanor's actor.
+  withdrawn and a seat removed, whatever the thread's status, and
+  neither once an activation or another removal changed the row first
+  (`Arca.SharedThreadMembersRaceTest`). Every function is the platform's
+  and refuses an athanor's actor.
   """
 
   use ExUnit.Case, async: true
@@ -113,6 +115,8 @@ defmodule Arca.SharedThreadMembersTest do
       end
 
       assert {:ok, []} = SharedThreadMembers.activate(server(), who, id)
+      assert {:error, :not_found} = SharedThreadMembers.withdraw(server(), thread.id, id)
+      assert {:ok, %{user_id: ^who}} = SharedThreadMembers.find(server(), thread.id, who)
     end
 
     test "drops an invitation where the person sits already, and keeps one in an archived thread",
@@ -208,5 +212,219 @@ defmodule Arca.SharedThreadMembersTest do
     end
 
     assert {:ok, [%{user_id: ^by}]} = SharedThreadMembers.list(server(), thread.id)
+  end
+end
+
+defmodule Arca.SharedThreadMembersRaceTest do
+  @moduledoc """
+  Two writers of one row of a thread's people, on real connections
+  outside the sandbox: the first pauses inside its transaction right after
+  its first statement on `shared_thread_members`, and the second runs until
+  it has answered or waits on a lock that first statement took. Then the
+  first goes on, and the answers of both agree with the rows they left: a
+  withdrawal never deletes the seat an activation made of its invitation,
+  and of two removals of one seat one answers it and the other
+  `:not_found`.
+
+  PostgreSQL only: on SQLite each transaction holds the one write lock
+  from its start, so the second writer cannot run inside the first's.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.{ControlPlane, SharedThreadMembers, SharedThreads}
+  alias Arca.Schemas.{CellLease, SharedThread, SharedThreadMember}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @moduletag :postgres
+
+  @slot_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  @pause {__MODULE__, :pause}
+
+  defp server, do: Prima.Actor.system()
+  defp person, do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    hold_slot!()
+    by = person()
+
+    on_exit(fn ->
+      unboxed(fn ->
+        ids = from(t in SharedThread, where: t.created_by == ^by, select: t.id)
+        Arca.Repo.delete_all(from(m in SharedThreadMember, where: m.thread_id in subquery(ids)))
+        Arca.Repo.delete_all(from(t in SharedThread, where: t.created_by == ^by))
+      end)
+    end)
+
+    {:ok, thread} =
+      unboxed(fn -> SharedThreads.create(server(), %{title: "Race", created_by: by}) end)
+
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.pause/4, nil)
+
+    {:ok, by: by, thread: thread}
+  end
+
+  test "a withdrawal and an activation of one invitation agree on which came first",
+       %{by: by, thread: thread} do
+    who = person()
+    id = "per_#{System.unique_integer([:positive])}"
+    {:ok, _} = unboxed(fn -> SharedThreadMembers.invite(server(), thread.id, id, by) end)
+
+    withdrawal = paused(fn -> SharedThreadMembers.withdraw(server(), thread.id, id) end)
+    assert_receive {:paused, withdrawer}, 5_000
+
+    activation = watched(fn -> SharedThreadMembers.activate(server(), who, id) end)
+    activated = settled(activation)
+    send(withdrawer, :continue)
+
+    withdrawn = Task.await(withdrawal, 10_000)
+    activated = answer(activated, activation)
+    seat = unboxed(fn -> SharedThreadMembers.find(server(), thread.id, who) end)
+
+    case withdrawn do
+      {:ok, %{status: "invited", person_identifier: ^id}} ->
+        assert {:ok, []} = activated
+        assert {:error, :not_found} = seat
+
+      {:error, :not_found} ->
+        assert {:ok, [_]} = activated
+        assert {:ok, %{user_id: ^who}} = seat
+
+      other ->
+        flunk("the withdrawal answered #{inspect(other)}")
+    end
+  end
+
+  test "of two removals of one seat, one answers it and the other not_found",
+       %{by: by, thread: thread} do
+    first = paused(fn -> SharedThreadMembers.remove(server(), thread.id, by) end)
+    assert_receive {:paused, remover}, 5_000
+
+    second = watched(fn -> SharedThreadMembers.remove(server(), thread.id, by) end)
+    seconded = settled(second)
+    send(remover, :continue)
+
+    answers = [Task.await(first, 10_000), answer(seconded, second)]
+
+    assert Enum.count(answers, &match?({:ok, %{user_id: ^by, status: "active"}}, &1)) == 1,
+           inspect(answers)
+
+    assert Enum.count(answers, &(&1 == {:error, :not_found})) == 1, inspect(answers)
+
+    assert {:error, :not_found} =
+             unboxed(fn -> SharedThreadMembers.find(server(), thread.id, by) end)
+  end
+
+  @doc false
+  # The telemetry handler: the process that set the pause stops after its
+  # first statement on `shared_thread_members`, inside its transaction,
+  # until the case lets it go on.
+  def pause(_event, _measurements, %{query: query}, _config) do
+    case Process.get(@pause) do
+      {test, fragment} ->
+        if String.contains?(query, fragment) do
+          Process.delete(@pause)
+          send(test, {:paused, self()})
+
+          receive do
+            :continue -> :ok
+          after
+            15_000 -> raise "paused past the case"
+          end
+        end
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp paused(fun) do
+    test = self()
+
+    Task.async(fn ->
+      Process.put(@pause, {test, ~s("shared_thread_members")})
+      unboxed(fn -> outcome(fun) end)
+    end)
+  end
+
+  # The second writer, which names its backend first so the case can see
+  # it wait.
+  defp watched(fun) do
+    test = self()
+
+    Task.async(fn ->
+      unboxed(fn ->
+        %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+        send(test, {:backend, backend})
+        outcome(fun)
+      end)
+    end)
+  end
+
+  # What the writer ended with, a raise included, so a writer that raises
+  # is a wrong answer and not a crashed case.
+  defp outcome(fun) do
+    fun.()
+  rescue
+    error -> {:raised, error}
+  end
+
+  # The second writer answered, or waits on a lock.
+  defp settled(task) do
+    assert_receive {:backend, backend}, 5_000
+    settled(task, backend, System.monotonic_time(:millisecond) + 10_000)
+  end
+
+  defp settled(task, backend, deadline) do
+    case Task.yield(task, 20) do
+      {:ok, result} ->
+        {:answered, result}
+
+      nil ->
+        cond do
+          waiting?(backend) -> :waiting
+          System.monotonic_time(:millisecond) < deadline -> settled(task, backend, deadline)
+          true -> flunk("backend #{backend} neither answered nor waited on a lock")
+        end
+    end
+  end
+
+  defp answer({:answered, result}, _task), do: result
+  defp answer(:waiting, task), do: Task.await(task, 10_000)
+
+  defp waiting?(backend) do
+    unboxed(fn ->
+      %{rows: rows} =
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [backend])
+
+      rows == [["Lock"]]
+    end)
+  end
+
+  # This member's slot, taken on a real connection so every connection
+  # reads the lease. Each process-wide value is restored after the case,
+  # registered before it changes (`Prima.Test.Env`), and the lease row is
+  # deleted.
+  defp hold_slot! do
+    node = "node-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      unboxed(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
+    end)
+
+    for key <- @slot_keys, do: Prima.Test.Env.erase_persistent_term(key)
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot", 60_000) end)
+    slot
   end
 end

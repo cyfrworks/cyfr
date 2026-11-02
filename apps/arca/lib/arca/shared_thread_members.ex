@@ -25,7 +25,11 @@ defmodule Arca.SharedThreadMembers do
   transitions take (`Arca.SecurityTransitions`), so a seat never lands
   beside a transition holding the person. A seat or an invitation is
   written only into an active thread, read under the thread's lock;
-  withdrawing and removing are admitted whatever the thread's status.
+  withdrawing and removing are admitted whatever the thread's status, each
+  one delete under the predicate that names its row, whose row count is
+  its answer: a withdrawal finds no invitation an activation already made
+  a seat, and of two removals of one seat one answers it and the other
+  `:not_found`.
 
   A row crosses as a plain map (`Arca.Data`). A refusal is `:not_found`,
   `:archived` (the thread is archived), `:conflict` (the person is seated
@@ -202,15 +206,16 @@ defmodule Arca.SharedThreadMembers do
 
   def remove(%Prima.Actor{}, _thread_id, _user_id), do: {:error, :cross_tenant}
 
-  # arca:unscoped-ok a shared thread is no athanor's; the row is deleted by its own key.
+  # One delete of the row `query` names, under the predicate that names
+  # it: its row count is the answer. A row an activation or another
+  # removal changed or deleted first no longer matches, so it is answered
+  # `:not_found` and left as it stands. The thread's indexes let at most
+  # one row match.
+  # arca:unscoped-ok a shared thread is no athanor's; the row is deleted by its thread and key.
   defp drop(query) do
-    case Arca.Repo.one(query) do
-      nil ->
-        {:error, :not_found}
-
-      %SharedThreadMember{} = row ->
-        {1, _} = Arca.Repo.delete_all(from(m in SharedThreadMember, where: m.id == ^row.id))
-        {:ok, row}
+    case Arca.Repo.delete_all(select(query, [m], m)) do
+      {1, [row]} -> {:ok, row}
+      {0, _} -> {:error, :not_found}
     end
   end
 
@@ -278,6 +283,7 @@ defmodule Arca.SharedThreadMembers do
   # transaction: the first lock of the standing order. A person with no
   # row has nothing to hold.
   @spec hold_people!([String.t()]) :: :ok
+  # arca:unscoped-ok a person is no athanor's; people are locked by their own ids.
   # arca:db-raise-ok a step inside the caller's transaction.
   def hold_people!(user_ids) when is_list(user_ids) do
     from(u in User, where: u.id in ^user_ids, order_by: [asc: u.id], select: u.id)

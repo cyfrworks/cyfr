@@ -23,7 +23,9 @@ defmodule Arca.SharedThreads do
   write runs under this member's slot (`Arca.Repo.owned/2`; `:not_owner`
   once another member holds it). The people a write seats are locked first
   and the thread after them, the order a person's standing transitions
-  take (`Arca.SecurityTransitions`). Archiving or reopening a thread
+  take (`Arca.SecurityTransitions`). Renaming, archiving and reopening
+  each lock the thread, then make one write conditional on its kind and
+  status, whose row count is its answer; archiving or reopening a thread
   raises its `security_generation` by one in the same statement.
 
   A row crosses as a plain map (`Arca.Data`). A refusal is `:not_found`,
@@ -101,7 +103,7 @@ defmodule Arca.SharedThreads do
 
   # The pair is written only when no active pair holds `pair_of`; a pair
   # another transaction committed first leaves this insert a no-op, and the
-  # read after it sees that pair.
+  # read after it answers that pair.
   # arca:unscoped-ok a pair is no athanor's; it is written by its two people.
   defp make_pair(pair_of, by, other) do
     now = Arca.ServerMetaStorage.now!()
@@ -118,7 +120,12 @@ defmodule Arca.SharedThreads do
         {:ok, Arca.Repo.get!(SharedThread, id)}
 
       {0, _} ->
-        {:ok, active_pair(pair_of)}
+        # The pair another transaction committed first, unless it was
+        # archived since: then this one is made after all.
+        case active_pair(pair_of) do
+          %SharedThread{} = found -> {:ok, found}
+          nil -> make_pair(pair_of, by, other)
+        end
     end
   end
 
@@ -166,21 +173,12 @@ defmodule Arca.SharedThreads do
   @doc "Give the thread `id` a new `title`; a pair has none to give."
   @spec rename(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :pair | {:invalid, map()}} | refusal()
-  # arca:unscoped-ok a shared thread is no athanor's; it is renamed by its id.
   def rename(%Prima.Actor{scope: :platform}, id, title) when is_binary(id) do
     with :ok <- valid([{:title, title?(title)}]) do
       Arca.Repo.owned("Arca.SharedThreads.rename", fn ->
-        case lock!(id) do
-          nil ->
-            {:error, :not_found}
-
-          %SharedThread{kind: "pair"} ->
-            {:error, :pair}
-
-          %SharedThread{} ->
-            {1, _} = Arca.Repo.update_all(by_id(id), set: [title: title])
-            {:ok, Arca.Repo.get!(SharedThread, id)}
-        end
+        transition(id, dynamic([t], t.kind == "shared"), [set: [title: title]], fn
+          %SharedThread{kind: "pair"} -> {:error, :pair}
+        end)
       end)
     end
   end
@@ -192,27 +190,16 @@ defmodule Arca.SharedThreads do
   `security_generation`. One archived already answers as it stands.
   """
   @spec archive(Prima.Actor.t(), String.t()) :: {:ok, row()} | {:error, :not_found} | refusal()
-  # arca:unscoped-ok a shared thread is no athanor's; it is archived by its id.
   def archive(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.owned("Arca.SharedThreads.archive", fn ->
-      case lock!(id) do
-        nil ->
-          {:error, :not_found}
+      changes = [
+        set: [status: "archived", archived_at: Arca.ServerMetaStorage.now!()],
+        inc: [security_generation: 1]
+      ]
 
-        %SharedThread{status: "archived"} = thread ->
-          {:ok, thread}
-
-        %SharedThread{} ->
-          now = Arca.ServerMetaStorage.now!()
-
-          {1, _} =
-            Arca.Repo.update_all(by_id(id),
-              set: [status: "archived", archived_at: now],
-              inc: [security_generation: 1]
-            )
-
-          {:ok, Arca.Repo.get!(SharedThread, id)}
-      end
+      transition(id, dynamic([t], t.status == "active"), changes, fn
+        %SharedThread{status: "archived"} = thread -> {:ok, thread}
+      end)
     end)
   end
 
@@ -224,37 +211,44 @@ defmodule Arca.SharedThreads do
   """
   @spec unarchive(Prima.Actor.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :pair} | refusal()
-  # arca:unscoped-ok a shared thread is no athanor's; it is reopened by its id.
   def unarchive(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.owned("Arca.SharedThreads.unarchive", fn ->
-      case lock!(id) do
-        nil ->
-          {:error, :not_found}
+      changes = [set: [status: "active", archived_at: nil], inc: [security_generation: 1]]
+      reopenable = dynamic([t], t.kind == "shared" and t.status == "archived")
 
-        %SharedThread{kind: "pair"} ->
-          {:error, :pair}
-
-        %SharedThread{status: "active"} = thread ->
-          {:ok, thread}
-
-        %SharedThread{} ->
-          {1, _} =
-            Arca.Repo.update_all(by_id(id),
-              set: [status: "active", archived_at: nil],
-              inc: [security_generation: 1]
-            )
-
-          {:ok, Arca.Repo.get!(SharedThread, id)}
-      end
+      transition(id, reopenable, changes, fn
+        %SharedThread{kind: "pair"} -> {:error, :pair}
+        %SharedThread{status: "active"} = thread -> {:ok, thread}
+      end)
     end)
   end
 
   def unarchive(%Prima.Actor{}, _id), do: {:error, :cross_tenant}
 
+  # The thread locked, then one write conditional on `condition`, whose row
+  # count is the answer: the row it changed, or, when the locked row did
+  # not match, `unchanged`'s answer for that row. No row is `:not_found`.
+  # The lock holds the row as it was read until the transaction ends, so
+  # the read and the write agree on it.
+  # arca:unscoped-ok a shared thread is no athanor's; it is changed by its id.
+  defp transition(id, condition, changes, unchanged) do
+    case lock!(id) do
+      nil ->
+        {:error, :not_found}
+
+      %SharedThread{} = thread ->
+        case Arca.Repo.update_all(from(t in by_id(id), where: ^condition), changes) do
+          {1, _} -> {:ok, Arca.Repo.get!(SharedThread, id)}
+          {0, _} -> unchanged.(thread)
+        end
+    end
+  end
+
   @doc false
   # The thread row, locked against every other writer of it until the
   # caller's transaction ends, or nil: a step inside the transactions of
-  # this module and of `Arca.SharedThreadMembers` and `Arca.SharedMessages`.
+  # this module and of `Arca.SharedThreadMembers` that change a thread or
+  # write a seat or an invitation into it.
   @spec lock!(String.t()) :: SharedThread.t() | nil
   # arca:unscoped-ok a shared thread is no athanor's; it is locked by its id.
   # arca:db-raise-ok a step inside the caller's transaction.
