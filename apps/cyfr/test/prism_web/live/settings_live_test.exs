@@ -88,6 +88,71 @@ defmodule PrismWeb.SettingsLiveTest do
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
   end
 
+  describe "invite to this CYFR" do
+    defp text(html), do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.trim()
+
+    test "the administrator creates a link naming no thread, shown once, lists it and revokes it",
+         %{conn: conn} do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+
+      # The administrator's invitation into a thread they sit in is the
+      # thread's, and this section does not list it.
+      {:ok, thread} = Sanctum.SharedThreads.create(ops.user_id, "Settings thread")
+      ctx = Sanctum.TestContext.session!(ops.user_id)
+      {:ok, %{invitation: threaded}} = Sanctum.Invitations.create(ctx, thread.id)
+
+      {view, html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+      assert html =~ "Invite to this CYFR"
+      assert has_element?(view, ~s([data-test="invite-cyfr"] [data-test="invitation-create"]))
+      refute has_element?(view, ~s([data-test="invitation-new"]))
+      refute has_element?(view, ~s([phx-value-id="#{threaded.id}"]))
+
+      view
+      |> element(~s([data-test="invitation-create"]))
+      |> render_click()
+
+      link = view |> element(~s([data-test="invitation-link"])) |> render() |> text()
+      assert String.starts_with?(link, Sanctum.Person.home() <> "/invite#")
+      code = link |> String.split("#") |> List.last()
+      assert has_element?(view, ~s([data-test="invitation-copy"]))
+
+      [%{id: id, issued_by: issuer}] =
+        Arca.Repo.all(from(i in Arca.Schemas.Invitation, where: is_nil(i.thread_id)))
+
+      assert issuer == ops.user_id
+      assert {:ok, shown} = Sanctum.Invitations.lookup(code)
+      refute Map.has_key?(shown, :thread)
+
+      revoke = ~s(#invite-cyfr [data-test="invitation-revoke"][phx-value-id="#{id}"])
+      assert has_element?(view, revoke)
+      refute has_element?(view, ~s([phx-value-id="#{threaded.id}"]))
+
+      # Shown once: the page read again lists the link and no longer shows it.
+      {again, html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      refute has_element?(again, ~s([data-test="invitation-new"]))
+      refute html =~ code
+      assert has_element?(again, "#invite-cyfr td", "pending")
+
+      again |> element(revoke) |> render_click()
+
+      assert has_element?(again, "#invite-cyfr td", "revoked")
+      refute has_element?(again, revoke)
+      assert %DateTime{} = Arca.Repo.get!(Arca.Schemas.Invitation, id).revoked_at
+      assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
+      assert Arca.Repo.get!(Arca.Schemas.Invitation, threaded.id).revoked_at == nil
+    end
+
+    test "a person who is not the administrator does not see the section", %{conn: conn} do
+      person = test_user()
+      {view, html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+
+      refute html =~ "Invite to this CYFR"
+      refute has_element?(view, ~s([data-test="invite-cyfr"]))
+      refute has_element?(view, ~s([data-test="invitation-create"]))
+    end
+  end
+
   # A key the platform administrator offers is shared from their own
   # vault; Settings holds no credential store of its own.
   test "a platform administrator's Settings offers no place to enter or list a key",

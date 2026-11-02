@@ -590,6 +590,36 @@ defmodule Prima.Refusal do
   defp row(:no_agent),
     do: {:setup_required, "This athanor has no assistant to address — reset its AQUA tree"}
 
+  # A shared thread's rules (`Sanctum.SharedThreads`).
+  defp row({:shared_thread, :archived}),
+    do: {:forbidden, "This thread is archived — reopen it to talk or add people"}
+
+  defp row({:shared_thread, :pair}),
+    do:
+      {:invalid_argument,
+       "A pair's two people were set when it opened — start a thread with a title to talk with more"}
+
+  defp row({:shared_thread, :self}),
+    do: {:invalid_argument, "A pair is two people — pick someone else"}
+
+  defp row({:shared_thread, :not_together}),
+    do: {:invalid_argument, "You can only pair with someone you already share a thread with"}
+
+  defp row({:shared_thread, :recovering_from_restore}),
+    do:
+      {:forbidden,
+       "This CYFR was restored from a backup, and someone in this thread has not yet " <>
+         "recovered their sign-in: no one is added until everyone has"}
+
+  defp row({:limit_reached, :max_shared_threads_per_person, _limit}),
+    do: {:rate_limited, "You have made as many threads as this CYFR allows — archive one first"}
+
+  defp row({:limit_reached, :max_people_per_thread, _limit}),
+    do: {:rate_limited, "This thread holds as many people as this CYFR allows"}
+
+  defp row({:limit_reached, :max_pairs_per_person, _limit}),
+    do: {:rate_limited, "One of you holds as many pairs as this CYFR allows — end one first"}
+
   defp row(:execution_unavailable),
     do: {:unavailable, "The execution engine is unavailable — retry shortly"}
 

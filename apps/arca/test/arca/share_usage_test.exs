@@ -10,7 +10,7 @@ defmodule Arca.ShareUsageTest do
   alias Arca.ShareUsage
   alias Arca.Test.QueryCounter
 
-  @everyone %{audience: "everyone", group_id: nil}
+  @everyone %{audience: "everyone", thread_id: nil}
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -103,15 +103,18 @@ defmodule Arca.ShareUsageTest do
     test "a claim under an audience the share no longer holds is refused and counts nothing; " <>
            "one under the audience it holds is counted",
          %{terry: terry, share: share} do
-      group = group!([terry.user.id])
-      narrowed = %{audience: "group", group_id: group.id}
+      thread = thread!([terry.user.id])
+      narrowed = %{audience: "thread", thread_id: thread.id}
       {:ok, _} = Arca.Shares.set_audience(terry.actor, share.id, @everyone, narrowed)
 
       assert {:error, :audience_changed} =
                ShareUsage.claim(terry.actor, share.id, "usr_alice", @everyone)
 
       assert {:error, :audience_changed} =
-               ShareUsage.claim(terry.actor, share.id, "usr_alice", %{narrowed | group_id: "g"})
+               ShareUsage.claim(terry.actor, share.id, "usr_alice", %{
+                 narrowed
+                 | thread_id: "sth_other"
+               })
 
       assert {:ok, %{people: [], totals: []}} = ShareUsage.usage(terry.actor, share.id, 1)
       assert {:ok, %{person: 1}} = ShareUsage.claim(terry.actor, share.id, "usr_alice", narrowed)
@@ -130,7 +133,11 @@ defmodule Arca.ShareUsageTest do
           assert {:error, {:invalid, %{^field => _}}} =
                    Arca.Shares.create(
                      terry.actor,
-                     Map.put(%{entry_id: entry.id, audience: "group", group_id: "g"}, field, bad)
+                     Map.put(
+                       %{entry_id: entry.id, audience: "thread", thread_id: "sth_x"},
+                       field,
+                       bad
+                     )
                    ),
                  inspect({field, bad})
         end
@@ -234,7 +241,7 @@ defmodule Arca.ShareUsageRaceTest do
   alias Arca.Test.Shares, as: Fixture
   alias Ecto.Adapters.SQL.Sandbox
 
-  @everyone %{audience: "everyone", group_id: nil}
+  @everyone %{audience: "everyone", thread_id: nil}
 
   # The purge is registered before the owner is made, so a case stopped at
   # its timeout leaves nothing behind.

@@ -5,7 +5,8 @@ defmodule PrismWeb.InviteLive do
   @moduledoc """
   `/invite`: the page an invitation link opens
   (`<CYFR address>/invite#<code>`). It names who invited the newcomer and
-  to which athanor, and makes their identity here.
+  to which shared thread, by its title, when the invitation names one,
+  and makes their identity here.
 
   It is sessionless. The code travels in the address's fragment, which no
   server log records; the page's script hands it over
@@ -23,7 +24,7 @@ defmodule PrismWeb.InviteLive do
   name and the recovery secret and request id the browser drew, is the
   invitation admission's credential (`Sanctum.Newcomer.admit/2` with
   `{:invitation, code}`) makes the person, their keys, their athanor, the
-  passkey, the seat the invitation names and their enrollment in one
+  passkey, the seat in the thread the invitation names and their enrollment in one
   transaction with the code's redemption. A cancelled ceremony sends
   nothing. Then screen 2 registers them at cyfr.run, shows their
   recovery code, and "I saved it" signs them in, landing as any sign-in
@@ -34,7 +35,7 @@ defmodule PrismWeb.InviteLive do
   in a fragment, and the sign-in page redeems it through "Sign in from
   your CYFR" (`PrismWeb.LoginLive`).
 
-  Its controls carry `data-test` names: `invite-from`, `invite-athanor`,
+  Its controls carry `data-test` names: `invite-from`, `invite-thread`,
   `invite-expires`, `invite-sign-in` and `invite-refused`; the screens
   carry their own.
   """
@@ -64,7 +65,7 @@ defmodule PrismWeb.InviteLive do
      |> AdmissionCard.mount(), layout: false}
   end
 
-  # The invitation read: who invited, to which athanor, and the name the
+  # The invitation read: who invited, to which thread, and the name the
   # inviter typed, which fills the field and is checked at once.
   @impl true
   def handle_event("invite_token", %{"token" => code}, %{assigns: %{step: :reading}} = socket)
@@ -210,13 +211,13 @@ defmodule PrismWeb.InviteLive do
                 </span>
                 invited you to
                 <span
-                  :if={@invitation[:athanor]}
-                  data-test="invite-athanor"
+                  :if={@invitation[:thread]}
+                  data-test="invite-thread"
                   class="font-medium text-gray-100"
                 >
-                  {@invitation.athanor}
+                  {@invitation.thread}
                 </span>
-                {if @invitation[:athanor], do: "on this CYFR.", else: "this CYFR."} This CYFR keeps your identity.
+                {if @invitation[:thread], do: "on this CYFR.", else: "this CYFR."} This CYFR keeps your identity.
               </p>
               <p data-test="invite-expires" class="text-xs text-gray-500">
                 The invitation can be used once, until {Calendar.strftime(

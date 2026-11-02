@@ -23,7 +23,8 @@
 #
 #   person IDENTIFIER
 #       The person this home admitted under IDENTIFIER: their row's
-#       provenance, their memberships here, their sessions (the athanor
+#       provenance, their memberships here, the shared threads they sit
+#       in (`threads`), their sessions (the athanor
 #       each is bound to and the `key_epoch` it records) and their
 #       passkeys here (state and the recovery epoch each is bound to), or
 #       `{none: true}`.
@@ -131,6 +132,14 @@ fn args ->
               )
             )
 
+          threads =
+            Arca.Repo.all(
+              from(m in Arca.Schemas.SharedThreadMember,
+                where: m.user_id == ^user_id and m.status == "active",
+                select: m.thread_id
+              )
+            )
+
           sessions =
             Arca.Repo.all(
               from(s in Arca.Schemas.Session,
@@ -152,6 +161,7 @@ fn args ->
             user_id: user_id,
             provenance: identity.provenance,
             memberships: Enum.sort(memberships),
+            threads: Enum.sort(threads),
             sessions: sessions,
             passkeys: passkeys
           })

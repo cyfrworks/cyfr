@@ -342,6 +342,7 @@ defmodule Cyfr.Boundaries do
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
+    Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]

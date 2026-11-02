@@ -17,7 +17,8 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   # Each takes authority away and gives none: signing out, a command line
   # withdrawing its sign-in, revoking (a command line's session and a
   # shared key among them), withdrawing consent, leaving, removing a
-  # member, denying someone at a door, unlinking a door and archiving.
+  # member, withdrawing a shared thread's invitation, denying someone at a
+  # door, unlinking a door and archiving.
   @roster ~w(
     athanor.archive
     door.deny
@@ -33,6 +34,10 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     session.cli_revoke
     session.logout
     share.revoke
+    shared_thread.archive
+    shared_thread.leave
+    shared_thread.remove
+    shared_thread.withdraw
     vault.revoke
     webhook.revoke
   )

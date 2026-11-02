@@ -6,8 +6,8 @@ defmodule Sanctum.Providers.Invitation do
   The `invitation` tool: invitations to become a person at this CYFR
   (`Sanctum.Invitations`) — create, revoke, list.
 
-  `create` issues one naming a group athanor the caller holds a seat in,
-  or, for the platform administrator, one naming none, optionally
+  `create` issues one naming a shared thread the caller sits in, or, for
+  the platform administrator, one naming none, optionally
   offering its newcomer a `name` their invitation page fills in, and
   answers its
   code once with the link that opens it, `invitation_url`:
@@ -18,7 +18,7 @@ defmodule Sanctum.Providers.Invitation do
   issuer or the administrator; `list` answers every invitation to the
   administrator and the caller's own to anyone else. Each is a person's
   act: an API-key context is refused. An answer carries no null: an
-  invitation that names no athanor has no athanor keys.
+  invitation that names no thread has no thread keys.
   """
 
   alias Sanctum.Context
@@ -37,10 +37,10 @@ defmodule Sanctum.Providers.Invitation do
           "create",
           "Create an invitation",
           [
-            Arg.new("athanor_id", :string,
+            Arg.new("thread_id", :string,
               description:
-                "The group athanor the newcomer is seated in, which you hold a seat in. " <>
-                  "Left out, the invitation seats them in no group: the platform administrator's alone (create)"
+                "The shared thread the newcomer is seated in, which you sit in. " <>
+                  "Left out, the invitation seats them in no thread: the platform administrator's alone (create)"
             ),
             Arg.new("name", :string,
               description:
@@ -70,7 +70,7 @@ defmodule Sanctum.Providers.Invitation do
         )
       ],
       description:
-        "Invitations to become a person here. A member invites someone into a group they sit in; the platform administrator may invite someone into no group. The link is given once, expires after seven days and admits one person. The administrator lists and revokes every invitation; anyone else their own.",
+        "Invitations to become a person here. Anyone invites someone into a shared thread they sit in; the platform administrator may invite someone into no thread. The link is given once, expires after seven days and admits one person. The administrator lists and revokes every invitation; anyone else their own.",
       title: "Invitations"
     )
   end
@@ -84,7 +84,7 @@ defmodule Sanctum.Providers.Invitation do
 
   def handle(%Context{} = ctx, %{"action" => "create"} = args) do
     with {:ok, %{invitation: invitation, code: code}} <-
-           Invitations.create(ctx, Map.get(args, "athanor_id"), Map.get(args, "name")) do
+           Invitations.create(ctx, Map.get(args, "thread_id"), Map.get(args, "name")) do
       {:ok,
        %{
          invitation: render(invitation),

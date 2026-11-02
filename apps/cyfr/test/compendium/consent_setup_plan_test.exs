@@ -530,7 +530,7 @@ defmodule Compendium.ConsentSetupPlanTest do
       ShareFixtures.traders!()
     end
 
-    test "after Alice leaves the group Terry shared with, her grant is no longer ready",
+    test "after Alice leaves the thread Terry shared with, her grant is no longer ready",
          %{alice: alice, traders: traders, share: share} do
       ref = "reagent:local.plan-shared"
       publish_manifest!(alice.ctx, "plan-shared", @shared_need)

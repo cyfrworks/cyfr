@@ -42,14 +42,25 @@ defmodule Sanctum.SharesRaceTest do
     owner
   end
 
-  defp group!(made, members) do
-    group = unboxed(fn -> Fixture.group!(members) end)
-    :ok = Agent.update(made, &[%{athanor: group, user: nil} | &1])
-    group
+  # A shared thread `creator` made, recorded for the purge.
+  defp thread!(made, creator) do
+    {:ok, thread} =
+      unboxed(fn ->
+        Arca.SharedThreads.create(Prima.Actor.system(), %{title: "Desk", created_by: creator})
+      end)
+
+    :ok = Agent.update(made, &[%{thread: thread} | &1])
+    thread
   end
 
+  # The threads go first: their seats name the people purged after them.
   defp purge!(made) do
-    for %{athanor: athanor, user: user} <- made do
+    {threads, owners} = Enum.split_with(made, &Map.has_key?(&1, :thread))
+
+    for %{thread: thread} <- threads,
+        do: Arca.Repo.delete_all(from(t in Arca.Schemas.SharedThread, where: t.id == ^thread.id))
+
+    for %{athanor: athanor, user: user} <- owners do
       {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
       Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
 
@@ -73,7 +84,7 @@ defmodule Sanctum.SharesRaceTest do
        %{made: made} do
     terry = owned!(made)
     alice = owned!(made)
-    group = group!(made, [terry.user.id])
+    thread = thread!(made, terry.user.id)
     entry = unboxed(fn -> Fixture.entry!(terry.actor, %{field_names: ~s(["KEY"])}) end)
     share = unboxed(fn -> Fixture.share!(terry.actor, entry.id) end)
 
@@ -84,7 +95,7 @@ defmodule Sanctum.SharesRaceTest do
     parent = self()
 
     # The holder takes the share's row as a revoke would, waits until the
-    # use is seen waiting on it, then narrows the share to a group Alice
+    # use is seen waiting on it, then narrows the share to a thread Alice
     # is not in, and commits.
     holder =
       Task.async(fn ->
@@ -98,10 +109,12 @@ defmodule Sanctum.SharesRaceTest do
 
             receive do
               :narrow ->
-                Arca.Shares.set_audience(terry.actor, share.id, Fixture.everyone(), %{
-                  audience: "group",
-                  group_id: group.id
-                })
+                Arca.Shares.set_audience(
+                  terry.actor,
+                  share.id,
+                  %{audience: "everyone", thread_id: nil},
+                  %{audience: "thread", thread_id: thread.id}
+                )
             end
           end)
         end)
@@ -135,7 +148,7 @@ defmodule Sanctum.SharesRaceTest do
     end
 
     send(holding, :narrow)
-    assert {:ok, {:ok, %{audience: "group"}}} = Task.await(holder, 15_000)
+    assert {:ok, {:ok, %{audience: "thread"}}} = Task.await(holder, 15_000)
     assert Task.await(use, 15_000) == {:error, :not_offered}
 
     assert {:ok, %{people: [], totals: []}} =

@@ -9,7 +9,7 @@
 # and shares each with everyone through the system layer's sharing sheet,
 # Ana signs in for the first time, her first sign-in binds the model key's
 # share and she is offered both, her claims meet the person cap, a
-# narrowing to a group and a revocation refuse her, Bea is denied at the
+# narrowing to a thread and a revocation refuse her, Bea is denied at the
 # door, and the administrator cannot enter Ana's athanor.
 #
 # The proof asks the server for its part through the output directory
@@ -17,8 +17,8 @@
 # person's sign-in through the release fixture's door
 # (tests/release-boot/fixture.exs `person`), and the claims and reads of
 # the proof's own fixture (tests/share-proof/fixture.exs), which
-# answers bounded facts and never material, and seeds the group the
-# narrowing names.
+# answers bounded facts and never material, and seeds the shared thread
+# the narrowing names.
 #
 # The harness runs no execution engine and no model, so no run is started:
 # an admission is the loader's answer, and a claim is the resolver's, not
@@ -164,8 +164,8 @@ answer_ask() {
       ANSWER="$(share_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
         "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
       ;;
-    group)
-      ANSWER="$(share_fixture group "$admin_token" "$(asked "$ask" member)" "$(asked "$ask" name)")"
+    thread)
+      ANSWER="$(share_fixture thread "$admin_token" "$(asked "$ask" member)" "$(asked "$ask" name)")"
       ;;
     derived_head)
       ANSWER="$(share_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" share_id)" \

@@ -3,14 +3,14 @@
 
 defmodule Arca.InvitationsTest do
   @moduledoc """
-  Invitations to become a person here: written in the actor's athanor, or
-  in none under the platform scope, by the hash of their code with an
-  expiry on the database's clock, the issuer's generation as their row
-  stands and the name offered, if any; found by that hash and listed across
-  athanors only under the platform scope; ended once, revoked while open
-  or redeemed while open and unexpired, each by one conditional write. An
-  athanor's erasure takes the invitations that name it and leaves the
-  instance's own.
+  Invitations to become a person here: written under the platform scope,
+  naming the shared thread they seat their newcomer in or none, by the
+  hash of their code with an expiry on the database's clock, the issuer's
+  generation as their row stands and the name offered, if any; found by
+  that hash and listed only under the platform scope; ended once, revoked
+  while open or redeemed while open and unexpired, each by one
+  conditional write. No athanor holds one, so an athanor's erasure leaves
+  every invitation.
   """
 
   use ExUnit.Case, async: true
@@ -25,7 +25,7 @@ defmodule Arca.InvitationsTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     athanor = "ath_inv_#{System.unique_integer([:positive])}"
-    {:ok, athanor: athanor, actor: Prima.Actor.in_athanor(athanor)}
+    {:ok, in_athanor: Prima.Actor.in_athanor(athanor), actor: Prima.Actor.system()}
   end
 
   defp server, do: Prima.Actor.system()
@@ -75,8 +75,8 @@ defmodule Arca.InvitationsTest do
   end
 
   describe "insert/2" do
-    test "names the actor's athanor, or none under the platform scope, and sets the expiry from the lifetime",
-         %{actor: actor, athanor: athanor} do
+    test "names no thread, or the shared thread it is given, and sets the expiry from the lifetime",
+         %{actor: actor} do
       issuer = issuer!()
       before = DateTime.utc_now()
       {row, hash} = issued!(actor, issuer)
@@ -85,7 +85,7 @@ defmodule Arca.InvitationsTest do
                id: "inv_" <> _,
                code_hash: ^hash,
                issued_by: ^issuer,
-               athanor_id: ^athanor,
+               thread_id: nil,
                name: nil,
                redeemed_by: nil,
                redeemed_at: nil,
@@ -96,27 +96,29 @@ defmodule Arca.InvitationsTest do
       assert lifetime == 7 * @day_ms
       assert DateTime.compare(row.inserted_at, before) != :lt
 
-      {platform, _hash} = issued!(server())
-      assert platform.athanor_id == nil
-    end
+      thread = "sth_" <> Prima.UUID7.generate()
 
-    test "takes the athanor from the actor alone, and refuses an actor with none", %{actor: actor} do
-      {:ok, row} =
+      {:ok, named} =
         Invitations.insert(actor, %{
           code_hash: code_hash(),
-          issued_by: issuer!(),
+          issued_by: issuer,
           lifetime_ms: @day_ms,
-          athanor_id: "ath_elsewhere"
+          thread_id: thread
         })
 
-      assert row.athanor_id == actor.athanor_id
+      assert named.thread_id == thread
+    end
 
-      assert {:error, :no_athanor} =
-               Invitations.insert(%Prima.Actor{scope: :athanor}, %{
-                 code_hash: code_hash(),
-                 issued_by: issuer!(),
-                 lifetime_ms: @day_ms
-               })
+    test "writes as the platform alone, and refuses a thread that is no shared thread's id",
+         %{actor: actor, in_athanor: in_athanor} do
+      attrs = %{code_hash: code_hash(), issued_by: issuer!(), lifetime_ms: @day_ms}
+
+      assert {:error, :cross_tenant} = Invitations.insert(in_athanor, attrs)
+
+      assert {:error, {:invalid, %{thread_id: [_]}}} =
+               Invitations.insert(actor, Map.put(attrs, :thread_id, "ath_elsewhere"))
+
+      assert Arca.Repo.aggregate(Invitation, :count) == 0
     end
 
     test "keeps the name it offers its newcomer", %{actor: actor} do
@@ -194,14 +196,15 @@ defmodule Arca.InvitationsTest do
       assert Enum.all?([first.id, second.id, other.id], &(&1 in Enum.map(all, fn r -> r.id end)))
     end
 
-    test "every function but insert refuses an athanor-scoped actor", %{actor: actor} do
+    test "every function refuses an athanor-scoped actor",
+         %{actor: actor, in_athanor: in_athanor} do
       {row, hash} = issued!(actor)
 
-      assert {:error, :cross_tenant} = Invitations.get(actor, row.id)
-      assert {:error, :cross_tenant} = Invitations.by_code_hash(actor, hash)
-      assert {:error, :cross_tenant} = Invitations.list(actor, [])
-      assert {:error, :cross_tenant} = Invitations.revoke(actor, row.id)
-      assert {:error, :cross_tenant} = Invitations.redeem(actor, hash, person())
+      assert {:error, :cross_tenant} = Invitations.get(in_athanor, row.id)
+      assert {:error, :cross_tenant} = Invitations.by_code_hash(in_athanor, hash)
+      assert {:error, :cross_tenant} = Invitations.list(in_athanor, [])
+      assert {:error, :cross_tenant} = Invitations.revoke(in_athanor, row.id)
+      assert {:error, :cross_tenant} = Invitations.redeem(in_athanor, hash, person())
       assert {:ok, %{revoked_at: nil, redeemed_at: nil}} = Invitations.get(server(), row.id)
     end
   end
@@ -304,26 +307,24 @@ defmodule Arca.InvitationsTest do
       refute_received :also_ran
     end
 
-    test "an athanor-scoped actor is refused before anything runs", %{actor: actor} do
+    test "an athanor-scoped actor is refused before anything runs",
+         %{actor: actor, in_athanor: in_athanor} do
       {row, hash} = issued!(actor)
       test = self()
 
       assert {:error, :cross_tenant} =
-               Invitations.redeem_for(actor, hash, person(), also: fn _row -> ran(test) end)
+               Invitations.redeem_for(in_athanor, hash, person(), also: fn _row -> ran(test) end)
 
       refute_received :also_ran
       assert %Invitation{redeemed_by: nil} = Arca.Repo.get!(Invitation, row.id)
     end
   end
 
-  test "an athanor's erasure takes the invitations naming it and leaves the instance's own", %{
-    actor: actor
-  } do
-    {named, _} = issued!(actor)
-    {own, _} = issued!(server())
+  test "an athanor's erasure leaves every invitation", %{actor: actor, in_athanor: in_athanor} do
+    {own, _} = issued!(actor)
 
-    assert {:ok, %{"invitations" => 1}} = Arca.TenantTables.delete_all_for(actor)
-    assert {:error, :not_found} = Invitations.get(server(), named.id)
+    assert {:ok, deleted} = Arca.TenantTables.delete_all_for(in_athanor)
+    refute Map.has_key?(deleted, "invitations")
     assert {:ok, _} = Invitations.get(server(), own.id)
   end
 end

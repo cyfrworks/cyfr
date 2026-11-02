@@ -716,12 +716,12 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, issuer} =
         Sanctum.Tenancy.Users.get_by_identity("github|https://github.com|login-installation")
 
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Garden")
+      {:ok, thread} = Sanctum.SharedThreads.create(issuer.id, "Garden")
       ctx = Sanctum.TestContext.session!(issuer.id)
-      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, thread.id)
       if opts[:revoked], do: {:ok, _} = Sanctum.Invitations.revoke(ctx, invitation.id)
       {:ok, hash} = Sanctum.Invitations.code_hash(code)
-      %{code: code, hash: hash, issuer: issuer, group: group}
+      %{code: code, hash: hash, issuer: issuer, thread: thread}
     end
 
     test "an invitation link opens the sign-in from your CYFR, says who invited, and its start carries the hash, never the code",

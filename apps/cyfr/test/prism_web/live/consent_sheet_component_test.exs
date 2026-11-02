@@ -1971,11 +1971,14 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       {:ok, view, _html} = live_isolated(conn, PrismWeb.ConsentSheetComponentTest.Host)
 
       terry = Cyfr.Test.ShareFixtures.person!("Terry")
-      traders = Arca.Test.Shares.group!([terry.user.id, alice.user_id])
+      traders = Cyfr.Test.ShareFixtures.thread!([terry.user.id, alice.user_id])
       entry = Cyfr.Test.ShareFixtures.key!(terry)
 
       share =
-        Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+        Arca.Test.Shares.share!(terry.actor, entry.id, %{
+          audience: "thread",
+          thread_id: traders.id
+        })
 
       local = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: athanor.id}
       name = "sheet-shared-#{System.unique_integer([:positive])}"

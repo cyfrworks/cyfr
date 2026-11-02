@@ -15,6 +15,7 @@ defmodule Sanctum.Provider do
   - `tincture_visibility` - Whether a tincture is public
   - `athanor` - The athanors a person belongs to
   - `member` - Who is in an athanor
+  - `shared_thread` - Threads people talk in, which no athanor holds
   - `invitation` - Invitations to become a person here
   - `door` - The server allowlist, platform admins only
   - `vault` - The athanor's credential entries
@@ -26,7 +27,7 @@ defmodule Sanctum.Provider do
   - `pairing` - Paired devices
   - `passkey` - Passkeys at this home
   - `confirmation` - Pending confirmations of sensitive changes
-  - `share` - A person's own keys offered to a group they are in or to everyone
+  - `share` - A person's own keys offered to a thread they sit in or to everyone
 
   ## Resources
 
@@ -90,6 +91,7 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.Session.definition(),
       Sanctum.Providers.Athanor.definition(),
       Sanctum.Providers.Member.definition(),
+      Sanctum.Providers.SharedThread.definition(),
       Sanctum.Providers.Invitation.definition(),
       Sanctum.Providers.Door.definition(),
       Sanctum.Providers.OAuth.definition(),
@@ -121,6 +123,7 @@ defmodule Sanctum.Provider do
   def handle("session", ctx, args), do: Sanctum.Providers.Session.handle(ctx, args)
   def handle("athanor", ctx, args), do: Sanctum.Providers.Athanor.handle(ctx, args)
   def handle("member", ctx, args), do: Sanctum.Providers.Member.handle(ctx, args)
+  def handle("shared_thread", ctx, args), do: Sanctum.Providers.SharedThread.handle(ctx, args)
   def handle("invitation", ctx, args), do: Sanctum.Providers.Invitation.handle(ctx, args)
   def handle("door", ctx, args), do: Sanctum.Providers.Door.handle(ctx, args)
   def handle("oauth", ctx, args), do: Sanctum.Providers.OAuth.handle(ctx, args)

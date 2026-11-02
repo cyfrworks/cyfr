@@ -184,6 +184,8 @@ defmodule Prima.CapsTest do
              :max_groups_per_person,
              :max_pairs_per_person,
              :max_members_per_group,
+             :max_shared_threads_per_person,
+             :max_people_per_thread,
              :max_threads_per_athanor,
              :athanor_storage_bytes
            ]

@@ -1039,17 +1039,17 @@ material or grants an unbound component access.
 
 ### Shares (`share` tool)
 
-A share offers one attach-only entry of your own vault to everyone on this CYFR or to one group you are in. It holds no material and copies nothing: it names the entry, its audience and its caps. The people it is offered to grant it to their own components, and CYFR attaches the key to each of their requests within the entry's destination and never discloses it. A key is shared, and its shares are read and managed, from your own athanor alone (`not_own_athanor` otherwise).
+A share offers one attach-only entry of your own vault to everyone on this CYFR or to one shared thread you sit in. It holds no material and copies nothing: it names the entry, its audience and its caps. The people it is offered to grant it to their own components, and CYFR attaches the key to each of their requests within the entry's destination and never discloses it. A key is shared, and its shares are read and managed, from your own athanor alone (`not_own_athanor` otherwise).
 
 An entry can be shared while it is active (`entry_unavailable` otherwise), attach-only (`disclosed_not_shareable`), an `api_key` or a `bundle` (`kind_not_shareable`), and its destination names its `methods` and `paths` as well as its hosts (`destination_incomplete`: rebind the entry first). One entry holds at most one active share per audience (`already_shared`).
 
-The audience is `everyone`, every active person on this CYFR, or `group` with the `group_id` of an active group you are an active member of, a DM included (`not_member` otherwise); `athanor.list` names your groups. A group audience is read at each use, so a person who joins the group may use the key and one who leaves may not, with nothing written to the share. You are never in your own share's audience.
+The audience is `everyone`, every active person on this CYFR, or `thread` with the `thread_id` of an active shared thread you sit in, a pair included (`not_member` otherwise); `shared_thread.list` names your threads. A thread audience is read at each use, so a person who joins the thread may use the key and one who leaves may not, with nothing written to the share. You are never in your own share's audience.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `create` | `entry_id`, `audience` (`everyone` \| `group`), `group_id` for a group, optional `person_daily`, `total_daily` | Share the entry — needs a fresh `credential_sharing` confirmation. Answers the share, whose id is `shr_…` |
+| `create` | `entry_id`, `audience` (`everyone` \| `thread`), `thread_id` for a thread, optional `person_daily`, `total_daily` | Share the entry — needs a fresh `credential_sharing` confirmation. Answers the share, whose id is `shr_…` |
 | `list` | — | Your shares, active and revoked, oldest first: each names its entry, audience, caps and status, with today's total use (`used_today`) |
-| `set_audience` | `share_id`, `audience`, `group_id`, `expected` (`audience`, `group_id`: the audience you saw) | Move the share to another audience. Widening it, to everyone or to another group, needs a fresh `credential_sharing` confirmation; narrowing it to a group needs the session alone, and the audience it already has writes nothing. `expected` is compared with the stored audience before anything else: one that differs is a conflict ("The audience changed since it was shown, so nothing was saved."), with nothing saved and no confirmation asked |
+| `set_audience` | `share_id`, `audience`, `thread_id`, `expected` (`audience`, `thread_id`: the audience you saw) | Move the share to another audience. Widening it, to everyone or to another thread, needs a fresh `credential_sharing` confirmation; narrowing it to a thread needs the session alone, and the audience it already has writes nothing. `expected` is compared with the stored audience before anything else: one that differs is a conflict ("The audience changed since it was shown, so nothing was saved."), with nothing saved and no confirmation asked |
 | `set_caps` | `share_id`, `person_daily`, `total_daily` | Write both daily caps; a cap omitted or `null` is no limit |
 | `revoke` | `share_id` | Refuse the next request through it; every grant that binds it, in every athanor, stops being ready until it is given again |
 | `usage` | `share_id`, `days` (1–35) | Each person who used it, by id and display name, with their count by day, and the share's day totals |
@@ -1255,10 +1255,26 @@ allow naming their identifier (`per_…`) admits them. An entry given a name kee
 identifier cyfr.run answers for it, with the name beside it. `*` also lets anyone
 make a person here with a passkey. An invitation that someone with a CYFR name
 redeems by signing in from their CYFR writes an allow of their identifier, unless a
-deny names it, and a deny always outranks an allow. Groups never widen the allowlist
-otherwise: adding an unknown identifier to a group leaves an invitation that
-activates on that person's first admitted CYFR sign-in and, when the allowlist would
+deny names it, and a deny always outranks an allow. Threads never widen the allowlist
+otherwise: adding an unknown identifier to a shared thread leaves an invitation that
+activates on that person's admitted CYFR sign-in and, when the allowlist would
 refuse them, a request for the operator.
+
+### Invitations (`invitation` tool)
+
+An invitation is to this CYFR: its link makes a new person here, with their own
+athanor, or admits someone who signs in from their CYFR. It works once and expires
+after seven days, and its code is shown only when it is made.
+
+| Action | Key args | What it does |
+|--------|----------|--------------|
+| `create` | optional `thread_id`, `name` | Make an invitation. With `thread_id`, a shared thread you sit in while it is active (never a pair), it seats its newcomer there; without, it names no thread, and only the platform administrator makes one (Settings, **Invite to this CYFR**). `name` fills the newcomer's name in. Answers the invitation and `invitation_url`, once |
+| `list` | — | The invitations you made, or every one for the platform administrator, newest first: each with its `state` (`pending`, `redeemed`, `revoked`, `expired`), its expiry, and the `thread_id` and, to a viewer seated there, `thread_title` it names |
+| `revoke` | `invitation_id` | Close a pending invitation, as its issuer or the platform administrator |
+
+A thread whose people include someone still recovering from a declared restore admits
+no one new, by an addition, an invitation's redemption or an invited row's activation,
+until each of them has recovered.
 
 An operator keeps their keys in their own vault, as everyone does, and offers one to the people here by sharing it with everyone: such a share is what a new person's first sign-in binds when it fits ([Shares](#shares-share-tool)). The people it is offered to grant it through the same consent walk as their own entries; no share bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
 

@@ -33,6 +33,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     ScheduleRun,
     Session,
     ShareChanged,
+    SharedThreadChanged,
     Tinctures,
     VaultEntryChanged,
     Webhooks
@@ -98,6 +99,12 @@ defmodule Cyfr.TelemetryBridgeTest do
       {[:cyfr, :sanctum, :membership, :changed],
        %{user_id: @user, athanor_id: @athanor, change: :joined}, Bus.memberships(@user),
        {Membership, %{user_id: @user, change: :joined}}},
+      {[:cyfr, :sanctum, :shared_thread, :changed], %{thread_id: "sth_1", user_ids: [@user]},
+       Bus.shared_threads(@user),
+       {SharedThreadChanged, %{kind: :changed, user_id: @user, thread_id: "sth_1"}}},
+      {[:cyfr, :sanctum, :shared_thread, :posted], %{thread_id: "sth_1", user_ids: [@user]},
+       Bus.shared_threads(@user),
+       {SharedThreadChanged, %{kind: :posted, user_id: @user, thread_id: "sth_1"}}},
       {[:cyfr, :sanctum, :vault, :entry_changed],
        Map.merge(tenant, %{entry_id: "v1", verb: :rotate, meta: %{name: "k"}}),
        Bus.vault_changed(@actor),
@@ -294,8 +301,8 @@ defmodule Cyfr.TelemetryBridgeTest do
         share_id: "shr_audience",
         kind: :audience,
         user_id: @user,
-        audience: "group",
-        group_id: "ath_traders",
+        audience: "thread",
+        thread_id: "sth_traders",
         vault_entry_id: "vlt_market",
         fields: %{"API_KEY" => "sk-share-never-bridged"}
       })
@@ -762,6 +769,57 @@ defmodule Cyfr.TelemetryBridgeTest do
       _ -> flush()
     after
       0 -> :ok
+    end
+  end
+
+  describe "a shared thread's change" do
+    test "reaches the own topic of each person it names" do
+      people = ["usr_thread_a", "usr_thread_b"]
+      for person <- people ++ ["usr_thread_other"], do: relay(Bus.shared_threads(person))
+
+      :telemetry.execute([:cyfr, :sanctum, :shared_thread, :changed], %{count: 1}, %{
+        thread_id: "sth_bridge",
+        user_ids: people
+      })
+
+      for person <- people do
+        topic = Bus.shared_threads(person)
+        assert_receive {:heard, ^topic, heard}
+
+        assert heard == %Cyfr.Bus.SharedThreadChanged{
+                 kind: :changed,
+                 user_id: person,
+                 thread_id: "sth_bridge"
+               }
+      end
+
+      refute_receive {:heard, _topic, _message}, 100
+    end
+  end
+
+  describe "a shared thread's change made through its rules" do
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
+    test "is published, after its write commits, on the own topic of the person it seats" do
+      alice = Cyfr.Test.ShareFixtures.person!("Alice").user.id
+      bob = Cyfr.Test.ShareFixtures.person!("Bob").user.id
+      {:ok, thread} = Sanctum.SharedThreads.create(alice, "Plans")
+      thread_id = thread.id
+
+      topic = Bus.shared_threads(bob)
+      relay(topic)
+
+      assert {:ok, :added} = Sanctum.SharedThreads.add(alice, thread_id, user_id: bob)
+
+      assert_receive {:heard, ^topic,
+                      %Cyfr.Bus.SharedThreadChanged{
+                        kind: :changed,
+                        user_id: ^bob,
+                        thread_id: ^thread_id
+                      }}
     end
   end
 end

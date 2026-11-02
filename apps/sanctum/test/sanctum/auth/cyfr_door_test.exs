@@ -16,7 +16,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   current live key, for this home, this challenge and this carry, and the
   door judges the identity by its identifier. A first-time person is made
   by the remote admission (`Sanctum.Newcomer`), a known one unlocked: a
-  remote person here, with no key and no athanor of their own; their
+  remote person here, with no key and an athanor of their own; their
   session records the head's `key_epoch` and commits with its login
   receipt, and a retried login resumes it. Every carry that reaches a
   directory read is counted against the installation's 200 a minute
@@ -25,7 +25,8 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
   The challenge copies the request's attempt and invitation. A challenge
   carrying an invitation's hash admits by it: a known person is checked
-  against the door's deny, redeemed, seated and allowed, then unlocked; a
+  against the door's deny, redeemed, seated in the shared thread it names
+  and allowed, then unlocked; a
   first-time one is admitted by the remote admission with it; an
   invitation that can no longer be used signs in only a person the door
   admits anyway, and the allow it wrote admits later sign-ins without it.
@@ -462,12 +463,13 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
       assert user.id == row.user_id
 
-      # No athanor of their own is minted: they hold here only what a
-      # membership gives them, and this one gives none.
-      assert Sanctum.Tenancy.Users.personal_athanor_id(user.id) == :none
+      # Their own athanor is minted with them, as every person's is.
+      assert {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user.id)
+      assert {:ok, %{id: ^athanor_id, kind: "person"}} = Sanctum.Tenancy.Athanors.get(athanor_id)
 
-      # The session records the fresh head's key_epoch, with its receipt.
-      assert [%{provider: "cyfr", athanor_id: nil, identity_key_epoch: epoch}] =
+      # The session, bound to their athanor, records the fresh head's
+      # key_epoch, with its receipt.
+      assert [%{provider: "cyfr", athanor_id: ^athanor_id, identity_key_epoch: epoch}] =
                sessions(user.id)
 
       assert epoch == DirectoryServer.key_epoch(identity)
@@ -738,18 +740,25 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       {:ok, issuer} =
         Sanctum.Tenancy.Users.get_by_identity("github|https://github.com|cyfr-door-installation")
 
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Invited at the door")
-      %{issuer: issuer, group: group}
+      {:ok, thread} = Sanctum.SharedThreads.create(issuer.id, "Invited at the door")
+      %{issuer: issuer, thread: thread}
     end
 
-    defp invitation!(%{issuer: issuer, group: group}) do
+    defp invitation!(%{issuer: issuer, thread: thread}) do
       ctx = Sanctum.TestContext.session!(issuer.id)
-      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, group.id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, thread.id)
       {:ok, hash} = Sanctum.Invitations.code_hash(code)
       {invitation, hash}
     end
 
     defp door(identifier), do: Enum.filter(Store.list(), &(&1.value == identifier))
+
+    defp seated?(user_id, thread),
+      do:
+        match?(
+          {:ok, _seat},
+          Arca.SharedThreadMembers.find(Prima.Actor.system(), thread.id, user_id)
+        )
 
     # A remote person this home knows, signed in once under an allow that
     # was then removed: known here, and unallowed.
@@ -774,7 +783,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert {:ok, %{invitation: :redeemed, resumed: false}} =
                CyfrDoor.callback(assertion(identity, held, context.home), held)
 
-      assert Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      assert seated?(user_id, context.thread)
       note = "invitation " <> invitation.id
       assert [%{effect: "allow", status: "allowed", note: ^note}] = door(identity.identifier)
 
@@ -791,7 +800,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
                CyfrDoor.callback(assertion(identity, held, context.home), held)
 
       user_id = person_of(identity.identifier).user_id
-      assert Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      assert seated?(user_id, context.thread)
       assert [%{effect: "allow"}] = door(identity.identifier)
     end
 
@@ -828,7 +837,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       end
 
       assert %{redeemed_at: nil} = Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id)
-      refute Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      refute seated?(user_id, context.thread)
       refute person_of(other.identifier)
     end
 
@@ -855,7 +864,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       end
 
       refute person_of(stranger.identifier)
-      refute Sanctum.Tenancy.Members.member?(known_id, context.group.id)
+      refute seated?(known_id, context.thread)
       assert door(stranger.identifier) == []
       assert door(known.identifier) == []
 
@@ -877,7 +886,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert {:ok, %{invitation: :none}} =
                CyfrDoor.callback(assertion(identity, held, context.home), held)
 
-      assert Sanctum.Tenancy.Members.member?(user_id, context.group.id)
+      assert seated?(user_id, context.thread)
       assert Arca.Repo.get!(Arca.Schemas.Invitation, invitation.id).redeemed_by == user_id
 
       # The same invitation again is spent, and the allow still admits.

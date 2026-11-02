@@ -30,7 +30,7 @@
 //                    UTC midnight; her vault's Shared with you, compared
 //                    whole, shows the owner and her use today, 3, and no
 //                    cap, which is the owner's
-//   narrow_audience  the administrator narrows Company AI's share to a group
+//   narrow_audience  the administrator narrows Company AI's share to a thread
 //                    holding Bea on Shared by you, which sends the audience
 //                    the row showed as expected: Ana's claim is refused, her
 //                    consent's row binding reads it no longer offered, and
@@ -273,7 +273,7 @@ const FIELDS = {
     athanor_id: minted(ADMIN),
     vault_entry_id: minted(ROW),
     audience: exact,
-    group_id: exact,
+    thread_id: exact,
     person_daily: exact,
     total_daily: exact,
     status: exact,
@@ -433,7 +433,7 @@ function requestedShare(spec, id, entryId, operator, over = {}) {
     athanor_id: operator.athanor_id,
     vault_entry_id: entryId,
     audience: "everyone",
-    group_id: null,
+    thread_id: null,
     person_daily: spec.person_daily === "" ? null : Number(spec.person_daily),
     total_daily: null,
     status: "active",
@@ -938,15 +938,15 @@ async function main() {
     // -----------------------------------------------------------------------
     // narrow_audience
     // -----------------------------------------------------------------------
-    // Bea signs in once and is seated with the administrator in a group,
-    // Traders, which the narrowing names.
+    // Bea signs in once and is seated with the administrator in a shared
+    // thread, Traders, which the narrowing names.
     bea = await ask({ op: "sign_in", name: "bea", email: "bea@example.com" });
-    const traders = await ask({ op: "group", member: bea.user_id, name: "Traders" });
+    const traders = await ask({ op: "thread", member: bea.user_id, name: "Traders" });
     await open(admin, vault);
     const audience = admin.locator(`${byYouRow(ai.share)} form[data-test="share-audience-form"]`);
-    const offeredTraders = await audience.locator(`option[value="group:${traders.group_id}"]`)
+    const offeredTraders = await audience.locator(`option[value="shared_thread:${traders.thread_id}"]`)
       .waitFor({ state: "attached", timeout: 30_000 }).then(() => true).catch(() => false);
-    await audience.locator('select[name="audience"]').selectOption(`group:${traders.group_id}`);
+    await audience.locator('select[name="audience"]').selectOption(`shared_thread:${traders.thread_id}`);
     const mark = frames.length;
     await audience.locator('[data-test="share-audience-save"]').click();
     const saved = await told(admin, "Audience saved.");
@@ -986,7 +986,7 @@ async function main() {
       // Mail's, which is to everyone.
       shared: [ai.share, mail.share],
     };
-    aiShareOver = { ...aiShareOver, audience: "group", group_id: traders.group_id };
+    aiShareOver = { ...aiShareOver, audience: "thread", thread_id: traders.thread_id };
     setModel();
     model.ana.shared = [mail.share];
     const notOffered = [{ admitted: false, refusal: "not_offered" }];

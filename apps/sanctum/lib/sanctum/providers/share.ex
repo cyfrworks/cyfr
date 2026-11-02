@@ -4,7 +4,7 @@
 defmodule Sanctum.Providers.Share do
   @moduledoc """
   The `share` tool: one of a person's attach-only vault entries offered to
-  a group they are in or to everyone on this CYFR, so the people it is
+  a shared thread they sit in or to everyone on this CYFR, so the people it is
   offered to grant it to their own components, which use it with CYFR
   attaching the key to each request and never disclosing it. Thin
   argument mapping over `Sanctum.Shares`, which owns every rule.
@@ -37,13 +37,13 @@ defmodule Sanctum.Providers.Share do
         required: true,
         enum: Arca.Shares.audiences(),
         description:
-          "Who it is offered to: everyone on this CYFR, or the active members of one group"
+          "Who it is offered to: everyone on this CYFR, or the people of one shared thread"
       )
 
-    group_id =
-      Arg.new("group_id", :string,
+    thread_id =
+      Arg.new("thread_id", :string,
         description:
-          "The group a group audience names, one you are an active member of; none for everyone"
+          "The shared thread a thread audience names, one you sit in; none for everyone"
       )
 
     # The audience the caller saw: a change is decided against it, and one
@@ -56,10 +56,10 @@ defmodule Sanctum.Providers.Share do
            Arg.new("audience", :string,
              required: true,
              enum: Arca.Shares.audiences(),
-             description: "The audience as the caller saw it: everyone, or a group"
+             description: "The audience as the caller saw it: everyone, or a thread"
            ),
-           Arg.new("group_id", :string,
-             description: "The group as the caller saw it; none for everyone"
+           Arg.new("thread_id", :string,
+             description: "The thread as the caller saw it; none for everyone"
            )
          ]},
         required: true,
@@ -102,14 +102,14 @@ defmodule Sanctum.Providers.Share do
           "Share a key: one attach-only entry of your own athanor, of kind " <>
             Enum.join(Prima.CredentialKinds.shareable(), " or ") <>
             ", whose destination names its methods and paths, offered to everyone or to a " <>
-            "group you are in, with optional daily caps",
+            "shared thread you sit in, with optional daily caps",
           [
             Arg.new("entry_id", :string,
               required: true,
               description: "Vault entry id (vlt_…) of your own athanor"
             ),
             audience,
-            group_id,
+            thread_id,
             person_daily,
             total_daily
           ],
@@ -126,9 +126,9 @@ defmodule Sanctum.Providers.Share do
         Operation.new(
           "share",
           "set_audience",
-          "Set a share's audience; widening it to everyone or another group asks a " <>
+          "Set a share's audience; widening it to everyone or another thread asks a " <>
             "confirmation",
-          [share_id, audience, group_id, expected],
+          [share_id, audience, thread_id, expected],
           [kind: :write] ++ owner
         ),
         Operation.new(
@@ -174,7 +174,7 @@ defmodule Sanctum.Providers.Share do
         )
       ],
       description:
-        "Keys shared between people on this CYFR: one of your attach-only vault entries offered to a group you are in or to everyone, which the people it is offered to grant to their own components; CYFR attaches the key to each request and never discloses it. list, usage and offered are reads; create, set_audience, set_caps and revoke are the owner's.",
+        "Keys shared between people on this CYFR: one of your attach-only vault entries offered to a shared thread you sit in or to everyone, which the people it is offered to grant to their own components; CYFR attaches the key to each request and never discloses it. list, usage and offered are reads; create, set_audience, set_caps and revoke are the owner's.",
       title: "Shares"
     )
   end
@@ -183,7 +183,7 @@ defmodule Sanctum.Providers.Share do
     params = %{
       entry_id: args["entry_id"],
       audience: args["audience"],
-      group_id: args["group_id"],
+      thread_id: args["thread_id"],
       person_daily: args["person_daily"],
       total_daily: args["total_daily"]
     }
@@ -207,7 +207,7 @@ defmodule Sanctum.Providers.Share do
       params = %{
         share_id: id,
         audience: args["audience"],
-        group_id: args["group_id"],
+        thread_id: args["thread_id"],
         expected: expected
       }
 
@@ -271,12 +271,12 @@ defmodule Sanctum.Providers.Share do
   # shape before Sanctum is called: present and a record. Whether it is an
   # audience a share may hold is Sanctum's (`:invalid_expected`).
   defp expected(%{"expected" => %{} = expected}),
-    do: {:ok, %{audience: expected["audience"], group_id: expected["group_id"]}}
+    do: {:ok, %{audience: expected["audience"], thread_id: expected["thread_id"]}}
 
   defp expected(%{"expected" => _not_a_record}),
     do:
       {:error,
-       {:invalid_argument, "invalid_expected: expected is a record of audience and group_id"}}
+       {:invalid_argument, "invalid_expected: expected is a record of audience and thread_id"}}
 
   defp expected(_args),
     do:
@@ -321,19 +321,19 @@ defmodule Sanctum.Providers.Share do
   defp fmt(:invalid_audience),
     do:
       {:invalid_argument,
-       "invalid_audience: audience is everyone with no group_id, or group with the " <>
-         "group_id of a group you are in"}
+       "invalid_audience: audience is everyone with no thread_id, or thread with the " <>
+         "thread_id of a shared thread you sit in"}
 
   defp fmt(:invalid_expected),
     do:
       {:invalid_argument,
        "invalid_expected: expected is the audience the change was decided against, " <>
-         "everyone with no group_id or group with its group_id"}
+         "everyone with no thread_id or thread with its thread_id"}
 
   defp fmt(:not_member),
     do:
       {:invalid_argument,
-       "not_member: a group audience names an active group you are an active member of"}
+       "not_member: a thread audience names an active shared thread you sit in"}
 
   defp fmt(:already_shared),
     do: {:conflict, "already_shared: the entry is already shared with that audience"}

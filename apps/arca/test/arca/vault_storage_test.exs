@@ -900,10 +900,13 @@ defmodule Arca.VaultStorageTest do
            "and leaves the shares as they are",
          %{terry: terry, entry: entry, share: share, alice: alice, alices: alices} do
       own = dependent_profile!(terry.actor, entry.id)
-      traders = Arca.Test.Shares.group!([terry.user.id])
+      traders = Arca.Test.Shares.thread!([terry.user.id])
 
       revoked =
-        Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+        Arca.Test.Shares.share!(terry.actor, entry.id, %{
+          audience: "thread",
+          thread_id: traders.id
+        })
 
       {:ok, _} = Arca.Shares.revoke(terry.actor, revoked.id, @blocked)
 

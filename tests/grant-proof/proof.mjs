@@ -493,7 +493,7 @@ async function main() {
     };
     const shareRow = {
       id: seeded.share_id, athanor_id: owner.athanor_id, vault_entry_id: seeded.entry_id, created_by: owner.user_id,
-      audience: "everyone", group_id: null, person_daily: null, total_daily: null, status: "active",
+      audience: "everyone", thread_id: null, person_daily: null, total_daily: null, status: "active",
     };
     const useRow = (user_id) => ({ athanor_id: owner.athanor_id, share_id: seeded.share_id, user_id, count: 1 });
     const windowOf = (read) => ({ from: clock.now, to: read.now, today: read.today });

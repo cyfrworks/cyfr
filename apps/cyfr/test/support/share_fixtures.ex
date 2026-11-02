@@ -5,8 +5,8 @@ defmodule Cyfr.Test.ShareFixtures do
   @moduledoc """
   Two people on one CYFR and a key one of them shares, as the consent
   walk meets them: Terry and Alice, each signed in to their own athanor
-  and seated together in the group Traders, and Terry's attach-only key
-  for the openai.com inference API shared with Traders (`traders!/0`).
+  and seated together in the shared thread Traders, and Terry's attach-only
+  key for the openai.com inference API shared with Traders (`traders!/0`).
   The rows are written through the storage facades (`Arca.Test.Shares`);
   each person's context is a signed-in person's in their own athanor,
   admitted through Prism, where a share is bound.
@@ -22,18 +22,18 @@ defmodule Cyfr.Test.ShareFixtures do
   def destination, do: @destination
 
   @doc """
-  Terry, Alice, the group Traders holding both, Terry's key (`entry`) and
-  its share with Traders (`share`).
+  Terry, Alice, the shared thread Traders seating both, Terry's key
+  (`entry`) and its share with Traders (`share`).
   """
   @spec traders!() :: map()
   def traders! do
     terry = person!("Terry")
     alice = person!("Alice")
-    traders = Arca.Test.Shares.group!([terry.user.id, alice.user.id])
+    traders = thread!([terry.user.id, alice.user.id])
     entry = key!(terry)
 
     share =
-      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
 
     %{terry: terry, alice: alice, traders: traders, entry: entry, share: share}
   end
@@ -109,14 +109,26 @@ defmodule Cyfr.Test.ShareFixtures do
     digest
   end
 
-  @doc "`person` leaves `group`, as the leave transition writes it."
-  @spec leave!(map(), map()) :: :ok
-  def leave!(group, %{user: user}) do
-    {:ok, _left} =
-      Arca.SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group.id), user.id,
-        verify: fn _ -> :ok end
-      )
+  @doc """
+  A shared thread titled `title`, made by the first of `user_ids` and
+  seating the rest, written through the stores as the platform writes
+  them.
+  """
+  @spec thread!([String.t(), ...], String.t()) :: map()
+  def thread!([creator | others], title \\ "Traders") do
+    server = Prima.Actor.system()
+    {:ok, thread} = Arca.SharedThreads.create(server, %{title: title, created_by: creator})
 
+    for other <- others,
+        do: {:ok, _seat} = Arca.SharedThreadMembers.seat(server, thread.id, other, creator)
+
+    thread
+  end
+
+  @doc "`person` leaves `thread`, as the store writes a leave."
+  @spec leave!(map(), map()) :: :ok
+  def leave!(thread, %{user: user}) do
+    {:ok, _left} = Arca.SharedThreadMembers.leave(Prima.Actor.system(), thread.id, user.id)
     :ok
   end
 end

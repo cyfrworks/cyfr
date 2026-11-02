@@ -81,14 +81,16 @@ defmodule Sanctum.Tenancy.CapsTest do
     end
   end
 
-  test "an unset count cap is its generous shipped default, the storage cap is absent unless set, 0 removes each, and a set cap is a ceiling" do
+  test "an unset count cap is its generous shipped default, the storage and shared thread caps are absent unless set, 0 removes each, and a set cap is a ceiling" do
     reset_caps()
 
     assert Map.new(Prima.Caps.keys(), &{&1, Caps.get(&1)}) == %{
              max_athanors: {:ok, 10_000},
              max_groups_per_person: {:ok, 50},
-             max_pairs_per_person: {:ok, 200},
+             max_pairs_per_person: {:ok, nil},
              max_members_per_group: {:ok, 1_000},
+             max_shared_threads_per_person: {:ok, nil},
+             max_people_per_thread: {:ok, nil},
              max_threads_per_athanor: {:ok, 1_000},
              athanor_storage_bytes: {:ok, nil}
            }

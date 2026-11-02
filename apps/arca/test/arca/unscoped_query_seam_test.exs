@@ -388,9 +388,11 @@ defmodule Arca.UnscopedQuerySeamTest do
   # with its reason before it lands.
   @share_crossings %{
     {"apps/arca/lib/arca/shares.ex", "offered_to"} =>
-      "the shares whose audience holds one person, by their memberships",
+      "the shares whose audience holds one person, by their seats in shared threads",
     {"apps/arca/lib/arca/shares.ex", "active_member?"} =>
-      "one membership of a group, read when a group share is made, moved and used",
+      "one seat in a shared thread, read when a thread share is made, moved and used",
+    {"apps/arca/lib/arca/shares.ex", "lock_thread"} =>
+      "the shared thread a thread audience names, locked by its id after the owner's athanor",
     {"apps/arca/lib/arca/shares.ex", "get_for_source"} =>
       "one share and its source entry, by the bare id a binding names",
     {"apps/arca/lib/arca/shares.ex", "administrator_shares"} =>
@@ -506,7 +508,10 @@ defmodule Arca.UnscopedQuerySeamTest do
         "thread and the person or identifier; deleted with the thread, never with an athanor",
     "Arca.Schemas.SharedMessage" =>
       "a message in a shared thread, keyed by the thread and its seq; deleted with the " <>
-        "thread, never with an athanor"
+        "thread, never with an athanor",
+    "Arca.Schemas.Invitation" =>
+      "an invitation to this CYFR, keyed by its id and the hash of its code, listed by its " <>
+        "issuer; it names at most a shared thread, which no athanor holds"
   }
 
   test "every schema without an athanor column is classified" do

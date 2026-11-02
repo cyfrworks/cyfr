@@ -38,13 +38,10 @@ defmodule Arca.TenantTables do
 
   # Every table carrying `athanor_id`, children first. `verify_roster!/0`
   # checks this against the live schema, so a new athanor-scoped table
-  # fails the boot rather than surviving erasure silently. Four of them
-  # may hold rows with no athanor — `memberships`, `sessions`,
-  # `decision_logs` and `invitations` — and erasure matches the athanor, so
-  # those rows stay: a null-tenant decision is the host's, purged under its
-  # own retention, and an invitation that seats its newcomer in no group is
-  # the instance's admission, not an athanor's. One that names a group is
-  # that group's, and goes with it.
+  # fails the boot rather than surviving erasure silently. Three of them
+  # may hold rows with no athanor — `memberships`, `sessions` and
+  # `decision_logs` — and erasure matches the athanor, so those rows stay:
+  # a null-tenant decision is the host's, purged under its own retention.
   @roster [
     "execution_events",
     "rate_windows",
@@ -103,7 +100,6 @@ defmodule Arca.TenantTables do
     "cron_schedules",
     "build_records",
     "provisioning_claims",
-    "invitations",
     "memberships"
   ]
 
@@ -182,6 +178,9 @@ defmodule Arca.TenantTables do
   # `shared_threads`, `shared_thread_members` and `shared_messages` are a
   # place several people talk in, its people and what they say: no athanor
   # holds a shared thread, so no athanor's erasure takes one.
+  #
+  # `invitations` are invitations to this CYFR: the instance's admission,
+  # naming at most a shared thread, which no athanor holds either.
   @not_athanor_scoped [
     "registry_tokens",
     "server_meta",
@@ -204,7 +203,8 @@ defmodule Arca.TenantTables do
     "cli_sign_ins",
     "shared_threads",
     "shared_thread_members",
-    "shared_messages"
+    "shared_messages",
+    "invitations"
   ]
 
   @doc "The closed roster, children first."

@@ -915,17 +915,15 @@ defmodule PrismWeb.VaultLiveTest do
       %{user: user, conn: conn, own: own, ctx: Sanctum.TestContext.via(ctx, :prism)}
     end
 
-    # Terry and Alice, each in their own athanor, seated together in Traders.
+    # Terry and Alice, each in their own athanor, seated together in the
+    # shared thread Traders.
     defp traders! do
       terry = named!("Terry")
       alice = named!("Alice")
-      {:ok, traders} = Sanctum.Tenancy.Athanors.create_group(terry.user.user_id, "Traders")
+      {:ok, traders} = Sanctum.SharedThreads.create(terry.user.user_id, "Traders")
 
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(alice.user.user_id,
-          scope: "athanor",
-          athanor_id: traders.id
-        )
+      {:ok, :added} =
+        Sanctum.SharedThreads.add(terry.user.user_id, traders.id, user_id: alice.user.user_id)
 
       %{terry: terry, alice: alice, traders: traders}
     end
@@ -997,7 +995,7 @@ defmodule PrismWeb.VaultLiveTest do
 
       assert has_element?(
                view,
-               sheet <> ~s( input[name="audience"][value="group:#{traders.id}"])
+               sheet <> ~s( input[name="audience"][value="shared_thread:#{traders.id}"])
              )
 
       assert texts(view, sheet <> " fieldset[data-test=share-audience] label") ==
@@ -1026,7 +1024,7 @@ defmodule PrismWeb.VaultLiveTest do
 
       view
       |> form(sheet, %{
-        "audience" => "group:#{traders.id}",
+        "audience" => "shared_thread:#{traders.id}",
         "person_daily" => "",
         "total_daily" => ""
       })
@@ -1045,8 +1043,11 @@ defmodule PrismWeb.VaultLiveTest do
 
       wait_until(fn -> shares_of(terry) != [] end, 2_000, "the share made once confirmed")
       [share] = shares_of(terry)
-      assert %{audience: "group", group_id: group_id, person_daily: nil, total_daily: nil} = share
-      assert group_id == traders.id
+
+      assert %{audience: "thread", thread_id: thread_id, person_daily: nil, total_daily: nil} =
+               share
+
+      assert thread_id == traders.id
 
       wait_until(fn -> has_element?(view, by_you(share)) end, 2_000, "the row")
 
@@ -1062,13 +1063,14 @@ defmodule PrismWeb.VaultLiveTest do
            "granted, from the person's own athanor" do
       %{terry: terry, traders: traders} = traders!()
       market = key!(terry, "market key", @market)
-      _share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+      _share = share!(terry, market, %{"audience" => "thread", "thread_id" => traders.id})
 
-      group_ctx = %{terry.ctx | athanor_id: traders.id}
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(terry.user.user_id, "Desk")
+      group_ctx = %{terry.ctx | athanor_id: group.id}
       group_key = key!(%{ctx: group_ctx}, "group key", @market)
 
-      conn = log_in_user(build_conn(), terry.user, athanor_id: traders.id)
-      {view, html} = mount_athanor(conn, "/vault", traders)
+      conn = log_in_user(build_conn(), terry.user, athanor_id: group.id)
+      {view, html} = mount_athanor(conn, "/vault", group)
 
       assert html =~ "group key"
       refute has_element?(view, share_button(group_key))
@@ -1078,7 +1080,7 @@ defmodule PrismWeb.VaultLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "a sheet's audience other than everyone or the person's own groups, or a cap that " <>
+    test "a sheet's audience other than everyone or the person's own threads, or a cap that " <>
            "is no count, dispatches nothing" do
       %{terry: terry} = traders!()
       market = key!(terry, "market key", @market)
@@ -1088,7 +1090,7 @@ defmodule PrismWeb.VaultLiveTest do
       sheet = "#system-layer-share"
 
       for {params, sentence} <- [
-            {%{"audience" => "group:ath_elsewhere"}, "Choose who it is shared with"},
+            {%{"audience" => "shared_thread:sth_elsewhere"}, "Choose who it is shared with"},
             {%{"audience" => "everyone", "person_daily" => "-1"}, "A cap is a whole number"},
             {%{"audience" => "everyone", "total_daily" => "1.5"}, "A cap is a whole number"}
           ] do
@@ -1106,11 +1108,72 @@ defmodule PrismWeb.VaultLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "the audience picker offers the person's active shared threads, a pair under the " <>
+           "other person's name, and reads them again when the person joins a thread or one " <>
+           "is archived" do
+      %{terry: terry, alice: alice, traders: traders} = traders!()
+      {:ok, pair} = Sanctum.SharedThreads.pair(terry.user.user_id, alice.user.user_id)
+      market = key!(terry, "market key", @market)
+      share = share!(terry, market, %{"audience" => "everyone"})
+      {view, _html} = vault!(terry)
+
+      offered = [
+        {"everyone", "Everyone on this CYFR"},
+        {"shared_thread:#{pair.id}", "Alice"},
+        {"shared_thread:#{traders.id}", "Traders"}
+      ]
+
+      view |> element(share_button(market)) |> render_click()
+      sheet = ~s(#system-layer-share input[name="audience"])
+      assert audiences(view, sheet, &(&1 |> LazyHTML.parent_node() |> LazyHTML.text())) == offered
+
+      picker = by_you(share) <> ~s( form[data-test="share-audience-form"] option)
+      assert audiences(view, picker, &LazyHTML.text/1) == offered
+
+      # Bob seats Terry in a thread of his: the page reads the threads again
+      # without a reload.
+      bob = named!("Bob")
+      bob_id = bob.user.user_id
+      {:ok, desk} = Sanctum.SharedThreads.create(bob_id, "Desk")
+      {:ok, :added} = Sanctum.SharedThreads.add(bob_id, desk.id, user_id: terry.user.user_id)
+      joined = [hd(offered), {"shared_thread:#{desk.id}", "Desk"} | tl(offered)]
+
+      wait_until(
+        fn -> audiences(view, picker, &LazyHTML.text/1) == joined end,
+        2_000,
+        "the joined thread offered"
+      )
+
+      # An archived thread is no audience.
+      {:ok, _archived} = Sanctum.SharedThreads.archive(bob_id, desk.id)
+
+      wait_until(
+        fn -> audiences(view, picker, &LazyHTML.text/1) == offered end,
+        2_000,
+        "the archived thread no longer offered"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Each element `selector` names, as its value and the words `label`
+    # reads for it.
+    defp audiences(view, selector, label) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(selector)
+      |> Enum.map(fn node ->
+        words = node |> label.() |> String.replace(~r/\s+/, " ") |> String.trim()
+        {node |> LazyHTML.attribute("value") |> List.first(), words}
+      end)
+    end
+
     test "Shared with you shows what is offered, by its owner's name and never its value, " <>
-           "and loses it when the person leaves the group" do
+           "and loses it when the person leaves the thread" do
       %{terry: terry, alice: alice, traders: traders} = traders!()
       market = key!(terry, "market key", @market)
-      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+      share = share!(terry, market, %{"audience" => "thread", "thread_id" => traders.id})
 
       {view, html} = vault!(alice)
 
@@ -1126,7 +1189,7 @@ defmodule PrismWeb.VaultLiveTest do
       refute html =~ "market key"
 
       # Leaving writes nothing to the share; the seat's change alone is read.
-      :ok = Sanctum.Tenancy.Members.remove_member(traders, user_id: alice.user.user_id)
+      {:ok, %{ended: false}} = Sanctum.SharedThreads.leave(alice.user.user_id, traders.id)
 
       wait_until(fn -> not has_element?(view, with_you(share)) end, 2_000, "the row gone")
       assert has_element?(view, ~s([data-test="shared-with-you-none"]), "No one shares a key")
@@ -1137,7 +1200,7 @@ defmodule PrismWeb.VaultLiveTest do
            "shares a key" do
       %{terry: terry, alice: alice, traders: traders} = traders!()
       market = key!(terry, "market key", @market)
-      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+      share = share!(terry, market, %{"audience" => "thread", "thread_id" => traders.id})
       {view, _html} = vault!(alice)
       assert has_element?(view, with_you(share))
 
@@ -1164,7 +1227,7 @@ defmodule PrismWeb.VaultLiveTest do
       {terry_view, _} = vault!(terry)
       {alice_view, _} = vault!(alice)
 
-      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+      share = share!(terry, market, %{"audience" => "thread", "thread_id" => traders.id})
 
       wait_until(fn -> has_element?(terry_view, by_you(share)) end, 2_000, "the owner's row")
       wait_until(fn -> has_element?(alice_view, with_you(share)) end, 2_000, "the offered row")
@@ -1204,7 +1267,7 @@ defmodule PrismWeb.VaultLiveTest do
            "naming the audience the row showed" do
       %{terry: terry, traders: traders} = traders!()
       market = key!(terry, "market key", @market)
-      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+      share = share!(terry, market, %{"audience" => "thread", "thread_id" => traders.id})
       {view, _} = vault!(terry)
 
       view
@@ -1246,7 +1309,7 @@ defmodule PrismWeb.VaultLiveTest do
            "the entry is rotated" do
       %{terry: terry, traders: traders} = traders!()
       market = key!(terry, "market key", @market)
-      share = share!(terry, market, %{"audience" => "group", "group_id" => traders.id})
+      share = share!(terry, market, %{"audience" => "thread", "thread_id" => traders.id})
 
       {:ok, _marked} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
       {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)

@@ -5,9 +5,9 @@ defmodule PrismWeb.SystemLayer.Share do
   @moduledoc """
   The sharing sheet, which only the system layer draws: one of the
   person's own vault entries offered to everyone on this CYFR or to one
-  group they are an active member of, a DM included, with two optional
-  daily caps. The groups are the ones the prompt names (`groups`), each
-  under the name the person reads; there is no list of people to pick.
+  shared thread they sit in, a pair included, with two optional daily
+  caps. The threads are the ones the prompt names (`threads`), each under
+  the name the person reads; there is no list of people to pick.
 
   The caps start empty. Empty is no limit, `0` admits no use, and a
   number is the most requests that day, per person or by everyone
@@ -24,7 +24,7 @@ defmodule PrismWeb.SystemLayer.Share do
   use Phoenix.Component
 
   @everyone "everyone"
-  @group "group:"
+  @thread "shared_thread:"
 
   attr :id, :string, required: true
   attr :prompt, :map, required: true
@@ -48,16 +48,21 @@ defmodule PrismWeb.SystemLayer.Share do
           <input type="radio" name="audience" value={everyone()} required />
           <span>Everyone on this CYFR</span>
         </label>
-        <label :for={group <- @prompt.subject.groups} class="flex items-center gap-2 text-sm">
-          <input type="radio" name="audience" value={group_value(group.id)} data-group={group.id} />
-          <span>{group.name}</span>
+        <label :for={thread <- @prompt.subject.threads} class="flex items-center gap-2 text-sm">
+          <input
+            type="radio"
+            name="audience"
+            value={thread_value(thread.id)}
+            data-thread={thread.id}
+          />
+          <span>{thread.name}</span>
         </label>
         <p
-          :if={@prompt.subject.groups == []}
+          :if={@prompt.subject.threads == []}
           class="text-xs text-gray-400"
-          data-test="share-no-groups"
+          data-test="share-no-threads"
         >
-          You are in no group, so it can be shared with everyone alone.
+          You are in no shared thread, so it can be shared with everyone alone.
         </p>
       </fieldset>
       <fieldset class="space-y-2" data-test="share-caps">
@@ -105,12 +110,12 @@ defmodule PrismWeb.SystemLayer.Share do
   @doc """
   `share.create`'s arguments for what the sheet of `subject` sent: the
   entry the prompt names, the audience chosen, everyone or one of the
-  prompt's groups, and each cap typed, a whole number, absent when left
+  prompt's threads, and each cap typed, a whole number, absent when left
   empty. `{:error, sentence}` for anything else, with nothing dispatched.
   """
   @spec args(map(), map()) :: {:ok, map()} | {:error, String.t()}
-  def args(%{entry_id: entry_id, groups: groups}, params) when is_map(params) do
-    with {:ok, audience} <- audience(params["audience"], groups),
+  def args(%{entry_id: entry_id, threads: threads}, params) when is_map(params) do
+    with {:ok, audience} <- audience(params["audience"], threads),
          {:ok, caps} <- caps(params) do
       {:ok,
        %{"entry_id" => entry_id}
@@ -122,24 +127,24 @@ defmodule PrismWeb.SystemLayer.Share do
 
   @doc """
   The audience a choice names, as `share.create` and `share.set_audience`
-  take it: `"everyone"`, or `"group:<id>"` for one of `groups`, the
+  take it: `"everyone"`, or `"shared_thread:<id>"` for one of `threads`, the
   person's own. `{:error, sentence}` for anything else.
   """
   @spec audience(term(), [%{id: String.t()}]) :: {:ok, map()} | {:error, String.t()}
-  def audience(@everyone, _groups), do: {:ok, %{"audience" => "everyone"}}
+  def audience(@everyone, _threads), do: {:ok, %{"audience" => "everyone"}}
 
-  def audience(@group <> id, groups) do
-    if Enum.any?(groups, &(&1.id == id)),
-      do: {:ok, %{"audience" => "group", "group_id" => id}},
+  def audience(@thread <> id, threads) do
+    if Enum.any?(threads, &(&1.id == id)),
+      do: {:ok, %{"audience" => "thread", "thread_id" => id}},
       else: no_audience()
   end
 
-  def audience(_chosen, _groups), do: no_audience()
+  def audience(_chosen, _threads), do: no_audience()
 
   @doc "The choice that names `audience`, as `audience/2` reads it."
   @spec audience_value(map()) :: String.t()
-  def audience_value(%{"audience" => "group", "group_id" => id}) when is_binary(id),
-    do: @group <> id
+  def audience_value(%{"audience" => "thread", "thread_id" => id}) when is_binary(id),
+    do: @thread <> id
 
   def audience_value(%{"audience" => audience}), do: to_string(audience)
 
@@ -156,7 +161,7 @@ defmodule PrismWeb.SystemLayer.Share do
   end
 
   defp no_audience,
-    do: {:error, "Choose who it is shared with: everyone, or one of your groups."}
+    do: {:error, "Choose who it is shared with: everyone, or one of your threads."}
 
   defp cap(nil), do: {:ok, nil}
 
@@ -179,7 +184,7 @@ defmodule PrismWeb.SystemLayer.Share do
     do: {:error, "A cap is a whole number of requests a day, or empty for no limit."}
 
   defp everyone, do: @everyone
-  defp group_value(id), do: audience_value(%{"audience" => "group", "group_id" => id})
+  defp thread_value(id), do: audience_value(%{"audience" => "thread", "thread_id" => id})
 
   defp uncapped(true),
     do:

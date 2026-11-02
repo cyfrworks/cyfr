@@ -191,6 +191,7 @@ defmodule PrismWeb.SystemLayerTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
+  alias Cyfr.Test.ShareFixtures
   alias PrismWeb.SystemLayer.Prompt
   alias PrismWeb.SystemLayerTest.{BareHost, Host, MovingHost, QuietHost}
   alias Sanctum.Context
@@ -4455,25 +4456,25 @@ defmodule PrismWeb.SystemLayerTest do
       %{view: view, ctx: person_context(user, athanor), user: user}
     end
 
-    # A key of the person's own athanor shared with a group they sit in
-    # (`first`), and a second group of theirs (`second`).
+    # A key of the person's own athanor shared with a thread they sit in
+    # (`first`), and a second thread of theirs (`second`).
     defp made_share!(ctx) do
       actor = Context.actor(ctx)
-      [first, second] = for _group <- 1..2, do: Arca.Test.Shares.group!([ctx.user_id])
+      [first, second] = for _thread <- 1..2, do: ShareFixtures.thread!([ctx.user_id])
       entry = Arca.Test.Shares.entry!(actor)
-      share = Arca.Test.Shares.share!(actor, entry.id, %{audience: "group", group_id: first.id})
+      share = Arca.Test.Shares.share!(actor, entry.id, %{audience: "thread", thread_id: first.id})
       %{share: share, first: first, second: second}
     end
 
-    # The share's stored audience moved to its second group, as another
+    # The share's stored audience moved to its second thread, as another
     # session of the person moves it, with no record of this page's.
     defp moved!(ctx, %{share: share, first: first, second: second}) do
       {:ok, _moved} =
         Arca.Shares.set_audience(
           Context.actor(ctx),
           share.id,
-          %{audience: "group", group_id: first.id},
-          %{audience: "group", group_id: second.id}
+          %{audience: "thread", thread_id: first.id},
+          %{audience: "thread", thread_id: second.id}
         )
 
       :ok
@@ -4521,7 +4522,7 @@ defmodule PrismWeb.SystemLayerTest do
       args = %{
         "share_id" => made.share.id,
         "audience" => "everyone",
-        "expected" => %{"audience" => "group", "group_id" => made.first.id}
+        "expected" => %{"audience" => "thread", "thread_id" => made.first.id}
       }
 
       Map.merge(made, %{tag: tag, ref: asked!(view, ctx, tag, "share/set_audience", args)})
@@ -4660,15 +4661,15 @@ defmodule PrismWeb.SystemLayerTest do
            "refusal alone",
          %{view: view, ctx: ctx} do
       %{share: share, first: first} = made_share!(ctx)
-      # A group the person does not sit in.
-      elsewhere = Arca.Test.Shares.group!()
+      # A thread the person does not sit in.
+      elsewhere = ShareFixtures.thread!([Arca.Test.Shares.person!().id])
       tag = {:audience, share.id}
 
       args = %{
         "share_id" => share.id,
-        "audience" => "group",
-        "group_id" => elsewhere.id,
-        "expected" => %{"audience" => "group", "group_id" => first.id}
+        "audience" => "thread",
+        "thread_id" => elsewhere.id,
+        "expected" => %{"audience" => "thread", "thread_id" => first.id}
       }
 
       ref = asked!(view, ctx, tag, "share/set_audience", args)
@@ -4903,20 +4904,24 @@ defmodule PrismWeb.SystemLayerTest do
       id: "share-vlt_1",
       kind: :share,
       action: :credential_sharing,
-      subject: %{entry_id: "vlt_1", name: "market key", groups: [%{id: "ath_g", name: "Traders"}]}
+      subject: %{
+        entry_id: "vlt_1",
+        name: "market key",
+        threads: [%{id: "sth_t", name: "Traders"}]
+      }
     }
 
-    test "names the entry and the person's groups, under credential_sharing alone" do
+    test "names the entry and the person's threads, under credential_sharing alone" do
       assert {:ok, @share} = Prompt.validate(@share)
-      assert {:ok, _} = Prompt.validate(put_in(@share.subject.groups, []))
+      assert {:ok, _} = Prompt.validate(put_in(@share.subject.threads, []))
 
       for prompt <- [
             %{@share | action: :credential_entry},
             %{@share | action: nil},
             put_in(@share.subject[:value], "sk-1"),
             put_in(@share.subject[:audience], "everyone"),
-            put_in(@share.subject.groups, [%{id: "ath_g"}]),
-            put_in(@share.subject.groups, [%{id: "", name: "Traders"}]),
+            put_in(@share.subject.threads, [%{id: "sth_t"}]),
+            put_in(@share.subject.threads, [%{id: "", name: "Traders"}]),
             put_in(@share.subject.entry_id, ""),
             update_in(@share.subject, &Map.delete(&1, :name))
           ] do
@@ -5782,8 +5787,8 @@ defmodule PrismWeb.SystemLayerTest do
              id: "k-share",
              kind: :share,
              action: :credential_sharing,
-             subject: %{entry_id: "vlt_k", name: "probe", groups: []}
-           }, "Offer this key to everyone on this CYFR or to one of your groups"},
+             subject: %{entry_id: "vlt_k", name: "probe", threads: []}
+           }, "Offer this key to everyone on this CYFR or to one of your threads"},
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
            "Pair a phone or another browser with this CYFR"},

@@ -10,13 +10,14 @@ defmodule Sanctum.Invitations do
 
   ## Issuing
 
-  The platform administrator issues one naming no athanor. Anyone,
-  the administrator included, issues one naming a group athanor they hold
-  an active seat in: the invitation seats its newcomer there, which is the
-  group's act, and the administrator's capability is over the instance,
-  never a seat. A person's own athanor, a frozen roster and an archived
-  athanor take none, and to a caller with no seat an athanor answers as a
-  missing one does. An invitation may offer its newcomer a name, which
+  An invitation is to this CYFR. The platform administrator issues one
+  naming no thread. Anyone, the administrator included, issues one naming
+  a shared thread they sit in while it is active: the invitation seats
+  its newcomer there, which is the thread's people's act, and the
+  administrator's capability is over the instance, never a seat. To a
+  caller not seated there a thread answers as a missing one does; a pair
+  takes none, since its two people were set when it opened. An invitation
+  may offer its newcomer a name, which
   their invitation page fills in; it reserves nothing, and the newcomer
   may take another. The code is 32 random bytes, given to the issuer once
   as base64url without padding; only the lowercase hex SHA-256 of the
@@ -28,8 +29,8 @@ defmodule Sanctum.Invitations do
   is still open. The administrator lists every invitation, anyone else the
   ones they issued; to anyone else another's invitation answers as a
   missing one does. Each shows its state (`pending`, `redeemed`, `revoked`
-  or `expired`), its expiry, and the athanor it names when it names one,
-  whose name only a viewer seated there reads.
+  or `expired`), its expiry, and the thread it names when it names one,
+  whose title only a viewer seated there reads.
 
   ## Redeeming
 
@@ -39,16 +40,19 @@ defmodule Sanctum.Invitations do
   it under, their `security_generation` still the one the invitation
   recorded (`Arca.Invitations`), so a denial, an allow or a declared
   restore since retires it and restored authority never redeems; one
-  naming an athanor needs the issuer still seated there and the athanor
-  still an active group with an open roster, and one naming none needs
-  the issuer still the platform administrator. Any failure is
+  naming a thread needs the thread still active and the issuer still
+  seated there, and one naming none needs the issuer still the platform
+  administrator. Any failure is
   `:invitation_invalid`, one answer for all, so a code reveals nothing of
   why. `lookup/1` makes exactly that check for the invitation page, and
   reads only. `redeem/2` marks the invitation redeemed by the person, by
   one conditional write that lands only while the row is open and
   unexpired, inside the admission's transaction after the check. The seat
-  an invitation naming a group makes reads its issuer's standing and seat
-  there once more, under the group's lock (`issuer_seated/1`).
+  an invitation naming a thread makes is a row of the thread's people,
+  written under the thread's lock with its issuer's standing and seat
+  read there once more (`issuer_seated/1`), the thread's people cap
+  counted and a declared restore's hold read there too
+  (`Sanctum.SharedThreads.seat_invited/4`).
 
   ## Redeeming as an existing identity
 
@@ -59,7 +63,7 @@ defmodule Sanctum.Invitations do
   person this CYFR already knows, in a transaction of its own, and
   `redeem_hash/2` for one it does not, in the remote admission's
   (`Sanctum.Newcomer`). After the conditional write both write, in that
-  transaction, the seat the invitation names, under the group's lock,
+  transaction, the seat the invitation names, under the thread's lock,
   and the identifier's allow (`Sanctum.Door.Store.allow_unless_denied/4`),
   the row `door.allow`
   writes, added by the issuer, noting the invitation, labelled with the
@@ -71,8 +75,8 @@ defmodule Sanctum.Invitations do
   admitted by that allow, which any later deny outranks.
   """
 
-  alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.{Context, SharedThreads}
+  alias Sanctum.Tenancy.{Members, Users}
 
   @lifetime_ms 7 * 24 * 60 * 60 * 1000
   @code_bytes 32
@@ -83,43 +87,44 @@ defmodule Sanctum.Invitations do
           required(:state) => String.t(),
           required(:issued_by) => String.t(),
           required(:expires_at) => DateTime.t(),
-          optional(:athanor_id) => String.t(),
-          optional(:athanor_name) => String.t()
+          optional(:thread_id) => String.t(),
+          optional(:thread_title) => String.t()
         }
 
   @typedoc """
-  What the invitation page shows: who invited, to which athanor, until
+  What the invitation page shows: who invited, to which thread, until
   when, and the name it offers.
   """
   @type shown :: %{
           required(:inviter) => String.t(),
           required(:expires_at) => DateTime.t(),
-          optional(:athanor) => String.t(),
+          optional(:thread) => String.t(),
           optional(:name) => String.t()
         }
 
   @doc """
-  Issue an invitation naming the group athanor `athanor_id`, or none
+  Issue an invitation naming the shared thread `thread_id`, or none
   (`nil`), offering its newcomer `name`, or none (`nil`), a name by
   `Sanctum.Newcomer.name/1`. Answers the invitation and its code, which is
   given once and never stored.
   """
   @spec create(Context.t(), String.t() | nil, String.t() | nil) ::
           {:ok, %{invitation: view(), code: String.t()}} | {:error, term()}
-  def create(%Context{user_id: user_id} = ctx, athanor_id, name \\ nil)
+  def create(%Context{user_id: user_id} = ctx, thread_id, name \\ nil)
       when is_binary(user_id) do
     with :ok <- offered(name),
-         {:ok, actor} <- issuable(ctx, athanor_id) do
+         :ok <- issuable(ctx, thread_id) do
       bytes = :crypto.strong_rand_bytes(@code_bytes)
 
       attrs = %{
         code_hash: Prima.Digest.sha256_hex(bytes),
         issued_by: user_id,
         lifetime_ms: @lifetime_ms,
+        thread_id: thread_id,
         name: name
       }
 
-      case Arca.Invitations.insert(actor, attrs) do
+      case Arca.Invitations.insert(server(), attrs) do
         {:ok, row} -> {:ok, %{invitation: view(row, seats(user_id)), code: encode(bytes)}}
         {:error, reason} -> {:error, unavailable(reason)}
       end
@@ -168,7 +173,7 @@ defmodule Sanctum.Invitations do
   @doc """
   What the invitation page shows of the invitation `code` opens: who
   invited (their display name, else their handle, else "a member of this
-  CYFR", never an address), the athanor's name when it names one, its
+  CYFR", never an address), the thread's title when it names one, its
   expiry, and the name it offers when it offers one; or
   `:invitation_invalid` under exactly the check redemption makes
   (`redeemable/1`). Reads only.
@@ -176,9 +181,9 @@ defmodule Sanctum.Invitations do
   @spec lookup(term()) :: {:ok, shown()} | {:error, :invitation_invalid | :unavailable}
   def lookup(code) do
     with {:ok, code_hash} <- code_hash(code),
-         {:ok, %{row: row, issuer: issuer, athanor: athanor}} <- standing(code_hash) do
+         {:ok, %{row: row, issuer: issuer, title: title}} <- standing(code_hash) do
       shown = %{inviter: inviter(issuer), expires_at: row.expires_at}
-      shown = if athanor, do: Map.put(shown, :athanor, athanor.name), else: shown
+      shown = if is_binary(title), do: Map.put(shown, :thread, title), else: shown
       {:ok, if(is_binary(row.name), do: Map.put(shown, :name, row.name), else: shown)}
     end
   end
@@ -296,9 +301,9 @@ defmodule Sanctum.Invitations do
   end
 
   @doc """
-  Tell the group the invitation `code_hash` names of the person `user_id`
-  it seated there, once the redemption committed. One naming no group, or
-  one that cannot be read, tells no one.
+  Tell the thread the invitation `code_hash` names of the person `user_id`
+  it seated there, once the redemption committed. One naming no thread,
+  or one that cannot be read, tells no one.
   """
   @spec announce(String.t(), String.t()) :: :ok
   def announce(code_hash, user_id) when is_binary(code_hash) and is_binary(user_id) do
@@ -308,11 +313,8 @@ defmodule Sanctum.Invitations do
     end
   end
 
-  defp joined(%{athanor_id: athanor_id}, user_id) when is_binary(athanor_id) do
-    Members.broadcast_change(user_id, athanor_id, :joined)
-    Sanctum.Notify.member_changed(athanor_id)
-    :ok
-  end
+  defp joined(%{thread_id: thread_id}, _user_id) when is_binary(thread_id),
+    do: SharedThreads.joined(thread_id)
 
   defp joined(_invitation, _user_id), do: :ok
 
@@ -332,30 +334,50 @@ defmodule Sanctum.Invitations do
   end
 
   @doc """
-  Whether the issuer of `invitation`, which names a group athanor, is
+  Whether the issuer of `invitation`, which names a shared thread, is
   still an active person at the standing they issued it under, seated
-  there: asked again by the seat's `reserve:` under that athanor's lock
-  (`Arca.Members.seat/3`), which a leave and a deny of the issuer take
-  too, so the seat and a removal of the issuer decide in one order.
-  `:invitation_invalid` otherwise.
+  there while it is active: asked again under the thread's lock by the
+  seat it makes (`Sanctum.SharedThreads.seat_invited/4`), which a leave
+  and a deny of the issuer take too, so the seat and a removal of the
+  issuer decide in one order. `:invitation_invalid` otherwise.
   """
   @spec issuer_seated(map()) :: :ok | {:error, :invitation_invalid | :unavailable}
-  def issuer_seated(%{issued_by: issuer, athanor_id: athanor_id} = invitation)
-      when is_binary(athanor_id) do
-    with {:ok, _user} <- issuer(invitation), do: seated(issuer, athanor_id)
+  def issuer_seated(%{issued_by: issuer, thread_id: thread_id} = invitation)
+      when is_binary(thread_id) do
+    with {:ok, _user} <- issuer(invitation), do: seated(issuer, thread_id)
   end
 
   @doc """
-  The group athanor the redeemed invitation `code` opened seats its
-  person in, read after the admission committed: `{:ok, athanor_id}`, or
+  The seat the invitation `invitation` names for the person `user_id`,
+  when it names a thread, in the caller's transaction: a row of the
+  thread's people, under the thread's lock, its issuer read there once
+  more (`issuer_seated/1`). A person seated there already keeps the seat
+  they hold. An invitation naming no thread seats no one.
+  """
+  @spec invited_seat(map(), String.t()) :: :ok | {:error, term()}
+  def invited_seat(%{thread_id: nil}, _user_id), do: :ok
+
+  def invited_seat(%{thread_id: thread_id, issued_by: issuer} = invitation, user_id) do
+    case SharedThreads.seat_invited(thread_id, user_id, issuer, fn ->
+           issuer_seated(invitation)
+         end) do
+      :ok -> :ok
+      {:error, reason} when reason in [:not_found, :archived, :not_member, :pair] -> invalid()
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  The shared thread the redeemed invitation `code` opened seats its
+  person in, read after the admission committed: `{:ok, thread_id}`, or
   `:none` when it names none or cannot be read.
   """
   @spec seat(term()) :: {:ok, String.t()} | :none
   def seat(code) do
     with {:ok, code_hash} <- code_hash(code),
-         {:ok, %{athanor_id: athanor_id}} when is_binary(athanor_id) <-
+         {:ok, %{thread_id: thread_id}} when is_binary(thread_id) <-
            Arca.Invitations.by_code_hash(server(), code_hash) do
-      {:ok, athanor_id}
+      {:ok, thread_id}
     else
       _none -> :none
     end
@@ -366,51 +388,24 @@ defmodule Sanctum.Invitations do
   defp offered(nil), do: :ok
   defp offered(name), do: Sanctum.Newcomer.name(name)
 
-  # The actor the invitation is written under: the platform scope's for
-  # one naming no athanor, the group's for one naming it.
+  # One naming no thread is the administrator's; one naming a thread is
+  # issued by a person seated there while it is active, and a pair takes
+  # none. To anyone else the thread answers as a missing one does.
   defp issuable(ctx, nil) do
-    if admin?(ctx), do: {:ok, server()}, else: {:error, :platform_admin_required}
+    if admin?(ctx), do: :ok, else: {:error, :platform_admin_required}
   end
 
-  defp issuable(%Context{user_id: user_id}, athanor_id) when is_binary(athanor_id) do
-    with {:ok, athanor} <- seated_in(user_id, athanor_id) do
-      cond do
-        athanor.kind != "group" ->
-          {:error,
-           {:invalid_argument,
-            "A person's own athanor has one member, its owner; invite people to a group"}}
-
-        athanor.roster == "frozen" ->
-          {:error,
-           {:invalid_argument,
-            "A direct thread's two members were set when it opened; invite people to a group"}}
-
-        athanor.status != "active" ->
-          {:error, {:invalid_argument, "That athanor is archived"}}
-
-        true ->
-          {:ok, Prima.Actor.in_athanor(athanor.id)}
-      end
+  defp issuable(%Context{user_id: user_id}, thread_id) when is_binary(thread_id) do
+    case SharedThreads.get(user_id, thread_id) do
+      {:ok, %{kind: "pair"}} -> {:error, {:shared_thread, :pair}}
+      {:ok, %{status: "active"}} -> :ok
+      {:ok, %{}} -> {:error, {:shared_thread, :archived}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp issuable(_ctx, _athanor_id),
-    do: {:error, {:invalid_argument, "athanor_id names an athanor by its id"}}
-
-  # The athanor, read only for a caller seated in it: anyone else is told
-  # what a missing athanor tells them.
-  defp seated_in(user_id, athanor_id) do
-    missing = {:error, {:not_found, "Athanor", athanor_id}}
-
-    with {:ok, athanor} <- Athanors.get(athanor_id),
-         {:ok, _seat} <- Members.active_seat(user_id, athanor_id) do
-      {:ok, athanor}
-    else
-      {:error, :not_found} -> missing
-      :none -> missing
-      {:error, reason} -> {:error, unavailable(reason)}
-    end
-  end
+  defp issuable(_ctx, _thread_id),
+    do: {:error, {:invalid_argument, "thread_id names a shared thread by its id"}}
 
   # ---- revoking and listing --------------------------------------------------
 
@@ -432,12 +427,12 @@ defmodule Sanctum.Invitations do
     end
   end
 
-  # The athanors the viewer holds an active seat in, whose names their
+  # The threads the viewer sits in, by id with their titles, which their
   # invitations may show. An unanswered read shows none.
   defp seats(user_id) do
-    case Members.list_by_user(user_id) do
-      {:ok, rows} -> for %{athanor_id: id} <- rows, is_binary(id), into: MapSet.new(), do: id
-      {:error, _unanswered} -> MapSet.new()
+    case SharedThreads.list(user_id) do
+      {:ok, threads} -> Map.new(threads, &{&1.id, &1.title})
+      {:error, _unanswered} -> %{}
     end
   end
 
@@ -448,18 +443,16 @@ defmodule Sanctum.Invitations do
       issued_by: row.issued_by,
       expires_at: row.expires_at
     }
-    |> named(row.athanor_id, seats)
+    |> named(row.thread_id, seats)
   end
 
   defp named(view, nil, _seats), do: view
 
-  defp named(view, athanor_id, seats) do
-    view = Map.put(view, :athanor_id, athanor_id)
+  defp named(view, thread_id, seats) do
+    view = Map.put(view, :thread_id, thread_id)
 
-    with true <- MapSet.member?(seats, athanor_id),
-         {:ok, %{name: name}} when is_binary(name) <- Athanors.get(athanor_id) do
-      Map.put(view, :athanor_name, name)
-    else
+    case Map.get(seats, thread_id) do
+      title when is_binary(title) -> Map.put(view, :thread_title, title)
       _unseated -> view
     end
   end
@@ -473,14 +466,14 @@ defmodule Sanctum.Invitations do
 
   # ---- redeeming -------------------------------------------------------------
 
-  # The invitation, its issuer and the athanor it names, when every check
-  # of the module doc holds.
+  # The invitation, its issuer and the title of the thread it names, when
+  # every check of the module doc holds.
   defp standing(code_hash) do
     with {:ok, row} <- invitation(code_hash),
          :ok <- open(row),
          {:ok, issuer} <- issuer(row),
-         {:ok, athanor} <- named_place(row) do
-      {:ok, %{row: row, issuer: issuer, athanor: athanor}}
+         {:ok, title} <- named_place(row) do
+      {:ok, %{row: row, issuer: issuer, title: title}}
     end
   end
 
@@ -503,26 +496,6 @@ defmodule Sanctum.Invitations do
       {:ok, _no_identifier} -> invalid()
       {:error, :not_found} -> invalid()
       {:error, reason} -> {:error, unavailable(reason)}
-    end
-  end
-
-  # The seat a group invitation names, under the group's lock, its issuer
-  # still seated there and the group's member cap counted, as the
-  # invitation admission's is; a person seated there already keeps the
-  # seat they hold.
-  defp invited_seat(%{athanor_id: nil}, _user_id), do: :ok
-
-  defp invited_seat(%{athanor_id: athanor_id, issued_by: issuer} = invitation, user_id) do
-    case Members.ensure(user_id,
-           scope: "athanor",
-           athanor_id: athanor_id,
-           added_by: issuer,
-           reserve: fn ->
-             with :ok <- issuer_seated(invitation), do: Members.member_cap(athanor_id)
-           end
-         ) do
-      {:ok, _seat} -> :ok
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -558,10 +531,10 @@ defmodule Sanctum.Invitations do
     end
   end
 
-  # One naming no athanor needs its issuer still the administrator; one
-  # naming an athanor needs them still seated there, and the athanor still
-  # an active group with an open roster.
-  defp named_place(%{athanor_id: nil, issued_by: issuer}) do
+  # One naming no thread needs its issuer still the administrator; one
+  # naming a thread needs the thread still active and its issuer still
+  # seated there. Answers the thread's title, or none.
+  defp named_place(%{thread_id: nil, issued_by: issuer}) do
     case Members.platform_seat(issuer) do
       {:ok, _seat} -> {:ok, nil}
       :none -> invalid()
@@ -569,27 +542,21 @@ defmodule Sanctum.Invitations do
     end
   end
 
-  defp named_place(%{athanor_id: athanor_id, issued_by: issuer}) do
-    with {:ok, athanor} <- place(athanor_id),
-         :ok <- seated(issuer, athanor_id) do
-      {:ok, athanor}
+  defp named_place(%{thread_id: thread_id, issued_by: issuer}) do
+    with :ok <- seated(issuer, thread_id) do
+      case SharedThreads.title_of(thread_id) do
+        {:ok, title} -> {:ok, title}
+        {:error, :not_found} -> invalid()
+        {:error, :unavailable} -> {:error, :unavailable}
+      end
     end
   end
 
-  defp place(athanor_id) do
-    case Athanors.get(athanor_id) do
-      {:ok, %{kind: "group", status: "active", roster: "open"} = athanor} -> {:ok, athanor}
-      {:ok, _closed} -> invalid()
-      {:error, :not_found} -> invalid()
-      {:error, reason} -> {:error, unavailable(reason)}
-    end
-  end
-
-  defp seated(user_id, athanor_id) do
-    case Members.active_seat(user_id, athanor_id) do
-      {:ok, _seat} -> :ok
-      :none -> invalid()
-      {:error, reason} -> {:error, unavailable(reason)}
+  defp seated(user_id, thread_id) do
+    case SharedThreads.active_seat?(user_id, thread_id) do
+      {:ok, true} -> :ok
+      {:ok, false} -> invalid()
+      {:error, :unavailable} -> {:error, :unavailable}
     end
   end
 

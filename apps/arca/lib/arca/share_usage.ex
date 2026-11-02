@@ -51,7 +51,7 @@ defmodule Arca.ShareUsage do
   Count one use of the share `share_id` of the actor's athanor by
   `user_id` today, held to the caps the share's row holds when the claim
   reads it under its lock, and to `admitted`, the audience
-  (`%{audience: _, group_id: _}`) the caller read the share at when it
+  (`%{audience: _, thread_id: _}`) the caller read the share at when it
   admitted the person.
 
   Answers the day and both counts after the claim. Refused, with nothing
@@ -108,7 +108,7 @@ defmodule Arca.ShareUsage do
   defp claimable(athanor_id, share_id, admitted) do
     from(s in Share,
       where: s.id == ^share_id,
-      select: {s.status, s.audience, s.group_id, s.person_daily, s.total_daily}
+      select: {s.status, s.audience, s.thread_id, s.person_daily, s.total_daily}
     )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
     |> Arca.QueryHelpers.for_share()
@@ -117,12 +117,12 @@ defmodule Arca.ShareUsage do
       nil ->
         {:error, :not_found}
 
-      {"active", audience, group_id, person_daily, total_daily} ->
-        if Arca.Shares.same_audience?(%{audience: audience, group_id: group_id}, admitted),
+      {"active", audience, thread_id, person_daily, total_daily} ->
+        if Arca.Shares.same_audience?(%{audience: audience, thread_id: thread_id}, admitted),
           do: {:ok, {person_daily, total_daily}},
           else: {:error, :audience_changed}
 
-      {status, _audience, _group_id, _person_daily, _total_daily} ->
+      {status, _audience, _thread_id, _person_daily, _total_daily} ->
         {:error, {:share_unavailable, status}}
     end
   end

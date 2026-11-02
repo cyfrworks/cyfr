@@ -6,19 +6,21 @@ defmodule Sanctum.InvitationsTest do
   Who may issue, revoke and list invitations, and what the invitation page
   reads of one (`Sanctum.Invitations`).
 
-  The platform administrator issues one naming no athanor; anyone issues
-  one naming a group athanor they hold a seat in, the administrator
-  included, and to anyone else that athanor answers as a missing one. One
-  may offer its newcomer a name, which the invitation page reads. The
-  code is given once and only its hash is stored. The issuer or the
-  administrator revokes; the administrator lists every invitation and
-  anyone else their own. `lookup/1` names who invited and to which
-  athanor, never by an address, and refuses an expired, redeemed or
-  revoked code, and one whose issuer lost the seat or was denied, with one
-  answer. `redeemable_hash/1` makes the same checks from the code's hash.
+  The platform administrator issues one naming no thread; anyone issues
+  one naming a shared thread they sit in while it is active, the
+  administrator included, and to anyone else that thread answers as a
+  missing one. A pair and an archived thread take none. One may offer its
+  newcomer a name, which the invitation page reads. The code is given
+  once and only its hash is stored. The issuer or the administrator
+  revokes; the administrator lists every invitation and anyone else their
+  own. `lookup/1` names who invited and to which thread, never by an
+  address, and refuses an expired, redeemed or revoked code, and one
+  whose issuer left the thread or was denied, with one answer.
+  `redeemable_hash/1` makes the same checks from the code's hash.
   `redeem_for/2` redeems one for a person this CYFR knows, writing their
-  seat and their identifier's allow with the redemption, once, and a deny
-  rolls all of it back with the invitation unspent.
+  seat in the thread and their identifier's allow with the redemption,
+  once; a deny, the thread's people cap and a declared restore's hold on
+  the thread each roll all of it back with the invitation unspent.
   """
 
   # Contexts are loaded from sessions, and the caps' settings are
@@ -27,9 +29,9 @@ defmodule Sanctum.InvitationsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.Invitation
-  alias Sanctum.Invitations
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Arca.Schemas.{Invitation, RestorePerson, SharedThreadMember}
+  alias Sanctum.{Invitations, SharedThreads}
+  alias Sanctum.Tenancy.{Members, Users}
   alias Sanctum.TestContext
 
   setup tags do
@@ -64,14 +66,14 @@ defmodule Sanctum.InvitationsTest do
 
   defp ctx(user), do: TestContext.session!(user.id)
 
-  defp group!(creator, members \\ []) do
-    {:ok, group} =
-      Athanors.create_group(creator.id, "Invited #{System.unique_integer([:positive])}")
+  defp thread!(creator, people \\ []) do
+    {:ok, thread} =
+      SharedThreads.create(creator.id, "Invited #{System.unique_integer([:positive])}")
 
-    for member <- members,
-        do: {:ok, :added} = Members.add(group, [user_id: member.id], creator.id)
+    for person <- people,
+        do: {:ok, :added} = SharedThreads.add(creator.id, thread.id, user_id: person.id)
 
-    group
+    thread
   end
 
   defp row(id), do: Arca.Repo.get!(Invitation, id)
@@ -102,7 +104,21 @@ defmodule Sanctum.InvitationsTest do
   defp door(identifier),
     do: Enum.filter(Sanctum.Door.Store.list(), &(&1.value == identifier))
 
-  defp seated?(user, group), do: Members.member?(user.id, group.id)
+  # The person's seat in the thread, as its row of people.
+  defp seat(user, thread) do
+    Arca.Repo.one(
+      from(m in SharedThreadMember,
+        where: m.thread_id == ^thread.id and m.user_id == ^user.id and m.status == "active"
+      )
+    )
+  end
+
+  defp seated?(user, thread), do: seat(user, thread) != nil
+
+  defp people_rows(thread),
+    do:
+      Arca.Repo.aggregate(from(m in SharedThreadMember, where: m.thread_id == ^thread.id), :count)
+
   defp invitations, do: Arca.Repo.aggregate(Invitation, :count)
 
   defp expire!(id) do
@@ -112,14 +128,24 @@ defmodule Sanctum.InvitationsTest do
       Arca.Repo.update_all(from(i in Invitation, where: i.id == ^id), set: [expires_at: past])
   end
 
+  # A declared restore's hold on every thread `user` sits in: their
+  # recovery from it stays open.
+  defp recovering!(user) do
+    Arca.Repo.insert!(%RestorePerson{
+      restore_id: Prima.UUID7.generate_id("rst"),
+      user_id: user.id,
+      open: true
+    })
+  end
+
   describe "create/3" do
-    test "a member issues one for their group: the code is given once and only its hash is stored" do
+    test "a member issues one for a thread they sit in: the code is given once and only its hash is stored" do
       alice = person!()
-      group = group!(alice)
+      thread = thread!(alice)
       before = DateTime.utc_now()
 
       assert {:ok, %{invitation: invitation, code: code}} =
-               Invitations.create(ctx(alice), group.id)
+               Invitations.create(ctx(alice), thread.id)
 
       assert {:ok, <<_::binary-size(32)>> = bytes} = Base.url_decode64(code, padding: false)
       refute code =~ "="
@@ -128,35 +154,36 @@ defmodule Sanctum.InvitationsTest do
                id: id,
                state: "pending",
                issued_by: issued_by,
-               athanor_id: athanor_id,
-               athanor_name: name,
+               thread_id: thread_id,
+               thread_title: title,
                expires_at: expires_at
              } = invitation
 
-      assert {issued_by, athanor_id, name} == {alice.id, group.id, group.name}
+      assert {issued_by, thread_id, title} == {alice.id, thread.id, thread.title}
       assert DateTime.diff(expires_at, before, :day) in [6, 7]
 
       stored = row(id)
+      assert stored.thread_id == thread.id
       assert stored.code_hash == Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
       refute Enum.any?(Map.values(Map.from_struct(stored)), &(&1 == code))
     end
 
-    test "the administrator issues one naming no athanor; it carries no athanor key" do
+    test "the administrator issues one naming no thread; it carries no thread key" do
       admin = admin!()
 
       assert {:ok, %{invitation: invitation}} = Invitations.create(ctx(admin), nil)
       assert invitation.state == "pending"
-      refute Map.has_key?(invitation, :athanor_id)
-      refute Map.has_key?(invitation, :athanor_name)
-      assert row(invitation.id).athanor_id == nil
+      refute Map.has_key?(invitation, :thread_id)
+      refute Map.has_key?(invitation, :thread_title)
+      assert row(invitation.id).thread_id == nil
     end
 
     test "offers the newcomer a name the invitation page reads, and refuses one that is no name" do
       alice = person!()
-      group = group!(alice)
+      thread = thread!(alice)
 
       assert {:ok, %{invitation: invitation, code: code}} =
-               Invitations.create(ctx(alice), group.id, "mira")
+               Invitations.create(ctx(alice), thread.id, "mira")
 
       assert row(invitation.id).name == "mira"
       assert {:ok, %{name: "mira"}} = Invitations.lookup(code)
@@ -165,53 +192,53 @@ defmodule Sanctum.InvitationsTest do
 
       for name <- ["Not A Name", "", "-mira", String.duplicate("a", 40)] do
         assert {:error, {:invalid_argument, _}} =
-                 Invitations.create(ctx(alice), group.id, name),
+                 Invitations.create(ctx(alice), thread.id, name),
                inspect(name)
       end
 
       assert invitations() == before
     end
 
-    test "a member cannot issue one naming no athanor, and a non-member cannot issue for a group" do
+    test "only the administrator issues one naming no thread, and no one issues for a thread they do not sit in" do
       alice = person!()
       outsider = person!()
-      group = group!(alice)
+      thread = thread!(alice)
 
       assert {:error, :platform_admin_required} = Invitations.create(ctx(alice), nil)
 
-      assert {:error, {:not_found, "Athanor", id}} = Invitations.create(ctx(outsider), group.id)
-      assert id == group.id
+      assert {:error, {:not_found, "Thread", id}} = Invitations.create(ctx(outsider), thread.id)
+      assert id == thread.id
 
-      assert {:error, {:not_found, "Athanor", "ath_missing"}} =
-               Invitations.create(ctx(outsider), "ath_missing")
+      assert {:error, {:not_found, "Thread", "sth_missing"}} =
+               Invitations.create(ctx(outsider), "sth_missing")
 
       assert invitations() == 0
     end
 
-    test "the administrator issues for a group only from a seat in it" do
+    test "the administrator issues for a thread only from a seat in it" do
       admin = admin!()
       alice = person!()
-      group = group!(alice)
+      thread = thread!(alice)
 
-      assert {:error, {:not_found, "Athanor", _}} = Invitations.create(ctx(admin), group.id)
+      assert {:error, {:not_found, "Thread", _}} = Invitations.create(ctx(admin), thread.id)
       assert invitations() == 0
 
-      {:ok, :added} = Members.add(group, [user_id: admin.id], alice.id)
-      assert {:ok, _} = Invitations.create(ctx(admin), group.id)
+      {:ok, :added} = SharedThreads.add(alice.id, thread.id, user_id: admin.id)
+      assert {:ok, _} = Invitations.create(ctx(admin), thread.id)
     end
 
-    test "a person's own athanor, a frozen pair and an archived group take none" do
+    test "a pair, an archived thread and a person's own athanor take none" do
       alice = person!()
       bob = person!()
-      shared = group!(alice, [bob])
+      shared = thread!(alice, [bob])
+      {:ok, pair} = SharedThreads.pair(alice.id, bob.id)
+      archived = thread!(alice, [bob])
+      {:ok, _} = SharedThreads.archive(alice.id, archived.id)
       own = Sanctum.Test.People.athanor!(alice)
-      {:ok, pair} = Athanors.create_pair(alice.id, bob.id)
-      archived = group!(alice, [bob])
-      {:ok, _} = Athanors.archive(archived)
 
-      for athanor <- [own, pair, archived] do
-        assert {:error, {:invalid_argument, _}} = Invitations.create(ctx(alice), athanor.id)
-      end
+      assert {:error, {:shared_thread, :pair}} = Invitations.create(ctx(alice), pair.id)
+      assert {:error, {:shared_thread, :archived}} = Invitations.create(ctx(alice), archived.id)
+      assert {:error, {:not_found, "Thread", _}} = Invitations.create(ctx(alice), own.id)
 
       assert invitations() == 0
       assert {:ok, _} = Invitations.create(ctx(alice), shared.id)
@@ -223,9 +250,9 @@ defmodule Sanctum.InvitationsTest do
       admin = admin!()
       alice = person!()
       bob = person!()
-      group = group!(alice, [bob])
-      {:ok, %{invitation: first}} = Invitations.create(ctx(alice), group.id)
-      {:ok, %{invitation: second}} = Invitations.create(ctx(alice), group.id)
+      thread = thread!(alice, [bob])
+      {:ok, %{invitation: first}} = Invitations.create(ctx(alice), thread.id)
+      {:ok, %{invitation: second}} = Invitations.create(ctx(alice), thread.id)
 
       assert {:error, {:not_found, "Invitation", _}} = Invitations.revoke(ctx(bob), first.id)
       assert row(first.id).revoked_at == nil
@@ -240,8 +267,8 @@ defmodule Sanctum.InvitationsTest do
 
     test "a redeemed invitation cannot be revoked" do
       alice = person!()
-      group = group!(alice)
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      thread = thread!(alice)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
       {:ok, _} = Invitations.redeem(code, person!().id)
 
       assert {:error, {:invalid_argument, _}} = Invitations.revoke(ctx(alice), invitation.id)
@@ -254,16 +281,16 @@ defmodule Sanctum.InvitationsTest do
       admin = admin!()
       alice = person!()
       bob = person!()
-      group = group!(alice, [bob])
+      thread = thread!(alice, [bob])
 
-      {:ok, %{invitation: pending}} = Invitations.create(ctx(alice), group.id)
-      {:ok, %{invitation: revoked}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{invitation: pending}} = Invitations.create(ctx(alice), thread.id)
+      {:ok, %{invitation: revoked}} = Invitations.create(ctx(alice), thread.id)
       {:ok, _} = Invitations.revoke(ctx(alice), revoked.id)
-      {:ok, %{invitation: expired}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{invitation: expired}} = Invitations.create(ctx(alice), thread.id)
       expire!(expired.id)
-      {:ok, %{invitation: redeemed, code: code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{invitation: redeemed, code: code}} = Invitations.create(ctx(alice), thread.id)
       {:ok, _} = Invitations.redeem(code, person!().id)
-      {:ok, %{invitation: bobs}} = Invitations.create(ctx(bob), group.id)
+      {:ok, %{invitation: bobs}} = Invitations.create(ctx(bob), thread.id)
       {:ok, %{invitation: admins}} = Invitations.create(ctx(admin), nil)
 
       states = fn ctx ->
@@ -283,27 +310,31 @@ defmodule Sanctum.InvitationsTest do
       everyone = states.(ctx(admin))
       assert Map.take(everyone, [pending.id, bobs.id, admins.id]) |> map_size() == 3
 
-      # The administrator holds no seat in the group: its id is shown, its
-      # name is not.
+      # Bob, seated there, reads the thread's title.
+      {:ok, [own]} = Invitations.list(ctx(bob))
+      assert {own.thread_id, own.thread_title} == {thread.id, thread.title}
+
+      # The administrator holds no seat in the thread: its id is shown,
+      # its title is not.
       {:ok, listed} = Invitations.list(ctx(admin))
       shown = Enum.find(listed, &(&1.id == bobs.id))
-      assert shown.athanor_id == group.id
-      refute Map.has_key?(shown, :athanor_name)
-      refute Map.has_key?(Enum.find(listed, &(&1.id == admins.id)), :athanor_id)
+      assert shown.thread_id == thread.id
+      refute Map.has_key?(shown, :thread_title)
+      refute Map.has_key?(Enum.find(listed, &(&1.id == admins.id)), :thread_id)
     end
   end
 
   describe "lookup/1" do
-    test "names who invited and to which athanor, and the expiry" do
+    test "names who invited and to which thread, and the expiry" do
       alice = person!(%{name: "Alice Example"})
-      group = group!(alice)
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      thread = thread!(alice)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
 
       assert {:ok, shown} = Invitations.lookup(code)
 
       assert shown == %{
                inviter: "Alice Example",
-               athanor: group.name,
+               thread: thread.title,
                expires_at: invitation.expires_at
              }
     end
@@ -321,7 +352,7 @@ defmodule Sanctum.InvitationsTest do
             {handled, "@" <> handled.namespace},
             {plain, "a member of this CYFR"}
           ] do
-        {:ok, %{code: code}} = Invitations.create(ctx(issuer), group!(issuer).id)
+        {:ok, %{code: code}} = Invitations.create(ctx(issuer), thread!(issuer).id)
         assert {:ok, %{inviter: ^expected}} = Invitations.lookup(code)
         refute expected =~ "@example.com"
       end
@@ -329,17 +360,23 @@ defmodule Sanctum.InvitationsTest do
       {:ok, %{code: code}} = Invitations.create(ctx(admin), nil)
       assert {:ok, shown} = Invitations.lookup(code)
       assert shown.inviter == "a member of this CYFR"
-      refute Map.has_key?(shown, :athanor)
+      refute Map.has_key?(shown, :thread)
     end
 
     test "an expired, a redeemed, a revoked, an unknown and a malformed code are one refusal" do
       alice = person!()
-      group = group!(alice)
-      {:ok, %{invitation: expired, code: expired_code}} = Invitations.create(ctx(alice), group.id)
+      thread = thread!(alice)
+
+      {:ok, %{invitation: expired, code: expired_code}} =
+        Invitations.create(ctx(alice), thread.id)
+
       expire!(expired.id)
-      {:ok, %{code: redeemed_code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{code: redeemed_code}} = Invitations.create(ctx(alice), thread.id)
       {:ok, _} = Invitations.redeem(redeemed_code, person!().id)
-      {:ok, %{invitation: revoked, code: revoked_code}} = Invitations.create(ctx(alice), group.id)
+
+      {:ok, %{invitation: revoked, code: revoked_code}} =
+        Invitations.create(ctx(alice), thread.id)
+
       {:ok, _} = Invitations.revoke(ctx(alice), revoked.id)
       unknown = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -349,17 +386,20 @@ defmodule Sanctum.InvitationsTest do
       end
     end
 
-    test "an issuer who lost their seat, and one who was denied, admit no one" do
+    test "an issuer who left the thread, and one who was denied, admit no one" do
       alice = person!()
       bob = person!()
-      group = group!(alice, [bob])
-      {:ok, %{code: left}} = Invitations.create(ctx(bob), group.id)
-      {:ok, %{code: denied}} = Invitations.create(ctx(alice), group.id)
+      carol = person!()
+      thread = thread!(alice, [bob, carol])
+      {:ok, %{code: left}} = Invitations.create(ctx(bob), thread.id)
+      {:ok, %{code: denied}} = Invitations.create(ctx(alice), thread.id)
       assert {:ok, _} = Invitations.lookup(left)
       assert {:ok, _} = Invitations.lookup(denied)
 
-      :ok = Members.remove_member(group, user_id: bob.id)
+      # Carol stays seated, so the thread stays active.
+      {:ok, %{ended: false}} = SharedThreads.leave(bob.id, thread.id)
       {:ok, _} = Users.deny(alice)
+      assert {:ok, %{status: "active"}} = SharedThreads.get(carol.id, thread.id)
 
       for code <- [left, denied] do
         assert {:error, :invitation_invalid} = Invitations.lookup(code)
@@ -370,16 +410,22 @@ defmodule Sanctum.InvitationsTest do
     test "redeemable_hash/1 agrees with redeemable/1, and refuses what is no hash" do
       alice = person!()
       bob = person!()
-      group = group!(alice, [bob])
-      {:ok, %{code: open}} = Invitations.create(ctx(alice), group.id)
-      {:ok, %{code: left}} = Invitations.create(ctx(bob), group.id)
-      {:ok, %{invitation: expired, code: expired_code}} = Invitations.create(ctx(alice), group.id)
+      thread = thread!(alice, [bob])
+      {:ok, %{code: open}} = Invitations.create(ctx(alice), thread.id)
+      {:ok, %{code: left}} = Invitations.create(ctx(bob), thread.id)
+
+      {:ok, %{invitation: expired, code: expired_code}} =
+        Invitations.create(ctx(alice), thread.id)
+
       expire!(expired.id)
-      {:ok, %{invitation: revoked, code: revoked_code}} = Invitations.create(ctx(alice), group.id)
+
+      {:ok, %{invitation: revoked, code: revoked_code}} =
+        Invitations.create(ctx(alice), thread.id)
+
       {:ok, _} = Invitations.revoke(ctx(alice), revoked.id)
-      {:ok, %{code: redeemed_code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{code: redeemed_code}} = Invitations.create(ctx(alice), thread.id)
       {:ok, _} = Invitations.redeem(redeemed_code, person!().id)
-      :ok = Members.remove_member(group, user_id: bob.id)
+      {:ok, _} = SharedThreads.leave(bob.id, thread.id)
 
       assert :ok = Invitations.redeemable(open)
       assert :ok = Invitations.redeemable_hash(hash(open))
@@ -394,14 +440,14 @@ defmodule Sanctum.InvitationsTest do
       end
     end
 
-    test "a group archived since, and an issuer of one naming no athanor who no longer administers, admit no one" do
+    test "a thread archived since, and an issuer of one naming no thread who no longer administers, admit no one" do
       admin = admin!()
       alice = person!()
-      group = group!(alice, [person!()])
-      {:ok, %{code: archived}} = Invitations.create(ctx(alice), group.id)
+      thread = thread!(alice, [person!()])
+      {:ok, %{code: archived}} = Invitations.create(ctx(alice), thread.id)
       {:ok, %{code: platform}} = Invitations.create(ctx(admin), nil)
 
-      {:ok, _} = Athanors.archive(group)
+      {:ok, _} = SharedThreads.archive(alice.id, thread.id)
       {:ok, seat} = Members.platform_seat(admin.id)
       {1, _} = Arca.Repo.delete_all(from(m in Arca.Schemas.Membership, where: m.id == ^seat.id))
 
@@ -414,9 +460,9 @@ defmodule Sanctum.InvitationsTest do
   describe "redeem_for/2" do
     test "a known person's redemption writes nothing after this member loses its slot" do
       alice = person!()
-      group = group!(alice)
+      thread = thread!(alice)
       carol = remote!()
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
 
       keys = [
         {Arca.ControlPlane, :standing},
@@ -439,7 +485,7 @@ defmodule Sanctum.InvitationsTest do
 
       actual = %{
         redeemed_by: row(invitation.id).redeemed_by,
-        seated: seated?(carol, group),
+        seated: seated?(carol, thread),
         door: Enum.map(door(carol.identifier), & &1.effect)
       }
 
@@ -447,16 +493,17 @@ defmodule Sanctum.InvitationsTest do
              "a stale owner changed admission state: #{inspect(actual)}; answer=#{inspect(answer)}"
     end
 
-    test "redeems once for a person known here, writing their seat and their identifier's allow" do
+    test "redeems once for a person known here, writing their seat in the thread and their identifier's allow" do
       alice = person!()
-      group = group!(alice)
+      thread = thread!(alice)
       carol = remote!("carol")
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
       note = "invitation " <> invitation.id
 
       assert {:ok, %{redeemed_by: redeemed_by}} = Invitations.redeem_for(hash(code), carol.id)
       assert redeemed_by == carol.id
-      assert seated?(carol, group)
+      assert %SharedThreadMember{status: "active", added_by: seated_by} = seat(carol, thread)
+      assert seated_by == alice.id
 
       assert [
                %{
@@ -475,27 +522,28 @@ defmodule Sanctum.InvitationsTest do
       dave = remote!()
       assert {:error, :invitation_invalid} = Invitations.redeem_for(hash(code), dave.id)
       assert {:error, :invitation_invalid} = Invitations.redeem_for(hash(code), carol.id)
-      refute seated?(dave, group)
+      refute seated?(dave, thread)
       assert door(dave.identifier) == []
       assert length(door(carol.identifier)) == 1
+      assert people_rows(thread) == 2
     end
 
-    test "one naming no athanor writes the allow and no seat" do
+    test "one naming no thread writes the allow and no seat" do
       admin = admin!()
       carol = remote!()
       {:ok, %{code: code}} = Invitations.create(ctx(admin), nil)
 
       assert {:ok, _} = Invitations.redeem_for(hash(code), carol.id)
       assert [%{effect: "allow", label: nil}] = door(carol.identifier)
-      assert {:ok, []} = Members.list_by_user(carol.id)
+      assert {:ok, []} = SharedThreads.list(carol.id)
     end
 
     test "a deny of the identifier or of the person refuses it, the invitation unspent and no seat" do
       alice = person!()
-      group = group!(alice)
+      thread = thread!(alice)
       carol = remote!()
       dave = remote!()
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
       {:ok, identifier_deny} = Sanctum.Door.Store.deny("identifier", carol.identifier, "ops")
       {:ok, _person_deny} = Sanctum.Door.Store.deny("person", dave.id, "ops")
 
@@ -503,8 +551,8 @@ defmodule Sanctum.InvitationsTest do
       assert {:error, {:door, :denied}} = Invitations.redeem_for(hash(code), dave.id)
 
       assert %{redeemed_at: nil, redeemed_by: nil} = row(invitation.id)
-      refute seated?(carol, group)
-      refute seated?(dave, group)
+      refute seated?(carol, thread)
+      refute seated?(dave, thread)
       assert door(carol.identifier) == [identifier_deny]
       assert door(dave.identifier) == []
       assert :ok = Invitations.redeemable(code)
@@ -512,34 +560,64 @@ defmodule Sanctum.InvitationsTest do
 
     test "a spent, revoked or expired invitation writes no seat and no allow" do
       alice = person!()
-      group = group!(alice)
-      {:ok, %{code: spent}} = Invitations.create(ctx(alice), group.id)
+      thread = thread!(alice)
+      {:ok, %{code: spent}} = Invitations.create(ctx(alice), thread.id)
       {:ok, _} = Invitations.redeem(spent, person!().id)
-      {:ok, %{invitation: revoked, code: revoked_code}} = Invitations.create(ctx(alice), group.id)
+
+      {:ok, %{invitation: revoked, code: revoked_code}} =
+        Invitations.create(ctx(alice), thread.id)
+
       {:ok, _} = Invitations.revoke(ctx(alice), revoked.id)
-      {:ok, %{invitation: expired, code: expired_code}} = Invitations.create(ctx(alice), group.id)
+
+      {:ok, %{invitation: expired, code: expired_code}} =
+        Invitations.create(ctx(alice), thread.id)
+
       expire!(expired.id)
 
       for code <- [spent, revoked_code, expired_code] do
         carol = remote!()
         assert {:error, :invitation_invalid} = Invitations.redeem_for(hash(code), carol.id)
-        refute seated?(carol, group)
+        refute seated?(carol, thread)
         assert door(carol.identifier) == []
       end
     end
 
-    test "a group's member cap, reached, refuses it and rolls the redemption back" do
+    test "the thread's people cap, reached, refuses it and rolls the redemption back" do
       alice = person!()
-      group = group!(alice)
+      thread = thread!(alice)
       carol = remote!()
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), group.id)
-      Sanctum.Test.Settings.put("max_members_per_group", 1)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
+      Sanctum.Test.Settings.put("max_people_per_thread", 1)
 
-      assert {:error, {:limit_reached, :max_members_per_group, 1}} =
+      assert {:error, {:limit_reached, :max_people_per_thread, 1}} =
                Invitations.redeem_for(hash(code), carol.id)
 
-      assert %{redeemed_at: nil} = row(invitation.id)
+      assert %{redeemed_at: nil, redeemed_by: nil} = row(invitation.id)
+      refute seated?(carol, thread)
+      assert people_rows(thread) == 1
       assert door(carol.identifier) == []
+      assert :ok = Invitations.redeemable(code)
+    end
+
+    test "a thread a declared restore holds refuses it, the invitation unspent and no seat" do
+      alice = person!()
+      bob = person!()
+      thread = thread!(alice, [bob])
+      carol = remote!()
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx(alice), thread.id)
+
+      # Bob still recovers from a declared restore: the thread admits no
+      # one new, though the invitation itself still opens.
+      recovering!(bob)
+      assert :ok = Invitations.redeemable(code)
+
+      assert {:error, :recovering_from_restore} = Invitations.redeem_for(hash(code), carol.id)
+
+      assert %{redeemed_at: nil, redeemed_by: nil} = row(invitation.id)
+      refute seated?(carol, thread)
+      assert people_rows(thread) == 2
+      assert door(carol.identifier) == []
+      assert :ok = Invitations.redeemable(code)
     end
   end
 end
@@ -550,7 +628,8 @@ defmodule Sanctum.InvitationsRaceTest do
   redemption runs: after the caller's check of the door and before the
   redemption's write, and, on PostgreSQL, inside the redemption's
   transaction before its allow. Either way the deny wins: the redemption
-  rolls back with the invitation unspent, no seat and no allow.
+  rolls back with the invitation unspent, no seat in the thread it names
+  and no allow.
   """
 
   use ExUnit.Case, async: false
@@ -558,7 +637,17 @@ defmodule Sanctum.InvitationsRaceTest do
   import Ecto.Query, only: [from: 2]
   import Arca.Test.Adapter, only: [postgres?: 0]
 
-  alias Arca.Schemas.{Athanor, ExternalIdentity, Invitation, Membership, PersonIdentity, User}
+  alias Arca.Schemas.{
+    Athanor,
+    ExternalIdentity,
+    Invitation,
+    Membership,
+    PersonIdentity,
+    SharedThread,
+    SharedThreadMember,
+    User
+  }
+
   alias Arca.Schemas.ServerAllowlistEntry, as: Entry
   alias Ecto.Adapters.SQL.Sandbox
   alias Sanctum.Door.Store
@@ -575,9 +664,9 @@ defmodule Sanctum.InvitationsRaceTest do
 
     unboxed(fn ->
       {:ok, issuer} = Sanctum.Test.People.linked(%{id: key, provider: "github"})
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(issuer.id, "Race #{n}")
+      {:ok, thread} = Sanctum.SharedThreads.create(issuer.id, "Race #{n}")
       ctx = Sanctum.Context.build(user_id: issuer.id)
-      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx, group.id)
+      {:ok, %{invitation: invitation, code: code}} = Invitations.create(ctx, thread.id)
       {:ok, hash} = Invitations.code_hash(code)
 
       {:ok, carol} =
@@ -587,17 +676,19 @@ defmodule Sanctum.InvitationsRaceTest do
         })
 
       {:ok,
-       group: group, invitation: invitation, hash: hash, carol: carol, identifier: identifier}
+       thread: thread, invitation: invitation, hash: hash, carol: carol, identifier: identifier}
     end)
   end
 
-  defp state(%{group: group, invitation: invitation, carol: carol, identifier: identifier}) do
+  defp state(%{thread: thread, invitation: invitation, carol: carol, identifier: identifier}) do
     unboxed(fn ->
       %{
         redeemed_by: Arca.Repo.get!(Invitation, invitation.id).redeemed_by,
         seats:
           Arca.Repo.aggregate(
-            from(m in Membership, where: m.user_id == ^carol.id and m.athanor_id == ^group.id),
+            from(m in SharedThreadMember,
+              where: m.user_id == ^carol.id and m.thread_id == ^thread.id
+            ),
             :count
           ),
         door: Arca.Repo.all(from(e in Entry, where: e.value == ^identifier, select: e.effect))
@@ -710,6 +801,15 @@ defmodule Sanctum.InvitationsRaceTest do
 
     Arca.Repo.delete_all(from(e in Entry, where: e.value in ^[identifier | people]))
     Arca.Repo.delete_all(from(i in Invitation, where: i.issued_by in ^people))
+
+    threads =
+      Arca.Repo.all(from(t in SharedThread, where: t.created_by in ^people, select: t.id))
+
+    Arca.Repo.delete_all(
+      from(m in SharedThreadMember, where: m.thread_id in ^threads or m.user_id in ^people)
+    )
+
+    Arca.Repo.delete_all(from(t in SharedThread, where: t.id in ^threads))
 
     Arca.Repo.delete_all(
       from(m in Membership, where: m.user_id in ^people or m.athanor_id in ^athanors)

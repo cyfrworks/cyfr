@@ -308,7 +308,7 @@ const binding = {
   consumed_by_root: null,
 };
 const share = {
-  id: "shr_1", athanor_id: "ath_owner", vault_entry_id: "vlt_1", audience: "everyone", group_id: null,
+  id: "shr_1", athanor_id: "ath_owner", vault_entry_id: "vlt_1", audience: "everyone", thread_id: null,
   person_daily: null, total_daily: null, status: "active", created_by: "usr_owner", inserted_at: inside, updated_at: inside,
 };
 const use = { athanor_id: "ath_owner", share_id: "shr_1", user_id: "usr_recipient", day: "2026-10-31", count: 1, updated_at: inside };

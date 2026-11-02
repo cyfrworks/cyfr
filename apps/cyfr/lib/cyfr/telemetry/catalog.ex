@@ -124,6 +124,14 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note: "which athanors a person may now reach"
     },
+    [:cyfr, :sanctum, :shared_thread, :changed] => %{
+      consumers: [:bridge],
+      note: "a shared thread's title, status or people changed: told to each person it names"
+    },
+    [:cyfr, :sanctum, :shared_thread, :posted] => %{
+      consumers: [:bridge],
+      note: "a shared thread took a message: told to each of its people"
+    },
     [:cyfr, :sanctum, :vault, :entry_changed] => %{
       consumers: [:bridge],
       note:

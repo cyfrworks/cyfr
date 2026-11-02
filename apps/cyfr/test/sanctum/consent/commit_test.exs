@@ -2275,7 +2275,7 @@ defmodule Sanctum.Consent.CommitTest do
         )
 
       entry = Arca.Test.Shares.entry!(terry.actor, Map.put(attrs, :binding_digest, digest))
-      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "group", group_id: traders.id})
+      Arca.Test.Shares.share!(terry.actor, entry.id, %{audience: "thread", thread_id: traders.id})
     end
 
     # Terry's revoke landing as Alice's revision commits: armed once the
@@ -2437,7 +2437,7 @@ defmodule Sanctum.Consent.CommitTest do
          %{alice: alice, terry: terry, share: share} do
       ref = custom!(alice.ctx, "commit-share-refusals")
 
-      # Sam is in no group Terry shared with.
+      # Sam is in no thread Terry shared with.
       sam = ShareFixtures.person!("Sam")
 
       assert {:error, {:share_not_offered, "api_key"}} =
@@ -3236,7 +3236,7 @@ defmodule Sanctum.Consent.CommitTest do
         })
       end
 
-      # Sam is in no group Terry shared with.
+      # Sam is in no thread Terry shared with.
       assert {:error, {:share_not_offered, "api_key"}} = shared.(sam)
 
       # Alice is: the share is taken as the account.

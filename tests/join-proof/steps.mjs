@@ -368,7 +368,7 @@ async function invited(chromium, { home, identifier }) {
   record.invited = {
     door_before: doorBefore.entries, door_after: doorAfter.entries,
     link_text: linkText, said, code_on_sign_in_page: codeOnPage,
-    seated: person.memberships.includes(invitation.athanor_id),
+    seated: person.threads.includes(invitation.thread_id),
     admissions: [receiptsInvited - receiptsBefore, receiptsLater - receiptsInvited],
     second_use_refused: refused, second_use_said: refusedText,
   };
@@ -379,7 +379,7 @@ async function invited(chromium, { home, identifier }) {
       doorAfter.entries.length === 1 && allow && allow.status === "allowed" && /^invitation inv_/.test(allow.note || "") &&
       receiptsInvited - receiptsBefore === 1 && receiptsLater - receiptsInvited === 1 &&
       refused && /can no longer be used/.test(refusedText || ""),
-    "an invitation link opened in A's browser, taken through \"Already have a CYFR name? Sign in with it.\", seats the person in its group and writes the allow under their identifier; a later sign-in needs no link; the link a second time is used",
+    "an invitation link opened in A's browser, taken through \"Already have a CYFR name? Sign in with it.\", seats the person in its shared thread and writes the allow under their identifier; a later sign-in needs no link; the link a second time is used",
     record.invited);
 }
 

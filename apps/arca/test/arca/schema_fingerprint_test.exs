@@ -195,7 +195,7 @@ defmodule Arca.SchemaFingerprintTest do
       athanor_id: athanor,
       vault_entry_id: "vlt_sh_1",
       audience: "everyone",
-      group_id: nil,
+      thread_id: nil,
       status: "active",
       created_by: "usr_a",
       inserted_at: now,
@@ -208,23 +208,23 @@ defmodule Arca.SchemaFingerprintTest do
     assert refused("shares", %{share | id: "shr_fp_2", vault_entry_id: "vlt_sh_2"}) =~
              ~r/foreign key/i
 
-    # One active share per entry and audience, an absent group included;
+    # One active share per entry and audience, an absent thread included;
     # a revoked one stands beside it.
     assert refused("shares", %{share | id: "shr_fp_3"}) =~ "shares_active_audience_index"
     assert :ok = insert_row("shares", %{share | id: "shr_fp_4", status: "revoked"})
 
-    group = %{share | id: "shr_fp_5", audience: "group", group_id: "ath_traders"}
-    assert :ok = insert_row("shares", group)
-    assert refused("shares", %{group | id: "shr_fp_6"}) =~ "shares_active_audience_index"
-    assert :ok = insert_row("shares", %{group | id: "shr_fp_7", group_id: "ath_pair"})
+    thread = %{share | id: "shr_fp_5", audience: "thread", thread_id: "sth_traders"}
+    assert :ok = insert_row("shares", thread)
+    assert refused("shares", %{thread | id: "shr_fp_6"}) =~ "shares_active_audience_index"
+    assert :ok = insert_row("shares", %{thread | id: "shr_fp_7", thread_id: "sth_pair"})
 
-    # A group exactly when the audience is one.
+    # A thread exactly when the audience is one.
     for bad <- [
-          %{group | id: "shr_fp_8", group_id: nil},
-          %{group | id: "shr_fp_9", group_id: ""},
-          %{share | id: "shr_fp_10", group_id: "ath_traders"}
+          %{thread | id: "shr_fp_8", thread_id: nil},
+          %{thread | id: "shr_fp_9", thread_id: ""},
+          %{share | id: "shr_fp_10", thread_id: "sth_traders"}
         ] do
-      assert refused("shares", bad) =~ "shares_group_named"
+      assert refused("shares", bad) =~ "shares_thread_named"
     end
 
     usage = %{

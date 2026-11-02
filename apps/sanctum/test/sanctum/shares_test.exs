@@ -20,8 +20,9 @@ defmodule Sanctum.SharesTest do
   import Ecto.Query, only: [from: 2]
 
   alias Sanctum.Context
+  alias Sanctum.SharedThreads
   alias Sanctum.Shares
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
   alias Sanctum.Test.ConsentFixtures
   alias Sanctum.TestContext
 
@@ -32,7 +33,7 @@ defmodule Sanctum.SharesTest do
   @source "catalyst:local.stock-watcher"
   @issuer "https://idp.example.com"
   @oidc ~s(["oidc","https://idp.example.com","cid"])
-  @everyone %{audience: "everyone", group_id: nil}
+  @everyone %{audience: "everyone", thread_id: nil}
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -80,14 +81,14 @@ defmodule Sanctum.SharesTest do
     )
   end
 
-  # A group `creator` made, with `members` seated in it by them.
-  defp group!(creator, members \\ []) do
-    {:ok, group} = Athanors.create_group(creator.user_id, "Traders #{uniq()}")
+  # A shared thread `creator` made, with `members` seated in it by them.
+  defp thread!(creator, members \\ []) do
+    {:ok, thread} = SharedThreads.create(creator.user_id, "Traders #{uniq()}")
 
     for member <- members,
-        do: {:ok, :added} = Members.add(group, [user_id: member.user_id], creator.user_id)
+        do: {:ok, :added} = SharedThreads.add(creator.user_id, thread.id, user_id: member.user_id)
 
-    group
+    thread
   end
 
   # An attach-only key of the owner's own athanor whose destination names
@@ -204,7 +205,7 @@ defmodule Sanctum.SharesTest do
               binding_key: key,
               share_id: share.id,
               binding_digest: digest,
-              admitted: %{audience: share.audience, group_id: share.group_id}
+              admitted: %{audience: share.audience, thread_id: share.thread_id}
             }
           ]
         }
@@ -343,12 +344,12 @@ defmodule Sanctum.SharesTest do
       untouched!(terry, share, entry)
     end
 
-    test "a share revoked, absent, to a group the person is not in, or their own is not " <>
+    test "a share revoked, absent, to a thread the person is not in, or their own is not " <>
            "offered, with nothing counted or unsealed",
          %{terry: terry, alice: alice} do
-      traders = group!(terry)
-      grouped = key!(terry)
-      to_traders = share!(terry, grouped, %{audience: "group", group_id: traders.id})
+      traders = thread!(terry)
+      threaded = key!(terry)
+      to_traders = share!(terry, threaded, %{audience: "thread", thread_id: traders.id})
       revoked_entry = key!(terry)
       revoked = share!(terry, revoked_entry)
       :ok = revoke!(terry, revoked)
@@ -357,7 +358,7 @@ defmodule Sanctum.SharesTest do
 
       for {ctx, share, entry} <- [
             {alice, revoked, revoked_entry},
-            {alice, to_traders, grouped},
+            {alice, to_traders, threaded},
             {terry, own, own_entry}
           ] do
         assert {:error, :not_offered} = resolve(ctx, share, digest!(entry)), share.id
@@ -365,8 +366,8 @@ defmodule Sanctum.SharesTest do
       end
 
       absent = %{id: Prima.UUID7.generate_id("shr")}
-      assert {:error, :not_offered} = resolve(alice, absent, digest!(grouped))
-      assert last_used(terry, grouped) == nil
+      assert {:error, :not_offered} = resolve(alice, absent, digest!(threaded))
+      assert last_used(terry, threaded) == nil
     end
 
     test "a source no longer active is refused with its status, with nothing counted or unsealed",
@@ -587,13 +588,13 @@ defmodule Sanctum.SharesTest do
   # ---------------------------------------------------------------------------
 
   describe "discovery" do
-    test "a member of the group is offered the share by its owner's name; leaving ends it and " <>
-           "joining begins it, with nothing written to the share",
+    test "a person seated in the thread is offered the share by its owner's name; leaving " <>
+           "ends it and joining begins it, with nothing written to the share",
          %{terry: terry, alice: alice} do
       bob = person!("Bob")
-      traders = group!(terry, [alice])
+      traders = thread!(terry, [alice])
       entry = key!(terry)
-      share = share!(terry, entry, %{audience: "group", group_id: traders.id})
+      share = share!(terry, entry, %{audience: "thread", thread_id: traders.id})
       id = share.id
 
       assert {:ok, %{id: ^id, owner: "Terry"} = view} = Shares.binding(alice, share.id)
@@ -602,14 +603,14 @@ defmodule Sanctum.SharesTest do
       assert {:ok, []} = Shares.offered(bob)
       before = stored_share(terry, share)
 
-      :ok = Members.remove_member(traders, user_id: alice.user_id)
+      :ok = SharedThreads.remove(terry.user_id, traders.id, user_id: alice.user_id)
 
       assert {:error, :not_offered} = Shares.binding(alice, share.id)
       assert {:ok, []} = Shares.offered(alice)
       assert {:error, :not_offered} = resolve(alice, share, digest!(entry))
       untouched!(terry, share, entry)
 
-      {:ok, :added} = Members.add(traders, [user_id: bob.user_id], terry.user_id)
+      {:ok, :added} = SharedThreads.add(terry.user_id, traders.id, user_id: bob.user_id)
 
       assert {:ok, [%{id: ^id, owner: "Terry"}]} = Shares.offered(bob)
       assert stored_share(terry, share) == before
@@ -654,7 +655,7 @@ defmodule Sanctum.SharesTest do
                id: share.id,
                owner: "Terry",
                audience: "everyone",
-               group_id: nil,
+               thread_id: nil,
                kind: "api_key",
                provider_hint: "example.com",
                field_names: ["KEY", "ORG"],
@@ -715,7 +716,7 @@ defmodule Sanctum.SharesTest do
                {:ok,
                 %{
                   audience: "everyone",
-                  group_id: nil,
+                  thread_id: nil,
                   kind: "api_key",
                   provider_hint: "example.com",
                   field_names: ["KEY", "ORG"],
@@ -732,16 +733,16 @@ defmodule Sanctum.SharesTest do
 
   describe "administrator_shares/1" do
     test "the platform administrator's active shares to everyone, newest first: never a " <>
-           "member's, a group's, a revoked one or the person's own",
+           "member's, a thread's, a revoked one or the person's own",
          %{terry: terry} do
       admin = person!("Admin")
       {:ok, _seat} = TestContext.ensure_platform(admin.user_id)
       newcomer = person!("Newcomer")
-      staff = group!(admin)
+      staff = thread!(admin)
 
       first = share!(admin, key!(admin))
       second = share!(admin, key!(admin))
-      _to_staff = share!(admin, key!(admin), %{audience: "group", group_id: staff.id})
+      _to_staff = share!(admin, key!(admin), %{audience: "thread", thread_id: staff.id})
       revoked = share!(admin, key!(admin))
       :ok = revoke!(admin, revoked)
       _members = share!(terry, key!(terry))
@@ -847,8 +848,9 @@ defmodule Sanctum.SharesTest do
 
   describe "the owner's verbs" do
     test "are made from the owner's own athanor alone, with nothing written",
-         %{terry: terry, alice: alice} do
-      traders = group!(terry, [alice])
+         %{terry: terry} do
+      # A group athanor Terry sits in: an athanor of theirs, not their own.
+      {:ok, traders} = Athanors.create_group(terry.user_id, "Traders #{uniq()}")
       entry = key!(terry)
       share = share!(terry, entry)
       in_group = %{terry | athanor_id: traders.id}
@@ -894,7 +896,7 @@ defmodule Sanctum.SharesTest do
                id: share.id,
                entry_id: entry.id,
                audience: "everyone",
-               group_id: nil,
+               thread_id: nil,
                person_daily: 5,
                total_daily: nil,
                status: "active",
@@ -951,12 +953,12 @@ defmodule Sanctum.SharesTest do
            "confirmation",
          %{terry: terry, alice: alice} do
       bob = person!("Bob")
-      traders = group!(terry, [alice])
-      desk = group!(terry, [bob])
-      share = share!(terry, key!(terry), %{audience: "group", group_id: traders.id})
+      traders = thread!(terry, [alice])
+      desk = thread!(terry, [bob])
+      share = share!(terry, key!(terry), %{audience: "thread", thread_id: traders.id})
       id = share.id
-      to_traders = %{audience: "group", group_id: traders.id}
-      to_desk = %{audience: "group", group_id: desk.id}
+      to_traders = %{audience: "thread", thread_id: traders.id}
+      to_desk = %{audience: "thread", thread_id: desk.id}
 
       move = fn ctx, to, expected ->
         Shares.set_audience(ctx, Map.merge(%{share_id: id, expected: expected}, to))
@@ -967,7 +969,7 @@ defmodule Sanctum.SharesTest do
       assert {:ok, :unchanged} = move.(terry, to_traders, to_traders)
       refute_received {:share, _, _}
 
-      # Group to everyone, and group to another group, widen: each asks.
+      # Thread to everyone, and thread to another thread, widen: each asks.
       for to <- [@everyone, to_desk] do
         assert {:error, {:confirmation_required, %{id: secret, operation: "share.set_audience"}}} =
                  move.(terry, to, to_traders)
@@ -975,8 +977,8 @@ defmodule Sanctum.SharesTest do
         assert confirmation!(terry, secret).action == "credential_sharing"
       end
 
-      assert %{audience: "group", group_id: group_id} = stored_share(terry, share)
-      assert group_id == traders.id
+      assert %{audience: "thread", thread_id: thread_id} = stored_share(terry, share)
+      assert thread_id == traders.id
       refute_received {:share, _, _}
 
       assert {:ok, :changed} = TestContext.confirming(terry, &move.(&1, to_desk, to_traders))
@@ -988,7 +990,7 @@ defmodule Sanctum.SharesTest do
       assert_received {:share, :audience, %{share_id: ^id}}
       assert {:ok, [%{id: ^id}]} = Shares.offered(alice)
 
-      # Everyone to a group narrows: the session alone.
+      # Everyone to a thread narrows: the session alone.
       assert {:ok, :changed} = move.(terry, to_traders, @everyone)
       assert_received {:share, :audience, %{share_id: ^id}}
       assert {:ok, []} = Shares.offered(bob)
@@ -1001,9 +1003,9 @@ defmodule Sanctum.SharesTest do
     test "a credential_sharing confirmation's preview names the sharing it confirms, never a " <>
            "value or a person",
          %{terry: terry, alice: alice} do
-      traders = group!(terry, [alice])
+      traders = thread!(terry, [alice])
       entry = key!(terry)
-      to_traders = %{audience: "group", group_id: traders.id}
+      to_traders = %{audience: "thread", thread_id: traders.id}
 
       assert {:error, {:confirmation_required, %{id: created}}} =
                Shares.create(terry, Map.merge(%{entry_id: entry.id, person_daily: 5}, to_traders))
@@ -1014,13 +1016,13 @@ defmodule Sanctum.SharesTest do
                Shares.set_audience(terry, %{
                  share_id: share.id,
                  audience: "everyone",
-                 group_id: nil,
+                 thread_id: nil,
                  expected: to_traders
                })
 
       for {secret, resource, details} <- [
             {created, entry.name,
-             %{"audience" => "group", "person_daily" => "5", "total_daily" => "no limit"}},
+             %{"audience" => "thread", "person_daily" => "5", "total_daily" => "no limit"}},
             {widened, share.id, %{"audience" => "everyone"}}
           ] do
         record = confirmation!(terry, secret)
@@ -1037,15 +1039,15 @@ defmodule Sanctum.SharesTest do
     test "a widening proven over one audience is a conflict at its repeat once the audience " <>
            "moved, with nothing more written and the proof not spent",
          %{terry: terry, alice: alice} do
-      traders = group!(terry, [alice])
-      desk = group!(terry)
-      to_traders = %{audience: "group", group_id: traders.id}
-      to_desk = %{audience: "group", group_id: desk.id}
+      traders = thread!(terry, [alice])
+      desk = thread!(terry)
+      to_traders = %{audience: "thread", thread_id: traders.id}
+      to_desk = %{audience: "thread", thread_id: desk.id}
       share = share!(terry, key!(terry), to_traders)
-      widening = %{share_id: share.id, audience: "everyone", group_id: nil, expected: to_traders}
+      widening = %{share_id: share.id, audience: "everyone", thread_id: nil, expected: to_traders}
 
       # Before the proof's repeat, another of the owner's sessions moves the
-      # share to another group. The repeat is the proven request itself,
+      # share to another thread. The repeat is the proven request itself,
       # the audience it was decided against included.
       answer =
         TestContext.confirming(terry, fn ctx ->
@@ -1060,8 +1062,8 @@ defmodule Sanctum.SharesTest do
         end)
 
       assert {:error, {:conflict, _sentence}} = answer
-      assert %{audience: "group", group_id: group_id} = stored_share(terry, share)
-      assert group_id == desk.id
+      assert %{audience: "thread", thread_id: thread_id} = stored_share(terry, share)
+      assert thread_id == desk.id
       refute_received {:share, :audience, _}
 
       # The conflict came before the proof was asked for: it is not spent on
@@ -1081,20 +1083,20 @@ defmodule Sanctum.SharesTest do
             :absent,
             nil,
             "everyone",
-            [audience: "everyone", group_id: nil],
+            [audience: "everyone", thread_id: nil],
             %{},
-            %{audience: "anyone", group_id: nil},
-            %{audience: "group", group_id: nil},
-            %{audience: "everyone", group_id: "ath_other"}
+            %{audience: "anyone", thread_id: nil},
+            %{audience: "thread", thread_id: nil},
+            %{audience: "everyone", thread_id: "sth_other"}
           ] do
-        params = %{share_id: id, audience: "everyone", group_id: nil}
+        params = %{share_id: id, audience: "everyone", thread_id: nil}
         params = if expected == :absent, do: params, else: Map.put(params, :expected, expected)
 
         assert {:error, :invalid_expected} = Shares.set_audience(terry, params),
                inspect({id, expected})
       end
 
-      assert %{audience: "everyone", group_id: nil} = stored_share(terry, share)
+      assert %{audience: "everyone", thread_id: nil} = stored_share(terry, share)
       refute_received {:share, _, _}
     end
 
@@ -1239,7 +1241,7 @@ defmodule Sanctum.SharesTest do
     test "each write announces once its share, its kind and who acted; a refused or " <>
            "unchanged write announces nothing",
          %{terry: terry, alice: alice} do
-      traders = group!(terry, [alice])
+      traders = thread!(terry, [alice])
       entry = key!(terry)
       params = %{entry_id: entry.id, audience: "everyone"}
       {:ok, share} = TestContext.confirming(terry, &Shares.create(&1, params))
@@ -1250,8 +1252,8 @@ defmodule Sanctum.SharesTest do
       assert {:ok, :changed} =
                Shares.set_audience(terry, %{
                  share_id: id,
-                 audience: "group",
-                 group_id: traders.id,
+                 audience: "thread",
+                 thread_id: traders.id,
                  expected: @everyone
                })
 
@@ -1267,8 +1269,8 @@ defmodule Sanctum.SharesTest do
       # A refused or an unchanged write says nothing.
       live_entry = key!(terry)
       live = share!(terry, live_entry)
-      seen = %{share_id: live.id, audience: "everyone", group_id: nil, expected: @everyone}
-      to_traders = %{audience: "group", group_id: traders.id}
+      seen = %{share_id: live.id, audience: "everyone", thread_id: nil, expected: @everyone}
+      to_traders = %{audience: "thread", thread_id: traders.id}
 
       assert {:error, :already_shared} =
                TestContext.confirming(

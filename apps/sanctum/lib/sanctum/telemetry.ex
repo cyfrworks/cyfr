@@ -50,6 +50,10 @@ defmodule Sanctum.Telemetry do
   @session_created_event [:cyfr, :sanctum, :session, :created]
   @sessions_revoked_event [:cyfr, :sanctum, :sessions, :revoked]
   @membership_event [:cyfr, :sanctum, :membership, :changed]
+  @shared_thread_events %{
+    changed: [:cyfr, :sanctum, :shared_thread, :changed],
+    posted: [:cyfr, :sanctum, :shared_thread, :posted]
+  }
   @vault_entry_event [:cyfr, :sanctum, :vault, :entry_changed]
   @athanor_archived_event [:cyfr, :sanctum, :athanor, :archived]
   @api_keys_event [:cyfr, :sanctum, :api_keys, :changed]
@@ -167,6 +171,21 @@ defmodule Sanctum.Telemetry do
       user_id: user_id,
       athanor_id: athanor_id,
       change: change
+    })
+  end
+
+  @doc """
+  The shared thread `thread_id` changed (`:changed`: its title, status or
+  people) or took a message (`:posted`), told to each person in
+  `user_ids`: its people, and anyone a change took from it.
+  """
+  @spec shared_thread(:changed | :posted, String.t(), [String.t()]) :: :ok
+  def shared_thread(kind, thread_id, user_ids)
+      when is_map_key(@shared_thread_events, kind) and is_binary(thread_id) and
+             is_list(user_ids) do
+    :telemetry.execute(Map.fetch!(@shared_thread_events, kind), %{count: 1}, %{
+      thread_id: thread_id,
+      user_ids: Enum.uniq(user_ids)
     })
   end
 

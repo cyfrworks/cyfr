@@ -631,8 +631,8 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  defp invitation_sentence(%{inviter: inviter, athanor: athanor}),
-    do: "#{inviter} invited you to #{athanor} on this CYFR. Sign in from your CYFR to accept."
+  defp invitation_sentence(%{inviter: inviter, thread: thread}),
+    do: "#{inviter} invited you to #{thread} on this CYFR. Sign in from your CYFR to accept."
 
   defp invitation_sentence(%{inviter: inviter}),
     do: "#{inviter} invited you to this CYFR. Sign in from your CYFR to accept."

@@ -33,9 +33,9 @@ defmodule Sanctum.ProviderTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 16 action-based tools" do
+    test "returns 17 action-based tools" do
       tools = Provider.tools()
-      assert length(tools) == 16
+      assert length(tools) == 17
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -55,6 +55,8 @@ defmodule Sanctum.ProviderTest do
       # A person's own keys, offered to the people they share them with.
       assert "share" in tool_names
       assert "invitation" in tool_names
+      # Threads people talk in, which no athanor holds.
+      assert "shared_thread" in tool_names
     end
 
     test "each tool has required schema fields" do

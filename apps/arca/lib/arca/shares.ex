@@ -4,8 +4,8 @@
 defmodule Arca.Shares do
   @moduledoc """
   Persistence mechanics for shares: one of an athanor's vault entries
-  offered to an audience, `everyone` or the active members of one group
-  (`Arca.Schemas.Share`). A share is a row of its owner's athanor that
+  offered to an audience, `everyone` or the people seated in one shared
+  thread (`Arca.Schemas.Share`). A share is a row of its owner's athanor that
   names the entry, the audience and the caps; it holds no material and
   copies nothing, so every reader reaches the entry through it. Whether a
   person may read or use one, and every confirmation, are the layer
@@ -16,12 +16,14 @@ defmodule Arca.Shares do
   `create/3`, `list/1`, `get/2`, `set_audience/4`, `set_caps/4` and
   `revoke/3` take the owner's actor first and work in its athanor. A share
   is made from a person's own athanor only: `create/3` takes the creator's
-  person row and then the athanors it names (the owner's own and the
-  group's) under lock, in `Arca.SecurityTransitions`' order, then the
-  entry's row under lock, and re-checks from those rows that the athanor
-  is the creator's own and active (`{:error, :not_own_athanor}`), that a
-  group audience names an active group the creator is an active member of
-  (`{:error, :not_member}`), and that the entry is active
+  person row, then the owner's athanor row, then the row of the shared
+  thread a thread audience names, each under lock, in
+  `Arca.SecurityTransitions`' order (a person, then an athanor, then a
+  shared thread), then the entry's row under lock, and re-checks from
+  those rows that the athanor is the creator's own and active
+  (`{:error, :not_own_athanor}`), that a thread audience names an active
+  thread the creator is seated in (`{:error, :not_member}`), and that the
+  entry is active
   (`{:error, {:entry_unavailable, status}}`), attach-only
   (`{:error, :disclosed_not_shareable}`), of a shareable kind
   (`{:error, :kind_not_shareable}`) and has a destination naming its
@@ -31,8 +33,10 @@ defmodule Arca.Shares do
   `{:error, :not_found}`, and a second active share of one entry to one
   audience `{:error, :already_shared}`, each with nothing written.
 
-  `set_audience/4` is a compare-and-set against the audience the caller
-  read, and takes no lock: a use's claim and a revision's lock each hold
+  `set_audience/4` takes the owner's athanor row, then the row of the
+  thread the new audience names, under lock in the same order, reads the
+  creator's seat there, and then writes by compare-and-set against the
+  audience the caller read: a use's claim and a revision's lock each hold
   the audience they admitted under against the row they lock
   (`same_audience?/2`), so one racing a narrowing is refused rather than
   admitted outside the audience. `revoke/3` takes the share's row
@@ -53,7 +57,7 @@ defmodule Arca.Shares do
   A share is read for a recipient in their own athanor, so these reads
   cross athanors by design, each by the one key it is asked for:
   `offered_to/2` (the active shares whose audience holds the person),
-  `member?/3` (one membership, read at use), `get_for_source/2` (one share
+  `member?/3` (one seat, read at use), `get_for_source/2` (one share
   by id, with its source entry's binding facts), `administrator_shares/1`
   (the active shares to everyone of an owner who holds the platform
   administrator's membership) and `head_profiles_referencing_share/2`
@@ -62,7 +66,15 @@ defmodule Arca.Shares do
 
   import Ecto.Query
 
-  alias Arca.Schemas.{Athanor, Membership, Share, User, VaultEntry}
+  alias Arca.Schemas.{
+    Athanor,
+    Membership,
+    Share,
+    SharedThread,
+    SharedThreadMember,
+    User,
+    VaultEntry
+  }
 
   @typedoc "A share as callers see it. It holds no material."
   @type share :: %{
@@ -70,7 +82,7 @@ defmodule Arca.Shares do
           athanor_id: String.t(),
           vault_entry_id: String.t(),
           audience: String.t(),
-          group_id: String.t() | nil,
+          thread_id: String.t() | nil,
           person_daily: non_neg_integer() | nil,
           total_daily: non_neg_integer() | nil,
           status: String.t(),
@@ -99,14 +111,14 @@ defmodule Arca.Shares do
   @typedoc "A share with its source entry and the person who owns its athanor."
   @type offered :: %{share: share(), source: source(), owner_user_id: String.t()}
 
-  @typedoc "Who a share is offered to: `everyone`, or one group."
-  @type audience :: %{audience: String.t(), group_id: String.t() | nil}
+  @typedoc "Who a share is offered to: `everyone`, or one shared thread's people."
+  @type audience :: %{audience: String.t(), thread_id: String.t() | nil}
 
   @typedoc "What a revocation revoked and the profiles it blocked."
   @type revoked :: %{share_ids: [String.t()], blocked: [{String.t(), String.t()}]}
 
   @doc """
-  Whether `audience`, `%{audience: _, group_id: _}`, is one a share may
+  Whether `audience`, `%{audience: _, thread_id: _}`, is one a share may
   name (`Arca.Schemas.Share.audience_valid?/1`).
   """
   @spec audience_valid?(term()) :: boolean()
@@ -114,15 +126,18 @@ defmodule Arca.Shares do
 
   @doc """
   Whether the share row's audience `held` is the audience `admitted` a
-  caller read it at, both `%{audience: _, group_id: _}`: the one compare
+  caller read it at, both `%{audience: _, thread_id: _}`: the one compare
   a use's claim (`Arca.ShareUsage.claim/4`) and a revision's lock on the
   shares it binds (`Arca.ConsentStorage`) make, so a narrowing, which
   takes no lock, refuses what raced it rather than admitting outside the
   audience.
   """
   @spec same_audience?(audience(), map()) :: boolean()
-  def same_audience?(%{audience: audience, group_id: group_id}, %{audience: audience} = admitted),
-    do: Map.get(admitted, :group_id) == group_id
+  def same_audience?(
+        %{audience: audience, thread_id: thread_id},
+        %{audience: audience} = admitted
+      ),
+      do: Map.get(admitted, :thread_id) == thread_id
 
   def same_audience?(_held, _admitted), do: false
 
@@ -143,7 +158,7 @@ defmodule Arca.Shares do
 
   @doc """
   Share the entry `attrs.entry_id` of the actor's athanor with
-  `attrs.audience` (`"everyone"`, or `"group"` with `attrs.group_id`),
+  `attrs.audience` (`"everyone"`, or `"thread"` with `attrs.thread_id`),
   with the optional caps `attrs.person_daily` and `attrs.total_daily`
   (absent for no limit). The actor names the creator (`user_id`).
 
@@ -186,7 +201,7 @@ defmodule Arca.Shares do
         athanor_id: athanor_id,
         vault_entry_id: Map.get(attrs, :entry_id),
         audience: Map.get(attrs, :audience),
-        group_id: Map.get(attrs, :group_id),
+        thread_id: Map.get(attrs, :thread_id),
         person_daily: Map.get(attrs, :person_daily),
         total_daily: Map.get(attrs, :total_daily),
         created_by: user_id
@@ -198,7 +213,7 @@ defmodule Arca.Shares do
       Arca.Repo.Errors.with_db_rescue("Arca.Shares.create", fn ->
         Arca.Repo.locking_transaction(fn ->
           with :ok <- creator_stands(user_id),
-               :ok <- athanors_admit(athanor_id, user_id, row),
+               :ok <- places_admit(athanor_id, user_id, row),
                :ok <- shareable(athanor_id, row.vault_entry_id),
                :ok <- verify.() do
             insert(changeset)
@@ -230,21 +245,19 @@ defmodule Arca.Shares do
     end
   end
 
-  # The owner's athanor and the group the audience names, under lock in
-  # id order, then the creator's seat in the group, read under the
-  # creator's lock already held.
-  defp athanors_admit(athanor_id, user_id, row) do
-    ids = Enum.sort(Enum.uniq([athanor_id | List.wrap(row.group_id)]))
-
-    held =
-      from(a in Athanor, where: a.id in ^ids, order_by: a.id)
-      |> Arca.QueryHelpers.for_update()
-      |> Arca.Repo.all()
-      |> Map.new(&{&1.id, &1})
-
-    with :ok <- own_athanor(held[athanor_id], user_id) do
-      group_admits(row, held, user_id)
+  # The owner's athanor, then the shared thread the audience names, each
+  # under lock, then the creator's seat in the thread, read under those
+  # locks and the creator's, already held.
+  defp places_admit(athanor_id, user_id, row) do
+    with :ok <- own_athanor(lock_athanor(athanor_id), user_id) do
+      thread_admits(row, user_id)
     end
+  end
+
+  defp lock_athanor(athanor_id) do
+    from(a in Athanor, where: a.id == ^athanor_id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
   end
 
   @doc false
@@ -258,33 +271,42 @@ defmodule Arca.Shares do
 
   def own_athanor(_athanor, _user_id), do: {:error, :not_own_athanor}
 
-  defp group_admits(%Share{audience: "everyone"}, _held, _user_id), do: :ok
+  # A thread audience's thread under lock, after the owner's athanor, then
+  # the creator's seat in it: a seat's write, a leave and a denial each
+  # wait for this, and this for them.
+  defp thread_admits(%{audience: "everyone"}, _user_id), do: :ok
 
-  defp group_admits(%Share{audience: "group", group_id: group_id}, held, user_id) do
-    case held[group_id] do
-      %Athanor{kind: "group", status: "active"} ->
-        if active_member?(group_id, user_id), do: :ok, else: {:error, :not_member}
+  defp thread_admits(%{audience: "thread", thread_id: thread_id}, user_id) do
+    case lock_thread(thread_id) do
+      %SharedThread{status: "active"} ->
+        if active_member?(thread_id, user_id), do: :ok, else: {:error, :not_member}
 
-      _other ->
+      _archived_or_absent ->
         {:error, :not_member}
     end
   end
 
-  # Whether `user_id` is an active person seated, active, in the active
-  # group `group_id`: the one membership read a group share is made,
-  # moved and used by.
-  # arca:unscoped-ok a share's group is another athanor than its owner's
-  # or its reader's: one membership, read by the group and the person.
-  defp active_member?(group_id, user_id) do
-    from(m in Membership,
-      join: g in Athanor,
-      on: g.id == m.athanor_id,
+  # arca:unscoped-ok a share's thread is no athanor's: it is locked by its id.
+  defp lock_thread(thread_id) do
+    from(t in SharedThread, where: t.id == ^thread_id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
+
+  # Whether `user_id` is an active person seated in the active shared
+  # thread `thread_id`: the one seat read a thread share is made, moved
+  # and used by.
+  # arca:unscoped-ok a share's thread is no athanor's: one seat, read by
+  # the thread and the person.
+  defp active_member?(thread_id, user_id) do
+    from(m in SharedThreadMember,
+      join: t in SharedThread,
+      on: t.id == m.thread_id,
       join: u in User,
       on: u.id == m.user_id,
       where:
-        m.athanor_id == ^group_id and m.user_id == ^user_id and m.scope == "athanor" and
-          m.status == "active" and g.kind == "group" and g.status == "active" and
-          u.status == "active"
+        m.thread_id == ^thread_id and m.user_id == ^user_id and m.status == "active" and
+          t.status == "active" and u.status == "active"
     )
     |> Arca.Repo.exists?()
   end
@@ -352,7 +374,7 @@ defmodule Arca.Shares do
   # the index, and ecto_sqlite3 the index SQLite names in its error text.
   defp insert(changeset) do
     changeset
-    |> Ecto.Changeset.unique_constraint([:athanor_id, :vault_entry_id, :audience, :group_id],
+    |> Ecto.Changeset.unique_constraint([:athanor_id, :vault_entry_id, :audience, :thread_id],
       name: :shares_active_audience_index
     )
     |> Arca.Repo.insert()
@@ -395,10 +417,12 @@ defmodule Arca.Shares do
   @doc """
   Move an active share of the actor's athanor from the audience
   `expected` the caller read to `audience`, each
-  `%{audience: _, group_id: _}`, by compare-and-set and with no lock.
+  `%{audience: _, thread_id: _}`: the owner's athanor row and then the
+  new audience's thread row under lock (the module doc), the creator's
+  seat read there, then a compare-and-set.
 
-  A group audience names an active group the creator of the share is an
-  active member of (`{:error, :not_member}`). A share no longer at
+  A thread audience names an active thread the creator of the share is
+  seated in (`{:error, :not_member}`). A share no longer at
   `expected` is `{:error, :conflict}`, a revoked one
   `{:error, {:share_unavailable, "revoked"}}`, one the athanor does not
   hold `{:error, :not_found}`, and a move onto an audience another active
@@ -420,39 +444,37 @@ defmodule Arca.Shares do
       when resolved(athanor_id) and is_binary(id) do
     if Share.audience_valid?(expected) and Share.audience_valid?(audience) do
       Arca.Repo.Errors.with_db_rescue("Arca.Shares.set_audience", fn ->
-        with {:ok, share} <- fetch(athanor_id, id),
-             :ok <- group_open(audience, share.created_by) do
-          move_audience(athanor_id, share, expected, audience)
-        end
+        Arca.Repo.locking_transaction(fn ->
+          with %Athanor{} <- lock_athanor(athanor_id) || {:error, :not_found},
+               {:ok, share} <- fetch(athanor_id, id),
+               :ok <- thread_admits(audience, share.created_by) do
+            move_audience(athanor_id, share, expected, audience)
+          end
+          |> Arca.Repo.committed()
+        end)
       end)
     else
-      {:error, {:invalid, %{audience: ["is everyone with no group, or group with one"]}}}
+      {:error, {:invalid, %{audience: ["is everyone with no thread, or thread with one"]}}}
     end
   end
 
   def set_audience(%Prima.Actor{}, id, _expected, _audience) when is_binary(id),
     do: {:error, :no_athanor}
 
-  defp group_open(%{audience: "everyone"}, _user_id), do: :ok
-
-  defp group_open(%{audience: "group", group_id: group_id}, user_id) do
-    if active_member?(group_id, user_id), do: :ok, else: {:error, :not_member}
-  end
-
   # The write lands only on the row still active at `expected`: its
   # filters are the compare, and `force:` makes a move onto the audience it
-  # already holds compare too. An absent group needs no filter of its own,
+  # already holds compare too. An absent thread needs no filter of its own,
   # since `everyone` holds none by the baseline's check. Both adapters'
   # names for the natural key's index are declared, as `insert/1` does.
   defp move_audience(athanor_id, share, expected, audience) do
     filters =
       %{athanor_id: athanor_id, status: "active", audience: expected.audience}
-      |> then(&if expected.group_id, do: Map.put(&1, :group_id, expected.group_id), else: &1)
+      |> then(&if expected.thread_id, do: Map.put(&1, :thread_id, expected.thread_id), else: &1)
 
     share
-    |> Ecto.Changeset.change(audience: audience.audience, group_id: audience.group_id)
+    |> Ecto.Changeset.change(audience: audience.audience, thread_id: audience.thread_id)
     |> Map.update!(:filters, &Map.merge(&1, filters))
-    |> Ecto.Changeset.unique_constraint([:athanor_id, :vault_entry_id, :audience, :group_id],
+    |> Ecto.Changeset.unique_constraint([:athanor_id, :vault_entry_id, :audience, :thread_id],
       name: :shares_active_audience_index
     )
     |> Arca.Repo.update(stale_error_field: :id, force: true)
@@ -641,8 +663,8 @@ defmodule Arca.Shares do
 
   @doc """
   The active shares offered to the actor's person (`user_id`): every
-  share to `everyone`, and every share to a group the person is an
-  active member of, while that group is active. The person is active,
+  share to `everyone`, and every share to a shared thread the person is
+  seated in, while that thread is active. The person is active,
   and a share is never offered to its owner. Each comes with its source
   entry's binding facts and its owner, newest first. `provider_hint:`
   narrows to one provider's entries.
@@ -650,19 +672,17 @@ defmodule Arca.Shares do
   @spec offered_to(Prima.Actor.t(), keyword()) ::
           {:ok, [offered()]} | {:error, :no_person | term()}
   # arca:unscoped-ok a share is offered across athanors: the shares whose
-  # audience holds one person, read by that person's memberships and the
-  # audience column, each answered with the athanor it is in.
+  # audience holds one person, read by that person's seats in shared
+  # threads and the audience column, each answered with the athanor it is in.
   def offered_to(%Prima.Actor{user_id: user_id}, opts)
       when is_binary(user_id) and user_id != "" and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("Arca.Shares.offered_to", fn ->
-      groups =
-        from(m in Membership,
-          join: g in Athanor,
-          on: g.id == m.athanor_id,
-          where:
-            m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
-              g.kind == "group" and g.status == "active",
-          select: m.athanor_id
+      threads =
+        from(m in SharedThreadMember,
+          join: t in SharedThread,
+          on: t.id == m.thread_id,
+          where: m.user_id == ^user_id and m.status == "active" and t.status == "active",
+          select: m.thread_id
         )
 
       query =
@@ -672,7 +692,7 @@ defmodule Arca.Shares do
           where: a.owner_user_id != ^user_id,
           where:
             s.audience == "everyone" or
-              (s.audience == "group" and s.group_id in subquery(groups))
+              (s.audience == "thread" and s.thread_id in subquery(threads))
         )
 
       query =
@@ -688,17 +708,17 @@ defmodule Arca.Shares do
   def offered_to(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_person}
 
   @doc """
-  Whether `user_id` is an active person and an active member of the
-  active group `group_id`: the audience of a group share, read at use.
+  Whether `user_id` is an active person seated in the active shared
+  thread `thread_id`: the audience of a thread share, read at use.
   The actor is the person themselves or the platform's.
   """
   @spec member?(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, boolean()} | {:error, :cross_tenant | term()}
-  def member?(%Prima.Actor{} = actor, group_id, user_id)
-      when is_binary(group_id) and is_binary(user_id) and user_id != "" do
+  def member?(%Prima.Actor{} = actor, thread_id, user_id)
+      when is_binary(thread_id) and is_binary(user_id) and user_id != "" do
     if platform(actor) or actor.user_id == user_id do
       Arca.Repo.Errors.with_db_rescue("Arca.Shares.member?", fn ->
-        {:ok, active_member?(group_id, user_id)}
+        {:ok, active_member?(thread_id, user_id)}
       end)
     else
       {:error, :cross_tenant}
@@ -819,7 +839,7 @@ defmodule Arca.Shares do
       athanor_id: s.athanor_id,
       vault_entry_id: s.vault_entry_id,
       audience: s.audience,
-      group_id: s.group_id,
+      thread_id: s.thread_id,
       person_daily: s.person_daily,
       total_daily: s.total_daily,
       status: s.status,

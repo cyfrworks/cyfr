@@ -5,21 +5,15 @@ defmodule PrismWeb.MembersLive do
   @moduledoc """
   Who is in the focused athanor: the members, the pending invites, and the
   controls every member has: add by name, remove, withdraw an invite,
-  leave. In an open group a name no one holds offers a link with that name
-  filled in. Withdraw reaches only an
-  invitation: one accepted since the page loaded stays a member. A
+  leave. A name no one holds is said to be no one's. Withdraw reaches only
+  an invitation: one accepted since the page loaded stays a member. A
   person's own athanor has one member and no controls beyond the list.
-
-  In an open group, the invitation links section creates a link that
-  makes a new person here and seats them in the group, shows it once with
-  a copy control, lists the links the viewer sees for this group
-  (`invitation.list`: their own, or every one for the platform
-  administrator) and revokes one still pending.
+  An invitation names a shared thread, never an athanor, so this page
+  makes none.
   """
 
   use PrismWeb, :live_view
 
-  alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -42,8 +36,6 @@ defmodule PrismWeb.MembersLive do
      |> assign(:new_person, "")
      |> assign(:unknown_name, nil)
      |> assign(:new_group_name, "")
-     |> assign(:invitations, [])
-     |> assign(:new_link, nil)
      |> assign(:loading, true)}
   end
 
@@ -195,50 +187,6 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
-  def handle_event("invitation_create", _params, %{assigns: %{athanor: %{id: id}}} = socket) do
-    case call_tool(socket, "invitation/create", %{"athanor_id" => id}) do
-      {:ok, %{invitation_url: link}} ->
-        {:noreply, socket |> assign(:new_link, link) |> load()}
-
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not create the link: #{error_message(reason)}")}
-    end
-  end
-
-  def handle_event("invite_name", _params, socket) do
-    with %{unknown_name: name, athanor: %{id: id} = athanor} when is_binary(name) <-
-           socket.assigns,
-         true <- invitable?(athanor) do
-      case call_tool(socket, "invitation/create", %{"name" => name, "athanor_id" => id}) do
-        {:ok, %{invitation_url: link}} ->
-          {:noreply,
-           socket
-           |> assign(:new_link, link)
-           |> assign(:new_person, "")
-           |> assign(:unknown_name, nil)
-           |> clear_flash()
-           |> load()}
-
-        {:error, reason} ->
-          {:noreply,
-           put_flash(socket, :error, "Could not create the link: #{error_message(reason)}")}
-      end
-    else
-      _no_offer -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("invitation_revoke", %{"id" => id}, socket) do
-    case call_tool(socket, "invitation/revoke", %{"invitation_id" => id}) do
-      {:ok, _} ->
-        {:noreply, socket |> load() |> put_flash(:info, "Invitation link revoked.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not revoke: #{error_message(reason)}")}
-    end
-  end
-
   def handle_event("form_changed", params, socket) do
     {:noreply,
      socket
@@ -355,30 +303,6 @@ defmodule PrismWeb.MembersLive do
     |> assign(:athanor_label, athanor && PrismWeb.Athanors.label(athanor, ctx))
     |> assign(:members, members)
     |> assign(:groups, groups)
-    |> assign(:invitations, invitations(socket, athanor))
-  end
-
-  # The invitation links the viewer sees that seat people in this group,
-  # newest first.
-  defp invitations(socket, %{id: athanor_id} = athanor) do
-    with true <- invitable?(athanor),
-         {:ok, %{invitations: invitations}} <- call_tool(socket, "invitation/list", %{}) do
-      Enum.filter(invitations, &(&1[:athanor_id] == athanor_id))
-    else
-      _none -> []
-    end
-  end
-
-  defp invitations(_socket, _athanor), do: []
-
-  defp invitable?(%{kind: "group", status: "active", roster: "open"}), do: true
-  defp invitable?(_athanor), do: false
-
-  defp until(iso) do
-    case DateTime.from_iso8601(iso) do
-      {:ok, at, _offset} -> Calendar.strftime(at, "%-d %b %Y, %H:%M UTC")
-      _unparsed -> iso
-    end
   end
 
   @impl true
@@ -480,7 +404,7 @@ defmodule PrismWeb.MembersLive do
             class="mt-1 text-xs text-gray-500"
             data-test="member-add-help"
           >
-            Add someone by their name. A name no one holds yet offers an invitation link with that name filled in.
+            Add someone by their name.
           </p>
 
           <%!-- A DM's door is closed; growing the room is a different act.
@@ -506,66 +430,7 @@ defmodule PrismWeb.MembersLive do
 
           <div :if={@unknown_name} data-test="member-unknown-name" class="mt-4 space-y-2">
             <p class="text-sm text-gray-400">No one has @{@unknown_name} yet.</p>
-            <.button :if={invitable?(@athanor)} phx-click="invite_name">
-              Create an invitation link for @{@unknown_name}
-            </.button>
           </div>
-        </.card>
-
-        <.card :if={invitable?(@athanor)}>
-          <h3 class="text-sm font-medium text-gray-400 mb-1">Invitation links</h3>
-          <p class="text-xs text-gray-500 mb-4">
-            A link makes someone new to this CYFR a person here and seats them in this group.
-            Someone who already has a CYFR name signs in with it from the same link. It works once
-            and expires after seven days.
-          </p>
-
-          <div :if={@new_link} data-test="invitation-new" class="mb-4 space-y-2">
-            <p class="text-xs text-gray-400">
-              Send this link to the person you invite. It is shown only now.
-            </p>
-            <div class="flex gap-2 items-center">
-              <code
-                data-test="invitation-link"
-                class="flex-1 text-xs text-gray-200 bg-gray-800 rounded px-2 py-2 break-all"
-              >
-                {@new_link}
-              </code>
-              <.button
-                variant="ghost"
-                data-test="invitation-copy"
-                phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_link})}
-              >
-                Copy
-              </.button>
-            </div>
-          </div>
-
-          <div :if={@invitations != []} id="invitations">
-            <.table id="invitation-rows" rows={@invitations}>
-              <:col :let={i} label="State">
-                <.badge color={if i[:state] == "pending", do: "green", else: "yellow"}>
-                  {i[:state]}
-                </.badge>
-              </:col>
-              <:col :let={i} label="Expires">{until(i[:expires_at])}</:col>
-              <:col :let={i} label="Actions">
-                <.button
-                  :if={i[:state] == "pending"}
-                  variant="ghost"
-                  phx-click="invitation_revoke"
-                  phx-value-id={i[:id]}
-                  data-confirm="Revoke this link? It will admit no one."
-                >
-                  Revoke
-                </.button>
-              </:col>
-            </.table>
-          </div>
-
-          <.button class="mt-4" phx-click="invitation_create" data-test="invitation-create">
-            Create an invitation link
-          </.button>
         </.card>
 
         <.card>

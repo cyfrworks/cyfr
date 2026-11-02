@@ -6,8 +6,8 @@
 # evaluates to a function of the argument list; each command answers one
 # line, `SHARE=` and a JSON object of bounded, non-secret facts. It calls
 # the real paths named below and reads back what they decided, and seeds
-# one thing, a group of the administrator's holding Bea (`group`), which
-# the narrowing names. The administrator's keys and their shares are made
+# one thing, a shared thread of the administrator's holding Bea (`thread`),
+# which the narrowing names. The administrator's keys and their shares are made
 # on the Vault page, in the browser. Material a share unseals is discarded
 # here and never serialized.
 #
@@ -52,11 +52,11 @@
 #   under the context it establishes as a request establishes it
 #   (`Sanctum.Caller.establish/2`), at Prism (origin interactive).
 #
-#   group SESSION_TOKEN MEMBER_USER_ID NAME
-#       The administrator, by their session, makes the group NAME
-#       (`Sanctum.Tenancy.Athanors.create_group/3`, which seats them) and
-#       seats the person MEMBER_USER_ID in it
-#       (`Sanctum.Tenancy.Members.ensure/2`). Answers the group's id.
+#   thread SESSION_TOKEN MEMBER_USER_ID NAME
+#       The administrator, by their session, makes the shared thread titled
+#       NAME (`Sanctum.SharedThreads.create/2`, which seats them) and seats
+#       the person MEMBER_USER_ID in it (`Sanctum.SharedThreads.add/3`).
+#       Answers the thread's id.
 #
 #   derived_head SESSION_TOKEN SHARE_ID PROVIDER FIELD DESTINATION_JSON
 #       What the first sign-in's bootstrap derives for the person's head of
@@ -420,14 +420,11 @@ fn args ->
 
       answer.(%{destination: canonical, binding_digest: digest})
 
-    ["group", token, member_id, name] ->
+    ["thread", token, member_id, name] ->
       admin = person_ctx.(token)
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(admin.user_id, name)
-
-      {:ok, _seat} =
-        Sanctum.Tenancy.Members.ensure(member_id, scope: "athanor", athanor_id: group.id)
-
-      answer.(%{group_id: group.id})
+      {:ok, thread} = Sanctum.SharedThreads.create(admin.user_id, name)
+      {:ok, :added} = Sanctum.SharedThreads.add(admin.user_id, thread.id, user_id: member_id)
+      answer.(%{thread_id: thread.id})
 
     ["derived_head", token, share_id, provider, field, destination] ->
       ctx = person_ctx.(token)

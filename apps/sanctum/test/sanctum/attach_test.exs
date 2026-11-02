@@ -179,7 +179,7 @@ defmodule Sanctum.AttachTest do
           binding_key: key,
           share_id: share.id,
           binding_digest: approved,
-          admitted: %{audience: share.audience, group_id: share.group_id}
+          admitted: %{audience: share.audience, thread_id: share.thread_id}
         }
       ])
 

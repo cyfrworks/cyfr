@@ -219,7 +219,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   # The readiness of a lent share, and its end when the person leaves the
-  # group, are `Compendium.ConsentSetupPlanTest`'s.
+  # thread, are `Compendium.ConsentSetupPlanTest`'s.
   test "a dependency's profile bound to a key shared with the person lends it: the plan, the " <>
          "preview, the commit and the load read it as the share" do
     %{alice: alice, share: share} = Cyfr.Test.ShareFixtures.traders!()

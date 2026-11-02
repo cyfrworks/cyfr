@@ -3307,7 +3307,7 @@ defmodule PrismWeb.SystemLayer do
 
   defp description(%{kind: :share}),
     do:
-      "Offer this key to everyone on this CYFR or to one of your groups. They grant it to " <>
+      "Offer this key to everyone on this CYFR or to one of your threads. They grant it to " <>
         "their own apps, and confirming it here is a fresh confirmation."
 
   defp description(%{kind: :pairing}),
