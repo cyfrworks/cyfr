@@ -161,6 +161,7 @@ your-project/
     ├── cyfr.db             # Vault entries, consents, execution records
     ├── cache/              # Immutable cached artifacts (OCI blobs)
     ├── system/             # Server-internal scratch (health probes)
+    ├── shared/             # One tree per shared thread: its attachments
     └── athanors/           # One tree per athanor — each person's and each group's
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/

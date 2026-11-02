@@ -178,6 +178,10 @@ defmodule Arca.TenantTables do
   # `cli_sign_ins` are command lines waiting to be approved: no person or
   # athanor owns one until its approval mints a session, which carries
   # both.
+  #
+  # `shared_threads`, `shared_thread_members` and `shared_messages` are a
+  # place several people talk in, its people and what they say: no athanor
+  # holds a shared thread, so no athanor's erasure takes one.
   @not_athanor_scoped [
     "registry_tokens",
     "server_meta",
@@ -197,7 +201,10 @@ defmodule Arca.TenantTables do
     "device_certifications",
     "installation_claims",
     "request_rate_windows",
-    "cli_sign_ins"
+    "cli_sign_ins",
+    "shared_threads",
+    "shared_thread_members",
+    "shared_messages"
   ]
 
   @doc "The closed roster, children first."
