@@ -52,15 +52,21 @@ defmodule Sanctum.Newcomer do
 
   ## The setup token's re-admission
 
-  While the person setup made holds no passkey, no paired device and no
-  linked sign-in method, `{:setup, token}` answers that person again
-  (`readmitted: true`), with the credential it brings: the passkey written
-  for them, or a new command-line session. The guard decides it under the
-  order row and the person's lock, so two re-admissions decide in one
-  order. From the commit that gives the person any of the three, the
-  token opens nothing (`:setup_closed`). A token that is not the
-  configured one, a missing one, or a CYFR with none configured, opens
-  nothing either.
+  While the person setup made holds no method at this home's address, no
+  passkey at its RP ID (`Sanctum.Passkeys.rp_id/0`) that is active or
+  that a restore suspended and no linked sign-in method,
+  `{:setup, token}` answers that person again (`readmitted: true`), with
+  the credential it brings: the passkey written for them, or a new
+  command-line session. A passkey made at an address the home has left
+  signs no one in here, so after an address change the setup link lets
+  the administrator register one at the new address; a pending one
+  there, awaiting their own authorization, leaves it open. A suspended
+  one closes it, since the restore's own path re-enables it. The guard
+  decides it under the order row and the person's lock, so two
+  re-admissions decide in one order. From the commit that gives the
+  person such a method, the token opens nothing (`:setup_closed`). A
+  token that is not the configured one, a missing one, or a CYFR with
+  none configured, opens nothing either.
 
   ## The credential
 
@@ -244,25 +250,41 @@ defmodule Sanctum.Newcomer do
   end
 
   @doc """
-  Whether `token` opens setup now: it is the configured setup token, and
-  a setup would be admitted (`Arca.InstallationClaims.setup_open?/1`).
-  The setup page asks before it starts a passkey ceremony, so a link that
-  is not valid, or a CYFR set up already, creates no passkey; the
-  admission decides again in its transaction. One refusal for both, as
-  the admission answers, so a guesser learns nothing from it.
+  Whether `token` opens setup now, and for whom: it is the configured
+  setup token, and a setup at this home's RP ID would be admitted
+  (`Arca.InstallationClaims.setup/2`), as the first person (`:first`) or
+  as the person setup made, let in again under the name their enrollment
+  holds (`{:readmit, name}`). The setup page asks before it starts a
+  passkey ceremony, so a link that is not valid, or a CYFR set up
+  already, creates no passkey; the admission decides again in its
+  transaction. One refusal for both, as the admission answers, so a
+  guesser learns nothing from it.
   """
-  @spec setup_open(term()) :: :ok | {:error, :setup_closed | :unavailable}
+  @spec setup_open(term()) ::
+          {:ok, :first | {:readmit, String.t()}}
+          | {:error, :setup_closed | :unavailable}
   def setup_open(token) when is_binary(token) do
     with :ok <- admissible({:setup, token}) do
-      case Arca.InstallationClaims.setup_open?(Prima.Actor.system()) do
-        {:ok, true} -> :ok
-        {:ok, false} -> {:error, :setup_closed}
+      case Arca.InstallationClaims.setup(Prima.Actor.system(), Sanctum.Passkeys.rp_id()) do
+        {:ok, :first} -> {:ok, :first}
+        {:ok, {:readmit, person}} -> readmitted_name(person)
+        {:ok, :closed} -> {:error, :setup_closed}
         {:error, _unanswered} -> {:error, :unavailable}
       end
     end
   end
 
   def setup_open(_token), do: {:error, :setup_closed}
+
+  # The name the person's enrollment holds, which follows the name their
+  # row records once one is (`Sanctum.Recovery`). Every person setup made
+  # was enrolled in their admission's transaction.
+  defp readmitted_name(%{id: user_id}) do
+    case Arca.IdentityAttempts.enrollment(Prima.Actor.system(), user_id) do
+      {:ok, %{name: name}} when is_binary(name) -> {:ok, {:readmit, name}}
+      _damaged_or_unanswered -> {:error, :unavailable}
+    end
+  end
 
   # ---- before the transaction ----------------------------------------------
 
@@ -416,7 +438,11 @@ defmodule Sanctum.Newcomer do
       Prima.Actor.system(),
       user_attrs,
       identity(admission, now),
-      [admission: kind(admission), also: &also(admission, {write, enroll}, &1)] ++
+      [
+        admission: kind(admission),
+        rp_id: Sanctum.Passkeys.rp_id(),
+        also: &also(admission, {write, enroll}, &1)
+      ] ++
         verify(admission) ++ restore_claim(admission)
     )
     |> case do
@@ -427,11 +453,14 @@ defmodule Sanctum.Newcomer do
     end
   end
 
-  # The person setup made, admitted again while they hold no sign-in
-  # method: only the credential this admission brings is written, and
-  # the enrollment their first admission opened stands.
+  # The person setup made, admitted again while they hold no method at this
+  # home's address: only the credential this admission brings is written,
+  # and the enrollment their first admission opened stands.
   defp readmit(user_id, write) do
-    case Arca.Users.readmit(Prima.Actor.system(), user_id, also: write) do
+    case Arca.Users.readmit(Prima.Actor.system(), user_id,
+           rp_id: Sanctum.Passkeys.rp_id(),
+           also: write
+         ) do
       {:ok, person} -> {:ok, person}
       {:error, :database_error} -> {:error, :unavailable}
       {:error, reason} -> {:error, reason}

@@ -6,8 +6,9 @@
 # inside a container built from this directory's Dockerfile, so the
 # verification host installs nothing and joins no group. A person's terminal
 # on the guest's own screen runs the install script as `curl ... | sh` pipes
-# it, with production trust, then `cyfr init`, `cyfr screen on` and `cyfr up`,
-# and CYFR answers on its port. After a reboot labwc and Chrome run on tty1
+# it, with production trust, then `cyfr init`, whose screen question's first
+# answer shows CYFR on the screen, and `cyfr up`, and CYFR answers on its
+# port. After a reboot labwc and Chrome run on tty1
 # and show CYFR's setup page (screen-setup.png); after `cyfr down` and another
 # reboot CYFR stays down, the screen says why (screen-waiting.png), and
 # Ctrl+Alt+F2 reaches a terminal:
@@ -145,32 +146,31 @@ clean_install() {
   check "the install script linked cyfr onto PATH" transcript_has script 'sudo ln -sf /home/proof/.local/bin/cyfr /usr/local/bin/cyfr'
   pane_step_end script
 
-  step "cyfr init on a machine without Docker"
+  step "cyfr init on a machine without Docker, its screen question answered 1"
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
-  pane_step init 'mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1200 \
-    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1, 2 or 3' 3 'Choose 1 or 2' 2
-  check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
-  check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
-  check "sudo asks at most one password (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" -le 1
-  check "init goes on through the docker group and asks how CYFR is reached" transcript_has init 'How will you reach CYFR\?'
-  pane_step_end init
-
-  step "cyfr screen on"
   # The guest's virtio display has no 3D; the product sets no renderer.
   guest_root 'mkdir -p /etc/systemd/system/cyfr-screen.service.d && printf "[Service]\nEnvironment=WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1\n" >/etc/systemd/system/cyfr-screen.service.d/proof.conf' ||
     fail "the guest's renderer was not set ($GUEST_DIR/root.txt)"
-  pane_step screen-on 'cd ~/cyfr && cyfr screen on' 900 'Show CYFR on this screen\? \(yes/no\)' yes "$SUDO_PROMPT" @password
-  check "cyfr screen on exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
-  check "it asks once (asked ${PANE_ANSWERED[0]})" test "${PANE_ANSWERED[0]}" = 1
-  check "it shows the commands" transcript_has screen-on '^  systemctl enable cyfr-screen$'
-  check "it gives the next step" transcript_has screen-on 'The screen starts at the next boot\. Run `cyfr up`, then `sudo reboot`\.'
+  pane_step init 'mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1500 \
+    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1 or 2 \[1\]' 1
+  check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
+  check "sudo asks at most two passwords, the requirements' and the screen's (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" -le 2
+  check "init goes on through the docker group and asks the screen question once (asked ${PANE_ANSWERED[2]})" sh -c '[ "$1" = 1 ] && grep -qx "This machine has no desktop. Show CYFR on its screen?" "$2"' sh "${PANE_ANSWERED[2]}" "$GUEST_DIR/transcript-init.txt"
+  check "it never asks how CYFR is reached" sh -c '! grep -q "How will you reach CYFR" "$1"' sh "$GUEST_DIR/transcript-init.txt"
+  check "it shows the screen's commands" transcript_has init '^  systemctl enable cyfr-screen$'
+  check "it says what it downloads" transcript_has init '^Downloading Chrome from Google \(about 110 MB\)$'
+  check "it ends on the CYFR reached from this machine" transcript_has init '^CYFR is reached from this machine, at http://localhost:4000\.$'
+  check "it gives the next step" transcript_has init '^Next: cyfr up, then sudo reboot\.$'
   check "nothing took the terminal: tty1's getty runs and the screen does not" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-active --quiet cyfr-screen'
   check "Chrome's package left no .deb behind" guest_ssh '! ls /tmp/*.deb'
-  pane_step_end screen-on
+  pane_step_end init
 
   step "cyfr up in the terminal that started before the group"
   pane_step up 'cd ~/cyfr && cyfr up' 900
   check "cyfr up exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "it says the reboot is next" transcript_has up '^Now run sudo reboot\. This screen opens setup at power-on\.$'
+  check "it names no optional next steps" sh -c '! grep -q "Optional next steps" "$1"' sh "$GUEST_DIR/transcript-up.txt"
   pane_step_end up
   code=$(guest_ssh "curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/" 2>&1)
   check "CYFR answers on its port (HTTP $code)" sh -c '[ "$1" -ge 200 ] && [ "$1" -lt 400 ]' sh "$code"

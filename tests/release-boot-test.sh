@@ -413,7 +413,7 @@ mkdir -p "$scratch/cells"
 
 : >"$scratch/calls.log"
 [ "$(status_of cell cell_new "$scratch/cells/local")" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed on the stand-in command line"; }
-[ "$(calls args)" = "init --no-interactive --no-pull --access local" ] || fail "cell_new ran cyfr $(calls args), not init --no-interactive --no-pull --access local"
+[ "$(calls args)" = "init --no-interactive --no-pull" ] || fail "cell_new ran cyfr $(calls args), not init --no-interactive --no-pull"
 [ "$(calls home)" = "$scratch/cells/local/home" ] || fail "the command line ran with HOME $(calls home), not the cell's"
 [[ "$(calls dir)" == cyfr-cell-local-* ]] || fail "the command line ran in $(calls dir), not a directory of the run's own"
 [ "$(calls example)" = same ] || fail "the command line's .env.example is not the checkout's"
@@ -436,11 +436,12 @@ done
 pass "a local cell is init's deployment file with the test's settings beside it, none of the caller's environment reaching the command line"
 
 : >"$scratch/calls.log"
-[ "$(status_of cell cell_new "$scratch/cells/named" "" cyfr.example.com)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed for a named cell"; }
-[ "$(calls args)" = "init --no-interactive --no-pull --access public --domain cyfr.example.com" ] ||
-  fail "cell_new ran cyfr $(calls args) for a named cell"
+[ "$(status_of cell cell_new "$scratch/cells/named")" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed for a named cell"; }
 [ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500 4501 4502)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed"; }
-[ "$(grep -c '^args=' "$scratch/calls.log")" = 1 ] || fail "cell_hostname ran the command line again on a cell init made public at its name: $(calls args)"
+[ "$(calls args)" = "$(printf '%s\n' "init --no-interactive --no-pull" "access public --domain cyfr.example.com --yes")" ] ||
+  fail "a named cell ran cyfr $(calls args)"
+[ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500 4501 4502)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed again"; }
+[ "$(grep -c '^args=' "$scratch/calls.log")" = 2 ] || fail "cell_hostname ran the command line again on a cell public at its name: $(calls args)"
 for pair in CYFR_ACCESS=public CYFR_HOST=cyfr.example.com CYFR_PUBLIC_URL=https://cyfr.example.com CYFR_PORT=4500 CYFR_HOST_API_PORT=4501 CYFR_PROXY_PORT=4502; do
   [ "$(assigned named "${pair%%=*}")" = 1 ] && [ "$(value named "${pair%%=*}")" = "${pair#*=}" ] ||
     fail "the named cell's deployment file does not assign $pair once"
@@ -449,7 +450,7 @@ done
   fail "the named cell's node name is not its own: $(cat "$scratch/cells/named/node")"
 [ "$(DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/drive.sh" cell cell_proxy_port "$scratch/cells/named")" = 4502 ] ||
   fail "cell_proxy_port does not answer the named cell's proxy listener port"
-pass "a named cell is init's public home at its name, on three ports of its own, its proxy listener's the third"
+pass "a named cell is the public home cyfr access makes at its name, on three ports of its own, its proxy listener's the third"
 
 : >"$scratch/calls.log"
 : >"$scratch/cli-writes-no-url"
@@ -578,7 +579,7 @@ case "$1" in
     ;;
   address)
     ADDRESS="$WORK/cell"
-    cell_new "$ADDRESS" "" cyfr.example.com
+    cell_new "$ADDRESS"
     source "$DRIVE_SCRATCH/address-call.sh"
     server_start "$ADDRESS"
     ;;

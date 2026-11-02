@@ -102,11 +102,12 @@ free_port() {
 . "$HERE/cleanup.sh"
 trap cleanup EXIT
 
-# `cyfr setup --no-pull` `$2...` in the project `$1`, as a person runs it
-# there: HOME the run's own, nothing of the caller's environment but PATH
-# and how Docker is reached, its output in `$WORK/$1.setup.log`. The
-# run's images are built here, so nothing is pulled. Its pid is left in
-# SETUP_PID.
+# `cyfr setup --no-pull --no-open` `$2...` in the project `$1`, as a
+# device's launcher runs it there, this proof being the launcher that
+# opens the pages: HOME the run's own, nothing of the caller's environment
+# but PATH and how Docker is reached, so no display, its output in
+# `$WORK/$1.setup.log`. The run's images are built here, so nothing is
+# pulled. Its pid is left in SETUP_PID.
 setup_start() {
   local project="$1"
   shift
@@ -116,7 +117,7 @@ setup_start() {
     exec env -i HOME="$WORK/home" PATH="$PATH" LANG=C.UTF-8 TERM=dumb \
       DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
       ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-      "$CYFR" setup --no-pull "$@"
+      "$CYFR" setup --no-pull --no-open "$@"
   ) </dev/null >"$WORK/$project.setup.log" 2>&1 &
   SETUP_PID=$!
 }

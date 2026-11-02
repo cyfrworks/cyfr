@@ -251,7 +251,7 @@ Until the first release one baseline migration is the schema; after it, dated mi
 
 Configuration is parsed explicitly, and an invalid security-relevant value is refused. A platform setting is read through one accessor, environment first, and an unreadable store refuses the boot.
 
-The access mode is a deployment setting: one value in the deployment file (`CYFR_ACCESS`: `local`, `tailnet` or `public`), from which the home's address, its listeners, its origins, proxy trust and the stack's profile selection follow (`Cyfr.RuntimeConfig.resolve_access/1`). Only the machine's own `cyfr` writes it, the boot refuses a setting that contradicts it, and a local home listens on the loopback alone.
+The access mode is a deployment setting: one value in the deployment file (`CYFR_ACCESS`: `local`, `tailnet` or `public`), from which the home's address, its listeners, its origins, proxy trust and the stack's profile selection follow (`Cyfr.RuntimeConfig.resolve_access/1`). Only the machine's own `cyfr` writes it, the boot refuses a setting that contradicts it, and a local home listens on the loopback alone. A passkey works only at the address it was made at, so after a change of address each person registers one again, and the setup token lets the person setup made back in while they hold no passkey there that is active or that a restore suspended, and no linked sign-in method (`Arca.InstallationClaims`).
 
 ### 6.9 Backup, runtime and budgets
 

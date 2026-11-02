@@ -18,7 +18,7 @@
 #            makes before it snapshots a cell, run as the update runs it
 #            (`bin/cyfr eval`, which starts no application), answers the
 #            running cell's one slot under this release, and none once the
-#            cell has stopped. Then a public home `cyfr init --access public
+#            cell has stopped. Then a public home `cyfr access public
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.Person.home()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
@@ -461,7 +461,7 @@ if [ "$ADAPTER" = postgres ]; then
   pg_fresh_database "$ADDRESS_DB"
   ADDRESS_URL="$(pg_url "$ADDRESS_DB")"
 fi
-cell_new "$ADDRESS" "$ADDRESS_URL" cyfr.example.com
+cell_new "$ADDRESS" "$ADDRESS_URL"
 cell_hostname "$ADDRESS" cyfr.example.com
 server_start "$ADDRESS"
 home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.Person.home())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"

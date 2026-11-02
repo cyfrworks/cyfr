@@ -109,7 +109,7 @@ A passkey is registered at one CYFR, under that CYFR's host as its relying party
 
 CYFR's address is its tailnet name, its domain, or `localhost` when only its own computer reaches it, and it changes when `cyfr access` moves CYFR to another mode or name. Before it makes such a change, `cyfr access` lists what stops working:
 
-1. **Passkeys.** A passkey made at the old address stops working, since its relying party is the old host (above). Each person registers one at the new address, which this CYFR's platform administrator authorizes, as when every way to confirm is lost.
+1. **Passkeys.** Passkeys made at the old address no longer sign anyone in, since their relying party is the old host (above). The setup link at the new address registers the administrator's passkey there; everyone else registers one, which an administrator authorizes.
 2. **Paired devices.** Pair every device again, at the new address.
 3. **Clients and callbacks.** Update the redirect address in OAuth apps you registered (vault credentials, an OIDC issuer), the URL your webhook senders call, CLI contexts and MCP clients.
 4. **Saved addresses.** Every other CYFR and device that saved the old address needs the new one.

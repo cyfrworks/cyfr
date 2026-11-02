@@ -62,6 +62,13 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	if strings.Index(text, "Make this change?") < strings.Index(text, "Ports opened on this machine") {
 		t.Errorf("the confirmation is asked before the change is shown:\n%s", text)
 	}
+	// After the change, the setup link at the new address lets the
+	// administrator back in.
+	passkeys := "Done. CYFR is reached as:\n  Who can reach CYFR: anyone on the internet, who still has to sign in\n  Address: https://cyfr.example.com\n  Certificate email: ops@example.com\n  Ports opened on this machine: 80 and 443\n" +
+		"Passkeys made at the old address no longer sign anyone in. Open https://cyfr.example.com/setup#" + setupTokenOf(t) + " to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n"
+	if !strings.HasSuffix(text, passkeys) {
+		t.Errorf("cyfr access printed:\n%s\nwant it to end on:\n%s", text, passkeys)
+	}
 	if len(s.switches) != 1 || s.locks != 1 {
 		t.Fatalf("%d switches under %d locks, want one under the lock", len(s.switches), s.locks)
 	}
@@ -98,8 +105,13 @@ func TestAccessChangesNothingUnconfirmed(t *testing.T) {
 	if len(s.switches) != 0 || read(t, ".env") != before {
 		t.Errorf("an unconfirmed change switched %+v", s.switches)
 	}
-	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, "", &bytes.Buffer{}); err != nil || accessOf(t) != access.ModePublic {
+	var out bytes.Buffer
+	if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, "", &out); err != nil || accessOf(t) != access.ModePublic {
 		t.Errorf("--yes did not make the change: %v", err)
+	}
+	// The fake engine's preview names no change of address here.
+	if strings.Contains(out.String(), "Passkeys made at the old address") {
+		t.Errorf("a change the preview says keeps the address spoke of passkeys:\n%s", out.String())
 	}
 }
 
@@ -722,7 +734,7 @@ func TestAccessCommandsAreTheContractsSurface(t *testing.T) {
 	if f := accessCmd.Flags().Lookup("request-id"); f == nil || !f.Hidden {
 		t.Errorf("--request-id is not hidden")
 	}
-	for _, name := range []string{"access", "domain", "acme-email", "tailscale-auth-key-file", "hostname", "no-pull", "force"} {
+	for _, name := range []string{"no-pull", "force"} {
 		if initCmd.Flags().Lookup(name) == nil {
 			t.Errorf("cyfr init has no --%s", name)
 		}
@@ -822,10 +834,9 @@ func TestAccessOpensTheJoinLinkOnADisplay(t *testing.T) {
 	}
 }
 
-// --no-open is a flag of init and of `cyfr access`, read into the options
-// both apply.
+// --no-open is a flag of `cyfr access`, read into the options it applies.
 func TestNoOpenIsAnAccessFlag(t *testing.T) {
-	for _, c := range []*cobra.Command{initCmd, accessCmd} {
+	for _, c := range []*cobra.Command{accessCmd} {
 		f := c.Flags().Lookup("no-open")
 		if f == nil || f.Value.Type() != "bool" {
 			t.Fatalf("%s has no --no-open", c.Name())

@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -96,58 +97,94 @@ func TestUpSurfacesTheBootRefusal(t *testing.T) {
 	}
 }
 
-// A headless CYFR serves no setup page: after its start, `cyfr up` reads
-// cyfr's log through the engine and, when the boot logged that no one is
-// set up yet, says so and that `cyfr login --setup` sets up its first
-// person. A log without that line, or one that cannot be read, adds
-// nothing, and a CYFR that is not headless reads no log.
-func TestUpSaysHowAHeadlessCYFRIsSetUp(t *testing.T) {
-	const notice = "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.\n"
+// After its start `cyfr up` reads cyfr's log through the engine, only the
+// lines since the container's current start, so an earlier boot's notice
+// is never said again. On a first start, the boot having logged that no
+// one is set up yet, it says how the first person is set up: on this
+// machine's screen when the cyfr-screen service runs, after a reboot when
+// it is enabled and not running, otherwise through the setup link, from a
+// phone or laptop with Tailscale on for tailnet access, and for local
+// access on a machine with no display beside the ssh line. A headless
+// CYFR's line is its own. Any later start, and a log that cannot be read,
+// says the start and Prism's address alone.
+func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 	const startedAt = "2026-10-28T00:01:02.123456789Z"
-	const line = "[Cyfr] Not set up: no one is set up on this CYFR yet. Its first person, who administers it, runs `cyfr login --setup` in its directory.\n"
+	const line = "[Cyfr] Not set up: no one is set up on this CYFR yet. Its first person, who administers it, opens the setup link.\n"
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const local = "CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4123\n"
+	const tailnet = "CYFR_ACCESS=tailnet\nCYFR_HOST=cyfr.tail1234.ts.net\nCYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nTESTNODE1CNTRL\nCYFR_PORT=4000\n"
+	account, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		name, env, log, exit string
-		reads, says          bool
+		enabled, active      bool
+		display              bool
+		container            bool
+		after                string
 	}{
-		{"headless with no one set up", "CYFR_HEADLESS=on\n", "booting\n" + line, "0", true, true},
-		{"headless with its switch spaced", `CYFR_HEADLESS=" on "` + "\n", line, "0", true, true},
-		{"headless with someone set up", "CYFR_HEADLESS=on\n", "booting\n", "0", true, false},
-		{"headless with its log unread", "CYFR_HEADLESS=on\n", line, "1", true, false},
-		{"headless with no cyfr container to read", "CYFR_HEADLESS=on\n", line, "0", false, false},
-		{"not headless", "CYFR_HEADLESS=off\n", line, "0", false, false},
-		{"headless unset", "", line, "0", false, false},
+		{name: "public", env: scenarioEnv, log: "booting\n" + line, exit: "0", container: true, display: true,
+			after: "\nOpen https://cyfr.example.com/setup#" + token + " to set up its first person.\n"},
+		{name: "tailnet", env: tailnet, log: line, exit: "0", container: true,
+			after: "\nOpen https://cyfr.tail1234.ts.net/setup#" + token + " on your phone or laptop, with Tailscale on, to set up its first person.\n"},
+		{name: "local with a display", env: local, log: line, exit: "0", container: true, display: true,
+			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person.\n"},
+		{name: "local with no display", env: local, log: line, exit: "0", container: true,
+			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person.\n" +
+				"From another computer: ssh -L 4123:127.0.0.1:4123 " + account.Username + "@" + host + ", then open the link there.\n"},
+		{name: "a screen to reboot into", env: local, log: line, exit: "0", container: true, enabled: true,
+			after: "\nNow run sudo reboot. This screen opens setup at power-on.\n"},
+		{name: "a screen that runs", env: local, log: line, exit: "0", container: true, enabled: true, active: true,
+			after: "\nSetup is on this screen (Ctrl+Alt+F1).\n"},
+		{name: "headless", env: scenarioEnv + "CYFR_HEADLESS=on\n", log: line, exit: "0", container: true,
+			after: "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.\n"},
+		{name: "headless with its switch spaced", env: scenarioEnv + `CYFR_HEADLESS=" on "` + "\n", log: line, exit: "0", container: true,
+			after: "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.\n"},
+		{name: "a later start", env: scenarioEnv, log: "booting\n", exit: "0", container: true, enabled: true},
+		{name: "a headless later start", env: scenarioEnv + "CYFR_HEADLESS=on\n", log: "booting\n", exit: "0", container: true},
+		{name: "a log unread", env: scenarioEnv, log: line, exit: "1", container: true},
+		{name: "no cyfr container to read", env: scenarioEnv, log: line, exit: "0"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
-			s.edit(".env", scenarioEnv+c.env)
+			s.edit(".env", c.env+"CYFR_SETUP_TOKEN="+token+"\n")
 			s.answer("logs.out", c.log)
 			s.answer("logs.exit", c.exit)
-			container := "c0ffee"
-			if c.name == "headless with no cyfr container to read" {
-				container = ""
+			container := ""
+			if c.container {
+				container = "c0ffee"
 			}
 			s.answer("ps.out", container+"\n")
 			s.answer("inspect.out", startedAt+"\n")
+			stubLauncher(t, c.display, nil)
+			saved := machine.screenService
+			t.Cleanup(func() { machine.screenService = saved })
+			machine.screenService = func() (bool, bool) { return c.enabled, c.active }
+			head, err := (&fakeEngine{s: s.engine, dir: s.project}).Head()
+			if err != nil {
+				t.Fatal(err)
+			}
 			var out bytes.Buffer
 			if err := runUp(context.Background(), &out); err != nil {
 				t.Fatalf("cyfr up: %v", err)
 			}
-			started := "CYFR server started.\n  Prism:           https://cyfr.example.com/\n"
-			if says := strings.Contains(out.String(), started+notice); says != c.says || !strings.Contains(out.String(), started) || (!c.says && strings.Contains(out.String(), "No one is set up")) {
-				t.Errorf("cyfr up printed\n%s\nwant the notice after the start: %v", out.String(), c.says)
+			want := "CYFR server started.\n  Prism:           " + access.Describe(head).Address + "/\n" + c.after
+			if out.String() != want {
+				t.Errorf("cyfr up printed\n%s\nwant\n%s", out.String(), want)
 			}
-			want := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", profiles + "up -d"}
-			if headlessEnv := strings.Contains(c.env, "on"); headlessEnv {
-				want = append(want, profiles+"ps -q cyfr")
+			selection := strings.Join(composePrefixArgs(s.project, head), " ") + " "
+			calls := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", selection + "up -d", selection + "ps -q cyfr"}
+			if c.container {
+				calls = append(calls, "inspect --format {{.State.StartedAt}} c0ffee",
+					selection+"logs --no-color --no-log-prefix --since "+startedAt+" cyfr")
 			}
-			if c.reads {
-				// Only the lines since the container's current start, so an
-				// earlier boot's notice is never said again.
-				want = append(want, "inspect --format {{.State.StartedAt}} c0ffee",
-					profiles+"logs --no-color --no-log-prefix --since "+startedAt+" cyfr")
-			}
-			if log := s.log(); !slices.Equal(log, want) {
-				t.Errorf("cyfr up ran\n%s\nwant\n%s", strings.Join(log, "\n"), strings.Join(want, "\n"))
+			if log := s.log(); !slices.Equal(log, calls) {
+				t.Errorf("cyfr up ran\n%s\nwant\n%s", strings.Join(log, "\n"), strings.Join(calls, "\n"))
 			}
 			if holder := s.engine.held(); holder != "" {
 				t.Errorf("the lock is still held, by %s", holder)
@@ -167,7 +204,7 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 	if err := runUp(context.Background(), &out); err != nil {
 		t.Fatalf("cyfr up: %v", err)
 	}
-	want := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", profiles + "up -d"}
+	want := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", profiles + "up -d", profiles + "ps -q cyfr"}
 	if log := s.log(); !slices.Equal(log, want) {
 		t.Errorf("cyfr up ran\n%s\nwant\n%s", strings.Join(log, "\n"), strings.Join(want, "\n"))
 	}

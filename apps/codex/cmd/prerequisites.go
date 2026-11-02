@@ -23,8 +23,8 @@ import (
 // dockerPackages are the packages cyfr init installs.
 var dockerPackages = []string{"docker.io", "docker-compose-v2", "apparmor"}
 
-// machine is how cyfr init observes this machine and changes it. Tests
-// stand in for all of it.
+// machine is how cyfr observes this machine and changes it. Tests stand
+// in for all of it.
 var machine = struct {
 	// supported is Ubuntu 26.04, run by an account that is not root.
 	supported func() bool
@@ -41,6 +41,9 @@ var machine = struct {
 	groups func(account string) []string
 	// displayManager is whether a display manager has the screen.
 	displayManager func() bool
+	// screenService is whether the cyfr-screen service is enabled, and
+	// whether it runs.
+	screenService func() (enabled, active bool)
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// forget invalidates sudo's cached login.
@@ -60,6 +63,10 @@ var machine = struct {
 	running: func() bool { return exec.Command("systemctl", "is-active", "--quiet", "docker").Run() == nil },
 	displayManager: func() bool {
 		return exec.Command("systemctl", "is-active", "--quiet", "display-manager").Run() == nil
+	},
+	screenService: func() (bool, bool) {
+		return exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen").Run() == nil,
+			exec.Command("systemctl", "is-active", "--quiet", "cyfr-screen").Run() == nil
 	},
 	groups: func(account string) []string {
 		args := []string{"-nG"}

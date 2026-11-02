@@ -173,7 +173,8 @@ defmodule Sanctum.RecoveryTest do
         updated_at: now
       },
       nil,
-      admission: "setup"
+      admission: "setup",
+      rp_id: Sanctum.Passkeys.rp_id()
     )
   end
 

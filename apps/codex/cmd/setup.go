@@ -32,7 +32,7 @@ var setupCmd = &cobra.Command{
 	Use:     "setup",
 	Short:   "Set up CYFR from pages on this machine's screen: how it is reached, then the start",
 	GroupID: "server",
-	Long: `Set up a new CYFR in the current directory from pages shown on this machine's own screen, the face of 'cyfr init' for a device with a touch screen and no keyboard. It serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url; a Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display. Nothing off this machine reaches them: the address carries a token of this run, and every request must come from the pages themselves.
+	Long: `Set up a new CYFR in the current directory from pages shown on this machine's own screen, the face of 'cyfr init' for a device with a touch screen and no keyboard. It serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url. A Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display, and there cyfr setup without --no-open refuses before it serves anything: 'cyfr init' sets CYFR up at a terminal. Nothing off this machine reaches them: the address carries a token of this run, and every request must come from the pages themselves.
 
 The pages ask how CYFR is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email), then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. For tailnet access, the join shows its approval link as a QR code and as text with a Copy button, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves CYFR reached from this device only, and the pages offer to try the join again or to start CYFR on this device only. A start that fails shows why, and offers to try again or, for CYFR reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
 
@@ -82,6 +82,9 @@ const setupStepStart = "start"
 // runSetup is `cyfr setup` in the working directory: the pages served
 // until the run they drive ends, or ctx does.
 func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
+	if !o.noOpen && !hasDisplay() {
+		return errors.New("cyfr setup serves pages for a device whose launcher opens them, and this machine has no browser to open them. Run cyfr init here.")
+	}
 	if err := refuseExistingHome(".env"); err != nil {
 		return err
 	}
@@ -363,10 +366,8 @@ func (s *setupSession) run(a setup.Answers) {
 	// The settings step is init's writing of the new .env.
 	wroteEnv := false
 	err := initProject(s.ctx, initOptions{noPull: s.o.noPull}, initFace{
-		answers: func(context.Context) (accessChoice, error) {
-			return choice, nil
-		},
-		apply: s.apply,
+		choice: choice,
+		apply:  s.apply,
 		step: func(name string) {
 			wroteEnv = wroteEnv || name == initStepSettings
 			s.step(name)
@@ -398,7 +399,7 @@ func (s *setupSession) run(a setup.Answers) {
 // link and machine shown on them, its name changed or the join cancelled
 // from them, and a failure that leaves the home local offering the join
 // again or the home on this device only.
-func (s *setupSession) apply(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
+func (s *setupSession) apply(ctx context.Context, c accessChoice) (access.Head, error) {
 	for {
 		attempt, cancel := context.WithCancel(ctx)
 		s.mu.Lock()
@@ -407,7 +408,7 @@ func (s *setupSession) apply(ctx context.Context, c accessChoice, key []byte) (a
 			s.st.Name = joinName(c.accessOptions)
 		}
 		s.mu.Unlock()
-		head, err := applyMode(attempt, c, key, joinChoice{onAuthURL: s.waiting, onJoined: s.joined}, s.out)
+		head, err := applyMode(attempt, c, joinChoice{onAuthURL: s.waiting, onJoined: s.joined}, s.out)
 		s.mu.Lock()
 		cancelled, name := s.cancelled, s.rename
 		s.cancelJoin, s.cancelled, s.st.AuthURL = nil, "", ""
@@ -459,7 +460,7 @@ func (s *setupSession) apply(ctx context.Context, c accessChoice, key []byte) (a
 func (s *setupSession) thisDeviceOnly(ctx context.Context, why error) (access.Head, error) {
 	for {
 		s.step(initStepAccess)
-		head, err := applyMode(ctx, accessChoice{mode: access.ModeLocal}, nil, joinChoice{}, s.out)
+		head, err := applyMode(ctx, accessChoice{mode: access.ModeLocal}, joinChoice{}, s.out)
 		if err == nil {
 			return head, stayLocal{why}
 		}
@@ -472,8 +473,8 @@ func (s *setupSession) thisDeviceOnly(ctx context.Context, why error) (access.He
 // applyMode is applyInitAccess, whose lock first runs the engine's
 // recovery of an attempt an earlier failure left unfinished: a home that
 // recovery leaves already as c asks is that head, the change made.
-func applyMode(ctx context.Context, c accessChoice, key []byte, choice joinChoice, out io.Writer) (access.Head, error) {
-	head, err := applyInitAccess(ctx, c, key, choice, out)
+func applyMode(ctx context.Context, c accessChoice, choice joinChoice, out io.Writer) (access.Head, error) {
+	head, err := applyInitAccess(ctx, c, choice, out)
 	if r := (*access.Refusal)(nil); errors.As(err, &r) && r.Code == "access_unchanged" {
 		return currentHead()
 	}
@@ -524,7 +525,7 @@ func (s *setupSession) start() {
 			case setup.OfferRetry:
 			case setup.OfferLocal:
 				s.step(setupStepStart)
-				if _, err = applyMode(s.ctx, accessChoice{mode: access.ModeLocal}, nil, joinChoice{}, s.out); err != nil {
+				if _, err = applyMode(s.ctx, accessChoice{mode: access.ModeLocal}, joinChoice{}, s.out); err != nil {
 					continue
 				}
 			default:

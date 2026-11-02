@@ -863,7 +863,7 @@ project_new() {
   cp "$HERE/compose.yml" "$WORK/docker-compose.override.yml"
   cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$WORK/keeper.seccomp.json"
   cp "$ROOT/.env.example" "$WORK/.env.example"
-  cli_ok init init --no-interactive --no-pull --access local
+  cli_ok init init --no-interactive --no-pull
   [ -f "$WORK/.env" ] || fail "cyfr init wrote no .env"
   # The run's own settings: its images, migration, the private host the
   # shutdown case's upstream is, and builds off as an operator turns them

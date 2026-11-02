@@ -91,9 +91,9 @@ func TestAnEnvLineComposeDoesNotReadIsSaidByItsLine(t *testing.T) {
 	if want := "read " + path + ": " + sentence; keysErr == nil || keysErr.Error() != want {
 		t.Errorf("ensureEnvFileKeys answered %v, want %q", keysErr, want)
 	}
-	existingErr := refuseExistingAccess(path, initOptions{})
+	_, existingErr := existingAccess(path)
 	if existingErr == nil || existingErr.Error() != sentence {
-		t.Errorf("refuseExistingAccess answered %v, want %q", existingErr, sentence)
+		t.Errorf("existingAccess answered %v, want %q", existingErr, sentence)
 	}
 	for _, err := range []error{keysErr, existingErr} {
 		if err != nil && strings.Contains(err.Error(), secret) {

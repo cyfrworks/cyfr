@@ -239,6 +239,9 @@ defmodule Arca.Users do
       (`Arca.Schemas.User.admissions/0`), recorded on their row.
     * `restore:` — the installation claim a restore's mint names
       (`%{request_id: …, token_digest: …}`), never a caller's argument.
+    * `rp_id:` (required for `setup`) — the home's current WebAuthn RP ID,
+      the address at which a passkey of setup's person still works
+      (`Arca.InstallationClaims.guard!/3`).
     * `verify:` — the higher owner's check (`ARCHITECTURE.md` §4.4), run
       inside the transaction after the installation guard and before any
       row is written. A zero-arity function answering `:ok` or
@@ -253,7 +256,7 @@ defmodule Arca.Users do
       call.
 
   The installation guard runs first, inside the same transaction
-  (`Arca.InstallationClaims.guard!/2`): the installation's first person is
+  (`Arca.InstallationClaims.guard!/3`): the installation's first person is
   made only by `setup` or a restore, and is granted the platform role in
   this transaction, after their rows and before `also:`
   (`Arca.Members.grant_platform!/1`); no other mint grants it. Every other
@@ -261,13 +264,12 @@ defmodule Arca.Users do
   or a node with no person whose installed mode is `:restore_reserved`,
   refuses everything but its restore (`:restore_reserved`); a restore is
   `:not_claimed` unless its claim is pending exactly as named, and
-  `:not_empty` on a node that holds a person; a `setup` past its person's
-  first sign-in method is `:setup_closed`. A `setup` on a node whose person
-  setup made holds no sign-in method yet mints nothing and answers
-  `{:error, {:readmit, person}}`: that person is admitted again through
-  `readmit/3`. A node whose boot installed no
-  mode raises `Arca.InstallationClaims.NotInstalledError` and mints
-  nothing.
+  `:not_empty` on a node that holds a person; a `setup` once its person
+  holds a method at `rp_id` (`Arca.InstallationClaims`) is `:setup_closed`. A
+  `setup` on a node whose person setup made holds none mints nothing and
+  answers `{:error, {:readmit, person}}`: that person is admitted again
+  through `readmit/3`. A node whose boot installed no mode raises
+  `Arca.InstallationClaims.NotInstalledError` and mints nothing.
 
   `identity_attrs` is the sign-in method linked with the person, or nil
   for none. A concurrent mint naming the same identity wins the unique
@@ -305,6 +307,7 @@ defmodule Arca.Users do
 
   defp mint_guarded(actor, admission, user_attrs, identity_attrs, opts) do
     restore = Keyword.get(opts, :restore)
+    rp_id = if admission == "setup", do: Keyword.fetch!(opts, :rp_id)
     verify = Keyword.get(opts, :verify, fn -> :ok end)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
     user_attrs = user_attrs |> Map.new() |> Map.put(:admission, admission)
@@ -314,7 +317,7 @@ defmodule Arca.Users do
         identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
 
     Arca.Repo.owned("Arca.Users.mint", fn ->
-      case Arca.InstallationClaims.guard!(admission, restore) do
+      case Arca.InstallationClaims.guard!(admission, restore, rp_id) do
         {:readmit, %User{} = user} ->
           {:error, {:readmit, Arca.Data.project(user)}}
 
@@ -340,21 +343,23 @@ defmodule Arca.Users do
 
   @doc """
   Admit again the person `setup` made, `user_id`, while they hold no
-  sign-in method yet: the installation guard decides it again under the
-  order row (`Arca.InstallationClaims.guard!/2`), as `mint/4` decided it,
-  so a method registered since refuses `:setup_closed`. `also:` runs in
-  that transaction, handed the person, with `mint/4`'s contract. A member
-  that lost its slot is refused `:not_owner`.
+  method at `rp_id:` (required, the home's current RP ID): the
+  installation guard decides it again under the order row
+  (`Arca.InstallationClaims.guard!/3`), as `mint/4` decided it, so a
+  method registered since refuses `:setup_closed`. `also:` runs in that
+  transaction, handed the person, with `mint/4`'s contract. A member that
+  lost its slot is refused `:not_owner`.
   """
   @spec readmit(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, map()}
           | {:error, :setup_closed | :restore_reserved | :not_owner | term()}
   def readmit(%Prima.Actor{scope: :platform}, user_id, opts)
       when is_binary(user_id) and is_list(opts) do
+    rp_id = Keyword.fetch!(opts, :rp_id)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
 
     Arca.Repo.owned("Arca.Users.readmit", fn ->
-      case Arca.InstallationClaims.guard!("setup", nil) do
+      case Arca.InstallationClaims.guard!("setup", nil, rp_id) do
         {:readmit, %User{id: ^user_id} = user} ->
           with :ok <- also_ran(also.(Arca.Data.project(user))), do: {:ok, user}
 
