@@ -53,6 +53,9 @@ func standInMachine(t *testing.T) *standIn {
 	}
 	machine.apply = func(commands []string) error {
 		s.applied = append(s.applied, commands)
+		if slices.ContainsFunc(commands, func(c string) bool { return strings.HasPrefix(c, "usermod") }) {
+			s.member = append(s.member, dockerGroup)
+		}
 		s.reachable = s.reachableAfter
 		return s.applyErr
 	}
@@ -86,7 +89,6 @@ func TestInitLeavesAMachineAlone(t *testing.T) {
 	for name, set := range map[string]func(s *standIn){
 		"no terminal":    func(*standIn) { askTerminal = func() bool { return false } },
 		"another system": func(s *standIn) { s.supported = false },
-		"Docker answers": func(s *standIn) { s.reachable = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := standInMachine(t)
@@ -130,7 +132,7 @@ func TestInitInstallsThroughOneSudoAndContinues(t *testing.T) {
 			t.Errorf("the preview lacks %q:\n%s", c, out)
 		}
 	}
-	if !strings.Contains(out, "Install these requirements? (yes/no)") || !strings.Contains(out, "Run `newgrp docker` here, or log out and in again, before `cyfr up`.") {
+	if !strings.Contains(out, "Install these requirements? (yes/no)") {
 		t.Errorf("output:\n%s", out)
 	}
 	self, _ := os.Executable()
@@ -287,6 +289,47 @@ func TestInitAnswersTheContinuationsStatus(t *testing.T) {
 	sgStandIn(t, "7")
 	if _, _, err := prepare(t); ExitStatus(err) != 7 {
 		t.Fatalf("err = %v, status %d", err, ExitStatus(err))
+	}
+}
+
+// cyfr up in a terminal older than the group runs itself again through sg.
+func TestUpContinuesInATerminalOlderThanTheGroup(t *testing.T) {
+	s := standInMachine(t)
+	s.member = []string{"docker"}
+	record := sgStandIn(t, "0")
+	continued, err := upWithGroup(nil, &bytes.Buffer{}, &bytes.Buffer{})
+	if !continued || err != nil {
+		t.Fatalf("continued %t, err %v", continued, err)
+	}
+	self, _ := os.Executable()
+	sg, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(sg), "docker\n-c\n"+shellQuote([]string{self, "up"})+"\n"; got != want {
+		t.Errorf("sg ran %q, want %q", got, want)
+	}
+}
+
+// cyfr up carries on as it is when sg has nothing to give it.
+func TestUpNeedsNoContinuation(t *testing.T) {
+	for name, set := range map[string]func(*standIn){
+		"another system":     func(s *standIn) { s.supported = false },
+		"not in the group":   func(s *standIn) { s.member = nil },
+		"the process has it": func(s *standIn) { s.process = []string{"docker"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := standInMachine(t)
+			s.member = []string{"docker"}
+			set(s)
+			record := sgStandIn(t, "0")
+			if continued, err := upWithGroup(nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
+				t.Fatalf("continued %t, err %v", continued, err)
+			}
+			if _, err := os.Stat(record); err == nil {
+				t.Error("sg ran")
+			}
+		})
 	}
 }
 
