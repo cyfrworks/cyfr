@@ -8,6 +8,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/version"
 )
 
 // screenProject is a project directory on a machine that can show it.
@@ -47,21 +49,26 @@ func screenCommandsIn(dir string, tail ...string) []string {
 
 // `cyfr screen on` shows the plain commands, asks once and runs them
 // through one sudo, starting nothing, then forgets the login and says what
-// is next; packages it has are not installed again, and with none to
+// is next; Chrome's download says what it fetches and shows curl's
+// progress bar; packages it has are not installed again, and with none to
 // install it reads no package lists.
 func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	s := screenProject(t)
 	askInput = strings.NewReader("yes\n")
 	dir, _ := os.Getwd()
 	var out bytes.Buffer
-	if err := screenOn(context.Background(), true, &out); err != nil {
+	screenOnCmd.SetContext(context.Background())
+	screenOnCmd.SetOut(&out)
+	t.Cleanup(func() { screenOnCmd.SetContext(nil); screenOnCmd.SetOut(nil) })
+	if err := screenOnCmd.RunE(screenOnCmd, nil); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	want := append([]string{
 		"apt-get update",
 		"apt-get install -y --no-install-recommends labwc wvkbd",
 		"deb=$(mktemp --suffix=.deb)",
-		`curl -fsSL -o "$deb" ` + chromeDeb,
+		"echo 'Downloading Chrome from Google (about 110 MB)'",
+		`curl -fL --progress-bar -o "$deb" ` + chromeDeb,
 		`apt-get install -y "$deb"`,
 		`rm -f "$deb"`,
 	}, screenCommandsIn(dir)...)
@@ -233,40 +240,190 @@ func TestScreenOffRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 }
 
-// Init offers the screen on a machine that can show it. The default, and
-// a machine with a desktop, leave it alone; the first choice runs what
-// `screen on` runs, its question already answered.
-func TestInitOffersTheScreen(t *testing.T) {
-	t.Run("the default", func(t *testing.T) {
-		s := screenProject(t)
-		askInput = strings.NewReader("\n")
-		var out bytes.Buffer
-		if err := offerScreen(context.Background(), &out); err != nil || s.applied != nil {
-			t.Fatalf("err = %v, applied %v", err, s.applied)
+// initProjectOnScreen makes the working directory a new project for cyfr
+// init, with a compose file and the fake engine, on a machine that can
+// show CYFR, at a terminal, whose Docker answers this account.
+func initProjectOnScreen(t *testing.T) (*standIn, *fakeStack) {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(newInitProject(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	engine := useFakeEngine(t)
+	s := standInMachine(t)
+	s.reachable = true
+	return s, engine
+}
+
+// screenQuestion is init's screen question, as the terminal shows it.
+const screenQuestion = "This machine has no desktop. Show CYFR on its screen?\n" +
+	"  1. Yes. At power-on this screen shows CYFR full screen, with an on-screen keyboard.\n" +
+	"  2. No. This screen keeps its login prompt, and you open CYFR from another machine.\n" +
+	"Choose 1 or 2 [1]: "
+
+// envWatch is a terminal's input that records whether .env exists when a
+// question reads it.
+type envWatch struct {
+	in      io.Reader
+	written bool
+}
+
+func (w *envWatch) Read(p []byte) (int, error) {
+	w.written = w.written || fileExists(".env")
+	return w.in.Read(p)
+}
+
+// On a machine with no desktop init asks first whether its screen shows
+// CYFR, before anything is written, the first answer the default; once
+// .env is written it runs what `screen on` runs, its question already
+// answered, and its ending is the reboot's. The second answer, and the
+// end of the input, leave the screen alone and end on the setup link.
+func TestInitAsksForTheScreenBeforeWriting(t *testing.T) {
+	for _, c := range []struct {
+		name, input string
+		screen      bool
+	}{
+		{"the default", "\n", true},
+		{"one", "1\n", true},
+		{"two", "2\n", false},
+		{"the end of the input", "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := initProjectOnScreen(t)
+			stubLauncher(t, true, nil)
+			in := &envWatch{in: strings.NewReader(c.input)}
+			askInput = in
+			var out bytes.Buffer
+			if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+				t.Fatalf("init: %v\n%s", err, out.String())
+			}
+			if !strings.HasPrefix(out.String(), screenQuestion) || in.written {
+				t.Errorf("init did not ask first, before .env was written (written: %v):\n%s", in.written, out.String())
+			}
+			if strings.Contains(out.String(), "(yes/no)") {
+				t.Errorf("init asked twice:\n%s", out.String())
+			}
+			ending := "\n\n" + localEnding("http://localhost:4000")
+			if c.screen {
+				ending += "Next: cyfr up, then sudo reboot.\nAt power-on this screen opens CYFR's setup page, which sets up its first person with a passkey.\n"
+			} else {
+				ending += setupLinkLine(t, "http://localhost:4000")
+			}
+			if !strings.HasSuffix(out.String(), ending) {
+				t.Errorf("init printed:\n%s\nwant it to end on:\n%s", out.String(), ending)
+			}
+			if installed := len(s.applied) == 1 && slices.Contains(s.applied[0], "systemctl enable cyfr-screen"); installed != c.screen || len(s.applied) > 1 {
+				t.Errorf("applied %q, want the screen installed: %v", s.applied, c.screen)
+			}
+			if c.screen && !fileExists(filepath.Join(screenDir, "launcher.sh")) {
+				t.Errorf("init did not write the screen's files")
+			}
+		})
+	}
+}
+
+// A machine with a desktop, and --no-interactive, are asked nothing and
+// keep their screen.
+func TestInitLeavesTheScreenAloneOnADesktopOrWithoutATerminal(t *testing.T) {
+	for name, set := range map[string]func(s *standIn){
+		"a desktop":        func(s *standIn) { s.displayManager = true },
+		"--no-interactive": func(*standIn) { askTerminal = func() bool { return false } },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := initProjectOnScreen(t)
+			set(s)
+			askInput = noInput{t}
+			var out bytes.Buffer
+			if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+				t.Fatalf("init: %v\n%s", err, out.String())
+			}
+			if strings.Contains(out.String(), "Show CYFR on its screen?") || s.applied != nil {
+				t.Errorf("init asked for the screen, or applied %q:\n%s", s.applied, out.String())
+			}
+		})
+	}
+}
+
+// An interrupt at the screen question ends init there, before it writes a
+// file, takes the lock or runs anything: on a release build the question
+// comes before the scaffold's download and --force's removals.
+func TestInitScreenQuestionEndsOnAnInterrupt(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		s, engine := initProjectOnScreen(t)
+		o := initOptions{noPull: true}
+		if release {
+			savedVersion, savedDownload := version.Version, downloadScaffold
+			t.Cleanup(func() { version.Version, downloadScaffold = savedVersion, savedDownload })
+			version.Version = "0.6.0-alpha.1"
+			downloadScaffold = func(string) error {
+				t.Error("init downloaded the scaffold before its question was answered")
+				return nil
+			}
+			o.force = true
 		}
-		for _, want := range []string{"Show CYFR on this machine's own screen?", "1. With its own screen", "2. Without a screen"} {
-			if !strings.Contains(out.String(), want) {
-				t.Errorf("the offer lacks %q:\n%s", want, out.String())
+		in, asked := blockAfter(t)
+		askInput = in
+		var out bytes.Buffer
+		err := interruptAt(t, asked, func(ctx context.Context) error { return runInit(ctx, o, &out, &out) })
+		wantInterrupted(t, err, "Interrupted; nothing was written.")
+		nothingWritten(t, ".env.example", "docker-compose.yml")
+		if engine.locks != 0 || s.applied != nil {
+			t.Errorf("the interrupted init took the lock %d times and applied %q", engine.locks, s.applied)
+		}
+	}
+}
+
+// A screen whose install fails leaves init's ending without it, and init
+// says to run `cyfr screen on` again.
+func TestInitEndsWithoutTheScreenWhenItsInstallFails(t *testing.T) {
+	s, _ := initProjectOnScreen(t)
+	stubLauncher(t, true, nil)
+	s.applyErr = os.ErrPermission
+	askInput = strings.NewReader("1\n")
+	var out bytes.Buffer
+	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
+	if err == nil || err.Error() != "Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again" {
+		t.Fatalf("init answered %v\n%s", err, out.String())
+	}
+	if want := "\n\n" + localEnding("http://localhost:4000") + setupLinkLine(t, "http://localhost:4000"); !strings.HasSuffix(out.String(), want) {
+		t.Errorf("init printed:\n%s\nwant it to end on:\n%s", out.String(), want)
+	}
+}
+
+// After a change of address, `cyfr access` rewrites the files of a screen
+// the project has for the new head, so the screen opens the new address
+// with no `cyfr screen on`, and a project with no screen gets none.
+func TestAccessRewritesTheScreensFiles(t *testing.T) {
+	for _, screen := range []bool{true, false} {
+		s := newAccessProject(t)
+		dir, err := filepath.EvalSymlinks(".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(dir)
+		s.addressChanges = []string{"Passkeys made at the old address no longer sign anyone in."}
+		if screen {
+			if err := writeScreenFiles(access.Head{Mode: access.ModeLocal, Port: 4000}, dir, "alice"); err != nil {
+				t.Fatal(err)
 			}
 		}
-	})
-	t.Run("with its own screen", func(t *testing.T) {
-		s := screenProject(t)
-		askInput = strings.NewReader("1\n")
 		var out bytes.Buffer
-		if err := offerScreen(context.Background(), &out); err != nil || len(s.applied) != 1 {
-			t.Fatalf("err = %v, applied %v", err, s.applied)
+		if err := runAccess(context.Background(), access.ModePublic, accessOptions{domain: "cyfr.example.com"}, true, "", &out); err != nil {
+			t.Fatalf("cyfr access public: %v\n%s", err, out.String())
 		}
-		if strings.Contains(out.String(), "(yes/no)") {
-			t.Errorf("init asked twice:\n%s", out.String())
+		if !screen {
+			if fileExists(screenDir) {
+				t.Errorf("cyfr access wrote %s into a project with no screen", screenDir)
+			}
+			continue
 		}
-	})
-	t.Run("a desktop", func(t *testing.T) {
-		s := screenProject(t)
-		s.displayManager = true
-		var out bytes.Buffer
-		if err := offerScreen(context.Background(), &out); err != nil || out.Len() != 0 {
-			t.Fatalf("err = %v, out %q", err, out.String())
+		launcher := read(t, filepath.Join(screenDir, "launcher.sh"))
+		if !strings.Contains(launcher, `"https://cyfr.example.com/setup#$token"`) || strings.Contains(launcher, "localhost:4000/setup") {
+			t.Errorf("the launcher does not open the new address:\n%s", launcher)
 		}
-	})
+	}
 }

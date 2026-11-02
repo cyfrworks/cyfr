@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -86,54 +85,6 @@ func wantInterrupted(t *testing.T, err error, sentence string) {
 	}
 }
 
-// An interrupt at any of init's questions ends init there, before it
-// writes a file, takes the lock or runs anything: on a release build the
-// questions come before the scaffold's download and --force's removals.
-func TestInitQuestionsEndOnAnInterrupt(t *testing.T) {
-	for _, c := range []struct {
-		name    string
-		answers []string
-		release bool
-	}{
-		{"the access question", nil, false},
-		{"the machine name", []string{"1"}, false},
-		{"the domain", []string{"2"}, false},
-		{"the certificate email", []string{"2", "cyfr.example.com"}, false},
-		{"a release's access question, with --force", nil, true},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			newInitProject(t)
-			s := useFakeEngine(t)
-			kept := []string{".env.example"}
-			o := initOptions{noPull: true}
-			if c.release {
-				savedVersion, savedDownload := version.Version, downloadScaffold
-				t.Cleanup(func() { version.Version, downloadScaffold = savedVersion, savedDownload })
-				version.Version = "0.6.0-alpha.1"
-				downloadScaffold = func(string) error {
-					t.Error("init downloaded the scaffold before its questions were answered")
-					return nil
-				}
-				if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0644); err != nil {
-					t.Fatal(err)
-				}
-				kept = append(kept, "docker-compose.yml")
-				o.force = true
-			}
-			in, asked := blockAfter(t, c.answers...)
-			askTerminal = func() bool { return true }
-			askInput = in
-			var out bytes.Buffer
-			err := interruptAt(t, asked, func(ctx context.Context) error { return runInit(ctx, o, &out, &out) })
-			wantInterrupted(t, err, "Interrupted; nothing was written.")
-			nothingWritten(t, kept...)
-			if s.locks != 0 || len(s.joins) != 0 || len(s.switches) != 0 {
-				t.Errorf("the interrupted init took the lock %d times, joined %v, switched %v", s.locks, s.joins, s.switches)
-			}
-		})
-	}
-}
-
 // `cyfr access`'s questions end on an interrupt: before the join nothing
 // is changed; after it the join is said to stand, and nothing is switched.
 func TestAccessQuestionsEndOnAnInterrupt(t *testing.T) {
@@ -206,9 +157,9 @@ func TestAFormEndsWithTheContext(t *testing.T) {
 	}
 }
 
-// A release's init asks its questions before the scaffold's download; a
-// download that fails with a warning lays down no .env.example, so no
-// .env is written and init says the mode answered was not applied.
+// A release's download that fails with a warning lays down no
+// .env.example, so no .env is written, and init as the setup pages run it
+// says the mode they answered was not applied.
 func TestInitSaysAnAnsweredModeWasNotAppliedWithoutATemplate(t *testing.T) {
 	t.Chdir(t.TempDir())
 	s := useFakeEngine(t)
@@ -216,10 +167,8 @@ func TestInitSaysAnAnsweredModeWasNotAppliedWithoutATemplate(t *testing.T) {
 	t.Cleanup(func() { version.Version, downloadScaffold = savedVersion, savedDownload })
 	version.Version = "0.6.0-alpha.1"
 	downloadScaffold = func(string) error { return errors.New("the release is offline") }
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("1\n\n")
 	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
+	err := initAs(context.Background(), accessChoice{mode: access.ModeTailnet}, &out)
 	if err == nil || err.Error() != "CYFR was not set up to be reached as answered (tailnet): there is no .env.example to write .env from" {
 		t.Fatalf("init answered %v\n%s", err, out.String())
 	}

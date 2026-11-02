@@ -100,7 +100,7 @@ func TestPreviewShowsBothHeadsAndTheAddressChange(t *testing.T) {
 	if p.OldWords.Who != "only this computer" || p.NewWords.Ports != "80 and 443" || p.NewWords.Address != "https://home.example.com" {
 		t.Errorf("words %+v → %+v", p.OldWords, p.NewWords)
 	}
-	if len(p.AddressChanges) != 4 || !strings.HasPrefix(p.AddressChanges[0], "Passkeys made at the old address stop working") {
+	if len(p.AddressChanges) != 4 || !strings.HasPrefix(p.AddressChanges[0], "Passkeys made at the old address no longer sign anyone in") {
 		t.Errorf("address changes %v", p.AddressChanges)
 	}
 	if _, err := h.e.Switch(bg, h.request(id(1), publicTarget, "")); err != nil {

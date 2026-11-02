@@ -313,15 +313,15 @@ func writeTemp(t *testing.T, name, text string) string {
 	return path
 }
 
-// A home init gives an address is answered at that address: the .env it
-// writes for a public name names the https origin the name implies, the
-// one Sanctum.origin/0 and every policy derived from it read. Through init
-// itself and the access engine's switch of the stopped stack.
+// A home the setup pages give an address is answered at that address: the
+// .env init writes for a public name names the https origin the name
+// implies, the one Sanctum.origin/0 and every policy derived from it read.
+// Through init itself and the access engine's switch of the stopped stack.
 func TestInitWritesThePublicURLItsAddressImplies(t *testing.T) {
 	newInitProject(t)
 	useRealEngine(t, &stoppedDocker{})
 	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}, noPull: true}, &out, &out)
+	err := initAs(context.Background(), accessChoice{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}}, &out)
 	if err != nil {
 		t.Fatalf("cyfr init: %v\n%s", err, out.String())
 	}

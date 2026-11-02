@@ -393,7 +393,7 @@ func TestSetupRefusesAnExistingHome(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out bytes.Buffer
-		if err := runSetup(context.Background(), setupOptions{}, &out); err == nil || err.Error() != c.want {
+		if err := runSetup(context.Background(), setupOptions{noOpen: true}, &out); err == nil || err.Error() != c.want {
 			t.Errorf("setup over %q answered %v, want %q", c.env, err, c.want)
 		}
 		if out.Len() != 0 {
@@ -487,7 +487,7 @@ func (c *pagesClient) await(phase string) setup.State {
 // runSetupInBackground runs cyfr setup under ctx, answering its end.
 func runSetupInBackground(ctx context.Context, out io.Writer) <-chan error {
 	done := make(chan error, 1)
-	go func() { done <- runSetup(ctx, setupOptions{noPull: true}, out) }()
+	go func() { done <- runSetup(ctx, setupOptions{noPull: true, noOpen: true}, out) }()
 	return done
 }
 
@@ -617,7 +617,7 @@ func TestSetupRefusesASecondSetupInTheProject(t *testing.T) {
 	defer stopSecond()
 	var out bytes.Buffer
 	second := make(chan error, 1)
-	go func() { second <- runSetup(secondCtx, setupOptions{noPull: true}, &syncWriter{w: &out}) }()
+	go func() { second <- runSetup(secondCtx, setupOptions{noPull: true, noOpen: true}, &syncWriter{w: &out}) }()
 	select {
 	case err = <-second:
 	case <-time.After(5 * time.Second):
@@ -789,7 +789,7 @@ func TestSetupOpensItsPagesOnADisplay(t *testing.T) {
 	}{
 		{"a display", true, false, nil, true, "Opened it in your browser. It stops once CYFR is up.\n"},
 		{"--no-open", true, true, nil, false, "Open it in a browser on this machine. It stops once CYFR is up.\n"},
-		{"no display", false, false, nil, false, "Open it in a browser on this machine. It stops once CYFR is up.\n"},
+		{"no display, --no-open", false, true, nil, false, "Open it in a browser on this machine. It stops once CYFR is up.\n"},
 		{"a launcher that fails", true, false, errors.New("no xdg-open to open it with"), false,
 			"Could not open a browser here (no xdg-open to open it with); open the address above.\nOpen it in a browser on this machine. It stops once CYFR is up.\n"},
 	} {
@@ -820,4 +820,22 @@ func TestSetupOpensItsPagesOnADisplay(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Without a display and without --no-open, cyfr setup refuses before it
+// serves, writes or opens anything: its pages are for a device whose
+// launcher opens them, and cyfr init sets CYFR up at a terminal.
+func TestSetupRefusesWithoutADisplay(t *testing.T) {
+	newInitProject(t)
+	useFakeEngine(t)
+	l := stubLauncher(t, false, nil)
+	var out bytes.Buffer
+	err := runSetup(context.Background(), setupOptions{noPull: true}, &out)
+	if want := "cyfr setup serves pages for a device whose launcher opens them, and this machine has no browser to open them. Run cyfr init here."; err == nil || err.Error() != want {
+		t.Fatalf("cyfr setup answered %v, want %q", err, want)
+	}
+	if out.Len() != 0 || len(l.all()) != 0 {
+		t.Errorf("the refused setup printed %q and opened %v", out.String(), l.all())
+	}
+	nothingWritten(t, ".env.example")
 }

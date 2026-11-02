@@ -241,8 +241,8 @@ var (
 	askInput    io.Reader = os.Stdin
 )
 
-// accessOptions are the inputs `cyfr init` and `cyfr access` take for the
-// mode they apply.
+// accessOptions are the inputs of the mode `cyfr access` applies, and
+// that the setup pages answer.
 type accessOptions struct {
 	domain, acmeEmail, keyFile, hostname string
 	newNode, noOpen                      bool
@@ -753,17 +753,29 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	// The switch runs to its end once it begins: an interrupt then is the
 	// journal's to recover, never a half-made change this command walks
 	// away from.
-	if err := answerFailure(e.Switch(context.WithoutCancel(ctx), access.SwitchRequest{
+	err = answerFailure(e.Switch(context.WithoutCancel(ctx), access.SwitchRequest{
 		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest, Content: content,
-	})); err != nil {
+	}))
+	if local := (startedLocally{}); err != nil && !errors.As(err, &local) {
 		return err
 	}
-	fmt.Fprintln(out, "Done. CYFR is reached as:")
-	printWords(out, p.NewWords)
-	if p.Reopen {
-		printTailscale(ctx, e, out)
+	if err == nil {
+		fmt.Fprintln(out, "Done. CYFR is reached as:")
+		printWords(out, p.NewWords)
+		if p.Reopen {
+			printTailscale(ctx, e, out)
+		}
 	}
-	return nil
+	// .env holds the new head now, CYFR started as it says or on this
+	// machine only: the screen follows it, and passkeys of a new address
+	// begin at its setup link.
+	screenErr := followScreen(p.New)
+	if len(p.AddressChanges) > 0 {
+		if values, verr := access.ReadEnvValues(".env"); verr == nil && !headless(values) {
+			fmt.Fprintf(out, "Passkeys made at the old address no longer sign anyone in. Open %s to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n", hyperlink(out, setupLink(p.NewWords.Address, values)))
+		}
+	}
+	return errors.Join(err, screenErr)
 }
 
 // printTailscale prints the tailnet machine as the engine sees it now

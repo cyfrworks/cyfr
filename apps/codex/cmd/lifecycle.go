@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -395,8 +396,6 @@ func refuseUndeclaredRestore() error {
 
 func init() {
 	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json even if they already exist (never replaces .env or .env.example)")
-	initCmd.Flags().String("access", "", "How the new CYFR is reached: local, tailnet or public (asked on a terminal; local otherwise)")
-	addAccessFlags(initCmd)
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
@@ -405,7 +404,7 @@ func init() {
 
 var initCmd = &cobra.Command{
 	Use:     "init",
-	Short:   "Scaffold a CYFR project, choose how it is reached and mint the stack's keys into .env",
+	Short:   "Scaffold a CYFR project reached from this machine and mint the stack's keys into .env",
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
@@ -413,13 +412,13 @@ Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime 
 
 On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
 
-How CYFR is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. .env is written for this computer only, with every key; then, for tailnet access, the machine joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves CYFR reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: access is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional).
+The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with a passkey. A headless CYFR (CYFR_HEADLESS=on) serves no page, so its first person runs 'cyfr login --setup' in this directory instead. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with a passkey, and after a change of address it lets the administrator back in. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. A headless CYFR (CYFR_HEADLESS=on) serves no page, so its first person runs 'cyfr login --setup' in this directory instead. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
 	Example: `  cyfr init
-  cyfr init --no-interactive --access public --domain cyfr.example.com
+  cyfr init --no-interactive --no-pull
   cyfr init --force
   cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -427,22 +426,19 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .en
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		o := initOptions{accessOptions: accessFlags(cmd)}
+		var o initOptions
 		o.force, _ = cmd.Flags().GetBool("force")
 		o.noPull, _ = cmd.Flags().GetBool("no-pull")
-		o.mode, _ = cmd.Flags().GetString("access")
 		o.continuation = continuationArgs(cmd)
 		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
-// initOptions are cyfr init's flags; mode is --access, empty when it is not
-// given. continuation is the flags given, for the init run that continues
-// once the requirements are installed (prepareMachine).
+// initOptions are cyfr init's flags. continuation is the flags given, for
+// the init run that continues once the requirements are installed
+// (prepareMachine).
 type initOptions struct {
-	accessOptions
 	force, noPull bool
-	mode          string
 	continuation  []string
 }
 
@@ -453,15 +449,14 @@ type accessChoice struct {
 }
 
 // initFace is how one run of init meets the person setting the home up:
-// the terminal's questions and printed link (runInit), or the setup pages
-// (cyfr setup). Every step and its order are initProject's either way.
+// the terminal (runInit), or the setup pages (cyfr setup). Every step and
+// its order are initProject's either way.
 type initFace struct {
-	// answers is how a new home is reached, asked once, before init writes
-	// anything, when it is to write a new .env; an error ends init there.
-	answers func(ctx context.Context) (accessChoice, error)
+	// choice is how a new home is reached, local when its mode is empty.
+	choice accessChoice
 	// apply applies a new home's mode, other than local, to its stopped
 	// stack and answers the head it switched to (applyInitAccess).
-	apply func(ctx context.Context, c accessChoice, key []byte) (access.Head, error)
+	apply func(ctx context.Context, c accessChoice) (access.Head, error)
 	// step, when set, is told the step init begins (the init* steps).
 	step func(name string)
 }
@@ -481,8 +476,11 @@ func (f initFace) begin(name string) {
 }
 
 // runInit is `cyfr init` in the working directory, asking on the terminal:
-// the machine's missing requirements first (prepareMachine), then the
-// project, unless the run continued in a process of its own.
+// the machine's missing requirements first (prepareMachine), then, for a
+// new project, whether this machine's screen shows CYFR, then the project,
+// unless the run continued in a process of its own. The screen is asked
+// for before anything is written, so an interrupt at its question leaves
+// the directory as it was, and installed once .env is.
 func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	switch continued, err := prepareMachine(ctx, o.continuation, out, errOut); {
 	case err != nil:
@@ -491,25 +489,73 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 		return nil
 	}
 	fresh := !fileExists(".env")
-	err := initProject(ctx, o, initFace{
-		answers: func(ctx context.Context) (accessChoice, error) {
-			choice, err := chooseAccess(ctx, o, askTerminal(), bufio.NewReader(askInput), out)
-			if err != nil {
-				return choice, interruption{errQuestionInterrupted}
-			}
-			return choice, nil
-		},
-		apply: func(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
-			return applyInitAccess(ctx, c, key, joinChoice{
-				optionsGiven: o.hostname != "" || o.keyFile != "",
-				onAuthURL:    openJoinLink(o.noOpen, out),
-			}, out)
-		},
-	}, out, errOut)
-	if err != nil || !fresh {
+	screen := false
+	if fresh {
+		var err error
+		if screen, err = askScreen(ctx, out); err != nil {
+			return err
+		}
+	}
+	if err := initProject(ctx, o, initFace{}, out, errOut); err != nil {
 		return err
 	}
-	return offerScreen(ctx, out)
+	if !fresh || !fileExists(".env") {
+		fmt.Fprintln(out, "")
+		if fileExists("docker-compose.yml") {
+			fmt.Fprintln(out, "Next: run 'cyfr up' to start the stack.")
+		} else {
+			fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
+		}
+		fmt.Fprintln(out, "  `cyfr access status` shows how CYFR is reached.")
+		return nil
+	}
+	var screenErr error
+	if screen {
+		screenErr = screenOn(ctx, false, out)
+	}
+	initEnding(out, screen && screenErr == nil)
+	return screenErr
+}
+
+// initEnding is init's last word on the new CYFR in the working directory,
+// reached from this machine: its address, the ways to reach it from
+// elsewhere, and the next step, which on screen is the reboot that shows
+// setup there, and otherwise the setup link (sshTunnel's line beside it on
+// a machine with no display). A headless CYFR serves no setup page.
+func initEnding(out io.Writer, screen bool) {
+	values, _ := access.ReadEnvValues(".env")
+	port := existingSelection(".env").port
+	address := access.Describe(access.Head{Mode: access.ModeLocal, Port: port}).Address
+	fmt.Fprintln(out, "")
+	fmt.Fprintf(out, "CYFR is reached from this machine, at %s.\n", address)
+	fmt.Fprintln(out, "To reach it from your phone and laptop too: cyfr access tailnet. From the internet: cyfr access public --domain <your domain>.")
+	if headless(values) {
+		fmt.Fprintln(out, "CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.")
+		return
+	}
+	fmt.Fprintln(out, "A new address costs every passkey; the setup link gets the administrator back in.")
+	if screen {
+		fmt.Fprintln(out, "Next: cyfr up, then sudo reboot.")
+		fmt.Fprintln(out, "At power-on this screen opens CYFR's setup page, which sets up its first person with a passkey.")
+		return
+	}
+	fmt.Fprintf(out, "Next: cyfr up. Then open %s to set up its first person.\n", hyperlink(out, setupLink(address, values)))
+	if !hasDisplay() {
+		fmt.Fprintln(out, sshTunnel(port))
+	}
+}
+
+// sshTunnel is the line that brings this machine's loopback port, where a
+// local CYFR answers, to another computer, whose browser then opens the
+// link at the same localhost address, the one its passkeys belong to.
+func sshTunnel(port int) string {
+	account := ""
+	if u, err := user.Current(); err == nil {
+		account = u.Username
+	}
+	host, _ := os.Hostname()
+	p := strconv.Itoa(port)
+	return "From another computer: ssh -L " + p + ":127.0.0.1:" + p + " " + account + "@" + host + ", then open the link there."
 }
 
 // initProject is cyfr init in the working directory, meeting its person
@@ -519,31 +565,16 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 
 	// What init cannot complete is refused before anything is written: a
 	// .env that does not say how its home is reached, whose cure is
-	// `cyfr access <mode>`, and access flags that make no home.
+	// `cyfr access <mode>`.
 	envExisted := fileExists(".env")
 	if envExisted {
-		if err := refuseExistingAccess(".env", o); err != nil {
+		if _, err := existingAccess(".env"); err != nil {
 			return err
 		}
 	}
-	if err := checkInitAccess(o); err != nil {
-		return err
-	}
-	key, err := readAuthKey(o.keyFile)
-	if err != nil {
-		return err
-	}
-
-	// A new .env's questions come before anything is written, so an
-	// interrupt at one leaves the directory as it was. A new .env is
-	// written from the .env.example a release's scaffold lays down, or one
-	// already there.
-	asked := !envExisted && (releaseBuild || fileExists(".env.example"))
-	choice := accessChoice{mode: access.ModeLocal}
-	if asked {
-		if choice, err = face.answers(ctx); err != nil {
-			return err
-		}
+	choice := face.choice
+	if choice.mode == "" {
+		choice.mode = access.ModeLocal
 	}
 
 	// An existing .env gains the keys it lacks before anything else
@@ -607,8 +638,7 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	envCreated := false
 	sel := existingSelection(".env")
 	var head access.Head
-	var envValues map[string]string
-	if asked && fileExists(".env.example") {
+	if !envExisted && fileExists(".env.example") {
 		face.begin(initStepSettings)
 		text, changes, d, err := newEnv(".env.example")
 		if err != nil {
@@ -616,9 +646,6 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 		}
 		if err := writeFileAtomic(".env", text, 0600); err != nil {
 			return fmt.Errorf("Failed to write .env: %w", err)
-		}
-		if envValues, err = access.ReadEnvValues(".env"); err != nil {
-			return fmt.Errorf("Failed to read .env: %w", engineFailure(err))
 		}
 		envCreated = true
 		envChanges = changes
@@ -643,14 +670,14 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	_ = os.MkdirAll("data", 0755)
 	_ = scaffold.MakeDir("aqua")
 
-	// The mode the home was asked for, applied as a switch of its stopped
+	// The mode the pages answered, applied as a switch of the stopped
 	// stack; a refusal or a join that ends without the machine leaves it
 	// local, and init reports that last.
 	var accessErr error
 	switch {
 	case envCreated && choice.mode != access.ModeLocal:
 		face.begin(initStepAccess)
-		applied, err := face.apply(ctx, choice, key)
+		applied, err := face.apply(ctx, choice)
 		local := startedLocally{}
 		switch {
 		case errors.As(err, &local):
@@ -662,8 +689,6 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 			head = applied
 			sel = selection{profiles: head.Profiles, port: head.Port}
 		}
-	case !envCreated && !envExisted && o.mode != "":
-		accessErr = fmt.Errorf("--access %s was not applied: there is no .env.example to write .env from", o.mode)
 	case !envCreated && !envExisted && choice.mode != access.ModeLocal:
 		// The answers were asked for a release's .env.example that its
 		// download did not lay down.
@@ -753,17 +778,6 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 		fmt.Fprintln(out, "   versions. Copy those files from a repo checkout, or run the server from")
 		fmt.Fprintln(out, "   the checkout itself as CONTRIBUTING.md's \"Running from source\" says.")
 	}
-	fmt.Fprintln(out, "")
-	if composeExists {
-		fmt.Fprintln(out, "Next: run 'cyfr up' to start the stack.")
-	} else {
-		fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
-	}
-	if envCreated {
-		setupNext(out, head, envValues)
-	} else {
-		fmt.Fprintln(out, "  `cyfr access status` shows how CYFR is reached.")
-	}
 	return accessErr
 }
 
@@ -786,37 +800,10 @@ func setupLink(address string, values map[string]string) string {
 	return address + "/setup#" + strings.TrimSpace(values[setupTokenVar])
 }
 
-// setupNext says how the first person of the new CYFR at head is set up:
-// through the setup link, or on a headless CYFR, which serves no page, by
-// `cyfr login --setup`.
-func setupNext(out io.Writer, head access.Head, values map[string]string) {
-	if headless(values) {
-		fmt.Fprintln(out, "  CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.")
-		return
-	}
-	fmt.Fprintln(out, "  Setup link:      "+hyperlink(out, setupLink(access.Describe(head).Address, values)))
-	fmt.Fprintln(out, "  Once CYFR is up, the setup link sets up its first person, who administers it, with a passkey.")
-}
-
 // leftLocal is what a new home whose mode was not applied is told: it is
 // reached from this computer only, and `cyfr access <mode>` changes that.
 func leftLocal(mode string) string {
 	return fmt.Sprintf("CYFR is set up to be reached from this computer only; `cyfr access %s` changes that", mode)
-}
-
-// refuseExistingAccess refuses an existing .env init does not complete: one
-// existingAccess refuses, and access flags, since init chooses how a new
-// home is reached and `cyfr access` changes an existing one's. A --access
-// naming the mode .env holds is no change and passes.
-func refuseExistingAccess(path string, o initOptions) error {
-	current, err := existingAccess(path)
-	if err != nil {
-		return err
-	}
-	if (o.mode != "" && o.mode != current) || o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
-		return existingHomeRefusal("cyfr init", current)
-	}
-	return nil
 }
 
 // existingAccess is the mode the existing .env at path says its home is
@@ -845,30 +832,6 @@ func existingHomeRefusal(command, current string) error {
 	return fmt.Errorf(".env says CYFR is reached as %s, and %s leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current, command)
 }
 
-// checkInitAccess refuses access flags that make no home before anything is
-// written: a mode outside the three, an option without --access or for
-// another mode, and a domain or email Derive refuses.
-func checkInitAccess(o initOptions) error {
-	switch o.mode {
-	case "":
-		if o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
-			return errors.New("--domain, --acme-email, --tailscale-auth-key-file and --hostname say how a new CYFR is reached only beside --access: --access public with a domain and an email, --access tailnet with a key file and a name. Nothing was changed")
-		}
-		return nil
-	case access.ModeLocal, access.ModeTailnet, access.ModePublic:
-	default:
-		return fmt.Errorf("--access takes local, tailnet or public; %q is none of them. Nothing was changed", o.mode)
-	}
-	if err := checkTailnetOptions(o.mode, o.accessOptions); err != nil {
-		return err
-	}
-	if o.mode == access.ModePublic && o.domain == "" {
-		// Asked on a terminal; local otherwise (chooseAccess).
-		return nil
-	}
-	return checkTarget(access.Target{Mode: o.mode, Domain: o.domain, ACMEEmail: o.acmeEmail})
-}
-
 // checkTarget refuses a target Derive refuses for its own inputs: an
 // option outside its mode, a domain or an email that is not one. The port
 // and the builds URL are the template's here, and the tailnet machine a
@@ -878,104 +841,11 @@ func checkTarget(t access.Target) error {
 	return engineFailure(err)
 }
 
-// chooseAccess decides the mode of a new home. On a terminal the access
-// question comes first, unless --access answers it, then what the mode
-// needs that its flags do not give: a tailnet machine's name, a public
-// domain and its certificate email. Without one the home is local unless
-// --access tailnet comes with --tailscale-auth-key-file or --access public
-// with --domain. A question ends with ctx, answering its error.
-func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio.Reader, out io.Writer) (accessChoice, error) {
-	c := accessChoice{accessOptions: o.accessOptions, mode: o.mode}
-	if !interactive {
-		switch {
-		case c.mode == access.ModeTailnet && c.keyFile == "":
-			fmt.Fprintln(out, "--access tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so CYFR is reached from this computer only; `cyfr access tailnet` joins it later.")
-			c.mode = access.ModeLocal
-		case c.mode == access.ModePublic && c.domain == "":
-			fmt.Fprintln(out, "--access public needs --domain, so CYFR is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
-			c.mode = access.ModeLocal
-		case c.mode == "":
-			c.mode = access.ModeLocal
-		}
-		return c, nil
-	}
-	if c.mode == "" {
-		fmt.Fprintln(out, "How will you reach CYFR?")
-		fmt.Fprintln(out, "  1. My devices, via Tailscale (recommended)")
-		fmt.Fprintln(out, "  2. A public domain, via Caddy")
-		fmt.Fprintln(out, "  3. This computer only")
-		for c.mode == "" {
-			answer, more, err := askLine(ctx, r, out, "Choose 1, 2 or 3", "1")
-			if err != nil {
-				return c, err
-			}
-			switch {
-			case answer == "1":
-				c.mode = access.ModeTailnet
-			case answer == "2":
-				c.mode = access.ModePublic
-			case answer == "3":
-				c.mode = access.ModeLocal
-			case !more:
-				// The end of the input is no answer, least of all
-				// consent to join a tailnet: the home is local, as
-				// --no-interactive leaves it.
-				fmt.Fprintln(out, "No answer was read, so CYFR is reached from this computer only; `cyfr access tailnet` or `cyfr access public --domain <your domain>` changes that.")
-				c.mode = access.ModeLocal
-			default:
-				fmt.Fprintln(out, "Answer 1, 2 or 3.")
-			}
-		}
-	}
-	switch c.mode {
-	case access.ModeTailnet:
-		if c.hostname == "" {
-			fmt.Fprintln(out, "This machine's name on your tailnet is part of CYFR's address, and certificate names are public: anyone can read it in the certificate logs.")
-			hostname, err := ask(ctx, r, out, "Machine name", "cyfr")
-			if err != nil {
-				return c, err
-			}
-			c.hostname = hostname
-		}
-	case access.ModePublic:
-		for c.domain == "" {
-			answer, more, err := askLine(ctx, r, out, "The domain CYFR is reached at (its DNS names this machine)", "")
-			if err != nil {
-				return c, err
-			}
-			if err := checkTarget(access.Target{Mode: c.mode, Domain: answer}); answer != "" && err != nil {
-				fmt.Fprintln(out, err)
-			} else {
-				c.domain = answer
-			}
-			if c.domain == "" && !more {
-				fmt.Fprintln(out, "No domain was given, so CYFR is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
-				c.mode = access.ModeLocal
-				return c, nil
-			}
-		}
-		for asking := c.acmeEmail == ""; asking; {
-			answer, more, err := askLine(ctx, r, out, "Email for the certificate authority's notices (blank for none)", "")
-			if err != nil {
-				return c, err
-			}
-			err = checkTarget(access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
-			if answer == "" || err == nil {
-				c.acmeEmail = answer
-				break
-			}
-			fmt.Fprintln(out, err)
-			asking = more
-		}
-	}
-	return c, nil
-}
-
-// applyInitAccess applies the mode chosen for a new home as an engine
-// switch of its stopped stack, the tailnet joined first for tailnet as
-// choice meets the join, and answers the head it switched to. Any failure
-// leaves the home as .env holds it, local.
-func applyInitAccess(ctx context.Context, c accessChoice, key []byte, choice joinChoice, out io.Writer) (access.Head, error) {
+// applyInitAccess applies the mode the setup pages chose for a new home as
+// an engine switch of its stopped stack, the tailnet joined first for
+// tailnet as choice meets the join, and answers the head it switched to.
+// Any failure leaves the home as .env holds it, local.
+func applyInitAccess(ctx context.Context, c accessChoice, choice joinChoice, out io.Writer) (access.Head, error) {
 	id, err := newRequestID()
 	if err != nil {
 		return access.Head{}, err
@@ -986,13 +856,13 @@ func applyInitAccess(ctx context.Context, c accessChoice, key []byte, choice joi
 	}
 	defer unlock()
 	target := access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
-	p, join, err := previewTarget(ctx, e, target, id, c.accessOptions, key, out, choice)
+	p, join, err := previewTarget(ctx, e, target, id, c.accessOptions, nil, out, choice)
 	if err != nil {
 		return access.Head{}, err
 	}
 	rec, err := e.Switch(context.WithoutCancel(ctx), access.SwitchRequest{
 		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
-		Content: requestContent(target, c.accessOptions, key),
+		Content: requestContent(target, c.accessOptions, nil),
 	})
 	head := p.New
 	if rec.FinalHead != nil {
@@ -1190,7 +1060,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A headless CYFR (CYFR_HEADLESS=on) serves no setup page: when its log says no one is set up on it yet, cyfr up says so after the start, and that 'cyfr login --setup' in this directory sets up its first person.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints. A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so there 'cyfr login --setup' in this directory sets up its first person.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1251,7 +1121,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	if local := (startedLocally{}); startErr != nil && !errors.As(startErr, &local) {
 		startErr = withBootFatal(ctx, e, head, startErr)
 	}
-	noOneYet := startErr == nil && headlessNotSetUp(ctx, e, head)
+	firstStart := startErr == nil && notSetUp(ctx, e, head)
 	release()
 	select {
 	case <-interrupts:
@@ -1263,15 +1133,39 @@ func runUp(ctx context.Context, out io.Writer) error {
 	}
 	fmt.Fprintln(out, "CYFR server started.")
 	fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
-	if noOneYet {
-		fmt.Fprintln(out, "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.")
+	if firstStart {
+		setupNext(out, head)
 	}
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Optional next steps:")
-	fmt.Fprintln(out, "  cyfr login      authenticate this CLI")
-	fmt.Fprintln(out, "  Then in Prism's \"MCP Servers\" page, click \"Add stdio server\"")
-	fmt.Fprintln(out, "  to run stdio/npx MCP servers (filesystem, github, …) for AQUA.")
 	return nil
+}
+
+// setupNext is how the first person of the CYFR at head, which no one is
+// set up on yet, is set up, said after its start: on this machine's own
+// screen when the cyfr-screen service shows it, a reboot away when it is
+// enabled and has not started; otherwise through the setup link, which a
+// local CYFR on a machine with no display reaches through sshTunnel's
+// line. A headless CYFR serves no setup page.
+func setupNext(out io.Writer, head access.Head) {
+	values, _ := access.ReadEnvValues(".env")
+	if headless(values) {
+		fmt.Fprintln(out, "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.")
+		return
+	}
+	link := hyperlink(out, setupLink(access.Describe(head).Address, values))
+	fmt.Fprintln(out, "")
+	switch enabled, active := machine.screenService(); {
+	case active:
+		fmt.Fprintln(out, "Setup is on this screen (Ctrl+Alt+F1).")
+	case enabled:
+		fmt.Fprintln(out, "Now run sudo reboot. This screen opens setup at power-on.")
+	case head.Mode == access.ModeTailnet:
+		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person.\n", link)
+	default:
+		fmt.Fprintf(out, "Open %s to set up its first person.\n", link)
+		if head.Mode == access.ModeLocal && !hasDisplay() {
+			fmt.Fprintln(out, sshTunnel(head.Port))
+		}
+	}
 }
 
 // bootFatalMarker begins the line a refused boot prints, its sentence
@@ -1303,15 +1197,10 @@ func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startEr
 // logs (Cyfr.Application.not_set_up_marker/0).
 const notSetUpMarker = "[Cyfr] Not set up:"
 
-// headlessNotSetUp reports whether .env makes CYFR headless, so that no
-// setup page sets up its first person, and the cyfr service's log, read
-// under the lock, holds the boot's line for a CYFR with no person yet. A
-// log that cannot be read holds none.
-func headlessNotSetUp(ctx context.Context, e stackEngine, head access.Head) bool {
-	values, err := access.ReadEnvValues(".env")
-	if err != nil || !headless(values) {
-		return false
-	}
+// notSetUp reports whether the cyfr service's log, read under the lock,
+// holds the boot's line for a CYFR with no person yet. A log that cannot
+// be read holds none.
+func notSetUp(ctx context.Context, e stackEngine, head access.Head) bool {
 	res, err := cyfrLogSinceStart(ctx, e, head)
 	return err == nil && res.ExitCode == 0 &&
 		strings.Contains(string(res.Stdout)+"\n"+string(res.Stderr), notSetUpMarker)

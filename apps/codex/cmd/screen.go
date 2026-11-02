@@ -45,7 +45,11 @@ var screenOnCmd = &cobra.Command{
 	Short: "Show CYFR on this machine's own screen; again, rewrite what shows it",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return screenOn(cmd.Context(), true, cmd.OutOrStdout())
+		if err := screenOn(cmd.Context(), true, cmd.OutOrStdout()); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "The screen starts at the next boot. Run `cyfr up`, then `sudo reboot`.")
+		return nil
 	},
 }
 
@@ -68,21 +72,21 @@ func screenPossible() bool {
 	return askTerminal() && machine.supported() && machine.arch() == "amd64"
 }
 
-// offerScreen is init's question, on a new project on a machine that can
-// show it.
-func offerScreen(ctx context.Context, out io.Writer) error {
+// askScreen is init's question, for a new project on a machine that can
+// show CYFR and has no desktop: true for the first answer, which init
+// installs (screenOn) once .env is written.
+func askScreen(ctx context.Context, out io.Writer) (bool, error) {
 	if !screenPossible() || machine.displayManager() {
-		return nil
+		return false, nil
 	}
-	fmt.Fprintln(out, "\nShow CYFR on this machine's own screen?\n  1. With its own screen\n  2. Without a screen")
-	answer, _, err := askLine(ctx, bufio.NewReader(askInput), out, "Choose 1 or 2", "2")
+	fmt.Fprintln(out, "This machine has no desktop. Show CYFR on its screen?")
+	fmt.Fprintln(out, "  1. Yes. At power-on this screen shows CYFR full screen, with an on-screen keyboard.")
+	fmt.Fprintln(out, "  2. No. This screen keeps its login prompt, and you open CYFR from another machine.")
+	answer, _, err := askLine(ctx, bufio.NewReader(askInput), out, "Choose 1 or 2", "1")
 	if err != nil {
-		return interruption{errQuestionInterrupted}
+		return false, interruption{errQuestionInterrupted}
 	}
-	if answer != "1" {
-		return nil
-	}
-	return screenOn(ctx, false, out)
+	return answer == "1", nil
 }
 
 // screenOn writes what shows CYFR into the project, then installs it through
@@ -98,14 +102,7 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	case !access.HasComposeFile(".") || !fileExists(".env"):
 		return errors.New("There is no CYFR in this directory. Run `cyfr screen on` in the directory `cyfr init` set up")
 	}
-	dir, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	if !screenPath.MatchString(dir) {
-		return fmt.Errorf("`cyfr screen` needs a project path of letters, digits and / . _ - alone, and this one is %q", dir)
-	}
-	account, err := user.Current()
+	dir, account, err := screenSite()
 	if err != nil {
 		return err
 	}
@@ -113,7 +110,7 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := writeScreenFiles(head, dir, account.Username); err != nil {
+	if err := writeScreenFiles(head, dir, account); err != nil {
 		return fmt.Errorf("cyfr screen could not write %s (%v)", screenDir, err)
 	}
 	commands := screenCommands(dir)
@@ -135,8 +132,25 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err != nil {
 		return errors.New("Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again")
 	}
-	fmt.Fprintln(out, "The screen starts at the next boot. Run `cyfr up`, then `sudo reboot`.")
 	return nil
+}
+
+// screenSite is the project directory and the account the screen's files
+// name: the working directory, refused when the service's unit could not
+// hold its path as it is, and this account.
+func screenSite() (string, string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", "", err
+	}
+	if !screenPath.MatchString(dir) {
+		return "", "", fmt.Errorf("`cyfr screen` needs a project path of letters, digits and / . _ - alone, and this one is %q", dir)
+	}
+	account, err := user.Current()
+	if err != nil {
+		return "", "", err
+	}
+	return dir, account.Username, nil
 }
 
 // screenCommands are the commands `cyfr screen on` runs, the packages'
@@ -153,7 +167,8 @@ func screenCommands(dir string) []string {
 	if !chrome {
 		commands = append(commands,
 			"deb=$(mktemp --suffix=.deb)",
-			"curl -fsSL -o \"$deb\" "+chromeDeb,
+			"echo 'Downloading Chrome from Google (about 110 MB)'",
+			"curl -fL --progress-bar -o \"$deb\" "+chromeDeb,
 			"apt-get install -y \"$deb\"",
 			"rm -f \"$deb\"")
 	}
@@ -189,8 +204,26 @@ func screenOff(out io.Writer) error {
 	return nil
 }
 
+// followScreen rewrites the screen's files of the project in the working
+// directory, when it has them, for head, the one .env holds after a
+// change, so the screen opens CYFR at its address with no `cyfr screen on`.
+func followScreen(head access.Head) error {
+	if !fileExists(screenDir) {
+		return nil
+	}
+	dir, account, err := screenSite()
+	if err == nil {
+		err = writeScreenFiles(head, dir, account)
+	}
+	if err != nil {
+		return fmt.Errorf("This machine's screen still opens the old address: cyfr could not rewrite %s (%v). Run `cyfr screen on` to rewrite it", screenDir, err)
+	}
+	return nil
+}
+
 // writeScreenFiles renders the embedded files into the project, at head's
-// address: running `cyfr screen on` again rewrites them.
+// address: `cyfr screen on` and a change of address (cyfr access) rewrite
+// them.
 func writeScreenFiles(head access.Head, dir, account string) error {
 	proxy := "set --"
 	if head.Mode == access.ModeTailnet {

@@ -533,10 +533,15 @@ func (e *fakeEngine) Stop(ctx context.Context, cause string, all bool) (access.R
 // fakeRunner runs the `docker` on PATH as the engine's system runner runs
 // docker: under ctx, in a process group of its own, with every COMPOSE_*
 // taken out of the environment and DOCKER_* kept. It records each call it
-// runs for a stack.
+// runs for a stack. A test that set up no fake docker (FAKE_DOCKER_DIR)
+// reaches no docker: the call fails, as one to a Docker that does not
+// answer.
 type fakeRunner struct{ s *fakeStack }
 
 func (r fakeRunner) Run(ctx context.Context, c access.Call) (access.Result, error) {
+	if os.Getenv("FAKE_DOCKER_DIR") == "" {
+		return access.Result{}, errors.New("this test set up no fake docker")
+	}
 	if r.s != nil {
 		r.s.mu.Lock()
 		r.s.calls = append(r.s.calls, c)

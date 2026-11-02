@@ -19,7 +19,7 @@ const IdentityUnchanged = "Your CYFR identity does not change."
 // addressChanges is what stops working when the home's address changes,
 // shown before the change is made.
 var addressChanges = []string{
-	"Passkeys made at the old address stop working. Each person registers one at the new address, which an administrator authorizes as today.",
+	"Passkeys made at the old address no longer sign anyone in. Open the setup link at the new address to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.",
 	"Pair every device again.",
 	"Update the redirect address in OAuth apps you registered (vault credentials, an OIDC issuer), the URL your webhook senders call, CLI contexts and MCP clients.",
 	"Every other CYFR and device that saved the old address needs the new one.",

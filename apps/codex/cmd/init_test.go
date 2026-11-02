@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -62,11 +64,20 @@ func setupTokenOf(t *testing.T) string {
 	return token
 }
 
-// setupLinkLine is the line init prints the setup link of the CYFR at
-// address on, with the setup token the working directory's .env holds.
+// setupLinkLine is the line init's ending gives the setup link of the
+// CYFR at address on, with the setup token the working directory's .env
+// holds.
 func setupLinkLine(t *testing.T, address string) string {
 	t.Helper()
-	return "  Setup link:      " + address + "/setup#" + setupTokenOf(t) + "\n"
+	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person.\n"
+}
+
+// initAs is init as the setup pages run it, answered c: initProject, its
+// mode applied as the engine's switch (applyInitAccess).
+func initAs(ctx context.Context, c accessChoice, out io.Writer) error {
+	return initProject(ctx, initOptions{noPull: true}, initFace{choice: c, apply: func(ctx context.Context, c accessChoice) (access.Head, error) {
+		return applyInitAccess(ctx, c, joinChoice{}, out)
+	}}, out, out)
 }
 
 // nothingWritten fails unless the working directory holds exactly names.
@@ -86,66 +97,37 @@ func nothingWritten(t *testing.T, names ...string) {
 	}
 }
 
-// --no-interactive makes a local home unless --access tailnet comes with
-// --tailscale-auth-key-file or --access public with --domain; each other
-// combination of the access flags says why it is local, or refuses before
-// anything is written.
-func TestInitNoInteractiveRules(t *testing.T) {
-	keyFile := filepath.Join(t.TempDir(), "authkey")
-	if err := os.WriteFile(keyFile, []byte("tskey-auth-kTEST-SECRET\n"), 0600); err != nil {
-		t.Fatal(err)
+// init asks nothing about how CYFR is reached, at a terminal or not: it
+// writes a home reached from this machine, takes no lock and switches
+// nothing, and none of the flags that chose another way is init's.
+func TestInitAsksNothingAboutHowCYFRIsReached(t *testing.T) {
+	// A machine init installs nothing on and offers no screen to.
+	saved := machine.supported
+	t.Cleanup(func() { machine.supported = saved })
+	machine.supported = func() bool { return false }
+	for _, terminal := range []bool{false, true} {
+		newInitProject(t)
+		s := useFakeEngine(t)
+		askTerminal = func() bool { return terminal }
+		askInput = noInput{t}
+		var out bytes.Buffer
+		if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+			t.Fatalf("init: %v\n%s", err, out.String())
+		}
+		if got := accessOf(t); got != access.ModeLocal {
+			t.Errorf("the home is %s, want local", got)
+		}
+		if s.locks != 0 || len(s.joins) != 0 || len(s.switches) != 0 {
+			t.Errorf("init took the lock %d times, joined %v and switched %v", s.locks, s.joins, s.switches)
+		}
+		if strings.Contains(out.String(), "How will you reach CYFR?") {
+			t.Errorf("init asked how CYFR is reached:\n%s", out.String())
+		}
 	}
-	cases := []struct {
-		name    string
-		o       initOptions
-		mode    string
-		notice  string
-		refusal string
-	}{
-		{name: "no flags", o: initOptions{}, mode: access.ModeLocal},
-		{name: "--access local", o: initOptions{mode: access.ModeLocal}, mode: access.ModeLocal},
-		{name: "--access tailnet alone", o: initOptions{mode: access.ModeTailnet}, mode: access.ModeLocal, notice: "--access tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file"},
-		{name: "--access tailnet with a key file", o: initOptions{mode: access.ModeTailnet, accessOptions: accessOptions{keyFile: keyFile, hostname: "home"}}, mode: access.ModeTailnet},
-		{name: "--access public alone", o: initOptions{mode: access.ModePublic}, mode: access.ModeLocal, notice: "--access public needs --domain"},
-		{name: "--access public with a domain", o: initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com", acmeEmail: "ops@example.com"}}, mode: access.ModePublic},
-		{name: "a domain without --access", o: initOptions{accessOptions: accessOptions{domain: "cyfr.example.com"}}, refusal: "only beside --access"},
-		{name: "a domain for a local home", o: initOptions{mode: access.ModeLocal, accessOptions: accessOptions{domain: "cyfr.example.com"}}, refusal: "`--domain` is for public access, and this command chooses `local`"},
-		{name: "an email for a tailnet home", o: initOptions{mode: access.ModeTailnet, accessOptions: accessOptions{acmeEmail: "ops@example.com", keyFile: keyFile}}, refusal: "`--acme-email` is for public access, and this command chooses `tailnet`"},
-		{name: "a machine name for a public home", o: initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com", hostname: "home"}}, refusal: "`--hostname` is for joining a tailnet, and this command chooses `public`"},
-		{name: "a domain that is not one", o: initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "localhost"}}, refusal: "`localhost` is not a valid domain"},
-		{name: "a mode that is none", o: initOptions{mode: "tls"}, refusal: `--access takes local, tailnet or public; "tls" is none of them`},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			newInitProject(t)
-			s := useFakeEngine(t)
-			c.o.noPull = true
-			var out bytes.Buffer
-			err := runInit(context.Background(), c.o, &out, &out)
-			if c.refusal != "" {
-				if err == nil || !strings.Contains(err.Error(), c.refusal) || !strings.Contains(err.Error(), "Nothing was changed") {
-					t.Fatalf("init answered %v, want the refusal %q", err, c.refusal)
-				}
-				nothingWritten(t, ".env.example")
-				if s.locks != 0 {
-					t.Errorf("a refused init took the lock")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("init: %v\n%s", err, out.String())
-			}
-			if got := accessOf(t); got != c.mode {
-				t.Errorf("the home is %s, want %s", got, c.mode)
-			}
-			if c.notice != "" && !strings.Contains(out.String(), c.notice) {
-				t.Errorf("init does not say why the home is local:\n%s", out.String())
-			}
-			// A local home is .env as init writes it: no engine, no lock.
-			if wantSwitch := c.mode != access.ModeLocal; (len(s.switches) == 1) != wantSwitch || (s.locks == 1) != wantSwitch {
-				t.Errorf("%d switches under %d locks, want a switch: %v", len(s.switches), s.locks, wantSwitch)
-			}
-		})
+	for _, name := range []string{"access", "domain", "acme-email", "tailscale-auth-key-file", "hostname", "no-open"} {
+		if initCmd.Flags().Lookup(name) != nil {
+			t.Errorf("cyfr init has --%s", name)
+		}
 	}
 }
 
@@ -201,157 +183,38 @@ func TestInitFollowsTheTemplatesPort(t *testing.T) {
 	if got := cfg.Contexts["local"].URL; got != "http://127.0.0.1:4123" {
 		t.Errorf("the local context is %s, want the home's loopback port", got)
 	}
-	if !strings.Contains(out.String(), setupLinkLine(t, "http://localhost:4123")) {
-		t.Errorf("init does not print the setup link at the home's address:\n%s", out.String())
+	if !strings.Contains(out.String(), "CYFR is reached from this machine, at http://localhost:4123.\n") || !strings.Contains(out.String(), setupLinkLine(t, "http://localhost:4123")) {
+		t.Errorf("init does not print the home's address and setup link at its port:\n%s", out.String())
 	}
 }
 
-// A tailnet home init joins first, with the auth key the file holds, which
-// reaches the engine's join alone: never .env, the output or a request.
-// The switch then takes the joined machine's name and id.
-func TestInitJoinsATailnetHomeWithTheKeyFile(t *testing.T) {
-	newInitProject(t)
-	s := useFakeEngine(t)
-	keyFile := filepath.Join(t.TempDir(), "authkey")
-	const key = "tskey-auth-kTEST-SECRET"
-	if err := os.WriteFile(keyFile, []byte(key+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{mode: access.ModeTailnet, accessOptions: accessOptions{keyFile: keyFile}, noPull: true}, &out, &out)
-	if err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	if len(s.joins) != 1 || string(s.joinKeys[0]) != key || s.joins[0].Hostname != "" || s.joins[0].NewNode {
-		t.Fatalf("the join was %+v with key %q, want one join with the file's key", s.joins, s.joinKeys)
-	}
-	if len(s.switches) != 1 || s.switches[0].JoinID != "join-"+s.joins[0].ID || s.switches[0].ID == s.joins[0].ID {
-		t.Fatalf("the switch %+v does not take the join's machine under a request id of its own", s.switches)
-	}
-	f := projectEnv(t)
-	for k, want := range map[string]string{"CYFR_ACCESS": "tailnet", "CYFR_HOST": "cyfr.tail1234.ts.net", "CYFR_TAILNET_NODE_ID": "nTESTNODE1CNTRL", "CYFR_PUBLIC_URL": "https://cyfr.tail1234.ts.net"} {
-		if got, _ := f.value(k); got != want {
-			t.Errorf(".env's %s is %q, want %q", k, got, want)
-		}
-	}
-	env, _ := os.ReadFile(".env")
-	if strings.Contains(string(env)+out.String(), key) {
-		t.Errorf("the auth key reached .env or the output")
-	}
-	if !strings.Contains(out.String(), setupLinkLine(t, "https://cyfr.tail1234.ts.net")) {
-		t.Errorf("init does not print the setup link at the home's address from its head:\n%s", out.String())
-	}
-}
-
-// A join that fails, or one an interrupt cancels while it waits for the
-// approval, leaves the home reached from this computer only: .env local,
-// no switch, the rest of the project made, and init says so and exits
-// non-zero. The cancelled join is cancelled in the engine, whose container
-// would outlive init otherwise.
-func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
-	t.Run("the approval link expires", func(t *testing.T) {
-		newInitProject(t)
-		s := useFakeEngine(t)
-		s.join = func(ctx context.Context, r access.JoinRequest) (access.Receipt, error) {
-			r.OnAuthURL("https://login.tailscale.com/a/approve-test")
-			return access.Receipt{RequestID: r.ID, Op: "join", State: "completed", Outcome: "failed", Code: "tailnet_join_expired"}, nil
-		}
-		askTerminal = func() bool { return true }
-		askInput = strings.NewReader("1\n\n")
-		var out bytes.Buffer
-		err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
-		expired := access.Refuse("tailnet_join_expired", nil).Message()
-		if err == nil || !strings.Contains(err.Error(), expired) || !strings.Contains(err.Error(), "reached from this computer only; `cyfr access tailnet` changes that") {
-			t.Fatalf("init answered %v\n%s", err, out.String())
-		}
-		if !strings.Contains(out.String(), "https://login.tailscale.com/a/approve-test") {
-			t.Errorf("init does not print the approval link:\n%s", out.String())
-		}
-		localAndMade(t, s)
-	})
-	t.Run("an interrupt cancels the waiting join", func(t *testing.T) {
-		newInitProject(t)
-		s := useFakeEngine(t)
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		s.join = func(jctx context.Context, r access.JoinRequest) (access.Receipt, error) {
-			r.OnAuthURL("https://login.tailscale.com/a/approve-test")
-			cancel()
-			<-jctx.Done()
-			return access.Receipt{}, jctx.Err()
-		}
-		askTerminal = func() bool { return true }
-		askInput = strings.NewReader("1\nhome\n")
-		var out bytes.Buffer
-		err := runInit(ctx, initOptions{noPull: true}, &out, &out)
-		cancelled := access.Refuse("tailnet_join_cancelled", nil).Message()
-		var refusal *access.Refusal
-		if err == nil || !errors.As(err, &refusal) || refusal.Code != "tailnet_join_cancelled" || !strings.HasPrefix(err.Error(), cancelled+"\n") {
-			t.Fatalf("init answered %v\n%s", err, out.String())
-		}
-		if s.cancels != 1 {
-			t.Errorf("the waiting join was cancelled %d times, want once", s.cancels)
-		}
-		if s.joins[0].Hostname != "home" {
-			t.Errorf("the join asked for %q, want the machine name answered", s.joins[0].Hostname)
-		}
-		localAndMade(t, s)
-	})
-}
-
-// A switch whose start left the home on this machine only is no success:
-// init answers tailnet_node_mismatch's sentence alone, which exits 3, and
-// never says the home stayed local, since the switch was made.
+// A switch the setup pages' answer made, whose start left the home on
+// this machine only, is no success: init answers tailnet_node_mismatch's
+// sentence alone, which exits 3, and never says the home stayed local,
+// since the switch was made.
 func TestInitReportsAStartOnThisMachineOnly(t *testing.T) {
 	newInitProject(t)
 	s := useFakeEngine(t)
 	local := startedLocalReceipt("switch")
 	s.switchReceipt = &local
 	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}, noPull: true}, &out, &out)
+	err := initAs(context.Background(), accessChoice{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}}, &out)
 	if want := access.Refuse("tailnet_node_mismatch", mismatch()).Message(); err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally {
 		t.Fatalf("init answered %v (exit %d), want %q and exit 3", err, ExitStatus(err), want)
 	}
 }
 
-// localAndMade fails unless init left a local home with the project made
-// around it and nothing switched.
-func localAndMade(t *testing.T, s *fakeStack) {
-	t.Helper()
-	if got := accessOf(t); got != access.ModeLocal {
-		t.Errorf("the home is %s, want local", got)
-	}
-	if len(s.switches) != 0 {
-		t.Errorf("init switched after the join ended without a machine: %+v", s.switches)
-	}
-	for _, name := range []string{".gitignore", "data", "aqua"} {
-		if _, err := os.Stat(name); err != nil {
-			t.Errorf("init did not make %s: %v", name, err)
-		}
-	}
-	if _, err := os.Stat("cyfr.yaml"); err == nil {
-		t.Error("init wrote cyfr.yaml, which no command reads")
-	}
-	if holder := s.held(); holder != "" {
-		t.Errorf("init left the lock held, by %s", holder)
-	}
-}
-
 // Run again on a .env that does not say how its home is reached, init
-// refuses with access_missing's sentence and writes nothing; a --access that
-// contradicts the mode an existing .env holds is refused the same way,
-// since `cyfr access` changes an existing home's.
+// refuses with access_missing's sentence and writes nothing.
 func TestInitRefusesAnExistingEnvWithoutAccessAndWritesNothing(t *testing.T) {
 	for _, c := range []struct {
 		name, env string
-		o         initOptions
 		want      string
 	}{
-		{"no CYFR_ACCESS", "CYFR_SECRET_KEY_BASE=kept\nCYFR_HOST=localhost\n", initOptions{}, access.Refuse("access_missing", nil).Message()},
-		{"CYFR_ACCESS blank", "CYFR_ACCESS=\nCYFR_LOCUS_RUNTIME_ROOT=\n", initOptions{mode: access.ModeLocal}, access.Refuse("access_missing", nil).Message()},
-		{"another mode", "CYFR_ACCESS=local\n", initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}}, ".env says CYFR is reached as local"},
+		{"no CYFR_ACCESS", "CYFR_SECRET_KEY_BASE=kept\nCYFR_HOST=localhost\n", access.Refuse("access_missing", nil).Message()},
+		{"CYFR_ACCESS blank", "CYFR_ACCESS=\nCYFR_LOCUS_RUNTIME_ROOT=\n", access.Refuse("access_missing", nil).Message()},
 		// The last assignment is the one compose reads.
-		{"CYFR_ACCESS blanked by a later line", "CYFR_ACCESS=local\nCYFR_ACCESS=\n", initOptions{}, access.Refuse("access_missing", nil).Message()},
+		{"CYFR_ACCESS blanked by a later line", "CYFR_ACCESS=local\nCYFR_ACCESS=\n", access.Refuse("access_missing", nil).Message()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			newInitProject(t)
@@ -360,7 +223,7 @@ func TestInitRefusesAnExistingEnvWithoutAccessAndWritesNothing(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			err := runInit(context.Background(), c.o, &out, &out)
+			err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("init answered %v, want %q", err, c.want)
 			}
@@ -372,38 +235,6 @@ func TestInitRefusesAnExistingEnvWithoutAccessAndWritesNothing(t *testing.T) {
 				t.Errorf("the refused init took the lock")
 			}
 		})
-	}
-}
-
-// The end of the input is no answer: init's access question read at it
-// makes the home local, as --no-interactive would, saying so, and never
-// joins a tailnet; an empty line takes the recommended answer.
-func TestInitTakesTheEndOfInputAsNoAnswer(t *testing.T) {
-	newInitProject(t)
-	s := useFakeEngine(t)
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("")
-	var out bytes.Buffer
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	if len(s.joins) != 0 || len(s.switches) != 0 || accessOf(t) != access.ModeLocal {
-		t.Fatalf("the end of the input joined %d times, switched %d times and left the home %s, want local and nothing joined\n%s", len(s.joins), len(s.switches), accessOf(t), out.String())
-	}
-	if want := "No answer was read, so CYFR is reached from this computer only; `cyfr access tailnet` or `cyfr access public --domain <your domain>` changes that."; !strings.Contains(out.String(), want) {
-		t.Errorf("init does not say why the home is local:\n%s", out.String())
-	}
-
-	newInitProject(t)
-	s = useFakeEngine(t)
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("\n")
-	out.Reset()
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	if len(s.joins) != 1 || accessOf(t) != access.ModeTailnet {
-		t.Errorf("an empty line joined %d times and left the home %s, want the recommended tailnet\n%s", len(s.joins), accessOf(t), out.String())
 	}
 }
 
@@ -426,46 +257,11 @@ func TestInitOnADevBuildSaysWhereTheScaffoldComesFrom(t *testing.T) {
 	}
 }
 
-// On a terminal the access question comes first; an answer that is none
-// of the three is asked again, and a public home's domain is asked, an
-// invalid one with the rule it breaks.
-func TestInitAsksTheAccessQuestionFirst(t *testing.T) {
-	newInitProject(t)
-	s := useFakeEngine(t)
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("9\n2\nlocalhost\ncyfr.example.com\nnot-an-email\nops@example.com\n")
-	var out bytes.Buffer
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	text := out.String()
-	question, again := strings.Index(text, "How will you reach CYFR?"), strings.Index(text, "Answer 1, 2 or 3.")
-	if question < 0 || again < question {
-		t.Errorf("the access question does not come first, or is not asked again on a wrong answer:\n%s", text)
-	}
-	for _, want := range []string{"`localhost` is not a valid domain", "`not-an-email` is not a valid email address"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("init does not say %q:\n%s", want, text)
-		}
-	}
-	if len(s.switches) != 1 || s.switches[0].Target != (access.Target{Mode: access.ModePublic, Domain: "cyfr.example.com", ACMEEmail: "ops@example.com"}) {
-		t.Errorf("the switch was %+v", s.switches)
-	}
-	f := projectEnv(t)
-	for k, want := range map[string]string{"CYFR_ACCESS": "public", "CYFR_HOST": "cyfr.example.com", "CYFR_PUBLIC_URL": "https://cyfr.example.com", "CADDY_ACME_EMAIL": "ops@example.com"} {
-		if got, _ := f.value(k); got != want {
-			t.Errorf(".env's %s is %q, want %q", k, got, want)
-		}
-	}
-	if !strings.Contains(text, setupLinkLine(t, "https://cyfr.example.com")) || strings.Contains(text, "<your CYFR_HOST>") {
-		t.Errorf("init does not print the setup link at the home's address from its head:\n%s", text)
-	}
-}
-
-// init through the access engine itself and this host's Docker: the
-// engine's docker calls run through its watchdog re-exec, `cyfr internal
-// docker-run`, which here is this test binary (TestMain), and the switch of
-// the stopped stack writes the public head into .env.
+// init as the setup pages run it, through the access engine itself and
+// this host's Docker: the engine's docker calls run through its watchdog
+// re-exec, `cyfr internal docker-run`, which here is this test binary
+// (TestMain), and the switch of the stopped stack writes the public head
+// into .env.
 func TestInitSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
 	requireCompose(t)
 	newInitProject(t)
@@ -473,7 +269,7 @@ func TestInitSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
 	var out bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	err := runInit(ctx, initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com", acmeEmail: "ops@example.com"}, noPull: true}, &out, &out)
+	err := initAs(ctx, accessChoice{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com", acmeEmail: "ops@example.com"}}, &out)
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
@@ -494,60 +290,14 @@ func TestInitSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
 	}
 }
 
-// On a machine with a display init opens a tailnet join's approval link in
-// the default browser once it has printed it, and still waits for the
-// approval; with --no-open, or with no display, it prints the link alone.
-// Off a terminal the link and the setup link are plain text.
-func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
-	const link = "https://login.tailscale.com/a/approve-test"
-	for _, c := range []struct {
-		name            string
-		display, noOpen bool
-	}{
-		{"a display", true, false},
-		{"--no-open", true, true},
-		{"no display", false, false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			newInitProject(t)
-			s := useFakeEngine(t)
-			l := stubLauncher(t, c.display, nil)
-			askTerminal = func() bool { return true }
-			askInput = strings.NewReader("1\n\n")
-			var out bytes.Buffer
-			if err := runInit(context.Background(), initOptions{noPull: true, accessOptions: accessOptions{noOpen: c.noOpen}}, &out, &out); err != nil {
-				t.Fatalf("init: %v\n%s", err, out.String())
-			}
-			opened := c.display && !c.noOpen
-			between := ""
-			if opened {
-				between = "Opened it in your browser.\n"
-			}
-			want := "To join this machine to your tailnet, open this link and approve the machine:\n  " + link + "\n" + between + "Waiting for the approval (Ctrl-C cancels the join)...\n"
-			if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), setupLinkLine(t, "https://cyfr.tail1234.ts.net")) {
-				t.Errorf("init printed:\n%s\nwant within it:\n%s", out.String(), want)
-			}
-			var handed []string
-			if opened {
-				handed = []string{link}
-			}
-			if got := l.all(); !slices.Equal(got, handed) {
-				t.Errorf("the launcher was handed %v, want %v", got, handed)
-			}
-			if len(s.switches) != 1 || accessOf(t) != access.ModeTailnet {
-				t.Errorf("the join did not go on to the switch: %+v", s.switches)
-			}
-		})
-	}
-}
-
 // A new .env gets a setup token of 32 random bytes in 64 lowercase
-// hexadecimal characters, on one line, and init prints the setup link at
-// the new CYFR's address in place of its bare address; init run again
-// keeps the token as it is.
+// hexadecimal characters, on one line, and init ends on the setup link at
+// the new CYFR's address; init run again keeps the token as it is, and
+// ends on the next step alone.
 func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 	newInitProject(t)
 	useFakeEngine(t)
+	stubLauncher(t, true, nil)
 	var out bytes.Buffer
 	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 		t.Fatalf("init: %v\n%s", err, out.String())
@@ -558,8 +308,8 @@ func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 		t.Errorf(".env assigns %s on %d lines, want one", setupTokenVar, n)
 	}
 	text := out.String()
-	if !strings.Contains(text, line+"  Once CYFR is up, the setup link sets up its first person, who administers it, with a passkey.\n") || strings.Contains(text, "Prism:") {
-		t.Errorf("init printed:\n%s\nwant the setup link %q and no bare address", text, line)
+	if !strings.HasSuffix(text, "\n\n"+localEnding("http://localhost:4000")+line) || strings.Contains(text, "Prism:") {
+		t.Errorf("init printed:\n%s\nwant it to end on the setup link %q", text, line)
 	}
 
 	out.Reset()
@@ -569,13 +319,57 @@ func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 	if again, _ := projectEnv(t).value(setupTokenVar); again != token {
 		t.Errorf("init run again changed the setup token from %q to %q", token, again)
 	}
+	again := out.String()
+	if !strings.HasSuffix(again, "\n\nNext: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.\n  `cyfr access status` shows how CYFR is reached.\n") || strings.Contains(again, "/setup#") {
+		t.Errorf("init run again printed:\n%s", again)
+	}
+}
+
+// localEnding is the head of init's ending for a CYFR reached from this
+// machine at address, up to its next step.
+func localEnding(address string) string {
+	return "CYFR is reached from this machine, at " + address + ".\n" +
+		"To reach it from your phone and laptop too: cyfr access tailnet. From the internet: cyfr access public --domain <your domain>.\n" +
+		"A new address costs every passkey; the setup link gets the administrator back in.\n"
+}
+
+// Without the screen, init's last line on a machine with no display is
+// the ssh command that brings the address to another computer, with this
+// account and this machine's name; with a display there is none.
+func TestInitEndsWithTheSSHLineOnAMachineWithNoDisplay(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, display := range []bool{false, true} {
+		newInitProject(t)
+		useFakeEngine(t)
+		stubLauncher(t, display, nil)
+		var out bytes.Buffer
+		if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+			t.Fatalf("init: %v\n%s", err, out.String())
+		}
+		want := "\n\n" + localEnding("http://localhost:4000") + setupLinkLine(t, "http://localhost:4000")
+		if !display {
+			want += "From another computer: ssh -L 4000:127.0.0.1:4000 " + account.Username + "@" + host + ", then open the link there.\n"
+		}
+		if !strings.HasSuffix(out.String(), want) {
+			t.Errorf("with a display %v init printed:\n%s\nwant it to end on:\n%s", display, out.String(), want)
+		}
+	}
 }
 
 // A new .env that makes CYFR headless, CYFR_HEADLESS read as the server
 // reads it, prints that the first person runs cyfr login --setup after
 // cyfr up, and no setup link, since a headless CYFR serves no page.
 func TestInitPrintsLoginSetupForAHeadlessCYFR(t *testing.T) {
-	const notice = "  CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.\n"
+	const notice = "\nCYFR is reached from this machine, at http://localhost:4000.\n" +
+		"To reach it from your phone and laptop too: cyfr access tailnet. From the internet: cyfr access public --domain <your domain>.\n" +
+		"CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.\n"
 	for _, c := range []struct {
 		assignment string
 		headless   bool
@@ -596,7 +390,7 @@ func TestInitPrintsLoginSetupForAHeadlessCYFR(t *testing.T) {
 				t.Fatalf("init: %v\n%s", err, out.String())
 			}
 			text := out.String()
-			printsNotice, printsLink := strings.Contains(text, notice), strings.Contains(text, "Setup link:")
+			printsNotice, printsLink := strings.HasSuffix(text, notice), strings.Contains(text, "/setup#")
 			if printsNotice != c.headless || printsLink == c.headless {
 				t.Errorf("init printed the headless notice %v and the setup link %v, want the notice %v:\n%s", printsNotice, printsLink, c.headless, text)
 			}
