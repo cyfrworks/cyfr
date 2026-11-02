@@ -273,7 +273,7 @@ defmodule Prism.Router do
         pipe_through [:attachment, :attachment_throttle]
 
         get "/attachments/:message_id/:filename", SharedAttachmentController, :show,
-          metadata: %{auth: :browser_seat_handler}
+          metadata: %{auth: :browser_session}
       end
 
       # Opening an athanor is a link: focus is in the URL, `/a/<athanor>/…` —

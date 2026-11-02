@@ -2300,13 +2300,6 @@ defmodule Cyfr.Boundaries do
         "the session cookie for who, the URL's athanor for where, focused in the " <>
           "controller exactly as a LiveView mount focuses it"
     },
-    browser_seat_handler: %{
-      admits: :session,
-      why:
-        "the session cookie for who, and that person's seat in the URL's shared thread " <>
-          "for where, read in the controller through `Sanctum.SharedThreads`; no athanor " <>
-          "is focused, since a shared thread is no athanor's"
-    },
     public_oauth_state: %{
       admits: :flow_state,
       why: "the OAuth state token the callback carries is the credential"
@@ -2400,8 +2393,10 @@ defmodule Cyfr.Boundaries do
       admits: :session,
       why:
         "the browser's own cookie session, established and revalidated in the controller, " <>
-          "with the browser pipeline's CSRF token on the POST; no athanor, since what it " <>
-          "starts (linking a sign-in method) is the person's own"
+          "with no athanor focused, since what the route reaches is the person's own or " <>
+          "decided by Sanctum for them: linking a sign-in method, posted with the browser " <>
+          "pipeline's CSRF token, or a shared thread's file, served only to a person " <>
+          "seated in the thread (`Sanctum.SharedThreads.attachment/4`)"
     }
   }
 

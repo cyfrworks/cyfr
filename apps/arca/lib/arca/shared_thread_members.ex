@@ -478,9 +478,10 @@ defmodule Arca.SharedThreadMembers do
   @doc false
   # Every active thread `user_a` and `user_b` both sit in, locked in id
   # order inside the caller's transaction, after it locked the two people:
-  # the pair's, before `together!/2` reads their seats again, so a
-  # removal, a leave or a denial of either seat, each of which takes the
-  # thread's lock, waits for the pair or is read by it.
+  # a pair's and a file offer's (`Arca.FileOffers`), before their seats
+  # are read again, so a removal, a leave or a denial of either seat, each
+  # of which takes the thread's lock, waits for the pair or the offer or
+  # is read by it.
   @spec lock_shared!(String.t(), String.t()) :: [String.t()]
   # arca:unscoped-ok a shared thread is no athanor's; two people's threads are locked by their seats.
   # arca:db-raise-ok a step inside the caller's transaction.

@@ -157,7 +157,7 @@ defmodule Aqua do
           [%{step_id: String.t(), role: String.t() | nil, text: String.t()}]
   defdelegate stream_texts(stream), to: Aqua.Loop.Stream, as: :texts
 
-  @doc "The room open beside a thread, read as quoted material (`Aqua.RoomExcerpt.read/2`)."
+  @doc "The shared thread open beside a thread, read as quoted material (`Aqua.RoomExcerpt.read/2`)."
   @spec room_excerpt(Context.t(), Aqua.RoomExcerpt.room()) :: {:ok, String.t()} | {:error, term()}
   defdelegate room_excerpt(ctx, room), to: Aqua.RoomExcerpt, as: :read
 end

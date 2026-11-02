@@ -1061,7 +1061,7 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(
           socket,
           :error,
-          "What the room shows is too long to read into one message — untick reading it and send again."
+          "What the thread beside this shows is too long to read into one message — untick reading it and send again."
         )
 
       :too_many_attachments ->
@@ -1886,7 +1886,7 @@ defmodule PrismWeb.ThreadPaneLive do
       <label
         :if={@panel? and reads_room?(@room)}
         id={@dom <> "-read-room"}
-        title="Each message you send here carries what the room shows — read for you, never kept"
+        title="Each message you send here carries what the thread beside it shows — read for you, never kept"
         class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-xs text-gray-500"
       >
         <input

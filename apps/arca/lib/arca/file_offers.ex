@@ -197,12 +197,14 @@ defmodule Arca.FileOffers do
   `{:error, :duplicate_filename}` for two files of one name;
   `{:error, {:too_large, filename}}` for a file over
   `Arca.Files.max_write/0`; `{:error, :not_shared}` when the two share no
-  active athanor and no active shared thread; the sender's storage cap's refusal; and a read's own
-  error. The rows are written under the two people's and the sender's
-  athanor's locks, the head of `Arca.SecurityTransitions`' one order, and
-  only once those are still active and still share an athanor or a
-  thread: a denial
-  or an archive in flight is waited for, and an offer it overtook is
+  active athanor and no active shared thread; the sender's storage cap's
+  refusal; and a read's own error. The rows are written under the two
+  people's and the sender's athanor's locks, the head of
+  `Arca.SecurityTransitions`' one order, then the locks of the shared
+  threads the two sit in, and only once those are still active and still
+  share an athanor or a thread: a denial, an archive, or a removal or
+  leave from one of those threads, in flight, is waited for, and an
+  offer it overtook is
   refused, `{:error, :denied}` for the sender, `{:error, :not_shared}`
   for the recipient and `{:error, :athanor_archived}` for the sender's
   athanor (`{:error, :no_athanor}` when it has no row). A snapshot write
@@ -877,6 +879,7 @@ defmodule Arca.FileOffers do
     Arca.Repo.Errors.with_db_rescue("Arca.FileOffers.offer", fn ->
       Arca.Repo.locking_transaction(fn ->
         with :ok <- hold_parties(sender, recipient, athanor_id),
+             :ok <- hold_shared_threads(sender, recipient),
              :ok <- shared(sender, recipient),
              {:ok, rows} <-
                insert_rows(athanor_id, offer_id, sender, recipient, contents, expires_at) do
@@ -921,6 +924,16 @@ defmodule Arca.FileOffers do
       athanor != "active" -> {:error, :athanor_archived}
       true -> :ok
     end
+  end
+
+  # The active shared threads the two both sit in, locked after the people
+  # and the athanor and before their seats are read again, as a pair takes
+  # them (`Arca.SharedThreads.pair/3`): a removal or a leave of either
+  # seat takes its thread's lock, so one in flight is waited for and its
+  # commit read, and one that starts later waits for the offer.
+  defp hold_shared_threads(sender, recipient) do
+    _locked = Arca.SharedThreadMembers.lock_shared!(sender, recipient)
+    :ok
   end
 
   defp insert_rows(athanor_id, offer_id, sender, recipient, contents, expires_at) do

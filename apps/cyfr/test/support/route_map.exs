@@ -840,7 +840,7 @@
           path: "/shared/:thread/attachments/:message_id/:filename",
           plug: "PrismWeb.SharedAttachmentController",
           plug_opts: ":show",
-          auth: "browser_seat_handler",
+          auth: "browser_session",
           live_view: nil,
           pipe_through: ["attachment", "attachment_throttle"]
         }

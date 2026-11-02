@@ -158,6 +158,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert thread_of(pane) == nil
     assert render(pane) =~ "Read #{team.title}"
 
+    refute has_element?(pane, ~s(label[title*="room"])),
+           "the shared-thread read tooltip still says room"
+
+    assert has_element?(pane, ~s(label[title*="thread beside it"]))
+
     Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
