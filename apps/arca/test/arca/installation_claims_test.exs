@@ -8,8 +8,10 @@ defmodule Arca.InstallationClaimsTest do
   makes of an empty node, only by opening its attempt. Only setup and a
   restore make the first person, who holds the platform grant from the
   mint's own transaction; every other admission onto an empty node is
-  refused. Setup answers its person again while they hold no sign-in
-  method, and opens nothing after. An uninstalled mode refuses;
+  refused. Setup answers its person again while no sign-in method of
+  theirs works at the RP ID it names, the home's current one, and opens
+  nothing after: a passkey at an RP ID the home has left, and the
+  first-method mark, leave it open. An uninstalled mode refuses;
   `:restore_reserved` refuses setup on an empty node; a pending claim
   reserves the node whatever the mode; a restore's own mint is admitted
   only under its exact claim, on an empty node; a claim exists only with
@@ -22,7 +24,7 @@ defmodule Arca.InstallationClaimsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Members, Users}
+  alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Members, Passkeys, Users}
 
   alias Arca.Schemas.{
     CellLease,
@@ -38,6 +40,10 @@ defmodule Arca.InstallationClaimsTest do
     {Arca.ControlPlane, :generation},
     {Arca.ControlPlane, :slot}
   ]
+
+  # The home's RP ID now, and one it has left.
+  @here "b.example"
+  @left "a.example"
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -111,16 +117,38 @@ defmodule Arca.InstallationClaimsTest do
      }}
   end
 
-  # A setup mint, naming no sign-in method: a linked one closes setup.
+  # A setup mint at the home's RP ID now, naming no sign-in method: a
+  # linked one closes setup.
   defp mint(opts \\ []) do
     {user, _identity} = person_attrs()
-    Users.mint(server(), user, nil, Keyword.put_new(opts, :admission, "setup"))
+    Users.mint(server(), user, nil, Keyword.merge([admission: "setup", rp_id: @here], opts))
   end
 
   # A mint under `admission`, linking a sign-in method.
   defp admitted(admission, opts \\ []) do
     {user, identity} = person_attrs()
     Users.mint(server(), user, identity, [admission: admission] ++ opts)
+  end
+
+  defp readmit(user_id, opts),
+    do: Users.readmit(server(), user_id, Keyword.put_new(opts, :rp_id, @here))
+
+  # A passkey of `user_id` registered at `rp_id`, in `state`.
+  defp passkey!(user_id, rp_id, state \\ "active") do
+    {:ok, row} =
+      Passkeys.register(server(), %{
+        user_id: user_id,
+        credential_id: "cred-#{System.unique_integer([:positive])}",
+        rp_id: rp_id,
+        relying_home: "https://" <> rp_id,
+        public_key: "cose-key",
+        registration_digest: digest("registration"),
+        possession_verified: true,
+        state: state,
+        expires_at: if(state == "pending", do: DateTime.add(DateTime.utc_now(), 3600))
+      })
+
+    row
   end
 
   defp platform?(user_id), do: match?({:ok, _}, Members.find_platform(server(), user_id))
@@ -156,7 +184,7 @@ defmodule Arca.InstallationClaimsTest do
   end
 
   defp people, do: Arca.Repo.aggregate(User, :count)
-  defp open?, do: InstallationClaims.setup_open?(server())
+  defp open?, do: InstallationClaims.setup(server(), @here)
   defp claims, do: Arca.Repo.aggregate(InstallationClaim, :count)
 
   describe "the installed mode" do
@@ -270,7 +298,7 @@ defmodule Arca.InstallationClaimsTest do
       {:ok, %{id: first}} = mint()
 
       assert {:ok, %{id: ^first}} =
-               Users.readmit(server(), first,
+               readmit(first,
                  also: fn person ->
                    send(me, {:again, person.id})
                    :ok
@@ -280,31 +308,78 @@ defmodule Arca.InstallationClaimsTest do
       assert_received {:again, ^first}
 
       assert {:error, :closure_refused} =
-               Users.readmit(server(), first, also: fn _ -> {:error, :closure_refused} end)
+               readmit(first, also: fn _ -> {:error, :closure_refused} end)
 
       assert people() == 1
       assert grants() == 1
     end
 
-    test "opens nothing from the commit that marks their first passkey or device" do
+    test "opens nothing from the commit that gives them an active passkey at the RP ID it names" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+      passkey!(first, @here)
+
+      assert {:error, :setup_closed} = mint()
+      assert {:error, :setup_closed} = readmit(first, also: fn _ -> :ok end)
+      assert people() == 1
+    end
+
+    test "names them again while their only passkey is at an RP ID the home has left" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+      passkey!(first, @left)
+
+      assert {:error, {:readmit, %{id: ^first}}} = mint()
+      assert {:ok, %{id: ^first}} = readmit(first, also: fn _ -> :ok end)
+
+      # The mark their first passkey set stays, and leaves setup open.
+      assert %{first_method_at: %DateTime{}} =
+               Arca.Repo.get_by!(Arca.Schemas.PersonIdentity, user_id: first)
+
+      # A passkey at the RP ID setup names closes it; one naming another
+      # RP ID is answered by its own.
+      passkey!(first, @here)
+      assert {:error, :setup_closed} = mint()
+      assert {:error, :setup_closed} = readmit(first, also: fn _ -> :ok end)
+      assert {:error, {:readmit, %{id: ^first}}} = mint(rp_id: "c.example")
+    end
+
+    test "a pending passkey at the RP ID it names, and the first-method mark alone, leave it open" do
       {:ok, %{id: first}} = mint()
       identity_row!(first)
 
       {:ok, :marked} =
         Arca.Repo.transaction(fn -> Arca.PersonIdentities.first_method!(first) end)
 
-      assert {:error, :setup_closed} = mint()
-      assert {:error, :setup_closed} = Users.readmit(server(), first, also: fn _ -> :ok end)
-      assert people() == 1
+      passkey!(first, @here, "pending")
+
+      assert {:error, {:readmit, %{id: ^first}}} = mint()
+      assert {:ok, %{id: ^first}} = readmit(first, also: fn _ -> :ok end)
     end
 
-    test "opens nothing once a sign-in method is linked to them" do
+    test "opens nothing once a sign-in method is linked to them, with no passkey at the RP ID it names" do
       {:ok, %{id: first}} = mint()
+      identity_row!(first)
+      passkey!(first, @left)
       {_user, identity} = person_attrs()
       {:ok, %{linked: true}} = Users.link_identity(server(), first, identity)
 
       assert {:error, :setup_closed} = mint()
-      assert {:error, :setup_closed} = Users.readmit(server(), first, also: fn _ -> :ok end)
+      assert {:error, :setup_closed} = readmit(first, also: fn _ -> :ok end)
+    end
+
+    test "names only the person setup made: another person's passkeys change nothing" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+      passkey!(first, @left)
+
+      {:ok, %{id: other}} = admitted("open")
+      identity_row!(other)
+      passkey!(other, @here)
+
+      assert {:error, {:readmit, %{id: ^first}}} = mint()
+      assert {:error, :setup_closed} = readmit(other, also: fn _ -> :ok end)
+      assert {:ok, %{id: ^first}} = readmit(first, also: fn _ -> :ok end)
     end
 
     test "opens nothing on a node whose people setup did not make" do
@@ -326,36 +401,37 @@ defmodule Arca.InstallationClaimsTest do
     end
   end
 
-  describe "setup_open?/1, the guard's answer read without its locks" do
-    test "answers what a setup's mint would: open on an empty node and for a person with no method" do
-      assert {:ok, true} = open?()
+  describe "setup/2, the guard's answer read without its locks" do
+    test "answers what a setup's mint would: the first person, then that person while no method works at the RP ID" do
+      assert {:ok, :first} = open?()
       {:ok, %{id: first}} = mint()
-      assert {:ok, true} = open?()
+      assert {:ok, {:readmit, %{id: ^first}}} = open?()
 
       identity_row!(first)
+      passkey!(first, @left)
+      assert {:ok, {:readmit, %{id: ^first}}} = open?()
 
-      {:ok, :marked} =
-        Arca.Repo.transaction(fn -> Arca.PersonIdentities.first_method!(first) end)
-
-      assert {:ok, false} = open?()
+      passkey!(first, @here)
+      assert {:ok, :closed} = open?()
       assert {:error, :setup_closed} = mint()
+      assert {:ok, {:readmit, %{id: ^first}}} = InstallationClaims.setup(server(), "c.example")
     end
 
     test "is closed under :restore_reserved, while a claim is pending, and to any actor but the platform's" do
       :ok = InstallationClaims.install_mode!(:restore_reserved)
-      assert {:ok, false} = open?()
+      assert {:ok, :closed} = open?()
 
       :ok = InstallationClaims.install_mode!(:ordinary)
       {:ok, _} = open(restore())
-      assert {:ok, false} = open?()
+      assert {:ok, :closed} = open?()
 
       assert {:error, :cross_tenant} =
-               InstallationClaims.setup_open?(%Prima.Actor{user_id: "per_x"})
+               InstallationClaims.setup(%Prima.Actor{user_id: "per_x"}, @here)
     end
 
     test "reads and writes nothing it holds: no row is added" do
       before = {people(), claims()}
-      assert {:ok, true} = open?()
+      assert {:ok, :first} = open?()
       assert {people(), claims()} == before
     end
   end
@@ -691,7 +767,7 @@ defmodule Arca.InstallationClaimsRaceTest do
         updated_at: now
       },
       nil,
-      [admission: "setup"] ++ opts
+      [admission: "setup", rp_id: "home.example"] ++ opts
     )
   end
 

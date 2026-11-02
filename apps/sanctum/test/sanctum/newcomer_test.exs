@@ -9,9 +9,11 @@ defmodule Sanctum.NewcomerTest do
 
   Setup makes the installation's first person, their keys, their athanor,
   their credential, their enrollment and the platform grant in one
-  transaction, and answers that person again while they hold no sign-in
-  method, with the enrollment that stands; from the commit that gives
-  them one, the token opens nothing. Every local admission brings the new
+  transaction, and answers that person again while no sign-in method of
+  theirs works at the home's address, with the enrollment that stands, so
+  after the home moves its administrator registers a passkey at the new
+  address; from the commit that gives them a working method, the token
+  opens nothing. Every local admission brings the new
   person's identity, enrolls them with it in its transaction, answers
   their recovery code, and admits no one where no directory is pinned. An open admission needs
   the door's `*` and passes the athanor caps, and a refusal anywhere in
@@ -84,10 +86,21 @@ defmodule Sanctum.NewcomerTest do
 
   # A newcomer's registration: the browser's answer to the options drawn
   # for a person who does not exist yet.
-  defp registration do
+  defp registration, do: registration(authenticator())
+
+  defp registration(auth) do
     {:ok, options} = Sanctum.Passkeys.newcomer_options()
-    auth = Authenticator.new("newcomer|#{System.unique_integer([:positive])}")
     Authenticator.registration(auth, options)
+  end
+
+  defp authenticator, do: Authenticator.new("newcomer|#{System.unique_integer([:positive])}")
+
+  # The home moves to `origin`: the address every ceremony is bound to.
+  defp move_home!(origin), do: Prima.Test.Env.put_app_env(:sanctum, :public_url, origin)
+
+  defp sign_in(auth) do
+    challenge = Sanctum.Passkeys.sign_in_challenge()
+    Sanctum.Passkeys.sign_in(challenge, Authenticator.assertion(auth, challenge.challenge))
   end
 
   defp people, do: Arca.Repo.aggregate(User, :count)
@@ -363,7 +376,7 @@ defmodule Sanctum.NewcomerTest do
       assert length(sessions(first.id)) == 1
     end
 
-    test "opens nothing once the person connects a device, which marks their first method" do
+    test "the first-method mark alone, which a connected device sets, leaves it open" do
       %{person: first} = setup!()
 
       # A pairing's completion sets the mark a first passkey sets
@@ -371,8 +384,86 @@ defmodule Sanctum.NewcomerTest do
       {:ok, :marked} =
         Arca.Repo.transaction(fn -> Arca.PersonIdentities.first_method!(first.id) end)
 
+      assert {:ok, %{person: %{id: same}, readmitted: true}} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
+      assert same == first.id
+    end
+
+    test "after the home moves, its administrator registers a passkey at the new address, which signs them in, and then it opens nothing" do
+      move_home!("https://a.example")
+      before = authenticator()
+
+      %{person: admin} = setup!({:passkey, registration(before), identity("mira")})
+      assert {:error, :setup_closed} = Newcomer.setup_open(@token)
+
+      move_home!("https://b.example")
+      assert {:error, :assertion_refused} = sign_in(before)
+      now = authenticator()
+
+      assert {:ok, %{person: %{id: same}, readmitted: true, session_token: token}} =
+               Newcomer.admit({:setup, @token}, {:passkey, registration(now), identity()})
+
+      assert same == admin.id
+      assert {:ok, %{user_id: ^same, provider: "passkey"}} = Sanctum.Session.get(token)
+
+      assert [
+               %Passkey{rp_id: "a.example", state: "active"},
+               %Passkey{rp_id: "b.example", state: "active"}
+             ] =
+               Arca.Repo.all(from(p in Passkey, where: p.user_id == ^same, order_by: p.rp_id))
+
+      assert {:ok, %{session_token: signed_in}} = sign_in(now)
+      assert {:ok, %{user_id: ^same}} = Sanctum.Session.get(signed_in)
+      assert {:error, :assertion_refused} = sign_in(before)
+
+      assert {:error, :setup_closed} = Newcomer.setup_open(@token)
+
       assert {:error, :setup_closed} =
                Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
+      assert people() == 1
+      assert grants() == 1
+    end
+
+    test "after the home moves, an administrator who linked a sign-in method is not let in again" do
+      move_home!("https://a.example")
+      %{person: admin} = setup!({:passkey, registration(), identity()})
+
+      {:ok, %{linked: true}} =
+        Arca.Users.link_identity(Prima.Actor.system(), admin.id, %{
+          key: "github|https://github.com|moved-admin",
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "moved-admin"
+        })
+
+      move_home!("https://b.example")
+      assert {:error, :setup_closed} = Newcomer.setup_open(@token)
+
+      assert {:error, :setup_closed} =
+               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
+
+      assert passkeys() == 1
+    end
+
+    test "after the home moves, another person's passkey at the new address leaves the administrator's way in open" do
+      move_home!("https://a.example")
+      %{person: admin} = setup!({:passkey, registration(), identity("mira")})
+
+      move_home!("https://b.example")
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+
+      assert {:ok, %{person: other, readmitted: false}} =
+               Newcomer.admit(:open, {:passkey, registration(), identity()})
+
+      refute other.id == admin.id
+      assert {:ok, {:readmit, "mira"}} = Newcomer.setup_open(@token)
+
+      assert {:ok, %{person: %{id: same}, readmitted: true}} =
+               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
+      assert same == admin.id
     end
 
     test "a token that is not the configured one, a missing one, or none configured, opens nothing and writes nothing" do
@@ -402,13 +493,16 @@ defmodule Sanctum.NewcomerTest do
     end
 
     test "setup_open/1 answers before any ceremony what the admission would, one refusal for both" do
-      assert :ok = Newcomer.setup_open(@token)
+      assert {:ok, :first} = Newcomer.setup_open(@token)
       assert {:error, :setup_closed} = Newcomer.setup_open(String.duplicate("0", 64))
       assert {:error, :setup_closed} = Newcomer.setup_open(nil)
 
-      # The person setup made, with no sign-in method yet, is answered again.
-      {:ok, _admitted} = Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
-      assert :ok = Newcomer.setup_open(@token)
+      # The person setup made, with no sign-in method yet, is answered
+      # again, by the name their enrollment holds.
+      {:ok, _admitted} =
+        Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity("mira")})
+
+      assert {:ok, {:readmit, "mira"}} = Newcomer.setup_open(@token)
 
       # Their first passkey closes it.
       assert {:ok, %{readmitted: true}} =

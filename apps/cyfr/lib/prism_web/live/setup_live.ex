@@ -27,6 +27,11 @@ defmodule PrismWeb.SetupLive do
   nothing. Then screen 2 registers them at cyfr.run, shows their
   recovery code, and "I saved it" signs them in.
 
+  When the link lets the person setup made in again, since no sign-in
+  method of theirs works at this address (an address change left their
+  passkeys at the old one), the page asks no name: it offers a passkey
+  for the name their enrollment holds, and screen 2 follows as before.
+
   The screens carry their own `data-test` names.
   """
 
@@ -51,6 +56,7 @@ defmodule PrismWeb.SetupLive do
       |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
       |> assign(:step, :reading)
       |> assign(:token, nil)
+      |> assign(:readmit, nil)
       |> assign(:error, nil)
       |> AdmissionCard.mount()
 
@@ -78,9 +84,24 @@ defmodule PrismWeb.SetupLive do
   def handle_event("setup_token", %{"token" => token}, %{assigns: %{step: :reading}} = socket)
       when is_binary(token) do
     case Sanctum.Newcomer.setup_open(token) do
-      :ok -> {:noreply, assign(socket, step: :passkey, token: token, error: nil)}
-      {:error, :setup_closed} -> {:noreply, redirect(socket, to: ~p"/")}
-      {:error, reason} -> {:noreply, assign(socket, :error, PrismWeb.Ops.error_message(reason))}
+      {:ok, :first} ->
+        {:noreply, assign(socket, step: :passkey, token: token, error: nil)}
+
+      {:ok, {:readmit, name}} ->
+        {:noreply,
+         assign(socket,
+           step: :passkey,
+           token: token,
+           readmit: name,
+           admission_name: name,
+           error: nil
+         )}
+
+      {:error, :setup_closed} ->
+        {:noreply, redirect(socket, to: ~p"/")}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :error, PrismWeb.Ops.error_message(reason))}
     end
   end
 
@@ -94,7 +115,7 @@ defmodule PrismWeb.SetupLive do
 
   def handle_event("setup_start", _params, %{assigns: %{step: :passkey, token: token}} = socket) do
     cond do
-      not AdmissionCard.startable?(socket) ->
+      is_nil(socket.assigns.readmit) and not AdmissionCard.startable?(socket) ->
         {:reply, %{error: true}, socket}
 
       not Arca.ControlPlane.held?() ->
@@ -106,7 +127,7 @@ defmodule PrismWeb.SetupLive do
         {:reply, %{error: message}, assign(socket, :admission_error, message)}
 
       true ->
-        with :ok <- Sanctum.Newcomer.setup_open(token),
+        with {:ok, _whom} <- Sanctum.Newcomer.setup_open(token),
              {:ok, %{public_key: public_key, registration: registration}} <-
                Sanctum.Passkeys.newcomer_options() do
           {:reply, %{public_key: public_key, registration: registration},
@@ -189,8 +210,29 @@ defmodule PrismWeb.SetupLive do
                 {@error}
               </p>
             </div>
+            <div :if={@step == :passkey and @readmit != nil} class="space-y-4">
+              <p class="text-sm text-gray-300 leading-relaxed" data-test="setup-readmit">
+                Register a passkey for {@readmit} at this address.
+              </p>
+              <p
+                :if={@admission_error}
+                role="alert"
+                data-test="admission-error"
+                class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300"
+              >
+                {@admission_error}
+              </p>
+              <button
+                type="button"
+                data-webauthn-start
+                data-test="admission-create"
+                class="w-full px-4 py-3 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg transition-colors cursor-pointer"
+              >
+                Create a passkey
+              </button>
+            </div>
             <AdmissionCard.name_screen
-              :if={@step == :passkey}
+              :if={@step == :passkey and @readmit == nil}
               name={@admission_name}
               check={@admission_check}
               error={@admission_error}

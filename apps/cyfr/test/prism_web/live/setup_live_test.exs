@@ -13,7 +13,9 @@ defmodule PrismWeb.SetupLiveTest do
   them in with the offer of another code. Each answer of cyfr.run leaves
   screen 2 in its state, and a page that ends before "I saved it"
   resumes in Settings. A token that is not this CYFR's, and a CYFR set up
-  already, are one answer, and no ceremony starts.
+  already, are one answer, and no ceremony starts. After the address
+  changes, the link asks the administrator no name: it offers a passkey
+  for them at the new address, which signs them in.
   """
 
   # The setup token is process-wide configuration.
@@ -214,6 +216,60 @@ defmodule PrismWeb.SetupLiveTest do
       assert {people(), passkeys()} == {1, 1}
 
       # A tab opened now goes to the root before any ceremony.
+      closed!(conn)
+    end
+  end
+
+  describe "after the address changes" do
+    test "the link asks no name, offers the administrator a passkey at this address, and signs them in",
+         %{conn: conn} do
+      directory!()
+      registry!()
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://a.example")
+      {_browser, view, _identity} = created(conn, "mira")
+      code!(view)
+      view |> element(~s([data-test="admission-saved"])) |> render_click()
+      assert_redirect(view)
+      %{id: user_id} = person()
+
+      Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://b.example")
+      {browser, view} = opened(conn)
+
+      assert has_element?(
+               view,
+               ~s([data-test="setup-readmit"]),
+               "Register a passkey for mira at this address."
+             )
+
+      refute has_element?(view, "p", "You are the first person on this CYFR, and you run it.")
+      refute has_element?(view, ~s([data-test="admission-name-input"]))
+      assert has_element?(view, ~s([data-test="admission-create"][data-webauthn-start]))
+      refute_vocabulary(render(view))
+
+      # Their code was saved at the first address, so nothing is left to
+      # save and the page signs them in.
+      credential = ceremony(view, "setup")
+      fields = Sanctum.Test.Newcomers.identity() |> Sanctum.Test.Newcomers.fields()
+      render_hook(view, "setup_passkey", Map.put(fields, "credential", credential))
+      {path, _flash} = assert_redirect(view)
+      assert "/auth/passkey/complete/" <> _ticket = path
+
+      assert {1, 1} == {people(), grants()}
+
+      assert ["a.example", "b.example"] ==
+               Arca.Repo.all(
+                 from(p in Passkey,
+                   where: p.user_id == ^user_id and p.state == "active",
+                   order_by: p.rp_id,
+                   select: p.rp_id
+                 )
+               )
+
+      landed = get(browser, path)
+      assert redirected_to(landed) == "/"
+      token = get_session(landed, :sanctum_session_token)
+      assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.load(token)
+
       closed!(conn)
     end
   end
@@ -499,7 +555,14 @@ defmodule PrismWeb.SetupLiveTest do
         Sanctum.Newcomer.admit({:setup, @token}, {:command_line, "laptop", first})
 
       {_browser, view} = opened(conn)
-      name!(view, "nova")
+
+      assert has_element?(
+               view,
+               ~s([data-test="setup-readmit"]),
+               "Register a passkey for mira at this address."
+             )
+
+      refute has_element?(view, ~s([data-test="admission-name-input"]))
       admit!(view, "setup")
 
       assert [%{id: ^person_id, namespace: "mira"}] = Arca.Repo.all(User)

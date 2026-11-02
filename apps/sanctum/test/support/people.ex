@@ -120,6 +120,7 @@ defmodule Sanctum.Test.People do
     {:ok, %{id: user_id}} =
       Arca.Users.mint(Prima.Actor.system(), user_attrs, nil,
         admission: "setup",
+        rp_id: Sanctum.Passkeys.rp_id(),
         also: fn person ->
           with :ok <- Sanctum.Person.mint_keys(person),
                {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person),

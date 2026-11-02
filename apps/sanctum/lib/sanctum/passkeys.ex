@@ -314,12 +314,15 @@ defmodule Sanctum.Passkeys do
   Store a newcomer's verified credential, active, for the person
   `user_id`, inside their admission's transaction: the token's nonce
   claimed, and the first-method mark on their identity row set under
-  their lock (`Arca.Passkeys.register/3`), so a failed admission leaves
-  neither the person nor the passkey.
+  their lock when it is not set yet (`Arca.Passkeys.register/3`), so a
+  failed admission leaves neither the person nor the passkey. The
+  admission's guard is what admits the write, under the same lock: a
+  re-admitted administrator whose home moved holds the mark from their
+  first passkey, at the address the home left.
   """
   @spec write_newcomer(String.t(), map()) :: :ok | {:error, term()}
   def write_newcomer(user_id, verified) when is_binary(user_id) do
-    case store(user_id, verified, "active", first_method: true) do
+    case store(user_id, verified, "active", []) do
       {:ok, _row} -> :ok
       {:error, reason} -> {:error, reason}
     end
