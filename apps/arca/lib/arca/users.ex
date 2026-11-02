@@ -265,7 +265,7 @@ defmodule Arca.Users do
   refuses everything but its restore (`:restore_reserved`); a restore is
   `:not_claimed` unless its claim is pending exactly as named, and
   `:not_empty` on a node that holds a person; a `setup` once its person
-  holds a sign-in method that works at `rp_id` is `:setup_closed`. A
+  holds a method at `rp_id` (`Arca.InstallationClaims`) is `:setup_closed`. A
   `setup` on a node whose person setup made holds none mints nothing and
   answers `{:error, {:readmit, person}}`: that person is admitted again
   through `readmit/3`. A node whose boot installed no mode raises
@@ -343,8 +343,8 @@ defmodule Arca.Users do
 
   @doc """
   Admit again the person `setup` made, `user_id`, while they hold no
-  sign-in method that works at `rp_id:` (required, the home's current RP
-  ID): the installation guard decides it again under the order row
+  method at `rp_id:` (required, the home's current RP ID): the
+  installation guard decides it again under the order row
   (`Arca.InstallationClaims.guard!/3`), as `mint/4` decided it, so a
   method registered since refuses `:setup_closed`. `also:` runs in that
   transaction, handed the person, with `mint/4`'s contract. A member that

@@ -43,16 +43,19 @@ defmodule Arca.InstallationClaims do
     * A restore's mint names its claim, and is admitted only while that
       claim is pending, exactly as bound, on a node with no person.
     * A `setup` mint is admitted on a node with no person. Once its person
-      exists, `setup` answers that person again while no sign-in method
-      of theirs works at the home's current address: no active passkey
-      at the RP ID the setup names, which Sanctum reads from the home
-      (`Sanctum.Passkeys.rp_id/0`), and no linked sign-in method. A
-      passkey bound to an RP ID the home has left, and the first-method
-      mark on their identity row, do not close it, so an administrator
-      whose home moved is let in again at the new address. It is read
-      under their lock, and is `:setup_closed` from the commit that gave
-      them a working method on, and on a node whose people setup did not
-      make.
+      exists, `setup` answers that person again while they hold no
+      method at the home's current address: no passkey at the RP ID the
+      setup names, which Sanctum reads from the home
+      (`Sanctum.Passkeys.rp_id/0`), that is active or that a restore
+      suspended, and no linked sign-in method. A passkey bound to an RP
+      ID the home has left, a pending or revoked one, and the
+      first-method mark on their identity row do not close it, so an
+      administrator whose home moved is let in again at the new address.
+      A suspended one closes it: the restore's own path re-enables it,
+      and the backup the restore came from carried the setup token. It
+      is read under their lock, and is `:setup_closed` from the commit
+      that gave them such a method on, and on a node whose people setup
+      did not make.
     * Every other mint is refused `:restore_reserved` while a claim is
       pending, whatever the mode, and on a node with no person while the
       mode is `:restore_reserved`; `setup` is refused the same way.
@@ -224,14 +227,14 @@ defmodule Arca.InstallationClaims do
     end
   end
 
-  # The person setup made, while no sign-in method of theirs works at the
-  # home's current address: no active passkey at `rp_id` and no linked
-  # sign-in method. Under the guard, read under their lock, which every
-  # write that gives them either takes before it writes (a passkey
-  # registered or activated active and a re-enabled one, in
-  # `Arca.Passkeys`, and a link, in `Arca.Users.link_identity/4`), so a
-  # method committed first is seen and one that starts later waits for
-  # this decision.
+  # The person setup made, while they hold no method at the home's current
+  # address: no passkey at `rp_id` that is active or suspended, and no
+  # linked sign-in method. Under the guard, read under their lock, which
+  # every write that gives them one takes before it writes (a passkey
+  # registered or activated active, in `Arca.Passkeys`, and a link, in
+  # `Arca.Users.link_identity/4`), so a method committed first is seen and
+  # one that starts later waits for this decision. A suspension and a
+  # re-enabling move a passkey between the two states that close it.
   defp readmitted(rp_id, lock) do
     case Arca.Repo.one(from(u in User, where: u.admission == "setup", select: u.id)) do
       nil ->
@@ -244,7 +247,9 @@ defmodule Arca.InstallationClaims do
         holds_method? =
           Arca.Repo.exists?(
             from(p in Passkey,
-              where: p.user_id == ^user_id and p.state == "active" and p.rp_id == ^rp_id
+              where:
+                p.user_id == ^user_id and p.state in ["active", "suspended"] and
+                  p.rp_id == ^rp_id
             )
           ) or Arca.Repo.exists?(from(i in ExternalIdentity, where: i.user_id == ^user_id))
 

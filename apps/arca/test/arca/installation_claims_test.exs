@@ -357,6 +357,27 @@ defmodule Arca.InstallationClaimsTest do
       assert {:ok, %{id: ^first}} = readmit(first, also: fn _ -> :ok end)
     end
 
+    test "a passkey a restore suspended at the RP ID it names closes it, and a revoked one does not" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+      %{id: passkey} = passkey!(first, @here)
+
+      # Suspended as a declared restore suspends every active passkey
+      # (`Arca.SecurityTransitions`): the restore's own path re-enables it.
+      {1, _} =
+        Arca.Repo.update_all(from(p in Arca.Schemas.Passkey, where: p.id == ^passkey),
+          set: [state: "suspended"]
+        )
+
+      assert {:error, :setup_closed} = mint()
+      assert {:error, :setup_closed} = readmit(first, also: fn _ -> :ok end)
+      assert {:ok, :closed} = open?()
+
+      [^passkey] = Passkeys.revoke_all(from(p in Arca.Schemas.Passkey, where: p.id == ^passkey))
+      assert {:error, {:readmit, %{id: ^first}}} = mint()
+      assert {:ok, %{id: ^first}} = readmit(first, also: fn _ -> :ok end)
+    end
+
     test "opens nothing once a sign-in method is linked to them, with no passkey at the RP ID it names" do
       {:ok, %{id: first}} = mint()
       identity_row!(first)

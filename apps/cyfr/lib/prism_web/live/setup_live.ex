@@ -27,10 +27,10 @@ defmodule PrismWeb.SetupLive do
   nothing. Then screen 2 registers them at cyfr.run, shows their
   recovery code, and "I saved it" signs them in.
 
-  When the link lets the person setup made in again, since no sign-in
-  method of theirs works at this address (an address change left their
-  passkeys at the old one), the page asks no name: it offers a passkey
-  for the name their enrollment holds, and screen 2 follows as before.
+  When the link lets the person setup made in again, as after an address
+  change left their passkeys at the old one, the page asks no name: it
+  offers a passkey for the name their enrollment holds, and screen 2
+  follows as before.
 
   The screens carry their own `data-test` names.
   """

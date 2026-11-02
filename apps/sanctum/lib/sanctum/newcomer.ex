@@ -52,18 +52,21 @@ defmodule Sanctum.Newcomer do
 
   ## The setup token's re-admission
 
-  While the person setup made holds no sign-in method that works at this
-  home's address, no active passkey at its RP ID (`Sanctum.Passkeys.rp_id/0`)
-  and no linked sign-in method, `{:setup, token}` answers that person
-  again (`readmitted: true`), with the credential it brings: the passkey
-  written for them, or a new command-line session. A passkey made at an
-  address the home has left signs no one in here, so after an address
-  change the setup link lets the administrator register one at the new
-  address. The guard decides it under the order row and the person's
-  lock, so two re-admissions decide in one order. From the commit that
-  gives the person a working method, the token opens nothing
-  (`:setup_closed`). A token that is not the configured one, a missing
-  one, or a CYFR with none configured, opens nothing either.
+  While the person setup made holds no method at this home's address, no
+  passkey at its RP ID (`Sanctum.Passkeys.rp_id/0`) that is active or
+  that a restore suspended and no linked sign-in method,
+  `{:setup, token}` answers that person again (`readmitted: true`), with
+  the credential it brings: the passkey written for them, or a new
+  command-line session. A passkey made at an address the home has left
+  signs no one in here, so after an address change the setup link lets
+  the administrator register one at the new address; a pending one
+  there, awaiting their own authorization, leaves it open. A suspended
+  one closes it, since the restore's own path re-enables it. The guard
+  decides it under the order row and the person's lock, so two
+  re-admissions decide in one order. From the commit that gives the
+  person such a method, the token opens nothing (`:setup_closed`). A
+  token that is not the configured one, a missing one, or a CYFR with
+  none configured, opens nothing either.
 
   ## The credential
 
@@ -450,10 +453,9 @@ defmodule Sanctum.Newcomer do
     end
   end
 
-  # The person setup made, admitted again while no sign-in method of theirs
-  # works at this home's address: only the credential this admission
-  # brings is written, and the enrollment their first admission opened
-  # stands.
+  # The person setup made, admitted again while they hold no method at this
+  # home's address: only the credential this admission brings is written,
+  # and the enrollment their first admission opened stands.
   defp readmit(user_id, write) do
     case Arca.Users.readmit(Prima.Actor.system(), user_id,
            rp_id: Sanctum.Passkeys.rp_id(),
