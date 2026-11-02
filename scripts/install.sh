@@ -360,16 +360,29 @@ install_binary() {
     fi
 }
 
+# A script cannot change the PATH of the shell that started it, so a cyfr
+# that lands outside PATH is linked into /usr/local/bin, which PATH holds
+# here and now. The file stays the person's, so `cyfr update` replaces it
+# without root.
 check_path() {
     dir="$1"
     case ":${PATH}:" in
-        *":${dir}:"*) ;;
-        *)
-            printf "\nNote: %s is not in your PATH.\n" "$dir"
-            printf "Add it by running:\n"
-            printf "  export PATH=\"%s:\$PATH\"\n" "$dir"
-            ;;
+        *":${dir}:"*) return ;;
     esac
+    link_onto_path "$dir" || printf "\ncyfr is not on your PATH. Run it as %s/cyfr.\n" "$dir"
+}
+
+link_onto_path() {
+    [ -z "${CYFR_INSTALL_DIR:-}" ] || return 1
+    [ -d /usr/local/bin ] || return 1
+    case ":${PATH}:" in
+        *":/usr/local/bin:"*) ;;
+        *) return 1 ;;
+    esac
+    command -v sudo >/dev/null 2>&1 || return 1
+    { : </dev/tty; } 2>/dev/null || return 1
+    printf "\nThis command puts cyfr on your PATH:\n  sudo ln -sf %s/cyfr /usr/local/bin/cyfr\n" "$1"
+    sudo ln -sf "$1/cyfr" /usr/local/bin/cyfr </dev/tty
 }
 
 # Test harness sources this file to unit-test the verification functions;
