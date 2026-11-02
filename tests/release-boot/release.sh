@@ -263,8 +263,7 @@ cell_value() {
 # seed tree, and the deployment file `cyfr init --no-interactive --no-pull`
 # writes: the stack's keys minted for this cell alone, the empty CORS
 # allowlist, the client ids .env.example ships, builds on with their URL
-# and key, and the access mode with every setting it implies, `local`, or
-# `public` at the domain `$3` when it is given (`--access public --domain`).
+# and key, and the access mode `local` with every setting it implies.
 # Beside it the cell's own settings, each init writes none of: the
 # database adapter the release was COMPILED for (runtime.exs refuses a
 # disagreement), auto-migration on, the listener ports, the host API on
@@ -272,18 +271,14 @@ cell_value() {
 # validator. `$2` is the PostgreSQL URL of the cell's database, ignored
 # for SQLite.
 cell_new() {
-  local cell="$1" url="${2:-}" host="${3:-}"
+  local cell="$1" url="${2:-}"
   "$ROOT/scripts/wasm-tools.sh" install "$ROOT/_tools" >/dev/null ||
     fail "the pinned wasm-tools could not be installed"
   mkdir -p "$cell/data" "$cell/home"
   cp -R "$ROOT/seed" "$cell/seed"
   rm -f "$cell/.env"
 
-  if [ -n "$host" ]; then
-    cell_cli "$cell" init --no-interactive --no-pull --access public --domain "$host"
-  else
-    cell_cli "$cell" init --no-interactive --no-pull --access local
-  fi
+  cell_cli "$cell" init --no-interactive --no-pull
   cell_set "$cell" CYFR_PORT "$PORT"
   cell_set "$cell" CYFR_DATABASE "$ADAPTER"
   cell_set "$cell" CYFR_AUTO_MIGRATE on
@@ -296,12 +291,12 @@ cell_new() {
   if [ "$ADAPTER" = postgres ]; then cell_set "$cell" CYFR_DATABASE_URL "$url"; fi
 }
 
-# Cell `$1` is a public home at the hostname `$2`, as `cyfr init --access
-# public --domain` or `cyfr access public --domain` makes one: what the
-# command line writes for the name is its mode, its host and its public
-# URL, and nothing here writes those itself. A cell made by `cell_new` for
-# that name already is one; any other cell is switched with `cyfr access`,
-# which keeps every other line of its deployment file, its keys among them.
+# Cell `$1` is a public home at the hostname `$2`, as `cyfr access public
+# --domain` makes one: what the command line writes for the name is its
+# mode, its host and its public URL, and nothing here writes those itself.
+# A cell public at that name already is one; any other cell is switched
+# with `cyfr access`, which keeps every other line of its deployment file,
+# its keys among them.
 # The cell then answers on three listener ports picked free, or given by
 # `$3`, `$4` and `$5`: its loopback listener, host API and proxy listener,
 # where the front that terminates TLS forwards (tests/browser/lib.mjs).

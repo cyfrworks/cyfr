@@ -166,8 +166,8 @@ browser_certificate() {
 }
 
 # A home: a new cell at `$1` (release.sh's `cell_new`, `$3` the PostgreSQL
-# URL of its database), the public home `cyfr init` makes for the hostname
-# `$2` (`cell_hostname`), on listener ports picked free, with a
+# URL of its database), the public home `cyfr access` makes of it for the
+# hostname `$2` (`cell_hostname`), on listener ports picked free, with a
 # certificate for `$2` from the run's authority. Its name is the cell's
 # directory name.
 browser_home() {
@@ -177,7 +177,7 @@ browser_home() {
   [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
     fail "a home's cell is named in lowercase letters, digits and dashes, not '$name'"
   [[ "$host" == *.test ]] || fail "a home's hostname is a .test name, not '$host'"
-  cell_new "$cell" "$url" "$host"
+  cell_new "$cell" "$url"
   if [ -n "$BROWSER_HOMES_PORT" ]; then
     port=$((BROWSER_HOMES_PORT + 3 * ${#BROWSER_HOMES[@]}))
     cell_hostname "$cell" "$host" "$port" "$((port + 1))" "$((port + 2))"

@@ -79,7 +79,7 @@ func sgStandIn(t *testing.T, status string) string {
 func prepare(t *testing.T) (bool, string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	continued, err := prepareMachine(context.Background(), []string{"--access=local"}, &out, &out)
+	continued, err := prepareMachine(context.Background(), []string{"--no-pull"}, &out, &out)
 	return continued, out.String(), err
 }
 
@@ -140,7 +140,7 @@ func TestInitInstallsThroughOneSudoAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(sg), "docker\n-c\n"+shellQuote([]string{self, "init", "--access=local"})+"\n"; got != want {
+	if got, want := string(sg), "docker\n-c\n"+shellQuote([]string{self, "init", "--no-pull"})+"\n"; got != want {
 		t.Errorf("sg ran %q, want %q", got, want)
 	}
 }
