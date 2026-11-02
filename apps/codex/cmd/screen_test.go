@@ -240,25 +240,6 @@ func TestScreenOffRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 }
 
-// initProjectOnScreen makes the working directory a new project for cyfr
-// init, with a compose file and the fake engine, on a machine that can
-// show CYFR, at a terminal, whose Docker answers this account.
-func initProjectOnScreen(t *testing.T) (*standIn, *fakeStack) {
-	t.Helper()
-	dir, err := filepath.EvalSymlinks(newInitProject(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(dir)
-	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	engine := useFakeEngine(t)
-	s := standInMachine(t)
-	s.reachable = true
-	return s, engine
-}
-
 // screenQuestion is init's screen question, as the terminal shows it.
 const screenQuestion = "This machine has no desktop. Show CYFR on its screen?\n" +
 	"  1. Yes. At power-on this screen shows CYFR full screen, with an on-screen keyboard.\n" +
