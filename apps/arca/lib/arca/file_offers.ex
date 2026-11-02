@@ -10,7 +10,9 @@ defmodule Arca.FileOffers do
 
   `offer/3` takes the sender's actor, the recipient's person id and files
   under `data/`. The two must sit together in an active athanor
-  (`Arca.Members.shared_athanor?/3`, asked under the platform's actor).
+  (`Arca.Members.shared_athanor?/3`) or an active shared thread
+  (`Arca.SharedThreadMembers.together?/3`), each asked under the
+  platform's actor.
   Each file's bytes are copied at once into the sender's reserved
   `payloads/offers/<offer id>/`, a snapshot counted against the sender's
   storage cap, and one `file_offers` row per file, in the sender's
@@ -195,10 +197,11 @@ defmodule Arca.FileOffers do
   `{:error, :duplicate_filename}` for two files of one name;
   `{:error, {:too_large, filename}}` for a file over
   `Arca.Files.max_write/0`; `{:error, :not_shared}` when the two share no
-  active athanor; the sender's storage cap's refusal; and a read's own
+  active athanor and no active shared thread; the sender's storage cap's refusal; and a read's own
   error. The rows are written under the two people's and the sender's
   athanor's locks, the head of `Arca.SecurityTransitions`' one order, and
-  only once those are still active and still share an athanor: a denial
+  only once those are still active and still share an athanor or a
+  thread: a denial
   or an archive in flight is waited for, and an offer it overtook is
   refused, `{:error, :denied}` for the sender, `{:error, :not_shared}`
   for the recipient and `{:error, :athanor_archived}` for the sender's
@@ -804,9 +807,13 @@ defmodule Arca.FileOffers do
   defp segments(_path), do: :error
 
   defp shared(sender, recipient) do
-    case Arca.Members.shared_athanor?(Prima.Actor.system(), sender, recipient) do
+    server = Prima.Actor.system()
+
+    with {:ok, false} <- Arca.Members.shared_athanor?(server, sender, recipient),
+         {:ok, false} <- Arca.SharedThreadMembers.together?(server, sender, recipient) do
+      {:error, :not_shared}
+    else
       {:ok, true} -> :ok
-      {:ok, false} -> {:error, :not_shared}
       {:error, _} = error -> error
     end
   end

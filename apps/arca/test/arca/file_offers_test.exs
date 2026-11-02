@@ -337,6 +337,40 @@ defmodule Arca.FileOffersTest do
       assert {:ok, []} = FileOffers.outbox(sender)
     end
 
+    test "an offer to a person the sender shares only an active shared thread with is made; " <>
+           "once the thread is archived, or one of them left it, it is refused",
+         %{sender: sender, stranger: stranger} do
+      server = Prima.Actor.system()
+      source!(sender, "a.txt", "x")
+
+      {:ok, thread} =
+        Arca.SharedThreads.create(server, %{title: "Offers", created_by: sender.user_id})
+
+      {:ok, _} =
+        Arca.SharedThreadMembers.seat(server, thread.id, stranger.user_id, sender.user_id)
+
+      assert {:ok, %{offer_id: offer_id}} =
+               FileOffers.offer(sender, stranger.user_id, ["data/docs/a.txt"])
+
+      assert {:ok, [%{offer_id: ^offer_id}]} = FileOffers.inbox(stranger)
+
+      {:ok, _} = Arca.SharedThreads.archive(server, thread.id, sender.user_id)
+
+      assert {:error, :not_shared} =
+               FileOffers.offer(sender, stranger.user_id, ["data/docs/a.txt"])
+
+      {:ok, other} =
+        Arca.SharedThreads.create(server, %{title: "Again", created_by: sender.user_id})
+
+      {:ok, _} = Arca.SharedThreadMembers.seat(server, other.id, stranger.user_id, sender.user_id)
+      {:ok, _} = Arca.SharedThreadMembers.leave(server, other.id, stranger.user_id)
+
+      assert {:error, :not_shared} =
+               FileOffers.offer(sender, stranger.user_id, ["data/docs/a.txt"])
+
+      assert {:ok, [%{offer_id: ^offer_id}]} = FileOffers.outbox(sender)
+    end
+
     test "an offer from an athanor archived since, or from one with no row, is refused under " <>
            "the lock, and nothing of it stands",
          %{sender: sender, recipient: recipient} do

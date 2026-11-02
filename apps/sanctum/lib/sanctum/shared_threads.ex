@@ -138,6 +138,44 @@ defmodule Sanctum.SharedThreads do
   end
 
   @doc """
+  The thread's newest `count` messages, oldest first, for a person seated
+  in it: what their own AQUA reads of the thread they have open
+  (`Aqua.RoomExcerpt`).
+  """
+  @spec tail(String.t(), String.t(), pos_integer()) :: {:ok, [map()]} | {:error, term()}
+  def tail(user_id, thread_id, count)
+      when is_binary(user_id) and is_binary(thread_id) and is_integer(count) and count > 0 do
+    with {:ok, _thread} <- seated(user_id, thread_id) do
+      case Arca.SharedMessages.latest(server(), thread_id, count) do
+        {:ok, rows} -> {:ok, Enum.map(rows, &message/1)}
+        {:error, reason} -> unavailable(reason)
+      end
+    end
+  end
+
+  @doc """
+  The people `user_id` sits with in an active thread, as `%{user_id,
+  display_name, email}`, each once and never `user_id` themself, ordered
+  by name: whom a person may pair with or offer a copy of a file to. An
+  invitation is no seat and an archived thread is no place to share. A
+  read the store cannot answer is `{:error, :database_error}`, never a
+  shorter list.
+  """
+  @spec people_in_threads_with(String.t()) ::
+          {:ok, [%{user_id: String.t(), display_name: String.t() | nil, email: String.t() | nil}]}
+          | {:error, :database_error}
+  def people_in_threads_with(user_id) when is_binary(user_id) and user_id != "" do
+    case Arca.SharedThreadMembers.people_with(server(), user_id) do
+      {:ok, people} ->
+        {:ok, Enum.sort_by(people, &{&1.display_name || &1.email || "", &1.user_id})}
+
+      {:error, reason} ->
+        Logger.error("[Sanctum.SharedThreads] the store did not answer: #{inspect(reason)}")
+        {:error, :database_error}
+    end
+  end
+
+  @doc """
   The bytes of the file `stored_name` that message `message_id` of the
   thread carries, with its name and type, for a person seated in the
   thread: what a download serves.
@@ -416,17 +454,25 @@ defmodule Sanctum.SharedThreads do
   Post `content` with `files` in the thread as `user_id`, a member: the
   files are stored first, under the message's own id, and the message
   lands after them; a message that does not land leaves none of its files.
+  `aloud`, given by `Aqua.Aloud` alone, is the provenance of a line said
+  aloud from the person's own thread (`"aloud_from"`, and `"shared_agent"`
+  when the words were their assistant's), kept in the message's payload.
   """
-  @spec post(String.t(), String.t(), String.t(), [file()]) :: {:ok, map()} | {:error, term()}
-  def post(user_id, thread_id, content, files \\ [])
-      when is_binary(user_id) and is_binary(thread_id) and is_list(files) do
+  @spec post(String.t(), String.t(), String.t() | nil, [file()], map()) ::
+          {:ok, map()} | {:error, term()}
+  def post(user_id, thread_id, content, files \\ [], aloud \\ %{})
+      when is_binary(user_id) and is_binary(thread_id) and is_list(files) and is_map(aloud) do
     message_id = Prima.UUID7.generate_id("shm")
 
     with :ok <- said(content, files),
          :ok <- bounded(files),
          {:ok, _thread} <- seated(user_id, thread_id),
          {:ok, refs} <- store(thread_id, message_id, files) do
-      payload = if refs == [], do: nil, else: %{"attachments" => refs}
+      payload =
+        aloud
+        |> Map.take(["aloud_from", "shared_agent"])
+        |> then(&if(refs == [], do: &1, else: Map.put(&1, "attachments", refs)))
+        |> then(&if(&1 == %{}, do: nil, else: &1))
 
       case Arca.SharedMessages.append(server(), thread_id, %{
              id: message_id,

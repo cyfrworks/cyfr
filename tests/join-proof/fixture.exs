@@ -17,14 +17,11 @@
 #       `{confirmation_required: secret}` (which the caller keeps to
 #       itself), or `{error}`.
 #
-#   group TOKEN NAME
-#       A group athanor of the session TOKEN's person: `{athanor_id,
-#       slug}`.
-#
 #   person IDENTIFIER
 #       The person this home admitted under IDENTIFIER: their row's
-#       provenance, their memberships here, the shared threads they sit
-#       in (`threads`), their sessions (the athanor
+#       provenance, their memberships here, their own athanor here by its
+#       route (`athanor_route`), the shared threads they sit in
+#       (`threads`), their sessions (the athanor
 #       each is bound to and the `key_epoch` it records) and their
 #       passkeys here (state and the recovery epoch each is bound to), or
 #       `{none: true}`.
@@ -33,12 +30,13 @@
 #       The person's one pending passkey registration here: its id and
 #       its registration digest, which an administrator authorizes.
 #
-#   post USER_ID ATHANOR_ID TEXT
-#       A message of TEXT by the person in a thread of ATHANOR_ID, written
-#       only while they hold a seat there: `{thread_id}` or `{refused}`.
+#   post USER_ID THREAD_ID TEXT
+#       A message of TEXT by the person in the shared thread THREAD_ID,
+#       posted under their seat there (`Sanctum.SharedThreads.post/3`):
+#       `{message_id}` or `{refused}`.
 #
-#   read ATHANOR_ID THREAD_ID
-#       The thread's messages, as `{texts: [...]}`.
+#   read THREAD_ID
+#       The shared thread's messages, as `{texts: [...]}`.
 #
 #   tables
 #       The tables of this home's database.
@@ -114,11 +112,6 @@ fn args ->
           answer.(%{error: refusal.(reason)})
       end
 
-    ["group", token, name] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, name)
-      answer.(%{athanor_id: athanor.id, slug: athanor.slug})
-
     ["person", identifier] ->
       case Arca.PersonIdentities.lookup_identifier(system, identifier) do
         {:ok, identity} ->
@@ -157,10 +150,19 @@ fn args ->
               )
             )
 
+          athanor_route =
+            with {:ok, id} <- Sanctum.Tenancy.Users.personal_athanor_id(user_id),
+                 {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(id) do
+              Sanctum.Tenancy.Athanors.route_slug(athanor)
+            else
+              _none -> nil
+            end
+
           answer.(%{
             user_id: user_id,
             provenance: identity.provenance,
             memberships: Enum.sort(memberships),
+            athanor_route: athanor_route,
             threads: Enum.sort(threads),
             sessions: sessions,
             passkeys: passkeys
@@ -182,26 +184,15 @@ fn args ->
         row -> answer.(%{passkey_id: row.id, registration_digest: row.registration_digest})
       end
 
-    ["post", user_id, athanor_id, text] ->
-      case Sanctum.Tenancy.Members.active_seat(user_id, athanor_id) do
-        {:ok, _seat} ->
-          actor = %Prima.Actor{user_id: user_id, athanor_id: athanor_id, authenticated: true}
-          {:ok, thread} = Arca.ThreadStorage.create(actor)
-          {:ok, _} = Arca.ThreadStorage.append(actor, thread.id, %{author: user_id, content: text})
-          answer.(%{thread_id: thread.id})
-
-        _none ->
-          answer.(%{refused: "not_member"})
+    ["post", user_id, thread_id, text] ->
+      case Sanctum.SharedThreads.post(user_id, thread_id, text) do
+        {:ok, message} -> answer.(%{message_id: message.id})
+        {:error, reason} -> answer.(%{refused: refusal.(reason)})
       end
 
-    ["read", athanor_id, thread_id] ->
-      messages =
-        case Arca.ThreadStorage.messages(Prima.Actor.in_athanor(athanor_id), thread_id) do
-          {:ok, messages} -> messages
-          messages when is_list(messages) -> messages
-        end
-
-      answer.(%{texts: Enum.map(messages, &Map.get(&1, :content))})
+    ["read", thread_id] ->
+      {:ok, messages} = Arca.SharedMessages.list(system, thread_id)
+      answer.(%{texts: Enum.map(messages, & &1.content)})
 
     ["tables"] ->
       names =

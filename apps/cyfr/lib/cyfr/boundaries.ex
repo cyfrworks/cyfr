@@ -361,8 +361,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Notify Sanctum.Provisioning
-        Sanctum.Refusals Sanctum.RunningTasks Sanctum.Tenancy Sanctum.ToolGrants
-        Sanctum.VirtualTools
+        Sanctum.Refusals Sanctum.RunningTasks Sanctum.SharedThreads Sanctum.Tenancy
+        Sanctum.ToolGrants Sanctum.VirtualTools
       ),
       reason:
         "`Sanctum.ToolGrants` holds the standing answers a person gave, which are " <>
@@ -384,6 +384,10 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.RunningTasks` cancels and releases a call a turn runs, and " <>
           "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
           "declares the assistant's virtual tools, which its hands, kinds and policy read. " <>
+          "`Sanctum.SharedThreads` is the one place the person's own assistant meets a " <>
+          "shared thread, under the person's own seat: the excerpt a turn reads of the " <>
+          "thread open beside it (`Aqua.RoomExcerpt`) and a line said aloud into one " <>
+          "(`Aqua.Aloud`). " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -595,7 +599,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Pairing
         Sanctum.Passkeys Sanctum.PolicyLog
         Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
-        Sanctum.SignIn
+        Sanctum.SharedThreads Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
@@ -607,6 +611,11 @@ defmodule Cyfr.Boundaries do
           "ingress — a wide roster is the entry point doing its job. " <>
           "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
           "public profile (`Sanctum.Consent.profiles/2`). " <>
+          "`Sanctum.SharedThreads` is the shared-thread download's seat check and read " <>
+          "(`PrismWeb.SharedAttachmentController`, `attachment/4`), the chat's and the " <>
+          "files page's read of the people a person shares a thread with " <>
+          "(`people_in_threads_with/1`), and the pane's per-file bound (`limits/0`); every " <>
+          "change of a thread goes through the `shared_thread` tool. " <>
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
           "control and never decides: the operation a confirmation dispatches decides. " <>
@@ -2089,6 +2098,14 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
+    "Sanctum.SharedThreads" => [
+      attachment: 4,
+      get: 2,
+      limits: 0,
+      people_in_threads_with: 1,
+      post: 5,
+      tail: 3
+    ],
     "Sanctum.SignIn" => [
       link_ticket: 2,
       record_claim: 2,
@@ -2282,6 +2299,13 @@ defmodule Cyfr.Boundaries do
       why:
         "the session cookie for who, the URL's athanor for where, focused in the " <>
           "controller exactly as a LiveView mount focuses it"
+    },
+    browser_seat_handler: %{
+      admits: :session,
+      why:
+        "the session cookie for who, and that person's seat in the URL's shared thread " <>
+          "for where, read in the controller through `Sanctum.SharedThreads`; no athanor " <>
+          "is focused, since a shared thread is no athanor's"
     },
     public_oauth_state: %{
       admits: :flow_state,

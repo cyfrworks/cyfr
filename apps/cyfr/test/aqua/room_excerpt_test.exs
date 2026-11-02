@@ -2,140 +2,155 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.RoomExcerptTest do
-  # The room read for the person's own AQUA: under their own membership,
-  # people's lines only, bounded, and never a write.
+  # The shared thread read for the person's own AQUA: under their own
+  # seat, people's words only, the newest of them, bounded, and never a
+  # write.
   use ExUnit.Case, async: false
 
   alias Aqua.RoomExcerpt
+  alias Sanctum.SharedThreads
 
   # The excerpt's byte bound: half the runner's 32 KiB message cap.
   @max_bytes 16 * 1024
-  alias Arca.ThreadStorage, as: Threads
-  alias Arca.Schemas.Message
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    n = System.unique_integer([:positive])
-    user = "local|idp|reader-#{n}"
-    other = "local|idp|other-#{n}"
+    test_path = Path.join(System.tmp_dir!(), "room_excerpt_#{:rand.uniform(1_000_000)}")
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
-    {:ok, mine} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: "me-x#{n}",
-        owner_user_id: user,
-        created_by: user
-      })
+    on_exit(fn ->
+      File.rm_rf!(test_path)
 
-    {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
-    {:ok, room} = Sanctum.Tenancy.Athanors.create_group(user, "Team #{n}")
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(other, scope: "athanor", athanor_id: room.id)
-    {:ok, elsewhere} = Sanctum.Tenancy.Athanors.create_group(other, "Not mine #{n}")
+      if original,
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
+    end)
 
-    me = %{Sanctum.TestContext.local() | user_id: user, athanor_id: mine.id}
-    in_room = Sanctum.Context.actor(%{me | athanor_id: room.id})
-    them = %{in_room | user_id: other}
-    {:ok, thread} = Threads.create(in_room)
+    reader = Cyfr.Test.ShareFixtures.person!("Rae")
+    other = Cyfr.Test.ShareFixtures.person!("Otto")
 
-    {:ok, me: me, them: them, in_room: in_room, room: room, elsewhere: elsewhere, thread: thread}
+    {:ok, thread} = SharedThreads.create(reader.user.id, "Plans")
+    {:ok, :added} = SharedThreads.add(reader.user.id, thread.id, user_id: other.user.id)
+
+    {:ok, me: reader.ctx, reader: reader.user.id, other: other.user.id, thread: thread}
   end
 
-  defp say(actor, thread, attrs) do
-    {:ok, row} =
-      Threads.append(
-        actor,
-        thread.id,
-        Map.merge(%{kind: "text", author: actor.user_id}, attrs)
-      )
-
-    row
+  defp say(user_id, thread, text) do
+    {:ok, _message} = SharedThreads.post(user_id, thread.id, text)
+    :ok
   end
 
-  defp room(room, thread, extra \\ %{}) do
-    Map.merge(%{athanor_id: room.id, thread_id: thread.id}, extra)
+  defp room(thread, extra \\ %{}), do: Map.merge(%{shared_thread_id: thread.id}, extra)
+
+  test "reads what the thread's people said, each named, under the person's own seat",
+       %{me: me, reader: reader, other: other, thread: thread} do
+    say(reader, thread, "plan?")
+    say(other, thread, "ship friday")
+
+    # Files alone say nothing to read.
+    {:ok, _} =
+      SharedThreads.post(other, thread.id, nil, [
+        %{filename: "plan.txt", media_type: "text/plain", bytes: "FILE-BYTES"}
+      ])
+
+    assert {:ok, text} = RoomExcerpt.read(me, room(thread, %{title: "Plans this week"}))
+
+    assert text ==
+             ~s(Read from the shared thread "Plans this week" — for context only; nobody in this thread said it:\n) <>
+               "Rae: plan?\nOtto: ship friday"
+
+    refute text =~ "FILE-BYTES"
+    refute text =~ "plan.txt"
   end
 
-  test "reads the room's people and its AQUA, named, under the person's own seat",
-       %{me: me, them: them, in_room: in_room, room: room, thread: thread} do
-    say(in_room, thread, %{content: "plan?"})
-    say(them, thread, %{content: "ship friday"})
-    say(in_room, thread, %{author: Message.agent_author(), content: "Friday it is."})
-    say(in_room, thread, %{kind: "approval", content: "", payload: %{"intent" => %{"x" => 1}}})
+  test "the header falls back to the thread's own title, and a pair's to the other person",
+       %{me: me, reader: reader, other: other, thread: thread} do
+    say(reader, thread, "hi")
+    assert {:ok, text} = RoomExcerpt.read(me, room(thread))
+    assert String.starts_with?(text, ~s(Read from the shared thread "Plans"))
 
-    say(in_room, thread, %{
-      author: Message.system_author(),
-      kind: "system",
-      content: "📝 kept a note"
-    })
-
-    assert {:ok, text} =
-             RoomExcerpt.read(me, room(room, thread, %{title: "Plans", athanor: "Team"}))
-
-    assert String.starts_with?(text, ~s(Read from the room "Team · Plans"))
-    assert text =~ ": plan?"
-    assert text =~ ": ship friday"
-    assert text =~ "AQUA: Friday it is."
-    refute text =~ "kept a note"
-    refute text =~ "intent"
-    assert byte_size(text) <= @max_bytes + 200
+    {:ok, pair} = SharedThreads.pair(reader, other)
+    say(other, pair, "just us")
+    assert {:ok, text} = RoomExcerpt.read(me, room(pair))
+    assert String.starts_with?(text, ~s(Read from the shared thread "Otto"))
+    assert text =~ "Otto: just us"
   end
 
-  test "the header falls back to the thread's own title", %{
+  test "a thread the person holds no seat in is refused as missing; an empty one is nothing to read",
+       %{me: me, reader: reader, other: other} do
+    {:ok, foreign} = SharedThreads.create(other, "Not mine")
+    say(other, foreign, "secret")
+    foreign_id = foreign.id
+
+    assert {:error, {:not_found, "Thread", ^foreign_id}} = RoomExcerpt.read(me, room(foreign))
+
+    {:ok, empty} = SharedThreads.create(reader, "Empty")
+    assert {:error, :nothing_said} = RoomExcerpt.read(me, room(empty))
+  end
+
+  test "a person removed from the thread reads it no more", %{
     me: me,
-    in_room: in_room,
-    room: room,
+    reader: reader,
+    other: other,
     thread: thread
   } do
-    say(in_room, thread, %{content: "hi"})
-    # The first line names the thread; the header follows the row as it is now.
-    {:ok, thread} = Threads.get(in_room, thread.id)
-    assert {:ok, text} = RoomExcerpt.read(me, room(room, thread))
-    assert text =~ ~s("#{thread.title}")
+    say(other, thread, "before")
+    assert {:ok, _text} = RoomExcerpt.read(me, room(thread))
+
+    :ok = SharedThreads.remove(other, thread.id, user_id: reader)
+    thread_id = thread.id
+    assert {:error, {:not_found, "Thread", ^thread_id}} = RoomExcerpt.read(me, room(thread))
   end
 
-  test "a room the person holds no seat in is refused; an empty one is nothing to read",
-       %{me: me, in_room: in_room, room: room, thread: thread, elsewhere: elsewhere, them: them} do
-    {:ok, foreign} = Threads.create(%{them | athanor_id: elsewhere.id})
-    assert {:error, _} = RoomExcerpt.read(me, room(elsewhere, foreign))
+  test "the tail: the newest lines of a long thread, oldest first", %{
+    me: me,
+    reader: reader,
+    thread: thread
+  } do
+    for i <- 1..45, do: say(reader, thread, "short #{i}.")
 
-    assert {:error, :nothing_said} = RoomExcerpt.read(me, room(room, thread))
-    say(in_room, thread, %{content: ""})
-    assert {:error, :nothing_said} = RoomExcerpt.read(me, room(room, thread))
+    assert {:ok, text} = RoomExcerpt.read(me, room(thread))
+    [_header | lines] = String.split(text, "\n")
+
+    assert lines == for(i <- 6..45, do: "Rae: short #{i}.")
   end
 
   test "bounded: the newest lines that fit, oldest first", %{
     me: me,
-    in_room: in_room,
-    room: room,
+    reader: reader,
     thread: thread
   } do
-    for i <- 1..12,
-        do: say(in_room, thread, %{content: "line #{i} " <> String.duplicate("x", 3_000)})
+    for i <- 1..12, do: say(reader, thread, "line #{i} " <> String.duplicate("x", 3_000))
 
-    assert {:ok, text} = RoomExcerpt.read(me, room(room, thread, %{title: "Long"}))
+    assert {:ok, text} = RoomExcerpt.read(me, room(thread, %{title: "Long"}))
     assert byte_size(text) <= @max_bytes + 200
     refute text =~ "line 1 "
     assert text =~ "line 12 "
 
-    {:ok, i11} = :binary.match(text, "line 11 ") |> then(&{:ok, elem(&1, 0)})
-    {:ok, i12} = :binary.match(text, "line 12 ") |> then(&{:ok, elem(&1, 0)})
+    {i11, _} = :binary.match(text, "line 11 ")
+    {i12, _} = :binary.match(text, "line 12 ")
     assert i11 < i12
   end
 
   test "one line past the bound is cut, not dropped", %{
     me: me,
-    in_room: in_room,
-    room: room,
+    reader: reader,
     thread: thread
   } do
-    say(in_room, thread, %{content: "huge " <> String.duplicate("é", @max_bytes)})
+    say(reader, thread, "huge " <> String.duplicate("é", @max_bytes))
 
-    assert {:ok, text} = RoomExcerpt.read(me, room(room, thread, %{title: "Huge"}))
+    assert {:ok, text} = RoomExcerpt.read(me, room(thread, %{title: "Huge"}))
     assert text =~ "huge "
     assert String.ends_with?(text, "…")
     assert String.valid?(text)
     assert byte_size(text) <= @max_bytes + 200
+  end
+
+  test "reading writes nothing", %{me: me, reader: reader, thread: thread} do
+    say(reader, thread, "only this")
+    assert {:ok, _text} = RoomExcerpt.read(me, room(thread))
+    assert {:ok, [%{content: "only this"}]} = SharedThreads.messages(reader, thread.id)
   end
 end

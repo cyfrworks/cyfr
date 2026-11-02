@@ -1039,21 +1039,18 @@ defmodule Aqua.LoopTest do
     assert roots() == before
   end
 
-  test "the room excerpt reaches the model and never the retained input", %{
+  test "the shared thread's excerpt reaches the model and never the retained input", %{
     ctx: ctx,
     thread: thread
   } do
-    # The room is read under the person's own seat.
+    # The shared thread is read under the person's own seat in it.
+    {ctx, _user} = Sanctum.TestContext.person!(ctx)
+
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-    {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
-
-    {:ok, _} =
-      Threads.append(Sanctum.Context.actor(ctx), room.id, %{
-        author: ctx.user_id,
-        content: "ROOM-ONLY-LINE"
-      })
+    {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
+    {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "ROOM-ONLY-LINE")
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
@@ -1061,7 +1058,7 @@ defmodule Aqua.LoopTest do
         turn: %{
           agent: "aqua",
           requested_by: ctx.user_id,
-          options: %{"room" => %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}}
+          options: %{"room" => %{"shared_thread_id" => beside.id, "title" => "Beside"}}
         }
       })
 

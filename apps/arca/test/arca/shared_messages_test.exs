@@ -9,7 +9,7 @@ defmodule Arca.SharedMessagesTest do
   refused in an archived or unknown thread, for an author who is not a
   person or not seated in the thread, and for an id that is not a
   message's; read oldest first, after a `seq` and by the
-  page. The baseline holds one message per `seq` in a thread, and many
+  page, or its newest by the page (`latest/3`). The baseline holds one message per `seq` in a thread, and many
   appending at once each land on a `seq` of their own
   (`Arca.SharedMessagesRaceTest`). Every function is the platform's and
   refuses an athanor's actor.
@@ -134,6 +134,38 @@ defmodule Arca.SharedMessagesTest do
     end
   end
 
+  describe "latest/3" do
+    test "reads the newest messages, oldest first, however long the thread", %{
+      by: by,
+      thread: thread
+    } do
+      for n <- 1..5,
+          do:
+            {:ok, _} = SharedMessages.append(server(), thread.id, %{author: by, content: "#{n}"})
+
+      assert {:ok, tail} = SharedMessages.latest(server(), thread.id, 3)
+      assert Enum.map(tail, & &1.seq) == [3, 4, 5]
+      assert Enum.map(tail, & &1.content) == ~w(3 4 5)
+
+      assert {:ok, all} = SharedMessages.latest(server(), thread.id, 10)
+      assert Enum.map(all, & &1.seq) == [1, 2, 3, 4, 5]
+
+      assert {:ok, []} = SharedMessages.latest(server(), "sth_nobody", 3)
+    end
+
+    test "reads at most a page, the newest of it", %{by: by, thread: thread} do
+      max = SharedMessages.max_page()
+
+      for n <- 1..(max + 1),
+          do:
+            {:ok, _} = SharedMessages.append(server(), thread.id, %{author: by, content: "#{n}"})
+
+      assert {:ok, tail} = SharedMessages.latest(server(), thread.id, max + 1)
+      assert length(tail) == max
+      assert Enum.map(tail, & &1.seq) == Enum.to_list(2..(max + 1))
+    end
+  end
+
   test "the baseline holds one message per seq in a thread", %{by: by, thread: thread} do
     {:ok, _} = SharedMessages.append(server(), thread.id, %{author: by, content: "first"})
 
@@ -168,6 +200,7 @@ defmodule Arca.SharedMessagesTest do
              SharedMessages.append(actor, thread.id, %{author: by, content: "x"})
 
     assert {:error, :cross_tenant} = SharedMessages.list(actor, thread.id)
+    assert {:error, :cross_tenant} = SharedMessages.latest(actor, thread.id, 3)
     assert {:ok, []} = SharedMessages.list(server(), thread.id)
   end
 end

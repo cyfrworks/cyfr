@@ -255,20 +255,19 @@ PY
     h_setup)
       identifier="$(asked "$ask" identifier)"
       allowed="$(admin_console door/allow "{\"value\":\"$identifier\",\"note\":\"join proof\"}")"
-      group="$(join_fixture "$H" group "@$SECRETS/admin-token" "Household")"
-      pair="$(join_fixture "$H" group "@$SECRETS/admin-token" "Pair")"
-      invited_group="$(admin_console member/add "{\"athanor\":\"$(field "$group" athanor_id)\",\"identifier\":\"$identifier\"}")"
-      invited_pair="$(admin_console member/add "{\"athanor\":\"$(field "$pair" athanor_id)\",\"identifier\":\"$identifier\"}")"
+      # A shared thread the operator makes, Household, with the person's
+      # identifier invited: their seat once they sign in here.
+      household="$(admin_console shared_thread/create '{"title":"Household"}')"
+      invited="$(admin_console shared_thread/add "{\"thread\":\"$(field "$household" ok id)\",\"identifier\":\"$identifier\"}")"
       directory="$(join_fixture "$H" directory)"
       a_directory="$(join_fixture "$A" directory)"
-      ANSWER="$(python3 - "$allowed" "$group" "$pair" "$invited_group" "$invited_pair" "$directory" "$a_directory" <<'PY'
+      ANSWER="$(python3 - "$allowed" "$household" "$invited" "$directory" "$a_directory" <<'PY'
 import json, sys
-allowed, group, pair, ig, ip, directory, a_directory = (json.loads(a) for a in sys.argv[1:])
+allowed, household, invited, directory, a_directory = (json.loads(a) for a in sys.argv[1:])
 print(json.dumps({
     "allowed": "ok" in allowed, "allow_answer": allowed if "ok" not in allowed else None,
-    "group": group, "pair": pair,
-    "invited_group": "ok" in ig, "invited_pair": "ok" in ip,
-    "invite_answers": [a for a in (ig, ip) if "ok" not in a],
+    "household": (household.get("ok") or {}).get("id"),
+    "invited": "ok" in invited, "invite_answer": None if "ok" in invited else invited,
     "directory": directory["directory_url"], "a_directory": a_directory["directory_url"],
 }))
 PY
@@ -336,14 +335,20 @@ print(json.dumps({'entries': [{k: e.get(k) for k in ('kind', 'value', 'effect', 
       ANSWER="$(admin_console passkey/recover_admin "$(cat "$WORK/recover-args")" confirmed)"
       rm -f "$SECRETS/confirmation"
       ;;
+    pair)
+      # The pair of the operator and the person, who share Household,
+      # found or made by the operator.
+      ANSWER="$(admin_console shared_thread/pair "{\"user\":\"$(asked "$ask" user_id)\"}" |
+        python3 -c "import json, sys; a = json.load(sys.stdin); print(json.dumps({'thread_id': (a.get('ok') or {}).get('id'), 'answer': None if 'ok' in a else a}))")"
+      ;;
     post)
-      ANSWER="$(join_fixture "$H" post "$(asked "$ask" user_id)" "$(asked "$ask" athanor_id)" "$(asked "$ask" text)")"
+      ANSWER="$(join_fixture "$H" post "$(asked "$ask" user_id)" "$(asked "$ask" thread_id)" "$(asked "$ask" text)")"
       ;;
     read)
-      ANSWER="$(join_fixture "$H" read "$(asked "$ask" athanor_id)" "$(asked "$ask" thread_id)")"
+      ANSWER="$(join_fixture "$H" read "$(asked "$ask" thread_id)")"
       ;;
     remove)
-      ANSWER="$(admin_console member/remove "{\"athanor\":\"$(asked "$ask" athanor_id)\",\"identifier\":\"$(asked "$ask" identifier)\"}")"
+      ANSWER="$(admin_console shared_thread/remove "{\"thread\":\"$(asked "$ask" thread_id)\",\"identifier\":\"$(asked "$ask" identifier)\"}")"
       ;;
     certifications)
       cell="$WORK/$(asked "$ask" cell)"

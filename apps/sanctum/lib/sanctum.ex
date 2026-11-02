@@ -111,6 +111,7 @@ defmodule Sanctum do
       Resources,
       RunningTasks,
       Session,
+      SharedThreads,
       Shares,
       SignIn,
       Tenancy,

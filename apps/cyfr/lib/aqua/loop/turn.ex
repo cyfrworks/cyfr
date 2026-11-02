@@ -393,16 +393,9 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  defp excerpt(ctx, %{
-         "room" => %{"athanor_id" => athanor_id, "thread_id" => thread_id} = room
-       })
-       when is_binary(athanor_id) and is_binary(thread_id) do
-    case Aqua.RoomExcerpt.read(ctx, %{
-           athanor_id: athanor_id,
-           thread_id: thread_id,
-           athanor: room["athanor"],
-           title: room["title"]
-         }) do
+  defp excerpt(ctx, %{"room" => %{"shared_thread_id" => thread_id} = room})
+       when is_binary(thread_id) do
+    case Aqua.RoomExcerpt.read(ctx, %{shared_thread_id: thread_id, title: room["title"]}) do
       {:ok, text} -> text
       {:error, _} -> nil
     end

@@ -19,33 +19,35 @@ defmodule Aqua.Aloud do
 
   ## What it refuses, and why
 
-    * A source you cannot read, or a target you cannot write. Membership in
-      both athanors, checked separately — sharing is not a way to reach an
-      athanor you are not in, and there is **no operator bypass**: a
-      platform administrator holds no seat by the capability and focuses
-      only where they are a member, and a copy belongs to members alone.
+    * A source you cannot read, or a target you do not sit in. The source
+      is a thread of the athanor you are a member of; the target is a
+      shared thread you hold a seat in (`Sanctum.SharedThreads`, which
+      answers a thread you do not sit in as a missing one). There is **no
+      operator bypass**: a platform administrator holds no seat by the
+      capability, and a copy belongs to the people of the thread alone.
     * A line that is not YOURS. You say aloud what you said — every
       selected message must be authored by the caller, or the verb would
       let one person speak another's words under their own name. One
       extension: a line your own assistant said to you, in your own
       athanor, is yours to share — it was said to nobody else. The copy
       says so (`shared_agent: true` in its payload) and is attributed to
-      you, never to the assistant. A room's assistant's lines belong to
-      the room and stay refused.
+      you, never to the assistant. Any other athanor's assistant's lines
+      stay refused.
     * A copy into the SAME thread. Nothing to say aloud; the line is
       already there.
 
-  Attachments are copied as **bytes** into the target athanor's own tree. A
-  reference left pointing at the source would be a link into your private
-  storage handed to everyone in the room — the read would fail for them if
-  the boundary held, and leak if it did not. Copying is the only version of
-  this that is both honest and reachable, and it is charged to the target
-  athanor's quota like any other upload.
+  Attachments are copied as **bytes** into the shared thread's own root
+  (`shared/{thread}/…`). A reference left pointing at the source would be
+  a link into your private storage handed to everyone in the thread —
+  the read would fail for them if the boundary held, and leak if it did
+  not. Copying is the only version of this that is both honest and
+  reachable; a shared thread's files are bounded per file alone.
   """
 
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Attachments
   alias Sanctum.Context
+  alias Sanctum.SharedThreads
   alias Sanctum.Tenancy.{Members, Users}
 
   @agent_author Prima.Author.agent()
@@ -59,22 +61,20 @@ defmodule Aqua.Aloud do
           | term()
 
   @doc """
-  Copy `message_ids` from the thread the caller is in onto a thread in
-  `target_athanor_id`, attributed to the caller.
+  Copy `message_ids` from the thread the caller is in onto the shared
+  thread `target_id`, attributed to the caller.
 
   The source is read under `ctx` as it stands — the athanor you are already
-  focused on, tenant-keyed like every other read. The **target athanor is
-  named**, because a thread id alone would need a lookup that spans
-  tenants, and there is no such read in this system by design.
+  focused on, tenant-keyed like every other read. The target is read and
+  written under your own seat in it.
 
-  Returns the appended rows. The originals are untouched — saying something
-  aloud does not move it out of your own thread.
+  Returns the messages posted. The originals are untouched — saying
+  something aloud does not move it out of your own thread.
   """
-  @spec post(Context.t(), String.t(), [String.t()], String.t(), String.t()) ::
-          {:ok, [Aqua.Tape.row()]} | {:error, error()}
-  def post(%Context{} = ctx, source_id, message_ids, target_athanor_id, target_id)
-      when is_binary(source_id) and is_list(message_ids) and
-             is_binary(target_athanor_id) and is_binary(target_id) do
+  @spec post(Context.t(), String.t(), [String.t()], String.t()) ::
+          {:ok, [map()]} | {:error, error()}
+  def post(%Context{} = ctx, source_id, message_ids, target_id)
+      when is_binary(source_id) and is_list(message_ids) and is_binary(target_id) do
     cond do
       source_id == target_id ->
         {:error, :same_thread}
@@ -84,18 +84,9 @@ defmodule Aqua.Aloud do
 
       true ->
         with :ok <- member_of(ctx, ctx.athanor_id),
-             :ok <- member_of(ctx, target_athanor_id),
-             # Membership was just proven for THIS user, so focus finds
-             # their seat — the only thing it admits, an operator's
-             # capability included — and adds the archive refusal a raw
-             # swap skipped: nothing is said aloud into a closed furnace.
-             {:ok, target_ctx} <- Context.focus(ctx, target_athanor_id),
-             {:ok, _} <- Threads.get(Sanctum.Context.actor(target_ctx), target_id),
+             {:ok, _thread} <- seated(ctx, target_id),
              {:ok, rows} <- take(ctx, source_id, message_ids) do
-          copy(ctx, target_ctx, source_id, target_id, rows)
-        else
-          {:error, :not_found} -> {:error, :not_found}
-          other -> other
+          copy(ctx, source_id, target_id, rows)
         end
     end
   end
@@ -104,16 +95,16 @@ defmodule Aqua.Aloud do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # Checked on BOTH sides, and on the source too rather than trusting the
-  # focus: a context is a struct, and this is the one verb that crosses
-  # athanors. The tenant-keyed reads would refuse a foreign thread
-  # anyway; this refuses it by name instead of as a confusing miss.
+  # The source's athanor checked rather than trusting the focus: a context
+  # is a struct, and this is the one verb that carries words out of an
+  # athanor. The tenant-keyed reads would refuse a foreign thread anyway;
+  # this refuses it by name instead of as a confusing miss.
   #
-  # Deliberately NO `platform_admin` arm. The capability is over the
-  # instance and is no seat: `Context.focus/2` refuses an operator in an
-  # athanor they are not in, and letting the capability bypass membership
-  # here would make the copy an export verb into or out of one. An
-  # operator who is not a member is refused like anyone else.
+  # Deliberately NO `platform_admin` arm, here or on the target. The
+  # capability is over the instance and is no seat: letting it bypass
+  # membership would make the copy an export verb out of an athanor or
+  # into a thread. An operator who is not a member is refused like anyone
+  # else.
   defp member_of(%Context{user_id: user_id}, athanor_id)
        when is_binary(user_id) and is_binary(athanor_id) do
     if Members.member?(user_id, athanor_id), do: :ok, else: {:error, :not_a_member}
@@ -160,66 +151,52 @@ defmodule Aqua.Aloud do
 
   defp sayable?(_row, _ctx), do: false
 
-  defp copy(source_ctx, target_ctx, source_id, target_id, rows) do
+  # The shared thread, under the caller's own seat; a thread they do not
+  # sit in answers as a missing one, and an archived one says nothing is
+  # said there any more.
+  defp seated(%Context{user_id: user_id}, target_id) do
+    case SharedThreads.get(user_id, target_id) do
+      {:ok, %{status: "active"} = thread} -> {:ok, thread}
+      {:ok, _archived} -> {:error, {:shared_thread, :archived}}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp copy(ctx, source_id, target_id, rows) do
     Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
-      case say(source_ctx, target_ctx, source_id, target_id, row) do
-        {:ok, appended} -> {:cont, {:ok, [appended | acc]}}
+      case say(ctx, source_id, target_id, row) do
+        {:ok, posted} -> {:cont, {:ok, [posted | acc]}}
         {:error, _} = err -> {:halt, err}
       end
     end)
     |> case do
-      {:ok, appended} -> {:ok, Enum.reverse(appended)}
+      {:ok, posted} -> {:ok, Enum.reverse(posted)}
       other -> other
     end
   end
 
-  # The id is minted first so the blobs can be written under it before the
-  # row exists — the same order `PrismWeb.ThreadPaneLive`
-  # uses, and the reason `append/3` takes an `:id`. The target's viewers
-  # hear of the row the way they hear of the runner's own — the copy has
-  # to appear on the tape it was said onto.
-  defp say(source_ctx, target_ctx, source_id, target_id, row) do
-    message_id = Prima.UUID7.generate_id("msg")
+  # Posted under the caller's seat, files and all: the thread stores the
+  # bytes under the message's own id before the message lands, and keeps
+  # none of them when it does not (`Sanctum.SharedThreads.post/5`).
+  defp say(ctx, source_id, target_id, row) do
+    aloud =
+      %{"aloud_from" => %{"thread_id" => source_id, "message_id" => row.id}}
+      |> put_shared_agent(row)
 
-    with {:ok, files} <- carry(source_ctx, source_id, row),
-         {:ok, refs} <- Attachments.store(target_ctx, target_id, message_id, files) do
-      payload =
-        %{"aloud_from" => %{"thread_id" => source_id, "message_id" => row.id}}
-        |> put_shared_agent(row)
-        |> put_refs(refs)
-
-      case Threads.append(Sanctum.Context.actor(target_ctx), target_id, %{
-             id: message_id,
-             author: target_ctx.user_id || Prima.Author.system(),
-             kind: "text",
-             content: row.content || "",
-             payload: payload
-           }) do
-        {:ok, appended} ->
-          Aqua.Runner.announce(appended)
-          {:ok, appended}
-
-        {:error, _} = err ->
-          # The bytes landed but the row did not: leave nothing behind in
-          # the target athanor's quota.
-          Attachments.discard(target_ctx, target_id, message_id, refs)
-          err
-      end
+    with {:ok, files} <- carry(ctx, source_id, row) do
+      SharedThreads.post(ctx.user_id, target_id, row.content || "", files, aloud)
     end
   end
 
-  defp put_refs(payload, []), do: payload
-  defp put_refs(payload, refs), do: Map.put(payload, "attachments", refs)
-
   # The copy is the person's, attributed to them; the mark says the words
-  # were their assistant's, so a room can render "shared from AQUA".
+  # were their assistant's, so a thread can render "shared from AQUA".
   defp put_shared_agent(payload, %{author: @agent_author}),
     do: Map.put(payload, "shared_agent", true)
 
   defp put_shared_agent(payload, _row), do: payload
 
-  # A message's blobs as upload-shaped files, read out of the source athanor
-  # so `Attachments.store/4` can write them into the target's own tree.
+  # A message's blobs as files, read out of the source athanor so the
+  # shared thread can store them in its own root.
   defp carry(source_ctx, source_id, row) do
     case Attachments.refs_of(row) do
       [] ->
@@ -244,6 +221,6 @@ defmodule Aqua.Aloud do
   end
 
   defp to_file(%{"filename" => name, "media_type" => type, "data" => data}) do
-    %{"filename" => name, "media_type" => type, "bytes" => Base.decode64!(data)}
+    %{filename: name, media_type: type, bytes: Base.decode64!(data)}
   end
 end

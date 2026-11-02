@@ -118,13 +118,15 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-    {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
+    # The sender is a person, seated here and in a shared thread beside
+    # their own thread.
+    {ctx, _user} = Sanctum.TestContext.person!(ctx)
 
     {:ok, _} =
-      Threads.append(Sanctum.Context.actor(ctx), room.id, %{
-        author: ctx.user_id,
-        content: "ROOM-ONLY-LINE"
-      })
+      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+    {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
+    {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "ROOM-ONLY-LINE")
 
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
@@ -141,7 +143,7 @@ defmodule Aqua.Loop.FlushTest do
           agent: "aqua",
           requested_by: ctx.user_id,
           model: @model_id,
-          options: %{"room" => %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}}
+          options: %{"room" => %{"shared_thread_id" => beside.id, "title" => "Beside"}}
         }
       })
 

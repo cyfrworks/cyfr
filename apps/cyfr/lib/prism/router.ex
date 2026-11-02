@@ -267,6 +267,15 @@ defmodule Prism.Router do
           metadata: %{auth: :browser_focus_handler}
       end
 
+      # A shared thread is no athanor's: its files are reached by the
+      # person's seat in it, and no athanor is focused.
+      scope "/shared/:thread", PrismWeb do
+        pipe_through [:attachment, :attachment_throttle]
+
+        get "/attachments/:message_id/:filename", SharedAttachmentController, :show,
+          metadata: %{auth: :browser_seat_handler}
+      end
+
       # Opening an athanor is a link: focus is in the URL, `/a/<athanor>/…` —
       # a person's athanor as `@<namespace>`, a group's by slug — so two tabs
       # can be two athanors. `PrismWeb.Focus` resolves the segment and narrows

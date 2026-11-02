@@ -274,7 +274,7 @@ defmodule Aqua.Loop.RequestTest do
                "content" => [
                  %{"text" => "[Summary of the thread so far]\nWe discussed x."},
                  %{"text" => "new question"},
-                 %{"text" => "## Read from the room\n\nBob: hi"}
+                 %{"text" => "## Read from a shared thread\n\nBob: hi"}
                ]
              }
            ] = Request.messages(rows, excerpt: "Bob: hi")
@@ -329,7 +329,7 @@ defmodule Aqua.Loop.RequestTest do
   # takes it back in both shapes and nothing else.
   describe "without_excerpt/1" do
     test "removes the trailing excerpt block, or the message it alone made" do
-      prefix = "## Read from the room\n\nthey said hi"
+      prefix = "## Read from a shared thread\n\nthey said hi"
 
       appended = %{
         "messages" => [
@@ -362,7 +362,7 @@ defmodule Aqua.Loop.RequestTest do
           %{
             "role" => "user",
             "content" => [
-              %{"type" => "text", "text" => "## Read from the room\n\nmine"},
+              %{"type" => "text", "text" => "## Read from a shared thread\n\nmine"},
               %{"type" => "text", "text" => "then"}
             ]
           }

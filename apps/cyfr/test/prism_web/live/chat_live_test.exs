@@ -312,12 +312,6 @@ defmodule PrismWeb.ChatLiveTest do
     assert html =~ "That athanor cannot be opened just now. Try again shortly."
     refute html =~ "Your session could not be checked"
 
-    # The read-aloud picker's athanor cannot be opened either.
-    html = render_click(view, "aloud_pick_athanor", %{"athanor" => athanor().id})
-    assert html =~ "That athanor cannot be opened just now. Try again shortly."
-    refute html =~ "You are not a member of that athanor."
-    refute html =~ "Your session could not be checked"
-
     Cyfr.Test.Sandbox.end_views()
   end
 
@@ -336,34 +330,42 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a DM opens from the rail, in place", %{conn: conn} do
+  test "a pair opens from the rail with someone you share a thread with, found or made, in place",
+       %{conn: conn} do
     alice = test_user()
     bob = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Pals #{alice.namespace}")
-    alice_conn = log_in_user(conn, alice, athanor_id: group.id)
-    _bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
+    conn = log_in_user(conn, alice, athanor_id: athanor().id)
+    {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
+    {:ok, :added} = Sanctum.SharedThreads.add(alice.user_id, plans.id, user_id: bob.user_id)
 
-    {view, html} = mount_chat(alice_conn, group)
-    # Bob, whom Alice shares an athanor with, is a person she can message.
+    {view, html} = mount_chat(conn)
+    # Bob, whom Alice shares a thread with, is a person she can message.
     assert html =~ "People"
-    assert has_element?(view, "button[phx-click=open_dm][phx-value-user-id='#{bob.user_id}']")
+    person = "button[phx-click=open_dm][phx-value-user-id='#{bob.user_id}']"
+    assert has_element?(view, person)
 
-    view
-    |> element("button[phx-click=open_dm][phx-value-user-id='#{bob.user_id}']")
-    |> render_click()
+    view |> element(person) |> render_click()
 
-    [pair] =
-      Enum.filter(Sanctum.Tenancy.Athanors.list_for_user(alice.user_id), &(&1.roster == "frozen"))
+    {:ok, threads} = Sanctum.SharedThreads.list(alice.user_id)
+    [pair] = for %{kind: "pair"} = thread <- threads, do: thread
+    assert_patch(view, PrismWeb.ChatLive.shared_path(pair.id))
 
-    assert_patch(view, chat_path(pair))
-    assert render(pane(view)) =~ "DM"
-    # The bar names the DM by the other person, never the pair's own "A & B"…
-    bar = find_live_child(view, "topbar")
-    assert has_element?(bar, "#viewing-name", bob.email)
-    refute has_element?(bar, "#viewing-name", alice.email)
-    # …and the session's default athanor did not move.
-    assert {:error, {:live_redirect, %{to: to}}} = live(alice_conn, "/")
-    assert to == chat_path(group)
+    # The rail names the pair by the other person, and its pane is the
+    # shared thread's, no athanor's.
+    bob_name = Sanctum.Tenancy.Users.display_name(bob.user_id)
+    assert has_element?(view, "#shared-thread-#{pair.id} button[aria-current=true]", bob_name)
+    assert find_live_child(view, "shared-pane-" <> pair.id)
+    refute pane(view)
+
+    # A second click finds the same pair.
+    view |> element(person) |> render_click()
+    assert_patch(view, PrismWeb.ChatLive.shared_path(pair.id))
+    {:ok, threads} = Sanctum.SharedThreads.list(alice.user_id)
+    assert [_one] = for(%{kind: "pair"} = thread <- threads, do: thread)
+
+    # The session's default athanor did not move.
+    assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
+    assert to == chat_path(athanor())
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -1162,5 +1164,172 @@ defmodule PrismWeb.ChatLiveTest do
     assert pane_thread(view).id == second.id
 
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  describe "threads with people" do
+    test "the rail lists your athanors' threads, your pairs by the other's name and your shared threads by title, and ?s= opens one under your seat",
+         %{conn: conn} do
+      alice = test_user()
+      bob = test_user()
+      carol = test_user()
+      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
+      {:ok, :added} = Sanctum.SharedThreads.add(alice.user_id, plans.id, user_id: bob.user_id)
+      {:ok, pair} = Sanctum.SharedThreads.pair(alice.user_id, bob.user_id)
+      {:ok, old} = Sanctum.SharedThreads.create(alice.user_id, "Old #{alice.namespace}")
+      {:ok, _} = Sanctum.SharedThreads.archive(alice.user_id, old.id)
+      {:ok, theirs} = Sanctum.SharedThreads.create(carol.user_id, "Theirs #{carol.namespace}")
+
+      {view, html} = mount_chat(conn)
+      assert has_element?(view, "#athanor-" <> athanor().id)
+      assert has_element?(view, "#shared-thread-#{plans.id}", "Plans #{alice.namespace}")
+
+      assert has_element?(
+               view,
+               "#shared-thread-#{pair.id}",
+               Sanctum.Tenancy.Users.display_name(bob.user_id)
+             )
+
+      refute has_element?(view, "#shared-thread-" <> old.id)
+      refute has_element?(view, "#shared-thread-" <> theirs.id)
+      refute html =~ "Theirs #{carol.namespace}"
+      shared_rows = view |> element("#shared-threads") |> render()
+      refute shared_rows =~ ~r/\b(workspace|group|room)s?\b/i
+
+      view |> element("#shared-thread-#{plans.id} button") |> render_click()
+      assert_patch(view, PrismWeb.ChatLive.shared_path(plans.id))
+      shared = find_live_child(view, "shared-pane-" <> plans.id)
+      assert render(shared) =~ "Plans #{alice.namespace}"
+
+      # A thread Alice does not sit in opens nothing, as a missing one.
+      html = render_patch(view, PrismWeb.ChatLive.shared_path(theirs.id))
+      assert html =~ "That thread cannot be opened"
+      refute html =~ "Theirs #{carol.namespace}"
+      refute find_live_child(view, "shared-pane-" <> theirs.id)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "New thread with people makes a thread with its title and the people named, and says who could not be added",
+         %{conn: conn} do
+      alice = test_user()
+      carol = test_user()
+      %{identifier: identifier} = Sanctum.Test.RegistryStub.enroll!(carol.user_id)
+      record_namespace!(carol)
+      Sanctum.Test.RegistryStub.handles!(%{carol.namespace => identifier})
+      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+
+      {view, _html} = mount_chat(conn)
+      view |> element("#new-with-people") |> render_click()
+
+      # A name that is no name makes nothing.
+      html =
+        view
+        |> form("#new-shared-thread", %{"title" => "Nope", "people" => "Not A Name"})
+        |> render_submit()
+
+      assert html =~ "is not a name"
+      assert {:ok, []} = Sanctum.SharedThreads.list(alice.user_id)
+
+      view
+      |> form("#new-shared-thread", %{
+        "title" => "Garden",
+        "people" => "@#{carol.namespace}, nobody-here"
+      })
+      |> render_submit()
+
+      {:ok, [garden]} = Sanctum.SharedThreads.list(alice.user_id)
+      assert garden.title == "Garden"
+      assert_patch(view, PrismWeb.ChatLive.shared_path(garden.id))
+      assert render(view) =~ "Not added: nobody-here"
+
+      {:ok, people} = Sanctum.SharedThreads.people(alice.user_id, garden.id)
+
+      assert Enum.sort(for %{status: "active", user_id: id} <- people, do: id) ==
+               Enum.sort([alice.user_id, carol.user_id])
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the rail reads the shared threads again on each change, and a thread you were taken out of closes",
+         %{conn: conn} do
+      alice = test_user()
+      bob = test_user()
+      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      {view, _html} = mount_chat(conn)
+
+      {:ok, late} = Sanctum.SharedThreads.create(bob.user_id, "Late #{bob.namespace}")
+      refute has_element?(view, "#shared-thread-" <> late.id)
+      {:ok, :added} = Sanctum.SharedThreads.add(bob.user_id, late.id, user_id: alice.user_id)
+      assert has_element?(view, "#shared-thread-#{late.id}", "Late #{bob.namespace}")
+
+      {:ok, _} = Sanctum.SharedThreads.rename(bob.user_id, late.id, "Later #{bob.namespace}")
+      assert has_element?(view, "#shared-thread-#{late.id}", "Later #{bob.namespace}")
+
+      view |> element("#shared-thread-#{late.id} button") |> render_click()
+      assert_patch(view, PrismWeb.ChatLive.shared_path(late.id))
+
+      :ok = Sanctum.SharedThreads.remove(bob.user_id, late.id, user_id: alice.user_id)
+      assert_patch(view, "/chat")
+      html = render(view)
+      assert html =~ "You are no longer in that thread."
+      refute has_element?(view, "#shared-thread-" <> late.id)
+      refute find_live_child(view, "shared-pane-" <> late.id)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the shared thread in view is told to your own AQUA by its id and title, and an athanor's thread is not",
+         %{conn: conn} do
+      alice = test_user()
+      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
+      {:ok, own} = Threads.create(Sanctum.Context.actor(member_ctx(alice, athanor())))
+
+      {view, _html} = mount_chat(conn, athanor(), own.id)
+      :ok = PrismWeb.RoomFeed.subscribe(PrismWeb.RoomFeed.topic(view.id))
+
+      render_patch(view, PrismWeb.ChatLive.shared_path(plans.id))
+      title = "Plans #{alice.namespace}"
+
+      assert_receive %Cyfr.Bus.RoomInView{
+        room: %{"shared_thread_id" => id, "title" => ^title} = room
+      }
+
+      assert id == plans.id
+      assert Map.keys(room) |> Enum.sort() == ["shared_thread_id", "title"]
+
+      render_patch(view, chat_path(athanor(), own.id))
+      assert_receive %Cyfr.Bus.RoomInView{room: nil}
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a line said aloud from the picker lands in the shared thread chosen, attributed to you",
+         %{conn: conn} do
+      alice = test_user()
+      bob = test_user()
+      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
+      {:ok, :added} = Sanctum.SharedThreads.add(alice.user_id, plans.id, user_id: bob.user_id)
+      actor = Sanctum.Context.actor(member_ctx(alice, athanor()))
+      {:ok, own} = Threads.create(actor)
+      {:ok, line} = Threads.append(actor, own.id, %{author: alice.user_id, content: "Say this"})
+
+      {view, _html} = mount_chat(conn, athanor(), own.id)
+      html = render_click(view, "aloud_open", %{"id" => line.id})
+      assert html =~ "Plans #{alice.namespace}"
+
+      view
+      |> element("button[phx-click=aloud_post][phx-value-thread='#{plans.id}']")
+      |> render_click()
+
+      assert render(view) =~ "Said aloud"
+      assert {:ok, [said]} = Sanctum.SharedThreads.messages(bob.user_id, plans.id)
+      assert %{author: author, content: "Say this"} = said
+      assert author == alice.user_id
+
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 end
