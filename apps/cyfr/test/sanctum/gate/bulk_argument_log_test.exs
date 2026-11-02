@@ -94,6 +94,7 @@ defmodule Sanctum.Gate.BulkArgumentLogTest do
                "file.write content",
                "notes.keep content",
                "notes.pin content",
+               "shared_thread.attach files[].data",
                "source.edit edits[].content",
                "source.write content",
                "thread.attach files[].data"

@@ -796,4 +796,30 @@ defmodule Cyfr.TelemetryBridgeTest do
       refute_receive {:heard, _topic, _message}, 100
     end
   end
+
+  describe "a shared thread's change made through its rules" do
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
+    test "is published, after its write commits, on the own topic of the person it seats" do
+      alice = Cyfr.Test.ShareFixtures.person!("Alice").user.id
+      bob = Cyfr.Test.ShareFixtures.person!("Bob").user.id
+      {:ok, thread} = Sanctum.SharedThreads.create(alice, "Plans")
+      thread_id = thread.id
+
+      topic = Bus.shared_threads(bob)
+      relay(topic)
+
+      assert {:ok, :added} = Sanctum.SharedThreads.add(alice, thread_id, user_id: bob)
+
+      assert_receive {:heard, ^topic,
+                      %Cyfr.Bus.SharedThreadChanged{
+                        kind: :changed,
+                        user_id: ^bob,
+                        thread_id: ^thread_id
+                      }}
+    end
+  end
 end

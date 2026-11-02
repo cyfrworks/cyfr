@@ -140,9 +140,12 @@ defmodule Sanctum.InvitationFreezeRaceTest do
     bob_add =
       Task.async(fn ->
         unboxed(fn ->
+          # The store's seat, held uncommitted under the thread's lock: the
+          # rules module announces after its write returns, which here would
+          # be inside this transaction, and the bus refuses a publish there.
           Arca.Repo.locking_transaction(fn ->
-            assert {:ok, :added} =
-                     Sanctum.SharedThreads.add(alice, thread_id, user_id: bob)
+            assert {:ok, %{user_id: ^bob}} =
+                     Arca.SharedThreadMembers.seat(Prima.Actor.system(), thread_id, bob, alice)
 
             send(parent, :bob_added_uncommitted)
 

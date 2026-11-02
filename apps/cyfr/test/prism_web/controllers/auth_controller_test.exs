@@ -917,10 +917,15 @@ defmodule PrismWeb.AuthControllerTest do
       refute get_session(signed_in, "cyfr_challenge")
       refute get_session(signed_in, "cyfr_request")
 
-      # Admitted to nothing here: no athanor of their own is minted, and the
-      # page they land on tells them so.
+      # Admitted with an athanor of their own, as everyone admitted here is,
+      # and they land in its chat.
+      {:ok, person} = Sanctum.Tenancy.Users.get_by_identifier(identity.identifier)
+      {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(person.id)
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+      route = Sanctum.Tenancy.Athanors.route_slug(athanor)
+
       landed = get(recycle(signed_in), "/")
-      assert redirected_to(landed) == "/login?error=no_athanor"
+      assert redirected_to(landed) == "/chat?" <> Plug.Conn.Query.encode([{"a", route}])
 
       # A retry of the same completed attempt resumes: the response was
       # lost, the browser still holds that attempt's challenge and request,
