@@ -558,9 +558,10 @@ defmodule Arca.SharedThreadMembersRaceTest do
   first goes on, and the answers of both agree with the rows they left: a
   withdrawal never deletes the seat an activation made of its invitation,
   of two removals of one seat one answers it and the other `:not_found`,
-  and a removal holding the thread's lock first wins over the seat, the
+  a removal holding the thread's lock first wins over the seat, the
   invitation and the message the person it removes writes meanwhile,
-  which wait on that lock and then read the removal.
+  which wait on that lock and then read the removal, and a pairing holds
+  the thread its two share, so a removal of either seat waits for it.
 
   PostgreSQL only: on SQLite each transaction holds the one write lock
   from its start, so the second writer cannot run inside the first's.
@@ -698,6 +699,27 @@ defmodule Arca.SharedThreadMembersRaceTest do
       assert {:error, :not_member} = removed_first(thread, adder, by, posted)
       assert {:ok, []} = unboxed(fn -> Arca.SharedMessages.list(server(), thread.id) end)
     end
+  end
+
+  test "a pairing holds the thread its two share, so a removal of either seat waits for it",
+       %{by: by, thread: thread} do
+    other = person()
+    {:ok, _} = unboxed(fn -> SharedThreadMembers.seat(server(), thread.id, other, by) end)
+
+    pairing = paused(fn -> SharedThreads.pair(server(), by, other) end)
+    assert_receive {:paused, pairer}, 5_000
+
+    removal = watched(fn -> SharedThreadMembers.remove(server(), thread.id, other, by) end)
+    assert settled(removal) == :waiting
+    send(pairer, :continue)
+
+    assert {:ok, %{kind: "pair", id: pair_id}} = Task.await(pairing, 10_000)
+    assert {:ok, %{user_id: ^other}} = Task.await(removal, 10_000)
+
+    # One order: the pair, made while they still shared the thread, then
+    # the removal.
+    assert {:ok, %{status: "active"}} = unboxed(fn -> SharedThreads.get(server(), pair_id) end)
+    assert people(thread) |> Enum.map(& &1.user_id) == [by]
   end
 
   # `by` removes `member`, paused inside its transaction after its first

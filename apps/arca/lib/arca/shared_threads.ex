@@ -90,8 +90,10 @@ defmodule Arca.SharedThreads do
   @doc """
   The active pair of `by` and `other`, made for them by `by` when there is
   none: the thread and both seats in one transaction, found or made only
-  while the two sit together in an active thread, read under their two
-  locks (`:not_together` otherwise). Of two callers
+  while the two sit together in an active thread (`:not_together`
+  otherwise): the two people locked, then every active thread they share,
+  in id order, then their seats read again, so a removal, a leave or a
+  denial of either seat waits for the pair or is read by it. Of two callers
   asking at once, one writes the pair and the other answers it, because
   the baseline lets one active pair hold its `pair_of`.
   """
@@ -105,6 +107,7 @@ defmodule Arca.SharedThreads do
 
       Arca.Repo.owned("Arca.SharedThreads.pair", fn ->
         SharedThreadMembers.hold_people!([by, other])
+        SharedThreadMembers.lock_shared!(by, other)
 
         if SharedThreadMembers.together!(by, other),
           do: found_or_made(actor, pair_of, by, other),
