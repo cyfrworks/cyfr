@@ -17,16 +17,10 @@ defmodule Aqua.RoomExcerptTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "room_excerpt_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
-
-    on_exit(fn ->
-      File.rm_rf!(test_path)
-
-      if original,
-        do: Application.put_env(:arca, :base_path, original),
-        else: Application.delete_env(:arca, :base_path)
-    end)
+    # The restore is registered before the change, so a test killed at its
+    # timeout leaves the setting as it found it.
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
+    on_exit(fn -> File.rm_rf!(test_path) end)
 
     reader = Cyfr.Test.ShareFixtures.person!("Rae")
     other = Cyfr.Test.ShareFixtures.person!("Otto")

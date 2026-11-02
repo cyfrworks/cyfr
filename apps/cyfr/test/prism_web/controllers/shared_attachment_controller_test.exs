@@ -15,16 +15,10 @@ defmodule PrismWeb.SharedAttachmentControllerTest do
 
   setup do
     base = Path.join(System.tmp_dir!(), "shared_download_#{System.unique_integer([:positive])}")
-    original = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, base)
-
-    on_exit(fn ->
-      File.rm_rf(base)
-
-      if original,
-        do: Application.put_env(:arca, :base_path, original),
-        else: Application.delete_env(:arca, :base_path)
-    end)
+    # The restore is registered before the change, so a test killed at its
+    # timeout leaves the setting as it found it.
+    Prima.Test.Env.put_app_env(:arca, :base_path, base)
+    on_exit(fn -> File.rm_rf(base) end)
 
     alice = test_user()
     bob = test_user()
