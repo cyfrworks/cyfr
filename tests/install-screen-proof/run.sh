@@ -142,11 +142,12 @@ clean_install() {
   check "the release's signature is verified" transcript_has script 'Signature verified'
   guest_ssh 'stat -c "%U %a" ~/.local/bin/cyfr' >"$GUEST_DIR/cyfr.txt" 2>&1
   check "cyfr is in ~/.local/bin, the person's" grep -qE '^proof 7[0-9]{2}$' "$GUEST_DIR/cyfr.txt"
+  check "the install script linked cyfr onto PATH" transcript_has script 'sudo ln -sf /home/proof/.local/bin/cyfr /usr/local/bin/cyfr'
   pane_step_end script
 
   step "cyfr init on a machine without Docker"
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
-  pane_step init 'export PATH="$HOME/.local/bin:$PATH"; mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1200 \
+  pane_step init 'mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1200 \
     'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1, 2 or 3' 3 'Choose 1 or 2' 2
   check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1

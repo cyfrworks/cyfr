@@ -311,6 +311,19 @@ run_case "a pre-release's tip says the cask follows the first release that is no
      case \"\$out\" in *'brew tap'*|*--cask*) exit 1 ;; esac" \
     "The Homebrew cask follows the first release that is not a pre-release; v0.6.0-alpha.1 is a pre-release, installed by this script alone."
 
+# check_path says nothing when cyfr is on PATH. Off PATH, with no link to
+# make, it names the whole path, and never a line to type into the shell.
+run_case "a directory on PATH needs no word" ok \
+    "out=\$(PATH=\"/opt/cyfr-test:\$PATH\" check_path /opt/cyfr-test)
+     [ -z \"\$out\" ]"
+
+run_case "off PATH with no link, it names the path to run" ok \
+    "CYFR_INSTALL_DIR=/opt/cyfr-test
+     out=\$(check_path /opt/cyfr-test)
+     printf '%s\n' \"\$out\"
+     case \"\$out\" in *'export PATH'*) exit 1 ;; esac" \
+    "cyfr is not on your PATH. Run it as /opt/cyfr-test/cyfr."
+
 if [ "$failures" -gt 0 ]; then
     printf '\n%s test(s) failed\n' "$failures" >&2
     exit 1
