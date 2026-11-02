@@ -108,7 +108,9 @@ defmodule Arca.SharesTest do
       group = group!([stranger.user.id])
       outsiders = thread!([stranger.user.id])
       archived = thread!([terry.user.id])
-      {:ok, _} = Arca.SharedThreads.archive(Prima.Actor.system(), archived.id)
+
+      {:ok, _} =
+        Arca.SharedThreads.archive(Prima.Actor.system(), archived.id, archived.created_by)
 
       disclosed = entry!(terry.actor, %{attach_only: false})
       oauth = entry!(terry.actor, %{kind: "oauth"})
@@ -439,7 +441,7 @@ defmodule Arca.SharesTest do
       assert {:ok, false} = Shares.member?(bob.actor, traders.id, bob.user.id)
 
       assert share.id in offered_ids(dora.user.id)
-      {:ok, _} = Arca.SharedThreads.archive(Prima.Actor.system(), traders.id)
+      {:ok, _} = Arca.SharedThreads.archive(Prima.Actor.system(), traders.id, traders.created_by)
       assert offered_ids(dora.user.id) == []
       assert {:ok, false} = Shares.member?(dora.actor, traders.id, dora.user.id)
 
@@ -681,7 +683,10 @@ defmodule Arca.SharesConcurrencyTest do
     share =
       unboxed(fn -> Fixture.share!(terry.actor, Fixture.entry!(terry.actor).id) end)
 
-    held = holding(fn -> Arca.SharedThreads.archive(Prima.Actor.system(), thread.id) end)
+    held =
+      holding(fn ->
+        Arca.SharedThreads.archive(Prima.Actor.system(), thread.id, thread.created_by)
+      end)
 
     move =
       waiting(

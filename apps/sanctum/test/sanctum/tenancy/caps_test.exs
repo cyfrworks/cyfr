@@ -87,7 +87,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert Map.new(Prima.Caps.keys(), &{&1, Caps.get(&1)}) == %{
              max_athanors: {:ok, 10_000},
              max_groups_per_person: {:ok, 50},
-             max_pairs_per_person: {:ok, 200},
+             max_pairs_per_person: {:ok, nil},
              max_members_per_group: {:ok, 1_000},
              max_shared_threads_per_person: {:ok, nil},
              max_people_per_thread: {:ok, nil},

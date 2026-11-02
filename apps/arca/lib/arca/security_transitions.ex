@@ -542,19 +542,22 @@ defmodule Arca.SecurityTransitions do
       |> Arca.Repo.all()
       |> MapSet.new()
 
-    ended =
+    ending =
       for %SharedThread{status: "active"} = thread <- threads,
           thread.kind == "pair" or not MapSet.member?(occupied, thread.id),
           do: thread.id
 
-    {_count, _} =
+    {_count, ended} =
       Arca.Repo.update_all(
-        from(t in SharedThread, where: t.id in ^ended and t.status == "active"),
+        from(t in SharedThread,
+          where: t.id in ^ending and t.status == "active",
+          select: t.id
+        ),
         set: [status: "archived", archived_at: now],
         inc: [security_generation: 1]
       )
 
-    {Enum.sort(ids), Enum.sort(ended)}
+    {Enum.sort(ids), Enum.sort(ended || [])}
   end
 
   # Every share of the athanors `athanor_ids` revoked and their dependents

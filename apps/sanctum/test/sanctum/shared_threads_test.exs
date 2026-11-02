@@ -564,20 +564,23 @@ defmodule Sanctum.SharedThreadsTest do
                SharedThreads.attachment(bob, id, message.id, "9-none")
     end
 
-    test "a file over the bound, or more than ten, is refused with nothing stored",
+    test "a file over the per-file bound is refused with nothing stored, and that is the one bound",
          %{alice: alice} do
       thread = thread!(alice)
-      %{max_files: max_files, max_file_bytes: max_bytes} = SharedThreads.limits()
-      assert max_files == 10
+      assert %{max_file_bytes: max_bytes} = SharedThreads.limits()
 
-      big = [%{filename: "big.bin", media_type: nil, bytes: :binary.copy(<<0>>, max_bytes + 1)}]
-      assert {:error, {:invalid_argument, _}} = SharedThreads.post(alice, thread.id, "big", big)
+      small = %{filename: "small.txt", media_type: "text/plain", bytes: "x"}
+      big = %{filename: "big.bin", media_type: nil, bytes: :binary.copy(<<0>>, max_bytes + 1)}
 
-      many = for n <- 1..11, do: %{filename: "#{n}.txt", media_type: "text/plain", bytes: "x"}
-      assert {:error, {:invalid_argument, _}} = SharedThreads.post(alice, thread.id, "many", many)
+      assert {:error, {:invalid_argument, _}} =
+               SharedThreads.post(alice, thread.id, "big", [small, big])
 
       assert stored(thread.id) == []
       assert {:ok, []} = SharedThreads.messages(alice, thread.id)
+
+      many = for n <- 1..11, do: %{small | filename: "#{n}.txt"}
+      assert {:ok, %{attachments: refs}} = SharedThreads.post(alice, thread.id, "many", many)
+      assert length(refs) == 11
     end
 
     test "a post to an archived thread is refused and leaves no file", %{alice: alice} do
@@ -644,5 +647,145 @@ defmodule Sanctum.SharedThreadsTest do
 
       refute_receive {_kind, %{thread_id: ^id}}, 50
     end
+  end
+end
+
+defmodule Sanctum.SharedThreadsReadThenWriteTest do
+  @moduledoc """
+  What a first read cannot decide. Each case reads as the rules module
+  does, then pauses right after its first read of a thread's people,
+  outside any transaction; the case changes the thread meanwhile, and the
+  write that follows answers what the store reads under its lock, in its
+  own transaction: a person removed meanwhile changes nothing, and a pair
+  is made only while its two still share a thread. Also: a message's file
+  is found by its message, however many came before it.
+
+  The pause is outside any transaction, so it holds on SQLite as on
+  PostgreSQL.
+  """
+
+  use ExUnit.Case, async: false
+
+  alias Sanctum.SharedThreads
+
+  @pause {__MODULE__, :pause}
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    n = System.unique_integer([:positive])
+    [alice, bob, carol] = for name <- ~w(alice bob carol), do: person!("#{name}-#{n}")
+    {:ok, thread} = SharedThreads.create(alice, "Review")
+    {:ok, :added} = SharedThreads.add(alice, thread.id, user_id: bob)
+    {:ok, :added} = SharedThreads.add(alice, thread.id, user_id: carol)
+
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.pause/4, nil)
+
+    {:ok, alice: alice, bob: bob, carol: carol, thread: thread}
+  end
+
+  defp person!(name) do
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|rtw-#{name}",
+        provider: "github",
+        email: "#{name}@example.com",
+        verified: true,
+        name: name
+      })
+
+    user.id
+  end
+
+  test "a member removed after the first read renames, archives, reopens, removes and withdraws nothing",
+       %{alice: alice, bob: bob, carol: carol, thread: thread} do
+    {:ok, :added} =
+      SharedThreads.add(alice, thread.id, identifier: "per_" <> String.duplicate("a", 64))
+
+    acts = [
+      fn -> SharedThreads.rename(bob, thread.id, "Theirs") end,
+      fn -> SharedThreads.archive(bob, thread.id) end,
+      fn -> SharedThreads.remove(bob, thread.id, user_id: carol) end,
+      fn -> SharedThreads.withdraw(bob, thread.id, "per_" <> String.duplicate("a", 64)) end
+    ]
+
+    for act <- acts do
+      {:ok, :added} = SharedThreads.add(alice, thread.id, user_id: bob)
+      assert {:error, {:not_found, "Thread", _}} = removed_meanwhile(act, alice, thread, bob)
+    end
+
+    {:ok, people} = SharedThreads.people(alice, thread.id)
+    assert Enum.sort(for %{user_id: id} <- people, do: id) == Enum.sort([alice, carol])
+    assert Enum.any?(people, &(&1.status == "invited"))
+    assert {:ok, %{title: "Review", status: "active"}} = SharedThreads.get(alice, thread.id)
+
+    {:ok, :added} = SharedThreads.add(alice, thread.id, user_id: bob)
+    {:ok, _} = SharedThreads.archive(alice, thread.id)
+    reopen = fn -> SharedThreads.unarchive(bob, thread.id) end
+    assert {:error, {:not_found, "Thread", _}} = removed_meanwhile(reopen, alice, thread, bob)
+    assert {:ok, %{status: "archived"}} = SharedThreads.get(alice, thread.id)
+  end
+
+  test "a pair is not made once its two no longer share a thread",
+       %{alice: alice, bob: bob, thread: thread} do
+    pairing = fn -> SharedThreads.pair(alice, bob) end
+
+    assert {:error, {:shared_thread, :not_together}} =
+             removed_meanwhile(pairing, alice, thread, bob)
+
+    assert {:ok, [%{id: id}]} = SharedThreads.list(alice)
+    assert id == thread.id
+  end
+
+  test "a file on the 501st message is read back by its message", %{alice: alice, thread: thread} do
+    for _ <- 1..500, do: {:ok, _} = SharedThreads.post(alice, thread.id, "words")
+    file = %{filename: "proof.txt", media_type: "text/plain", bytes: "proof"}
+    {:ok, message} = SharedThreads.post(alice, thread.id, "", [file])
+    assert message.seq == 501
+
+    [ref] = message.attachments
+
+    assert {:ok, %{bytes: "proof", filename: "proof.txt"}} =
+             SharedThreads.attachment(alice, thread.id, message.id, ref["stored_name"])
+  end
+
+  # `act` runs in a task that pauses right after its first read of the
+  # thread's people; `by` removes `member` meanwhile; then `act` goes on
+  # and its answer is returned. On SQLite the task shares the case's
+  # sandboxed connection, so the removal runs between its statements.
+  defp removed_meanwhile(act, by, thread, member) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        Process.put(@pause, test)
+        act.()
+      end)
+
+    assert_receive {:paused, actor}, 5_000
+
+    assert :ok = SharedThreads.remove(by, thread.id, user_id: member)
+
+    send(actor, :continue)
+    Task.await(task, 10_000)
+  end
+
+  @doc false
+  def pause(_event, _measurements, %{query: query}, _config) do
+    with test when is_pid(test) <- Process.get(@pause),
+         true <- String.starts_with?(query, "SELECT"),
+         true <- String.contains?(query, ~s("shared_thread_members")) do
+      Process.delete(@pause)
+      send(test, {:paused, self()})
+
+      receive do
+        :continue -> :ok
+      after
+        15_000 -> raise "paused past the case"
+      end
+    end
+
+    :ok
   end
 end

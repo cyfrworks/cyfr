@@ -31,9 +31,12 @@ defmodule Sanctum.SharedThreads do
   admits no one new by any path, an addition, an invitation's activation
   or an invitation's redemption, until each has recovered; removal and
   leave stay admitted. That, the caps `max_shared_threads_per_person`,
-  `max_people_per_thread` and `max_pairs_per_person` (absent for no
-  limit) and an adder's own seat are decided by the store under the
-  thread's lock, so no read here can be raced past them.
+  `max_people_per_thread` and `max_pairs_per_person` (each absent for no
+  limit), the acting person's own seat for every change of a thread, and
+  a pair's two people still sitting together are decided by the store, in
+  the transaction that writes, under the thread's lock or the two
+  people's, so no read here can be raced past them: the seat this module
+  reads first only picks the sentence a caller with none hears.
 
   ## What is said
 
@@ -43,7 +46,7 @@ defmodule Sanctum.SharedThreads do
   before its row lands, and removed again if it does not; every read and
   write of one goes through here, after the caller's seat is read, and
   that seat is the whole policy for a shared blob. A file is bounded by
-  `max_file_bytes` alone.
+  `max_file_bytes` alone, and a message carries any number of them.
 
   ## Answers
 
@@ -64,7 +67,6 @@ defmodule Sanctum.SharedThreads do
   alias Sanctum.Door
   alias Sanctum.Tenancy.Users
 
-  @max_files 10
   @max_file_bytes 20_000_000
   @name_max 120
 
@@ -84,8 +86,8 @@ defmodule Sanctum.SharedThreads do
   @type file :: %{filename: String.t(), media_type: String.t() | nil, bytes: binary()}
 
   @doc "Per-message bounds: files and bytes per file."
-  @spec limits() :: %{max_files: pos_integer(), max_file_bytes: pos_integer()}
-  def limits, do: %{max_files: @max_files, max_file_bytes: @max_file_bytes}
+  @spec limits() :: %{max_file_bytes: pos_integer()}
+  def limits, do: %{max_file_bytes: @max_file_bytes}
 
   # ---- reading ---------------------------------------------------------------
 
@@ -149,8 +151,8 @@ defmodule Sanctum.SharedThreads do
     missing = {:error, {:not_found, "Attachment", stored_name}}
 
     with {:ok, _thread} <- seated(user_id, thread_id),
-         {:ok, rows} <- message_rows(thread_id),
-         %{} = ref <- carried(rows, message_id, stored_name) || missing,
+         {:ok, message} <- message(thread_id, message_id, missing),
+         %{} = ref <- carried(message, stored_name) || missing,
          {:ok, bytes} <- read_blob(thread_id, message_id, stored_name, missing) do
       {:ok, %{filename: ref["filename"], media_type: ref["media_type"], bytes: bytes}}
     end
@@ -206,7 +208,7 @@ defmodule Sanctum.SharedThreads do
   def rename(user_id, thread_id, title) when is_binary(user_id) and is_binary(thread_id) do
     with {:ok, _thread} <- seated(user_id, thread_id),
          {:ok, title} <- title(title) do
-      changed(Arca.SharedThreads.rename(server(), thread_id, title), user_id, thread_id)
+      changed(Arca.SharedThreads.rename(server(), thread_id, user_id, title), user_id, thread_id)
     end
   end
 
@@ -214,7 +216,7 @@ defmodule Sanctum.SharedThreads do
   @spec archive(String.t(), String.t()) :: {:ok, thread()} | {:error, term()}
   def archive(user_id, thread_id) when is_binary(user_id) and is_binary(thread_id) do
     with {:ok, _thread} <- seated(user_id, thread_id) do
-      changed(Arca.SharedThreads.archive(server(), thread_id), user_id, thread_id)
+      changed(Arca.SharedThreads.archive(server(), thread_id, user_id), user_id, thread_id)
     end
   end
 
@@ -222,7 +224,7 @@ defmodule Sanctum.SharedThreads do
   @spec unarchive(String.t(), String.t()) :: {:ok, thread()} | {:error, term()}
   def unarchive(user_id, thread_id) when is_binary(user_id) and is_binary(thread_id) do
     with {:ok, _thread} <- seated(user_id, thread_id) do
-      changed(Arca.SharedThreads.unarchive(server(), thread_id), user_id, thread_id)
+      changed(Arca.SharedThreads.unarchive(server(), thread_id, user_id), user_id, thread_id)
     end
   end
 
@@ -272,6 +274,9 @@ defmodule Sanctum.SharedThreads do
 
         {:error, :conflict} ->
           {:ok, :added}
+
+        {:error, :denied} ->
+          {:error, {:not_found, "Person", user_id}}
 
         {:error, reason} ->
           refused(reason, thread.id)
@@ -345,8 +350,8 @@ defmodule Sanctum.SharedThreads do
     end
   end
 
-  defp removed(_by, thread, user_id: member) when is_binary(member) do
-    case Arca.SharedThreadMembers.remove(server(), thread.id, member) do
+  defp removed(by, thread, user_id: member) when is_binary(member) do
+    case Arca.SharedThreadMembers.remove(server(), thread.id, member, by) do
       {:ok, _seat} ->
         announce(:changed, thread.id, [member])
         :ok
@@ -360,7 +365,7 @@ defmodule Sanctum.SharedThreads do
   end
 
   defp removed(by, thread, identifier: identifier) when is_binary(identifier) do
-    case withdrawn(thread, identifier) do
+    case withdrawn(by, thread, identifier) do
       {:error, {:not_found, "Invitation", _}} ->
         case Users.get_by_identifier(identifier) do
           {:ok, %{id: ^by}} -> left(leave(by, thread.id))
@@ -388,11 +393,11 @@ defmodule Sanctum.SharedThreads do
   @spec withdraw(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def withdraw(user_id, thread_id, identifier)
       when is_binary(user_id) and is_binary(thread_id) and is_binary(identifier) do
-    with {:ok, thread} <- seated(user_id, thread_id), do: withdrawn(thread, identifier)
+    with {:ok, thread} <- seated(user_id, thread_id), do: withdrawn(user_id, thread, identifier)
   end
 
-  defp withdrawn(thread, identifier) do
-    case Arca.SharedThreadMembers.withdraw(server(), thread.id, identifier) do
+  defp withdrawn(by, thread, identifier) do
+    case Arca.SharedThreadMembers.withdraw(server(), thread.id, identifier, by) do
       {:ok, _row} ->
         announce(:changed, thread.id)
         :ok
@@ -448,9 +453,6 @@ defmodule Sanctum.SharedThreads do
 
   defp bounded(files) do
     cond do
-      length(files) > @max_files ->
-        {:error, {:invalid_argument, "A message carries at most #{@max_files} files"}}
-
       Enum.any?(files, &(not is_binary(&1[:bytes]))) ->
         {:error, {:invalid_argument, "A file's content is its bytes"}}
 
@@ -545,21 +547,19 @@ defmodule Sanctum.SharedThreads do
     end
   end
 
-  defp message_rows(thread_id) do
-    case Arca.SharedMessages.list(server(), thread_id) do
-      {:ok, rows} -> {:ok, rows}
+  # The message by its own id, never by a page of the thread's.
+  defp message(thread_id, message_id, missing) do
+    case Arca.SharedMessages.get(server(), thread_id, message_id) do
+      {:ok, message} -> {:ok, message}
+      {:error, :not_found} -> missing
       {:error, reason} -> unavailable(reason)
     end
   end
 
-  defp carried(rows, message_id, stored) do
-    with %{payload: %{"attachments" => refs}} when is_list(refs) <-
-           Enum.find(rows, &(&1.id == message_id)) do
-      Enum.find(refs, &match?(%{"stored_name" => ^stored}, &1))
-    else
-      _none -> nil
-    end
-  end
+  defp carried(%{payload: %{"attachments" => refs}}, stored) when is_list(refs),
+    do: Enum.find(refs, &match?(%{"stored_name" => ^stored}, &1))
+
+  defp carried(_message, _stored), do: nil
 
   # ---- sign-in, invitations and the denial ------------------------------------
 
@@ -780,8 +780,9 @@ defmodule Sanctum.SharedThreads do
   defp refused(:not_found, thread_id) when is_binary(thread_id), do: missing(thread_id)
   defp refused(:not_member, thread_id) when is_binary(thread_id), do: missing(thread_id)
 
-  defp refused(reason, _thread_id) when reason in [:archived, :pair, :recovering_from_restore],
-    do: {:error, {:shared_thread, reason}}
+  defp refused(reason, _thread_id)
+       when reason in [:archived, :pair, :not_together, :recovering_from_restore],
+       do: {:error, {:shared_thread, reason}}
 
   defp refused({:limit_reached, _key, _cap} = reason, _thread_id), do: {:error, reason}
   defp refused({:cap_unverifiable, _key} = reason, _thread_id), do: {:error, reason}

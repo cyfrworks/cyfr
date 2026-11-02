@@ -17,16 +17,14 @@ defmodule Arca.SharedMessages do
   ## Appending
 
   `append/3` runs under this member's slot (`Arca.Repo.owned/2`;
-  `:not_owner` once another member holds it) and takes the next `seq`
-  after the thread's last. The baseline's unique `(thread_id, seq)` index
-  lets one of two appenders that read the same last `seq` write the next:
-  the loser's insert writes nothing, and it reads the last `seq` again and
-  takes the one after. The thread's `last_message_at` is then set only
-  while it is active, under its row lock, so a message never lands in a
-  thread an archive committed first.
-
-  The author is seated in the thread, read in the same transaction
-  (`:not_member` otherwise).
+  `:not_owner` once another member holds it), locks the thread's row
+  first, as every write to a thread's people does
+  (`Arca.SharedThreadMembers`), and then reads the thread active and its
+  author seated (`:not_member` otherwise), so a removal or an archive that
+  committed first refuses the message, and one that starts later waits
+  for it. It takes the next `seq` after the thread's last; the baseline's
+  unique `(thread_id, seq)` index backs the lock, so an insert that finds
+  its `seq` taken reads the last again and takes the one after.
 
   A row crosses as a plain map (`Arca.Data`), its payload decoded. A
   refusal is `:not_found`, `:archived`, `:not_member`,
@@ -36,7 +34,7 @@ defmodule Arca.SharedMessages do
 
   import Ecto.Query
 
-  alias Arca.Schemas.{SharedMessage, SharedThread, SharedThreadMember}
+  alias Arca.Schemas.{SharedMessage, SharedThread}
 
   @typedoc "A message, as a plain map with its payload decoded."
   @type row :: map()
@@ -55,14 +53,13 @@ defmodule Arca.SharedMessages do
   """
   @spec append(Prima.Actor.t(), String.t(), map()) ::
           {:ok, row()}
-          | {:error, :not_found | :archived | {:invalid, map()}}
+          | {:error, :not_found | :archived | :not_member | {:invalid, map()}}
           | {:error, :cross_tenant | :not_owner | :database_error}
-  # arca:unscoped-ok a shared thread is no athanor's; its messages are written by its id.
   def append(%Prima.Actor{scope: :platform}, thread_id, attrs)
       when is_binary(thread_id) and is_map(attrs) do
     with {:ok, fields} <- fields(attrs) do
       Arca.Repo.owned("Arca.SharedMessages.append", fn ->
-        case Arca.Repo.get(SharedThread, thread_id) do
+        case Arca.SharedThreads.lock!(thread_id) do
           nil -> {:error, :not_found}
           %SharedThread{status: "archived"} -> {:error, :archived}
           %SharedThread{} -> seated_write(thread_id, fields)
@@ -74,15 +71,9 @@ defmodule Arca.SharedMessages do
 
   def append(%Prima.Actor{}, _thread_id, _attrs), do: {:error, :cross_tenant}
 
-  # The author is seated in the thread, read in the appending transaction.
-  # arca:unscoped-ok a shared thread is no athanor's; its author's seat is read by thread and person.
+  # The author is seated in the thread, read under its lock.
   defp seated_write(thread_id, fields) do
-    seated =
-      from(m in SharedThreadMember,
-        where: m.thread_id == ^thread_id and m.user_id == ^fields.author and m.status == "active"
-      )
-
-    if Arca.Repo.exists?(seated),
+    if Arca.SharedThreadMembers.seated?(thread_id, fields.author),
       do: write(thread_id, fields, Arca.ServerMetaStorage.now!()),
       else: {:error, :not_member}
   end
@@ -113,6 +104,23 @@ defmodule Arca.SharedMessages do
       {0, _} -> {:error, :archived}
     end
   end
+
+  @doc "The message `message_id` of the thread `thread_id`, its payload decoded."
+  @spec get(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+  # arca:unscoped-ok a shared thread is no athanor's; a message is read by its thread and id.
+  def get(%Prima.Actor{scope: :platform}, thread_id, message_id)
+      when is_binary(thread_id) and is_binary(message_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SharedMessages.get", fn ->
+      case Arca.Repo.get_by(SharedMessage, id: message_id, thread_id: thread_id) do
+        nil -> {:error, :not_found}
+        message -> {:ok, message}
+      end
+    end)
+    |> decoded()
+  end
+
+  def get(%Prima.Actor{}, _thread_id, _message_id), do: {:error, :cross_tenant}
 
   @doc """
   The thread's messages, oldest first: those after `after_seq:` (default

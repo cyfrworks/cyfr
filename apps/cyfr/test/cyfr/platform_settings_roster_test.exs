@@ -351,13 +351,14 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
     # Sanctum's ceilings on the server's athanors and a group's seats ship
     # with a generous default, and 0 removes each; an athanor's bytes, the
-    # shared threads a person makes and the people in one ship with no
-    # ceiling, which an administrator sets.
-    test "the server's athanors and a group's seats ship bounded; an athanor's bytes and a shared thread's ceilings unbounded" do
+    # pairs a person holds, the shared threads a person makes and the
+    # people in one ship with no ceiling, which an administrator sets.
+    test "the server's athanors and a group's seats ship bounded; an athanor's bytes, pairs and a shared thread's ceilings unbounded" do
       for {key, default, said} <- [
             {"max_athanors", 10_000, "Unset, 10,000, and 0 removes the ceiling"},
             {"max_members_per_group", 1_000, "unset, 1,000, and 0 removes the ceiling"},
             {"athanor_storage_bytes", nil, "Unset, no ceiling, and 0 is the same"},
+            {"max_pairs_per_person", nil, "Unset, no ceiling, and 0 is the same"},
             {"max_shared_threads_per_person", nil, "unset, no ceiling, and 0 is the same"},
             {"max_people_per_thread", nil, "unset, no ceiling, and 0 is the same"}
           ] do

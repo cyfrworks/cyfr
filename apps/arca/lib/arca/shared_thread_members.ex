@@ -30,17 +30,23 @@ defmodule Arca.SharedThreadMembers do
   invitations included, stay under `max_people_per_thread`
   (`Prima.Caps.check_counted/3`), each read under the thread's lock; an
   activation seats no one in a thread a restore holds, whose invitation
-  waits for a later sign-in. Withdrawing and removing are admitted
-  whatever the thread's status, each
-  one delete under the predicate that names its row, whose row count is
-  its answer: a withdrawal finds no invitation an activation already made
-  a seat, and of two removals of one seat one answers it and the other
-  `:not_found`.
+  waits for a later sign-in. Every write to a thread's people takes the
+  thread's row lock before anything else of the thread is read, so a
+  removal that commits first is read by the seat, the invitation or the
+  message waiting on it. Withdrawing and removing are a person's act:
+  they take the one acting and read their seat under the lock, and are
+  admitted whatever the thread's status, each one delete under the
+  predicate that names its row, whose row count is its answer: a
+  withdrawal finds no invitation an activation already made a seat, and of
+  two removals of one seat one answers it and the other `:not_found`. A
+  pair gains and loses no one: its two seats are written at its birth,
+  and it ends by a leave.
 
   A row crosses as a plain map (`Arca.Data`). A refusal is `:not_found`,
   `:archived` (the thread is archived), `:conflict` (the person is seated
   already, or the identifier invited already), `:not_member` (the one
-  adding sits nowhere in the thread), `:recovering_from_restore`, a cap's
+  acting sits nowhere in the thread), `:denied` (the person a seat names
+  no longer stands here), `:pair`, `:recovering_from_restore`, a cap's
   `{:limit_reached, key, cap}` or `{:cap_unverifiable, key}` (a row the
   thread already holds is `:conflict` first, since it takes no place), the
   `verify:` option's own refusal,
@@ -83,11 +89,13 @@ defmodule Arca.SharedThreadMembers do
       Arca.Repo.owned("Arca.SharedThreadMembers.seat", fn ->
         hold_people!([user_id])
 
-        add(actor, thread_id, @seated, verify, %{
-          user_id: user_id,
-          status: "active",
-          added_by: added_by
-        })
+        with :ok <- not_denied(user_id) do
+          add(actor, thread_id, @seated, verify, %{
+            user_id: user_id,
+            status: "active",
+            added_by: added_by
+          })
+        end
       end)
     end
   end
@@ -149,6 +157,7 @@ defmodule Arca.SharedThreadMembers do
     case SharedThreads.lock!(thread_id) do
       nil -> {:error, :not_found}
       %SharedThread{status: "archived"} -> {:error, :archived}
+      %SharedThread{kind: "pair"} -> {:error, :pair}
       %SharedThread{} = thread -> {:ok, thread}
     end
   end
@@ -171,10 +180,29 @@ defmodule Arca.SharedThreadMembers do
     if Arca.Repo.exists?(held), do: {:error, :conflict}, else: :ok
   end
 
-  # The one adding sits in the thread, read under its lock.
-  defp seated(thread_id, user_id) do
-    if Arca.Repo.exists?(seat_of(thread_id, user_id)), do: :ok, else: {:error, :not_member}
+  # The person a seat names stands here, read under their lock, which a
+  # denial takes first: a denial that committed first refuses the seat.
+  # arca:unscoped-ok a person is no athanor's; their standing is read by their id.
+  defp not_denied(user_id) do
+    denied = from(u in User, where: u.id == ^user_id and u.status != "active")
+    if Arca.Repo.exists?(denied), do: {:error, :denied}, else: :ok
   end
+
+  # The one adding or removing sits in the thread, read under its lock.
+  defp seated(thread_id, user_id),
+    do: if(seated?(thread_id, user_id), do: :ok, else: {:error, :not_member})
+
+  @doc false
+  # Whether `user_id` sits in the thread, read inside the caller's
+  # transaction after it locked the thread: the seat a write by them
+  # stands on (`Arca.SharedThreads`).
+  @spec seated?(String.t(), String.t()) :: boolean()
+  # arca:unscoped-ok a shared thread is no athanor's; a seat is read by its thread and person.
+  # arca:db-raise-ok a step inside the caller's transaction.
+  def seated?(thread_id, user_id) when is_binary(thread_id) and is_binary(user_id),
+    do: Arca.Repo.exists?(seat_of(thread_id, user_id))
+
+  def seated?(_thread_id, _user_id), do: false
 
   # A thread one of whose people still recovers from a declared restore
   # admits no one new, read under its lock, so a seat racing one into the
@@ -260,23 +288,40 @@ defmodule Arca.SharedThreadMembers do
     |> Arca.Repo.all()
   end
 
-  @doc "Withdraw the invitation `identifier` holds in the thread, and answer it."
-  @spec withdraw(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found} | refusal()
-  def withdraw(%Prima.Actor{scope: :platform}, thread_id, identifier)
-      when is_binary(thread_id) and is_binary(identifier) do
+  @doc """
+  Withdraw the invitation `identifier` holds in the thread, as `by`, who
+  sits there, and answer it.
+  """
+  @spec withdraw(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :not_member | :pair} | refusal()
+  def withdraw(%Prima.Actor{scope: :platform}, thread_id, identifier, by)
+      when is_binary(thread_id) and is_binary(identifier) and is_binary(by) do
     Arca.Repo.owned("Arca.SharedThreadMembers.withdraw", fn ->
-      drop(
-        from(m in SharedThreadMember,
-          where:
-            m.thread_id == ^thread_id and m.person_identifier == ^identifier and
-              m.status == "invited"
+      with :ok <- held_by(thread_id, by) do
+        drop(
+          from(m in SharedThreadMember,
+            where:
+              m.thread_id == ^thread_id and m.person_identifier == ^identifier and
+                m.status == "invited"
+          )
         )
-      )
+      end
     end)
   end
 
-  def withdraw(%Prima.Actor{}, _thread_id, _identifier), do: {:error, :cross_tenant}
+  def withdraw(%Prima.Actor{}, _thread_id, _identifier, _by), do: {:error, :cross_tenant}
+
+  # The thread locked, then `by`'s seat in it read under that lock: the
+  # first step of every write that removes someone from a thread, so it
+  # and a removal of `by` decide in one order. A pair loses no one but by
+  # its end.
+  defp held_by(thread_id, by) do
+    case SharedThreads.lock!(thread_id) do
+      nil -> {:error, :not_found}
+      %SharedThread{kind: "pair"} -> {:error, :pair}
+      %SharedThread{} -> seated(thread_id, by)
+    end
+  end
 
   @doc """
   The person `user_id` leaves the thread: their seat removed under the
@@ -312,13 +357,14 @@ defmodule Arca.SharedThreadMembers do
          not Arca.Repo.exists?(
            from(m in SharedThreadMember, where: m.thread_id == ^id and m.status == "active")
          ) do
-      {1, _} =
-        Arca.Repo.update_all(from(t in SharedThread, where: t.id == ^id),
-          set: [status: "archived", archived_at: Arca.ServerMetaStorage.now!()],
-          inc: [security_generation: 1]
-        )
-
-      true
+      case Arca.Repo.update_all(
+             from(t in SharedThread, where: t.id == ^id and t.status == "active"),
+             set: [status: "archived", archived_at: Arca.ServerMetaStorage.now!()],
+             inc: [security_generation: 1]
+           ) do
+        {1, _} -> true
+        {0, _} -> false
+      end
     else
       false
     end
@@ -326,17 +372,21 @@ defmodule Arca.SharedThreadMembers do
 
   defp ended(%SharedThread{}), do: false
 
-  @doc "Remove the person `user_id`'s seat from the thread, and answer it."
-  @spec remove(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found} | refusal()
-  def remove(%Prima.Actor{scope: :platform}, thread_id, user_id)
-      when is_binary(thread_id) and is_binary(user_id) do
+  @doc """
+  Remove the person `user_id`'s seat from the thread, as `by`, who sits
+  there, and answer it: the thread locked first, so a seat, an invitation
+  or a message waiting on the lock reads the removal.
+  """
+  @spec remove(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :not_member | :pair} | refusal()
+  def remove(%Prima.Actor{scope: :platform}, thread_id, user_id, by)
+      when is_binary(thread_id) and is_binary(user_id) and is_binary(by) do
     Arca.Repo.owned("Arca.SharedThreadMembers.remove", fn ->
-      drop(seat_of(thread_id, user_id))
+      with :ok <- held_by(thread_id, by), do: drop(seat_of(thread_id, user_id))
     end)
   end
 
-  def remove(%Prima.Actor{}, _thread_id, _user_id), do: {:error, :cross_tenant}
+  def remove(%Prima.Actor{}, _thread_id, _user_id, _by), do: {:error, :cross_tenant}
 
   # One delete of the row `query` names, under the predicate that names
   # it: its row count is the answer. A row an activation or another
@@ -370,30 +420,40 @@ defmodule Arca.SharedThreadMembers do
 
   @doc """
   Whether the people `user_a` and `user_b` are both seated in one active
-  thread: what a pair asks before it is made (`Sanctum.SharedThreads`).
+  thread: what a pair asks of two people (`Sanctum.SharedThreads`), here
+  for the sentence it answers, and again inside the pair's transaction
+  (`together!/2`), where it decides.
   """
   @spec together?(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, boolean()} | {:error, :cross_tenant | :database_error}
-  # arca:unscoped-ok a shared thread is no athanor's; two people's seats are read by their ids.
   def together?(%Prima.Actor{scope: :platform}, user_a, user_b)
       when is_binary(user_a) and is_binary(user_b) do
     Arca.Repo.Errors.with_db_rescue("Arca.SharedThreadMembers.together?", fn ->
-      {:ok,
-       Arca.Repo.exists?(
-         from(a in SharedThreadMember,
-           join: b in SharedThreadMember,
-           on: b.thread_id == a.thread_id,
-           join: t in SharedThread,
-           on: t.id == a.thread_id,
-           where:
-             a.user_id == ^user_a and a.status == "active" and b.user_id == ^user_b and
-               b.status == "active" and t.status == "active"
-         )
-       )}
+      {:ok, together!(user_a, user_b)}
     end)
   end
 
   def together?(%Prima.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
+
+  @doc false
+  # `together?/3` inside the caller's transaction: the pair's, after it
+  # locked the two people.
+  @spec together!(String.t(), String.t()) :: boolean()
+  # arca:unscoped-ok a shared thread is no athanor's; two people's seats are read by their ids.
+  # arca:db-raise-ok a step inside the caller's transaction.
+  def together!(user_a, user_b) when is_binary(user_a) and is_binary(user_b) do
+    Arca.Repo.exists?(
+      from(a in SharedThreadMember,
+        join: b in SharedThreadMember,
+        on: b.thread_id == a.thread_id,
+        join: t in SharedThread,
+        on: t.id == a.thread_id,
+        where:
+          a.user_id == ^user_a and a.status == "active" and b.user_id == ^user_b and
+            b.status == "active" and t.status == "active"
+      )
+    )
+  end
 
   @doc "The thread's seats and invitations, oldest first."
   @spec list(Prima.Actor.t(), String.t()) ::

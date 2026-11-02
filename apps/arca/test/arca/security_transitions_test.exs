@@ -766,11 +766,11 @@ defmodule Arca.SecurityTransitionsTest do
       host = person!()
       identifier = enrolled!(user.id)
 
-      {:ok, pair} = Arca.SharedThreads.pair(server(), user.id, peer.id)
       alone = shared_thread!(user.id)
       kept = shared_thread!(peer.id, [user.id])
+      {:ok, pair} = Arca.SharedThreads.pair(server(), user.id, peer.id)
       ended = shared_thread!(user.id, [peer.id])
-      {:ok, _} = Arca.SharedThreads.archive(server(), ended.id)
+      {:ok, _} = Arca.SharedThreads.archive(server(), ended.id, ended.created_by)
       invited = shared_thread!(host.id)
       {:ok, _} = Arca.SharedThreadMembers.invite(server(), invited.id, identifier, host.id)
 

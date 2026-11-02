@@ -362,7 +362,7 @@ defmodule Sanctum.Invitations do
            issuer_seated(invitation)
          end) do
       :ok -> :ok
-      {:error, reason} when reason in [:not_found, :archived, :not_member] -> invalid()
+      {:error, reason} when reason in [:not_found, :archived, :not_member, :pair] -> invalid()
       {:error, reason} -> {:error, reason}
     end
   end

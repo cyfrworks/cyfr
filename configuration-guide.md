@@ -135,7 +135,7 @@ refused, naming the variable or key and the form it must take.
 |---|---|---|---|---|---|---|---|
 | `CYFR_MAX_ATHANORS` | `max_athanors` | `integer` | `10000` | `tenancy` | live | refuse | Active athanors on this server; an archived one frees its place. Unset, 10,000, and 0 removes the ceiling. |
 | `CYFR_MAX_GROUPS_PER_PERSON` | `max_groups_per_person` | `integer` | `50` | `tenancy` | live | refuse | Groups one person may create (they may belong to more); 0 turns the cap off. |
-| `CYFR_MAX_PAIRS_PER_PERSON` | `max_pairs_per_person` | `integer` | `200` | `tenancy` | live | refuse | Pairs one person may hold open, a pair being a shared thread of two; a pair is made for two, so either person at the cap refuses it, and an ended pair frees its place. 0 turns the cap off. |
+| `CYFR_MAX_PAIRS_PER_PERSON` | `max_pairs_per_person` | `integer` | none | `tenancy` | live | refuse | Pairs one person may hold open, a pair being a shared thread of two; a pair is made for two, so either person at the cap refuses it, and an ended pair frees its place. Unset, no ceiling, and 0 is the same. |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | `max_members_per_group` | `integer` | `1000` | `tenancy` | live | refuse | Seats in one group, invitations included; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_SHARED_THREADS_PER_PERSON` | `max_shared_threads_per_person` | `integer` | none | `tenancy` | live | refuse | Shared threads one person may create, an archived one not counted (they may sit in more); unset, no ceiling, and 0 is the same. |
 | `CYFR_MAX_PEOPLE_PER_THREAD` | `max_people_per_thread` | `integer` | none | `tenancy` | live | refuse | People in one shared thread, invitations included; unset, no ceiling, and 0 is the same. |

@@ -57,7 +57,7 @@ defmodule Arca.SharedMessagesTest do
       assert {:error, :not_found} =
                SharedMessages.append(server(), "sth_nobody", %{author: by, content: "x"})
 
-      {:ok, _} = SharedThreads.archive(server(), thread.id)
+      {:ok, _} = SharedThreads.archive(server(), thread.id, thread.created_by)
 
       assert {:error, :archived} =
                SharedMessages.append(server(), thread.id, %{author: by, content: "x"})
@@ -86,7 +86,7 @@ defmodule Arca.SharedMessagesTest do
     test "refuses an author not seated in the thread, writing nothing", %{by: by, thread: thread} do
       left = Prima.UUID7.generate_id(Prima.PersonId.prefix())
       {:ok, _} = SharedThreadMembers.seat(server(), thread.id, left, by)
-      {:ok, _} = SharedThreadMembers.remove(server(), thread.id, left)
+      {:ok, _} = SharedThreadMembers.remove(server(), thread.id, left, thread.created_by)
 
       for author <- [Prima.UUID7.generate_id(Prima.PersonId.prefix()), left] do
         assert {:error, :not_member} =

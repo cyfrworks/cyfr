@@ -19,6 +19,8 @@ defmodule Arca.SharedThreadMembersTest do
 
   use ExUnit.Case, async: true
 
+  import Ecto.Query, only: [from: 2]
+
   alias Arca.{SecurityTransitions, SharedThreadMembers, SharedThreads}
   alias Arca.Schemas.RestorePerson
 
@@ -34,7 +36,7 @@ defmodule Arca.SharedThreadMembersTest do
   defp identifier, do: "per_#{System.unique_integer([:positive])}"
 
   defp archived!(thread) do
-    {:ok, _} = SharedThreads.archive(server(), thread.id)
+    {:ok, _} = SharedThreads.archive(server(), thread.id, thread.created_by)
     :ok
   end
 
@@ -72,6 +74,19 @@ defmodule Arca.SharedThreadMembersTest do
   end
 
   describe "seat/5" do
+    test "seats no one a denial took from this CYFR, read under their lock",
+         %{by: by, thread: thread} do
+      user = Arca.Test.Shares.person!()
+
+      {1, _} =
+        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user.id),
+          set: [status: "denied"]
+        )
+
+      assert {:error, :denied} = SharedThreadMembers.seat(server(), thread.id, user.id, by)
+      assert {:error, :not_found} = SharedThreadMembers.find(server(), thread.id, user.id)
+    end
+
     test "seats a person once", %{by: by, thread: thread} do
       who = person()
 
@@ -113,7 +128,7 @@ defmodule Arca.SharedThreadMembersTest do
          %{by: by, thread: thread} do
       left = person()
       {:ok, _} = SharedThreadMembers.seat(server(), thread.id, left, by)
-      {:ok, _} = SharedThreadMembers.remove(server(), thread.id, left)
+      {:ok, _} = SharedThreadMembers.remove(server(), thread.id, left, thread.created_by)
       before = people(thread)
 
       for adder <- [person(), left] do
@@ -212,7 +227,10 @@ defmodule Arca.SharedThreadMembersTest do
       end
 
       assert {:ok, []} = SharedThreadMembers.activate(server(), who, id)
-      assert {:error, :not_found} = SharedThreadMembers.withdraw(server(), thread.id, id)
+
+      assert {:error, :not_found} =
+               SharedThreadMembers.withdraw(server(), thread.id, id, thread.created_by)
+
       assert {:ok, %{user_id: ^who}} = SharedThreadMembers.find(server(), thread.id, who)
     end
 
@@ -276,11 +294,18 @@ defmodule Arca.SharedThreadMembersTest do
       {:ok, seat} = SharedThreadMembers.seat(server(), thread.id, who, by)
       :ok = archived!(thread)
 
-      assert {:ok, ^invitation} = SharedThreadMembers.withdraw(server(), thread.id, id)
-      assert {:error, :not_found} = SharedThreadMembers.withdraw(server(), thread.id, id)
+      assert {:ok, ^invitation} =
+               SharedThreadMembers.withdraw(server(), thread.id, id, thread.created_by)
 
-      assert {:ok, ^seat} = SharedThreadMembers.remove(server(), thread.id, who)
-      assert {:error, :not_found} = SharedThreadMembers.remove(server(), thread.id, who)
+      assert {:error, :not_found} =
+               SharedThreadMembers.withdraw(server(), thread.id, id, thread.created_by)
+
+      assert {:ok, ^seat} =
+               SharedThreadMembers.remove(server(), thread.id, who, thread.created_by)
+
+      assert {:error, :not_found} =
+               SharedThreadMembers.remove(server(), thread.id, who, thread.created_by)
+
       assert {:error, :not_found} = SharedThreadMembers.find(server(), thread.id, who)
 
       assert {:ok, [%{user_id: ^by}]} = SharedThreadMembers.list(server(), thread.id)
@@ -290,8 +315,11 @@ defmodule Arca.SharedThreadMembersTest do
       id = identifier()
       {:ok, invitation} = SharedThreadMembers.invite(server(), thread.id, id, by)
 
-      assert {:error, :not_found} = SharedThreadMembers.remove(server(), thread.id, id)
-      assert {:error, :not_found} = SharedThreadMembers.withdraw(server(), thread.id, by)
+      assert {:error, :not_found} =
+               SharedThreadMembers.remove(server(), thread.id, id, thread.created_by)
+
+      assert {:error, :not_found} =
+               SharedThreadMembers.withdraw(server(), thread.id, by, thread.created_by)
 
       {:ok, people} = SharedThreadMembers.list(server(), thread.id)
       assert invitation in people
@@ -307,8 +335,12 @@ defmodule Arca.SharedThreadMembersTest do
       {:ok, seat} = SharedThreadMembers.seat(server(), thread.id, who, by)
       _user = recovering!(thread, by)
 
-      assert {:ok, ^invitation} = SharedThreadMembers.withdraw(server(), thread.id, id)
-      assert {:ok, ^seat} = SharedThreadMembers.remove(server(), thread.id, who)
+      assert {:ok, ^invitation} =
+               SharedThreadMembers.withdraw(server(), thread.id, id, thread.created_by)
+
+      assert {:ok, ^seat} =
+               SharedThreadMembers.remove(server(), thread.id, who, thread.created_by)
+
       refute invitation in people(thread) or seat in people(thread)
     end
   end
@@ -342,8 +374,9 @@ defmodule Arca.SharedThreadMembersTest do
       assert people(thread) == [invitation]
     end
 
-    test "ends a pair when either of its two leaves", %{by: by} do
+    test "ends a pair when either of its two leaves", %{by: by, thread: thread} do
       other = person()
+      {:ok, _} = SharedThreadMembers.seat(server(), thread.id, other, by)
       {:ok, pair} = SharedThreads.pair(server(), by, other)
 
       assert {:ok, %{seat: %{user_id: ^other}, ended: true}} =
@@ -396,11 +429,12 @@ defmodule Arca.SharedThreadMembersTest do
       assert {:ok, false} = SharedThreadMembers.together?(server(), by, stranger)
       assert {:ok, false} = SharedThreadMembers.together?(server(), by, id)
 
+      {:ok, pair} = SharedThreads.pair(server(), by, who)
       :ok = archived!(thread)
-      assert {:ok, false} = SharedThreadMembers.together?(server(), by, who)
-
-      {:ok, _pair} = SharedThreads.pair(server(), by, who)
       assert {:ok, true} = SharedThreadMembers.together?(server(), who, by)
+
+      {:ok, _} = SharedThreads.archive(server(), pair.id, by)
+      assert {:ok, false} = SharedThreadMembers.together?(server(), by, who)
     end
   end
 
@@ -426,8 +460,8 @@ defmodule Arca.SharedThreadMembersTest do
           fn -> SharedThreadMembers.seat(actor, thread.id, person(), by) end,
           fn -> SharedThreadMembers.invite(actor, thread.id, id, by) end,
           fn -> SharedThreadMembers.activate(actor, person(), id) end,
-          fn -> SharedThreadMembers.withdraw(actor, thread.id, id) end,
-          fn -> SharedThreadMembers.remove(actor, thread.id, by) end,
+          fn -> SharedThreadMembers.withdraw(actor, thread.id, id, thread.created_by) end,
+          fn -> SharedThreadMembers.remove(actor, thread.id, by, thread.created_by) end,
           fn -> SharedThreadMembers.leave(actor, thread.id, by) end,
           fn -> SharedThreadMembers.find(actor, thread.id, by) end,
           fn -> SharedThreadMembers.together?(actor, by, by) end,
@@ -510,7 +544,7 @@ defmodule Arca.SharedThreadMembersCapsTest do
     assert {:ok, ^before} = SharedThreadMembers.list(server(), thread.id)
 
     # A withdrawn invitation frees its place.
-    {:ok, _} = SharedThreadMembers.withdraw(server(), thread.id, id)
+    {:ok, _} = SharedThreadMembers.withdraw(server(), thread.id, id, thread.created_by)
     assert {:ok, _} = SharedThreadMembers.seat(server(), thread.id, person(), by)
   end
 end
@@ -523,8 +557,10 @@ defmodule Arca.SharedThreadMembersRaceTest do
   it has answered or waits on a lock that first statement took. Then the
   first goes on, and the answers of both agree with the rows they left: a
   withdrawal never deletes the seat an activation made of its invitation,
-  and of two removals of one seat one answers it and the other
-  `:not_found`.
+  of two removals of one seat one answers it and the other `:not_found`,
+  and a removal holding the thread's lock first wins over the seat, the
+  invitation and the message the person it removes writes meanwhile,
+  which wait on that lock and then read the removal.
 
   PostgreSQL only: on SQLite each transaction holds the one write lock
   from its start, so the second writer cannot run inside the first's.
@@ -535,7 +571,7 @@ defmodule Arca.SharedThreadMembersRaceTest do
   import Ecto.Query, only: [from: 2]
 
   alias Arca.{ControlPlane, SharedThreadMembers, SharedThreads}
-  alias Arca.Schemas.{CellLease, SharedThread, SharedThreadMember}
+  alias Arca.Schemas.{CellLease, SharedMessage, SharedThread, SharedThreadMember}
   alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag :postgres
@@ -559,6 +595,7 @@ defmodule Arca.SharedThreadMembersRaceTest do
     on_exit(fn ->
       unboxed(fn ->
         ids = from(t in SharedThread, where: t.created_by == ^by, select: t.id)
+        Arca.Repo.delete_all(from(m in SharedMessage, where: m.thread_id in subquery(ids)))
         Arca.Repo.delete_all(from(m in SharedThreadMember, where: m.thread_id in subquery(ids)))
         Arca.Repo.delete_all(from(t in SharedThread, where: t.created_by == ^by))
       end)
@@ -580,7 +617,9 @@ defmodule Arca.SharedThreadMembersRaceTest do
     id = "per_#{System.unique_integer([:positive])}"
     {:ok, _} = unboxed(fn -> SharedThreadMembers.invite(server(), thread.id, id, by) end)
 
-    withdrawal = paused(fn -> SharedThreadMembers.withdraw(server(), thread.id, id) end)
+    withdrawal =
+      paused(fn -> SharedThreadMembers.withdraw(server(), thread.id, id, thread.created_by) end)
+
     assert_receive {:paused, withdrawer}, 5_000
 
     activation = watched(fn -> SharedThreadMembers.activate(server(), who, id) end)
@@ -607,22 +646,79 @@ defmodule Arca.SharedThreadMembersRaceTest do
 
   test "of two removals of one seat, one answers it and the other not_found",
        %{by: by, thread: thread} do
-    first = paused(fn -> SharedThreadMembers.remove(server(), thread.id, by) end)
+    who = person()
+    {:ok, _} = unboxed(fn -> SharedThreadMembers.seat(server(), thread.id, who, by) end)
+
+    first = paused(fn -> SharedThreadMembers.remove(server(), thread.id, who, by) end)
     assert_receive {:paused, remover}, 5_000
 
-    second = watched(fn -> SharedThreadMembers.remove(server(), thread.id, by) end)
+    second = watched(fn -> SharedThreadMembers.remove(server(), thread.id, who, by) end)
     seconded = settled(second)
     send(remover, :continue)
 
     answers = [Task.await(first, 10_000), answer(seconded, second)]
 
-    assert Enum.count(answers, &match?({:ok, %{user_id: ^by, status: "active"}}, &1)) == 1,
+    assert Enum.count(answers, &match?({:ok, %{user_id: ^who, status: "active"}}, &1)) == 1,
            inspect(answers)
 
     assert Enum.count(answers, &(&1 == {:error, :not_found})) == 1, inspect(answers)
 
     assert {:error, :not_found} =
-             unboxed(fn -> SharedThreadMembers.find(server(), thread.id, by) end)
+             unboxed(fn -> SharedThreadMembers.find(server(), thread.id, who) end)
+  end
+
+  describe "a removal that holds the thread's lock first" do
+    setup %{by: by, thread: thread} do
+      adder = person()
+      {:ok, _} = unboxed(fn -> SharedThreadMembers.seat(server(), thread.id, adder, by) end)
+      {:ok, adder: adder}
+    end
+
+    test "wins over a seat its removed adder writes",
+         %{by: by, thread: thread, adder: adder} do
+      who = person()
+      seated = fn -> SharedThreadMembers.seat(server(), thread.id, who, adder) end
+      assert {:error, :not_member} = removed_first(thread, adder, by, seated)
+      assert people(thread) |> Enum.map(& &1.user_id) == [by]
+    end
+
+    test "wins over an invitation its removed adder writes",
+         %{by: by, thread: thread, adder: adder} do
+      invited = fn -> SharedThreadMembers.invite(server(), thread.id, "per_raced", adder) end
+      assert {:error, :not_member} = removed_first(thread, adder, by, invited)
+      assert people(thread) |> Enum.map(& &1.user_id) == [by]
+    end
+
+    test "wins over a message its removed author posts",
+         %{by: by, thread: thread, adder: adder} do
+      posted = fn ->
+        Arca.SharedMessages.append(server(), thread.id, %{author: adder, content: "late"})
+      end
+
+      assert {:error, :not_member} = removed_first(thread, adder, by, posted)
+      assert {:ok, []} = unboxed(fn -> Arca.SharedMessages.list(server(), thread.id) end)
+    end
+  end
+
+  # `by` removes `member`, paused inside its transaction after its first
+  # statement on the thread's people, which follows the thread's lock;
+  # `write` meanwhile runs on another connection and waits on that lock;
+  # then the removal commits, and `write`'s answer is returned.
+  defp removed_first(thread, member, by, write) do
+    removal = paused(fn -> SharedThreadMembers.remove(server(), thread.id, member, by) end)
+    assert_receive {:paused, remover}, 5_000
+
+    raced = watched(write)
+    assert settled(raced) == :waiting
+    send(remover, :continue)
+
+    assert {:ok, %{user_id: ^member}} = Task.await(removal, 10_000)
+    Task.await(raced, 10_000)
+  end
+
+  defp people(thread) do
+    {:ok, rows} = unboxed(fn -> SharedThreadMembers.list(server(), thread.id) end)
+    rows
   end
 
   @doc false

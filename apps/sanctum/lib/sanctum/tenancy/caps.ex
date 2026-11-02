@@ -31,20 +31,19 @@ defmodule Sanctum.Tenancy.Caps do
   stale value, so a store that has been unreachable past the accessor's
   cache is never read as a server with no caps.
 
-  Every count but two ships on: the athanors at 10,000, the groups at 50,
-  the pairs at 200, the members at 1,000 and the threads at 1000 (`0`
-  turns any of them off); the shared threads a person creates, the people
-  in one shared thread and the bytes ship off, absent meaning no limit. A thread is
-  a row any member — or any headless client of theirs — can mint from the
+  The athanors ship at 10,000, the groups at 50, the members at 1,000 and
+  an athanor's threads at 1000 (`0` turns any of them off). A thread is a
+  row any member — or any headless client of theirs — can mint from the
   wire (`thread.create`), each with a follow row of its own, so an
-  athanor's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
-  the caller shares a room with, and nobody else's consent is asked, so
-  one member of a large room could otherwise spend `CYFR_MAX_ATHANORS`
-  for everyone by opening a DM per co-member. It counts the ACTIVE pairs a
-  person sits in — an ended DM is archived and frees its place — and is
-  asked for both people, since a pair is minted for two. A pair is a
-  shared thread of two (`Arca.SharedThreads.pair/3`) or, until the group
-  athanor goes, a frozen group athanor; each counts its own kind.
+  athanor's thread count needs a ceiling. The pairs a person holds, the
+  shared threads a person creates, the people in one shared thread and
+  the bytes ship off, absent meaning no limit, for an administrator to
+  set. The pair cap counts the ACTIVE pairs a person sits in — an ended
+  pair is archived and frees its place — and is asked for both people,
+  since a pair is made for two. A pair is a shared thread of two
+  (`Arca.SharedThreads.pair/3`) or, until the group athanor goes, a frozen
+  group athanor; each counts its own kind, and the group athanor's pairs
+  stay bounded by `max_athanors` too.
 
   The shared thread caps are counted by `Arca.SharedThreads` and
   `Arca.SharedThreadMembers` through the port, under the locks of the
