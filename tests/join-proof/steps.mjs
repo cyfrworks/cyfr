@@ -25,7 +25,7 @@ const settingsAt = (base, slug) => `${base}/a/${encodeURIComponent(slug)}/settin
 const shellAt = (base, slug) => `${base}/a/${encodeURIComponent(slug)}/canvas`;
 // The person's own athanor at H, by its route: where they work there,
 // read once they are admitted (`rest`).
-let own = null;
+let hubAthanor = null;
 const seconds = (ms) => Math.round(ms / 100) / 10;
 
 // The person's state at H, through run.sh.
@@ -111,7 +111,7 @@ async function crafted(chromium, { home, identifier }) {
   await page.goto(`${H}/login#cyfr=${b64url({ assertion: {}, genesis: {} })}`);
   await page.waitForURL((url) => url.pathname === "/login" && !url.hash, { timeout: 30_000 }).catch(() => null);
   await sleep(2_000);
-  const signedIn = !(await signedOut(page, settingsAt(H, own)));
+  const signedIn = !(await signedOut(page, settingsAt(H, hubAthanor)));
   await context.close();
 
   const after = { receipts: await receiptsAtHub(identifier), person: await atHub(identifier), actions: (await carryActions("a", identifier)).length };
@@ -155,7 +155,7 @@ async function copiedSession(chromium, { home, identifier }) {
   await context.addCookies([{
     name: cookie.name, value: cookie.value, domain: new URL(H).hostname, path: "/", httpOnly: true, secure: true, sameSite: "Lax",
   }]);
-  const atH = !(await signedOut(page, settingsAt(H, own)));
+  const atH = !(await signedOut(page, settingsAt(H, hubAthanor)));
   await context.close();
 
   // The person's own glass at A saw the request the copy made; it is
@@ -208,7 +208,7 @@ async function droppedCallback(chromium, state) {
   if (await continued.count()) await continued.click();
   await admitted(page);
   const retried = { receipts: await receiptsAtHub(identifier), sessions: (await atHub(identifier)).sessions.length };
-  const signedIn = !(await signedOut(page, settingsAt(H, own)));
+  const signedIn = !(await signedOut(page, settingsAt(H, hubAthanor)));
   await context.close();
   record.dropped_callback = { dropped_status: dropped, before, after_drop: afterDrop, after_retry: retried, signed_in: signedIn };
   return row("dropped_callback", "chromium",
@@ -417,7 +417,7 @@ async function hubPasskey(chromium, state) {
   const { identifier, hubPage } = state;
   const person = await atHub(identifier);
   await authenticatorWith(hubPage);
-  await open(hubPage, settingsAt(H, own));
+  await open(hubPage, settingsAt(H, hubAthanor));
   await hubPage.locator('[data-test="passkey-register"]').click();
   await flashed(hubPage, "administrator authorizes");
   await counted();
@@ -477,7 +477,7 @@ async function pairPhone(chromium, { page, home, base = A, credentialsFrom, view
   await authenticatorWith(phone, await credentialsFor(credentialsFrom, new URL(base).host));
   const code = await shownCode(phone, H);
 
-  await open(page, shellAt(H, own));
+  await open(page, shellAt(H, hubAthanor));
   await page.locator("#shell-devices").click();
   await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
   await page.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
@@ -580,7 +580,7 @@ async function removal(state) {
   const person = await atHub(identifier);
   const inHousehold = await ask({ op: "post", user_id: person.user_id, thread_id: hub.household, text: "after removal" });
   const inPair = await ask({ op: "post", user_id: person.user_id, thread_id: state.pair, text: "still here" });
-  const ownPage = !(await signedOut(hubPage, settingsAt(H, own)));
+  const ownPage = !(await signedOut(hubPage, settingsAt(H, hubAthanor)));
   await open(home.desk, home.settings);
   const aUsable = new URL(home.desk.url()).pathname.endsWith("/settings");
   const phoneState = state.phone ? await glassState(state.phone.phone) : null;
@@ -607,14 +607,14 @@ async function rotate(chromium, state) {
   const after = await ask({ op: "a_head" });
 
   // H retires the sessions bound to the old key_epoch within its bound.
-  const retiredMs = await within(() => signedOut(hubPage, settingsAt(H, own)), (SETTINGS.fresh + 30) * 1000);
+  const retiredMs = await within(() => signedOut(hubPage, settingsAt(H, hubAthanor)), (SETTINGS.fresh + 30) * 1000);
   const passkeys = (await atHub(identifier)).passkeys;
 
   // The H passkey stays, and signs the person in again.
   await hubPage.goto(`${H}/login`);
   await connected(hubPage);
   await passkeySignIn(hubPage, H);
-  const back = !(await signedOut(hubPage, settingsAt(H, own)));
+  const back = !(await signedOut(hubPage, settingsAt(H, hubAthanor)));
 
   // A CYFR-door session alone activates no new passkey here: a fresh
   // proof is asked for first.
@@ -622,7 +622,7 @@ async function rotate(chromium, state) {
   let asked = null;
   if (fresh.page) {
     await authenticatorWith(fresh.page);
-    await open(fresh.page, settingsAt(H, own));
+    await open(fresh.page, settingsAt(H, hubAthanor));
     await fresh.page.locator('[data-test="passkey-register"]').click();
     asked = await fresh.page.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 }).then(() => true).catch(() => false);
     await fresh.context.close();
@@ -679,7 +679,7 @@ async function tabs(state) {
   await sleep(2_000);
   await tab.unroute(`${H}/**`);
   const other = await home.deskContext.newPage();
-  await open(other, settingsAt(H, own)).catch(() => null);
+  await open(other, settingsAt(H, hubAthanor)).catch(() => null);
   await open(home.desk, home.settings);
   await open(tab, `${A}/carry`);
   const listed = await tab.locator('[data-test="carry-pending"]').innerText().catch(() => "");
@@ -701,7 +701,7 @@ async function restore(chromium, state) {
   await passkeyPage.goto(`${H}/login`);
   await connected(passkeyPage);
   await passkeySignIn(passkeyPage, H);
-  await open(passkeyPage, shellAt(H, own));
+  await open(passkeyPage, shellAt(H, hubAthanor));
   await passkeyPage.locator("#shell-devices").click();
   await passkeyPage.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
   // A pairing begun for some new device's code, the digest of a key no
@@ -716,7 +716,7 @@ async function restore(chromium, state) {
   // paired there, goes on, bound to H.
   const down = await ask({ op: "a_down" });
   const hubPage = await state.hubContext.newPage();
-  const hubUsable = !(await signedOut(hubPage, settingsAt(H, own)));
+  const hubUsable = !(await signedOut(hubPage, settingsAt(H, hubAthanor)));
   await hubPage.close();
   const phoneState = await glassState(state.phone.phone);
   record.lost_home = { a_down: down.down, hub_page: hubUsable, phone_at_hub: phoneState };
@@ -758,7 +758,7 @@ async function retired(chromium, state) {
   const { passkeyPage, passkeyContext } = state.passkeySession;
   // H retires every old-epoch session, the H passkey's included, within
   // its bound, as it reads the identity's new head.
-  const retiredMs = await within(() => signedOut(passkeyPage, settingsAt(H, own)), (SETTINGS.fresh + 40) * 1000);
+  const retiredMs = await within(() => signedOut(passkeyPage, settingsAt(H, hubAthanor)), (SETTINGS.fresh + 40) * 1000);
   const measuredFromRestore = retiredMs === null ? null : seconds(Date.now() - state.restoredAt);
   const person = await atHub(identifier);
   const confirmations = (await ask({ op: "confirmations", cell: "h", identifier })).confirmations;
@@ -779,7 +779,7 @@ async function retired(chromium, state) {
   const old = assertions[0];
   await replayPage.goto(`${H}/login#cyfr=${old}`);
   await sleep(4_000);
-  const replayedIn = !(await signedOut(replayPage, settingsAt(H, own)));
+  const replayedIn = !(await signedOut(replayPage, settingsAt(H, hubAthanor)));
   await replay.close();
   const after = { receipts: await receiptsAtHub(identifier), sessions: (await atHub(identifier)).sessions.length };
 
@@ -808,7 +808,7 @@ async function adminAgain(chromium, state) {
   const { identifier } = state;
   const page = state.newHub.page;
   await authenticatorWith(page);
-  await open(page, settingsAt(H, own));
+  await open(page, settingsAt(H, hubAthanor));
   await page.locator('[data-test="passkey-register"]').click();
   await flashed(page, "administrator authorizes");
   await counted();
@@ -846,7 +846,7 @@ async function viewport(chromium, state) {
 
   // Revocation, from H's Devices under H's passkey: the phone reads the
   // request on its glass first, then hears its pairing end.
-  await open(page, shellAt(H, own));
+  await open(page, shellAt(H, hubAthanor));
   await page.locator("#shell-devices").click();
   await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
   const revoke = await pressInLayer(page, '[data-test="pairing-revoke"]');
@@ -873,13 +873,13 @@ async function directoryDown(state) {
   await ask({ op: "directory_fault", directory: "dir.test", mode: "down" });
   const downAt = Date.now();
   const answered = await ask({ op: "h_fresh", identifier });
-  const usableWithin = !(await signedOut(page, settingsAt(H, own)));
+  const usableWithin = !(await signedOut(page, settingsAt(H, hubAthanor)));
   await sleep((SETTINGS.fresh + 5) * 1000);
   const past = await ask({ op: "h_fresh", identifier });
 
   // Past the bound the browser's protected work pauses: the page is not
   // served, and the sign-in page it lands on says why.
-  await page.goto(settingsAt(H, own));
+  await page.goto(settingsAt(H, hubAthanor));
   await page.waitForURL((url) => url.pathname === "/login", { timeout: 30_000 }).catch(() => null);
   await page.waitForFunction(() => /could not be confirmed fresh/.test(document.body.innerText), null, { timeout: 30_000 })
     .catch(() => null);
@@ -889,7 +889,7 @@ async function directoryDown(state) {
 
   // The directory back, the same session works again: a pause, not a
   // sign-out.
-  const resumedMs = await within(async () => !(await signedOut(page, settingsAt(H, own))), 30_000);
+  const resumedMs = await within(async () => !(await signedOut(page, settingsAt(H, hubAthanor))), 30_000);
   const said = pastPage.split("\n").find((line) => /could not be confirmed fresh/.test(line)) || null;
   record.directory_down = {
     within: answered.key_epoch ? "fresh" : answered, usable_within: usableWithin, past: past.refused || past,
@@ -907,8 +907,8 @@ async function directoryDown(state) {
 
 export async function rest(chromium, proxy, { home, hub, hubPage, hubContext }) {
   const state = { home, hub, hubPage, hubContext, proxy, identifier: home.identifier, code2: home.code2 };
-  own = (await atHub(home.identifier)).athanor_route;
-  if (!row("own_athanor", "chromium", !!own, "the person admitted at H has their own athanor there", { route: own })) return;
+  hubAthanor = (await atHub(home.identifier)).athanor_route;
+  if (!row("own_athanor", "chromium", !!hubAthanor, "the person admitted at H has their own athanor there", { route: hubAthanor })) return;
   const steps = [
     () => crafted(chromium, state),
     () => copiedSession(chromium, state),

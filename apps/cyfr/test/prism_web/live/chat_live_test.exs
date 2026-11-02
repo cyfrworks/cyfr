@@ -1257,20 +1257,44 @@ defmodule PrismWeb.ChatLiveTest do
       bob = test_user()
       conn = log_in_user(conn, alice, athanor_id: athanor().id)
       {view, _html} = mount_chat(conn)
+      # The page acts on what Alice is told; the test hears the same.
+      :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(alice.user_id))
+      alice_id = alice.user_id
 
       {:ok, late} = Sanctum.SharedThreads.create(bob.user_id, "Late #{bob.namespace}")
+      late_id = late.id
       refute has_element?(view, "#shared-thread-" <> late.id)
       {:ok, :added} = Sanctum.SharedThreads.add(bob.user_id, late.id, user_id: alice.user_id)
-      assert has_element?(view, "#shared-thread-#{late.id}", "Late #{bob.namespace}")
+
+      assert_receive %Cyfr.Bus.SharedThreadChanged{user_id: ^alice_id, thread_id: ^late_id},
+                     5_000
+
+      wait_until(
+        fn -> has_element?(view, "#shared-thread-#{late.id}", "Late #{bob.namespace}") end,
+        5_000,
+        "the added thread in the rail"
+      )
 
       {:ok, _} = Sanctum.SharedThreads.rename(bob.user_id, late.id, "Later #{bob.namespace}")
-      assert has_element?(view, "#shared-thread-#{late.id}", "Later #{bob.namespace}")
+
+      assert_receive %Cyfr.Bus.SharedThreadChanged{user_id: ^alice_id, thread_id: ^late_id},
+                     5_000
+
+      wait_until(
+        fn -> has_element?(view, "#shared-thread-#{late.id}", "Later #{bob.namespace}") end,
+        5_000,
+        "the renamed thread in the rail"
+      )
 
       view |> element("#shared-thread-#{late.id} button") |> render_click()
       assert_patch(view, PrismWeb.ChatLive.shared_path(late.id))
 
       :ok = Sanctum.SharedThreads.remove(bob.user_id, late.id, user_id: alice.user_id)
-      assert_patch(view, "/chat")
+
+      assert_receive %Cyfr.Bus.SharedThreadChanged{user_id: ^alice_id, thread_id: ^late_id},
+                     5_000
+
+      assert_patch(view, "/chat", 5_000)
       html = render(view)
       assert html =~ "You are no longer in that thread."
       refute has_element?(view, "#shared-thread-" <> late.id)
@@ -1293,14 +1317,15 @@ defmodule PrismWeb.ChatLiveTest do
       title = "Plans #{alice.namespace}"
 
       assert_receive %Cyfr.Bus.RoomInView{
-        room: %{"shared_thread_id" => id, "title" => ^title} = room
-      }
+                       room: %{"shared_thread_id" => id, "title" => ^title} = room
+                     },
+                     5_000
 
       assert id == plans.id
       assert Map.keys(room) |> Enum.sort() == ["shared_thread_id", "title"]
 
       render_patch(view, chat_path(athanor(), own.id))
-      assert_receive %Cyfr.Bus.RoomInView{room: nil}
+      assert_receive %Cyfr.Bus.RoomInView{room: nil}, 5_000
 
       Cyfr.Test.Sandbox.end_views()
     end

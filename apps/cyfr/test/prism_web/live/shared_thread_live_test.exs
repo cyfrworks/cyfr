@@ -7,6 +7,9 @@ defmodule PrismWeb.SharedThreadLiveTest do
   # gate's `shared_thread` tool under the person's own seat.
   use PrismWeb.ConnCase, async: false
 
+  import Prima.Test.Wait
+
+  alias Cyfr.Bus.SharedThreadChanged
   alias Sanctum.SharedThreads
   alias Sanctum.Test.RegistryStub
 
@@ -35,6 +38,10 @@ defmodule PrismWeb.SharedThreadLiveTest do
     {view, pane}
   end
 
+  # What a person is told of their threads, heard by the test as the page
+  # and the pane hear it.
+  defp listen!(user), do: :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(user.user_id))
+
   defp identifier, do: "per_" <> Prima.Digest.sha256_hex("stl-#{System.unique_integer()}")
 
   test "the pane shows what was said, by whom, with its files, and a post reaches another person's open pane",
@@ -57,9 +64,15 @@ defmodule PrismWeb.SharedThreadLiveTest do
              "a.txt"
            )
 
+    listen!(bob)
+    bob_id = bob.user_id
+    thread_id = thread.id
     alice_pane |> form("#shared-composer", %{"content" => "hi bob"}) |> render_submit()
 
-    assert render(bob_pane) =~ "hi bob"
+    assert_receive %SharedThreadChanged{kind: :posted, user_id: ^bob_id, thread_id: ^thread_id},
+                   5_000
+
+    wait_until(fn -> render(bob_pane) =~ "hi bob" end, 5_000, "the post in bob's pane")
     {:ok, messages} = SharedThreads.messages(bob.user_id, thread.id)
     assert %{author: author, content: "hi bob"} = List.last(messages)
     assert author == alice.user_id
@@ -125,7 +138,12 @@ defmodule PrismWeb.SharedThreadLiveTest do
     pane |> form("#shared-rename-form", %{"title" => "Renamed"}) |> render_submit()
     assert has_element?(pane, "#shared-title", "Renamed")
     assert {:ok, %{title: "Renamed"}} = SharedThreads.get(carol.user_id, thread.id)
-    assert has_element?(view, "#shared-thread-#{thread.id}", "Renamed")
+
+    wait_until(
+      fn -> has_element?(view, "#shared-thread-#{thread.id}", "Renamed") end,
+      5_000,
+      "the renamed thread in the rail"
+    )
 
     pane |> element("#shared-invite") |> render_click()
     assert render(pane) =~ "/invite#"
@@ -150,11 +168,18 @@ defmodule PrismWeb.SharedThreadLiveTest do
 
     refute has_element?(pane, "#shared-people button")
 
+    listen!(alice)
+    alice_id = alice.user_id
+    pair_id = pair.id
     pane |> element("#shared-leave") |> render_click()
 
     assert {:error, {:not_found, "Thread", _}} = SharedThreads.get(alice.user_id, pair.id)
     assert {:ok, %{status: "archived"}} = SharedThreads.get(bob.user_id, pair.id)
-    assert_patch(view, "/chat")
+
+    assert_receive %SharedThreadChanged{kind: :changed, user_id: ^alice_id, thread_id: ^pair_id},
+                   5_000
+
+    assert_patch(view, "/chat", 5_000)
     assert render(view) =~ "You are no longer in that thread."
 
     Cyfr.Test.Sandbox.end_views()
@@ -168,11 +193,18 @@ defmodule PrismWeb.SharedThreadLiveTest do
   } do
     {_alice_view, alice_pane} = open!(conn, alice, thread.id)
     {bob_view, _bob_pane} = open!(build_conn(), bob, thread.id)
+    listen!(bob)
+    bob_id = bob.user_id
+    thread_id = thread.id
 
     alice_pane |> element("#shared-archive") |> render_click()
 
     assert {:ok, %{status: "archived"}} = SharedThreads.get(bob.user_id, thread.id)
-    assert_patch(bob_view, "/chat")
+
+    assert_receive %SharedThreadChanged{kind: :changed, user_id: ^bob_id, thread_id: ^thread_id},
+                   5_000
+
+    assert_patch(bob_view, "/chat", 5_000)
     assert render(bob_view) =~ "This thread has been archived."
     refute has_element?(bob_view, "#shared-thread-" <> thread.id)
 
@@ -209,12 +241,24 @@ defmodule PrismWeb.SharedThreadLiveTest do
   test "a person taken out of the thread while its pane is open is told so, and reads nothing more",
        %{conn: conn, alice: alice, bob: bob, thread: thread} do
     {_view, pane} = open!(build_conn() |> Map.merge(conn), bob, thread.id)
+    listen!(bob)
+    bob_id = bob.user_id
+    thread_id = thread.id
 
     :ok = SharedThreads.remove(alice.user_id, thread.id, user_id: bob.user_id)
+
+    assert_receive %SharedThreadChanged{kind: :changed, user_id: ^bob_id, thread_id: ^thread_id},
+                   5_000
+
     {:ok, _} = SharedThreads.post(alice.user_id, thread.id, "after you left")
 
+    wait_until(
+      fn -> render(pane) =~ "You are no longer in this thread." end,
+      5_000,
+      "the pane saying bob is out"
+    )
+
     html = render(pane)
-    assert html =~ "You are no longer in this thread."
     refute html =~ "after you left"
     refute has_element?(pane, "#shared-composer")
   end
