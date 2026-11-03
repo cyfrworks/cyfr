@@ -13,12 +13,13 @@ import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect as tlsConnect } from "node:tls";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
-import { terminalStep } from "./terminal.mjs";
+import { firstPasskey } from "../browser/lib.mjs";
+import { confirmAtHome, crossDevice, holdAssertion, recertify, terminalRenewal, terminalStep } from "./terminal.mjs";
 import {
   A, A2, H, SETTINGS, addSession, admitted, assertions, ask, authenticatorWith, begin, captureAssertions, closePrompt,
-  confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, deviceLog, flashed,
-  confirmSignIn, freshContext, glassState, instrumentDevice, layer, nameHome, open, passkeySignIn, pressInLayer, ready, record, row,
-  secrets, shownCode, signIn, signInAtHome, signInAtHub, sleep, storageOf, storedDevice, waitFor,
+  confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, flashed,
+  confirmSignIn, freshContext, layer, nameHome, open, passkeySignIn, pressInLayer, ready, record, row,
+  secrets, signIn, signInAtHome, signInAtHub, sleep, storageOf, waitFor,
 } from "./common.mjs";
 
 const b64url = (object) => Buffer.from(JSON.stringify(object)).toString("base64url");
@@ -159,15 +160,21 @@ async function copiedSession(chromium, { home, identifier }) {
   const atH = !(await signedOut(page, settingsAt(H, hubAthanor)));
   await context.close();
 
-  // The person's own glass at A saw the request the copy made; it is
-  // cancelled there.
-  const glassShown = await home.glass.locator('[data-test="glass-prompt"]').count();
+  // The person's own Prism at A, the page holding their passkey, shows the
+  // request the copy made; it is cancelled there.
+  const confirmer = home.confirmer;
+  await confirmer.goto(`${A}/`);
+  await connected(confirmer);
+  const other = `${layer} [data-test="confirmation"][data-own="false"]`;
+  await confirmer.waitForSelector(other, { timeout: 30_000 }).catch(() => null);
+  const shownToPerson = await confirmer.locator(other).count();
   record.copied_session = {
     asserted: last && last.asserted, receipts: [before.receipts, await receiptsAtHub(identifier)],
-    signed_in_at_h: atH, shown_on_the_persons_glass: glassShown,
+    signed_in_at_h: atH, shown_in_the_persons_prism: shownToPerson,
   };
-  for (const ref of await home.glass.$$eval('[data-test="glass-prompt"]', (els) => els.map((e) => e.getAttribute("data-ref")))) {
-    await home.glass.locator(`[data-test="glass-prompt"][data-ref="${ref}"] [data-test="glass-cancel"]`).click().catch(() => null);
+  for (let i = 0; i < 5 && (await confirmer.locator(`${other} [data-test="confirm-cancel"]`).count()); i++) {
+    await confirmer.locator(`${other} [data-test="confirm-cancel"]`).first().click().catch(() => null);
+    await confirmer.waitForTimeout(1_000);
   }
   return row("copied_session", "chromium",
     last && !last.asserted && record.copied_session.receipts[0] === record.copied_session.receipts[1] && !atH,
@@ -388,19 +395,20 @@ async function invited(chromium, { home, identifier }) {
 }
 
 // The operator at H, signed in by the release fixture's door, with their
-// own first passkey there.
+// own first passkey there: H's setup made them with a protected device,
+// which confirms that registration (`firstPasskey`, the release fixture's
+// `device_confirm`).
 async function operator(chromium) {
   const { cookie, segment } = await ask({ op: "admin_cookie" }, { secret: true });
   secrets.push(cookie);
   const context = await freshContext(chromium);
   await addSession(context, H, cookie);
   const page = await context.newPage();
-  await authenticatorWith(page);
+  const authenticator = await authenticatorWith(page);
   await open(page, settingsAt(H, segment));
-  await page.locator('[data-test="passkey-register"]').click();
-  await flashed(page, "Passkey registered.");
+  const registered = await firstPasskey(page, { ask, layer, authenticator });
   await counted();
-  return { page, context, segment };
+  return { page, context, segment, registered };
 }
 
 // The operator authorizes the person's exact pending registration, with a
@@ -467,99 +475,29 @@ async function aPasskeyAtHub(chromium, { home, identifier }) {
     record.a_passkey_at_h);
 }
 
-// The person pairs a phone at their own athanor at H: the phone takes them to
-// A to certify it, and comes back with A's certificate.
-async function pairPhone(chromium, { page, home, base = A, credentialsFrom, viewport, step }) {
-  // The phone makes its key first, on H's /pair page, and shows its code;
-  // the person begins H's pairing for that code.
-  const context = await freshContext(chromium, viewport || { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await context.addInitScript(instrumentDevice);
-  const phone = await context.newPage();
-  await authenticatorWith(phone, await credentialsFor(credentialsFrom, new URL(base).host));
-  const code = await shownCode(phone, H);
+// The standing H holds for the command line paired there (`terminal`).
+async function terminalStanding(state) {
+  if (!state.terminal) return null;
+  const clients = (await ask({ op: "paired", cell: "h", identifier: state.identifier })).paired;
+  const found = clients.find((c) => c.id === state.terminal.clientId);
+  return found ? found.standing : null;
+}
 
-  await open(page, shellAt(H, hubAthanor));
-  await page.locator("#shell-devices").click();
-  await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
-  await page.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
-  const press = await pressInLayer(page, '[data-test="pairing-begin"]');
-  await confirmHere(page);
-  await page.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
-  const link = await page.locator(`${layer} [data-test="pairing-link"]`).inputValue();
-  await closePrompt(page);
-  secrets.push(link.split("#code=")[1]);
-
-  const measured = {};
-  await phone.goto(link);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="certify"]', { timeout: 60_000 });
-  const pending = (await storedDevice(phone)).pending;
-  if (viewport) measured.glass_certify = await measure(phone, "#glass");
-  await phone.locator('[data-test="glass-home"]').fill(new URL(base).host);
-  await phone.locator('[data-test="glass-home-submit"]').click();
-
-  // At the person's home: signed in by passkey, through its sign-in page.
-  await phone.waitForURL((url) => url.origin === base && url.pathname === "/login", { timeout: 60_000 });
-  await passkeySignIn(phone, base);
-  await phone.waitForURL((url) => url.origin === base && url.pathname === "/carry", { timeout: 60_000 });
-  await phone.waitForSelector('[data-test="carry-certify"]', { timeout: 60_000 });
-  const panel = await phone.locator('[data-test="carry-certify"]').innerText();
-  if (viewport) measured.certify_panel = await measure(phone, '[data-test="carry-certify"]');
-  await phone.locator('[data-test="certify-continue"]').click();
+// A credential entry asked for on `page`'s vault at H: its own request,
+// waiting on its confirmation. Answers its ref.
+async function askEntryAtHub(page, name) {
+  await open(page, `${H}/a/${encodeURIComponent(hubAthanor)}/vault`);
+  if (!(await page.locator("#vault-create-form").isVisible().catch(() => false))) {
+    await page.locator('button[phx-click="show_add"][phx-value-mode="fields"]').click();
+  }
+  const form = page.locator("#vault-create-form");
+  await form.locator('select[name="kind"]').selectOption("api_key", { timeout: 30_000 });
+  await form.locator('input[name="name"]').fill(name);
+  await form.locator('textarea[name="fields"]').fill(`API_KEY=${name}-not-shown`);
+  await form.locator('input[name="destination_hosts"]').fill("fixture.test");
+  await form.locator('button[type="submit"]').click();
   const own = `${layer} [data-test="confirmation"][data-own="true"]`;
-  await phone.waitForSelector(`${own} [data-test="confirm-passkey"]`, { timeout: 60_000 });
-  if (viewport) measured.consent_prompt = await measure(phone, layer);
-  const preview = await confirmHere(phone);
-
-  // Back at H with the certificate, the glass pairs and connects.
-  await phone.waitForURL((url) => url.origin === H && url.pathname === "/pair", { timeout: 60_000 });
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  if (viewport) measured.glass_ready = await measure(phone, "#glass");
-  const stored = await storedDevice(phone);
-  return { phone, context, pending, panel, preview, stored, measured, step, press };
-}
-
-async function phoneStep(chromium, state) {
-  const { home, identifier, hubPage } = state;
-  const paired = await pairPhone(chromium, { page: hubPage, home, credentialsFrom: home.desk });
-  state.phone = paired;
-  const cert = paired.stored.device && paired.stored.device.certificate;
-  const certifications = (await ask({ op: "certifications", cell: "a" })).certifications;
-  const clients = (await ask({ op: "paired", cell: "h", identifier })).paired;
-  record.phone = {
-    pending_kept: paired.pending && { certify: paired.pending.certify }, panel: paired.panel.slice(0, 300),
-    preview: paired.preview.slice(0, 300), issuer: cert && cert.issuer, audience: cert && cert.audience,
-    subject: cert && cert.subject && cert.subject.kind, certifications, clients,
-    pending_after: paired.stored.pending, press: paired.press,
-  };
-  return row("phone", "chromium",
-    cert && cert.issuer === A && cert.audience === H && cert.subject.kind === "identity" &&
-      certifications.length === 1 && certifications[0].audience === H && clients.some((c) => c.standing === "active") &&
-      paired.stored.pending === null && /person\.certify/.test(paired.preview),
-    "a phone pairs at H under A's certificate: it keeps its code while the person certifies it at A under a fresh proof there, and comes back",
-    record.phone);
-}
-
-async function renewal(chromium, proxy, state) {
-  const { phone } = state.phone;
-  const first = (await storedDevice(phone)).device.certificate;
-  const mark = proxy.seen.length;
-  const renewed = await waitFor(async () => {
-    const held = (await storedDevice(phone)).device;
-    return held && held.certificate.expires_at > first.expires_at ? held.certificate : null;
-  }, { timeoutMs: (SETTINGS.cert_seconds + 30) * 1000, stepMs: 1_000, what: "the renewed certificate" }).catch(() => null);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 }).catch(() => null);
-  const calls = proxy.seen.slice(mark).filter((r) => r.host === new URL(A).host && new URL(r.url).pathname === "/certify/v1/renew");
-  const posts = calls.filter((r) => r.method === "POST");
-  const cross = crossSiteHeld(calls);
-  record.renewal = {
-    renewed: !!renewed, posts: posts.map((r) => ({ status: r.status, site: r.fetch.site, origin: r.origin, cookie: r.cookie })),
-    preflights: calls.filter((r) => r.method === "OPTIONS").length, cross_site: cross, state: await glassState(phone),
-  };
-  return row("renewal", "chromium",
-    renewed && posts.length >= 2 && posts.every((r) => r.status === 200 && !r.cookie && r.origin === H) && cross.held &&
-      record.renewal.state === "ready",
-    "at half its life the phone renews at A by fetch, proving its key, with no cookie and no confirmation, and connects to H under the replacement",
-    record.renewal);
+  return (await page.waitForSelector(own, { timeout: 30_000 })).getAttribute("data-ref");
 }
 
 async function thread(state) {
@@ -584,22 +522,25 @@ async function removal(state) {
   const ownPage = !(await signedOut(hubPage, settingsAt(H, hubAthanor)));
   await open(home.desk, home.settings);
   const aUsable = new URL(home.desk.url()).pathname.endsWith("/settings");
-  const phoneState = state.phone ? await glassState(state.phone.phone) : null;
+  const deviceAtHub = await terminalStanding(state);
   record.removal = {
     removed: removed.ok ? true : removed, threads: person.threads, post_in_household: inHousehold,
-    post_in_pair: !!inPair.message_id, own_page: ownPage, a_usable: aUsable, phone: phoneState,
+    post_in_pair: !!inPair.message_id, own_page: ownPage, a_usable: aUsable, command_line_at_hub: deviceAtHub,
   };
   return row("removal", "chromium",
     !!removed.ok && !person.threads.includes(hub.household) && person.threads.includes(state.pair) &&
-      !!inHousehold.refused && !!inPair.message_id && ownPage && aUsable && phoneState === "ready",
-    "removed from H's Household thread, the person can no longer post there, while the pair thread, their own athanor at H, the phone paired there and A stay usable",
+      !!inHousehold.refused && !!inPair.message_id && ownPage && aUsable && deviceAtHub === "active",
+    "removed from H's Household thread, the person can no longer post there, while the pair thread, their own athanor at H, the command line paired there and A stay usable",
     record.removal);
 }
 
 async function rotate(chromium, state) {
   const { home, identifier, hubPage } = state;
+  // A change at H confirmed at A under the key about to be replaced, its
+  // assertion kept by the proof and never delivered (`recertify` presents
+  // it once A rotated).
+  state.heldAssertion = await holdAssertion({ ...state, hubAthanor });
   const before = await ask({ op: "a_head" });
-  const mark = (await deviceLog(state.phone.phone)).length;
   await open(home.desk, home.settings);
   await home.desk.locator('[data-test="identity-rotate"]').click();
   await confirmHere(home.desk);
@@ -634,39 +575,12 @@ async function rotate(chromium, state) {
     passkeys: passkeys.map((p) => p.state), passkey_signs_in: back, new_registration_asks_fresh_proof: asked,
     passkeys_after: passkeysAfter.map((p) => p.state), rotated_at: rotatedAt,
   };
-  state.phoneMark = mark;
   return row("rotate", "chromium",
     record.rotate.head_moved && retiredMs !== null && retiredMs <= (SETTINGS.fresh + 30) * 1000 &&
       passkeys.some((p) => p.state === "active") && back && asked === true &&
       passkeysAfter.filter((p) => p.state === "active").length === 1,
     "after A rotates the live key, H retires its old-epoch sessions within its bound; its passkey stays and signs in; a CYFR-door session's new passkey asks for a fresh proof",
     record.rotate);
-}
-
-async function recertify(state) {
-  const { phone } = state.phone;
-  // H refuses the certificate chained to the old key; A ends its
-  // certification; the phone offers to certify again.
-  await phone.waitForSelector('[data-test="glass-status"][data-state="recertify"]', { timeout: (SETTINGS.fresh + 90) * 1000 });
-  const log = (await deviceLog(phone)).slice(state.phoneMark || 0);
-  const prefilled = await phone.locator('[data-test="glass-home"]').inputValue();
-  await phone.locator('[data-test="glass-home-submit"]').click();
-  await phone.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
-  await phone.waitForSelector('[data-test="carry-certify"]', { timeout: 60_000 });
-  await phone.locator('[data-test="certify-continue"]').click();
-  await confirmHere(phone);
-  await phone.waitForURL((url) => url.origin === H && url.pathname === "/pair", { timeout: 60_000 });
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  const cert = (await storedDevice(phone)).device.certificate;
-  const head = await ask({ op: "a_head" });
-  record.recertify = {
-    closes: log.filter((e) => e.event === "close").map((e) => e.code), prefilled,
-    key_epoch_current: cert.subject.key_epoch === head.head,
-  };
-  return row("recertify", "chromium",
-    record.recertify.closes.includes(4408) && prefilled === A && record.recertify.key_epoch_current,
-    "the phone's certificate ends with the old key: the renewal at A is refused, and the phone is certified again there under a fresh proof, naming A's new key_epoch",
-    record.recertify);
 }
 
 async function tabs(state) {
@@ -706,7 +620,7 @@ async function restore(chromium, state) {
   await passkeyPage.locator("#shell-devices").click();
   await passkeyPage.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
   // A pairing begun for some new device's code, the digest of a key no
-  // glass here holds: it only waits for its confirmation.
+  // device here holds: it only waits for its confirmation.
   const someKey = createHash("sha256").update(randomBytes(32)).digest("base64url");
   await passkeyPage.locator(`${layer} [data-test="pairing-key-input"]`).fill(someKey);
   await pressInLayer(passkeyPage, '[data-test="pairing-begin"]');
@@ -719,10 +633,10 @@ async function restore(chromium, state) {
   const hubPage = await state.hubContext.newPage();
   const hubUsable = !(await signedOut(hubPage, settingsAt(H, hubAthanor)));
   await hubPage.close();
-  const phoneState = await glassState(state.phone.phone);
-  record.lost_home = { a_down: down.down, hub_page: hubUsable, phone_at_hub: phoneState };
-  if (!row("lost_home", "chromium", down.down && hubUsable && phoneState === "ready",
-    "with A lost, the person's work at H, a page there and the phone paired there, goes on bound to H",
+  const deviceAtHub = await terminalStanding(state);
+  record.lost_home = { a_down: down.down, hub_page: hubUsable, command_line_at_hub: deviceAtHub };
+  if (!row("lost_home", "chromium", down.down && hubUsable && deviceAtHub === "active",
+    "with A lost, the person's work at H, a page there and the command line paired there, goes on bound to H",
     record.lost_home)) return false;
 
   // The person restores on A2 with the second recovery code.
@@ -823,48 +737,25 @@ async function adminAgain(chromium, state) {
     record.admin_again);
 }
 
+// The cross-home confirmation's screens at the handheld's 720×720 touch
+// viewport (HANDHELD), after the restore: a context holding the person's
+// sessions at H and A2 and their A2 passkey asks for a credential entry at
+// H and confirms it through A2; H's request panel, A2's /carry#confirm=
+// page, A2's prompt and H's /confirm answer are measured and held.
 async function viewport(chromium, state) {
-  const page = state.newHub.page;
-  const paired = await pairPhone(chromium, {
-    page, base: A2, credentialsFrom: state.a2.page, viewport: HANDHELD, step: "viewport",
-  });
-  const { phone } = paired;
-  const measured = { ...paired.measured };
-
-  // Reconnecting: the page opened again connects under the stored device.
-  // Opened by its address, not reloaded: a reload repeats the referrer of
-  // the cross-site hop that first brought the page, as its own request.
-  await phone.goto(`${H}/pair`);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  measured.reconnected = await measure(phone, "#glass");
-
-  // Switching homes: to the person's home and back.
-  await phone.goto(`${A2}/`);
-  await connected(phone).catch(() => null);
-  measured.other_home = await measure(phone);
-  await phone.goto(`${H}/pair`);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-
-  // Revocation, from H's Devices under H's passkey: the phone reads the
-  // request on its glass first, then hears its pairing end.
-  await open(page, shellAt(H, hubAthanor));
-  await page.locator("#shell-devices").click();
-  await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
-  const revoke = await pressInLayer(page, '[data-test="pairing-revoke"]');
-  const shown = await phone.waitForSelector('[data-test="glass-prompt"]', { timeout: 60_000 }).then(() => true).catch(() => false);
-  if (shown) measured.glass_prompt = await measure(phone, "#glass");
-  await confirmHere(page);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="revoked"]', { timeout: 60_000 });
-  measured.revoked = await measure(phone, "#glass");
-
-  // The glass's and the prompts' screens are what the check holds, the
-  // glass's own prompt for the revocation among them; the other home's
-  // console page is measured and recorded as a finding.
-  const { other_home: otherHome, ...held } = measured;
-  const failures = unmet(held);
-  record.viewport = { measured: held, glass_prompt_shown: shown, failures, finding_other_home_console: otherHome, press: paired.press, revoke };
-  return row("viewport", "chromium", paired.stored.device && shown && failures.length === 0,
-    "at 720×720: pairing, reconnecting, switching homes, revocation and a consent read and confirmed in the system layer, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
+  const context = await chromium.newContext(HANDHELD);
+  await context.addCookies(await state.newHub.page.context().cookies([H, A2]));
+  const page = await context.newPage();
+  await authenticatorWith(page, await credentialsFor(state.a2.page, new URL(A2).host));
+  const measured = {};
+  const ref = await askEntryAtHub(page, "join-viewport-entry");
+  const confirmed = await confirmAtHome(page, ref, A2, { measured });
+  await context.close();
+  const failures = unmet(measured);
+  record.viewport = { measured, failures, home_origin: confirmed.home_origin, done: confirmed.done };
+  return row("viewport", "chromium",
+    confirmed.home_origin === A2 && confirmed.done === "confirmed" && failures.length === 0,
+    "at 720×720: a request at H, the person's own CYFR's confirmation page and prompt, and H's answer to its assertion, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);
 }
 
@@ -919,13 +810,13 @@ export async function rest(chromium, proxy, { home, hub, hubPage, hubContext }) 
     () => invited(chromium, state),
     () => hubPasskey(chromium, state),
     () => aPasskeyAtHub(chromium, state),
-    () => phoneStep(chromium, state),
-    () => renewal(chromium, proxy, state),
-    () => terminalStep(proxy, { ...state, hubAthanor }),
+    () => terminalStep(proxy, Object.assign(state, { hubAthanor })),
+    () => crossDevice(proxy, state),
+    () => terminalRenewal(proxy, state),
     () => thread(state),
     () => removal(state),
     () => rotate(chromium, state),
-    () => recertify(state),
+    () => recertify(proxy, state),
     () => tabs(state),
     () => restore(chromium, state),
     () => retired(chromium, state),

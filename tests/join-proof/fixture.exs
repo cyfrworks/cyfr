@@ -282,7 +282,7 @@ fn args ->
           from(c in Arca.Schemas.PendingConfirmation,
             where: c.user_id in ^user_ids,
             order_by: c.opened_at,
-            select: %{operation: c.operation, state: c.state}
+            select: %{operation: c.operation, state: c.state, proof: c.proof}
           )
         )
 
