@@ -428,18 +428,13 @@ async function main(chromium) {
   await person.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
   await connected(person);
   const confirmation = await confirmHere(person);
-  // Admitted with no athanor at B yet, the person lands on B's sign-in page,
-  // which says they are signed in and have no athanor there.
-  await person.waitForURL((url) => url.origin === B && url.search === "?error=no_athanor", { timeout: 90_000 });
+  // Admitted with an athanor of their own at B, made in the admission, the
+  // person lands on its chat.
+  await person.waitForURL((url) => url.origin === B && url.pathname === "/chat", { timeout: 90_000 });
   await connected(person);
   windowed("signin", from, "the sign-in at B");
   const landedText = await person.locator("body").innerText();
-  record.sign_in = {
-    code, code_named_at_a: confirmation.includes(code), landed: person.url().replace(/#.*/, ""),
-    says_signed_in: landedText.includes("You're signed in, but you have no athanor here yet."),
-  };
-  row("sign_in", record.sign_in.code_named_at_a && record.sign_in.landed === `${B}/login?error=no_athanor` && record.sign_in.says_signed_in,
-    "at B, A's address leads to A, A's confirmation names B's code, and B admits the person, with no athanor there", record.sign_in);
+  const landed = person.url().replace(/#.*/, "");
   S.cookies.remote = await cookieDigest(personContext, B, "b");
   await claim("sign_in:b.person_identities", "B's identities: its administrator's, and A's identifier as a remote person under A's genesis", cyfrRows("b", "person_identities"), {
     ...cyfrIo("b", "person_identities"),
@@ -449,11 +444,19 @@ async function main(chromium) {
       await opens("b", "b.identity", own, "operational_key_sealed", "operational");
     },
   });
+  // The athanors first: the person's row and session name their own.
+  await claim("sign_in:b.athanors", "B's athanors: its administrator's, and the person's own, made in the admission", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
   await claim("sign_in:b.users", "B's people: its administrator, and the person admitted remote", cyfrRows("b", "users"), cyfrIo("b", "users"));
   const remoteId = S.rows["sign_in:b.person_identities"]?.find((r) => r.identifier === id)?.user_id ?? "";
   await claim("sign_in:b.sessions[proof]", "the person's session at B: the browser's cookie's token, bound to the genesis's key epoch", cyfrRows("b", "sessions", "user_id", remoteId), cyfrIo("b", "sessions"));
   await claim("sign_in:b.sessions", "B's sessions: the administrator's, its cookie's token, and the person's", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
-  await claim("sign_in:b.athanors", "B's athanors are only its administrator's: the admission made none", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  const ownRoute = `@${(S.rows["sign_in:b.athanors"] ?? []).find((r) => r.owner_user_id === remoteId)?.slug ?? ""}`;
+  record.sign_in = {
+    code, code_named_at_a: confirmation.includes(code), landed, own_route: ownRoute,
+    shows_chat: landedText.includes("No threads yet."),
+  };
+  row("sign_in", record.sign_in.code_named_at_a && landed === `${B}/chat?a=${encodeURIComponent(ownRoute)}` && record.sign_in.shows_chat,
+    "at B, A's address leads to A, A's confirmation names B's code, and B admits the person, who lands in their own athanor's chat there", record.sign_in);
 
   // 4. registry.sync at A under the passkey stores a push token; the
   // registry bans the identifier; the token is refused there, and A's

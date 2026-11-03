@@ -599,6 +599,26 @@ defmodule Aqua.Providers.ThreadTest do
 
       assert {:ok, []} = Sanctum.SharedThreads.messages(someone, theirs.id)
     end
+
+    test "a source in an athanor not the caller's own is refused in plain words", %{
+      ctx: ctx,
+      thread: thread,
+      shared: shared
+    } do
+      other = Cyfr.Test.ShareFixtures.person!("Other").athanor
+
+      assert {:error, {:invalid_argument, msg}} =
+               call(%{ctx | athanor_id: other.id}, %{
+                 "action" => "aloud",
+                 "thread" => thread.id,
+                 "message_ids" => ["msg_x"],
+                 "target_thread" => shared.id
+               })
+
+      assert msg == "aloud reads only threads of your own athanor"
+      refute msg =~ "member"
+      assert {:ok, []} = Sanctum.SharedThreads.messages(ctx.user_id, shared.id)
+    end
   end
 
   describe "the send envelope and the thread's own verbs" do

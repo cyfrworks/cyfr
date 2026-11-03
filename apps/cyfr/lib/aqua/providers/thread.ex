@@ -762,8 +762,7 @@ defmodule Aqua.Providers.Thread do
         {:ok, %{said_aloud: length(rows), target_thread: target_thread}}
 
       {:error, :not_a_member} ->
-        {:error,
-         {:invalid_argument, "aloud reads only threads of an athanor you are a member of"}}
+        {:error, {:invalid_argument, "aloud reads only threads of your own athanor"}}
 
       {:error, :not_the_author} ->
         {:error,

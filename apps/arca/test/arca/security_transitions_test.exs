@@ -785,21 +785,41 @@ defmodule Arca.SecurityTransitionsTest do
       assert athanor(own.id).security_generation == 2
     end
 
-    test "a person with no own athanor is denied; a pointer to no row is refused" do
+    test "a person with no own athanor is denied; the one they own is found by its owner" do
       plain = person!()
 
       assert {:ok, %{archived_athanor_ids: []}} =
                SecurityTransitions.deny_user(server(), plain.id, verify: admit())
 
-      dangling = person!()
-      {:ok, _} = Arca.Users.update(server(), dangling.id, %{personal_athanor_id: "ath_nowhere"})
-      session = session!(dangling.id)
+      # Owned, and the personal pointer unset or naming no row: the owner
+      # is what selects the athanor, for the denial and for the allow.
+      for pointer <- [nil, "ath_nowhere"] do
+        owner = person!()
+        n = uniq()
 
-      assert {:error, :dangling_personal_athanor} =
-               SecurityTransitions.deny_user(server(), dangling.id, verify: admit())
+        {:ok, own} =
+          Arca.Athanors.insert(server(), %{
+            name: "Owned #{n}",
+            slug: "owned-#{n}",
+            owner_user_id: owner.id,
+            created_by: owner.id
+          })
 
-      assert user(dangling.id).status == "active"
-      assert session?(session)
+        if pointer,
+          do: {:ok, _} = Arca.Users.update(server(), owner.id, %{personal_athanor_id: pointer})
+
+        own_id = own.id
+
+        assert {:ok, %{archived_athanor_ids: [^own_id]}} =
+                 SecurityTransitions.deny_user(server(), owner.id, verify: admit())
+
+        assert athanor(own.id).status == "archived"
+
+        assert {:ok, %{reopened_athanor_ids: [^own_id]}} =
+                 SecurityTransitions.allow_user(server(), owner.id, verify: admit())
+
+        assert athanor(own.id).status == "active"
+      end
     end
 
     test "the caller's refusal rolls back everything, with its reason" do

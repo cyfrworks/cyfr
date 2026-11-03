@@ -617,6 +617,7 @@ function models(S) {
     return { ...pair("live", "live_public_key", "live_key_sealed"), ...pair("operational", "operational_public_key", "operational_key_sealed") };
   };
   const remote = () => first("sign_in:b.person_identities").find((r) => r.identifier === id)?.user_id;
+  const personAthanor = () => (first("sign_in:b.athanors") ?? []).find((r) => r.owner_user_id === remote());
   const adminIdentifier = () => first("sign_in:b.person_identities").find((r) => r.user_id === bAdmin())?.identifier;
   M["sign_in:b.person_identities"] = () => withLabels(["the administrator's", "the person's"], [
     {
@@ -665,7 +666,7 @@ function models(S) {
       admission: exact("remote"),
       display_name: nil(),
       namespace: nil(),
-      personal_athanor_id: nil(),
+      personal_athanor_id: derived(personAthanor()?.id, "the person's own athanor at B"),
       status: exact("active"),
       prefs: exact("{}", { shown: "`\"{}\"`: Newcomer's empty document (newcomer.ex:264)" }),
       first_seen_at: within(win(S, "signin")),
@@ -685,12 +686,38 @@ function models(S) {
     email: nil(),
     provider: exact("cyfr", { shown: "`\"cyfr\"`: the CYFR identity kind, as `CyfrDoor.context/1` mints it (cyfr_door.ex:509)" }),
     expires_at: derived(plusHours(first("sign_in:b.sessions[proof]")[0]?.inserted_at ?? "", S.ttlHours), "inserted_at plus session_ttl_hours (Sanctum.Session)"),
-    athanor_id: nil(),
+    athanor_id: derived(personAthanor()?.id, "the person's own athanor at B"),
     identity_key_epoch: derived(genesisHash, "a genesis's key epoch, its own hash"),
     cli_machine: nil(),
+    client_id: nil(),
     inserted_at: within(win(S, "signin")),
   }];
-  M["sign_in:b.athanors"] = () => [held(first("allow:b.athanors")[0], {}, "as read at allow")];
+  // Every person admitted here has an athanor here, minted in their
+  // admission (Sanctum.Newcomer), the remote person included: named "Me"
+  // like any person who names none, under the next free slug, and filled
+  // after the admission commits, so it may not be filled yet when read.
+  M["sign_in:b.athanors"] = () => {
+    const signinUntil = until(S, "signin", "sign_in:b.athanors");
+    return byKey(first("sign_in:b.athanors"), (r) => r.owner_user_id, [
+      [bAdmin(), held(first("allow:b.athanors")[0], {}, "as read at allow"), "the administrator's"],
+      [remote(), {
+        id: anId("ath"),
+        name: exact("Me"),
+        slug: exact("me-2", { shown: "`\"me-2\"`: the next free slug for \"Me\", the administrator's athanor holding `me`" }),
+        owner_user_id: derived(remote(), "B's identity row for A's identifier"),
+        status: exact("active"),
+        archived_at: noTime(),
+        created_by: derived(remote(), "B's identity row for A's identifier"),
+        settings: nil(),
+        provisioned_at: bound(`null, or a time inside ${signinUntil.name}`, (v) => v === null || inside(signinUntil, v), LONG_AGO),
+        provisioning_failed_at: noTime(),
+        provisioning_failure: nil(),
+        security_generation: exact(1),
+        created_at: within(win(S, "signin")),
+        updated_at: within(signinUntil),
+      }, "the person's"],
+    ]);
+  };
 
   // sign_in, B's sessions whole: the administrator's and the person's.
   M["sign_in:b.sessions"] = () => (() => {
@@ -706,6 +733,7 @@ function models(S) {
     athanor_id: derived(first("allow:b.athanors")[0]?.id, "B's one athanor"),
     identity_key_epoch: nil(),
     cli_machine: nil(),
+    client_id: nil(),
     inserted_at: within(win(S, "admin")),
   }, "the administrator's"], [remote(), held(first("sign_in:b.sessions[proof]")[0], {}, "as read at sign_in"), "the person's"]]);
   })();
@@ -785,12 +813,16 @@ function models(S) {
     ["setup:a.identity_attempts", "setup"], ["sync:a.registry_tokens", "sync"], ["setup:registry.directory.identity_log_entries", "setup"],
     ["setup:registry.namespaces[proof]", "setup"], ["setup:registry.policy_acceptances[a]", "setup"],
     ["ban:registry.banned_identities", "ban"], ["allow:b.passkeys", "allow"], ["allow:b.server_allowlist", "allow"],
-    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"], ["allow:b.athanors", "allow"]]) {
+    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"]]) {
     M[`held:${name.split(":").pop()}`] = () => heldAll(name, step);
   }
   M["held:registry.identity_heads[a]"] = () => heldAll("setup:registry.identity_heads[a]", "setup", (r) => ({
     read_at: sameOrWithin(first("sync:registry.identity_heads[a]")[0].read_at, since("registry.identity_heads[a]", "sync"), "as read at sync"),
   }));
+  M["held:b.athanors"] = () => first("sign_in:b.athanors").map((r) => held(r, {
+    provisioned_at: sameOrWithin(r.provisioned_at, since("b.athanors", "signin"), "as read at sign_in"),
+    updated_at: sameOrWithin(r.updated_at, since("b.athanors", "signin"), "as read at sign_in"),
+  }, "as read at sign_in"));
   M["held:b.users"] = () => first("sign_in:b.users").map((r) => held(r, {
     last_seen_at: sameOrWithin(r.last_seen_at, since("b.users", "signin"), "as read at sign_in"),
     updated_at: sameOrWithin(r.updated_at, since("b.users", "signin"), "as read at sign_in"),

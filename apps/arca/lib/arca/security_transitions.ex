@@ -85,8 +85,9 @@ defmodule Arca.SecurityTransitions do
   the write lock every transaction takes at entry is the lock and the
   order is code order (`Arca.Repo.locking_transaction/2`).
 
-  A denial touches one athanor, the person's own, which their row names
-  (`personal_athanor_id`) and which the person's lock holds still.
+  A denial touches one athanor, the person's own: the one whose
+  `owner_user_id` names them, of which there is at most one (a unique
+  index), locked right after the person.
 
   ## The deadline
 
@@ -122,8 +123,7 @@ defmodule Arca.SecurityTransitions do
   voided, the athanors archived or reopened with their new generations,
   the person of each archived athanor, the person's generation, and the shares
   it revoked (`revoked_share_ids`). Refusals:
-  `:not_found`, `:dangling_personal_athanor` (a person's own-athanor pointer
-  names no row), `:conflict`, `:postcondition_failed`, `:cross_tenant`,
+  `:not_found`, `:conflict`, `:postcondition_failed`, `:cross_tenant`,
   `:no_athanor`, `:database_error`, or the callback's own reason.
   """
 
@@ -279,11 +279,10 @@ defmodule Arca.SecurityTransitions do
   defp deny(user_id, verify) do
     result =
       with {:ok, user} <- lock_user(user_id),
-           athanors = lock_athanors(List.wrap(user.personal_athanor_id)),
-           :ok <- personal_present(user, athanors),
+           athanors = lock_owned(user_id),
            identifier = identifier_of(user_id),
            threads = lock_shared_threads(user_id),
-           retire = to_retire(user, athanors),
+           retire = Map.keys(athanors),
            :ok <-
              decide(verify, %{
                transition: :deny_user,
@@ -441,19 +440,6 @@ defmodule Arca.SecurityTransitions do
     end
   end
 
-  # A person may have no own athanor; a pointer to one that has no row is
-  # a broken relationship, and a denial does not skip it.
-  defp personal_present(%User{personal_athanor_id: id}, athanors) when is_binary(id) do
-    if Map.has_key?(athanors, id), do: :ok, else: {:error, :dangling_personal_athanor}
-  end
-
-  defp personal_present(%User{}, _athanors), do: :ok
-
-  # What a denial archives: the person's own athanor.
-  defp to_retire(%User{personal_athanor_id: personal}, athanors) do
-    personal |> List.wrap() |> Enum.filter(&Map.has_key?(athanors, &1))
-  end
-
   defp active_ids(ids, athanors),
     do: Enum.filter(ids, &match?(%Athanor{status: "active"}, athanors[&1]))
 
@@ -587,9 +573,8 @@ defmodule Arca.SecurityTransitions do
   defp allow(user_id, verify) do
     result =
       with {:ok, user} <- lock_user(user_id),
-           athanors = lock_athanors(List.wrap(user.personal_athanor_id)),
-           :ok <- personal_present(user, athanors),
-           athanor = athanors[user.personal_athanor_id],
+           athanors = lock_owned(user_id),
+           athanor = athanors |> Map.values() |> List.first(),
            :ok <- AthanorCensus.lock(),
            :ok <-
              decide(verify, %{
@@ -1563,10 +1548,10 @@ defmodule Arca.SecurityTransitions do
     end
   end
 
-  defp lock_athanors([]), do: %{}
-
-  defp lock_athanors(ids) do
-    from(a in Athanor, where: a.id in ^ids, order_by: [asc: a.id])
+  # The person's own athanor, by its owner, locked: none, or the one the
+  # unique index on `owner_user_id` allows.
+  defp lock_owned(user_id) do
+    from(a in Athanor, where: a.owner_user_id == ^user_id)
     |> QueryHelpers.for_update()
     |> Arca.Repo.all()
     |> Map.new(&{&1.id, &1})

@@ -68,7 +68,7 @@ run's record.
 |---|---|
 | `setup` | A is set up through `/setup`'s two screens: `@proof` is typed on the first and found free at the registry, and a passkey is made, which admits the person and opens their enrollment; the second screen registers the identity at `registry.test` and claims `@proof` before it shows the recovery code. With the code shown and not yet saved, the directory holds A's genesis, the enrollment attempt is accepted, and the registry holds `@proof` owned by A's identifier, that identifier's acceptance of its policy, the nonces of its two signed requests and its read of A's log, and answers `@proof` with A's identifier and directory; "I saved it" completes the attempt (a transition from the attempt read before it) and lands in CYFR signed in, where Settings says "Your name is @proof.". A's person (with the first person's platform administrator's mark), passkey, identity and athanor are read whole |
 | `allow` | B, set up through `/setup`'s two screens by its administrator as `@proof-b`, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person (with the platform administrator's mark) and athanor are its administrator's |
-| `sign_in` | a fresh profile at B's sign-in page, "Sign in from your CYFR" with A's address, reaches A, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, landing them on B's sign-in page as signed in with no athanor there; B's athanors are still its administrator's alone, its sessions are its administrator's and the person's, and the person's session holds the token the browser's cookie carries |
+| `sign_in` | a fresh profile at B's sign-in page, "Sign in from your CYFR" with A's address, reaches A, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, with an athanor of their own there made in the admission, landing them in its chat; B's athanors are its administrator's and the person's own, its sessions are its administrator's and the person's, and the person's session holds the token the browser's cookie carries |
 | `sync` | Sync push tokens at A, confirmed with the passkey, stores one push token for `@proof`, whose digest is the registry's token for it, made by A's identifier |
 | `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync shows `banned`'s sentence and records no nonce; then every object read in the run is read again and held to what was read before |
 | `readme` | this file's field table holds exactly the rows the proof's models print |
@@ -440,7 +440,7 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | admission | exact | `"remote"` |
 | sign_in:b.users[the person's] | display_name | exact | `null` |
 | sign_in:b.users[the person's] | namespace | exact | `null` |
-| sign_in:b.users[the person's] | personal_athanor_id | exact | `null` |
+| sign_in:b.users[the person's] | personal_athanor_id | derived | the person's own athanor at B |
 | sign_in:b.users[the person's] | status | exact | `"active"` |
 | sign_in:b.users[the person's] | prefs | exact | `"{}"`: Newcomer's empty document (newcomer.ex:264) |
 | sign_in:b.users[the person's] | first_seen_at | bound | a time inside the sign-in at B |
@@ -457,9 +457,10 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[proof][row] | email | exact | `null` |
 | sign_in:b.sessions[proof][row] | provider | exact | `"cyfr"`: the CYFR identity kind, as `CyfrDoor.context/1` mints it (cyfr_door.ex:509) |
 | sign_in:b.sessions[proof][row] | expires_at | derived | inserted_at plus session_ttl_hours (Sanctum.Session) |
-| sign_in:b.sessions[proof][row] | athanor_id | exact | `null` |
+| sign_in:b.sessions[proof][row] | athanor_id | derived | the person's own athanor at B |
 | sign_in:b.sessions[proof][row] | identity_key_epoch | derived | a genesis's key epoch, its own hash |
 | sign_in:b.sessions[proof][row] | cli_machine | exact | `null` |
+| sign_in:b.sessions[proof][row] | client_id | exact | `null` |
 | sign_in:b.sessions[proof][row] | inserted_at | bound | a time inside the sign-in at B |
 | sign_in:b.sessions[the administrator's] | id | captured | a new ses_ id |
 | sign_in:b.sessions[the administrator's] | token_hash | derived | the SHA-256 of the session token the administrator's cookie carries |
@@ -471,9 +472,11 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[the administrator's] | athanor_id | derived | B's one athanor |
 | sign_in:b.sessions[the administrator's] | identity_key_epoch | exact | `null` |
 | sign_in:b.sessions[the administrator's] | cli_machine | exact | `null` |
+| sign_in:b.sessions[the administrator's] | client_id | exact | `null` |
 | sign_in:b.sessions[the administrator's] | inserted_at | bound | a time inside setup at B |
 | sign_in:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | cli_machine | exact | as read at sign_in |
+| sign_in:b.sessions[the person's] | client_id | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | email | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | expires_at | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | id | exact | as read at sign_in |
@@ -483,20 +486,34 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[the person's] | token_hash | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | token_prefix | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | user_id | exact | as read at sign_in |
-| sign_in:b.athanors[row] | archived_at | exact | as read at allow |
-| sign_in:b.athanors[row] | created_at | exact | as read at allow |
-| sign_in:b.athanors[row] | created_by | exact | as read at allow |
-| sign_in:b.athanors[row] | id | exact | as read at allow |
-| sign_in:b.athanors[row] | name | exact | as read at allow |
-| sign_in:b.athanors[row] | owner_user_id | exact | as read at allow |
-| sign_in:b.athanors[row] | provisioned_at | exact | as read at allow |
-| sign_in:b.athanors[row] | provisioning_failed_at | exact | as read at allow |
-| sign_in:b.athanors[row] | provisioning_failure | exact | as read at allow |
-| sign_in:b.athanors[row] | security_generation | exact | as read at allow |
-| sign_in:b.athanors[row] | settings | exact | as read at allow |
-| sign_in:b.athanors[row] | slug | exact | as read at allow |
-| sign_in:b.athanors[row] | status | exact | as read at allow |
-| sign_in:b.athanors[row] | updated_at | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | archived_at | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | created_at | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | created_by | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | id | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | name | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | owner_user_id | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | provisioned_at | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | provisioning_failed_at | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | provisioning_failure | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | security_generation | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | settings | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | slug | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | status | exact | as read at allow |
+| sign_in:b.athanors[the administrator's] | updated_at | exact | as read at allow |
+| sign_in:b.athanors[the person's] | id | captured | a new ath_ id |
+| sign_in:b.athanors[the person's] | name | exact | `"Me"` |
+| sign_in:b.athanors[the person's] | slug | exact | `"me-2"`: the next free slug for "Me", the administrator's athanor holding `me` |
+| sign_in:b.athanors[the person's] | owner_user_id | derived | B's identity row for A's identifier |
+| sign_in:b.athanors[the person's] | status | exact | `"active"` |
+| sign_in:b.athanors[the person's] | archived_at | exact | `null` |
+| sign_in:b.athanors[the person's] | created_by | derived | B's identity row for A's identifier |
+| sign_in:b.athanors[the person's] | settings | exact | `null` |
+| sign_in:b.athanors[the person's] | provisioned_at | bound | null, or a time inside the sign-in at B up to sign_in:b.athanors's read |
+| sign_in:b.athanors[the person's] | provisioning_failed_at | exact | `null` |
+| sign_in:b.athanors[the person's] | provisioning_failure | exact | `null` |
+| sign_in:b.athanors[the person's] | security_generation | exact | `1` |
+| sign_in:b.athanors[the person's] | created_at | bound | a time inside the sign-in at B |
+| sign_in:b.athanors[the person's] | updated_at | bound | a time inside the sign-in at B up to sign_in:b.athanors's read |
 | sync:registry.push_tokens[proof][row] | id | captured | a token id: a new UUID, not the nil UUID |
 | sync:registry.push_tokens[proof][row] | token_hash | derived | the digest of the token A sealed |
 | sync:registry.push_tokens[proof][row] | namespace_slug | exact | `"proof"` |
@@ -691,6 +708,7 @@ row per field of each row of each step's objects:
 | held:registry.namespaces[proof][row] | created_at | exact | as read at setup |
 | held:registry.namespaces[proof][row] | updated_at | exact | as read at setup |
 | held:registry.namespaces[proof][row] | owner_identifier | exact | as read at setup |
+| held:registry.namespaces[proof][row] | address | exact | as read at setup |
 | held:registry.namespaces[proof][row] | reserved_reason | exact | as read at setup |
 | held:registry.identity_heads[a][row] | identifier | exact | as read at setup |
 | held:registry.identity_heads[a][row] | head | exact | as read at setup |
@@ -816,6 +834,7 @@ row per field of each row of each step's objects:
 | held:b.person_identities[the person's] | user_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | athanor_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | cli_machine | exact | as read at sign_in |
+| held:b.sessions[the administrator's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | email | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | expires_at | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | id | exact | as read at sign_in |
@@ -827,6 +846,7 @@ row per field of each row of each step's objects:
 | held:b.sessions[the administrator's] | user_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | cli_machine | exact | as read at sign_in |
+| held:b.sessions[the person's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | email | exact | as read at sign_in |
 | held:b.sessions[the person's] | expires_at | exact | as read at sign_in |
 | held:b.sessions[the person's] | id | exact | as read at sign_in |
@@ -836,20 +856,34 @@ row per field of each row of each step's objects:
 | held:b.sessions[the person's] | token_hash | exact | as read at sign_in |
 | held:b.sessions[the person's] | token_prefix | exact | as read at sign_in |
 | held:b.sessions[the person's] | user_id | exact | as read at sign_in |
-| held:b.athanors[row] | archived_at | exact | as read at allow |
-| held:b.athanors[row] | created_at | exact | as read at allow |
-| held:b.athanors[row] | created_by | exact | as read at allow |
-| held:b.athanors[row] | id | exact | as read at allow |
-| held:b.athanors[row] | name | exact | as read at allow |
-| held:b.athanors[row] | owner_user_id | exact | as read at allow |
-| held:b.athanors[row] | provisioned_at | exact | as read at allow |
-| held:b.athanors[row] | provisioning_failed_at | exact | as read at allow |
-| held:b.athanors[row] | provisioning_failure | exact | as read at allow |
-| held:b.athanors[row] | security_generation | exact | as read at allow |
-| held:b.athanors[row] | settings | exact | as read at allow |
-| held:b.athanors[row] | slug | exact | as read at allow |
-| held:b.athanors[row] | status | exact | as read at allow |
-| held:b.athanors[row] | updated_at | exact | as read at allow |
+| held:b.athanors[row 1] | archived_at | exact | as read at sign_in |
+| held:b.athanors[row 1] | created_at | exact | as read at sign_in |
+| held:b.athanors[row 1] | created_by | exact | as read at sign_in |
+| held:b.athanors[row 1] | id | exact | as read at sign_in |
+| held:b.athanors[row 1] | name | exact | as read at sign_in |
+| held:b.athanors[row 1] | owner_user_id | exact | as read at sign_in |
+| held:b.athanors[row 1] | provisioned_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
+| held:b.athanors[row 1] | provisioning_failed_at | exact | as read at sign_in |
+| held:b.athanors[row 1] | provisioning_failure | exact | as read at sign_in |
+| held:b.athanors[row 1] | security_generation | exact | as read at sign_in |
+| held:b.athanors[row 1] | settings | exact | as read at sign_in |
+| held:b.athanors[row 1] | slug | exact | as read at sign_in |
+| held:b.athanors[row 1] | status | exact | as read at sign_in |
+| held:b.athanors[row 1] | updated_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
+| held:b.athanors[row 2] | archived_at | exact | as read at sign_in |
+| held:b.athanors[row 2] | created_at | exact | as read at sign_in |
+| held:b.athanors[row 2] | created_by | exact | as read at sign_in |
+| held:b.athanors[row 2] | id | exact | as read at sign_in |
+| held:b.athanors[row 2] | name | exact | as read at sign_in |
+| held:b.athanors[row 2] | owner_user_id | exact | as read at sign_in |
+| held:b.athanors[row 2] | provisioned_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
+| held:b.athanors[row 2] | provisioning_failed_at | exact | as read at sign_in |
+| held:b.athanors[row 2] | provisioning_failure | exact | as read at sign_in |
+| held:b.athanors[row 2] | security_generation | exact | as read at sign_in |
+| held:b.athanors[row 2] | settings | exact | as read at sign_in |
+| held:b.athanors[row 2] | slug | exact | as read at sign_in |
+| held:b.athanors[row 2] | status | exact | as read at sign_in |
+| held:b.athanors[row 2] | updated_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
 | held:b.server_allowlist[row] | added_by | exact | as read at allow |
 | held:b.server_allowlist[row] | created_at | exact | as read at allow |
 | held:b.server_allowlist[row] | effect | exact | as read at allow |

@@ -156,16 +156,19 @@ defmodule Sanctum.Tenancy.Users do
   def personal_athanor_id(_), do: :none
 
   @doc """
-  Whether `athanor_id` is this person's own athanor.
+  Whether `athanor_id` is this person's own athanor: the athanor row's
+  `owner_user_id` names them.
 
   The one predicate behind "is the caller at home": a running chain reads
   notes across athanors only from there, and an assistant's line is the
-  person's to say aloud only when it was said there. Spelled once so the
-  domains that ask it cannot drift from the row that answers.
+  person's to say aloud only when it was said there. It reads the owner on
+  the athanor's row, as the focus does (`Sanctum.Context.focus/2`), so the
+  domains that ask it cannot drift from the row that answers. A store that
+  cannot answer is false.
   """
   @spec own_athanor?(String.t() | nil, String.t() | nil) :: boolean()
   def own_athanor?(user_id, athanor_id) when is_binary(user_id) and is_binary(athanor_id) do
-    personal_athanor_id(user_id) == {:ok, athanor_id}
+    match?({:ok, %{owner_user_id: ^user_id}}, Athanors.get(athanor_id))
   end
 
   def own_athanor?(_user_id, _athanor_id), do: false

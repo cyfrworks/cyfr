@@ -350,7 +350,7 @@ defmodule Sanctum.InvitationsTest do
 
       for {issuer, expected} <- [
             {handled, "@" <> handled.namespace},
-            {plain, "a member of this CYFR"}
+            {plain, "someone on this CYFR"}
           ] do
         {:ok, %{code: code}} = Invitations.create(ctx(issuer), thread!(issuer).id)
         assert {:ok, %{inviter: ^expected}} = Invitations.lookup(code)
@@ -359,7 +359,7 @@ defmodule Sanctum.InvitationsTest do
 
       {:ok, %{code: code}} = Invitations.create(ctx(admin), nil)
       assert {:ok, shown} = Invitations.lookup(code)
-      assert shown.inviter == "a member of this CYFR"
+      assert shown.inviter == "someone on this CYFR"
       refute Map.has_key?(shown, :thread)
     end
 

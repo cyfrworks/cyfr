@@ -563,7 +563,7 @@ defmodule Sanctum.Invitations do
   # A name a person reads: never an address.
   defp inviter(%{display_name: name}) when is_binary(name) and name != "", do: name
   defp inviter(%{namespace: handle}) when is_binary(handle) and handle != "", do: "@" <> handle
-  defp inviter(_issuer), do: "a member of this CYFR"
+  defp inviter(_issuer), do: "someone on this CYFR"
 
   # ---- shared ----------------------------------------------------------------
 
