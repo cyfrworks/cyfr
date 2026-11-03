@@ -138,11 +138,19 @@ func (s *swtpm) restart(t *testing.T) {
 			t.Fatalf("TPM2_Shutdown: %v", err)
 		}
 	})
+	// The orderly shutdown has written the chip's state; swtpm under a
+	// loaded host may be slow to act on SIGTERM, and the claim is the
+	// state's, not the exit's, so a slow one is killed.
 	_ = s.cmd.Process.Signal(syscall.SIGTERM)
 	select {
 	case <-s.done:
 	case <-time.After(10 * time.Second):
-		t.Fatalf("swtpm did not stop on SIGTERM:\n%s", s.log())
+		_ = s.cmd.Process.Kill()
+		select {
+		case <-s.done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("swtpm did not stop on SIGTERM or SIGKILL:\n%s", s.log())
+		}
 	}
 	s.start(t)
 }
