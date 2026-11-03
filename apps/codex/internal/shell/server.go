@@ -99,6 +99,17 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		srv.page(w, srv.Shell.View(), "")
 		return
 	}
+	if r.Method == http.MethodGet && r.URL.Path == "/lock" {
+		// Prism's Lock is a top-level navigation here, not a form post,
+		// since a form from an https Prism to this plain-http loopback meets
+		// Chrome's insecure-form interstitial. Locking is the one GET that
+		// changes anything: it is the safe direction, it ends only the
+		// sessions this screen opened, and repeating it is a harmless
+		// success.
+		srv.Shell.Lock("Locked.")
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/confirm" {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()

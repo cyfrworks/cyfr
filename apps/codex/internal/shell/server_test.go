@@ -45,7 +45,7 @@ func TestServer_AdmitsOnlyTheShellsOwnRequests(t *testing.T) {
 		{"Prism's Origin for Lock", "POST", Listen, "/lock", prism, 303},
 		{"Confirm on this device, a navigation", "GET", Listen, "/confirm?ref=cnr_x", "", 200},
 		{"Confirm by POST", "POST", Listen, "/confirm", prism, 404},
-		{"a lock by GET", "GET", Listen, "/lock", "", 404},
+		{"Prism's Lock, a navigation", "GET", Listen, "/lock", "", 303},
 		{"a preflight", "OPTIONS", Listen, "/lock", prism, 404},
 		{"an unknown path", "POST", Listen, "/sign", Origin, 404},
 	}
@@ -138,7 +138,7 @@ func TestServer_EntriesAreTheFixtures(t *testing.T) {
 	}
 	fixture(t, "device_unlock.json", &v)
 	sh := v.Exchange.Shell
-	if sh.Origin != Origin || sh.Lock.Method != "POST" || sh.Lock.Path != "/lock" || len(sh.Lock.Form) != 0 ||
+	if sh.Origin != Origin || (sh.Lock.Method != "POST" && sh.Lock.Method != "GET") || sh.Lock.Path != "/lock" || len(sh.Lock.Form) != 0 ||
 		sh.Confirm.Method != "GET" || sh.Confirm.Path != "/confirm" || len(sh.Confirm.Query) != 1 || sh.Confirm.Query[0] != "ref" {
 		t.Fatalf("the fixture's shell %+v, the shell's origin %s", sh, Origin)
 	}
@@ -156,5 +156,21 @@ func TestServer_ReadingAPageChangesNothing(t *testing.T) {
 	first, second := b.page(), b.page()
 	if !strings.Contains(first, "needs the six-word passphrase") || first != second {
 		t.Fatal("a read changed the page")
+	}
+}
+
+// Prism's Lock is a top-level navigation to /lock: a GET from no page of
+// the shell's locks the screen, retires each session it opened and
+// returns to the lock page, and a repeated one is a harmless success.
+func TestServer_PrismsLockIsANavigationThatLocks(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	w := b.do(http.MethodGet, "/lock", "", nil)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" || b.shell.Unlocked() || len(home.locked) != 1 {
+		t.Fatalf("GET /lock answered %d %q, unlocked %v, locked %v", w.Code, w.Header().Get("Location"), b.shell.Unlocked(), home.locked)
+	}
+	if w := b.do(http.MethodGet, "/lock", "", nil); w.Code != http.StatusSeeOther || len(home.locked) != 1 || b.restarts.Load() != 1 {
+		t.Fatalf("a repeated GET /lock did more: %d %v", w.Code, home.locked)
 	}
 }
