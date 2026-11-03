@@ -232,6 +232,7 @@ clean_install() {
   else
     check "the guest has no TPM" guest_ssh '! test -e /dev/tpmrm0'
   fi
+  check "Chrome's managed policy saves no password and installs no extension" guest_ssh 'grep -q "\"PasswordManagerEnabled\": false" /etc/opt/chrome/policies/managed/cyfr-screen.json && grep -q "\"ExtensionInstallBlocklist\": \[\"\*\"\]" /etc/opt/chrome/policies/managed/cyfr-screen.json'
   check "screenshot screen-setup.png" guest_screenshot screen-setup.png
   shell_page setup
   check "the screen shows the shell's own setup page" grep -q 'Set up CYFR' "$GUEST_DIR/shell-setup.html"

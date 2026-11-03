@@ -43,6 +43,7 @@ func screenCommandsIn(dir string, tail ...string) []string {
 	return append([]string{
 		"{ ! getent group tss >/dev/null || usermod -aG tss " + shellQuote([]string{account.Username}) + "; }",
 		"install -m 0644 " + files + "/52cyfr-screen " + screenAptLine,
+		"install -D -m 0644 " + files + "/cyfr-screen-policy.json " + screenPolicy,
 		"install -m 0644 " + files + "/cyfr-screen.service " + screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
@@ -223,7 +224,7 @@ func TestScreenOffRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 	want := []string{
 		"{ systemctl disable --now cyfr-screen || true; }",
-		"rm -f " + screenUnit + " " + screenAptLine,
+		"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
 		"systemctl daemon-reload",
 		"systemctl enable --now getty@tty1",
 	}

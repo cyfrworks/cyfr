@@ -162,18 +162,13 @@ type View struct {
 	Confirm    *pendingConfirm
 }
 
-// View is the page the screen shows now, and the notice it carries, said
-// once.
-func (s *Shell) View() View { return s.view(true) }
-
-// view is the page; consume says whether its notice is said now.
-func (s *Shell) view(consume bool) View {
+// View is the page the screen shows now, and the notice of the last action
+// or lock, which stays until the next action: reading a page changes
+// nothing.
+func (s *Shell) View() View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := View{Notice: s.notice, Storage: s.cfg.Detect(s.cfg.DataDir), Chip: s.cfg.Chip()}
-	if consume {
-		s.notice = ""
-	}
 	switch {
 	case s.rec == nil:
 		_, restore := s.cfg.Tokens()
@@ -213,6 +208,13 @@ func (s *Shell) newPassphrase() string {
 		}
 	}
 	return s.passphrase
+}
+
+// begin clears the last notice as an action starts.
+func (s *Shell) begin() {
+	s.mu.Lock()
+	s.notice = ""
+	s.mu.Unlock()
 }
 
 // say sets the sentence the next page shows.

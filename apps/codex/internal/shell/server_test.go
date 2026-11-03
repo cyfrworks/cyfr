@@ -146,3 +146,15 @@ func TestServer_EntriesAreTheFixtures(t *testing.T) {
 		t.Fatal("Prism cannot post the fixture's Lock")
 	}
 }
+
+// Reading a page changes nothing: an action's notice stays on every read
+// until the next action.
+func TestServer_ReadingAPageChangesNothing(t *testing.T) {
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	b.post("/setup", url.Values{"name": {"alice"}, "secret": {"123456"}, "again": {"123456"}})
+	first, second := b.page(), b.page()
+	if !strings.Contains(first, "needs the six-word passphrase") || first != second {
+		t.Fatal("a read changed the page")
+	}
+}

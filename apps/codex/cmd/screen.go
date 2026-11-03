@@ -37,7 +37,11 @@ const (
 	screenDir     = ".cyfr/screen"
 	screenUnit    = "/etc/systemd/system/cyfr-screen.service"
 	screenAptLine = "/etc/apt/apt.conf.d/52cyfr-screen"
-	chromeDeb     = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+	// screenPolicy is Chrome's managed policy on this machine: no password
+	// saving or autofill, so a PIN or passphrase is never offered to
+	// Google Password Manager, and no extensions.
+	screenPolicy = "/etc/opt/chrome/policies/managed/cyfr-screen.json"
+	chromeDeb    = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 )
 
 // screenPath is a project path the service's unit can hold as it is.
@@ -193,6 +197,7 @@ func screenCommands(dir, account string) []string {
 		// account joins it, where there is one, to keep its PIN in the chip.
 		"{ ! getent group tss >/dev/null || usermod -aG tss "+shellQuote([]string{account})+"; }",
 		"install -m 0644 "+files+"/52cyfr-screen "+screenAptLine,
+		"install -D -m 0644 "+files+"/cyfr-screen-policy.json "+screenPolicy,
 		"install -m 0644 "+files+"/cyfr-screen.service "+screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
@@ -206,7 +211,7 @@ func screenOff(out io.Writer) error {
 	}
 	commands := []string{
 		"{ systemctl disable --now cyfr-screen || true; }",
-		"rm -f " + screenUnit + " " + screenAptLine,
+		"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
 		"systemctl daemon-reload",
 		"systemctl enable --now getty@tty1",
 	}

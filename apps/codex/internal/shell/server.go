@@ -126,6 +126,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer form.erase()
+	srv.Shell.begin()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	action.run(ctx, srv, w, r, form)
@@ -185,7 +186,7 @@ var actions = map[string]action{
 // home's ticket once the box is unlocked and set up, else back to the
 // shell's page, which says what happened.
 func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	if srv.Shell.view(false).Page == PageUnlocked {
+	if srv.Shell.View().Page == PageUnlocked {
 		to, err := srv.Shell.Ticket(ctx)
 		if err == nil {
 			// The ticket travels in the fragment of a redirect: no request
