@@ -394,8 +394,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/tincture_wire_test.exs", ~w(tincture_urls)}
     ],
     "confirmation_assertion.json" => [
+      {"apps/cyfr/assets/test/home_confirm/home_confirm.test.mjs",
+       ~w(exchange.deciding exchange.home)},
       {"apps/prima/test/prima/confirmation_assertion_test.exs",
-       ~w(assertions identity keys lifetime_ms protocol record refusals verify)}
+       ~w(assertions identity keys lifetime_ms protocol record refusals verify)},
+      {"apps/sanctum/test/sanctum/pairing_test.exs", ~w(exchange)}
     ],
     "confirmation.json" => [
       {"apps/codex/cmd/consent_error_test.go", ~w(ref signal)},
@@ -414,15 +417,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/origin_test.exs", ~w(origins)}
     ],
     "device.json" => [
-      {"apps/cyfr/assets/test/system_layer/device_key.test.mjs",
-       ~w(continuous_fields key_digest messages protocol refusals types)},
       {"apps/cyfr/test/emissary/web/device_channel_test.exs", ~w(messages refusals)},
       {"apps/prima/test/prima/device_test.exs",
        ~w(continuous_fields key_digest messages protocol refusals types)}
     ],
     "device_cert.json" => [
-      {"apps/cyfr/assets/test/system_layer/device_key.test.mjs",
-       ~w(certificates challenge_refusals challenges keys proof_cases proof_protocol proofs purposes refusals verify)},
       {"apps/prima/test/prima/device_cert_test.exs",
        ~w(certificate_protocol certificates challenge_refusals challenges homes issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals reserved_client_ids verify)}
     ],
@@ -441,7 +440,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(protocol common_fields purpose_fields keys proofs verify)},
       {"apps/codex/internal/shell/server_test.go", ~w(exchange)},
       {"apps/cyfr/assets/test/device_unlock/complete.test.mjs", ~w(exchange)},
-      {"apps/cyfr/assets/test/system_layer/device_key.test.mjs", ~w(proofs purpose_fields)},
       {"apps/prima/test/prima/device_unlock_test.exs",
        ~w(protocol common_fields purpose_fields keys proofs verify exchange)}
     ],

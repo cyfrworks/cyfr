@@ -51,7 +51,7 @@
  */
 
 import {b64url, fromB64url} from "./base64url.js"
-import {jcs} from "./device_key.js"
+import {jcs} from "./jcs.js"
 import {decodeRecoveryCode} from "./recovery_code.js"
 
 export const SEED_BYTES = 32

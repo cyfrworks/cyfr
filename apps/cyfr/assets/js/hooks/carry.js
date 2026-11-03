@@ -19,8 +19,8 @@
  *   * at A's `/carry`, `#destination=<B>` (B's entry, which only fills the
  *     form), B's challenge, and B's return (`Prima.Carry.Return`); the
  *     last two are unpadded base64url JSON, told apart by their fields;
- *     and `#certify=<…>`, a glass at B asking A to certify its device
- *     key, which only shows the request until the person certifies it.
+ *     and `#confirm=<…>`, B asking A to confirm a change of the person's
+ *     at B, which only shows the change until the person confirms it.
  *
  * The hook is mounted with `data-carry="login"` on the sign-in page and
  * `data-carry="source"` on `/carry`; `data-lifetime-ms` is the carry's
@@ -38,7 +38,7 @@
  *     is used, or found expired.
  *   * `cyfr:carry:source` at A: the actions this tab began, each with its
  *     destination, `key_epoch` and time, and the transport fragment (a
- *     destination, a challenge, a return or a device to certify, meant for
+ *     destination, a challenge, a return or a change to confirm, meant for
  *     `/carry`) that
  *     arrived before the person signed in at A and was sent to `/login`
  *     with it, with its time. `/carry` takes the fragment once the person
@@ -96,7 +96,7 @@ export function decodeObject(text) {
 }
 
 /**
- * What a fragment is: `{kind}` of `carry`, `assertion` and `certify` (with
+ * What a fragment is: `{kind}` of `carry`, `assertion` and `confirm` (with
  * `value`, the part after the key), `destination` (with `destination`),
  * `challenge` and `return` (with `fragment` and `actionId`), `too_large`,
  * `unknown` or `none`.
@@ -107,7 +107,7 @@ export function classify(fragment, max = MAX_FRAGMENT_BYTES) {
 
   if (fragment.startsWith("carry=")) return keyed("carry", fragment.slice(6))
   if (fragment.startsWith("cyfr=")) return keyed("assertion", fragment.slice(5))
-  if (fragment.startsWith("certify=")) return keyed("certify", fragment.slice(8))
+  if (fragment.startsWith("confirm=")) return keyed("confirm", fragment.slice(8))
 
   if (fragment.startsWith("from=")) return {kind: "from", address: address(paramOf(fragment, "from"))}
   if (fragment.startsWith("invite=")) return keyed("invite", paramOf(fragment, "invite"))
@@ -163,7 +163,7 @@ export function address(entry) {
 // What the bound is held against: the encoded carry or assertion after its
 // key, as the homes bound it (`Prima.Carry.bounded/1`), or the whole
 // fragment when it has no key.
-const unkeyed = (fragment) => fragment.replace(/^(carry|cyfr|certify)=/, "")
+const unkeyed = (fragment) => fragment.replace(/^(carry|cyfr|confirm)=/, "")
 
 // Whether a fragment's navigation stays within the bound: the part after
 // its `#` is what the other page reads.
@@ -403,7 +403,7 @@ const Carry = {
       case "destination":
       case "challenge":
       case "return":
-      case "certify":
+      case "confirm":
         keepTransport(this.storage, fragment, now, this.lifetimeMs)
         return
       case "too_large":
@@ -457,8 +457,8 @@ const Carry = {
       case "return":
         this.pushEvent("carry_return", {fragment: found.fragment})
         return
-      case "certify":
-        this.pushEvent("carry_certify", {fragment: found.value})
+      case "confirm":
+        this.pushEvent("carry_confirm", {fragment: found.value})
         return
       case "too_large":
         this.pushEvent("carry_oversized", {})

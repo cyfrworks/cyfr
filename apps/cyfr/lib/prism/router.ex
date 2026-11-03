@@ -325,6 +325,10 @@ defmodule Prism.Router do
           # digest in its fragment. Session-only, so a person not signed in is
           # sent through `/login`, whose script clears the fragment.
           live "/devices/add", DeviceAddLive, :index, metadata: %{auth: :browser_authenticated}
+          # Coming back from confirming a change at the person's own home: its
+          # certified assertion in the fragment. Session-only, as the record
+          # it confirms is this session's person's.
+          live "/confirm", HomeConfirmLive, :index, metadata: %{auth: :browser_authenticated}
 
           scope "/a/:athanor" do
             # Forward to /chat with the athanor selected.

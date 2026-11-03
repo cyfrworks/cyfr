@@ -53,6 +53,10 @@ defmodule Emissary.Web.DeviceChannelTest do
   # The rate limiter's table and the settings' cache are the node's.
   use CyfrWeb.ConnCase, async: false
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.PersonIdentity
@@ -247,10 +251,13 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert {:reply, :ok, {:text, json}, state} =
                send_frame(state, intent_message("int_1", "pairing.list", %{}))
 
-      assert {:ok, {:answer, %{id: "int_1", result: %{"clients" => [client]}}}} =
+      assert {:ok, {:answer, %{id: "int_1", result: %{"clients" => clients}}}} =
                json |> Jason.decode!() |> Device.decode(:home)
 
-      # The gate saw the client itself: the one it lists as the caller's.
+      # Beside the passkey the fixture confirmed with, listed as its platform
+      # holder, the one device: the gate saw the client itself, the one it
+      # lists as the caller's.
+      assert [client] = Enum.reject(clients, &(&1["holder_kind"] == "platform"))
       assert client["client_id"] == device.client_id
       assert client["current"] == true
 
@@ -707,7 +714,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       cert = DeviceCert.sign(cert, elem(identity.live, 1))
       glass = Context.build(%{authenticated: false, client_ip: "198.51.100.77"})
-      submission = %{device_key: device_key, certificate: cert}
+      submission = %{holder: @holder, device_key: device_key, certificate: cert}
 
       {:ok, %{challenge: challenge}} =
         Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
@@ -755,11 +762,148 @@ defmodule Emissary.Web.DeviceChannelTest do
         :established
       )
 
-      assert {:ok, [%{standing: "active"}]} =
+      assert {:ok, clients} =
                Arca.PairedClients.list(Prima.Actor.in_athanor(context.athanor.id),
                  user_id: context.user.id,
                  standing: :all
                )
+
+      assert [%{standing: "active"}] = Enum.filter(clients, &(&1.source_kind == "device_cert"))
+    end
+  end
+
+  describe "a protected device of a person whose keys are at another home confirming" do
+    setup [:seated]
+
+    # The remote person's device made protected, connected; and a change of
+    # theirs asked under the session they hold here.
+    setup context do
+      remote = remote_device!(context)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in Arca.Schemas.PairedClient, where: p.id == ^remote.device.client_id),
+          set: [holder_kind: "software", display_name: "Pi"]
+        )
+
+      state = proven(remote.device)
+
+      change = %{
+        operation: "pairing.revoke",
+        arguments: %{"client_id" => "pcl_x"},
+        resource: "pcl_x"
+      }
+
+      {:error, {:confirmation_required, %{id: secret}}} =
+        Sanctum.Consent.Authz.check(context.session_ctx, :pairing_revocation, change)
+
+      Map.merge(remote, %{device_ctx: state.client, ref: Prima.Confirmation.ref(secret)})
+    end
+
+    defp remote_challenge(device_ctx, ref) do
+      Sanctum.Providers.Confirmation.handle(device_ctx, %{"action" => "pending", "request" => ref})
+    end
+
+    defp remote_confirm(device_ctx, ref, challenge, private) do
+      {:ok, challenge} = Challenge.decode(challenge)
+
+      Sanctum.Providers.Confirmation.handle(device_ctx, %{
+        "action" => "confirm",
+        "ref" => ref,
+        "device_proof" => Proof.encode(Proof.sign(challenge, private))
+      })
+    end
+
+    test "proves its person's record under the head their directory names", %{
+      device: device,
+      device_ctx: device_ctx,
+      ref: ref
+    } do
+      {:ok, %{confirmations: [record]}} = remote_challenge(device_ctx, ref)
+      assert "device" in record.methods
+
+      assert {:ok, %{state: "confirmed"}} =
+               remote_confirm(device_ctx, ref, record.challenge, device.private)
+    end
+
+    test "once their home rotated their keys, read live, it is neither challenged nor taken", %{
+      device: device,
+      device_ctx: device_ctx,
+      ref: ref,
+      identity: identity,
+      directory: directory
+    } do
+      {:ok, %{confirmations: [record]}} = remote_challenge(device_ctx, ref)
+
+      # Published at their directory; the head cached here is still inside
+      # its freshness bound, so only a live read sees the rotation.
+      _rotated = Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
+
+      assert {:error, %Prima.Refusal{reason: :certification_ended}} =
+               remote_confirm(device_ctx, ref, record.challenge, device.private)
+
+      # The live read moved this home to the new head, which ends what was
+      # bound to the old one: the record is voided, and nothing is left for
+      # the device to be challenged on.
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(device_ctx), ref)
+      assert row.state == "voided"
+      assert {:ok, %{confirmations: []}} = remote_challenge(device_ctx, ref)
+    end
+
+    test "confirms under the certificate their home renewed, once the one paired here expired", %{
+      device: device,
+      identity: identity,
+      ref: ref
+    } do
+      now = System.system_time(:millisecond)
+
+      {:ok, renewed} =
+        DeviceCert.new(
+          device_key: device.cert.device_key,
+          client_id: device.client_id,
+          subject: device.cert.subject,
+          issuer: device.cert.issuer,
+          audience: device.cert.audience,
+          athanor: device.cert.athanor,
+          not_before: now,
+          expires_at: now + 7_200_000
+        )
+
+      renewed = DeviceCert.sign(renewed, elem(identity.live, 1))
+      state = proven(%{device | cert: renewed})
+
+      # The certificate recorded at pairing runs out; the renewed one the
+      # device connected under is the one it now stands on here.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.DeviceCertificate,
+            where:
+              c.paired_client_id == ^device.client_id and
+                c.expires_at < ^DateTime.from_unix!(now + 7_000_000, :millisecond)
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      {:ok, %{confirmations: [record]}} = remote_challenge(state.client, ref)
+
+      assert {:ok, %{state: "confirmed"}} =
+               remote_confirm(state.client, ref, record.challenge, device.private)
+    end
+
+    test "with their directory unreachable it pauses rather than trusting the cached head", %{
+      device: device,
+      device_ctx: device_ctx,
+      ref: ref,
+      directory: directory
+    } do
+      {:ok, %{confirmations: [record]}} = remote_challenge(device_ctx, ref)
+      Sanctum.Test.DirectoryServer.Server.stop(directory.server)
+
+      assert {:error, :identity_stale} =
+               remote_confirm(device_ctx, ref, record.challenge, device.private)
+
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(device_ctx), ref)
+      assert row.state == "pending"
     end
   end
 
@@ -884,8 +1028,17 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert {:error, :invalid_ticket} = Sanctum.DeviceUnlock.redeem(ticket)
     end
 
-    test "a browser key with no holder unlocks nothing", %{session_ctx: session_ctx} do
+    test "a client that reports no holder unlocks nothing", %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
+
+      # No pairing writes such a row any more; one that holds none still
+      # unlocks nothing.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in Arca.Schemas.PairedClient, where: p.id == ^device.client_id),
+          set: [holder_kind: nil, display_name: nil]
+        )
+
       state = proven(device)
 
       {:reply, :ok, {:text, json}, state} =
@@ -966,7 +1119,7 @@ defmodule Emissary.Web.DeviceChannelTest do
                Sanctum.Pairing.complete(
                  Context.build(%{authenticated: false, client_ip: "127.0.0.1"}),
                  invitation.invitation_secret,
-                 %{device_key: device_key}
+                 %{holder: @holder, device_key: device_key}
                )
     end
 
@@ -1098,10 +1251,10 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert entry["preview"]["details"]["device"] == Device.key_code(args["key_digest"])
       assert entry["asker"]["kind"] == "session"
 
-      # An addition, once the person holds a passkey: the paired device
-      # offers every proof the person holds, each recorded as given on it.
+      # An addition, once the person holds a passkey: a passkey proves it;
+      # an emailed code, which proves no key held, is not offered.
       assert entry["restricted"] == true
-      assert entry["methods"] == ["passkey", "email"]
+      assert entry["methods"] == ["passkey"]
       refute inspect(entries) =~ id
 
       {:ok, digest} = Prima.Identity.Encoding.unb64(entry["webauthn"]["challenge"], 32)
@@ -2141,10 +2294,14 @@ defmodule Emissary.Web.DeviceChannelTest do
     glass = Context.build(%{authenticated: false, client_ip: source})
 
     {:ok, %{challenge: challenge}} =
-      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{device_key: device_key})
+      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
+        holder: @holder,
+        device_key: device_key
+      })
 
     {:ok, %{client_id: client_id, certificate: certificate}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
+        holder: @holder,
         device_key: device_key,
         proof: Proof.encode(Proof.sign(challenge, private))
       })
