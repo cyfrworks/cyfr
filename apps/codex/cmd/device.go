@@ -182,8 +182,39 @@ type console struct {
 	quiet func() func()
 }
 
+// newConsole is cyfr login's console: each question reads its own line
+// (askedLine), so no read of the terminal is left waiting once the last
+// question is answered, and the shell cyfr login starts reads every line
+// typed after it.
 func newConsole(out io.Writer) *console {
-	return &console{out: out, lines: confirmationInput, quiet: echoOff}
+	return &console{out: out, lines: func() <-chan []byte { return askedLine(os.Stdin) }, quiet: echoOff}
+}
+
+// askedLine reads one line from in, a byte at a time so nothing past its
+// newline is taken, and delivers it, without the newline, on the channel
+// it answers; the channel closes when the input ends first.
+func askedLine(in io.Reader) <-chan []byte {
+	ch := make(chan []byte, 1)
+	go func() {
+		var line []byte
+		b := make([]byte, 1)
+		for {
+			n, err := in.Read(b)
+			if n == 1 && b[0] == '\n' {
+				ch <- bytes.TrimRight(line, "\r")
+				return
+			}
+			if n == 1 {
+				line = append(line, b[0])
+			}
+			if err != nil {
+				clear(line)
+				close(ch)
+				return
+			}
+		}
+	}()
+	return ch
 }
 
 // errInputEnded is the input ending before the person answered.

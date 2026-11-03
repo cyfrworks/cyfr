@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -474,4 +475,66 @@ func captureStderr(t *testing.T, fn func()) string {
 	os.Stderr = saved
 	w.Close()
 	return string(<-out)
+}
+
+// cyfr login's console reads one line per question and nothing past it:
+// what is typed after its last answer stays for the shell it starts.
+func TestAskedLine_TakesNothingPastItsLine(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	if _, err := w.WriteString("the link\r\ncyfr whoami\n"); err != nil {
+		t.Fatal(err)
+	}
+	line, open := <-askedLine(r)
+	if !open || string(line) != "the link" {
+		t.Fatalf("asked line %q, %v", line, open)
+	}
+	w.Close()
+	rest, _ := io.ReadAll(r)
+	if string(rest) != "cyfr whoami\n" {
+		t.Errorf("the shell would read %q", rest)
+	}
+	if _, open := <-askedLine(r); open {
+		t.Error("an ended input answered a line")
+	}
+}
+
+// The console cyfr login asks on leaves the terminal unread once its last
+// question is answered: the line typed next, the first command in the
+// shell it starts, reaches that shell.
+func TestLoginConsole_LeavesTheNextLineToTheShell(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	saved := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = saved })
+	if _, err := w.WriteString("https://alice.example/pair#code=CODE\n"); err != nil {
+		t.Fatal(err)
+	}
+	c := newConsole(io.Discard)
+	c.quiet = func() func() { return func() {} }
+	if line, err := c.line(t.Context(), "Link or code: "); err != nil || string(line) != "https://alice.example/pair#code=CODE" {
+		t.Fatalf("answered %q, %v", line, err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := w.WriteString("cyfr whoami\n"); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	got := make(chan []byte, 1)
+	go func() { rest, _ := io.ReadAll(r); got <- rest }()
+	select {
+	case rest := <-got:
+		if string(rest) != "cyfr whoami\n" {
+			t.Errorf("the shell would read %q", rest)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the shell's first line was taken")
+	}
 }
