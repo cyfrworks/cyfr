@@ -60,8 +60,9 @@ type PINEnroll func(ctx context.Context) (evaluator string, err error)
 
 // open opens the record's key with secret: the chip or the passphrase
 // here, or a PIN its home evaluates, once, followed by the reset the
-// opened key signs. A reset the home does not take leaves the key open:
-// the attempt stays counted until the next unlock resets it.
+// opened key signs (settle). A reset the home does not take leaves the key
+// open and says so: the attempt stays counted, and a pending evaluator
+// stays pending, until an open whose reset the home takes.
 func (s *Shell) open(ctx context.Context, secret []byte) (*holder.Key, error) {
 	if !s.rec.Hardened() {
 		return s.rec.Open(secret)
@@ -77,8 +78,31 @@ func (s *Shell) open(ctx context.Context, secret []byte) (*holder.Key, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = s.resetPIN(ctx, reset, key)
+	if err := s.settle(ctx, reset, key); err != nil {
+		s.say("CYFR did not take this unlock's reset, so the tries it counted stay counted until an unlock it takes.")
+	}
 	return key, nil
+}
+
+// settle posts the reset an evaluation answered and, once the home takes
+// one under the record's pending evaluator, writes the record no longer
+// pending, so a replacement may start from it.
+func (s *Shell) settle(ctx context.Context, reset json.RawMessage, key *holder.Key) error {
+	if err := s.resetPIN(ctx, reset, key); err != nil {
+		return err
+	}
+	if !s.rec.PIN.Pending {
+		return nil
+	}
+	settled := *s.rec
+	blob := *s.rec.PIN
+	blob.Pending = false
+	settled.PIN = &blob
+	if err := settled.Save(s.cfg.Record); err != nil {
+		return err
+	}
+	s.rec = &settled
+	return nil
 }
 
 // evaluate is the holder's evaluation by the home, keeping the reset
@@ -133,7 +157,10 @@ func (s *Shell) resetPIN(ctx context.Context, raw json.RawMessage, key *holder.K
 // evaluated once, and the record is replaced on disk before the reset
 // tells the home the new evaluator works. A device that dies before the
 // record is written keeps the record it had, which still opens: the home
-// keeps the old evaluator until the new one's first reset.
+// keeps the old evaluator until the new one's first reset. No replacement
+// starts while the saved record's evaluator is pending (holder.PINBlob):
+// the home would remove it at this enrollment, and a replacement that then
+// failed would leave the record nothing to open with.
 func (s *Shell) SetPIN(ctx context.Context, pin, again []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,6 +185,10 @@ func (s *Shell) SetPIN(ctx context.Context, pin, again []byte) {
 		s.say("A PIN is six digits.")
 		return
 	}
+	if s.rec.PIN != nil && s.rec.PIN.Pending {
+		s.say("CYFR has not confirmed this %s's current PIN yet, so a new one could leave it nothing to open with: unlock with the current PIN once more while CYFR answers, then set the new one. Nothing changed.", s.cfg.Noun)
+		return
+	}
 	evaluator, err := s.cfg.EnrollPIN(ctx)
 	if err != nil {
 		s.say("CYFR did not set up the PIN: %s. Nothing changed on this %s.", strings.TrimSuffix(s.sentence(err), "."), s.cfg.Noun)
@@ -174,8 +205,10 @@ func (s *Shell) SetPIN(ctx context.Context, pin, again []byte) {
 		return
 	}
 	s.rec = hard
-	_ = s.resetPIN(ctx, reset, s.key)
 	s.say("This %s's key is now kept under your six-digit PIN. CYFR counts every try, so a copy of this %s's disk cannot guess it.", s.cfg.Noun, s.cfg.Noun)
+	if err := s.settle(ctx, reset, s.key); err != nil {
+		s.notice += " CYFR has not confirmed the new PIN yet: unlock with it once while CYFR answers before you change it again."
+	}
 }
 
 // pinSentence is what the person reads for a failure of a PIN the home

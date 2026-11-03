@@ -845,7 +845,7 @@ async function pinStep(cliHome, passphrase) {
     const stored = records.length === 1 ? JSON.parse(readFileSync(records[0], "utf8")) : {};
     const text = records.length === 1 ? readFileSync(records[0], "utf8") : "";
     r.record = { pin_blob: !!stored.pin, passphrase_blob: !!stored.software, kind: stored.kind,
-      evaluator_shape: /^pev_[A-Za-z0-9_-]{43}$/.test(stored.pin?.evaluator || ""), pin_on_disk: text.includes(pin) };
+      evaluator_shape: /^pev_[A-Za-z0-9_-]{43}$/.test(stored.pin?.evaluator || ""), pending: !!stored.pin?.pending, pin_on_disk: text.includes(pin) };
     r.enroll_exit = t.exit;
 
     // Three wrong PINs, each counted; the waits are 1 s and 2 s between.
@@ -893,7 +893,7 @@ async function pinStep(cliHome, passphrase) {
     r.home_away = { exit: awayExit, unreachable: /could not be reached/.test(awayOut), unlocked: /Unlocked\./.test(awayOut) };
 
     r.ok = r.confirmed_operation === "pin.enroll" && r.enroll_exit === 0 && r.record.pin_blob && !r.record.passphrase_blob &&
-      r.record.kind === "software" && r.record.evaluator_shape && !r.record.pin_on_disk &&
+      r.record.kind === "software" && r.record.evaluator_shape && !r.record.pending && !r.record.pin_on_disk &&
       r.wrong.every((w) => w.exit !== 0 && w.counted) && r.wait.said && r.wait.exit !== 0 &&
       r.unlock.confirm_exit === 0 && r.unlock.link_printed &&
       r.home_away.exit !== 0 && r.home_away.unreachable && !r.home_away.unlocked;

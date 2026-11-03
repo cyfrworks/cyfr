@@ -5,6 +5,7 @@ package shell
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -71,7 +72,7 @@ func TestSetPIN_KeepsTheKeyUnderAPINTheHomeCounts(t *testing.T) {
 	dir := t.TempDir()
 	sh, pass := pinned(t, home, dir)
 	rec := record(t, dir)
-	if rec.PIN == nil || rec.Software != nil || rec.PIN.Evaluator != home.pin.id(0) || rec.Kind != holder.KindSoftware {
+	if rec.PIN == nil || rec.Software != nil || rec.PIN.Evaluator != home.pin.id(0) || rec.Kind != holder.KindSoftware || rec.PIN.Pending {
 		t.Fatalf("record after SetPIN: %+v", rec)
 	}
 	if home.pin.charged != 1 || len(home.pin.resets) != 1 {
@@ -368,5 +369,43 @@ func TestPIN_AnAnswerOtherThanOneElementOpensNothing(t *testing.T) {
 		if v := sh.View(); sh.Unlocked() || !strings.Contains(v.Notice, "was not one it can use") {
 			t.Fatalf("%s: unlocked %v, notice %q", name, sh.Unlocked(), v.Notice)
 		}
+	}
+}
+
+// A reset the home does not take is said, and leaves the record's
+// evaluator pending: no replacement starts from it, nothing is enrolled
+// or charged, and the next unlock whose reset the home takes settles it,
+// after which a replacement goes ahead.
+func TestPIN_APendingEvaluatorIsSettledBeforeAnyReplacement(t *testing.T) {
+	home := newFakeHome(t)
+	dir := t.TempDir()
+	sh := pinLine(t, home, dir, false)
+	pairOnBox(t, home, sh)
+	sh.cfg.Client.Transport = reviewPINResetTransport{next: http.DefaultTransport}
+	sh.SetPIN(t.Context(), []byte("123456"), []byte("123456"))
+	if v := sh.View(); !record(t, dir).PIN.Pending || !strings.Contains(v.Notice, "has not confirmed the new PIN yet") {
+		t.Fatalf("an unconfirmed PIN: pending %v, notice %q", record(t, dir).PIN.Pending, v.Notice)
+	}
+	sh.Lock("")
+	home.pin.allow()
+	sh.Unlock(t.Context(), []byte("123456"))
+	if v := sh.View(); !sh.Unlocked() || v.Notice != "CYFR did not take this unlock's reset, so the tries it counted stay counted until an unlock it takes." {
+		t.Fatalf("a dropped reset: unlocked %v, notice %q", sh.Unlocked(), v.Notice)
+	}
+	enrolls, charged := home.pin.enrolls, home.pin.charged
+	sh.SetPIN(t.Context(), []byte("222222"), []byte("222222"))
+	if v := sh.View(); home.pin.enrolls != enrolls || home.pin.charged != charged || !strings.Contains(v.Notice, "has not confirmed this command line's current PIN yet") {
+		t.Fatalf("a replacement from a pending record: enrolls %d, charged %d, notice %q", home.pin.enrolls-enrolls, home.pin.charged-charged, v.Notice)
+	}
+	sh.Lock("")
+	sh.cfg.Client.Transport = http.DefaultTransport
+	home.pin.allow()
+	sh.Unlock(t.Context(), []byte("123456"))
+	if !sh.Unlocked() || record(t, dir).PIN.Pending {
+		t.Fatalf("settled: unlocked %v, pending %v, notice %q", sh.Unlocked(), record(t, dir).PIN.Pending, sh.View().Notice)
+	}
+	sh.SetPIN(t.Context(), []byte("222222"), []byte("222222"))
+	if rec := record(t, dir); rec.PIN.Evaluator != home.pin.id(1) || rec.PIN.Pending {
+		t.Fatalf("the replacement after settling: %+v, notice %q", rec.PIN, sh.View().Notice)
 	}
 }

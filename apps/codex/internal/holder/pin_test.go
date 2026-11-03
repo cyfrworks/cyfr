@@ -238,8 +238,9 @@ func TestPINBoundToItsEvaluatorName(t *testing.T) {
 }
 
 // TestPINRecordOnDisk: the saved record holds the sealed seed, its salt
-// and nonce and the evaluator's name, and nothing that opens it: no PIN,
-// no OPRF output, no wrap key, no blind.
+// and nonce, the evaluator's name and, freshly hardened, that the
+// evaluator's first reset is pending; nothing that opens it: no PIN, no
+// OPRF output, no wrap key, no blind.
 func TestPINRecordOnDisk(t *testing.T) {
 	rec := pinRecord(t, newTestEvaluator(t), "123456")
 	path := filepath.Join(t.TempDir(), "device.json")
@@ -268,7 +269,7 @@ func TestPINRecordOnDisk(t *testing.T) {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	if got := strings.Join(keys, ","); got != "ciphertext,evaluator,nonce,salt" {
+	if got := strings.Join(keys, ","); got != "ciphertext,evaluator,nonce,pending,salt" || !rec.PIN.Pending {
 		t.Fatalf("pin blob fields %s", got)
 	}
 }

@@ -57,6 +57,12 @@ type PINBlob struct {
 	Salt       []byte `json:"salt"`
 	Nonce      []byte `json:"nonce"`
 	Ciphertext []byte `json:"ciphertext"`
+	// Pending is an evaluator whose first reset the home has not taken
+	// yet. The home removes such an evaluator at the device's next
+	// enrollment, so a replacement never starts from a pending record: it
+	// would leave the record nothing to open with. It is no secret and
+	// opens nothing; HardenPIN sets it, the shell clears it.
+	Pending bool `json:"pending,omitempty"`
 }
 
 // Evaluate sends one blinded element to the home, which charges the
@@ -86,7 +92,7 @@ func (r *Record) HardenPIN(k *Key, evaluator string, pin []byte, eval Evaluate) 
 	}
 	out := *r
 	out.Software = nil
-	out.PIN = &PINBlob{Evaluator: evaluator, Salt: make([]byte, saltSize), Nonce: make([]byte, nonceSize)}
+	out.PIN = &PINBlob{Evaluator: evaluator, Salt: make([]byte, saltSize), Nonce: make([]byte, nonceSize), Pending: true}
 	if _, err := rand.Read(out.PIN.Salt); err != nil {
 		return nil, err
 	}
