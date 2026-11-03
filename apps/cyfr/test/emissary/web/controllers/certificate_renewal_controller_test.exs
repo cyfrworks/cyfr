@@ -117,11 +117,10 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
     |> post("/certify/v1/renew", Jason.encode!(body))
   end
 
-  test "answers the challenge, then the replacement for the device key's proof, to any origin with no credentials",
+  test "answers the challenge, then the replacement for the device key's proof, with no credentials",
        %{conn: conn, certificate: certificate, private: private} do
     first = renew(conn, %{"certificate" => certificate})
     assert %{"challenge" => challenge} = json_response(first, 200)
-    assert get_resp_header(first, "access-control-allow-origin") == ["*"]
     assert get_resp_header(first, "access-control-allow-credentials") == []
     assert get_resp_header(first, "set-cookie") == []
 
@@ -135,17 +134,14 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
     assert renewed.expires_at >= certificate["expires_at"]
   end
 
-  test "the preflight is answered before anything is read", %{conn: conn} do
-    preflight =
-      conn
-      |> put_req_header("origin", @hub)
-      |> put_req_header("access-control-request-method", "POST")
-      |> put_req_header("access-control-request-headers", "content-type")
-      |> options("/certify/v1/renew")
+  test "no page of another origin is answered: the route is the device's alone", %{
+    conn: conn,
+    certificate: certificate
+  } do
+    first = renew(conn, %{"certificate" => certificate})
 
-    assert preflight.status == 204
-    assert get_resp_header(preflight, "access-control-allow-origin") == ["*"]
-    assert get_resp_header(preflight, "access-control-allow-methods") |> hd() =~ "POST"
+    assert %{"challenge" => _} = json_response(first, 200)
+    assert get_resp_header(first, "access-control-allow-origin") == []
   end
 
   test "a session cookie the browser sends chooses nobody; the proof is still asked for",

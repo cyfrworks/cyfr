@@ -205,7 +205,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_OCI_REGISTRY_URL",
      "The OCI registry host components are pulled from and pushed to (default `registry.<CYFR_REGISTRY_URL>`, and `none` when that is `none`)."},
     {"CYFR_OIDC_CLIENT_ID",
-     "The client ID at the OIDC issuer, with `CYFR_OIDC_ISSUER` and `CYFR_OIDC_CLIENT_SECRET`. The issuer lists two redirect URIs for it: `<origin>/auth/oidcc/callback` for sign-in and `<origin>/auth/oidcc/reauth` for the fresh sign-in that confirms a sensitive change, which counts only when the issuer sends `auth_time` in its ID token; as the company issuer `CYFR_COMPANY_LOGIN` requires, it lists `<origin>/auth/company/callback` too. Changing the issuer or this client ID makes every person sign in with their company again."},
+     "The client ID at the OIDC issuer, with `CYFR_OIDC_ISSUER` and `CYFR_OIDC_CLIENT_SECRET`. The issuer lists two redirect URIs for it: `<origin>/auth/oidcc/callback` for sign-in and `<origin>/auth/oidcc/reauth` for the fresh sign-in that confirms a sensitive change while a person recovers from a declared restore or adds their first passkey or device, which counts only when the issuer sends `auth_time` in its ID token; as the company issuer `CYFR_COMPANY_LOGIN` requires, it lists `<origin>/auth/company/callback` too. Changing the issuer or this client ID makes every person sign in with their company again."},
     {"CYFR_OIDC_CLIENT_SECRET",
      "The client secret at the OIDC issuer, with `CYFR_OIDC_ISSUER` and `CYFR_OIDC_CLIENT_ID`."},
     {"CYFR_OIDC_ISSUER",

@@ -4,14 +4,17 @@
 defmodule PrismWeb.SystemLayer.Pairing do
   @moduledoc """
   The pairing prompt's body, which only the system layer draws: the
-  person's paired clients in the athanor in focus, each with its revoke
-  control and, for a protected device, what holds its key and what it
-  last reported of its disks (`Sanctum.Pairing.list/1`), a report a
-  person reads and never a decision; and the pairing code. A command line
-  is a protected device like any other, listed with its holder.
+  person's Devices, one list, in the athanor in focus, each with its
+  revoke control and what holds its key (`Sanctum.Pairing.list/1`): a
+  protected device with what it last reported of its disks, a report a
+  person reads and never a decision, and each passkey as **Passkey**, one
+  entry per credential, saying whether it may sync to their other
+  machines and that revoking it ends it on each of them. And the pairing
+  code. A command line is a protected device like any other, listed with
+  its holder.
 
   Pairing a device begins on the new device: a command line's `cyfr
-  login`, or this home's `/pair` page in a browser, makes its key and shows
+  login`, or the box's own screen, makes its key and shows
   the key's code (`Prima.Device.key_code/1`) and a QR code of this home's
   `/devices/add` page with the key's digest in the fragment
   (`PrismWeb.DeviceAddLive`), which a phone's camera opens here with the
@@ -63,7 +66,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
             >
               <div>
                 <p class="font-medium" data-test="pairing-client-name">
-                  {client[:display_name] || "Paired device"}
+                  {name(client)}
                 </p>
                 <p :if={holder(client)} class="text-xs text-gray-300" data-test="pairing-holder">
                   {holder(client)}
@@ -76,8 +79,11 @@ defmodule PrismWeb.SystemLayer.Pairing do
                 >
                   {storage(client)}
                 </p>
+                <p :if={scope(client)} class="text-xs text-gray-300" data-test="pairing-scope">
+                  {scope(client)}
+                </p>
                 <p class="text-xs text-gray-400">
-                  Paired {client.paired_at}{expiry(client)}
+                  {added(client)} {client.paired_at}{expiry(client)}
                 </p>
               </div>
               <button
@@ -133,7 +139,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
       >
         <input type="hidden" name="prompt_id" value={@prompt_id} />
         <label class="block text-sm" for={"#{@prompt_id}-pairing-key-code"}>
-          Type or paste the code the new device shows: cyfr login on a command line, or this CYFR's /pair page in a browser. Check it matches before you pair.
+          Type or paste the code the new device shows: cyfr login on a command line, or a box's own screen. Check it matches before you pair.
         </label>
         <input
           id={"#{@prompt_id}-pairing-key-code"}
@@ -162,7 +168,29 @@ defmodule PrismWeb.SystemLayer.Pairing do
 
   defp expiry(_client), do: ""
 
-  # What holds a protected device's key, as the device reports it.
+  defp name(%{holder_kind: "platform"}), do: "Passkey"
+  defp name(client), do: client[:display_name] || "Paired device"
+
+  defp added(%{holder_kind: "platform"}), do: "Registered"
+  defp added(_client), do: "Paired"
+
+  # What revoking an entry ends: a passkey wherever it synced, a device on
+  # that device alone.
+  defp scope(%{holder_kind: "platform", synced: true}),
+    do:
+      "May sync to your other phones and computers. Revoking it ends it on every one of them, " <>
+        "and the sessions it signed in."
+
+  defp scope(%{holder_kind: "platform"}),
+    do: "Kept on the one phone, computer or security key that made it. Revoking it ends it there."
+
+  defp scope(_device), do: nil
+
+  # What holds a protected device's key, as the device reports it; a
+  # passkey's platform keeps it under the person's own screen lock.
+  defp holder(%{holder_kind: "platform"}),
+    do: "Signs in and confirms with your face, fingerprint or screen lock, at this CYFR alone."
+
   defp holder(%{holder_kind: "chip"}),
     do: "Unlocks with a PIN; its key is sealed in this device's security chip."
 

@@ -1041,8 +1041,8 @@ defmodule Cyfr.Boundaries do
           "`PrismWeb.verified_routes/0` " <>
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
-          "declares its pipelines from the shared browser definition and plugs, the " <>
-          "device page's wider `connect-src` among them (`CyfrWeb.Plugs.BrowserCSP`). " <>
+          "declares its pipelines from the shared browser definition and plugs " <>
+          "(`CyfrWeb.Plugs.BrowserCSP` among them). " <>
           "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
           "this roster to every surface that lists it, so no declaration can say it."
     },
