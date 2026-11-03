@@ -113,7 +113,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 ### Codex: the command line
 
-- The `cyfr` binary, speaking MCP to Emissary with an API key or a session; its operation catalog is generated from the gate's table.
+- The `cyfr` binary, speaking MCP to Emissary with an API key or the session its own shell unlocks; its operation catalog is generated from the gate's table. On a person's terminal it is a protected device like the box's screen: `cyfr login` makes its key, pairs it from a device of the person's that reads the key's code, or enrolls it as a new person's first method under setup, an invitation or the open admission, and unlocks it into a session that lasts while its shell holds the device channel. It never signs in by another device's approval, and an API key is the unattended path.
 - The access engine (`apps/codex/internal/access`), which `cyfr init`, `setup`, `access`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
 - Two faces of the one program on the machine: the terminal, and the setup pages `cyfr setup` serves on the machine's loopback before the stack runs, for a device's own screen. The pages drive `cyfr init`'s sequence and `cyfr up`'s start, no second setup, and only the machine reaches them; Prism is never a setup surface.
 - The machine's own requirements: on Ubuntu 26.04, at a terminal, `cyfr init` installs Docker when this account cannot reach it, through one `sudo` of the commands it shows; `cyfr` itself never runs as root. `init` prepares and `up` starts, on every system.
@@ -190,11 +190,11 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 ### 5.2 Identity and standing
 
-Identity and standing are established at the authentication boundary, and a long-lived context revalidates them before protected work within a bounded cache lifetime. A session a protected device's unlock created stands on that device too: it is the person's session, never the device's context, it expires within a minute unless the device's own channel slides it, never past the device's certificate, and the device's lock, the channel's end and the device's revocation, suspension or certificate retirement end it.
+Identity and standing are established at the authentication boundary, and a long-lived context revalidates them before protected work within a bounded cache lifetime. A session a protected device's unlock created stands on that device too: it is the person's session, never the device's context, it expires within a minute unless the device's own channel slides it, never past the device's certificate, and the device's lock, the channel's end and the device's revocation, suspension or certificate retirement end it. A command line's session is one of these, its shell's own: spent from the unlock's ticket and held in memory, never copied to a browser, which unlocks through its own ticket.
 
 ### 5.3 One gate
 
-The screen, the command line, the wire and the assistant share one operation declaration and one gate, on two planes: external callers and calls inside a running chain. Entry paths that no person's session admits decide for themselves and record their own refusals: sign-in, restore, the directory, and a protected device's enrollment under the setup token or a restore's session.
+The screen, the command line, the wire and the assistant share one operation declaration and one gate, on two planes: external callers and calls inside a running chain. Entry paths that no person's session admits decide for themselves and record their own refusals: sign-in, restore, the directory, a protected device's enrollment under the setup token, an invitation's code, the open admission or a restore's session, and the spending of a protected device's unlock ticket for its session.
 
 ### 5.4 Consent
 
@@ -285,7 +285,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 - A home is the one installation that decides for an athanor. Home, glass, hub, cell, node and door are this document's words: what a person reads, the setup pages, the command line, Prism, the README and the guides, says CYFR for the installation and Aqua for the assistant, device or browser for the glass, the CYFR you join for a hub, cluster for a cell and server for a member of it, machine or server or CYFR for a node by its sense, and sign-in method for a door, and never these words.
 - Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and their journal, and home transfer; a node is the home of every athanor its store holds.
-- The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, and push delivery.
+- The glass is the client: display, input and device keys it never exports, bound to each home separately. The client shell runs on the box's screen and on Linux laptops and Pis (`cyfr login`), one home per context. *Not built yet:* an application that hosts Prism, the client shell's home switcher, listening without a page, notices and their read state across homes, and push delivery.
 - A hub is the always-on home of shared athanors, where people, its platform administrator among them, share keys from their own vaults with a group or with everyone (§5.5). Any home may require a company's sign-in of every person there: a standing condition, checked last wherever a person's standing is read, and never a door or the person's identity (`Sanctum.CompanyLogin`). *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored.
 - Every wire between homes names its version, and CYFR has no relay.
 
