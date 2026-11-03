@@ -2350,6 +2350,7 @@
           "invalid_token": 401,
           "setup_closed": 409,
           "first_method_used": 409,
+          "not_restored": 409,
           "not_found": 404,
           "proof_refused": 422,
           "invalid_request": 422,
@@ -2450,6 +2451,23 @@
           "ticket"
         ]
       }
+    },
+    "shell": {
+      "origin": "http://127.0.0.1:7340",
+      "lock": {
+        "method": "POST",
+        "path": "/lock",
+        "form": []
+      },
+      "confirm": {
+        "method": "GET",
+        "path": "/confirm",
+        "query": [
+          "ref"
+        ],
+        "target": "_blank"
+      },
+      "session_provider": "unlock"
     },
     "capabilities": {
       "root": [
