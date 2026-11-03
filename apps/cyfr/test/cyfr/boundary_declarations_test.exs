@@ -146,6 +146,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
+      {~w(DeviceUnlock),
+       "a protected device's enrollment, unlock ticket, lock and storage report, which the " <>
+         "enrollment ingress, the device channel and the unlock page call, each rostered " <>
+         "for its callers in `Cyfr.Boundaries`' surface rows"},
       {~w(Handle Newcomer),
        "the setup page's first-person admission (`Newcomer`) and the identity card's " <>
          "live handle check (`Handle`), each rostered for its callers in `Cyfr.Boundaries`' " <>
