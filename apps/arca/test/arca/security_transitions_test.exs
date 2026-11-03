@@ -8,7 +8,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   import Ecto.Query
 
-  alias Arca.Schemas.{ApiKey, Athanor, Membership, Session, User}
+  alias Arca.Schemas.{ApiKey, Athanor, Session, User}
 
   def server, do: Prima.Actor.system()
   def admit, do: fn _rows -> :ok end
@@ -47,7 +47,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
     user
   end
 
-  # A person with their own athanor, seated in it.
+  # A person with their own athanor.
   def owner! do
     user = person!()
     n = uniq()
@@ -61,7 +61,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
       })
 
     {:ok, user} = Arca.Users.update(server(), user.id, %{personal_athanor_id: athanor.id})
-    seat!(athanor.id, user.id)
     {user, athanor}
   end
 
@@ -78,13 +77,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
       })
 
     athanor
-  end
-
-  def seat!(athanor_id, user_id) do
-    {:ok, row} =
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
-
-    row
   end
 
   # The person's local identity row, enrolled under an identifier.
@@ -203,8 +195,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
   def athanor(id), do: Arca.Repo.get(Athanor, id)
   def session?(hash), do: Arca.Repo.exists?(where(Session, token_hash: ^hash))
   def revoked?(key_id), do: Arca.Repo.get(ApiKey, key_id).revoked
-  def seats(user_id), do: Arca.Repo.all(where(Membership, user_id: ^user_id))
-  def membership(id), do: Arca.Repo.get(Membership, id)
 
   # A frame credential row, written as its store writes one. Inserted
   # directly: minting is fenced by the member's slot, which these tests do
@@ -309,7 +299,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
           athanor_id: athanor_id,
           secret_hash: Prima.Digest.sha256("secret-#{uniq()}"),
           user_id: user_id,
-          membership_id: "mem_#{uniq()}",
           prospective_client_id: Prima.UUID7.generate_id("pcl"),
           audience_home: "https://home.example",
           expires_at: DateTime.add(now, 300, :second),
@@ -601,7 +590,7 @@ defmodule Arca.SecurityTransitionsTest do
   end
 
   describe "deny_user/3" do
-    test "retires every credential and seat, and archives their own athanor" do
+    test "retires every credential, and archives their own athanor" do
       {user, own} = owner!()
       {peer, theirs} = owner!()
 
@@ -634,9 +623,30 @@ defmodule Arca.SecurityTransitionsTest do
       assert revoked?(own_key) and revoked?(made_elsewhere)
       refute revoked?(peer_key)
 
-      assert seats(user.id) == []
-      assert length(change.removed_membership_ids) == 1
       assert change.member_user_ids == %{own.id => [user.id]}
+    end
+
+    test "clears the platform administrator's mark, which an allow never restores" do
+      {user, own} = owner!()
+      session = session!(user.id, own.id)
+
+      {1, _} =
+        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user.id),
+          set: [platform_admin_at: DateTime.utc_now()]
+        )
+
+      assert %DateTime{} = user(user.id).platform_admin_at
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert change.user.platform_admin_at == nil
+      assert %{status: "denied", platform_admin_at: nil} = user(user.id)
+      assert athanor(own.id).status == "archived"
+      refute session?(session)
+
+      assert {:ok, %{transitioned: true}} =
+               SecurityTransitions.allow_user(server(), user.id, verify: admit())
+
+      assert %{status: "active", platform_admin_at: nil} = user(user.id)
     end
 
     test "takes their seats and invitations in shared threads, and ends a pair or a thread left empty" do
@@ -775,21 +785,41 @@ defmodule Arca.SecurityTransitionsTest do
       assert athanor(own.id).security_generation == 2
     end
 
-    test "a person with no own athanor is denied; a pointer to no row is refused" do
+    test "a person with no own athanor is denied; the one they own is found by its owner" do
       plain = person!()
 
       assert {:ok, %{archived_athanor_ids: []}} =
                SecurityTransitions.deny_user(server(), plain.id, verify: admit())
 
-      dangling = person!()
-      {:ok, _} = Arca.Users.update(server(), dangling.id, %{personal_athanor_id: "ath_nowhere"})
-      session = session!(dangling.id)
+      # Owned, and the personal pointer unset or naming no row: the owner
+      # is what selects the athanor, for the denial and for the allow.
+      for pointer <- [nil, "ath_nowhere"] do
+        owner = person!()
+        n = uniq()
 
-      assert {:error, :dangling_personal_athanor} =
-               SecurityTransitions.deny_user(server(), dangling.id, verify: admit())
+        {:ok, own} =
+          Arca.Athanors.insert(server(), %{
+            name: "Owned #{n}",
+            slug: "owned-#{n}",
+            owner_user_id: owner.id,
+            created_by: owner.id
+          })
 
-      assert user(dangling.id).status == "active"
-      assert session?(session)
+        if pointer,
+          do: {:ok, _} = Arca.Users.update(server(), owner.id, %{personal_athanor_id: pointer})
+
+        own_id = own.id
+
+        assert {:ok, %{archived_athanor_ids: [^own_id]}} =
+                 SecurityTransitions.deny_user(server(), owner.id, verify: admit())
+
+        assert athanor(own.id).status == "archived"
+
+        assert {:ok, %{reopened_athanor_ids: [^own_id]}} =
+                 SecurityTransitions.allow_user(server(), owner.id, verify: admit())
+
+        assert athanor(own.id).status == "active"
+      end
     end
 
     test "the caller's refusal rolls back everything, with its reason" do
@@ -832,7 +862,6 @@ defmodule Arca.SecurityTransitionsTest do
     for {table, event, label} <- [
           {"sessions", "DELETE", "the session DELETE"},
           {"api_keys", "UPDATE", "the key UPDATE"},
-          {"memberships", "DELETE", "the membership DELETE"},
           {"athanors", "UPDATE", "the athanor UPDATE"},
           {"users", "UPDATE", "the person UPDATE"}
         ] do
@@ -855,7 +884,6 @@ defmodule Arca.SecurityTransitionsTest do
         assert athanor(own.id).status == "active"
         assert session?(session)
         refute revoked?(key)
-        assert length(seats(user.id)) == 1
 
         # An allow over the failed denial has nothing to restore and moves
         # nothing.
@@ -880,26 +908,19 @@ defmodule Arca.SecurityTransitionsTest do
   end
 
   describe "allow_user/3" do
-    test "restores standing, the own athanor and a new seat in it, and nothing else" do
+    test "restores standing and the own athanor, and nothing else" do
       {user, own} = owner!()
-      seat!(athanor!().id, user.id)
       key = key!(own.id, user.id)
-      {:ok, denied} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
-
-      [old_seat] =
-        for %{athanor_id: id} = row <- denied.removed_memberships, id == own.id, do: row
+      {:ok, _denied} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
       assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
       assert change.transitioned
       assert change.user_generation == 3
       assert change.reopened_athanor_ids == [own.id]
       assert change.athanor_generations == %{own.id => 3}
-      assert [seated] = change.seated_membership_ids
-      refute seated == old_seat.id
 
       assert user(user.id).status == "active"
       assert athanor(own.id).status == "active"
-      assert Enum.map(seats(user.id), & &1.athanor_id) == [own.id]
       assert revoked?(key)
       assert change.revoked_session_hashes == [] and change.revoked_api_key_ids == []
     end
@@ -918,7 +939,6 @@ defmodule Arca.SecurityTransitionsTest do
       assert user(user.id).status == "denied"
       assert user(user.id).security_generation == 2
       assert athanor(own.id).status == "archived"
-      assert seats(user.id) == []
     end
 
     for table <- @retirement_tables do
@@ -933,10 +953,9 @@ defmodule Arca.SecurityTransitionsTest do
         assert {:error, :database_error} =
                  SecurityTransitions.allow_user(server(), user.id, verify: admit())
 
-        # Nothing committed, row for row: no restored standing, reopened
-        # athanor or new seat beside a credential the allow was to retire.
+        # Nothing committed, row for row: no restored standing or reopened
+        # athanor beside a credential the allow was to retire.
         assert {user(user.id), athanor(own.id), rows(stragglers)} == before
-        assert seats(user.id) == []
 
         clear_failure!(failure)
 
@@ -1141,6 +1160,9 @@ defmodule Arca.SecurityTransitionsTest do
       assert {:error, {:invalid, %{status: ["is read-only"]}}} =
                Arca.Users.update(server(), user.id, %{status: "denied"})
 
+      assert {:error, {:invalid, %{platform_admin_at: ["is read-only"]}}} =
+               Arca.Users.update(server(), user.id, %{platform_admin_at: DateTime.utc_now()})
+
       ath = athanor!()
 
       assert {:error, {:invalid, %{status: ["is read-only"]}}} =
@@ -1150,6 +1172,7 @@ defmodule Arca.SecurityTransitionsTest do
                Arca.Athanors.set(Prima.Actor.in_athanor(ath.id), security_generation: 9)
 
       assert user(user.id).security_generation == 1
+      assert user(user.id).platform_admin_at == nil
       assert athanor(ath.id).security_generation == 1
     end
   end
@@ -1211,10 +1234,7 @@ defmodule Arca.SecurityTransitionsLockTest do
   The transitions under two real connections, outside the sandbox: a
   transition waiting behind another acts on what that one committed — on
   PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
-  — and never on a read taken before the wait; a seat into an athanor a
-  denial is archiving waits for it; and a denial whose membership set
-  moves while it locks the athanors runs again on the set as it now
-  stands.
+  — and never on a read taken before the wait.
   """
 
   use ExUnit.Case, async: false
@@ -1230,7 +1250,6 @@ defmodule Arca.SecurityTransitionsLockTest do
     ApiKey,
     Athanor,
     ExternalIdentity,
-    Membership,
     Session,
     User
   }
@@ -1283,7 +1302,6 @@ defmodule Arca.SecurityTransitionsLockTest do
 
     on_exit(fn ->
       unboxed(fn ->
-        Arca.Repo.delete_all(where(Membership, user_id: ^user_id))
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
         Arca.Repo.delete_all(where(ApiKey, created_by: ^user_id))
         Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
@@ -1296,56 +1314,12 @@ defmodule Arca.SecurityTransitionsLockTest do
     {:ok, user_id: user_id, own_id: own_id}
   end
 
-  # The athanors a case minted, named by the case before it runs anything,
-  # with every row that names them.
+  # The person's own athanor, with every row that names it.
   defp remove_athanors!(ids) do
     unboxed(fn ->
-      Arca.Repo.delete_all(from(m in Membership, where: m.athanor_id in ^ids))
       Arca.Repo.delete_all(from(k in ApiKey, where: k.athanor_id in ^ids))
       Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^ids))
     end)
-  end
-
-  # Another person's athanor, its owner no row here.
-  defp athanor! do
-    n = uniq()
-
-    {:ok, athanor} =
-      unboxed(fn ->
-        Arca.Athanors.insert(server(), %{
-          name: "A#{n}",
-          slug: "stl-a-#{n}",
-          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-          created_by: "system"
-        })
-      end)
-
-    athanor.id
-  end
-
-  defp seat(athanor_id, user_id) do
-    unboxed(fn ->
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
-    end)
-  end
-
-  # A seat's row written past `Arca.Members.seat/2`, which takes the
-  # person's lock first and so waits for a denial holding them: no writer
-  # in the tree seats a person without that lock, and the denial's replan
-  # is the guard should one ever appear, shown here on such a writer.
-  defp seat_row(athanor_id, user_id) do
-    now = DateTime.utc_now()
-
-    %{
-      id: Prima.UUID7.generate_id("mem"),
-      user_id: user_id,
-      scope: "athanor",
-      status: "active",
-      athanor_id: athanor_id,
-      added_by: "x",
-      created_at: now,
-      updated_at: now
-    }
   end
 
   # A transition that stops inside its own transaction — every lock taken,
@@ -1512,146 +1486,5 @@ defmodule Arca.SecurityTransitionsLockTest do
         Process.sleep(50)
         await_release!(user_id, since, bound_ms)
     end
-  end
-
-  # PostgreSQL alone: on SQLite the denial's immediate transaction admits
-  # no seat between its plan and its locks, so there is no moved set to find.
-  @tag :postgres
-  test "a membership taken while a denial locks the athanors is on the set it runs again on", %{
-    user_id: user_id
-  } do
-    other_id = athanor!()
-    on_exit(fn -> remove_athanors!([other_id]) end)
-    test = self()
-
-    # Hold the person's own athanor: the denial plans without the other
-    # athanor, then waits on this row while the seat there is written.
-    holder =
-      Task.async(fn ->
-        unboxed(fn ->
-          Arca.Repo.transaction(fn ->
-            [_] =
-              from(a in Athanor,
-                where: a.id == ^Arca.Repo.get(User, user_id).personal_athanor_id
-              )
-              |> Arca.QueryHelpers.for_update()
-              |> Arca.Repo.all()
-
-            send(test, :holding)
-
-            receive do
-              :seat -> :ok
-            end
-
-            {1, _} = Arca.Repo.insert_all(Membership, [seat_row(other_id, user_id)])
-          end)
-        end)
-      end)
-
-    assert_receive :holding, 5_000
-
-    denier =
-      Task.async(fn ->
-        unboxed(fn ->
-          SecurityTransitions.deny_user(server(), user_id,
-            verify: fn %{athanors: athanors} ->
-              send(test, {:asked, Enum.map(athanors, & &1.id)})
-              :ok
-            end
-          )
-        end)
-      end)
-
-    refute Task.yield(denier, 300)
-    send(holder.pid, :seat)
-    Task.await(holder, 25_000)
-
-    # The policy was shown the set as it stands after the seat, and the
-    # denial removed that seat with the rest.
-    assert {:ok, change} = Task.await(denier, 25_000)
-    assert_received {:asked, asked}
-    assert other_id in asked
-    refute_received {:asked, _}
-    assert other_id in Enum.map(change.removed_memberships, & &1.athanor_id)
-    unboxed(fn -> assert Arca.Repo.all(where(Membership, user_id: ^user_id)) == [] end)
-  end
-
-  # PostgreSQL alone: on SQLite no second connection can seat the person
-  # while the denial holds the database, so the set cannot move.
-  @tag :postgres
-  test "a set that moves on every attempt ends in a conflict, and nothing is written", %{
-    user_id: user_id,
-    own_id: own_id
-  } do
-    others = for _ <- 1..3, do: athanor!()
-    on_exit(fn -> remove_athanors!(others) end)
-    {:ok, _} = seat(own_id, user_id)
-    {:ok, agent} = Agent.start_link(fn -> others end)
-
-    # Every time the policy is asked, a second connection seats the
-    # person in one more athanor, past the person's lock (`seat_row/2`):
-    # the set the denial planned has moved by the time it would write.
-    verify = fn _rows ->
-      next = Agent.get_and_update(agent, fn [next | rest] -> {next, rest} end)
-
-      {1, _} =
-        Task.await(
-          Task.async(fn ->
-            unboxed(fn -> Arca.Repo.insert_all(Membership, [seat_row(next, user_id)]) end)
-          end),
-          25_000
-        )
-
-      :ok
-    end
-
-    assert {:error, :conflict} =
-             unboxed(fn ->
-               SecurityTransitions.deny_user(server(), user_id, verify: verify)
-             end)
-
-    assert Agent.get(agent, & &1) == []
-
-    unboxed(fn ->
-      user = Arca.Repo.get(User, user_id)
-      assert user.status == "active"
-      assert user.security_generation == 1
-      assert Arca.Repo.get(Athanor, own_id).status == "active"
-
-      for id <- others do
-        assert Arca.Repo.get(Athanor, id).status == "active"
-        assert Arca.Repo.get(Athanor, id).security_generation == 1
-      end
-
-      # The seats the second connection wrote stand; the denial wrote nothing.
-      assert length(Arca.Repo.all(where(Membership, user_id: ^user_id))) == 4
-    end)
-  end
-
-  test "a seat into an athanor a denial is archiving waits for it and is refused", %{
-    user_id: user_id,
-    own_id: own_id
-  } do
-    other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
-    on_exit(fn -> unboxed(fn -> Arca.Repo.delete_all(where(Membership, user_id: ^other)) end) end)
-
-    # The denial archives the person's own athanor; it holds the athanor
-    # while its policy is asked.
-    denier = paused(:deny_user, user_id)
-    assert_receive {:holding, :deny_user}, 5_000
-
-    seater = Task.async(fn -> seat(own_id, other) end)
-    refute Task.yield(seater, 300), "the seat was written while the denial held the athanor"
-
-    send(denier.pid, :go)
-    assert {:ok, change} = Task.await(denier, 25_000)
-    assert own_id in change.archived_athanor_ids
-
-    assert {:error, :athanor_archived} = Task.await(seater, 25_000)
-
-    unboxed(fn ->
-      refute Arca.Repo.exists?(where(Membership, user_id: ^other))
-      assert Arca.Repo.get(Athanor, own_id).status == "archived"
-    end)
   end
 end

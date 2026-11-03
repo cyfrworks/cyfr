@@ -26,7 +26,6 @@ defmodule Cyfr.TelemetryBridgeTest do
     FeedRun,
     FileOffer,
     FrameCredential,
-    Membership,
     Notify,
     PolicyDecision,
     Request,
@@ -85,8 +84,8 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.tinctures(@actor), {Tinctures, %{kind: :invoke_started, request_id: "r1"}}},
       {[:cyfr, :opus, :tincture, :invoke, :stop], Map.put(tenant, :status, :error),
        Bus.tinctures(@actor), {Tinctures, %{kind: :invoke_stopped, status: :error}}},
-      {[:cyfr, :sanctum, :notify], Map.merge(tenant, %{kind: :member_changed, payload: %{}}),
-       Bus.notify(@actor), {Notify, %{athanor_id: @athanor, kind: :member_changed}}},
+      {[:cyfr, :sanctum, :notify], Map.merge(tenant, %{kind: :athanor_changed, payload: %{}}),
+       Bus.notify(@actor), {Notify, %{athanor_id: @athanor, kind: :athanor_changed}}},
       {[:cyfr, :sanctum, :caller, :invalidated], %{hash: "key_1"},
        Bus.caller_invalidated_global(), {CallerInvalidated, %{session_key: "key_1"}}},
       {[:cyfr, :sanctum, :session, :created], %{}, Bus.sessions(), {Session, %{kind: :created}}},
@@ -96,9 +95,6 @@ defmodule Cyfr.TelemetryBridgeTest do
        %{user_id: @user, credential_id: "fcr_1", change: :suspended},
        Bus.frame_credentials(@user),
        {FrameCredential, %{kind: :suspended, user_id: @user, id: "fcr_1"}}},
-      {[:cyfr, :sanctum, :membership, :changed],
-       %{user_id: @user, athanor_id: @athanor, change: :joined}, Bus.memberships(@user),
-       {Membership, %{user_id: @user, change: :joined}}},
       {[:cyfr, :sanctum, :shared_thread, :changed], %{thread_id: "sth_1", user_ids: [@user]},
        Bus.shared_threads(@user),
        {SharedThreadChanged, %{kind: :changed, user_id: @user, thread_id: "sth_1"}}},
@@ -611,7 +607,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       refute inspect(heard) =~ @secret
       refute Map.has_key?(heard, :id)
 
-      # Published once, on the person's own topic: another member hears nothing.
+      # Published once, on the person's own topic: another person hears nothing.
       refute_receive %Confirmation{}, 100
     end
 
@@ -663,7 +659,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       # A payload that is not a map: a function clause that does not match.
       :telemetry.execute([:cyfr, :sanctum, :notify], %{}, %{
         athanor_id: @athanor,
-        kind: :member_changed,
+        kind: :athanor_changed,
         payload: :not_a_map
       })
 
@@ -673,11 +669,11 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       :telemetry.execute([:cyfr, :sanctum, :notify], %{}, %{
         athanor_id: @athanor,
-        kind: :member_changed,
+        kind: :athanor_changed,
         payload: %{}
       })
 
-      assert_receive %Notify{kind: :member_changed}
+      assert_receive %Notify{kind: :athanor_changed}
     end
 
     test "metadata with a malformed athanor is dropped, not raised" do

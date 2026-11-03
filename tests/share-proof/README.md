@@ -6,7 +6,7 @@ everyone through the system layer's sharing sheet is offered, capped,
 narrowed and revoked as they set it there, that a newcomer's first
 sign-in binds the administrator's share to everyone, that a person's
 denial writes nothing to a share, and that the administrator enters no
-athanor they hold no seat in.
+athanor but their own.
 The home is one `cyfr` release on a SQLite cell, `home.test`, behind the
 harness's HTTPS front (`browser_home`). The platform administrator
 (`operator@example.com`), the installation's first person and so made by
@@ -124,7 +124,7 @@ unchecked.
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
 | `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `resolved_policy`, `blob_digest`, `activation`, `shape_digest`, `commit_digest`: what the bootstrap derives (`derived_head`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
 | `consent_vault_refs` | `binding_key`, `vault_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `share_id`: its row's under Shared by you |
-| `users` | `email`, `email_verified`, `admission`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`, `personal_athanor_id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `created_at`, `updated_at`: times |
+| `users` | `email`, `email_verified`, `admission`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`, `personal_athanor_id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `platform_admin_at`, `created_at`, `updated_at`: times (`platform_admin_at` none for anyone but the installation's first person) |
 
 The bounds:
 
@@ -216,7 +216,7 @@ in the tree.
 | Reflected material, runner memory/logs/events/output and positive control | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs`; `tests/locus-runtime-image/canary.py`; `apps/cyfr/test/integration/runtime/secret_audit_test.exs` | "reflected credentials are masked across frames and execution exits"; scenario `credential_canary` (real runner, scripted control plane, with its mandatory positive-control record); "an attached value is audited by field and destination without material" | `Prima.SecretMasker`, `Opus.Host.AttachedFetch`, `canary.py` |
 | Real streamed AQUA turn through the administrator's share, its cap and its revoke | `apps/cyfr/test/integration/runtime/model_contract_test.exs` | "the administrator's share drives a streamed model turn without exposing its value"; "a share's cap and its revoke refuse the next model request" | `Sanctum.Shares`, `Aqua.Loop` |
 | Bootstrap binding, the cap's reset and matching/lifetime decisions | `apps/cyfr/test/sanctum/consent/bootstrap_test.exs`; `apps/sanctum/test/sanctum/shares_test.exs`; `apps/cyfr/test/sanctum/consent/commit_test.exs` | "a newly provisioned athanor binds the administrator's share to everyone whose source fits, whatever its label, and never a member's share to everyone"; "two of the administrator's shares that fit bind the newest"; "a cap that is reached refuses with the next midnight, with nothing more counted or unsealed"; "matching and binding lifetimes are committed per edge without implicit disclosure" | `Sanctum.Consent.Bootstrap`, `Sanctum.Shares`, `Sanctum.Consent.Commit` |
-| Administrator lacks a seat; stale platform basis cannot issue tenant authority | `apps/cyfr/test/sanctum/context_focus_test.exs`; `apps/sanctum/test/sanctum/issuance_test.exs` | "a platform administrator without a seat cannot focus an athanor"; "a platform membership cannot authorize tenant credential issuance" | `Sanctum.Context`, `Sanctum.Issuance` |
+| The administrator focuses and issues only in their own athanor | `apps/cyfr/test/sanctum/context_focus_test.exs`; `apps/sanctum/test/sanctum/issuance_test.exs` | "a platform administrator focuses no athanor but their own"; "a platform administrator issues only into their own athanor" | `Sanctum.Context`, `Sanctum.Issuance` |
 
 ## Declared coverage limit
 

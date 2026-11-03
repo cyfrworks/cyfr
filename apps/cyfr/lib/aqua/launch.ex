@@ -12,7 +12,7 @@ defmodule Aqua.Launch do
   The input is the durable step alone. The approver's context is rebuilt
   from the approval's `decided_by` (`Sanctum.Tenancy.continuation/3`), so
   a launch consumed after a restart runs as the person who decided it, or
-  not at all: a person no longer seated refuses it. It carries the origin
+  not at all: an athanor no longer the person's refuses it. It carries the origin
   stored on the approved turn's row, never one inferred from the person
   approving: a programmatic turn's launch stays `programmatic`, and a
   turn whose row stores an origin outside the vocabulary, damage a

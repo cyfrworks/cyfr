@@ -90,10 +90,9 @@ defmodule Arca.UnscopedQuerySeamTest do
 
   # Modules whose schema declares an athanor column — the tables a query can
   # be scoped to in the first place. Both spellings count: `field
-  # :athanor_id` and `belongs_to :athanor` (memberships — the one
-  # association in the codebase) declare the same column; detecting only
-  # the first would let a future `belongs_to` schema silently leave the
-  # roster.
+  # :athanor_id` and `belongs_to :athanor` declare the same column;
+  # detecting only the first would let a future `belongs_to` schema
+  # silently leave the roster.
   defp tenant_schemas do
     for path <- sources(),
         source = Prima.Test.SourceTree.read(path),

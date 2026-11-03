@@ -4,7 +4,7 @@
 defmodule Arca.Test.Shares do
   @moduledoc """
   The rows a share test acts on, written through the storage facades as
-  the layer above writes them: people, their own athanors and seats,
+  the layer above writes them: people, their own athanors,
   shared threads and their people, vault entries, shares, and profiles in another athanor whose head
   binds a share.
   """
@@ -54,7 +54,7 @@ defmodule Arca.Test.Shares do
   end
 
   @doc """
-  A person with their own athanor, seated in it: `%{user: _, athanor: _,
+  A person with their own athanor: `%{user: _, athanor: _,
   actor: _}`, the actor the owner's own, naming them.
   """
   @spec owner!() :: %{user: map(), athanor: map(), actor: Prima.Actor.t()}
@@ -71,7 +71,6 @@ defmodule Arca.Test.Shares do
       })
 
     {:ok, user} = Arca.Users.update(server(), user.id, %{personal_athanor_id: athanor.id})
-    seat!(athanor.id, user.id)
 
     %{
       user: user,
@@ -94,15 +93,6 @@ defmodule Arca.Test.Shares do
     end
 
     thread
-  end
-
-  @doc "Seat the person `user_id` in the athanor `athanor_id`."
-  @spec seat!(String.t(), String.t()) :: map()
-  def seat!(athanor_id, user_id) do
-    {:ok, row} =
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
-
-    row
   end
 
   @doc "A vault entry of the actor's athanor, attach-only, of kind `api_key` and shareable."

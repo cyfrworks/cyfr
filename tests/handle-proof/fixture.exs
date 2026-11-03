@@ -68,7 +68,7 @@ fn args ->
 
   tables =
     ~w(users person_identities passkeys server_allowlist sessions registry_tokens athanors
-       memberships identity_attempts)
+       identity_attempts)
 
   table! = fn table ->
     if table in tables, do: table, else: raise("no table #{inspect(table)} for this proof")

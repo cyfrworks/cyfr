@@ -76,7 +76,7 @@ defmodule Sanctum.Invitations do
   """
 
   alias Sanctum.{Context, SharedThreads}
-  alias Sanctum.Tenancy.{Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @lifetime_ms 7 * 24 * 60 * 60 * 1000
   @code_bytes 32
@@ -535,9 +535,9 @@ defmodule Sanctum.Invitations do
   # naming a thread needs the thread still active and its issuer still
   # seated there. Answers the thread's title, or none.
   defp named_place(%{thread_id: nil, issued_by: issuer}) do
-    case Members.platform_seat(issuer) do
-      {:ok, _seat} -> {:ok, nil}
-      :none -> invalid()
+    case Users.get(issuer) do
+      {:ok, user} -> if Sanctum.Tenancy.platform_admin?(user), do: {:ok, nil}, else: invalid()
+      {:error, :not_found} -> invalid()
       {:error, reason} -> {:error, unavailable(reason)}
     end
   end
@@ -563,7 +563,7 @@ defmodule Sanctum.Invitations do
   # A name a person reads: never an address.
   defp inviter(%{display_name: name}) when is_binary(name) and name != "", do: name
   defp inviter(%{namespace: handle}) when is_binary(handle) and handle != "", do: "@" <> handle
-  defp inviter(_issuer), do: "a member of this CYFR"
+  defp inviter(_issuer), do: "someone on this CYFR"
 
   # ---- shared ----------------------------------------------------------------
 

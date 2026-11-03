@@ -33,8 +33,9 @@ defmodule Aqua.LoopTest do
 
     # The test's storage is the tree of an athanor minted for it alone,
     # under the partition's storage root: nothing else names the tree, and
-    # it is removed, and nothing else, when the test ends.
-    ctx = ScriptedWorker.athanor!(Sanctum.TestContext.local(:prism))
+    # it is removed, and nothing else, when the test ends. The athanor is
+    # its person's own, who sends the turns and decides their cards.
+    ctx = person!()
     tree = own_tree!(ctx)
     keys = [arca: :seed_path, cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
@@ -68,6 +69,27 @@ defmodule Aqua.LoopTest do
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
+  end
+
+  # A person minted for the test with their own athanor, signed in
+  # through Prism.
+  defp person! do
+    n = System.unique_integer([:positive])
+
+    {:ok, person} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|loop#{n}",
+        provider: "github",
+        email: "loop#{n}@example.com",
+        verified: true,
+        name: "Loop"
+      })
+
+    %{
+      Sanctum.TestContext.local(:prism)
+      | user_id: person.id,
+        athanor_id: Sanctum.Test.People.athanor!(person).id
+    }
   end
 
   # The athanor's tree under the partition's storage root, which no earlier
@@ -1044,11 +1066,6 @@ defmodule Aqua.LoopTest do
     thread: thread
   } do
     # The shared thread is read under the person's own seat in it.
-    {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
-
     {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
     {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "ROOM-ONLY-LINE")
 
@@ -1495,25 +1512,6 @@ defmodule Aqua.LoopTest do
     profile_id
   end
 
-  # A seated member other than the sender, whose approval a launch runs as.
-  defp approver!(ctx) do
-    n = System.unique_integer([:positive])
-
-    {:ok, approver} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|launch-approver#{n}",
-        provider: "github",
-        email: "launch-approver#{n}@example.com",
-        verified: true,
-        name: "Approver"
-      })
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(approver.id, scope: "athanor", athanor_id: ctx.athanor_id)
-
-    %{ctx | user_id: approver.id}
-  end
-
   defp pins(turn),
     do: Map.take(turn, [:profile_id, :consent_id, :agent_capability_digest, :root_execution_id])
 
@@ -1618,7 +1616,7 @@ defmodule Aqua.LoopTest do
     assert vault_entry == supabase.id
 
     assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
-             Approvals.resolve(approver!(ctx), approval.id, %{decision: :approved})
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
     assert :completed =
              Task.await(
@@ -1683,7 +1681,7 @@ defmodule Aqua.LoopTest do
       )
 
     assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
-             Approvals.resolve(approver!(ctx), approval.id, %{decision: :approved})
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
@@ -1733,11 +1731,11 @@ defmodule Aqua.LoopTest do
   end
 
   # A launch of `launchable_app!/1`'s app through the loop, after a turn
-  # that read the pinned page: the card the loop drew, approved by another
-  # member, and the run resumed in a task while the app's script runs. The
-  # app's run stops at `{:probe, self()}` for `on_probe` to act on its
-  # root, by id. Answers the turn, the card's intent, the turn's sources
-  # when the card was drawn, the root's id and the loop's result.
+  # that read the pinned page: the card the loop drew, approved by the
+  # athanor's person, and the run resumed in a task while the app's script
+  # runs. The app's run stops at `{:probe, self()}` for `on_probe` to act
+  # on its root, by id. Answers the turn, the card's intent, the turn's
+  # sources when the card was drawn, the root's id and the loop's result.
   defp launch_through_loop!(ctx, thread, app_answer, on_probe) do
     %{ref: app} = launchable_app!(ctx)
     {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
@@ -1762,7 +1760,7 @@ defmodule Aqua.LoopTest do
     at_card = turn_sources(ctx, turn)
 
     assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
-             Approvals.resolve(approver!(ctx), approval.id, %{decision: :approved})
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
     resumed =
       Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)

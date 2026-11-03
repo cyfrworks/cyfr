@@ -16,8 +16,7 @@ defmodule Arca.Test.TenantTables do
   Delete every row this athanor owns, in one transaction: the tables
   reached through a parent first (`Arca.TenantTables.by_parent/0`), then
   the roster, children first. Answers `{:ok, %{table => count}}`. Rows
-  with no athanor (`memberships`, `sessions` and `decision_logs` may hold
-  them) stay, and blobs are another store's.
+  with no athanor (`sessions` and `decision_logs` may hold them) stay, and blobs are another store's.
   """
   @spec delete_all_for(Prima.Actor.t()) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, term()}

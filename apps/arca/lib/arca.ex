@@ -180,7 +180,6 @@ defmodule Arca do
       Layouts,
       McpLog,
       McpServerStorage,
-      Members,
       ObjectRevisions,
       Outbox,
       Overlay,

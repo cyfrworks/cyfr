@@ -1235,10 +1235,11 @@ CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
 Postgres / a custom registry.
 
 The installation's first person, made by its setup (or by a restore onto it
-empty), is its platform administrator, and no other grant exists: minted
+empty), is its platform administrator, a mark on their person that no other
+path writes: minted
 their own athanor past the server caps, never denied by the allowlist, and able
 to run the operator verbs (`door.*`, `execution.force_release`).
-The capability is over the instance, not a seat: an operator works inside their
+The capability is over the instance: an operator works inside their
 own athanor like everyone else and enters no other — opening another person's is
 refused like anyone's — and there is no cross-athanor reach. They hold no seat in
 a shared thread by the capability, and read one only where they sit. The **server allowlist** (`cyfr admin allow

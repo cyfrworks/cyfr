@@ -901,8 +901,8 @@ defmodule Arca.Execution do
         order_by: [desc: e.started_at],
         limit: ^limit
       )
-      # Scoped to the caller's athanor — no per-user narrowing (members are
-      # interchangeable), and no cross-athanor reach for an operator either:
+      # Scoped to the caller's athanor — no per-user narrowing (the athanor
+      # is one person's), and no cross-athanor reach for an operator either:
       # only a server-internal context reads unfiltered.
       |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.all()

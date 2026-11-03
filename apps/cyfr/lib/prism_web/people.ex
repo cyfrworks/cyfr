@@ -5,8 +5,7 @@ defmodule PrismWeb.People do
   @moduledoc """
   How a person is named on the console, once.
 
-  A member row (`Sanctum.Tenancy.Members.list_by_athanor/1`, or a shared
-  thread's people, atom-keyed) reads as its display
+  A person row (a shared thread's people, atom-keyed) reads as its display
   name, else its email, else a shortened id; a bare user id reads the same
   way from the `users` row. The person looking reads as "You", the way the
   console already names their own athanor — pass `nil` for `ctx` where no

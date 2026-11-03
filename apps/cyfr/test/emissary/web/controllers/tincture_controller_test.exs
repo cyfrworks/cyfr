@@ -305,8 +305,13 @@ defmodule Emissary.Web.TinctureControllerTest do
   # in their path; its address answers as a missing tincture does, whatever
   # credential the request carries.
   describe "private tincture at its address" do
+    # The tinctures are a person's, in their own athanor, and the
+    # credentials are that person's there.
     setup do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+      athanor = Sanctum.Test.People.athanor!(user)
+      ctx = Sanctum.TestContext.issuer!(%{ctx | athanor_id: athanor.id})
+      versions!(ctx)
 
       {:ok, %{api_key: key}} =
         Sanctum.TestContext.create_key(ctx, %{
@@ -316,18 +321,22 @@ defmodule Emissary.Web.TinctureControllerTest do
         })
 
       {:ok, session} = Sanctum.TestContext.create_session(ctx)
-      %{api_key: key, session: session}
+      %{api_key: key, session: session, address: "/t/@#{athanor.slug}/local/auth-dash"}
     end
 
-    test "is not found without a credential", %{conn: conn} do
-      assert get(conn, "/t/@test/local/auth-dash").status == 404
-      assert get(build_conn(), "/t/@test/local/auth-dash/app.js").status == 404
-      assert get(build_conn(), "/t/@test/local/auth-dash/data.db").status == 404
+    test "is not found without a credential", %{conn: conn, address: address} do
+      assert get(conn, address).status == 404
+      assert get(build_conn(), address <> "/app.js").status == 404
+      assert get(build_conn(), address <> "/data.db").status == 404
     end
 
-    test "is not found under an Authorization bearer", %{api_key: key, session: session} do
+    test "is not found under an Authorization bearer", %{
+      api_key: key,
+      session: session,
+      address: address
+    } do
       for bearer <- [key, session.token],
-          path <- ["/t/@test/local/auth-dash", "/t/@test/local/auth-dash/app.js"] do
+          path <- [address, address <> "/app.js"] do
         conn = build_conn() |> put_req_header("authorization", "Bearer #{bearer}") |> get(path)
         assert json_response(conn, 404)["code"] == "not_found", path
         refute conn.resp_body =~ "Auth"
@@ -615,8 +624,8 @@ defmodule Emissary.Web.TinctureControllerTest do
   describe "a private tincture version under its asset credential" do
     setup do
       # The credential is minted from the reader's own session: a private
-      # app's files are theirs to read while that session and their seat
-      # stand, not anyone's who has the URL. The versions are in the
+      # app's files are theirs to read while that session and their
+      # athanor stand, not anyone's who has the URL. The versions are in the
       # reader's own athanor, where they work.
       {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
       own = Sanctum.Test.People.athanor!(user)

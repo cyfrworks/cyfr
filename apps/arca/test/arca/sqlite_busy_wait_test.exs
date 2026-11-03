@@ -340,10 +340,10 @@ defmodule Arca.SqliteBusyWaitTest do
           log =
             capture_log(fn ->
               assert {:error, :database_error} =
-                       Arca.Members.seat(Prima.Actor.in_athanor("ath_busy_wait"), %{
-                         user_id: "usr_busy_wait",
-                         added_by: "x"
-                       })
+                       Arca.FrameCredentials.suspend(
+                         Prima.Actor.in_athanor("ath_busy_wait"),
+                         "fcr_busy_wait"
+                       )
             end)
 
           assert log =~ "within #{@short_ms} ms"

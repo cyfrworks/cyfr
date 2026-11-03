@@ -459,22 +459,17 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   def webhook_archived_athanor(conn, ctx) do
     n = System.unique_integer([:positive])
-    {ctx, _creator} = Sanctum.TestContext.person!(ctx, %{email: "seam#{n}@example.com"})
-    owner = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    # The hook's creator works in their own athanor, which is archived
+    # under it.
+    {ctx, creator} = Sanctum.TestContext.person!(ctx, %{email: "seam#{n}@example.com"})
+    own = Sanctum.Test.People.athanor!(creator)
 
-    {:ok, other} =
-      Sanctum.Tenancy.Athanors.create_personal(
-        %{name: "Seam #{n}", owner_user_id: owner, created_by: owner},
-        ["seam-#{n}"]
-      )
+    %{slug: slug, secret: secret} =
+      hook!(%{ctx | athanor_id: own.id}, %{replay_protection: "none"})
 
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: other.id)
-    in_other = %{ctx | athanor_id: other.id}
-    %{slug: slug, secret: secret} = hook!(in_other, %{replay_protection: "none"})
-
-    Sanctum.TestContext.archive!(other.id)
+    Sanctum.TestContext.archive!(own.id)
     conn = post_signed(conn, slug, secret, ~s({}))
-    Sanctum.TestContext.reopen!(other.id)
+    Sanctum.TestContext.reopen!(own.id)
 
     assert conn.status == 404
     {request_id_of(conn), refused(api_class(conn), :none)}

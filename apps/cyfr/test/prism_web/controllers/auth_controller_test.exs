@@ -32,6 +32,13 @@ defmodule PrismWeb.AuthControllerTest do
     Application.put_env(:sanctum, :oidc_issuer, "https://idp.test")
   end
 
+  # `ctx`'s identity signed in as a person and focused on their own
+  # athanor, the only athanor a session of theirs is minted into.
+  defp own_issuer!(ctx) do
+    {person, user} = Sanctum.TestContext.person!(ctx)
+    Sanctum.TestContext.issuer!(%{person | athanor_id: Sanctum.Test.People.athanor!(user).id})
+  end
+
   # A person here with the issuer's identity `uid` linked.
   defp linked!(uid, attrs \\ %{}) do
     {:ok, user} =
@@ -625,7 +632,7 @@ defmodule PrismWeb.AuthControllerTest do
     setup do
       issuer!()
 
-      person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      person = own_issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.Session.create(person)
       {:ok, person: person, session: session}
     end
@@ -720,7 +727,7 @@ defmodule PrismWeb.AuthControllerTest do
     test "another session's, an expired intent, or a denied person's links nothing, and signs no one in",
          %{session: session, person: person} do
       other =
-        Sanctum.TestContext.issuer!(%{
+        own_issuer!(%{
           Sanctum.TestContext.local()
           | user_id: "local|local|other-#{System.unique_integer([:positive])}"
         })

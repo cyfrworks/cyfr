@@ -88,11 +88,11 @@ defmodule CyfrWeb.SignInResponseTest do
       conn =
         %{sanctum_session_token: "stale"}
         |> browser_conn()
-        |> SignInResponse.respond({:unavailable, :membership_read}, session: {:mint, ctx})
+        |> SignInResponse.respond({:unavailable, :account_read}, session: {:mint, ctx})
 
       assert conn.status == 503
       assert ["text/html" <> _] = get_resp_header(conn, "content-type")
-      assert conn.resp_body =~ "could not read memberships"
+      assert conn.resp_body =~ "could not read your account"
       assert conn.resp_body =~ ~s(<a href="/login">Try again</a>)
       assert session_dropped?(conn)
     end
@@ -111,7 +111,7 @@ defmodule CyfrWeb.SignInResponseTest do
 
     test "the retry path is escaped into the page" do
       conn =
-        SignInResponse.respond(browser_conn(), {:unavailable, :membership_read},
+        SignInResponse.respond(browser_conn(), {:unavailable, :account_read},
           session: {:token, "t"},
           retry_path: "/legal?x=<b>"
         )
@@ -123,7 +123,7 @@ defmodule CyfrWeb.SignInResponseTest do
       conn =
         build_conn()
         |> put_req_header("accept", "application/json")
-        |> SignInResponse.respond({:unavailable, :membership_read}, session: {:token, "t"})
+        |> SignInResponse.respond({:unavailable, :account_read}, session: {:token, "t"})
 
       assert conn.status == 503
       assert ["text/html" <> _] = get_resp_header(conn, "content-type")
@@ -131,7 +131,7 @@ defmodule CyfrWeb.SignInResponseTest do
 
     test "a mint outage on a conn with no session is still a page" do
       conn =
-        SignInResponse.respond(build_conn(), {:unavailable, :membership_read},
+        SignInResponse.respond(build_conn(), {:unavailable, :account_read},
           session: {:mint, Sanctum.TestContext.local()}
         )
 

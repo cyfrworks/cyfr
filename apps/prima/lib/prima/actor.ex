@@ -73,8 +73,8 @@ defmodule Prima.Actor do
   athanor. `:platform` is the cross-tenant read `Sanctum.Context`
   constructs only through its internal builder.
 
-  The vocabulary is `Prima.TenancyScope`'s, where the identity domain and
-  the stored membership row read it too.
+  The vocabulary is `Prima.TenancyScope`'s, where the identity domain
+  reads it too.
   """
   @type scope :: Prima.TenancyScope.t()
 

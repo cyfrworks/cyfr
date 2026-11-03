@@ -1040,7 +1040,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       Sanctum.TestContext.create_session(
         Sanctum.Context.build(
           user_id: person.id,
-          athanor_id: Sanctum.TestContext.athanor_id(),
+          athanor_id: Sanctum.Test.People.athanor!(person).id,
           provider: "github",
           permissions: [:*],
           scope: :athanor,

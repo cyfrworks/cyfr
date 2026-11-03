@@ -41,8 +41,8 @@ defmodule Sanctum.ProviderTest do
       assert "session" in tool_names
       # The vault tool owns credential storage.
       refute "secret" in tool_names
-      # No "permission" tool: memberships are presence-only and there are
-      # no roles to store.
+      # No "permission" tool: an athanor is one person's and there are no
+      # roles to store.
       refute "permission" in tool_names
       assert "key" in tool_names
       assert "vault" in tool_names
@@ -787,7 +787,6 @@ defmodule Sanctum.ProviderTest do
         Context.build(
           user_id: "github|https://github.com|ext_user",
           namespace: "ext_ns",
-          athanor_id: "ath_acme",
           permissions: [:*],
           scope: :athanor,
           auth_method: :oidc,

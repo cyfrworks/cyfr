@@ -631,20 +631,20 @@ defmodule Cyfr.BoundariesTest do
       below = Boundaries.surface_reaches(row, names("apps/sanctum/lib/**/*.ex"))
       assert MapSet.member?(below, "Arca.ConsentStorage")
       assert MapSet.member?(below, "Arca.RegistryTokenStorage")
-      assert MapSet.member?(below, "Arca.Members")
+      assert MapSet.member?(below, "Arca.Athanors")
       assert MapSet.member?(below, "Arca.DecisionLog")
       assert MapSet.member?(below, "Arca.McpLog")
       assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the forty stores and the transitions, each a module" do
+    test "the security-row roster is exactly the thirty-nine stores and the transitions, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
                  Arca.ToolGrantStorage Arca.VaultStorage Arca.SessionStorage
                  Arca.ApiKeyStorage Arca.RegistryTokenStorage Arca.ProviderCredentialStorage
                  Arca.WebhookStorage Arca.FrameCredentials Arca.PairedClients Arca.Users
-                 Arca.Members Arca.Athanors Arca.Doors
+                 Arca.Athanors Arca.Doors
                  Arca.PersonIdentities Arca.IdentityAttempts
                  Arca.IdentityLog Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
@@ -1629,18 +1629,18 @@ defmodule Cyfr.BoundariesTest do
 
       assert Boundaries.surface_violations(row, planted) == ["Arca.ConsentStorage"]
 
-      # Standing is a security row too: a surface that asks the membership
-      # store who is seated, rather than Sanctum, is refused.
+      # Standing is a security row too: a surface that asks the athanor
+      # store whose athanor it is, rather than Sanctum, is refused.
       standing = [
-        {"apps/cyfr/lib/prism_web/live/planted_seats_live.ex",
+        {"apps/cyfr/lib/prism_web/live/planted_owner_live.ex",
          CodeLines.aliases(~S'''
-         defmodule PrismWeb.PlantedSeatsLive do
-           def seated(actor), do: Arca.Members.active_user_ids(actor)
+         defmodule PrismWeb.PlantedOwnerLive do
+           def owner(actor), do: Arca.Athanors.current(actor)
          end
          ''')}
       ]
 
-      assert Boundaries.surface_violations(row, standing) == ["Arca.Members"]
+      assert Boundaries.surface_violations(row, standing) == ["Arca.Athanors"]
 
       # The decision record, the request log and the policy log are security
       # rows too: the activity page reads them through Sanctum, never from

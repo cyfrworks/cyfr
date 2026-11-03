@@ -532,7 +532,7 @@ defmodule PrismWeb.AuthController do
   nowhere: no sign-in speaks to the registry.
 
   - unlocked → session, cookie, `/`
-  - a membership read failed → no session, a page saying so
+  - an account read failed → no session, a page saying so
   - no person here linked the identity → 403 page saying how to link it,
     no session
   - refused at the door → 403 page, no session
@@ -666,7 +666,7 @@ defmodule PrismWeb.AuthController do
           SignInResponse.respond(conn, :proceed, session: {:mint, ctx})
 
         {:error, :unavailable} ->
-          SignInResponse.respond(conn, {:unavailable, :membership_read},
+          SignInResponse.respond(conn, {:unavailable, :account_read},
             session: {:mint, ctx},
             retry_path: "/login"
           )
@@ -692,13 +692,13 @@ defmodule PrismWeb.AuthController do
         )
 
       {:error, :unavailable} ->
-        # A transient membership read during authenticate — a 503, never a
+        # A transient account read during authenticate — a 503, never a
         # 401: the person's credentials were fine and retrying fixes it.
         page(
           conn,
           503,
           "Temporarily unavailable",
-          "<p>The server could not read memberships just now. " <>
+          "<p>The server could not read your account just now. " <>
             "This is a transient fault, not a refusal.</p>" <>
             "<p><a href=\"/login\">Try again</a></p>"
         )

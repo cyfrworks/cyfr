@@ -165,8 +165,7 @@ defmodule Emissary.Web.DeviceChannel do
       verified. An intent, a repeated confirmation among them, is
       answered first with its `id` and an `error` naming the class.
     * `4403` (`forbidden`) — the client's standing ended: its pairing
-      revoked, its person denied, the athanor archived or the person no
-      longer seated in it.
+      revoked, its person denied, or the athanor archived or not theirs.
     * `4408` (`unauthenticated`) — the certificate expired unrenewed, or
       is no longer chained to the person's current live key: the glass
       renews.
@@ -204,7 +203,7 @@ defmodule Emissary.Web.DeviceChannel do
 
   @behaviour Phoenix.Socket.Transport
 
-  alias Cyfr.Bus.{AthanorArchived, Membership, Session}
+  alias Cyfr.Bus.{AthanorArchived, Session}
   alias Emissary.Web.DeviceChannel.Forwarder
   alias Prima.{Device, DeviceCert, StreamGrant}
   alias Prima.DeviceCert.{Challenge, Proof}
@@ -411,8 +410,7 @@ defmodule Emissary.Web.DeviceChannel do
   # A standing announcement about the person: the standing is read again
   # now, not at the next ping.
   def handle_info(message, %{client: %Context{} = client} = state)
-      when is_struct(message, Session) or is_struct(message, Membership) or
-             is_struct(message, AthanorArchived) do
+      when is_struct(message, Session) or is_struct(message, AthanorArchived) do
     if about?(message, client), do: recheck(state), else: {:ok, state}
   end
 
@@ -820,7 +818,7 @@ defmodule Emissary.Web.DeviceChannel do
   defp hear_standing(%{standing: true} = state), do: state
 
   defp hear_standing(state) do
-    :ok = Cyfr.Bus.subscribe_standing(state.client.user_id)
+    :ok = Cyfr.Bus.subscribe_standing()
     %{state | standing: true}
   end
 
@@ -892,7 +890,6 @@ defmodule Emissary.Web.DeviceChannel do
     do: kind != :created and user_id == ctx.user_id
 
   defp about?(%AthanorArchived{athanor_id: athanor_id}, ctx), do: athanor_id == ctx.athanor_id
-  defp about?(%Membership{}, _ctx), do: true
 
   # `revoke` for each of `grant_ids`, naming the client.
   defp revoke_frames(state, grant_ids) do

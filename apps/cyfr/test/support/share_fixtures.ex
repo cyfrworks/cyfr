@@ -39,7 +39,7 @@ defmodule Cyfr.Test.ShareFixtures do
   end
 
   @doc """
-  A person named `display_name` with their own athanor, seated in it:
+  A person named `display_name` with their own athanor:
   `%{user: _, athanor: _, actor: _, ctx: _}`, `ctx` their signed-in
   context there.
   """

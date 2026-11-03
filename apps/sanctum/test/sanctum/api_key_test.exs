@@ -596,18 +596,16 @@ defmodule Sanctum.ApiKeyTest do
     # name in different athanors coexist (no unique-constraint collision).
 
     setup do
-      ctx_a =
-        Sanctum.TestContext.issuer!(%Context{
-          user_id: "github|https://github.com|user-x",
-          athanor_id: "ath_a",
-          permissions: MapSet.new([:*]),
-          scope: :athanor,
-          auth_method: :oidc,
-          authenticated: true,
-          request_id: nil
-        })
+      person = %Context{
+        permissions: MapSet.new([:*]),
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true,
+        request_id: nil
+      }
 
-      ctx_b = Sanctum.TestContext.issuer!(%{ctx_a | athanor_id: "ath_b"})
+      ctx_a = Sanctum.TestContext.issuer!(%{person | user_id: "github|https://github.com|user-x"})
+      ctx_b = Sanctum.TestContext.issuer!(%{person | user_id: "github|https://github.com|user-y"})
 
       {:ok, ctx_a: ctx_a, ctx_b: ctx_b}
     end
@@ -620,13 +618,13 @@ defmodule Sanctum.ApiKeyTest do
       # validate/2 takes no caller athanor: it returns the key's OWN athanor
       # straight from the stored row — authoritative.
       assert {:ok, meta} = ApiKey.validate(created.api_key)
-      assert meta.athanor_id == "ath_a"
+      assert meta.athanor_id == ctx_a.athanor_id
 
-      # The shared builder binds the context to the KEY's athanor (ath_a), not
+      # The shared builder binds the context to the KEY's athanor (A's), not
       # to any caller/request context — so the key cannot operate as athanor
       # B even though an attacker controls the request.
       ctx = ApiKey.context_from_metadata(meta)
-      assert ctx.athanor_id == "ath_a"
+      assert ctx.athanor_id == ctx_a.athanor_id
       assert ctx.scope == :athanor
       assert ctx.auth_method == :api_key
     end
@@ -634,7 +632,7 @@ defmodule Sanctum.ApiKeyTest do
     test "context_from_metadata binds to the key row, ignoring the tenancy resolver",
          %{ctx_a: ctx_a} do
       # A key-derived context must never be re-resolved from the creating
-      # user's *current* membership. Point the tenancy resolver at a different
+      # user's *current* athanor. Point the tenancy resolver at a different
       # athanor and assert the key-derived context is unaffected (the athanor
       # comes from the row).
       original_resolver = Application.get_env(:sanctum, :tenancy_resolver_override)
@@ -655,7 +653,7 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, meta} = ApiKey.validate(created.api_key)
 
       ctx = ApiKey.context_from_metadata(meta)
-      assert ctx.athanor_id == "ath_a"
+      assert ctx.athanor_id == ctx_a.athanor_id
     end
 
     test "two keys with the same name in different athanors coexist",
@@ -938,8 +936,12 @@ defmodule Sanctum.ApiKeyTest do
 
     test "another person's key is not found, and asks no confirmation", %{key_id: id} do
       other =
-        %{Sanctum.TestContext.local() | user_id: "local|local|other"}
-        |> Sanctum.TestContext.issuer!(%{email: "other@example.com"})
+        Sanctum.TestContext.issuer!(
+          %{Sanctum.TestContext.local() | user_id: "local|local|other"},
+          %{
+            email: "other@example.com"
+          }
+        )
 
       assert {:error, :not_found} =
                ApiKey.reenable(%{other | confirmation_id: nil}, id, :confirmation)

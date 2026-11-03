@@ -73,7 +73,7 @@ defmodule Arca.Storage do
   `physical_segments/2` is the single translation from this logical
   vocabulary to the stored layout; every adapter joins its output under one
   storage root, so publishing in one athanor never overwrites another's
-  blobs and members of an athanor share its storage. A new athanor is
+  blobs. A new athanor is
   provisioned with its own copy of the shipped baseline (`Arca.Overlay`).
 
   ## Storage Structure

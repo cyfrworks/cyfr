@@ -12,11 +12,23 @@ defmodule Arca.DataTest do
 
   use ExUnit.Case, async: false
 
-  alias Arca.Schemas.{Athanor, Membership, User}
+  alias Arca.Schemas.{Athanor, User}
 
   defmodule Private do
     @moduledoc false
     defstruct [:secret]
+  end
+
+  # A schema with an association, which no shipped schema declares: the
+  # projection walks any schema it is handed, so it is built here.
+  defmodule Seat do
+    @moduledoc false
+    use Ecto.Schema
+
+    @primary_key {:id, :string, autogenerate: false}
+    schema "data_test_seats" do
+      belongs_to :athanor, Athanor, type: :string
+    end
   end
 
   defp user(overrides \\ %{}) do
@@ -69,15 +81,15 @@ defmodule Arca.DataTest do
     end
 
     test "omits an association never loaded, and projects a loaded one, nil included" do
-      unloaded = Arca.Data.project(%Membership{id: "mem_1", athanor_id: "ath_1"})
+      unloaded = Arca.Data.project(%Seat{id: "seat_1", athanor_id: "ath_1"})
       refute Map.has_key?(unloaded, :athanor)
       assert unloaded.athanor_id == "ath_1"
 
-      loaded_nil = Arca.Data.project(%Membership{id: "mem_2", athanor: nil})
+      loaded_nil = Arca.Data.project(%Seat{id: "seat_2", athanor: nil})
       assert Map.has_key?(loaded_nil, :athanor)
       assert loaded_nil.athanor == nil
 
-      loaded = Arca.Data.project(%Membership{id: "mem_3", athanor: %Athanor{id: "ath_3"}})
+      loaded = Arca.Data.project(%Seat{id: "seat_3", athanor: %Athanor{id: "ath_3"}})
       assert plain?(loaded.athanor)
       assert loaded.athanor.id == "ath_3"
       assert clean?(loaded)
@@ -89,7 +101,7 @@ defmodule Arca.DataTest do
       term = %{
         "external key" => [user(), {:ok, user()}],
         nested: %{deeper: {:tuple, [%{row: user()}]}},
-        loaded: %Membership{id: "mem_4", athanor: %Athanor{id: "ath_4"}}
+        loaded: %Seat{id: "seat_4", athanor: %Athanor{id: "ath_4"}}
       }
 
       projected = Arca.Data.project(term)
@@ -208,9 +220,8 @@ defmodule Arca.DataTest do
       assert clean?(errors)
     end
 
-    test "the mint's in-transaction callback is handed the row as a plain map" do
+    test "the mint answers the row as a plain map" do
       n = System.unique_integer([:positive])
-      test = self()
 
       assert {:ok, minted} =
                Arca.Athanors.mint(server(),
@@ -219,16 +230,9 @@ defmodule Arca.DataTest do
                    slug: "data-#{n}",
                    owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
                    created_by: "usr_d"
-                 },
-                 also: fn athanor ->
-                   send(test, {:seated, athanor})
-                   :ok
-                 end
+                 }
                )
 
-      assert_received {:seated, handed}
-      assert plain?(handed) and clean?(handed)
-      assert handed.id == minted.id
       assert plain?(minted) and clean?(minted)
     end
 

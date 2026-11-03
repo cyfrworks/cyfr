@@ -91,7 +91,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
         end
 
       {:error, :missing_tenant} ->
-        # API key valid but the owner has no resolved tenant/membership.
+        # API key valid but the owner has no resolved athanor.
         missing_tenant_error_response(conn, errors)
 
       {:error, :auth_provider_error} ->
@@ -106,7 +106,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   end
 
   defp missing_tenant_error_response(conn, errors) do
-    reason = {:missing_tenant, :no_membership}
+    reason = {:missing_tenant, :no_athanor}
     errors.halt(conn, 403, reason, Sanctum.Unauthorized.message(reason))
   end
 
@@ -145,7 +145,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
             {:error, :auth_provider_error}
 
           ctx ->
-            # current_user/1 returns a Context; resolve membership and gate.
+            # current_user/1 returns a Context; resolve the athanor and gate.
             context_from_session(ctx)
         end
       rescue
@@ -216,12 +216,12 @@ defmodule CyfrWeb.Plugs.Authenticate do
 
         {:error, :missing_tenant}
 
-      # The membership read failed. That is not "you have no athanor" — it is
+      # The person's read failed. That is not "you have no athanor" — it is
       # "we could not find out", and answering 403 tells the person to ask an
       # operator about a fault an operator cannot see. Same answer the session
       # path already gives for the same underlying failure.
       {:error, :unavailable} ->
-        Logger.error("[Authenticate] membership read failed for #{ctx.user_id} — answering 503")
+        Logger.error("[Authenticate] athanor read failed for #{ctx.user_id} — answering 503")
 
         {:error, :auth_provider_error}
     end
@@ -326,8 +326,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   #
   # API keys are ATHANOR credentials: the athanor comes from the stored key
   # (Sanctum.ApiKey.context_from_metadata/1) — never from the request or the
-  # creating user's *current* membership. Key validity is independent of the
-  # creator's membership; revocation is the control. An athanor-less key is
+  # creating user's *current* standing. Revocation is the control. An athanor-less key is
   # rejected by the tenant gate (the same gate context_from_session/1
   # applies).
   # The one recipe establishes the key; this surface maps its refusals to

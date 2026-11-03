@@ -897,7 +897,9 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
     # refuses each before its handler, and no recovery material is ever
     # answered into a frame.
     test "reaches no recovery material: every person action is refused it" do
-      issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+      own = Sanctum.Test.People.athanor!(user)
+      issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
       {:ok, session} = Sanctum.TestContext.create_session(issuer)
       {:ok, source} = Sanctum.Caller.establish(session.token)
 

@@ -14,7 +14,7 @@ defmodule Sanctum.ProvisioningTest do
   alias Arca.ProvisioningClaims, as: Claims
   alias Compendium.Provisioning, as: Filler
   alias Sanctum.Provisioning
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   # Another attempt — another boot's — holding the athanor's claim.
   defp held_elsewhere!(athanor_id, entry_kind \\ "first_need") do
@@ -118,10 +118,10 @@ defmodule Sanctum.ProvisioningTest do
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
-    # The mint is a row and a seat — no registry round trip.
+    # The mint is a row naming its person — no registry round trip.
     athanor = unfilled!(ctx.user_id, "Provisioned #{n}")
     refute athanor.provisioned_at
-    assert Members.member?(ctx.user_id, athanor.id)
+    assert athanor.owner_user_id == ctx.user_id
 
     in_athanor = %{ctx | athanor_id: athanor.id}
     :ok = Provisioning.start_provisioning(in_athanor)
@@ -152,8 +152,8 @@ defmodule Sanctum.ProvisioningTest do
     assert at == athanor.provisioned_at
   end
 
-  # An unfilled athanor of `user_id`'s own: the row and its owner's seat,
-  # as an admission's mint leaves them, under a slug derived from `name`.
+  # An unfilled athanor of `user_id`'s own: the row naming its owner, as an
+  # admission's mint leaves it, under a slug derived from `name`.
   defp unfilled!(user_id, name) do
     {:ok, slugs} = Athanors.person_slugs(nil, name)
 
@@ -209,7 +209,6 @@ defmodule Sanctum.ProvisioningTest do
     assert personal.slug == "prov#{n}"
     assert personal.owner_user_id == user.id
     assert personal.name == "Prov #{n}"
-    assert Members.member?(user.id, personal.id)
     assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
     assert pid == personal.id
 
@@ -291,7 +290,7 @@ defmodule Sanctum.ProvisioningTest do
     in_athanor = %{ctx | athanor_id: athanor.id}
     :ok = Provisioning.start_provisioning(in_athanor)
 
-    # A member edited their copy of foo.
+    # The athanor's person edited their copy of foo.
     version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
     :ok = Arca.put(Sanctum.Context.actor(in_athanor), version_dir ++ ["scratch.txt"], "x")
     assert {:ok, true} = Arca.Overlay.edited?(Sanctum.Context.actor(in_athanor), version_dir)
@@ -572,7 +571,7 @@ defmodule Sanctum.ProvisioningTest do
     # everyone: `%{entry: _, share: _}`.
     defp share! do
       admin = Cyfr.Test.ShareFixtures.person!("Admin")
-      {:ok, _seat} = Sanctum.TestContext.ensure_platform(admin.user.id)
+      {:ok, _admin} = Sanctum.TestContext.ensure_platform(admin.user.id)
       entry = Cyfr.Test.ShareFixtures.key!(admin)
       %{entry: entry, share: Arca.Test.Shares.share!(admin.actor, entry.id)}
     end

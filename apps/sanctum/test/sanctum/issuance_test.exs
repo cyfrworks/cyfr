@@ -5,8 +5,8 @@ defmodule Sanctum.IssuanceTest do
   @moduledoc """
   The policy a credential is issued under (`Sanctum.Issuance`), from a
   paired device's context: the device's binding names its paired client,
-  and an issuance from it locks that client after the person, the athanor
-  and the seat, and stands only while the client, the certificate the
+  and an issuance from it locks that client after the person and the
+  athanor, and stands only while the client, the certificate the
   context stands under and, for a person whose keys are at another home,
   the identity row they were resolved by still stand. A device context
   without its own binding issues nothing, and a session or a key issues
@@ -27,7 +27,7 @@ defmodule Sanctum.IssuanceTest do
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Issuance, Pairing, Person}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @source "198.51.100.9"
 
@@ -46,16 +46,16 @@ defmodule Sanctum.IssuanceTest do
         else: Application.delete_env(:sanctum, :public_url)
     end)
 
-    seated!()
+    person!()
   end
 
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A person seated in their own athanor, and the context their session
+  # A person with their own athanor, and the context their session
   # establishes there.
-  defp seated! do
+  defp person! do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
@@ -253,16 +253,6 @@ defmodule Sanctum.IssuanceTest do
     {result, attrs}
   end
 
-  # The person's seat in the athanor, deleted without an announcement:
-  # the athanor stays active and the platform row stays.
-  defp drop_seat!(user_id, athanor_id) do
-    Arca.Repo.delete_all(
-      from(m in Arca.Schemas.Membership,
-        where: m.user_id == ^user_id and m.athanor_id == ^athanor_id
-      )
-    )
-  end
-
   defp minted?(%{key_hash: hash}),
     do: Arca.Repo.exists?(from(k in ApiKey, where: k.key_hash == ^hash))
 
@@ -276,7 +266,7 @@ defmodule Sanctum.IssuanceTest do
   # ---------------------------------------------------------------------------
 
   describe "a paired device's binding" do
-    test "names its paired client and seat, and an issuance from it locks that client", %{
+    test "names its paired client, and an issuance from it locks that client", %{
       session_ctx: session_ctx,
       user: user,
       athanor: athanor
@@ -285,15 +275,8 @@ defmodule Sanctum.IssuanceTest do
       ctx = verified!(device)
       client_id = device.client_id
 
-      assert %{
-               source_kind: :device,
-               source_id: ^client_id,
-               focus_basis: seat_id,
-               identity: nil
-             } = ctx.credential_binding
-
-      assert {:ok, %{athanor_id: athanor_id}} = Sanctum.TestContext.membership(seat_id)
-      assert athanor_id == athanor.id
+      assert %{source_kind: :device, source_id: ^client_id, identity: nil} =
+               ctx.credential_binding
 
       assert {:ok, expectation} = Issuance.expectation(ctx, [])
       deadline = DateTime.from_unix!(device.certificate.expires_at, :millisecond)
@@ -303,7 +286,6 @@ defmodule Sanctum.IssuanceTest do
       assert Issuance.lock(expectation) == %{
                user_id: user.id,
                athanor_id: athanor.id,
-               membership_id: seat_id,
                source: {:device, client_id, deadline}
              }
     end
@@ -468,8 +450,7 @@ defmodule Sanctum.IssuanceTest do
                 credential_binding: session_ctx.credential_binding
             },
             another_client: %{ctx | client_id: "pcl_another"},
-            no_certificate: %{ctx | credential_deadline: nil},
-            no_seat: %{ctx | credential_binding: %{binding | focus_basis: :key}}
+            no_certificate: %{ctx | credential_deadline: nil}
           ] do
         assert Issuance.expectation(forged, []) == {:error, :missing_generation}, inspect(what)
         assert {{:error, :missing_generation}, attrs} = mint(forged)
@@ -576,7 +557,7 @@ defmodule Sanctum.IssuanceTest do
       assert expectation.identity == nil
 
       assert Issuance.lock(expectation) |> Map.keys() |> Enum.sort() ==
-               [:athanor_id, :membership_id, :source, :user_id]
+               [:athanor_id, :source, :user_id]
 
       attrs = %{name: "from-the-session"}
 
@@ -619,170 +600,79 @@ defmodule Sanctum.IssuanceTest do
   end
 
   # ---------------------------------------------------------------------------
-  # A platform membership
+  # The platform administrator
   # ---------------------------------------------------------------------------
 
-  test "a platform membership cannot authorize tenant credential issuance", %{
+  test "a platform administrator issues only into their own athanor", %{
     user: user,
-    athanor: athanor,
     session_ctx: session_ctx
   } do
-    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
-    assert {platform.scope, platform.athanor_id} == {"platform", nil}
+    {:ok, %{platform_admin_at: %DateTime{}}} = Sanctum.TestContext.ensure_platform(user.id)
 
-    # A live session focused on the athanor that names the person's
-    # platform row as its focus basis, which no focus stamps but a context
-    # built by hand can carry. The expectation takes the id for its shape
-    # alone; the stored row it names is a platform row, which seats nobody
-    # in an athanor.
-    retained = %{
+    # Their session, focused on their own athanor, mints.
+    assert {:ok, own} = mint(session_ctx)
+    assert minted?(own)
+
+    # Another person's athanor, active: a context focused there at its
+    # current generation, by hand or from a generation snapshot, issues
+    # nothing in it.
+    elsewhere = person!().athanor
+    {:ok, standing} = Sanctum.Tenancy.generation_snapshot(user.id, elsewhere.id)
+
+    by_hand = %{
       session_ctx
-      | credential_binding: %{session_ctx.credential_binding | focus_basis: platform.id}
-    }
-
-    assert {:ok, expectation} = Issuance.expectation(retained, [])
-    assert {expectation.athanor_id, expectation.membership_id} == {athanor.id, platform.id}
-    assert {{:error, :unauthenticated}, refused} = mint(retained)
-    refute minted?(refused)
-
-    # The same session through its seat mints: the row refused, not the
-    # session.
-    assert {:ok, seated} = mint(session_ctx)
-    assert minted?(seated)
-
-    # The seat lost while the athanor stays active: the platform row
-    # still stands, and a context that kept its id, read at the person's
-    # and the athanor's current generations, still issues nothing in the
-    # athanor.
-    drop_seat!(user.id, athanor.id)
-    refute Members.member?(user.id, athanor.id)
-    assert {:ok, %{status: "active"}} = Athanors.get(athanor.id)
-    assert {:ok, %{id: platform_id}} = Members.platform_seat(user.id)
-    assert platform_id == platform.id
-
-    {:ok, standing} = Sanctum.Tenancy.generation_snapshot(user.id, athanor.id)
-
-    kept = %{
-      retained
-      | session_token_hash: nil,
+      | athanor_id: elsewhere.id,
         credential_binding: %{
-          source_kind: :identity,
-          source_id: nil,
-          focus_basis: platform.id,
-          user_generation: standing.user_generation,
-          athanor_generation: standing.athanor_generation
+          session_ctx.credential_binding
+          | athanor_generation: standing.athanor_generation
         }
     }
 
-    assert {{:error, :unauthenticated}, refused} = mint(kept)
+    assert {:ok, %{athanor_id: athanor_id}} = Issuance.expectation(by_hand, [])
+    assert athanor_id == elsewhere.id
+    assert {{:error, :unauthenticated}, refused} = mint(by_hand)
     refute minted?(refused)
 
-    # Platform-only issuance, naming no athanor, stands on the platform
-    # row: a session for the person, outside every athanor.
-    {:ok, standing} = Sanctum.Tenancy.generation_snapshot(user.id, nil)
+    snapshotted = %{by_hand | session_token_hash: nil, credential_binding: nil}
+    assert {:ok, expectation} = Issuance.expectation(snapshotted, generation_snapshot: standing)
 
-    unfocused = %{
-      kept
-      | athanor_id: nil,
-        credential_binding: %{
-          kept.credential_binding
-          | user_generation: standing.user_generation,
-            athanor_generation: nil
-        }
-    }
-
-    assert {:ok, expectation} = Issuance.expectation(unfocused, [])
-    assert {expectation.athanor_id, expectation.membership_id} == {nil, platform.id}
-    hash = :crypto.strong_rand_bytes(32)
-
-    assert :ok =
-             Arca.SessionStorage.create_session(
-               hash,
-               %{
-                 user_id: user.id,
-                 provider: "github",
-                 expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
-               },
+    assert {:error, :unauthenticated} =
+             Arca.ApiKeyStorage.create_key(key_attrs(snapshotted),
                lock: Issuance.lock(expectation),
                verify: Issuance.verify(expectation)
              )
 
-    assert {:ok, %{user_id: user_id, athanor_id: nil}} = Arca.SessionStorage.get_session(hash)
-    assert user_id == user.id
+    refute Arca.Repo.exists?(from(k in ApiKey, where: k.athanor_id == ^elsewhere.id))
   end
 
-  test "a platform administrator's paired device has no standing where they hold no seat", %{
+  test "a platform administrator's paired device stands only in their own athanor", %{
     user: user,
     athanor: athanor,
     session_ctx: session_ctx
   } do
     device = pair!(session_ctx)
-    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
+    {:ok, _admin} = Sanctum.TestContext.ensure_platform(user.id)
 
-    # Seated, the device stands on the seat, and the platform row is only
-    # the capability flag.
+    # The device stands in the person's athanor, and the mark is only the
+    # capability flag.
     ctx = verified!(device)
     assert ctx.platform_admin
-    assert ctx.credential_binding.focus_basis != platform.id
+    assert {:ok, %{platform_admin: true}} = DeviceCerts.standing(user.id, athanor.id)
 
-    assert {:ok, %{seat: %{scope: "athanor", athanor_id: seated_in}, platform_admin: true}} =
-             DeviceCerts.standing(user.id, athanor.id)
-
-    assert seated_in == athanor.id
-
-    # The seat lost while the athanor stays active: the platform row
-    # still stands, and stands for nothing in the athanor.
-    drop_seat!(user.id, athanor.id)
-    assert {:ok, %{status: "active"}} = Athanors.get(athanor.id)
-    assert {:ok, %{id: platform_id}} = Members.platform_seat(user.id)
-    assert platform_id == platform.id
-
-    assert {:error, :not_standing} = DeviceCerts.standing(user.id, athanor.id)
-    assert {:error, _refused} = DeviceCerts.client_standing(ctx)
+    # Another person's athanor, active, is no standing of theirs.
+    elsewhere = person!().athanor
+    assert {:error, :not_standing} = DeviceCerts.standing(user.id, elsewhere.id)
   end
 
-  test "a device whose seat is a platform row is not established", %{
+  test "a derived credential naming an athanor not the person's is refused", %{
     user: user,
     athanor: athanor,
     session_ctx: session_ctx
   } do
-    device = pair!(session_ctx)
-    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
-    {:ok, standing} = DeviceCerts.standing(user.id, athanor.id)
-    {:ok, client} = DeviceCerts.paired_client(athanor.id, user.id, device.client_id)
-
-    # The rows `Sanctum.DeviceCerts` hands `Sanctum.Caller` once a device
-    # verified, as read: on the person's seat, the device is established.
-    verified = %{
-      certificate: device.certificate,
-      client: client,
-      identity: nil,
-      user: standing.user,
-      athanor: standing.athanor,
-      seat: standing.seat,
-      platform_admin: standing.platform_admin
-    }
-
-    assert {:ok, %Context{auth_method: :device}} =
-             Sanctum.Caller.establish_device(verified, [])
-
-    # The same rows with the person's platform row handed as the seat: the
-    # caller's own check refuses it, whatever `standing/2` answered.
-    assert platform.scope == "platform"
-
-    assert {:error, :unauthenticated} =
-             Sanctum.Caller.establish_device(%{verified | seat: platform}, [])
-  end
-
-  test "a derived session credential resting on a platform row is refused", %{
-    user: user,
-    athanor: athanor,
-    session_ctx: session_ctx
-  } do
-    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
+    {:ok, _admin} = Sanctum.TestContext.ensure_platform(user.id)
 
     # What a tincture asset or frame credential minted from this session
-    # names: its person, athanor, generations, source and focus basis.
+    # names: its person, athanor, generations and source.
     claims =
       Map.merge(session_ctx.credential_binding, %{
         user_id: user.id,
@@ -792,47 +682,40 @@ defmodule Sanctum.IssuanceTest do
     assert claims.source_kind == :session
     assert {:ok, _standing} = Sanctum.Caller.derived_standing(claims)
 
-    # The same credential resting on the person's platform row instead of
-    # their seat: every derived credential names an athanor, and a platform
-    # row is no seat in it.
+    # The same credential naming another person's athanor, active and at
+    # its current generation: the administrator's mark reaches no other
+    # athanor.
+    elsewhere = person!().athanor
+
     assert {:error, :not_member} =
-             Sanctum.Caller.derived_standing(%{claims | focus_basis: platform.id})
+             Sanctum.Caller.derived_standing(%{
+               claims
+               | athanor_id: elsewhere.id,
+                 athanor_generation: elsewhere.security_generation
+             })
   end
 
-  test "a pairing invitation resting on a platform row is refused at redemption", %{
+  test "a pairing invitation into another person's athanor is refused at redemption", %{
     user: user
   } do
-    n = System.unique_integer([:positive])
-    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
+    {:ok, _admin} = Sanctum.TestContext.ensure_platform(user.id)
+    elsewhere = person!().athanor
 
-    # Another person's athanor, which the person holds no seat in.
-    {:ok, other} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|pairing-other-#{n}",
-        provider: "github",
-        email: "pairing-other#{n}@example.com",
-        verified: true
-      })
-
-    elsewhere = Sanctum.Test.People.athanor!(other)
-    refute Members.member?(user.id, elsewhere.id)
-
-    # An invitation there whose only basis is the person's platform row,
-    # which `Sanctum.Pairing.begin/2` never opens but a stored row can
-    # carry: written through the invitations' own store, under a policy
-    # that lets it open, for the device key the glass made first and on a
-    # consumed `pairing.begin` confirmation the person's passkey gave.
+    # An invitation there for the person, which `Sanctum.Pairing.begin/2`
+    # never opens but a stored row can carry: written through the
+    # invitations' own store, under a policy that lets it open, for the
+    # device key the glass made first and on a consumed `pairing.begin`
+    # confirmation the person's passkey gave.
     secret = :crypto.strong_rand_bytes(16)
     secret_hash = Prima.Digest.sha256(secret)
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
     elsewhere_actor = Prima.Actor.in_athanor(elsewhere.id)
 
-    {:ok, %{membership_id: membership_id}} =
+    {:ok, _invitation} =
       Arca.PairingInvitations.open(
         elsewhere_actor,
         %{
           user_id: user.id,
-          membership_id: platform.id,
           secret_hash: secret_hash,
           key_digest: Prima.Device.key_digest(device_key),
           confirmation_ref: consumed_pairing_confirmation!(elsewhere_actor, user.id),
@@ -842,11 +725,9 @@ defmodule Sanctum.IssuanceTest do
         fn _rows -> :ok end
       )
 
-    assert membership_id == platform.id
-
     # The glass holding the secret asks for its challenge and answers it:
-    # the redemption locks the platform row, which is no seat in the
-    # athanor, and pairs nothing.
+    # the redemption locks the athanor, which is not the person's, and
+    # pairs nothing.
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
 
@@ -1121,10 +1002,10 @@ defmodule Sanctum.IssuanceTest do
       locked = Enum.find_index(sources, &(&1 == "device_certificates"))
 
       # The client's certificate is read only by the invitation's own
-      # standing locks, after the seat and before the invitation is written.
+      # standing locks, after the athanor and before the invitation is written.
       assert is_integer(locked) and is_integer(opened) and locked < opened, inspect(sources)
       assert Enum.at(sources, locked - 1) == "paired_clients"
-      assert Enum.at(sources, locked - 2) == "memberships"
+      assert Enum.at(sources, locked - 2) == "athanors"
 
       if Arca.Test.Adapter.postgres?() do
         for at <- [locked - 1, locked] do
@@ -1426,7 +1307,7 @@ defmodule Sanctum.IssuanceRaceTest do
   nothing is minted. Two real connections, outside the sandbox: the
   issuance is held, by a handler on the repo's own statement events, at
   the last moment another writer can still commit before it reaches the
-  client (on PostgreSQL once the person, the athanor and the seat are
+  client (on PostgreSQL once the person and the athanor are
   locked; on SQLite once its transaction has begun, before the one write
   lock), and the revocation commits there.
   """
@@ -1441,7 +1322,6 @@ defmodule Sanctum.IssuanceRaceTest do
     Athanor,
     DeviceCertificate,
     ExternalIdentity,
-    Membership,
     PairedClient,
     User
   }
@@ -1466,8 +1346,6 @@ defmodule Sanctum.IssuanceRaceTest do
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(ApiKey, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, user_id: ^user_id))
         Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
@@ -1493,7 +1371,6 @@ defmodule Sanctum.IssuanceRaceTest do
               client: client,
               user: standing.user,
               athanor: standing.athanor,
-              seat: standing.seat,
               platform_admin: standing.platform_admin
             },
             []
@@ -1536,9 +1413,6 @@ defmodule Sanctum.IssuanceRaceTest do
         slug: "race-#{n}",
         created_by: user_id
       })
-
-    {:ok, _} =
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
   end
 
   # The certificate the device stands under. Establishing a context checks
@@ -1625,7 +1499,7 @@ defmodule Sanctum.IssuanceRaceTest do
 
   # Inside the issuance's transaction, the last moment another writer can
   # still commit before the issuance reaches the client.
-  defp before_the_client(%{source: "memberships", query: query}),
+  defp before_the_client(%{source: "athanors", query: query}),
     do: postgres?() and query =~ "FOR UPDATE"
 
   defp before_the_client(%{query: "begin"}), do: not postgres?()

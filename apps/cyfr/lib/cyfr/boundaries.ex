@@ -336,7 +336,7 @@ defmodule Cyfr.Boundaries do
     Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage Arca.ToolGrantStorage
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
-    Arca.PairedClients Arca.Users Arca.Members Arca.Athanors Arca.Doors
+    Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
@@ -1214,7 +1214,7 @@ defmodule Cyfr.Boundaries do
           "sessions, API keys, tincture frame credentials, paired clients, their " <>
           "pairing invitations and device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
-          "the identities, memberships, athanors and sign-in permissions that decide standing, " <>
+          "the identities, athanors and sign-in permissions that decide standing, " <>
           "the invitations that admit a person and seat them, a person's company sign-in " <>
           "and the company sign-ins in flight, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
@@ -2108,10 +2108,6 @@ defmodule Cyfr.Boundaries do
       provisioning_failure: 1,
       route_slug: 1,
       settings: 1
-    ],
-    "Sanctum.Tenancy.Members" => [
-      list_by_athanor: 1,
-      member?: 2
     ],
     "Sanctum.Tenancy.Users" => [
       display_name: 1,

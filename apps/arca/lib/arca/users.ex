@@ -9,9 +9,8 @@ defmodule Arca.Users do
   ## Why none of this is athanor-scoped
 
   A person is not a row inside an athanor. They exist before any athanor
-  does — the row is written by their admission, before membership
-  resolution has chosen anything — they sit in several at
-  once, and the one column that names an athanor
+  does — the row is written by their admission, before their athanor is
+  minted — and the one column that names an athanor
   (`personal_athanor_id`) is a pointer out of the row, not a tenant
   stamp. Scoping these reads to an athanor would make sign-in impossible
   and would answer "not on this server" for every person outside the
@@ -247,9 +246,9 @@ defmodule Arca.Users do
 
   The installation guard runs first, inside the same transaction
   (`Arca.InstallationClaims.guard!/3`): the installation's first person is
-  made only by `setup` or a restore, and is granted the platform role in
-  this transaction, after their rows and before `also:`
-  (`Arca.Members.grant_platform!/1`); no other mint grants it. Every other
+  made only by `setup` or a restore, and is written with the platform
+  administrator's mark (`users.platform_admin_at`) in this transaction; no
+  other mint writes it. Every other
   admission onto an empty node is `:not_set_up`; a pending restore claim,
   or a node with no person whose installed mode is `:restore_reserved`,
   refuses everything but its restore (`:restore_reserved`); a restore is
@@ -317,9 +316,12 @@ defmodule Arca.Users do
         admitted when admitted in [:first, :ok] ->
           with :ok <- also_ran(verify.()),
                {:ok, user} <-
-                 %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert() |> settled(),
+                 admitted
+                 |> born()
+                 |> User.changeset(user_attrs)
+                 |> Arca.Repo.insert()
+                 |> settled(),
                {:ok, _identity} <- insert_identity(identity_attrs, user.id),
-               :ok <- first_grant(admitted, user.id),
                :ok <- also_ran(also.(Arca.Data.project(user))) do
             {:ok, user}
           end
@@ -371,8 +373,10 @@ defmodule Arca.Users do
   # its RP ID and its home URL, both required.
   defp here(opts), do: %{rp_id: Keyword.fetch!(opts, :rp_id), home: Keyword.fetch!(opts, :home)}
 
-  defp first_grant(:first, user_id), do: Arca.Members.grant_platform!(user_id)
-  defp first_grant(:ok, _user_id), do: :ok
+  # The installation's first person is born with the platform
+  # administrator's mark, on the row itself and past every changeset.
+  defp born(:first), do: %User{platform_admin_at: DateTime.utc_now()}
+  defp born(:ok), do: %User{}
 
   @doc """
   Link another IdP identity (`attrs`: its `:key`, `:provider`, `:issuer`

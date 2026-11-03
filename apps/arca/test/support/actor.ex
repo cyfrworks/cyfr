@@ -56,7 +56,7 @@ defmodule Arca.Test.Actor do
   @spec issuance(String.t()) :: keyword()
   def issuance(user_id \\ "usr_test") do
     [
-      lock: %{user_id: user_id, athanor_id: nil, membership_id: nil, source: nil},
+      lock: %{user_id: user_id, athanor_id: nil, source: nil},
       verify: fn _rows -> :ok end
     ]
   end

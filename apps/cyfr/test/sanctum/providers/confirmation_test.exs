@@ -42,12 +42,12 @@ defmodule Sanctum.Providers.ConfirmationTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Prima.Test.RateLimiter.reset!()
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
-    seated!()
+    signed_in!()
   end
 
-  # A person with a verified email, seated in their own athanor, and the
-  # context their session establishes there.
-  defp seated!(opts \\ []) do
+  # A person with a verified email and their own athanor, and the context
+  # their session establishes there.
+  defp signed_in!(opts \\ []) do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
@@ -338,7 +338,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       Application.put_env(:sanctum, :confirmation_code_transport, transport)
 
       # A person with no verified email is offered no code.
-      %{session_ctx: unverified} = seated!(verified: false)
+      %{session_ctx: unverified} = signed_in!(verified: false)
       other = asked!(unverified)
       assert pending!(unverified, other).methods == []
     end
@@ -796,7 +796,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     end
 
     test "with no transport configured, the method is unavailable" do
-      %{session_ctx: session_ctx} = seated!()
+      %{session_ctx: session_ctx} = signed_in!()
       id = asked!(session_ctx)
       transport = Application.get_env(:sanctum, :confirmation_code_transport)
       Application.delete_env(:sanctum, :confirmation_code_transport)
@@ -809,7 +809,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     end
 
     test "a person with no verified email is sent no code" do
-      %{session_ctx: session_ctx} = seated!(verified: false)
+      %{session_ctx: session_ctx} = signed_in!(verified: false)
       id = asked!(session_ctx)
 
       assert %Prima.Refusal{reason: :email_unavailable} =
@@ -838,18 +838,12 @@ defmodule Sanctum.Providers.ConfirmationTest do
       refute Enum.any?(records, &(&1.ref == named))
     end
 
-    test "another member reads, proves and cancels none of a person's records", %{
-      session_ctx: session_ctx,
-      athanor: athanor
+    test "another person reads, proves and cancels none of a person's records", %{
+      session_ctx: session_ctx
     } do
       id = asked!(session_ctx)
       named = ref(id)
-      %{user: other} = seated!()
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(other.id, scope: "athanor", athanor_id: athanor.id)
-
-      other_ctx = session_ctx(other, athanor)
+      %{user: other, session_ctx: other_ctx} = signed_in!()
       other_authenticator = TestContext.passkey!(other.id)
 
       {:ok, %{confirmations: theirs}} = call(other_ctx, "pending", %{})

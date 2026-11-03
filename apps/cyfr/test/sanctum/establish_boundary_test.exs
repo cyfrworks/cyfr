@@ -42,7 +42,7 @@ defmodule Sanctum.EstablishBoundaryTest do
     "apps/sanctum/lib/sanctum/provisioning.ex" => 1,
     # `Tenancy.continuation/3`: the person-shaped context a recovered
     # turn continues under, rebuilt from the turn's rows and refused when
-    # the person is denied, unseated or the athanor archived.
+    # the person is denied, or the athanor is not theirs or is archived.
     "apps/sanctum/lib/sanctum/tenancy.ex" => 1,
     # The suite's own builders. They live in `test/support`, which only the
     # test build compiles, and the roster reaches outside lib to keep them
@@ -172,7 +172,6 @@ defmodule Sanctum.EstablishBoundaryTest do
       },
       user: %{id: user_id, status: "active", security_generation: 1, email: nil},
       athanor: %{id: athanor_id, status: "active", security_generation: 1},
-      seat: %{id: "mem_forged", status: "active", user_id: user_id, scope: "platform"},
       platform_admin: true
     }
 

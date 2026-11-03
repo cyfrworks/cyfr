@@ -23,7 +23,7 @@ defmodule Sanctum.DeviceUnlock do
 
     * `{:setup, token}` admits the installation's first person, or the
       person setup made while they hold no method at this home's address
-      (`Sanctum.Newcomer`): their keys, athanor, platform grant, the
+      (`Sanctum.Newcomer`): their keys, athanor, platform administrator's mark, the
       paired client under the reserved id, its first certificate, the
       first-method latch and the recovery enrollment commit together
       (`{:device, enrollment, identity}`), and the admission answers the
@@ -74,7 +74,7 @@ defmodule Sanctum.DeviceUnlock do
   session, the client and the issuance expectation the channel's context
   read, and the row carried to the ticket's deadline. `redeem/1`, the browser's exchange, spends the ticket once and
   activates that row (`Sanctum.Session.create_unlocked/1`) in the
-  issuance transaction that rereads the person, athanor, seat, client
+  issuance transaction that rereads the person, athanor, client
   and certificate the expectation names, under the client's lock and
   then the row's. The ticket is bearer authority for this brief exchange
   alone; a ticket this member's cache no longer holds redeems nothing.

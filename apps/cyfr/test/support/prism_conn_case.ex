@@ -9,7 +9,7 @@ defmodule PrismWeb.ConnCase do
   LiveView processes and supervised tasks can hit the repo), imports
   `Phoenix.LiveViewTest`, and provides helpers to sign a test user in the
   way the browser does — a `Sanctum.Session` row, a claimed personal
-  namespace, a membership — and mount authenticated LiveViews.
+  namespace, their own athanor — and mount authenticated LiveViews.
   """
 
   use ExUnit.CaseTemplate
@@ -40,14 +40,13 @@ defmodule PrismWeb.ConnCase do
   Make `athanor_id` an athanor a turn can run in: the shipped tree and
   bundle copied in, indexed, the baseline consent the soul pins minted —
   as a fill leaves it — and a key connected to the Claude catalyst, which
-  its runs unseal when they attach. `user_id` is a member whose seat the
-  bootstrap runs under. The context it answers is that member in Prism,
+  its runs unseal when they attach. `user_id` is the athanor's person, whom
+  the bootstrap runs as. The context it answers is that person in Prism,
   so its origin is `interactive`, as a turn sent from the console is.
   """
   def ready_athanor!(athanor_id, user_id) do
     turn_env!()
     ctx = %{Sanctum.TestContext.local(:prism) | user_id: user_id, athanor_id: athanor_id}
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor_id)
     :ok = Sanctum.TestContext.shipped!(athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -171,23 +170,20 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Sign `user` in: claim their namespace (unless `claim: false`), seat them in
-  their own athanor (or `opts[:athanor_id]`), create a `Sanctum.Session`, and
-  put the token in the Plug session. Returns the conn.
+  Sign `user` in: claim their namespace (unless `claim: false`), focus them
+  on their own athanor (or `opts[:athanor_id]`), create a `Sanctum.Session`,
+  and put the token in the Plug session. Returns the conn.
 
-  The seat is the person's own athanor, as it is in production — no athanor is
-  shared server-wide, so two signed-in test users are strangers to each other
-  unless a test seats them together. The athanor is remembered for this test
-  process so `athanor_path/2` and `mount_athanor/3` name the same one.
+  The athanor is the person's own, as it is in production — no athanor is
+  shared, so two signed-in test users are strangers to each other. The
+  athanor is remembered for this test process so `athanor_path/2` and
+  `mount_athanor/3` name the same one.
   """
   def log_in_user(conn, user, opts \\ []) do
     if Keyword.get(opts, :claim, true), do: record_namespace!(user)
 
     athanor_id = Keyword.get_lazy(opts, :athanor_id, fn -> own_athanor!(user).id end)
     Process.put(:prism_test_athanor_id, athanor_id)
-
-    {:ok, _membership} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor_id)
 
     # The athanor holds what the server ships, as a fill leaves it.
     :ok = Sanctum.TestContext.shipped!(athanor_id)
@@ -243,7 +239,7 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  The athanor `log_in_user/3` seated this test's person in — the athanor the
+  The athanor `log_in_user/3` focused this test's person on — the athanor the
   page helpers name by default.
   """
   def seated_athanor do
@@ -257,9 +253,9 @@ defmodule PrismWeb.ConnCase do
 
   @doc """
   The page path for an athanor: `/a/<route>` + `suffix`. Takes an athanor, a
-  route string (for a test that names one without seating anybody), or
-  nothing — which is the athanor `log_in_user/3` seated this test's person
-  in. The empty suffix is the athanor's chat, which lives in the chat zone
+  route string (for a test that names one no one owns), or
+  nothing — which is the athanor `log_in_user/3` focused this test's person
+  on. The empty suffix is the athanor's chat, which lives in the chat zone
   (`/chat?a=<route>`).
   """
   def athanor_path(suffix, athanor \\ nil)

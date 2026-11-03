@@ -911,13 +911,10 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       assert %{reference: %{name: "markets"}} = canvas(view)
 
-      # Another member of the same athanor arranges their own layout.
+      # Another person arranges their own layout, in their own athanor.
       other = test_user()
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(other.user_id, scope: "athanor", athanor_id: athanor.id)
-
-      layout!(other, athanor, [entry("home", "tincture:local.notes-canvas")])
+      theirs = Sanctum.Test.People.athanor!(other.user_id)
+      layout!(other, theirs, [entry("home", "tincture:local.notes-canvas")])
       _ = render(view)
       assert %{reference: %{name: "markets"}} = canvas(view)
 

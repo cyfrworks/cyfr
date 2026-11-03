@@ -102,7 +102,7 @@ defmodule Sanctum.Recovery do
        `keys_active` may have been superseded meanwhile; then the person,
        their identity row (provenance `local`, enrolled at the accepted
        head) with the staged keys re-sealed under their own frame, their
-       athanor and their platform grant, all in the transaction of the
+       athanor and their platform administrator's mark, all in the transaction of the
        restore's admission (`Sanctum.Newcomer`), which advances the
        attempt too, so a crash can never leave a resume refused as a
        non-empty node. The
@@ -121,9 +121,7 @@ defmodule Sanctum.Recovery do
        never answered.
 
   A restore brings back the identity alone: the person, their keys and
-  their own athanor. It restores no private data, and a
-  membership an athanor's home revoked stays revoked, since each
-  membership is kept at its athanor's home.
+  their own athanor. It restores no private data.
 
   A directory that cannot answer a read before the mint or the session
   leaves the attempt where it stands, answered `:unavailable`.
@@ -1754,7 +1752,7 @@ defmodule Sanctum.Recovery do
   # their own frame and the attempt's `minted` phase, in the one
   # transaction of the restore's admission (`Sanctum.Newcomer`), which the
   # installation guard admits and which writes the person's athanor and
-  # their platform grant beside them: the restored person is the
+  # their platform administrator's mark beside them: the restored person is the
   # installation's first. A cached head that no longer names the attempt's
   # keys refuses the mint as `:superseded` (`minted/3`).
   defp mint_restored(attempt, genesis_hash) do

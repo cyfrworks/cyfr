@@ -7,9 +7,9 @@ defmodule Arca.ThreadStorage do
   durable record every member reads (`Aqua.Tape` writes it,
   `PrismWeb.ThreadPaneLive` shows it).
 
-  A thread belongs to the athanor of the context that opened it;
-  members are interchangeable, so any member of that athanor may read it,
-  send the next message or decide a pending approval. Reads scope through
+  A thread belongs to the athanor of the context that opened it, and so
+  to its person, who reads it, sends the next message and decides a
+  pending approval. Reads scope through
   `Arca.QueryHelpers.where_tenant/2` (a context without an athanor raises,
   fail closed) and every write stamps the context's athanor.
 
@@ -105,7 +105,7 @@ defmodule Arca.ThreadStorage do
   @doc """
   Open a new thread in the context's athanor, attributed to its user.
 
-  A thread is a row any member's client can mint from the wire, so the
+  A thread is a row a client can mint from the wire, so the
   athanor's count is held to the operator's `max_threads_per_athanor`
   ceiling, asked through `Prima.Caps`. One locking transaction locks the
   athanor's row, counts every thread the athanor holds, asks the cap and

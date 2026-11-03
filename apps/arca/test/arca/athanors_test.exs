@@ -207,7 +207,7 @@ defmodule Arca.AthanorsTest do
   end
 
   describe "mint/2 is one transaction" do
-    test "the row and its seats land together, under the caps it names" do
+    test "the row lands under the caps it names, its owner's" do
       n = System.unique_integer([:positive])
       creator = owner_id()
 
@@ -220,20 +220,11 @@ defmodule Arca.AthanorsTest do
                    slug: "m-#{n}",
                    owner_user_id: creator,
                    created_by: creator
-                 },
-                 also: fn minted ->
-                   with {:ok, _} <-
-                          Arca.Members.seat(in_athanor(minted.id), %{
-                            user_id: creator,
-                            scope: "athanor",
-                            added_by: creator
-                          }),
-                        do: :ok
-                 end
+                 }
                )
 
-      assert {:ok, %{status: "active"}} = Athanors.current(in_athanor(athanor.id))
-      assert {:ok, [^creator]} = Arca.Members.active_user_ids(in_athanor(athanor.id))
+      assert {:ok, %{status: "active", owner_user_id: ^creator}} =
+               Athanors.current(in_athanor(athanor.id))
     end
 
     # A cap the port refuses is the tenancy domain's to configure, so that
@@ -258,24 +249,6 @@ defmodule Arca.AthanorsTest do
                )
 
       assert {:error, :not_found} = Athanors.get_by_slug(server(), "none-#{n}")
-    end
-
-    test "a seat that refuses takes the athanor row with it" do
-      n = System.unique_integer([:positive])
-      slug = "seatless-#{n}"
-
-      assert {:error, :nope} =
-               Athanors.mint(server(),
-                 attrs: %{
-                   name: "S#{n}",
-                   slug: slug,
-                   owner_user_id: owner_id(),
-                   created_by: "system"
-                 },
-                 also: fn _minted -> {:error, :nope} end
-               )
-
-      assert {:error, :not_found} = Athanors.get_by_slug(server(), slug)
     end
 
     test "a slug the index already holds is :slug_taken and nothing is written" do

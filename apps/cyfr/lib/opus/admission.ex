@@ -712,8 +712,8 @@ defmodule Opus.Admission do
 
   defp check_public_rate_buckets(_run, _authority, _limits), do: :ok
 
-  # Buckets key on the {athanor, bucket} pair, so members of an athanor
-  # share them — and so do the members of the cell, which is where the
+  # Buckets key on the {athanor, bucket} pair, so every credential of an
+  # athanor shares them — and so do the members of the cell, which is where the
   # count lives. A rate authority that cannot answer refuses: a configured
   # limit must be enforceable. A refusal of the limit is recorded as a
   # policy denial.

@@ -170,7 +170,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     # the platform membership.
     defp administrator! do
       admin = ShareFixtures.person!("Admin")
-      {:ok, _seat} = Sanctum.TestContext.ensure_platform(admin.user.id)
+      {:ok, _admin} = Sanctum.TestContext.ensure_platform(admin.user.id)
       admin
     end
 
