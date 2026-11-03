@@ -96,12 +96,13 @@ cyfr up
 # administrator, then save the recovery code it shows
 # (on a headless server: cyfr login --setup --name <your name>)
 
-# Open Prism, your athanor's chat
-cyfr open
-
-# Sign this command line in: approve it in Prism
-# (cyfr login --provider github signs in without Prism)
+# Make this command line a device of yours: approve the code it shows
+# on a device you already use, paste the link back, and work in the
+# shell it starts, which holds your session until you exit it
 cyfr login
+
+# In that shell: open Prism, your athanor's chat, through this unlock
+cyfr open
 
 # Scan bundled components and auto-pull their dependencies
 cyfr register
@@ -526,7 +527,7 @@ Adding one from Prism:
 
 From the CLI or MCP, the same server is `cyfr mcp add github '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:github-token"}}]}'`; a server may define up to four backends.
 
-Defining or changing a server — `mcp_servers.create` and `update`, http or stdio — takes a signed-in session: Prism, or the CLI after `cyfr login`. A definition decides what the server runs and where it sends the vault entries it names, which is a person's decision like granting a vault entry to a component. An admin API key can list, inspect, test, refresh, restart, enable, disable and delete servers, but defines none.
+Defining or changing a server — `mcp_servers.create` and `update`, http or stdio — takes a signed-in session: Prism, or the CLI in the shell `cyfr login` starts. A definition decides what the server runs and where it sends the vault entries it names, which is a person's decision like granting a vault entry to a component. An admin API key can list, inspect, test, refresh, restart, enable, disable and delete servers, but defines none.
 
 How it holds together:
 
@@ -752,11 +753,12 @@ starting `CYFR-`, and signs them in once they say they saved it; a name
 taken meanwhile asks for another, and a cyfr.run that does not answer is
 tried again, from that screen or later from Settings. A name is for life. On
 a headless server, `cyfr login --setup --name <name>` in the project's
-directory reads the token from `.env`, does the same and prints the
-recovery code. Until that person holds a passkey, a paired device or a
-linked sign-in method, the token signs them in again, so a lost answer or
-an expired command-line session never locks them out; from then on, and
-for any other token, the link says it is not valid or setup is complete.
+directory reads the token from `.env`, makes that command line the
+person's first device (its key under the machine's TPM PIN or a drawn
+passphrase), does the same and shows the recovery code. A lost answer is
+finished with the same key, never by setting up again; once the person
+holds a passkey, a paired device or a linked sign-in method, the link,
+and any other token, says it is not valid or setup is complete.
 A local admission at this server (setup, an invitation, an open admission or a restore) makes the person with their
 own keys and their own athanor, and an invitation adds the seat it names; a remote admission, of a person whose keys
 another CYFR holds, makes neither. The athanor is seeded and baseline-consented
@@ -966,8 +968,9 @@ the web tier, whose crashes restart it alone, never restarts the rest.
 tinctures under `/t` are served, and every browser page — sign-in, the chat,
 Prism — answers 404. Its first person is set up with `cyfr login --setup`,
 which `cyfr up` names while no one is set up; it takes their name (`--name`,
-or asked on a terminal) and prints their recovery code. The CLI signs in on
-`/mcp`, so this is for servers that never show a face (a build worker, a relay); it does not combine with an external OIDC provider, which moves
+or asked on a terminal), makes that command line their device and shows
+their recovery code. The CLI acts on `/mcp`, unlocked by `cyfr login` or
+with an API key, so this is for servers that never show a face (a build worker, a relay); it does not combine with an external OIDC provider, which moves
 sign-in to the browser page a headless server refuses.
 
 ### Storage paths
@@ -1140,9 +1143,9 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr login` | Sign this command line in by approving it in Prism: prints a link and a code to check against Prism's, and waits; the session is saved under the context used (`--context` or the current one, a `--url` that is not its address refused) and listed under Devices in Prism, where it is revoked; `--provider github\|google` signs in with the provider's device flow instead (see [devices-guide.md](devices-guide.md)); `--setup [--name NAME]` makes this CYFR's first person with the setup token in the working directory's `.env` and the name `--name` gives (asked for on a terminal), takes the name at cyfr.run, prints their recovery code and signs them in once they press Enter to say they saved it; run again, it signs them in again, with the same code until it is saved, until they hold a passkey, a paired device or a linked sign-in method |
-| `cyfr logout` | End the context's session (`--context` or the current one; a `--url` that is not its address is refused) |
-| `cyfr open` | Open the context's address in your browser, this machine's loopback context as `http://localhost:<port>`; no session travels with it |
+| `cyfr login` | Unlock this command line, a device of yours, and start your shell holding its session: the key is sealed by the machine's TPM under a six-digit PIN, or kept under a six-word passphrase it draws where no chip can protect a PIN; the first time it shows the approve address as a QR code and the key's code, which a device of yours approves after a fresh unlock, and takes the link that device shows, pasted, or its code, typed; `--setup [--name NAME]` makes a headless CYFR's first person with this device and the setup token in the working directory's `.env`, `--join [--invitation CODE] [--name NAME]` a new person by the open door or an invitation, each showing the recovery code as a QR code and as text until Enter; the session lives only in that shell, kept alive by this command line's reports, and ends when the shell exits, the terminal closes or the connection is lost; a sensitive change asks the PIN or passphrase again over the home's preview (see [devices-guide.md](devices-guide.md)); unattended work uses an API key (`--token` or `CYFR_TOKEN`) |
+| `cyfr logout` | Lock this command line: the shell `cyfr login` started ends, with its session and any browser session `cyfr open` opened through it |
+| `cyfr open` | Open the context's address in your browser, this machine's loopback context as `http://localhost:<port>`; in the shell `cyfr login` started, open this command line's own page instead, whose Open CYFR signs the browser in through a one-time ticket, never the command line's session |
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
 | `cyfr athanor list/get/use/create/rename/settings/provision/archive/unarchive` | Your athanors, your own and your groups: list and show them, point this session at one, create, rename or archive a group, merge settings, retry a provisioning that failed |
@@ -1200,7 +1203,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr call vault '{"action":"list",…}'` | Manage vault entries (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Vault page |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
 | `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Vault page |
-| `cyfr pair <code>` / `cyfr pair list` / `cyfr pair revoke [client-id]` | Pair a new device with the code its `/pair` page shows, list paired devices, revoke one; pairing and revoking each need a fresh confirmation given in Prism ([devices-guide.md](devices-guide.md)) |
+| `cyfr pair <code>` / `cyfr pair list` / `cyfr pair revoke [client-id]` | Pair a new device with the code its `/pair` page or its `cyfr login` shows (or the approve address), list paired devices, revoke one; pairing and revoking each need a fresh confirmation, given in Prism or on this command line when it is a paired device ([devices-guide.md](devices-guide.md)) |
 
 ### Administration
 

@@ -209,7 +209,18 @@ func TestPair_ReadsTheCodeAndRefusesAnyOther(t *testing.T) {
 		t.Errorf("expected the digest read from the groups, got %v", args)
 	}
 
-	for _, code := range []string{"sv5QHby2", pairingDigest + "A", "sv5QHby2ooLrBWLs+JOrjk8goRiwYWrrCDbE2RuiE0o"} {
+	// The approve address a command line's cyfr login shows names the
+	// same digest.
+	approved := newCLIServer(t, "pairing.begin", pairingAnswer)
+	if out, err := runCLI(t, approved, "pair", "https://home.example/devices/add#key="+pairingDigest); err != nil {
+		t.Fatalf("cyfr pair with the approve address failed: %v\n%s", err, out)
+	}
+	if _, args := approved.call(0); args["key_digest"] != pairingDigest {
+		t.Errorf("expected the digest read from the approve address, got %v", args)
+	}
+
+	for _, code := range []string{"sv5QHby2", pairingDigest + "A", "sv5QHby2ooLrBWLs+JOrjk8goRiwYWrrCDbE2RuiE0o",
+		"https://home.example/devices/add#key=" + pairingDigest + "A"} {
 		refused := newCLIServer(t, "pairing.begin", pairingAnswer)
 		out, err := runCLI(t, refused, "pair", code)
 		if !exitsOne(err) || refused.count() != 0 {
