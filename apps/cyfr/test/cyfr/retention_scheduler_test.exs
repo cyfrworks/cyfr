@@ -371,7 +371,7 @@ defmodule Cyfr.RetentionSchedulerTest do
     } do
       # Ids minted in one millisecond are not ordered, so the walk's order
       # is read off them rather than assumed from the creation order.
-      [first, archived] = Enum.sort_by([group!("walked"), group!("archived")], & &1.id)
+      [first, archived] = Enum.sort_by([athanor!("walked"), athanor!("archived")], & &1.id)
 
       for athanor <- [first, archived] do
         over_limit!(athanor.id)
@@ -380,7 +380,7 @@ defmodule Cyfr.RetentionSchedulerTest do
       # Archived while the walk is on an earlier athanor: after the list of
       # active athanors was read, before the walk reaches this one.
       on_first_athanor(fn ->
-        {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
+        {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived, force: true)
       end)
 
       assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
@@ -394,7 +394,7 @@ defmodule Cyfr.RetentionSchedulerTest do
     test "an athanor whose settings are corrupt is logged against it, and the walk goes on", %{
       key: key
     } do
-      [corrupt, next] = Enum.sort_by([group!("corrupt"), group!("next")], & &1.id)
+      [corrupt, next] = Enum.sort_by([athanor!("corrupt"), athanor!("next")], & &1.id)
 
       over_limit!(corrupt.id)
       over_limit!(next.id)
@@ -542,12 +542,12 @@ defmodule Cyfr.RetentionSchedulerTest do
     action
   end
 
-  defp group!(name) do
+  defp athanor!(name) do
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
         name: name,
         slug: "#{name}-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "test"
       })
 

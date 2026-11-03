@@ -99,9 +99,9 @@ defmodule Prism.TinctureRegistryTest do
       assert t.entry == "index.html"
       assert t.title == "Test Dashboard"
       assert t.icon == "chart-line"
-      assert t.entry_url == "/t/test/local/test-dash"
+      assert t.entry_url == "/t/@test/local/test-dash"
       assert t.athanor_id == "ath_test"
-      assert t.athanor_segment == "test"
+      assert t.athanor_segment == "@test"
 
       GenServer.stop(pid)
     end
@@ -287,7 +287,7 @@ defmodule Prism.TinctureRegistryTest do
     test "picks up one athanor's change and leaves the others alone" do
       {:ok, other} =
         Sanctum.Tenancy.Athanors.create(%{
-          kind: "group",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           name: "Bystander",
           slug: "bystander",
           created_by: "test"
@@ -356,7 +356,7 @@ defmodule Prism.TinctureRegistryTest do
     test "discovers another athanor's tinctures under its own id" do
       {:ok, other} =
         Sanctum.Tenancy.Athanors.create(%{
-          kind: "group",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           name: "Acme",
           slug: "acme",
           created_by: "test"
@@ -379,7 +379,7 @@ defmodule Prism.TinctureRegistryTest do
 
       # Visible to the matching athanor, with its own route segment
       tinctures = TinctureRegistry.list_tinctures(name, lookup(other.id))
-      assert [%{name: "acme-dash", entry_url: "/t/acme/acme/acme-dash"}] = tinctures
+      assert [%{name: "acme-dash", entry_url: "/t/@acme/acme/acme-dash"}] = tinctures
 
       # Not visible to a different athanor
       other_tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_other"))
@@ -395,7 +395,7 @@ defmodule Prism.TinctureRegistryTest do
     test "a tincture whose athanor row is missing or archived has no route" do
       {:ok, archived} =
         Sanctum.Tenancy.Athanors.create(%{
-          kind: "group",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           name: "Gone",
           slug: "gone",
           created_by: "test"
@@ -415,7 +415,7 @@ defmodule Prism.TinctureRegistryTest do
         lay!(athanor_id, "local", "orphan", "0.1.0", manifest)
       end
 
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived, force: true)
 
       name = :test_orphans
       {:ok, pid} = TinctureRegistry.start_link(name: name)

@@ -460,8 +460,8 @@ defmodule Arca.FilesTest do
     n = System.unique_integer([:positive])
     sender = person!("s", n)
     recipient = person!("r", n)
-    shared = athanor!("shared", n)
-    for who <- [sender, recipient], do: seat!(shared, who.id)
+    # The two share a thread, which is what lets one offer the other a file.
+    Arca.Test.Shares.thread!([sender.id, recipient.id])
 
     {:ok, _} = Files.write(sender.actor, "data/reports/q3.csv", "a,b\n1,2\n")
 
@@ -486,7 +486,7 @@ defmodule Arca.FilesTest do
 
     # The sender's athanor is archived and erased, rows and blobs.
     {:ok, home} = Sanctum.Tenancy.Athanors.get(sender.home.id)
-    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(home)
+    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(home, force: true)
     assert {:ok, _counts} = Sanctum.Tenancy.Athanors.destroy(archived)
     assert {:error, :not_found} = Arca.get(sender.actor, ["data", "reports", "q3.csv"])
 
@@ -537,9 +537,9 @@ defmodule Arca.FilesTest do
   defp athanor!(label, n) do
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
         name: "Files #{label} #{n}",
         slug: "files-#{label}-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

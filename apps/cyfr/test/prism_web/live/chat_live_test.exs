@@ -2,9 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.ChatLiveTest do
-  # The chat page is a window onto the runner: two members of the same
-  # athanor see one thread, and a turn keeps going when the sender's tab is
-  # closed. Driven against the real loop and a scripted model.
+  # The chat page is a window onto the runner: two tabs of the person see
+  # one thread of their athanor, and a turn keeps going when the sender's
+  # tab is closed. Driven against the real loop and a scripted model.
   use PrismWeb.ConnCase, async: false
 
   require Ecto.Query
@@ -28,24 +28,20 @@ defmodule PrismWeb.ChatLiveTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    # The athanor most of these tests chat in. A group, because no athanor is
-    # shared server-wide and several of them seat two people together.
-    {:ok, athanor} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
-        name: "Chat",
-        slug: "chat-#{System.unique_integer([:positive])}",
-        created_by: "system"
-      })
+    # The person most of these tests chat as, and their own athanor.
+    person = test_user()
 
     # Set up, like an athanor people actually chat in: a turn pins the
     # baseline consent, and sending is held while one is being prepared.
-    {:ok, athanor} = Sanctum.TestContext.mark_provisioned(athanor)
+    {:ok, athanor} =
+      Sanctum.TestContext.mark_provisioned(Sanctum.Test.People.athanor!(person.user_id))
+
     Process.put(:chat_athanor, athanor)
+    Process.put(:chat_person, person)
 
     # Filled like an athanor people actually chat in, with its soul's
     # consent minted; the model it names is scripted.
-    ready_athanor!(athanor.id, Sanctum.TestContext.local().user_id)
+    ready_athanor!(athanor.id, person.user_id)
     script_model!()
 
     :ok
@@ -79,7 +75,7 @@ defmodule PrismWeb.ChatLiveTest do
     thread
   end
 
-  # The chat's address for an athanor (the shared one by default) and a thread.
+  # The chat's address for an athanor (the person's own by default) and a thread.
   defp chat_path(athanor, thread_id \\ nil) do
     athanor = athanor || athanor()
     PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), thread_id)
@@ -99,70 +95,20 @@ defmodule PrismWeb.ChatLiveTest do
   # The thread the athanor's one pane is turned to, from its own state.
   defp pane_thread(view), do: :sys.get_state(pane(view).pid).socket.assigns.thread
 
-  test "the rail lists every athanor you belong to, and opening one moves the tape, not the bench",
-       %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Rail #{alice.namespace}")
-    :ok = Sanctum.TestContext.shipped!(group.id)
-
-    {view, html} = mount_chat(conn)
-    assert html =~ "Rail #{alice.namespace}"
-    assert has_element?(view, "#athanor-" <> group.id)
-    # The tape is the shared athanor's, and the open athanor says so to a
-    # screen reader.
-    assert render(pane(view)) =~ "in Chat"
-    assert has_element?(view, "#athanor-#{athanor().id} button[aria-current=true]", "Chat")
-
-    view
-    |> element("#athanor-#{group.id} button[phx-click=open_athanor]")
-    |> render_click()
-
-    assert_patch(view, chat_path(group))
-    # The tape moved to the group…
-    assert render(pane(view)) =~ "in Rail #{alice.namespace}"
-    assert has_element?(view, "#athanor-#{group.id} button[aria-current=true]")
-    refute has_element?(view, "#athanor-#{athanor().id} button[aria-current=true]")
-
-    # …and the bar followed what the page has in view: the switcher names
-    # the group, and the tray now reads the shared athanor as "elsewhere" — a page that
-    # moves by patch cannot leave the bar on the athanor it mounted with.
-    bar = find_live_child(view, "topbar")
-    assert has_element?(bar, "#viewing-name", "Rail #{alice.namespace}")
-    Sanctum.Notify.broadcast(group.id, :execution_failed, %{})
-    Sanctum.Notify.broadcast(athanor().id, :execution_failed, %{})
-    :sys.get_state(bar.pid)
-    render_click(bar, "toggle_popover", %{"name" => "athanors"})
-    assert render(bar) =~ ~r/bg-blue-500\/80[^>]*>\s*\d+\s*</
-
-    # The session's default athanor did not move: the root still lands there.
-    assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
-    assert to == chat_path(nil)
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
   defp athanor, do: Process.get(:chat_athanor)
+  defp person, do: Process.get(:chat_person)
 
-  # A group filled as the setup fills the chat's athanor (`ready_athanor!/2`)
-  # but with no key bound to the model its soul names: one of the states
-  # whose empty chat offers to connect a model. It is the one the setup's
-  # own steps reach by leaving out the key, with nothing removed. The
-  # setup's fill points the seed path at the shipped tree for the whole
-  # test.
-  defp keyless_athanor! do
+  # `user`'s own athanor filled as the setup fills the chat's athanor
+  # (`ready_athanor!/2`) but with no key bound to the model its soul names:
+  # one of the states whose empty chat offers to connect a model. It is the
+  # one the setup's own steps reach by leaving out the key, with nothing
+  # removed. The setup's fill points the seed path at the shipped tree for
+  # the whole test.
+  defp keyless_athanor!(user) do
     {:ok, athanor} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
-        name: "Keyless",
-        slug: "keyless-#{System.unique_integer([:positive])}",
-        created_by: "system"
-      })
+      Sanctum.TestContext.mark_provisioned(Sanctum.Test.People.athanor!(user.user_id))
 
-    {:ok, athanor} = Sanctum.TestContext.mark_provisioned(athanor)
-    user_id = Sanctum.TestContext.local().user_id
-    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user_id, athanor_id: athanor.id}
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id)
+    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user.user_id, athanor_id: athanor.id}
     :ok = Sanctum.TestContext.shipped!(athanor.id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -181,15 +127,10 @@ defmodule PrismWeb.ChatLiveTest do
     |> String.trim()
   end
 
-  test "a grant the pane's turn needs is asked in the page's layer, and ends when the page opens another athanor",
+  test "a grant the pane's turn needs is asked in the page's layer",
        %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
-
-    {:ok, group} =
-      Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Elsewhere #{alice.namespace}")
-
-    :ok = Sanctum.TestContext.shipped!(group.id)
+    alice = person()
+    conn = log_in_user(conn, alice)
 
     here = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: athanor().id}
     name = "chat-grant-#{System.unique_integer([:positive])}"
@@ -218,68 +159,24 @@ defmodule PrismWeb.ChatLiveTest do
     render(pane(view))
     render(view)
     assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
-    assert has_element?(view, "#system-layer-dialog .consent-sheet", "in Chat")
-
-    # Planned in this athanor: once the page opens another, the grant is
-    # not committed there, and the prompt goes.
-    view
-    |> element("#athanor-#{group.id} button[phx-click=open_athanor]")
-    |> render_click()
-
-    assert_patch(view, chat_path(group))
-    refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
-    assert {:ok, []} = Sanctum.Consent.profiles(here, "catalyst:local.#{name}")
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "a thread named in the address opens under its athanor, whatever the session's default is",
-       %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Cold #{alice.namespace}")
-
-    ctx =
-      Sanctum.Context.build(
-        user_id: alice.user_id,
-        athanor_id: group.id,
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-
-    {:ok, _} =
-      Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
-        author: alice.user_id,
-        content: "cold open"
-      })
-
-    # A cold mount — no rail click, the session defaulting to the shared athanor.
-    {view, html} = mount_chat(conn, group, thread.id)
-    assert html =~ "cold open"
-    assert :sys.get_state(view.pid).socket.assigns.athanor.id == group.id
-    assert has_element?(view, "#thread-#{thread.id} button[aria-current=true]")
+    assert has_element?(view, "#system-layer-dialog .consent-sheet", "in #{athanor().name}")
 
     Cyfr.Test.Sandbox.end_views()
   end
 
   test "the rail lists only the athanors you hold a seat in", %{conn: conn} do
-    alice = test_user()
-    bob = test_user()
+    alice = person()
     carol = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
-    {:ok, theirs} = Sanctum.Tenancy.Athanors.create_group(bob.user_id, "Theirs #{bob.namespace}")
-    # Carol shares nothing with Alice: her only seat is in Bob's group.
-    _carol_conn = log_in_user(build_conn(), carol, athanor_id: theirs.id)
+    conn = log_in_user(conn, alice)
+    theirs = Sanctum.Test.People.athanor!(test_user().user_id)
+    # Carol shares nothing with Alice: her only seat is in her own athanor.
+    _carol_conn = log_in_user(build_conn(), carol)
 
-    {view, html} = mount_chat(conn)
+    {view, _html} = mount_chat(conn)
     %{athanors: athanors, people: people} = :sys.get_state(view.pid).socket.assigns
 
     refute theirs.id in Enum.map(athanors, & &1.athanor.id)
-    refute html =~ "Theirs #{bob.namespace}"
+    refute has_element?(view, "#athanor-" <> theirs.id)
     refute carol.user_id in Enum.map(people, & &1.user_id)
 
     Cyfr.Test.Sandbox.end_views()
@@ -299,8 +196,8 @@ defmodule PrismWeb.ChatLiveTest do
         else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
     end)
 
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
+    alice = person()
+    conn = log_in_user(conn, alice)
     {view, _html} = mount_chat(conn)
 
     # The seat read fails; the athanor listing, which selects no membership
@@ -317,14 +214,14 @@ defmodule PrismWeb.ChatLiveTest do
 
   test "a thread the athanor does not hold is refused by name, and the athanor's own opens",
        %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
+    alice = person()
+    conn = log_in_user(conn, alice)
 
     # A patch pushed from the first handle_params is applied inside the
     # join, so it is the outcome that is checked: the flash, and the athanor's own.
     {view, html} = mount_chat(conn, nil, "thread_not_here")
     assert html =~ "That thread isn"
-    assert render(pane(view)) =~ "in Chat"
+    assert render(pane(view)) =~ "in your AQUA"
     assert :sys.get_state(view.pid).socket.assigns.athanor.id == athanor().id
 
     Cyfr.Test.Sandbox.end_views()
@@ -332,9 +229,9 @@ defmodule PrismWeb.ChatLiveTest do
 
   test "a pair opens from the rail with someone you share a thread with, found or made, in place",
        %{conn: conn} do
-    alice = test_user()
+    alice = person()
     bob = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
+    conn = log_in_user(conn, alice)
     {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
     {:ok, :added} = Sanctum.SharedThreads.add(alice.user_id, plans.id, user_id: bob.user_id)
 
@@ -370,14 +267,13 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the chat opens on the athanor its address names, and a sent message becomes everyone's thread",
+  test "the chat opens on the person's own athanor, and a sent message's reply reaches each of their tabs",
        %{
          conn: conn
        } do
-    alice = test_user()
-    bob = test_user()
-    alice_conn = log_in_user(conn, alice, athanor_id: athanor().id)
-    bob_conn = log_in_user(build_conn(), bob, athanor_id: athanor().id)
+    alice = person()
+    alice_conn = log_in_user(conn, alice)
+    again_conn = log_in_user(build_conn(), alice)
 
     {alice_view, html} = mount_chat(alice_conn)
     assert html =~ "AQUA"
@@ -385,13 +281,10 @@ defmodule PrismWeb.ChatLiveTest do
     # The chat says which furnace it is, and whether that furnace can think:
     # this athanor's fill bound a key behind its soul's model, so its empty
     # chat asks for a message and offers no model to connect.
-    assert html =~ "in Chat"
+    assert html =~ "in your AQUA"
     assert empty_state(html) == "Ask AQUA anything."
 
-    # With multiple human members, the athanor requires an explicit agent mention.
-    assert html =~ "Talk to the group"
-
-    Cyfr.Test.ScriptedWorker.script([model_reply("Hi Alice, hi Bob")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Hi Alice")])
 
     pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua hello from alice"})
@@ -400,13 +293,13 @@ defmodule PrismWeb.ChatLiveTest do
     start_ctx = member_ctx(alice, athanor())
     thread = settled_thread!(start_ctx)
 
-    # The row exists in the athanor; Bob opens the same thread and
-    # reads the reply the runner — not the sender's socket — wrote.
-    {bob_view, bob_html} = mount_chat(bob_conn, nil, thread.id)
-    assert bob_html =~ "hello from alice"
-    assert render(pane(bob_view)) =~ "Hi Alice, hi Bob"
-    assert render(pane(alice_view)) =~ "Hi Alice, hi Bob"
-    refute render(pane(bob_view)) =~ "is asking"
+    # The row exists in the athanor; Alice's other tab opens the same
+    # thread and reads the reply the runner — not the sender's socket — wrote.
+    {again_view, again_html} = mount_chat(again_conn, nil, thread.id)
+    assert again_html =~ "hello from alice"
+    assert render(pane(again_view)) =~ "Hi Alice"
+    assert render(pane(alice_view)) =~ "Hi Alice"
+    refute render(pane(again_view)) =~ "is asking"
 
     agent = Arca.Schemas.Message.agent_author()
 
@@ -419,79 +312,17 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "an approval card decided by one member resolves for the other", %{conn: conn} do
-    alice = test_user()
+  test "a thread opens only in its own athanor, and only for a person seated there",
+       %{conn: conn} do
+    alice = person()
     bob = test_user()
-    alice_conn = log_in_user(conn, alice, athanor_id: athanor().id)
-    bob_conn = log_in_user(build_conn(), bob, athanor_id: athanor().id)
-
-    {alice_view, _} = mount_chat(alice_conn)
-
-    Cyfr.Test.ScriptedWorker.script([
-      model_call("c1", "notes", %{"action" => "keep", "name" => "plan", "content" => "ship it"})
-    ])
-
-    pane(alice_view)
-    |> form("form[phx-submit=submit]", %{"message" => "@aqua keep the plan"})
-    |> render_submit()
-
-    start_ctx = member_ctx(alice, athanor())
-
-    wait_until(
-      fn ->
-        match?(
-          [_],
-          Threads.pending_approvals(
-            Sanctum.Context.actor(start_ctx),
-            hd(Threads.list(Sanctum.Context.actor(start_ctx))).id
-          )
-        )
-      end,
-      60_000
-    )
-
-    [thread] = Threads.list(Sanctum.Context.actor(start_ctx))
-    {bob_view, _} = mount_chat(bob_conn, nil, thread.id)
-
-    assert render(pane(alice_view)) =~ "notes.keep"
-    assert render(pane(bob_view)) =~ "notes.keep"
-    [apr] = Threads.pending_approvals(Sanctum.Context.actor(start_ctx), thread.id)
-
-    # Bob approves from his tab; the turn continues and answers.
-    Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
-
-    pane(bob_view)
-    |> element("#" <> pane(bob_view).id <> "-card-" <> apr.id <> " button[phx-value-scope=once]")
-    |> render_click()
-
-    settled_thread!(start_ctx)
-    assert render(pane(bob_view)) =~ "Kept."
-    assert render(pane(alice_view)) =~ "Kept."
-    {:ok, done} = Threads.get_message(Sanctum.Context.actor(start_ctx), apr.id)
-    assert done.status == "approved"
-    assert done.resolved_by == bob.user_id
-
-    assert {:ok, %{status: "approved", decided_by: decided_by}} =
-             Aqua.Tape.approval_by_message(start_ctx, apr.id)
-
-    assert decided_by == bob.user_id
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "a thread opens only in its own athanor, and only for a member", %{conn: conn} do
-    alice = test_user()
-    bob = test_user()
-    alice_conn = log_in_user(conn, alice, athanor_id: athanor().id)
-    bob_conn = log_in_user(build_conn(), bob, athanor_id: athanor().id)
-
-    {:ok, group} =
-      Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Private #{alice.namespace}")
+    alice_conn = log_in_user(conn, alice)
+    theirs = Sanctum.Test.People.athanor!(bob.user_id)
 
     ctx =
       Sanctum.Context.build(
-        user_id: alice.user_id,
-        athanor_id: group.id,
+        user_id: bob.user_id,
+        athanor_id: theirs.id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -502,14 +333,13 @@ defmodule PrismWeb.ChatLiveTest do
 
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
-        author: alice.user_id,
+        author: bob.user_id,
         content: "secret plan"
       })
 
-    # The focused athanor, asked for the group's thread id, opens
-    # nothing of it: the id is not one of its threads, so the page says so
-    # and opens one of its own. (The rail may name the group's thread — Alice
-    # is its member — but the tape stays the focused athanor's.)
+    # The focused athanor, asked for Bob's thread id, opens nothing of it:
+    # the id is not one of its threads, so the page says so and opens one
+    # of its own.
     {view, html} = mount_chat(alice_conn, nil, thread.id)
     assert html =~ "That thread isn"
     refute render(pane(view)) =~ "secret plan"
@@ -517,106 +347,25 @@ defmodule PrismWeb.ChatLiveTest do
     assert athanor.id == athanor().id
     refute open && open.id == thread.id
 
-    # A person outside the group cannot address it at all: the chat leaves
-    # for the default athanor.
+    # A person with no seat in Bob's athanor cannot address it at all: the
+    # chat leaves for the default athanor.
     assert {:error, {:live_redirect, %{to: "/chat"}}} =
-             live(bob_conn, chat_path(group, thread.id))
+             live(alice_conn, chat_path(theirs, thread.id))
 
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "in a group, people talk to each other without AQUA answering; a removed member is shown out",
+  test "an attachment is stored as a blob the person can fetch on any device, and never from outside",
        %{conn: conn} do
-    alice = test_user()
-    bob = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Two #{alice.namespace}")
-    {:ok, _} = Sanctum.TestContext.mark_provisioned(group)
-    ready_athanor!(group.id, alice.user_id)
-    alice_conn = log_in_user(conn, alice, athanor_id: group.id)
-    bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
-
-    {alice_view, _} = mount_chat(alice_conn, group)
-
-    pane(alice_view)
-    |> form("form[phx-submit=submit]", %{"message" => "lunch at noon?"})
-    |> render_submit()
-
-    ctx = member_ctx(alice, group)
-    [thread] = Threads.list(Sanctum.Context.actor(ctx))
-    assert {:ok, []} = Aqua.Tape.open_turns(ctx, thread.id)
-    {bob_view, bob_html} = mount_chat(bob_conn, group, thread.id)
-    assert bob_html =~ "lunch at noon?"
-    # Two people are here, so the composer says a mention is needed rather
-    # than offering to ask the agent directly. Derived from the roster, not
-    # a per-group setting.
-    assert bob_html =~ "Talk to the group"
-
-    # Alice's pane hears Bob's message on the thread's topic, as the test does.
-    actor = Sanctum.Context.actor(ctx)
-    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
-
-    pane(bob_view)
-    |> form("form[phx-submit=submit]", %{"message" => "sure"})
-    |> render_submit()
-
-    assert_receive %Cyfr.Bus.ThreadEvent{kind: :message, data: %{content: "sure"}}, 5_000
-    assert render(pane(alice_view)) =~ "sure"
-    assert {:ok, []} = Aqua.Tape.open_turns(ctx, thread.id)
-
-    # Bob is removed: his tab is sent away, and a fresh open is refused.
-    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.memberships(bob.user_id))
-    :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: bob.user_id)
-    bob_id = bob.user_id
-
-    assert_receive %Cyfr.Bus.Membership{user_id: ^bob_id, change: :left}, 5_000
-    # His session was bound to the group, so the leave ended it with the
-    # seat: his tab is sent to sign in again.
-    assert_redirect(bob_view, "/login", 5_000)
-
-    {:ok, _view, redirected_html} =
-      case live(bob_conn, chat_path(group, thread.id)) do
-        {:error, {:live_redirect, %{to: to}}} -> {:ok, nil, to}
-        {:error, {:redirect, %{to: to}}} -> {:ok, nil, to}
-        {:ok, view, html} -> {:ok, view, html}
-      end
-
-    refute redirected_html =~ "lunch at noon?"
-
-    Cyfr.Test.ScriptedWorker.script([model_reply("Booked.")])
-
-    pane(alice_view)
-    |> form("form[phx-submit=submit]", %{"message" => "@aqua book it"})
-    |> render_submit()
-
-    settled_thread!(ctx)
-    # the whole exchange reaches the agent, each line attributed
-    [request] = model_requests()
-    text = request_text(request)
-    assert text =~ ~r/: lunch at noon\?/
-    assert text =~ ~r/: sure/
-    assert text =~ ~r/: @aqua book it/
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "an attachment is stored as a blob any member can fetch, and never from outside", %{
-    conn: conn
-  } do
-    alice = test_user()
-    bob = test_user()
+    alice = person()
     carol = test_user()
-
-    {:ok, group} =
-      Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Files #{alice.namespace}")
-
-    {:ok, _} = Sanctum.TestContext.mark_provisioned(group)
-    ready_athanor!(group.id, alice.user_id)
+    home = athanor()
     Cyfr.Test.ScriptedWorker.script([model_reply("Read them.")])
-    alice_conn = log_in_user(conn, alice, athanor_id: group.id)
-    bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
-    carol_conn = log_in_user(build_conn(), carol, athanor_id: athanor().id)
+    alice_conn = log_in_user(conn, alice)
+    again_conn = log_in_user(build_conn(), alice)
+    carol_conn = log_in_user(build_conn(), carol)
 
-    {alice_view, _} = mount_chat(alice_conn, group)
+    {alice_view, _} = mount_chat(alice_conn, home)
 
     for {name, content, type} <- [
           {"note.txt", "hi there", "text/plain"},
@@ -633,7 +382,7 @@ defmodule PrismWeb.ChatLiveTest do
     |> form("form[phx-submit=submit]", %{"message" => "@aqua read these"})
     |> render_submit()
 
-    ctx = member_ctx(alice, group)
+    ctx = member_ctx(alice, home)
     thread = settled_thread!(ctx)
 
     # The files rode the model request as typed blocks on the task.
@@ -667,44 +416,38 @@ defmodule PrismWeb.ChatLiveTest do
     note = Enum.find(refs, &(&1["filename"] == "note.txt"))
     plan = Enum.find(refs, &(&1["filename"] == "plan.md"))
 
-    # A member reads the bytes back on any device — addressed by the
+    # The person reads the bytes back on any device — addressed by the
     # STORED name, so same-named uploads stay distinct; the download still
     # carries the display filename. The type is served safe.
-    path = athanor_path("/attachments/#{msg.id}/#{note["stored_name"]}", group)
-    resp = get(bob_conn, path)
+    path = athanor_path("/attachments/#{msg.id}/#{note["stored_name"]}", home)
+    resp = get(again_conn, path)
     assert resp.status == 200
     assert resp.resp_body == "hi there"
     assert get_resp_header(resp, "content-disposition") == [~s(attachment; filename="note.txt")]
     assert get_resp_header(resp, "x-content-type-options") == ["nosniff"]
 
     # An undeclared type is served as opaque bytes, never as what the uploader said.
-    md = get(bob_conn, athanor_path("/attachments/#{msg.id}/#{plan["stored_name"]}", group))
+    md = get(again_conn, athanor_path("/attachments/#{msg.id}/#{plan["stored_name"]}", home))
     assert md.status == 200
     assert get_resp_header(md, "content-type") == ["application/octet-stream"]
 
-    # A person outside the group gets nothing; so does an anonymous request.
+    # A person outside the athanor gets nothing; so does an anonymous request.
     assert get(carol_conn, path).status == 404
     assert redirected_to(get(build_conn(), path)) == "/login"
-    assert get(bob_conn, athanor_path("/attachments/#{msg.id}/nope.txt", group)).status == 404
+    assert get(again_conn, athanor_path("/attachments/#{msg.id}/nope.txt", home)).status == 404
 
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a draft offered back after a reload deletes no attachment its pane did not store, another member's sent one included",
+  test "a draft offered back after a reload deletes no attachment its pane did not store, a sent one of another tab's included",
        %{conn: conn} do
-    alice = test_user()
-    bob = test_user()
-
-    {:ok, group} =
-      Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Drafts #{alice.namespace}")
-
-    {:ok, _} = Sanctum.TestContext.mark_provisioned(group)
-    ready_athanor!(group.id, alice.user_id)
+    alice = person()
+    home = athanor()
     Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
-    alice_conn = log_in_user(conn, alice, athanor_id: group.id)
-    bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
+    alice_conn = log_in_user(conn, alice)
+    again_conn = log_in_user(build_conn(), alice)
 
-    {alice_view, _} = mount_chat(alice_conn, group)
+    {alice_view, _} = mount_chat(alice_conn, home)
 
     pane(alice_view)
     |> file_input("form[phx-submit=submit]", :attachments, [
@@ -716,7 +459,7 @@ defmodule PrismWeb.ChatLiveTest do
     |> form("form[phx-submit=submit]", %{"message" => "@aqua keep this"})
     |> render_submit()
 
-    ctx = member_ctx(alice, group)
+    ctx = member_ctx(alice, home)
     thread = settled_thread!(ctx)
     [msg | _] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
     [ref] = Aqua.attachment_refs(msg)
@@ -733,12 +476,12 @@ defmodule PrismWeb.ChatLiveTest do
                )
              )
 
-    # Bob's browser offers back a "held send" naming Alice's sent message
-    # and its file, with a text the send refuses: the refusal discards
-    # nothing this pane did not store itself.
-    {bob_view, _} = mount_chat(bob_conn, group, thread.id)
+    # Alice's other browser offers back a "held send" naming the message
+    # the first sent and its file, with a text the send refuses: the
+    # refusal discards nothing this pane did not store itself.
+    {again_view, _} = mount_chat(again_conn, home, thread.id)
 
-    render_hook(pane(bob_view), "restore_draft", %{
+    render_hook(pane(again_view), "restore_draft", %{
       "thread_id" => thread.id,
       "client_id" => Prima.UUID7.generate_id("snd"),
       "message_id" => msg.id,
@@ -746,28 +489,29 @@ defmodule PrismWeb.ChatLiveTest do
       "attachments" => [ref]
     })
 
-    _ = render(pane(bob_view))
+    _ = render(pane(again_view))
     assert {:ok, "alice's bytes"} = Arca.get(Sanctum.Context.actor(ctx), blob)
 
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "an athanor still being set up says so, and any member can retry from the chat", %{
+  test "an athanor still being set up says so, and its person can retry from the chat", %{
     conn: conn
   } do
     alice = test_user()
-    # a bare group row: created, never provisioned — and no bundle to fill
-    # it from, so the fill fails and says so
+    # the person's own athanor as their admission minted it, never
+    # provisioned — and no bundle to fill it from, so the fill fails and
+    # says so
     Application.put_env(
       :arca,
       :seed_path,
       Path.join(System.tmp_dir!(), "no_seed_#{alice.namespace}")
     )
 
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Bare #{alice.namespace}")
-    conn = log_in_user(conn, alice, athanor_id: group.id)
+    own = Sanctum.Test.People.athanor!(alice.user_id)
+    conn = log_in_user(conn, alice, athanor_id: own.id)
 
-    {view, html} = mount_chat(conn, group)
+    {view, html} = mount_chat(conn, own)
     assert html =~ "still being set up"
 
     view |> element("button[phx-click=provision]") |> render_click()
@@ -775,7 +519,7 @@ defmodule PrismWeb.ChatLiveTest do
     rendered = render(view)
     assert rendered =~ "Still not set up"
     assert rendered =~ "last attempt failed at"
-    {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
+    {:ok, row} = Sanctum.Tenancy.Athanors.get(own.id)
     assert %{step: _} = Sanctum.Tenancy.Athanors.provisioning_failure(row)
 
     # The pane holds its composer while the athanor is being prepared, and
@@ -788,7 +532,7 @@ defmodule PrismWeb.ChatLiveTest do
     # The fill completing reaches both the page and its pane without a
     # reload: provisioning broadcasts on the athanor's own topic.
     {:ok, filled} = Sanctum.TestContext.mark_provisioned(row)
-    Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: filled.name})
+    Sanctum.Notify.broadcast(own.id, :athanor_changed, %{name: filled.name})
 
     refute render(view) =~ "still being set up"
     refute render(pane(view)) =~ "Still being prepared"
@@ -802,21 +546,21 @@ defmodule PrismWeb.ChatLiveTest do
     on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
 
     alice = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Held #{alice.namespace}")
-    conn = log_in_user(conn, alice, athanor_id: group.id)
-    ctx = member_ctx(alice, group)
+    own = Sanctum.Test.People.athanor!(alice.user_id)
+    conn = log_in_user(conn, alice, athanor_id: own.id)
+    ctx = member_ctx(alice, own)
 
     # The fill's claim is held: the athanor stays unfilled while the pane sends.
     {:ok, _held} =
       Arca.ProvisioningClaims.claim(
-        %Prima.Actor{athanor_id: group.id},
+        %Prima.Actor{athanor_id: own.id},
         "boot_elsewhere/own_held",
         "first_need",
         60_000,
         :none
       )
 
-    {view, _html} = mount_chat(conn, group)
+    {view, _html} = mount_chat(conn, own)
 
     pane(view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua hold this"})
@@ -835,7 +579,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     # A reload: the hook offers the held send back, and it is held again
     # under the same identity.
-    {reloaded, _} = mount_chat(conn, group, thread_id)
+    {reloaded, _} = mount_chat(conn, own, thread_id)
     render_hook(pane(reloaded), "restore_draft", envelope)
     assert render(pane(reloaded)) =~ "Retry"
 
@@ -848,10 +592,10 @@ defmodule PrismWeb.ChatLiveTest do
     # The fill completes: every pane holding the send retries on its own,
     # the athanor accepts the message once, and the turn runs.
     Cyfr.Test.ScriptedWorker.script([model_reply("Held, then heard")])
-    ready_athanor!(group.id, alice.user_id)
-    {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
+    ready_athanor!(own.id, alice.user_id)
+    {:ok, row} = Sanctum.Tenancy.Athanors.get(own.id)
     {:ok, filled} = Sanctum.TestContext.mark_provisioned(row)
-    Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: filled.name})
+    Sanctum.Notify.broadcast(own.id, :athanor_changed, %{name: filled.name})
 
     # Both panes offer the send; the turn it opens ends with the reply.
     wait_until(
@@ -901,15 +645,15 @@ defmodule PrismWeb.ChatLiveTest do
     on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
 
     alice = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Slow #{alice.namespace}")
-    conn = log_in_user(conn, alice, athanor_id: group.id)
+    own = Sanctum.Test.People.athanor!(alice.user_id)
+    conn = log_in_user(conn, alice, athanor_id: own.id)
 
     # Hold the athanor's claim so the mount's attempt returns at once instead
     # of running a fill this test never awaits — one that would reach the
     # database without the sandbox connection the test owns.
     {:ok, _held} =
       Arca.ProvisioningClaims.claim(
-        %Prima.Actor{athanor_id: group.id},
+        %Prima.Actor{athanor_id: own.id},
         "boot_elsewhere/own_held",
         "first_need",
         60_000,
@@ -917,7 +661,7 @@ defmodule PrismWeb.ChatLiveTest do
       )
 
     started = System.monotonic_time(:millisecond)
-    {_view, html} = mount_chat(conn, group)
+    {_view, html} = mount_chat(conn, own)
     assert System.monotonic_time(:millisecond) - started < 5_000
     assert html =~ "still being set up"
 
@@ -925,19 +669,18 @@ defmodule PrismWeb.ChatLiveTest do
   end
 
   test "archiving the athanor sends every open chat away", %{conn: conn} do
-    alice = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Gone #{alice.namespace}")
-    alice_conn = log_in_user(conn, alice, athanor_id: group.id)
-    {view, _} = mount_chat(alice_conn, group)
+    alice = person()
+    alice_conn = log_in_user(conn, alice)
+    {view, _} = mount_chat(alice_conn)
 
     # The guard refuses the archived focus before the page's own notify
     # handler runs; the root lands in the chat.
-    {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+    {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor(), force: true)
     assert_redirect(view, "/")
 
     # A fresh open is refused too — the root, or the login page when the
-    # archived group was the only athanor the session had.
-    assert {:error, {_, %{to: to}}} = live(alice_conn, chat_path(group))
+    # archived athanor was the only one the session had.
+    assert {:error, {_, %{to: to}}} = live(alice_conn, chat_path(athanor()))
     assert to in ["/chat", "/login?error=no_athanor"]
 
     Cyfr.Test.Sandbox.end_views()
@@ -945,7 +688,7 @@ defmodule PrismWeb.ChatLiveTest do
 
   test "the AQUA page mounts with the athanor's soul and roles, and opens the grant sheet for a model",
        %{conn: conn} do
-    conn = log_in_user(conn, test_user(), athanor_id: athanor().id)
+    conn = log_in_user(conn, person())
     {view, _html} = mount_athanor(conn, "/aqua")
     assert render(view) =~ "soul"
     assert has_element?(view, "code", "aqua")
@@ -966,15 +709,16 @@ defmodule PrismWeb.ChatLiveTest do
 
   test "at 720×720 the page and its drawer draw no text under 12 px and no target under 24 px",
        %{conn: conn} do
-    keyless = keyless_athanor!()
-    conn = log_in_user(conn, test_user(), athanor_id: keyless.id)
+    user = test_user()
+    keyless = keyless_athanor!(user)
+    conn = log_in_user(conn, user, athanor_id: keyless.id)
     {view, _html} = mount_chat(conn, keyless)
 
     # The pane at rest, its model with no key yet: the phone's Chats
     # button, the workbench link and the way to a model are each at least
     # 24 px high (`min-h-6`), and nothing it draws is smaller than
     # `text-xs`.
-    assert empty_state(render(pane(view))) == "Keyless has no model yet. Connect a model"
+    assert empty_state(render(pane(view))) == "your AQUA has no model yet. Connect a model"
     refute render(pane(view)) =~ @under_12px
     assert has_element?(pane(view), "button.min-h-6.text-xs[phx-click=toggle_rail]", "Chats")
     assert has_element?(pane(view), "header a.min-h-6.text-xs", "AQUA")
@@ -994,7 +738,7 @@ defmodule PrismWeb.ChatLiveTest do
 
   test "on a phone the drawer opens from the pane's Chats button and closes from its own ×",
        %{conn: conn} do
-    conn = log_in_user(conn, test_user(), athanor_id: athanor().id)
+    conn = log_in_user(conn, person())
     {view, html} = mount_chat(conn)
     hidden = ~r/id="thread-list"[^>]*max-md:hidden/
 
@@ -1012,109 +756,9 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a seat gained while the page is open joins the rail, and a fold the person closed stays closed",
-       %{conn: conn} do
-    alice = test_user()
-    bob = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
-
-    # The focused athanor holds a thread Alice does not follow, so its
-    # "Other threads" has something to fold.
-    home_ctx =
-      Sanctum.Context.build(
-        user_id: alice.user_id,
-        athanor_id: athanor().id,
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(home_ctx))
-
-    :ok =
-      Arca.ThreadSubscriptionStorage.unfollow(
-        Sanctum.Context.actor(home_ctx),
-        thread.id,
-        alice.user_id
-      )
-
-    {view, _html} = mount_chat(conn)
-    fold = "#athanor-#{athanor().id} button[phx-click=toggle_other]"
-    assert has_element?(view, fold <> "[aria-expanded=true]")
-    view |> element(fold) |> render_click()
-    assert has_element?(view, fold <> "[aria-expanded=false]")
-
-    # Bob makes a group and adds Alice from his side: her rail hears of it
-    # without a reload…
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(bob.user_id, "Late #{bob.namespace}")
-    refute has_element?(view, "#athanor-" <> group.id)
-    {:ok, :added} = Sanctum.Tenancy.Members.add(group, [user_id: alice.user_id], bob.user_id)
-    assert has_element?(view, "#athanor-" <> group.id)
-    assert render(view) =~ "Late #{bob.namespace}"
-
-    # …and the rebuild did not undo what she folded.
-    assert has_element?(view, fold <> "[aria-expanded=false]")
-
-    # Bob takes the seat back: the row goes, and the page — on the focused
-    # athanor — stays.
-    :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: alice.user_id)
-    refute has_element?(view, "#athanor-" <> group.id)
-    assert has_element?(view, "#athanor-#{athanor().id} button[aria-current=true]", "Chat")
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "following names only the open athanor's own threads: a foreign id writes no row",
-       %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Else #{alice.namespace}")
-
-    group_ctx =
-      Sanctum.Context.build(
-        user_id: alice.user_id,
-        athanor_id: group.id,
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    {:ok, foreign} = Threads.create(Sanctum.Context.actor(group_ctx))
-
-    :ok =
-      Arca.ThreadSubscriptionStorage.unfollow(
-        Sanctum.Context.actor(group_ctx),
-        foreign.id,
-        alice.user_id
-      )
-
-    # The focused athanor is open; the id belongs to the group.
-    {view, _html} = mount_chat(conn)
-    assert render_click(view, "follow_thread", %{"id" => foreign.id}) =~ "That thread isn"
-
-    refute Arca.ThreadSubscriptionStorage.follows?(
-             Prima.Actor.in_athanor(athanor().id),
-             foreign.id,
-             alice.user_id
-           )
-
-    refute Arca.ThreadSubscriptionStorage.follows?(
-             Prima.Actor.in_athanor(group.id),
-             foreign.id,
-             alice.user_id
-           )
-
-    assert render_click(view, "unfollow_thread", %{"id" => foreign.id}) =~
-             "That thread isn"
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
   test "+ New opens a blank pane, whatever the athanor already holds", %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
+    alice = person()
+    conn = log_in_user(conn, alice)
     home = athanor()
     ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
     {:ok, existing} = Threads.create(Sanctum.Context.actor(ctx))
@@ -1141,8 +785,8 @@ defmodule PrismWeb.ChatLiveTest do
   end
 
   test "a thread switch turns the athanor's pane rather than mounting another", %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice, athanor_id: athanor().id)
+    alice = person()
+    conn = log_in_user(conn, alice)
     home = athanor()
     ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
     {:ok, first} = Threads.create(Sanctum.Context.actor(ctx))
@@ -1169,10 +813,10 @@ defmodule PrismWeb.ChatLiveTest do
   describe "threads with people" do
     test "the rail lists your athanors' threads, your pairs by the other's name and your shared threads by title, and ?s= opens one under your seat",
          %{conn: conn} do
-      alice = test_user()
+      alice = person()
       bob = test_user()
       carol = test_user()
-      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      conn = log_in_user(conn, alice)
       {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
       {:ok, :added} = Sanctum.SharedThreads.add(alice.user_id, plans.id, user_id: bob.user_id)
       {:ok, pair} = Sanctum.SharedThreads.pair(alice.user_id, bob.user_id)
@@ -1212,12 +856,12 @@ defmodule PrismWeb.ChatLiveTest do
 
     test "New thread with people makes a thread with its title and the people named, and says who could not be added",
          %{conn: conn} do
-      alice = test_user()
+      alice = person()
       carol = test_user()
       %{identifier: identifier} = Sanctum.Test.RegistryStub.enroll!(carol.user_id)
       record_namespace!(carol)
       Sanctum.Test.RegistryStub.handles!(%{carol.namespace => identifier})
-      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      conn = log_in_user(conn, alice)
 
       {view, _html} = mount_chat(conn)
       view |> element("#new-with-people") |> render_click()
@@ -1253,9 +897,9 @@ defmodule PrismWeb.ChatLiveTest do
 
     test "the rail reads the shared threads again on each change, and a thread you were taken out of closes",
          %{conn: conn} do
-      alice = test_user()
+      alice = person()
       bob = test_user()
-      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      conn = log_in_user(conn, alice)
       {view, _html} = mount_chat(conn)
       # The page acts on what Alice is told; the test hears the same.
       :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(alice.user_id))
@@ -1305,8 +949,8 @@ defmodule PrismWeb.ChatLiveTest do
 
     test "the shared thread in view is told to your own AQUA by its id and title, and an athanor's thread is not",
          %{conn: conn} do
-      alice = test_user()
-      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      alice = person()
+      conn = log_in_user(conn, alice)
       {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
       {:ok, own} = Threads.create(Sanctum.Context.actor(member_ctx(alice, athanor())))
 
@@ -1332,9 +976,9 @@ defmodule PrismWeb.ChatLiveTest do
 
     test "a line said aloud from the picker lands in the shared thread chosen, attributed to you",
          %{conn: conn} do
-      alice = test_user()
+      alice = person()
       bob = test_user()
-      conn = log_in_user(conn, alice, athanor_id: athanor().id)
+      conn = log_in_user(conn, alice)
       {:ok, plans} = Sanctum.SharedThreads.create(alice.user_id, "Plans #{alice.namespace}")
       {:ok, :added} = Sanctum.SharedThreads.add(alice.user_id, plans.id, user_id: bob.user_id)
       actor = Sanctum.Context.actor(member_ctx(alice, athanor()))

@@ -229,7 +229,6 @@ defmodule PrismWeb.ConnCase do
 
         {:ok, athanor} =
           Sanctum.Tenancy.Athanors.create(%{
-            kind: "person",
             name: name,
             slug: slug,
             owner_user_id: user.user_id,

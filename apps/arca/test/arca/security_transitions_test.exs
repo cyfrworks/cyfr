@@ -54,7 +54,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
     {:ok, athanor} =
       Arca.Athanors.insert(server(), %{
-        kind: "person",
         name: "Own #{n}",
         slug: "own-#{n}",
         owner_user_id: user.id,
@@ -66,14 +65,17 @@ defmodule Arca.SecurityTransitions.Fixtures do
     {user, athanor}
   end
 
-  def group!(attrs \\ %{}) do
+  # Another person's athanor, its owner no row here.
+  def athanor! do
     n = uniq()
 
     {:ok, athanor} =
-      Arca.Athanors.insert(
-        server(),
-        Map.merge(%{kind: "group", name: "G#{n}", slug: "st-g-#{n}", created_by: "system"}, attrs)
-      )
+      Arca.Athanors.insert(server(), %{
+        name: "A#{n}",
+        slug: "st-a-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+        created_by: "system"
+      })
 
     athanor
   end
@@ -83,30 +85,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
       Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
 
     row
-  end
-
-  # An invitation held for `identifier`, written as a row: an identifier
-  # invitation's own write is fenced by the member's slot, which these
-  # cases do not hold.
-  def invite!(athanor_id, identifier) do
-    now = DateTime.utc_now()
-    id = Prima.UUID7.generate_id("mem")
-
-    {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.Membership, [
-        %{
-          id: id,
-          athanor_id: athanor_id,
-          person_identifier: identifier,
-          scope: "athanor",
-          status: "invited",
-          added_by: "x",
-          created_at: now,
-          updated_at: now
-        }
-      ])
-
-    Arca.Repo.get!(Arca.Schemas.Membership, id)
   end
 
   # The person's local identity row, enrolled under an identifier.
@@ -132,9 +110,8 @@ defmodule Arca.SecurityTransitions.Fixtures do
     identifier
   end
 
-  # A session of the person, bound to `athanor_id` when one is named; a
-  # remote person's binds their cached head's `key_epoch`.
-  def session!(user_id, athanor_id \\ nil, key_epoch \\ nil) do
+  # A session of the person, bound to `athanor_id` when one is named.
+  def session!(user_id, athanor_id \\ nil) do
     hash = :crypto.strong_rand_bytes(32)
 
     :ok =
@@ -144,7 +121,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
           user_id: user_id,
           provider: "github",
           athanor_id: athanor_id,
-          identity_key_epoch: key_epoch,
           expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
         },
         Arca.Test.Actor.issuance(user_id)
@@ -152,56 +128,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
     hash
   end
-
-  # The person made remote here, as the `cyfr` door admits one: their
-  # identity row names an identifier and its directory and holds no key,
-  # and the identifier's head is cached. Answers the identifier and the
-  # head's `key_epoch`. Both rows are inserted directly, for the reason a
-  # frame is: their stores fence each write by the member's slot.
-  def remote!(user_id) do
-    identifier = "per_" <> Prima.Digest.sha256_hex("st-remote-#{uniq()}")
-    epoch = Prima.Digest.sha256("st-head-#{uniq()}")
-    {1, _} = Arca.Repo.insert_all(Arca.Schemas.PersonIdentity, [remote_row(user_id, identifier)])
-    {1, _} = Arca.Repo.insert_all(Arca.Schemas.DirectoryHead, [head_row(identifier, epoch)])
-    %{identifier: identifier, epoch: epoch}
-  end
-
-  def remote_row(user_id, identifier) do
-    now = DateTime.utc_now()
-
-    %{
-      id: Prima.UUID7.generate_id("pid"),
-      user_id: user_id,
-      identifier: identifier,
-      provenance: "remote",
-      enrollment: "none",
-      directory_url: "https://dir.example",
-      revision: 1,
-      inserted_at: now,
-      updated_at: now
-    }
-  end
-
-  def head_row(identifier, epoch) do
-    now = DateTime.utc_now()
-
-    %{
-      identifier: identifier,
-      genesis: "genesis-bytes",
-      directory_url: "https://dir.example",
-      head_hash: epoch,
-      key_epoch: epoch,
-      recovery_epoch: epoch,
-      state: ~s({"head":"#{epoch}"}),
-      verified_at: now,
-      revision: 1,
-      inserted_at: now,
-      updated_at: now
-    }
-  end
-
-  def head(identifier), do: Arca.Repo.get(Arca.Schemas.DirectoryHead, identifier)
-  def identity(user_id), do: Arca.Repo.get_by(Arca.Schemas.PersonIdentity, user_id: user_id)
 
   def key!(athanor_id, created_by) do
     n = uniq()
@@ -487,39 +413,12 @@ defmodule Arca.SecurityTransitions.Fixtures do
     name
   end
 
-  # A trigger that makes one statement skip every row it would change
-  # without failing, spelled per adapter: what the statement answers then
-  # leaves the row standing, which only the transition's postcondition
-  # can catch. The sandbox rolls it back with the test.
-  def skip_on!(table, event) do
-    name = "st_skip_#{table}_#{String.downcase(event)}"
-
-    if Arca.Test.Adapter.sqlite?() do
-      Arca.Repo.query!(
-        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-          "BEGIN SELECT RAISE(IGNORE); END"
-      )
-    else
-      Arca.Repo.query!(
-        "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
-          "$$ BEGIN RETURN NULL; END $$"
-      )
-
-      Arca.Repo.query!(
-        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-          "FOR EACH ROW EXECUTE FUNCTION #{name}()"
-      )
-    end
-
-    name
-  end
-
   def clear_failure!(name) do
     if Arca.Test.Adapter.sqlite?() do
       Arca.Repo.query!("DROP TRIGGER #{name}")
     else
       table =
-        Regex.replace(~r/_(delete|update)$/, Regex.replace(~r/^st_(fail|skip)_/, name, ""), "")
+        Regex.replace(~r/_(delete|update)$/, Regex.replace(~r/^st_fail_/, name, ""), "")
 
       Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
       Arca.Repo.query!("DROP FUNCTION #{name}()")
@@ -529,15 +428,14 @@ end
 
 defmodule Arca.SecurityTransitionsTest do
   @moduledoc """
-  The five standing transitions, each one transaction: what a denial
-  retires, its seats and invitations in shared threads included, what an allow restores and what it never does, archive and
-  reopen, leaving one athanor and the retirement of a remote person it
-  leaves with no membership here, the generation every real change
-  raises, and a failed statement rolling back everything — the injected
-  session DELETE, key UPDATE and certificate UPDATE failures included,
-  after which an allow revives nothing, and a failed retirement inside an
-  allow or a reopen, which leaves the denial or the archive standing — or
-  a skipped one failing the postcondition.
+  The four standing transitions, each one transaction: what a denial
+  retires, its seats and invitations in shared threads included, what an
+  allow restores and what it never does, archive and reopen, the
+  generation every real change raises, and a failed statement rolling
+  back everything — the injected session DELETE, key UPDATE and
+  certificate UPDATE failures included, after which an allow revives
+  nothing, and a failed retirement inside an allow or a reopen, which
+  leaves the denial or the archive standing.
   """
 
   use ExUnit.Case, async: false
@@ -704,27 +602,15 @@ defmodule Arca.SecurityTransitionsTest do
   end
 
   describe "deny_user/3" do
-    test "retires every credential, seat, invitation and follow, and archives what it must" do
+    test "retires every credential and seat, and archives their own athanor" do
       {user, own} = owner!()
-      open = group!()
-      pair = group!(%{roster: "frozen"})
-      shared = group!()
-      peer = person!()
-
-      for athanor <- [open, pair, shared], do: seat!(athanor.id, user.id)
-      seat!(pair.id, peer.id)
-      seat!(shared.id, peer.id)
-      invitation = invite!(shared.id, enrolled!(user.id))
-
-      :ok =
-        Arca.ThreadSubscriptionStorage.follow(Prima.Actor.in_athanor(open.id), "thr_1", user.id)
+      {peer, theirs} = owner!()
 
       own_session = session!(user.id, own.id)
       other_session = session!(user.id)
       own_key = key!(own.id, user.id)
-      made_elsewhere = key!(shared.id, user.id)
-      pair_key = key!(pair.id, peer.id)
-      shared_key = key!(shared.id, peer.id)
+      made_elsewhere = key!(theirs.id, user.id)
+      peer_key = key!(theirs.id, peer.id)
 
       assert {:ok, change} =
                SecurityTransitions.deny_user(server(), user.id, verify: admit())
@@ -734,30 +620,24 @@ defmodule Arca.SecurityTransitionsTest do
       assert user(user.id).status == "denied"
       assert user(user.id).security_generation == 2
 
-      # Archived: the person's own athanor, the frozen pair they sat in, the
-      # open group they leave empty; the group a peer still holds stands.
-      assert change.archived_athanor_ids == Enum.sort([own.id, pair.id, open.id])
-      for id <- change.archived_athanor_ids, do: assert(athanor(id).status == "archived")
-      assert change.athanor_generations == Map.new(change.archived_athanor_ids, &{&1, 2})
-      assert athanor(shared.id).status == "active"
-      assert athanor(shared.id).security_generation == 1
+      # Archived: the person's own athanor alone; another person's stands.
+      assert change.archived_athanor_ids == [own.id]
+      assert athanor(own.id).status == "archived"
+      assert change.athanor_generations == %{own.id => 2}
+      assert athanor(theirs.id).status == "active"
+      assert athanor(theirs.id).security_generation == 1
 
       # The hashes and ids are the ones the statements removed.
       assert Enum.sort(change.revoked_session_hashes) == Enum.sort([own_session, other_session])
       refute session?(own_session) or session?(other_session)
 
-      assert Enum.sort(change.revoked_api_key_ids) ==
-               Enum.sort([own_key, made_elsewhere, pair_key])
-
-      assert revoked?(own_key) and revoked?(made_elsewhere) and revoked?(pair_key)
-      refute revoked?(shared_key)
+      assert change.revoked_api_key_ids == Enum.sort([own_key, made_elsewhere])
+      assert revoked?(own_key) and revoked?(made_elsewhere)
+      refute revoked?(peer_key)
 
       assert seats(user.id) == []
-      assert length(change.removed_membership_ids) == 4
-      assert [%{id: invitation_id}] = change.withdrawn_invitations
-      assert invitation_id == invitation.id
-      assert change.unfollowed == 1
-      assert change.member_user_ids[pair.id] == [peer.id]
+      assert length(change.removed_membership_ids) == 1
+      assert change.member_user_ids == %{own.id => [user.id]}
     end
 
     test "takes their seats and invitations in shared threads, and ends a pair or a thread left empty" do
@@ -807,14 +687,12 @@ defmodule Arca.SecurityTransitionsTest do
 
     test "ends their offers both ways" do
       {user, own} = owner!()
-      shared = group!()
-      peer = person!()
-      seat!(shared.id, user.id)
-      seat!(shared.id, peer.id)
+      {peer, peer_own} = owner!()
+      shared_thread!(user.id, [peer.id])
 
       mine = %Prima.Actor{athanor_id: own.id, user_id: user.id}
-      theirs = %Prima.Actor{athanor_id: shared.id, user_id: peer.id}
-      on_exit(fn -> for a <- [own.id, shared.id], do: File.rm_rf(storage_root(a)) end)
+      theirs = %Prima.Actor{athanor_id: peer_own.id, user_id: peer.id}
+      on_exit(fn -> for a <- [own.id, peer_own.id], do: File.rm_rf(storage_root(a)) end)
 
       :ok = Arca.put(mine, ["data", "out.txt"], "from the denied")
       :ok = Arca.put(theirs, ["data", "in.txt"], "to the denied")
@@ -848,52 +726,35 @@ defmodule Arca.SecurityTransitionsTest do
       assert_receive {[:cyfr, :arca, :file_offer, :declined], ^incoming}
     end
 
-    test "withdraws the open offers of an athanor it archives, whoever sent them" do
-      user = person!()
-      left = person!()
+    test "withdraws the open offers of the athanor it archives, whoever sent them" do
+      {user, own} = owner!()
       elsewhere = person!()
-      retired = group!()
-      kept = group!()
-      seat!(retired.id, user.id)
-      seat!(retired.id, left.id)
-      seat!(kept.id, left.id)
-      seat!(kept.id, elsewhere.id)
-      on_exit(fn -> for a <- [retired.id, kept.id], do: File.rm_rf(storage_root(a)) end)
 
-      # Sent from the group by a member who has since left it, to someone
-      # the denied person never met: no clause of theirs names it, but the
-      # deny archives the group they were the last member of.
-      from_retired = %Prima.Actor{athanor_id: retired.id, user_id: left.id}
-      :ok = Arca.put(from_retired, ["data", "left.txt"], "left behind")
-
-      {:ok, %{offer_id: stranded}} =
-        Arca.FileOffers.offer(from_retired, elsewhere.id, ["data/left.txt"])
-
-      {:ok, _} =
-        SecurityTransitions.leave_athanor(
-          %Prima.Actor{athanor_id: retired.id, user_id: left.id},
-          left.id,
-          verify: admit()
-        )
+      # Sent from their athanor by someone else, to someone the denied
+      # person never met: no clause of theirs names it, but the denial
+      # archives the athanor it was sent from.
+      # One offer of ten files.
+      1 = open_offers!(own.id, elsewhere.id, 10)
+      stranded = "ofr_many_#{own.id}_1"
 
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
-      assert change.archived_athanor_ids == [retired.id]
+      assert change.archived_athanor_ids == [own.id]
       assert change.ended_offer_ids == [stranded]
-      assert offer_statuses(stranded) == ["withdrawn"]
+      assert offer_statuses(stranded) == List.duplicate("withdrawn", 10)
     end
 
     test "ends more open offers than one statement can name" do
       user = person!()
-      group = group!()
-      offers = open_offers!(group.id, user.id, 32_800)
-      counters = observe_offer_ends!(group.id, offers)
+      theirs = athanor!()
+      offers = open_offers!(theirs.id, user.id, 32_800)
+      counters = observe_offer_ends!(theirs.id, offers)
 
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
       assert :atomics.get(counters, 1) == 32_800
       assert :atomics.get(counters, 2) == 32_800
       assert length(change.ended_offer_ids) == offers
-      assert open_offer_count(group.id) == 0
+      assert open_offer_count(theirs.id) == 0
     end
 
     test "a repeated denial moves no generation and still checks what it retires" do
@@ -973,7 +834,6 @@ defmodule Arca.SecurityTransitionsTest do
           {"sessions", "DELETE", "the session DELETE"},
           {"api_keys", "UPDATE", "the key UPDATE"},
           {"memberships", "DELETE", "the membership DELETE"},
-          {"thread_subscriptions", "DELETE", "the follow DELETE"},
           {"athanors", "UPDATE", "the athanor UPDATE"},
           {"users", "UPDATE", "the person UPDATE"}
         ] do
@@ -981,10 +841,6 @@ defmodule Arca.SecurityTransitionsTest do
         {user, own} = owner!()
         session = session!(user.id, own.id)
         key = key!(own.id, user.id)
-
-        :ok =
-          Arca.ThreadSubscriptionStorage.follow(Prima.Actor.in_athanor(own.id), "thr_f", user.id)
-
         frame = frame!(own.id, user.id)
         failure = fail_on!(unquote(table), unquote(event))
 
@@ -1027,10 +883,7 @@ defmodule Arca.SecurityTransitionsTest do
   describe "allow_user/3" do
     test "restores standing, the own athanor and a new seat in it, and nothing else" do
       {user, own} = owner!()
-      group = group!()
-      seat!(group.id, user.id)
-      peer = person!()
-      seat!(group.id, peer.id)
+      seat!(athanor!().id, user.id)
       key = key!(own.id, user.id)
       {:ok, denied} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
@@ -1103,57 +956,53 @@ defmodule Arca.SecurityTransitionsTest do
 
   describe "archive_athanor/3 and unarchive_athanor/3" do
     test "an archive revokes the athanor's keys with it; a reopen revokes none back" do
-      group = group!()
-      member = person!()
-      seat!(group.id, member.id)
-      key = key!(group.id, member.id)
+      {member, ath} = owner!()
+      key = key!(ath.id, member.id)
 
       assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
       assert archived.transitioned
-      assert archived.archived_athanor_ids == [group.id]
-      assert archived.athanor_generations == %{group.id => 2}
+      assert archived.archived_athanor_ids == [ath.id]
+      assert archived.athanor_generations == %{ath.id => 2}
       assert archived.revoked_api_key_ids == [key]
-      assert archived.member_user_ids == %{group.id => [member.id]}
+      assert archived.member_user_ids == %{ath.id => [member.id]}
       assert [%{status: "archived", security_generation: 2}] = archived.athanors
 
       # Idempotent: no second generation, the keys checked again.
       assert {:ok, again} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
       refute again.transitioned
-      assert athanor(group.id).security_generation == 2
+      assert athanor(ath.id).security_generation == 2
 
       assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
 
-      assert reopened.reopened_athanor_ids == [group.id]
-      assert athanor(group.id).status == "active"
-      assert athanor(group.id).security_generation == 3
+      assert reopened.reopened_athanor_ids == [ath.id]
+      assert athanor(ath.id).status == "active"
+      assert athanor(ath.id).security_generation == 3
       assert revoked?(key)
 
       assert {:ok, %{transitioned: false}} =
-               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
     end
 
     test "an archive withdraws the file offers its athanor holds open, once it commits" do
-      group = group!()
-      sender = person!()
+      {sender, ath} = owner!()
       recipient = person!()
-      seat!(group.id, sender.id)
-      seat!(group.id, recipient.id)
-      from_group = %Prima.Actor{athanor_id: group.id, user_id: sender.id}
-      on_exit(fn -> File.rm_rf(storage_root(group.id)) end)
+      shared_thread!(sender.id, [recipient.id])
+      from_own = %Prima.Actor{athanor_id: ath.id, user_id: sender.id}
+      on_exit(fn -> File.rm_rf(storage_root(ath.id)) end)
 
-      :ok = Arca.put(from_group, ["data", "open.txt"], "open")
-      :ok = Arca.put(from_group, ["data", "declined.txt"], "declined")
+      :ok = Arca.put(from_own, ["data", "open.txt"], "open")
+      :ok = Arca.put(from_own, ["data", "declined.txt"], "declined")
 
       {:ok, %{offer_id: open}} =
-        Arca.FileOffers.offer(from_group, recipient.id, ["data/open.txt"])
+        Arca.FileOffers.offer(from_own, recipient.id, ["data/open.txt"])
 
       {:ok, %{offer_id: declined}} =
-        Arca.FileOffers.offer(from_group, recipient.id, ["data/declined.txt"])
+        Arca.FileOffers.offer(from_own, recipient.id, ["data/declined.txt"])
 
       :ok = Arca.FileOffers.decline(%Prima.Actor{user_id: recipient.id}, declined)
 
@@ -1170,13 +1019,13 @@ defmodule Arca.SecurityTransitionsTest do
       on_exit(fn -> :telemetry.detach(handler) end)
 
       assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
       assert archived.ended_offer_ids == [open]
       refute Map.has_key?(archived, :ended_offers)
       assert offer_statuses(open) == ["withdrawn"]
       assert offer_statuses(declined) == ["declined"]
-      assert {:error, :not_found} = Arca.get(from_group, ["payloads", "offers", open, "open.txt"])
+      assert {:error, :not_found} = Arca.get(from_own, ["payloads", "offers", open, "open.txt"])
       assert_receive {:withdrawn, ^open}
 
       # The recipient can no longer take it, and archiving again ends nothing.
@@ -1184,47 +1033,47 @@ defmodule Arca.SecurityTransitionsTest do
                Arca.FileOffers.decline(%Prima.Actor{user_id: recipient.id}, open)
 
       assert {:ok, %{ended_offer_ids: []}} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
     end
 
     test "an archive ends more open offers than one statement can name" do
-      group = group!()
-      offers = open_offers!(group.id, person!().id, 32_800)
-      counters = observe_offer_ends!(group.id, offers)
+      ath = athanor!()
+      offers = open_offers!(ath.id, person!().id, 32_800)
+      counters = observe_offer_ends!(ath.id, offers)
 
       assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
       assert :atomics.get(counters, 1) == 32_800
       assert :atomics.get(counters, 2) == 32_800
       assert length(archived.ended_offer_ids) == offers
-      assert open_offer_count(group.id) == 0
+      assert open_offer_count(ath.id) == 0
     end
 
     test "an injected key UPDATE failure leaves the athanor open and its keys live" do
-      group = group!()
-      key = key!(group.id, person!().id)
+      ath = athanor!()
+      key = key!(ath.id, person!().id)
       failure = fail_on!("api_keys", "UPDATE")
 
       assert {:error, :database_error} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
-      assert athanor(group.id).status == "active"
-      assert athanor(group.id).security_generation == 1
+      assert athanor(ath.id).status == "active"
+      assert athanor(ath.id).security_generation == 1
       refute revoked?(key)
       clear_failure!(failure)
     end
 
     test "the caller decides, over the locked row" do
-      group = group!(%{roster: "frozen"})
-      {:ok, _} = SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+      ath = athanor!()
+      {:ok, _} = SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
-      assert {:error, :frozen_is_final} =
-               SecurityTransitions.unarchive_athanor(server(), group.id,
-                 verify: fn %{athanor: %{roster: "frozen"}} -> {:error, :frozen_is_final} end
+      assert {:error, :refused} =
+               SecurityTransitions.unarchive_athanor(server(), ath.id,
+                 verify: fn %{athanor: %{status: "archived"}} -> {:error, :refused} end
                )
 
-      assert athanor(group.id).status == "archived"
+      assert athanor(ath.id).status == "archived"
 
       assert {:error, :not_found} =
                SecurityTransitions.archive_athanor(server(), "ath_nowhere", verify: admit())
@@ -1232,30 +1081,28 @@ defmodule Arca.SecurityTransitionsTest do
 
     for table <- @retirement_tables do
       test "an injected #{table} UPDATE failure rolls the reopen back with every straggler standing" do
-        group = group!()
-        member = person!()
-        seat!(group.id, member.id)
-        {:ok, _} = SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
-        stragglers = stragglers!(group.id, member.id)
-        before = {athanor(group.id), rows(stragglers)}
+        {member, ath} = owner!()
+        {:ok, _} = SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
+        stragglers = stragglers!(ath.id, member.id)
+        before = {athanor(ath.id), rows(stragglers)}
         assert elem(before, 0).status == "archived"
         failure = fail_on!(unquote(table), "UPDATE")
 
         assert {:error, :database_error} =
-                 SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+                 SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
 
         # Nothing committed, row for row.
-        assert {athanor(group.id), rows(stragglers)} == before
+        assert {athanor(ath.id), rows(stragglers)} == before
 
         clear_failure!(failure)
 
         assert {:ok, reopened} =
-                 SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+                 SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
 
         assert reopened.transitioned
-        assert reopened.athanor_generations == %{group.id => 3}
+        assert reopened.athanor_generations == %{ath.id => 3}
         assert retired_ids(reopened) == straggler_ids(stragglers)
-        assert athanor(group.id).status == "active"
+        assert athanor(ath.id).status == "active"
 
         assert straggler_states(stragglers) ==
                  ["revoked", "revoked", "revoked", "revoked", "voided"]
@@ -1266,26 +1113,23 @@ defmodule Arca.SecurityTransitionsTest do
   describe "frame credentials" do
     test "a denial revokes the person's frames everywhere and every frame of what it archives" do
       {user, own} = owner!()
-      shared = group!()
-      peer = person!()
-      seat!(shared.id, user.id)
-      seat!(shared.id, peer.id)
+      {peer, theirs} = owner!()
 
       mine_own = frame!(own.id, user.id)
-      mine_shared = frame!(shared.id, user.id, "suspended")
-      peer_shared = frame!(shared.id, peer.id)
+      mine_theirs = frame!(theirs.id, user.id, "suspended")
+      peer_theirs = frame!(theirs.id, peer.id)
       # A frame of another person in the athanor the denial archives.
       guest_own = frame!(own.id, peer.id)
       already = frame!(own.id, user.id, "revoked")
 
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
-      assert change.revoked_frame_credential_ids == Enum.sort([mine_own, mine_shared, guest_own])
+      assert change.revoked_frame_credential_ids == Enum.sort([mine_own, mine_theirs, guest_own])
 
-      for id <- [mine_own, mine_shared, guest_own, already],
+      for id <- [mine_own, mine_theirs, guest_own, already],
           do: assert(frame_state(id) == "revoked")
 
-      assert frame_state(peer_shared) == "active"
+      assert frame_state(peer_theirs) == "active"
     end
 
     test "an allow revokes a frame that outlived the denial and restores none" do
@@ -1301,23 +1145,21 @@ defmodule Arca.SecurityTransitionsTest do
     end
 
     test "an archive revokes the athanor's frames, and a reopen revokes any since" do
-      group = group!()
-      member = person!()
-      seat!(group.id, member.id)
-      frame = frame!(group.id, member.id)
-      elsewhere = frame!(group!().id, member.id)
+      {member, ath} = owner!()
+      frame = frame!(ath.id, member.id)
+      elsewhere = frame!(athanor!().id, member.id)
 
       assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
       assert archived.revoked_frame_credential_ids == [frame]
       assert frame_state(frame) == "revoked"
       assert frame_state(elsewhere) == "active"
 
-      straggler = frame!(group.id, member.id)
+      straggler = frame!(ath.id, member.id)
 
       assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
 
       assert reopened.revoked_frame_credential_ids == [straggler]
       assert frame_state(straggler) == "revoked"
@@ -1346,14 +1188,14 @@ defmodule Arca.SecurityTransitionsTest do
     end
 
     test "an injected frame UPDATE failure leaves the athanor open and its frames standing" do
-      group = group!()
-      frame = frame!(group.id, person!().id)
+      ath = athanor!()
+      frame = frame!(ath.id, person!().id)
       failure = fail_on!("frame_credentials", "UPDATE")
 
       assert {:error, :database_error} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
-      assert athanor(group.id).status == "active"
+      assert athanor(ath.id).status == "active"
       assert frame_state(frame) == "active"
       clear_failure!(failure)
     end
@@ -1362,26 +1204,23 @@ defmodule Arca.SecurityTransitionsTest do
   describe "paired clients" do
     test "a denial revokes the person's clients everywhere and every client of what it archives" do
       {user, own} = owner!()
-      shared = group!()
-      peer = person!()
-      seat!(shared.id, user.id)
-      seat!(shared.id, peer.id)
+      {peer, theirs} = owner!()
 
       mine_own = paired!(own.id, user.id)
-      mine_shared = paired!(shared.id, user.id)
-      peer_shared = paired!(shared.id, peer.id)
+      mine_theirs = paired!(theirs.id, user.id)
+      peer_theirs = paired!(theirs.id, peer.id)
       # A client of another person in the athanor the denial archives.
       guest_own = paired!(own.id, peer.id)
       already = paired!(own.id, user.id, "revoked")
 
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
-      assert change.revoked_paired_client_ids == Enum.sort([mine_own, mine_shared, guest_own])
+      assert change.revoked_paired_client_ids == Enum.sort([mine_own, mine_theirs, guest_own])
 
-      for id <- [mine_own, mine_shared, guest_own, already],
+      for id <- [mine_own, mine_theirs, guest_own, already],
           do: assert(paired_standing(id) == "revoked")
 
-      assert paired_standing(peer_shared) == "active"
+      assert paired_standing(peer_theirs) == "active"
     end
 
     test "an allow revokes a client that outlived the denial and restores none" do
@@ -1397,23 +1236,21 @@ defmodule Arca.SecurityTransitionsTest do
     end
 
     test "an archive revokes the athanor's clients, and a reopen revokes any since" do
-      group = group!()
-      member = person!()
-      seat!(group.id, member.id)
-      paired = paired!(group.id, member.id)
-      elsewhere = paired!(group!().id, member.id)
+      {member, ath} = owner!()
+      paired = paired!(ath.id, member.id)
+      elsewhere = paired!(athanor!().id, member.id)
 
       assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
       assert archived.revoked_paired_client_ids == [paired]
       assert paired_standing(paired) == "revoked"
       assert paired_standing(elsewhere) == "active"
 
-      straggler = paired!(group.id, member.id)
+      straggler = paired!(ath.id, member.id)
 
       assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
 
       assert reopened.revoked_paired_client_ids == [straggler]
       assert paired_standing(straggler) == "revoked"
@@ -1445,23 +1282,20 @@ defmodule Arca.SecurityTransitionsTest do
   describe "device certificates, pairing invitations, passkeys and confirmations" do
     test "a denial retires them everywhere the person stood, and in what it archives" do
       {user, own} = owner!()
-      shared = group!()
-      peer = person!()
-      seat!(shared.id, user.id)
-      seat!(shared.id, peer.id)
+      {peer, theirs} = owner!()
 
-      client = paired!(shared.id, user.id)
-      cert = certificate!(shared.id, user.id, client)
+      client = paired!(theirs.id, user.id)
+      cert = certificate!(theirs.id, user.id, client)
       guest_client = paired!(own.id, peer.id)
       guest_cert = certificate!(own.id, peer.id, guest_client)
-      peer_client = paired!(shared.id, peer.id)
-      peer_cert = certificate!(shared.id, peer.id, peer_client)
-      invitation = invitation!(shared.id, user.id)
-      peer_invitation = invitation!(shared.id, peer.id)
+      peer_client = paired!(theirs.id, peer.id)
+      peer_cert = certificate!(theirs.id, peer.id, peer_client)
+      invitation = invitation!(theirs.id, user.id)
+      peer_invitation = invitation!(theirs.id, peer.id)
       passkey = passkey!(user.id)
-      own_confirmation = confirmation!(shared.id, user.id)
+      own_confirmation = confirmation!(theirs.id, user.id)
       by_guest = confirmation!(own.id, peer.id, client: guest_client)
-      peer_confirmation = confirmation!(shared.id, peer.id, client: peer_client)
+      peer_confirmation = confirmation!(theirs.id, peer.id, client: peer_client)
 
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
@@ -1488,27 +1322,25 @@ defmodule Arca.SecurityTransitionsTest do
     end
 
     test "an archive retires the athanor's; a reopen retires any since, and resurrects none" do
-      group = group!()
-      member = person!()
-      seat!(group.id, member.id)
-      client = paired!(group.id, member.id)
-      cert = certificate!(group.id, member.id, client)
-      invitation = invitation!(group.id, member.id)
-      confirmed = confirmation!(group.id, member.id, client: client)
-      elsewhere = invitation!(group!().id, member.id)
+      {member, ath} = owner!()
+      client = paired!(ath.id, member.id)
+      cert = certificate!(ath.id, member.id, client)
+      invitation = invitation!(ath.id, member.id)
+      confirmed = confirmation!(ath.id, member.id, client: client)
+      elsewhere = invitation!(athanor!().id, member.id)
 
       assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
 
       assert archived.revoked_device_certificate_ids == [cert]
       assert archived.revoked_pairing_invitation_ids == [invitation]
       assert archived.voided_confirmation_ids == [confirmed]
       assert invitation_state(elsewhere) == "pending"
 
-      straggler = invitation!(group.id, member.id)
+      straggler = invitation!(ath.id, member.id)
 
       assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
 
       assert reopened.revoked_pairing_invitation_ids == [straggler]
       assert invitation_state(invitation) == "revoked"
@@ -1537,280 +1369,6 @@ defmodule Arca.SecurityTransitionsTest do
     end
   end
 
-  describe "leave_athanor/3" do
-    test "retires that athanor's standing alone, and the person's other seats stand" do
-      stay = group!()
-      leave = group!()
-      person = person!()
-      seat!(stay.id, person.id)
-      seat!(leave.id, person.id)
-      peer = person!()
-      seat!(leave.id, peer.id)
-
-      bound = session!(person.id, leave.id)
-      unbound = session!(person.id, nil)
-      other_bound = session!(person.id, stay.id)
-      frame = frame!(leave.id, person.id)
-      client = paired!(leave.id, person.id)
-      cert = certificate!(leave.id, person.id, client)
-      invitation = invitation!(leave.id, person.id)
-      own_confirmation = confirmation!(leave.id, person.id)
-      stay_client = paired!(stay.id, person.id)
-      stay_cert = certificate!(stay.id, person.id, stay_client)
-      stay_confirmation = confirmation!(stay.id, person.id)
-      peer_client = paired!(leave.id, peer.id)
-      passkey = passkey!(person.id)
-
-      assert {:ok, change} =
-               SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(leave.id), person.id,
-                 verify: admit()
-               )
-
-      assert change.transitioned
-      assert [%{athanor_id: left}] = change.removed_memberships
-      assert left == leave.id
-      assert change.revoked_session_hashes == [bound]
-      assert change.revoked_frame_credential_ids == [frame]
-      assert change.revoked_paired_client_ids == [client]
-      assert change.revoked_device_certificate_ids == [cert]
-      assert change.revoked_pairing_invitation_ids == [invitation]
-      assert change.voided_confirmation_ids == [own_confirmation]
-
-      refute session?(bound)
-      assert session?(unbound)
-      assert session?(other_bound)
-      assert Enum.map(seats(person.id), & &1.athanor_id) == [stay.id]
-      assert paired_standing(stay_client) == "active"
-      assert certificate_state(stay_cert) == "active"
-      assert confirmation_state(stay_confirmation) == "pending"
-      assert paired_standing(peer_client) == "active"
-      assert passkey_state(passkey) == "active"
-
-      # Neither standing moved: a leave is not a denial or an archive.
-      assert user(person.id).security_generation == 1
-      assert athanor(leave.id).security_generation == 1
-    end
-
-    test "a person who holds no seat there is refused, and the caller's refusal rolls back" do
-      group = group!()
-      person = person!()
-      actor = Prima.Actor.in_athanor(group.id)
-
-      assert {:error, :not_member} =
-               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
-
-      seat!(group.id, person.id)
-      session = session!(person.id, group.id)
-
-      assert {:error, :last_member} =
-               SecurityTransitions.leave_athanor(actor, person.id,
-                 verify: fn %{transition: :leave_athanor} -> {:error, :last_member} end
-               )
-
-      assert session?(session)
-      assert length(seats(person.id)) == 1
-
-      assert {:error, :no_athanor} =
-               SecurityTransitions.leave_athanor(server(), person.id, verify: admit())
-    end
-
-    test "an injected certificate UPDATE failure rolls the whole leave back and the seat stands" do
-      group = group!()
-      person = person!()
-      seat!(group.id, person.id)
-      session = session!(person.id, group.id)
-      client = paired!(group.id, person.id)
-      cert = certificate!(group.id, person.id, client)
-      failure = fail_on!("device_certificates", "UPDATE")
-      actor = Prima.Actor.in_athanor(group.id)
-
-      assert {:error, :database_error} =
-               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
-
-      assert length(seats(person.id)) == 1
-      assert session?(session)
-      assert paired_standing(client) == "active"
-      assert certificate_state(cert) == "active"
-
-      clear_failure!(failure)
-
-      assert {:ok, %{revoked_device_certificate_ids: [^cert]}} =
-               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
-
-      assert seats(person.id) == []
-    end
-
-    test "a remote person it leaves with no membership here is retired here, head and all" do
-      group = group!()
-      elsewhere = group!()
-      person = person!()
-      %{identifier: identifier, epoch: epoch} = remote!(person.id)
-      seat!(group.id, person.id)
-      peer = person!()
-      seat!(group.id, peer.id)
-
-      bound = session!(person.id, group.id, epoch)
-      unbound = session!(person.id, nil, epoch)
-      key = key!(group.id, person.id)
-      client = paired!(group.id, person.id)
-      cert = certificate!(group.id, person.id, client)
-      # What they still hold in an athanor they no longer sit in goes too.
-      frame = frame!(elsewhere.id, person.id)
-      stray = paired!(elsewhere.id, person.id)
-      invitation = invitation!(elsewhere.id, person.id)
-      passkey = passkey!(person.id)
-      by_passkey = confirmation!(elsewhere.id, person.id, passkey: passkey)
-      own = confirmation!(group.id, person.id)
-      peer_session = session!(peer.id, group.id)
-      peer_client = paired!(group.id, peer.id)
-
-      assert {:ok, change} =
-               SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group.id), person.id,
-                 verify: admit()
-               )
-
-      assert change.dropped_head_identifier == identifier
-      assert Enum.sort(change.revoked_session_hashes) == Enum.sort([bound, unbound])
-      assert change.revoked_passkey_ids == [passkey]
-      assert change.revoked_paired_client_ids == Enum.sort([client, stray])
-      assert change.revoked_device_certificate_ids == [cert]
-      assert change.revoked_frame_credential_ids == [frame]
-      assert change.revoked_pairing_invitation_ids == [invitation]
-      assert change.voided_confirmation_ids == Enum.sort([by_passkey, own])
-
-      # Nothing of theirs is left to ask about a head this home dropped.
-      assert is_nil(head(identifier))
-      refute session?(bound)
-      refute session?(unbound)
-      assert passkey_state(passkey) == "revoked"
-      assert paired_standing(client) == "revoked"
-      assert paired_standing(stray) == "revoked"
-      assert certificate_state(cert) == "revoked"
-      assert frame_state(frame) == "revoked"
-      assert invitation_state(invitation) == "revoked"
-      assert confirmation_state(by_passkey) == "voided"
-      assert confirmation_state(own) == "voided"
-      assert seats(person.id) == []
-
-      # What stands: the person row and its standing, the identity row,
-      # the key (a standing channel of its athanor) and everyone else's.
-      assert user(person.id).status == "active"
-      assert user(person.id).security_generation == 1
-      assert identity(person.id).identifier == identifier
-      refute revoked?(key)
-      assert session?(peer_session)
-      assert paired_standing(peer_client) == "active"
-    end
-
-    test "a remote person with another seat or a platform row here, or a local one, keeps the rest" do
-      group = group!()
-      other = group!()
-
-      # Another seat here.
-      seated = person!()
-      %{identifier: seated_id, epoch: seated_epoch} = remote!(seated.id)
-      seat!(group.id, seated.id)
-      seat!(other.id, seated.id)
-
-      # A platform row here.
-      operator = person!()
-      %{identifier: operator_id, epoch: operator_epoch} = remote!(operator.id)
-      seat!(group.id, operator.id)
-      {:ok, :ok} = Arca.Repo.transaction(fn -> Arca.Members.grant_platform!(operator.id) end)
-
-      # A local person: no identity row of provenance remote.
-      local = person!()
-      seat!(group.id, local.id)
-
-      for {person, identifier, epoch} <- [
-            {seated, seated_id, seated_epoch},
-            {operator, operator_id, operator_epoch},
-            {local, nil, nil}
-          ] do
-        unbound = session!(person.id, nil, epoch)
-        passkey = passkey!(person.id)
-        client = paired!(other.id, person.id)
-
-        assert {:ok, change} =
-                 SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group.id), person.id,
-                   verify: admit()
-                 )
-
-        assert is_nil(change.dropped_head_identifier)
-        assert change.revoked_passkey_ids == []
-        assert session?(unbound)
-        assert passkey_state(passkey) == "active"
-        assert paired_standing(client) == "active"
-        if identifier, do: assert(head(identifier))
-      end
-    end
-
-    for {table, event} <- [
-          {"directory_heads", "DELETE"},
-          {"passkeys", "UPDATE"},
-          {"device_certificates", "UPDATE"}
-        ] do
-      test "an injected #{table} #{event} failure rolls a retiring leave back, head and all" do
-        group = group!()
-        person = person!()
-        %{identifier: identifier, epoch: epoch} = remote!(person.id)
-        seat!(group.id, person.id)
-        session = session!(person.id, nil, epoch)
-        client = paired!(group.id, person.id)
-        cert = certificate!(group.id, person.id, client)
-        passkey = passkey!(person.id)
-        failure = fail_on!(unquote(table), unquote(event))
-        actor = Prima.Actor.in_athanor(group.id)
-
-        assert {:error, :database_error} =
-                 SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
-
-        assert length(seats(person.id)) == 1
-        assert head(identifier)
-        assert session?(session)
-        assert passkey_state(passkey) == "active"
-        assert paired_standing(client) == "active"
-        assert certificate_state(cert) == "active"
-
-        clear_failure!(failure)
-
-        assert {:ok, %{dropped_head_identifier: ^identifier}} =
-                 SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
-
-        assert is_nil(head(identifier))
-        refute session?(session)
-      end
-    end
-
-    test "a certificate the statement skips fails the postcondition, and nothing commits" do
-      group = group!()
-      person = person!()
-      %{identifier: identifier, epoch: epoch} = remote!(person.id)
-      seat!(group.id, person.id)
-      session = session!(person.id, nil, epoch)
-      client = paired!(group.id, person.id)
-      cert = certificate!(group.id, person.id, client)
-      passkey = passkey!(person.id)
-      skip = skip_on!("device_certificates", "UPDATE")
-      actor = Prima.Actor.in_athanor(group.id)
-
-      assert {:error, :postcondition_failed} =
-               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
-
-      assert length(seats(person.id)) == 1
-      assert head(identifier)
-      assert session?(session)
-      assert passkey_state(passkey) == "active"
-      assert paired_standing(client) == "active"
-      assert certificate_state(cert) == "active"
-
-      clear_failure!(skip)
-
-      assert {:ok, %{revoked_device_certificate_ids: [^cert]}} =
-               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
-    end
-  end
-
   describe "the standing columns" do
     test "ordinary updates refuse them as read-only" do
       user = person!()
@@ -1821,26 +1379,26 @@ defmodule Arca.SecurityTransitionsTest do
       assert {:error, {:invalid, %{status: ["is read-only"]}}} =
                Arca.Users.update(server(), user.id, %{status: "denied"})
 
-      group = group!()
+      ath = athanor!()
 
       assert {:error, {:invalid, %{security_generation: ["is read-only"]}}} =
-               Arca.Athanors.update(Prima.Actor.in_athanor(group.id), %{security_generation: 9})
+               Arca.Athanors.update(Prima.Actor.in_athanor(ath.id), %{security_generation: 9})
 
       assert {:error, {:invalid, %{status: ["is read-only"]}}} =
-               Arca.Athanors.update(Prima.Actor.in_athanor(group.id), %{status: "archived"})
+               Arca.Athanors.update(Prima.Actor.in_athanor(ath.id), %{status: "archived"})
 
       assert {:error, {:invalid, %{security_generation: ["is read-only"]}}} =
-               Arca.Athanors.set(Prima.Actor.in_athanor(group.id), security_generation: 9)
+               Arca.Athanors.set(Prima.Actor.in_athanor(ath.id), security_generation: 9)
 
       assert user(user.id).security_generation == 1
-      assert athanor(group.id).security_generation == 1
+      assert athanor(ath.id).security_generation == 1
     end
   end
 
   describe "shares" do
-    # The owner's shares end with their standing: a denial, a leave that
-    # retires them and an archive of their own athanor revoke every share
-    # and block the profiles that bind one, in their own transaction.
+    # The owner's shares end with their standing: a denial and an archive
+    # of their own athanor revoke every share and block the profiles that
+    # bind one, in their own transaction.
     defp shared!(owner) do
       entry = Arca.Test.Shares.entry!(owner.actor)
       share = Arca.Test.Shares.share!(owner.actor, entry.id)
@@ -1886,58 +1444,6 @@ defmodule Arca.SecurityTransitionsTest do
       assert share_status(terry, share) == "revoked"
     end
 
-    test "a leave that retires a remote person revokes the shares of their own athanor; " <>
-           "an ordinary leave revokes none" do
-      terry = Arca.Test.Shares.owner!()
-      {share, alice, profile} = shared!(terry)
-      traders = group!()
-      seat!(traders.id, terry.user.id)
-      peer = person!()
-      seat!(traders.id, peer.id)
-
-      assert {:ok, left} =
-               SecurityTransitions.leave_athanor(
-                 Prima.Actor.in_athanor(traders.id),
-                 terry.user.id,
-                 verify: admit()
-               )
-
-      assert left.revoked_share_ids == []
-      assert share_status(terry, share) == "active"
-
-      # Their own athanor is their last seat here: a remote person leaving
-      # it is retired, and their shares with them.
-      remote!(terry.user.id)
-
-      assert {:ok, retired} =
-               SecurityTransitions.leave_athanor(
-                 Prima.Actor.in_athanor(terry.athanor.id),
-                 terry.user.id,
-                 verify: admit()
-               )
-
-      assert retired.dropped_head_identifier
-      assert retired.revoked_share_ids == [share.id]
-      assert share_status(terry, share) == "revoked"
-      assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "needs_consent"
-
-      # The transition retires no person row: the person and their own
-      # athanor read as they did, so the rows alone carry no standing, and
-      # a creation the caller holds under its own check (`verify:`, where
-      # the standing is Sanctum's to establish) writes nothing.
-      assert %{status: "active", security_generation: 1} = user(terry.user.id)
-      assert %{status: "active"} = athanor(terry.athanor.id)
-      entry = Arca.Test.Shares.entry!(terry.actor)
-
-      assert {:error, :not_standing} =
-               Arca.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"},
-                 verify: fn -> {:error, :not_standing} end
-               )
-
-      assert {:ok, [%{id: only}]} = Arca.Shares.list(terry.actor)
-      assert only == share.id
-    end
-
     test "a share created after a denial is refused, and a denial's failure keeps its shares" do
       terry = Arca.Test.Shares.owner!()
       {share, _alice, _profile} = shared!(terry)
@@ -1963,10 +1469,10 @@ defmodule Arca.SecurityTransitionsLockTest do
   The transitions under two real connections, outside the sandbox: a
   transition waiting behind another acts on what that one committed — on
   PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
-  — and never on a read taken before the wait; a seat and a leave of one
-  person serialize on the person, so a leave never retires a person a
-  seat it did not see has seated; and a denial whose membership set moves
-  while it locks the athanors runs again on the set as it now stands.
+  — and never on a read taken before the wait; a seat into an athanor a
+  denial is archiving waits for it; and a denial whose membership set
+  moves while it locks the athanors runs again on the set as it now
+  stands.
   """
 
   use ExUnit.Case, async: false
@@ -1981,10 +1487,8 @@ defmodule Arca.SecurityTransitionsLockTest do
   alias Arca.Schemas.{
     ApiKey,
     Athanor,
-    DirectoryHead,
     ExternalIdentity,
     Membership,
-    PersonIdentity,
     Session,
     User
   }
@@ -2028,7 +1532,6 @@ defmodule Arca.SecurityTransitionsLockTest do
       {:ok, _} =
         Arca.Athanors.insert(server(), %{
           id: own_id,
-          kind: "person",
           name: "Own #{n}",
           slug: "stl-own-#{n}",
           owner_user_id: user_id,
@@ -2061,18 +1564,18 @@ defmodule Arca.SecurityTransitionsLockTest do
     end)
   end
 
-  defp group!(attrs \\ %{}) do
+  # Another person's athanor, its owner no row here.
+  defp athanor! do
     n = uniq()
 
     {:ok, athanor} =
       unboxed(fn ->
-        Arca.Athanors.insert(
-          server(),
-          Map.merge(
-            %{name: "G#{n}", slug: "stl-g-#{n}", kind: "group", created_by: "system"},
-            attrs
-          )
-        )
+        Arca.Athanors.insert(server(), %{
+          name: "A#{n}",
+          slug: "stl-a-#{n}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          created_by: "system"
+        })
       end)
 
     athanor.id
@@ -2101,74 +1604,6 @@ defmodule Arca.SecurityTransitionsLockTest do
       created_at: now,
       updated_at: now
     }
-  end
-
-  # A remote person seated in `group_id`, as the `cyfr` door admits one:
-  # their identity row names an identifier and holds no key, and its head
-  # is cached. Removed, with everything naming them, on exit.
-  defp remote_person!(group_id) do
-    n = uniq()
-    now = DateTime.utc_now()
-    id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
-    identifier = "per_" <> Prima.Digest.sha256_hex("stl-remote-#{n}")
-    epoch = Prima.Digest.sha256("stl-head-#{n}")
-
-    on_exit(fn ->
-      unboxed(fn ->
-        Arca.Repo.delete_all(where(Membership, user_id: ^id))
-        Arca.Repo.delete_all(where(DirectoryHead, identifier: ^identifier))
-        Arca.Repo.delete_all(where(PersonIdentity, user_id: ^id))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^id))
-        Arca.Repo.delete_all(where(User, id: ^id))
-      end)
-    end)
-
-    unboxed(fn ->
-      {:ok, _} =
-        Arca.Test.People.mint(
-          server(),
-          %{
-            id: id,
-            provider: "cyfr",
-            first_seen_at: now,
-            last_seen_at: now,
-            created_at: now,
-            updated_at: now
-          },
-          %{
-            key: "cyfr|https://dir.example|#{identifier}",
-            provider: "cyfr",
-            issuer: "https://dir.example",
-            subject: identifier,
-            first_seen_at: now,
-            last_seen_at: now
-          },
-          also: fn person ->
-            {1, _} =
-              Arca.Repo.insert_all(PersonIdentity, [
-                Arca.SecurityTransitions.Fixtures.remote_row(person.id, identifier)
-              ])
-
-            :ok
-          end
-        )
-
-      {1, _} =
-        Arca.Repo.insert_all(DirectoryHead, [
-          Arca.SecurityTransitions.Fixtures.head_row(identifier, epoch)
-        ])
-
-      {:ok, _} =
-        Arca.Members.seat(Prima.Actor.in_athanor(group_id), %{user_id: id, added_by: "x"})
-    end)
-
-    %{id: id, identifier: identifier}
-  end
-
-  defp leave(group_id, user_id, verify) do
-    unboxed(fn ->
-      SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group_id), user_id, verify: verify)
-    end)
   end
 
   # A transition that stops inside its own transaction — every lock taken,
@@ -2378,12 +1813,12 @@ defmodule Arca.SecurityTransitionsLockTest do
   test "a membership taken while a denial locks the athanors is on the set it runs again on", %{
     user_id: user_id
   } do
-    pair_id = group!(%{roster: "frozen"})
-    on_exit(fn -> remove_athanors!([pair_id]) end)
+    other_id = athanor!()
+    on_exit(fn -> remove_athanors!([other_id]) end)
     test = self()
 
-    # Hold the person's own athanor: the denial plans without the pair,
-    # then waits on this row while the pair's seat is written.
+    # Hold the person's own athanor: the denial plans without the other
+    # athanor, then waits on this row while the seat there is written.
     holder =
       Task.async(fn ->
         unboxed(fn ->
@@ -2401,7 +1836,7 @@ defmodule Arca.SecurityTransitionsLockTest do
               :seat -> :ok
             end
 
-            {1, _} = Arca.Repo.insert_all(Membership, [seat_row(pair_id, user_id)])
+            {1, _} = Arca.Repo.insert_all(Membership, [seat_row(other_id, user_id)])
           end)
         end)
       end)
@@ -2410,16 +1845,28 @@ defmodule Arca.SecurityTransitionsLockTest do
 
     denier =
       Task.async(fn ->
-        unboxed(fn -> SecurityTransitions.deny_user(server(), user_id, verify: admit()) end)
+        unboxed(fn ->
+          SecurityTransitions.deny_user(server(), user_id,
+            verify: fn %{athanors: athanors} ->
+              send(test, {:asked, Enum.map(athanors, & &1.id)})
+              :ok
+            end
+          )
+        end)
       end)
 
     refute Task.yield(denier, 300)
     send(holder.pid, :seat)
     Task.await(holder, 25_000)
 
+    # The policy was shown the set as it stands after the seat, and the
+    # denial removed that seat with the rest.
     assert {:ok, change} = Task.await(denier, 25_000)
-    assert pair_id in change.archived_athanor_ids
-    unboxed(fn -> assert Arca.Repo.get(Athanor, pair_id).status == "archived" end)
+    assert_received {:asked, asked}
+    assert other_id in asked
+    refute_received {:asked, _}
+    assert other_id in Enum.map(change.removed_memberships, & &1.athanor_id)
+    unboxed(fn -> assert Arca.Repo.all(where(Membership, user_id: ^user_id)) == [] end)
   end
 
   # PostgreSQL alone: on SQLite no second connection can seat the person
@@ -2429,13 +1876,13 @@ defmodule Arca.SecurityTransitionsLockTest do
     user_id: user_id,
     own_id: own_id
   } do
-    groups = for _ <- 1..3, do: group!()
-    on_exit(fn -> remove_athanors!(groups) end)
+    others = for _ <- 1..3, do: athanor!()
+    on_exit(fn -> remove_athanors!(others) end)
     {:ok, _} = seat(own_id, user_id)
-    {:ok, agent} = Agent.start_link(fn -> groups end)
+    {:ok, agent} = Agent.start_link(fn -> others end)
 
     # Every time the policy is asked, a second connection seats the
-    # person in one more group, past the person's lock (`seat_row/2`):
+    # person in one more athanor, past the person's lock (`seat_row/2`):
     # the set the denial planned has moved by the time it would write.
     verify = fn _rows ->
       next = Agent.get_and_update(agent, fn [next | rest] -> {next, rest} end)
@@ -2464,7 +1911,7 @@ defmodule Arca.SecurityTransitionsLockTest do
       assert user.security_generation == 1
       assert Arca.Repo.get(Athanor, own_id).status == "active"
 
-      for id <- groups do
+      for id <- others do
         assert Arca.Repo.get(Athanor, id).status == "active"
         assert Arca.Repo.get(Athanor, id).security_generation == 1
       end
@@ -2475,114 +1922,29 @@ defmodule Arca.SecurityTransitionsLockTest do
   end
 
   test "a seat into an athanor a denial is archiving waits for it and is refused", %{
-    user_id: user_id
+    user_id: user_id,
+    own_id: own_id
   } do
-    group_id = group!()
-    on_exit(fn -> remove_athanors!([group_id]) end)
-    {:ok, _} = seat(group_id, user_id)
-
     other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
     on_exit(fn -> unboxed(fn -> Arca.Repo.delete_all(where(Membership, user_id: ^other)) end) end)
 
-    # The person is the group's last member, so the denial archives it; it
-    # holds the athanor while its policy is asked.
+    # The denial archives the person's own athanor; it holds the athanor
+    # while its policy is asked.
     denier = paused(:deny_user, user_id)
     assert_receive {:holding, :deny_user}, 5_000
 
-    seater = Task.async(fn -> seat(group_id, other) end)
+    seater = Task.async(fn -> seat(own_id, other) end)
     refute Task.yield(seater, 300), "the seat was written while the denial held the athanor"
 
     send(denier.pid, :go)
     assert {:ok, change} = Task.await(denier, 25_000)
-    assert group_id in change.archived_athanor_ids
+    assert own_id in change.archived_athanor_ids
 
     assert {:error, :athanor_archived} = Task.await(seater, 25_000)
 
     unboxed(fn ->
       refute Arca.Repo.exists?(where(Membership, user_id: ^other))
-      assert Arca.Repo.get(Athanor, group_id).status == "archived"
-    end)
-  end
-
-  test "a seat elsewhere waits for a leave holding the person, and lands after it retired them" do
-    group_id = group!()
-    other_id = group!()
-    on_exit(fn -> remove_athanors!([group_id, other_id]) end)
-    remote = remote_person!(group_id)
-    test = self()
-
-    # The leave found the person with no other row and retires them here;
-    # it holds the person while its policy is asked.
-    leaver =
-      Task.async(fn ->
-        leave(group_id, remote.id, fn _rows ->
-          send(test, :leave_holds)
-
-          receive do
-            :go -> :ok
-          end
-        end)
-      end)
-
-    assert_receive :leave_holds, 5_000
-
-    seater = Task.async(fn -> seat(other_id, remote.id) end)
-    refute Task.yield(seater, 300), "the seat was written while the leave held the person"
-
-    send(leaver.pid, :go)
-    assert {:ok, %{dropped_head_identifier: dropped}} = Task.await(leaver, 25_000)
-    assert dropped == remote.identifier
-    assert {:ok, %{athanor_id: ^other_id}} = Task.await(seater, 25_000)
-
-    unboxed(fn ->
-      assert [%{athanor_id: ^other_id}] = Arca.Repo.all(where(Membership, user_id: ^remote.id))
-      refute Arca.Repo.get(DirectoryHead, remote.identifier)
-    end)
-  end
-
-  test "a leave waiting behind a seat elsewhere sees it, and retires no one" do
-    group_id = group!()
-    other_id = group!()
-    on_exit(fn -> remove_athanors!([group_id, other_id]) end)
-    remote = remote_person!(group_id)
-    test = self()
-
-    # The seat is written and not yet committed: it holds the person.
-    seater =
-      Task.async(fn ->
-        unboxed(fn ->
-          Arca.Repo.transaction(fn ->
-            {:ok, row} =
-              Arca.Members.seat(Prima.Actor.in_athanor(other_id), %{
-                user_id: remote.id,
-                added_by: "x"
-              })
-
-            send(test, :seat_holds)
-
-            receive do
-              :commit -> row
-            end
-          end)
-        end)
-      end)
-
-    assert_receive :seat_holds, 5_000
-
-    leaver = Task.async(fn -> leave(group_id, remote.id, admit()) end)
-    refute Task.yield(leaver, 300), "the leave decided while the seat held the person"
-
-    send(seater.pid, :commit)
-    assert {:ok, %{athanor_id: ^other_id}} = Task.await(seater, 25_000)
-
-    # Had the leave read the person's rows before the seat committed, it
-    # would have retired a person who now sits elsewhere.
-    assert {:ok, change} = Task.await(leaver, 25_000)
-    assert is_nil(change.dropped_head_identifier)
-
-    unboxed(fn ->
-      assert [%{athanor_id: ^other_id}] = Arca.Repo.all(where(Membership, user_id: ^remote.id))
-      assert Arca.Repo.get(DirectoryHead, remote.identifier)
+      assert Arca.Repo.get(Athanor, own_id).status == "archived"
     end)
   end
 end

@@ -14,9 +14,8 @@ defmodule PrismWeb.AquaLiveTest.UnreadableRoles do
 end
 
 defmodule PrismWeb.AquaLiveTest do
-  # The AQUA page shows the tree of the athanor in focus — a person's own
-  # on their page, the group's on the group's — and every write lands
-  # there through the `aqua` and `notes` tools. These drive the LiveView
+  # The AQUA page shows the tree of the person's own athanor, and every
+  # write lands there through the `aqua` and `notes` tools. These drive the LiveView
   # itself: a test of the tool alone cannot catch a handler that reads
   # the wrong context or a card that offers a verb the tool refuses.
   use PrismWeb.ConnCase, async: false
@@ -54,18 +53,15 @@ defmodule PrismWeb.AquaLiveTest do
     end)
   end
 
-  test "a group's page shows the group's tree alone, and a person's page edits their own",
+  test "a person's page edits their own tree, and a write lands in it alone",
        %{conn: conn} do
     user = test_user()
-    n = System.unique_integer([:positive])
-
     mine = Sanctum.Test.People.athanor!(user.user_id)
-
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Acme #{n}")
-    conn = log_in_user(conn, user, athanor_id: group.id)
+    theirs = Sanctum.Test.People.athanor!(test_user().user_id)
+    conn = log_in_user(conn, user)
 
     mine_ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: mine.id}
-    group_ctx = %{mine_ctx | athanor_id: group.id}
+    their_ctx = %{mine_ctx | athanor_id: theirs.id}
 
     {:ok, _} =
       Cyfr.Test.AquaTool.call(mine_ctx, %{
@@ -75,15 +71,8 @@ defmodule PrismWeb.AquaLiveTest do
         "content" => "# Tom"
       })
 
-    refute Arca.exists?(Sanctum.Context.actor(group_ctx), Compendium.AquaPath.agent_file("tom"))
+    refute Arca.exists?(Sanctum.Context.actor(their_ctx), Compendium.AquaPath.agent_file("tom"))
 
-    # The group's page: no closet picker, no personal role.
-    {_view, html} = mount_athanor(conn, "/aqua", group)
-    refute html =~ "in your athanor"
-    refute html =~ "aqua-card-tom"
-    refute html =~ ~s(name="owner")
-
-    # The person's own page: their tree, and a write lands in it alone.
     {view, html} = mount_athanor(conn, "/aqua", mine)
     assert html =~ "aqua-card-tom"
 
@@ -96,7 +85,7 @@ defmodule PrismWeb.AquaLiveTest do
     })
 
     assert {:ok, %{"title" => "My Tom"}} = get_agent(mine_ctx, "tom")
-    refute Arca.exists?(Sanctum.Context.actor(group_ctx), Compendium.AquaPath.agent_file("tom"))
+    refute Arca.exists?(Sanctum.Context.actor(their_ctx), Compendium.AquaPath.agent_file("tom"))
   end
 
   # Point the soul at `ref`, and put it back afterwards: the agent files live
@@ -291,8 +280,7 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "the pinned page is written from the page and is what the soul reads",
          %{conn: conn, ctx: ctx} do
-      # The athanor here is the person's own, so its one pinned page is
-      # `about-you`; a shared athanor's is `about-us`.
+      # The athanor's one pinned page is `about-you`.
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "About you"
       assert html =~ "Nothing pinned yet."

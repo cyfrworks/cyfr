@@ -74,8 +74,8 @@ defmodule Cyfr.AdmissionOriginTest do
   @target "reagent:local.origin-target"
   @dep "reagent:local.origin-dep"
   @dep_ref "reagent:local.origin-dep:0.1.0"
-  # `Sanctum.TestContext.athanor!/0`'s group slug: a public tincture's address.
-  @address "test"
+  # `Sanctum.TestContext.athanor!/0`'s route segment: a public tincture's address.
+  @address "@test"
 
   # The rows this test holds: every entry that names an origin.
   @rows for row <- Boundaries.admission_entries(), row.origin != :none, do: row

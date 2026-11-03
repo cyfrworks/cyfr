@@ -38,12 +38,12 @@ defmodule Sanctum.Tenancy.AthanorsPurgeTest do
         verified: true
       })
 
-    {:ok, group} = Athanors.create_group(user.id, "Purge #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     ctx =
       Context.build(
         user_id: user.id,
-        athanor_id: group.id,
+        athanor_id: athanor.id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -53,23 +53,23 @@ defmodule Sanctum.Tenancy.AthanorsPurgeTest do
     :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "notes.txt"], "kept until purge")
     :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "agent.json"], "{}")
 
-    {:ok, group: group, ctx: ctx}
+    {:ok, athanor: athanor, ctx: ctx}
   end
 
-  test "refused while the athanor is active — archive first", %{group: group, ctx: ctx} do
-    assert {:error, :not_archived} = Athanors.purge_storage(group)
+  test "refused while the athanor is active — archive first", %{athanor: athanor, ctx: ctx} do
+    assert {:error, :not_archived} = Athanors.purge_storage(athanor)
     assert Arca.exists?(Sanctum.Context.actor(ctx), ["data", "notes.txt"])
   end
 
   test "purge drops the per-scope usage counters, not just the whole-tree total", %{
-    group: group,
+    athanor: athanor,
     ctx: ctx
   } do
     # Warm the per-scope pair the public quota reads.
     assert {:ok, %{files: files}} = Arca.Usage.scope_usage(Sanctum.Context.actor(ctx), "data")
     assert files >= 1
 
-    {:ok, archived} = Athanors.archive(group)
+    {:ok, archived} = Athanors.archive(athanor, force: true)
     assert :ok = Athanors.purge_storage(archived)
 
     # The purge path is `delete_tree(ctx, [])`, whose empty path names no
@@ -79,8 +79,8 @@ defmodule Sanctum.Tenancy.AthanorsPurgeTest do
              Arca.Usage.scope_usage(Sanctum.Context.actor(ctx), "data")
   end
 
-  test "after archive, the whole blob tree goes and the rows stay", %{group: group, ctx: ctx} do
-    assert {:ok, archived} = Athanors.archive(group)
+  test "after archive, the whole blob tree goes and the rows stay", %{athanor: athanor, ctx: ctx} do
+    assert {:ok, archived} = Athanors.archive(athanor, force: true)
     assert Arca.exists?(Sanctum.Context.actor(ctx), ["data", "notes.txt"])
 
     assert :ok = Athanors.purge_storage(archived)
@@ -90,6 +90,6 @@ defmodule Sanctum.Tenancy.AthanorsPurgeTest do
     assert {:ok, []} = Arca.list_recursive(Sanctum.Context.actor(ctx), [])
 
     # The row remains — purge deletes blobs, never the record.
-    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
+    assert {:ok, %{status: "archived"}} = Athanors.get(athanor.id)
   end
 end

@@ -116,12 +116,6 @@ defmodule Arca.ThreadStorage do
   `{:limit_reached, :max_threads_per_athanor, cap}` at the ceiling,
   `{:cap_unverifiable, :max_threads_per_athanor}` when the cap or the
   count cannot be read.
-
-  The creator starts out following it — a thread unfollowed by its own
-  author would be born invisible — and everyone else follows it
-  themselves. There is deliberately no subscriber list to pass: a client
-  must not follow other members. The follow is written after the thread
-  commits and is best effort.
   """
   @spec create(Prima.Actor.t(), map()) ::
           {:ok, map()}
@@ -136,12 +130,7 @@ defmodule Arca.ThreadStorage do
   def create(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.create", fn ->
-      with {:ok, thread} <- Repo.locking_transaction(fn -> insert_thread(actor, attrs) end) do
-        # After the commit: a follow that fails inside the transaction
-        # would abort it on PostgreSQL and lose the thread with it.
-        subscribe_creator(actor, thread)
-        {:ok, thread}
-      end
+      Repo.locking_transaction(fn -> insert_thread(actor, attrs) end)
     end)
     |> Arca.Data.project()
   end
@@ -185,16 +174,6 @@ defmodule Arca.ThreadStorage do
   defp count(%Prima.Actor{} = actor) do
     Repo.aggregate(from(c in Thread, where: c.athanor_id == ^actor.athanor_id), :count)
   end
-
-  # Best effort: a thread that exists but is in nobody's sidebar is a
-  # recoverable annoyance (follow it), where failing the create over it
-  # would lose the thread itself.
-  defp subscribe_creator(%Prima.Actor{user_id: creator} = actor, thread)
-       when is_binary(creator) do
-    Arca.ThreadSubscriptionStorage.follow(actor, thread.id, creator)
-  end
-
-  defp subscribe_creator(_ctx, _thread), do: :ok
 
   @doc """
   Update a thread's title, agent, turn cursor or last
@@ -470,7 +449,7 @@ defmodule Arca.ThreadStorage do
     with {:ok, thread} <- thread_row(actor, id),
          :ok <- delete_blobs(actor, thread.id) do
       # arca:unscoped-ok thread_row(actor, id) above establishes thread ownership.
-      # Delete its messages, follows, and grants. Explicit message deletion
+      # Delete its messages and grants. Explicit message deletion
       # also covers SQLite connections without foreign_keys=ON.
       Repo.transaction(fn ->
         Repo.delete_all(from(m in Message, where: m.thread_id == ^thread.id))
@@ -482,8 +461,8 @@ defmodule Arca.ThreadStorage do
     end
   end
 
-  # What rides with a thread besides its messages: who followed it,
-  # and what its members already answered about tool calls in it.
+  # What rides with a thread besides its messages: what its person
+  # already answered about tool calls in it.
   # Agent-scope grants are untouched — they belong to the agent, not the
   # thread.
   #
@@ -491,8 +470,6 @@ defmodule Arca.ThreadStorage do
   # caller already tenant-proved (do_delete's `get`, delete_before's
   # `where_athanor`), and each row names exactly one thread.
   defp delete_thread_satellites(ids) do
-    Repo.delete_all(from(s in Arca.Schemas.ThreadSubscription, where: s.thread_id in ^ids))
-
     Repo.delete_all(
       from(g in Arca.Schemas.ToolGrant,
         where: g.scope == ^Arca.Schemas.ToolGrant.thread_scope() and g.thread_id in ^ids

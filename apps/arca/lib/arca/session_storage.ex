@@ -178,22 +178,6 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Point a session at another athanor. Returns `{:error, :not_found}` when no
-  live session has that hash.
-  """
-  @spec update_athanor(binary(), String.t()) :: :ok | {:error, :not_found | :database_error}
-  def update_athanor(token_hash, athanor_id) when is_binary(athanor_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.update_athanor", fn ->
-      query = from(s in Session, where: s.token_hash == ^token_hash)
-
-      case Arca.Repo.update_all(query, set: [athanor_id: athanor_id]) do
-        {0, _} -> {:error, :not_found}
-        {_, _} -> :ok
-      end
-    end)
-  end
-
-  @doc """
   Delete every session of one user. Returns `{:ok, count}`.
   """
   @spec delete_by_user(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}

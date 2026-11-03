@@ -311,9 +311,7 @@ defmodule Arca.Providers.FilesTest do
       sender = person!("s", n)
       recipient = person!("r", n)
       stranger = person!("x", n)
-      shared = athanor!("shared", n)
-
-      for who <- [sender, recipient], do: seat!(shared, who.id)
+      Arca.Test.Shares.thread!([sender.id, recipient.id])
 
       on_exit(fn ->
         Store.reset()
@@ -577,7 +575,7 @@ defmodule Arca.Providers.FilesTest do
       assert {:error, {:invalid_argument, message}} =
                offer(sender, ["data/docs/a.txt"], stranger.id)
 
-      assert message =~ "You share no athanor with #{stranger.id}"
+      assert message =~ "You share no thread with #{stranger.id}"
 
       for outside <- ["notes/n.md", "components/reagents/local/x/0.1.0/x.wasm"] do
         assert {:error, {:invalid_argument, message}} = offer(sender, [outside], recipient.id)
@@ -828,12 +826,12 @@ defmodule Arca.Providers.FilesTest do
            "and the inbox names it before acceptance",
          %{sender: sender, recipient: recipient} do
       named = person!("n", System.unique_integer([:positive]))
-      seat!(recipient.home, named.id)
+      Arca.Test.Shares.thread!([named.id, recipient.id])
       user!(named.id, "alice-#{System.unique_integer([:positive])}")
       {:ok, %{namespace: namespace}} = Arca.Users.get(Prima.Actor.system(), named.id)
 
       odd = person!("o", System.unique_integer([:positive]))
-      seat!(recipient.home, odd.id)
+      Arca.Test.Shares.thread!([odd.id, recipient.id])
       user!(odd.id, "has/slash-#{System.unique_integer([:positive])}")
 
       for {who, slug} <- [{named, namespace}, {odd, odd.id}, {sender, sender.id}] do
@@ -945,7 +943,8 @@ defmodule Arca.Providers.FilesTest do
   # ---------------------------------------------------------------------------
 
   # A person working in an athanor of their own, as a session's context.
-  defp person!(label, n), do: member!(athanor!("home-#{label}", n), label, n)
+  defp person!(label, n),
+    do: member!(athanor!("home-#{label}", n, "usr_f0#{label}#{n}"), label, n)
 
   # A person seated in `home` and working in it, as a session's context.
   defp member!(home, label, n) do
@@ -966,12 +965,12 @@ defmodule Arca.Providers.FilesTest do
     %{id: id, home: home, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end
 
-  defp athanor!(label, n) do
+  defp athanor!(label, n, owner) do
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
         name: "F0 #{label} #{n}",
         slug: "f0-#{label}-#{n}",
+        owner_user_id: owner,
         created_by: "system"
       })
 
@@ -1071,7 +1070,7 @@ defmodule Arca.Providers.FilesRaceTest do
   import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.Providers.Files, as: Tool
-  alias Arca.Schemas.{Athanor, FileOffer, FileReceipt}
+  alias Arca.Schemas.{Athanor, FileOffer, FileReceipt, SharedThread}
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -1090,22 +1089,21 @@ defmodule Arca.Providers.FilesRaceTest do
 
     {sender, recipient, shared} =
       unboxed(fn ->
-        shared = athanor!("shared", n)
         sender = person!("s", n)
         recipient = person!("r", n)
-        for who <- [sender, recipient], do: seat!(shared.id, who.id)
-        {sender, recipient, shared}
+        {sender, recipient, Arca.Test.Shares.thread!([sender.id, recipient.id])}
       end)
 
     on_exit(fn ->
       unboxed(fn ->
-        ids = [sender.actor.athanor_id, recipient.actor.athanor_id, shared.id]
+        ids = [sender.actor.athanor_id, recipient.actor.athanor_id]
 
         for id <- ids do
           {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
         end
 
         Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^ids))
+        Arca.Repo.delete_all(from(t in SharedThread, where: t.id == ^shared.id))
       end)
 
       Application.put_env(:arca, :base_path, prev_base)
@@ -1297,8 +1295,8 @@ defmodule Arca.Providers.FilesRaceTest do
   end
 
   defp person!(label, n) do
-    home = athanor!("home-#{label}", n)
     id = "usr_fr#{label}#{n}"
+    home = athanor!("home-#{label}", n, id)
     seat!(home.id, id)
 
     %{
@@ -1307,12 +1305,12 @@ defmodule Arca.Providers.FilesRaceTest do
     }
   end
 
-  defp athanor!(label, n) do
+  defp athanor!(label, n, owner) do
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
         name: "Race #{label} #{n}",
         slug: "file-race-#{label}-#{n}",
+        owner_user_id: owner,
         created_by: "system"
       })
 

@@ -13,7 +13,7 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.{Context, Gate, RequestLog}
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Members
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -37,27 +37,29 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
     # The person's own athanor and their seat there, which their admission
     # made.
     mine = Sanctum.Test.People.athanor!(u)
-    {:ok, group} = Athanors.create_group(u.id, "Trip #{n}")
 
-    alice = %{Sanctum.TestContext.local(:prism) | user_id: u.id, athanor_id: group.id}
-    {:ok, home} = Context.focus(alice, mine.id)
-
+    # Bob's own athanor, where alice holds a seat and works: its log is
+    # bob's to read.
     {:ok, bob_user} =
       Sanctum.Test.People.linked(%{id: "local|idp|bob-#{n}", provider: "local"})
 
-    {:ok, _} = Members.create(%{user_id: bob_user.id, athanor_id: group.id})
+    bobs = Sanctum.Test.People.athanor!(bob_user)
+    {:ok, _} = Members.create(%{user_id: u.id, athanor_id: bobs.id})
+
+    alice = %{Sanctum.TestContext.local(:prism) | user_id: u.id, athanor_id: bobs.id}
+    {:ok, home} = Context.focus(alice, mine.id)
 
     bob =
       Context.build(
         user_id: bob_user.id,
-        athanor_id: group.id,
+        athanor_id: bobs.id,
         permissions: [:storage_read],
         scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
 
-    {:ok, alice: alice, home: home, mine: mine, group: group, bob: bob}
+    {:ok, alice: alice, home: home, mine: mine, bobs: bobs, bob: bob}
   end
 
   defp notes_rows(bob) do
@@ -67,7 +69,7 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
     rows
   end
 
-  test "a personal note read from a group stays out of the group's log", %{
+  test "a personal note read from another athanor stays out of that athanor's log", %{
     alice: alice,
     home: home,
     mine: mine,
@@ -107,7 +109,7 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
   end
 
   test "a read of the focused athanor keeps its output in the log", %{alice: alice, bob: bob} do
-    body = "Group plan: meet at the station at nine"
+    body = "Plan: meet at the station at nine"
     assert {:ok, _} = Aqua.Notes.keep(alice, "meeting", body)
 
     assert {:ok, %{content: ^body}} =
@@ -120,11 +122,11 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
   end
 
   test "the completion columns name the redaction only for another athanor's output", %{
-    group: group,
+    bobs: bobs,
     mine: mine,
     alice: alice
   } do
-    ours = %{name: "n", content: "here", athanor_id: group.id}
+    ours = %{name: "n", content: "here", athanor_id: bobs.id}
     theirs = %{matches: [%{name: "n", snippet: "there", athanor_id: mine.id}]}
     athanor_row = %{id: mine.id, name: "Me"}
     member_list = %{athanor: mine.id, members: [%{email: "x@example.com"}]}
@@ -139,12 +141,12 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
 
     # A clock or a source inside an answer is read by its fields, and the
     # row is still written.
-    clocked = %{id: group.id, created_at: DateTime.utc_now()}
+    clocked = %{id: bobs.id, created_at: DateTime.utc_now()}
 
     assert %{status: "success", output: clocked_kept} =
              RequestLog.closed(alice, {:ok, clocked}, %{})
 
-    assert clocked_kept =~ group.id
+    assert clocked_kept =~ bobs.id
 
     sourced = %{id: mine.id, created_at: DateTime.utc_now(), sources: [Prima.Source.new(:filed)]}
 
@@ -152,7 +154,7 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
              RequestLog.closed(alice, {:ok, sourced}, %{})
 
     # Prose that merely starts like an id is a body, not a locator.
-    prose = %{content: "ath_ is how an athanor id starts", athanor_id: group.id}
+    prose = %{content: "ath_ is how an athanor id starts", athanor_id: bobs.id}
     assert %{output: prose_kept} = RequestLog.closed(alice, {:ok, prose}, %{})
     assert prose_kept =~ "how an athanor id starts"
   end

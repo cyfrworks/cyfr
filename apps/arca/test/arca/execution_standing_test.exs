@@ -271,7 +271,7 @@ defmodule Arca.ExecutionStandingLockTest do
       unboxed(fn ->
         Arca.Athanors.insert(Prima.Actor.system(), %{
           id: athanor_id,
-          kind: "group",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           name: "Barrier #{n}",
           slug: "std-barrier-#{n}",
           created_by: "system"

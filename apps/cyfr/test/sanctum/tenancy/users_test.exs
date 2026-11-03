@@ -167,7 +167,6 @@ defmodule Sanctum.Tenancy.UsersTest do
 
     {:ok, personal} =
       Athanors.create(%{
-        kind: "person",
         name: "P7",
         slug: "p7-#{System.unique_integer([:positive])}",
         owner_user_id: u.id,
@@ -183,11 +182,9 @@ defmodule Sanctum.Tenancy.UsersTest do
     refute Users.own_athanor?(nil, personal.id)
   end
 
-  test "deny ejects: sessions and keys revoked, own athanor archived, group rows gone" do
+  test "deny ejects: sessions and keys revoked, own athanor archived" do
     u = person(4)
     personal = Sanctum.Test.People.athanor!(u)
-    {:ok, group} = Athanors.create_group("github|https://github.com|owner4", "G4")
-    {:ok, :added} = Members.add(group, [user_id: u.id], "owner4")
 
     ctx =
       Context.build(
@@ -214,21 +211,26 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert uid == u.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
-    refute Members.member?(u.id, group.id)
 
     # allow reverses the standing, reopens the athanor and seats its owner in
-    # it again; the credentials stay revoked and the group seat stays gone
+    # it again; the credentials stay revoked
     assert {:ok, %{status: "active"}} = Users.allow(denied)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
     assert Members.member?(u.id, personal.id)
-    refute Members.member?(u.id, group.id)
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
 
   test "a post-restore period is the person's: a denial and an athanor's purge leave it, the users row takes it" do
     u = person(42)
-    {:ok, group} = Athanors.create_group("github|https://github.com|owner42", "G42")
-    {:ok, :added} = Members.add(group, [user_id: u.id], "owner42")
+
+    # Another person's athanor: the purge is not the person's.
+    {:ok, other} =
+      Athanors.create(%{
+        name: "G42",
+        slug: "g42-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+        created_by: "system"
+      })
 
     # Written straight to the table: its store comes with the declared
     # restore.
@@ -242,7 +244,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert {:ok, _} = Users.deny(u)
     assert restore_periods(u.id) == 1
 
-    {:ok, archived} = Athanors.archive(group)
+    {:ok, archived} = Athanors.archive(other, force: true)
     assert {:ok, counts} = Athanors.destroy(archived)
     refute Map.has_key?(counts, "restore_people")
     assert restore_periods(u.id) == 1
@@ -254,52 +256,6 @@ defmodule Sanctum.Tenancy.UsersTest do
 
   defp restore_periods(user_id),
     do: Arca.Repo.aggregate(from(r in "restore_people", where: r.user_id == ^user_id), :count)
-
-  test "deny withdraws the group seats the identifier was still holding" do
-    n = System.unique_integer([:positive])
-    {:ok, group} = Athanors.create_group("github|https://github.com|owner41", "G41")
-
-    # An invitation names an identifier no person here holds: the deny's
-    # sweep by user id cannot see it, so it is withdrawn by identifier.
-    stranger = "per_" <> Prima.Digest.sha256_hex("invitee-#{n}")
-    {:ok, :invited} = Members.add(group, [identifier: stranger], "owner41")
-    assert [_] = invited_rows(group.id)
-
-    assert 1 == Members.withdraw_invites_for_identifier(stranger)
-    assert invited_rows(group.id) == []
-
-    # and a seat left waiting on a person's own identifier goes with their
-    # deny
-    identifier = "per_" <> Prima.Digest.sha256_hex("held-#{n}")
-
-    {:ok, u} =
-      Sanctum.Test.People.remote(
-        %{
-          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
-          provider: "cyfr"
-        },
-        %{identifier: identifier, directory_url: "https://dir.example"}
-      )
-
-    {:ok, group2} = Athanors.create_group("github|https://github.com|owner41", "G41b")
-
-    {:ok, _} =
-      Members.create(%{
-        person_identifier: identifier,
-        scope: "athanor",
-        status: "invited",
-        athanor_id: group2.id,
-        added_by: "owner41"
-      })
-
-    assert [_] = invited_rows(group2.id)
-    assert {:ok, _} = Users.deny(u)
-    assert invited_rows(group2.id) == []
-  end
-
-  defp invited_rows(athanor_id),
-    do:
-      athanor_id |> Members.list_by_athanor() |> rows!() |> Enum.filter(&(&1.status == "invited"))
 
   # A denial revokes every share of the person's own athanor in its
   # transaction, and each is announced once it committed, so recipients in
@@ -342,6 +298,4 @@ defmodule Sanctum.Tenancy.UsersTest do
     refute out.authenticated
     assert out.athanor_id == nil
   end
-
-  defp rows!({:ok, rows}), do: rows
 end

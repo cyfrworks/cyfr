@@ -4,8 +4,8 @@
 // The file-offer proof, run in the official Playwright image by run.sh
 // against a `cyfr` release behind the harness's HTTPS front (README.md).
 // Three people, each signed in in a Chromium context of their own at the
-// run's viewport: the sender and the recipient sit together in one group,
-// and the outsider sits in no athanor but their own. Every step a person
+// run's viewport: the sender and the recipient sit together in one shared
+// thread, and the outsider sits in no thread with them. Every step a person
 // takes is taken on the Files page and its topbar, as that person sees it.
 // Each step is one row of the record; the proof fails when a row does not
 // hold, and stops at the first row a later one rests on.
@@ -50,7 +50,7 @@
 // the rows, the storage counts, and the snapshots' and the accepted
 // copy's digests — is run.sh's, asked for through OUT_DIR (`ask-N.json`,
 // answered `answer-N.json`). OUT_DIR also holds run.sh's `setup.json`:
-// the people, the group, the viewport and the cases shown elsewhere.
+// the people, the thread, the viewport and the cases shown elsewhere.
 //
 // Usage: node proof.mjs HOMES_FILE OUT_DIR SENDER_COOKIE RECIPIENT_COOKIE OUTSIDER_COOKIE
 
@@ -645,7 +645,7 @@ async function main() {
     await sender.page.locator('#send-copy-form button[type="submit"]').click();
     // The refusal names the person the submission carried, so it shows the
     // outsider's id reached the server and was refused there.
-    const notShared = `You share no athanor with ${OUTSIDER.user_id} — an offer goes to someone you share an athanor with`;
+    const notShared = `You share no thread with ${OUTSIDER.user_id} — an offer goes to someone you share a thread with`;
     const refused = await flash(sender, /./, "the refusal of the edited picker", "error").catch(() => null);
     const sentAfterForged = (await shown(sender)).sent.map((s) => s.id);
     await closePicker(sender);
@@ -701,7 +701,7 @@ async function main() {
       browser: record.browser,
       at: record.at,
       people: setup.people,
-      group: setup.group,
+      thread: setup.thread,
       rows,
       shown_elsewhere: setup.shown_elsewhere,
       record,

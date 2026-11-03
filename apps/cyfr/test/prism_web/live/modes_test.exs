@@ -85,9 +85,9 @@ defmodule PrismWeb.ModesTest do
          %{conn: conn} do
       {:ok, other} =
         Athanors.create(%{
-          kind: "group",
           name: "Elsewhere",
           slug: "elsewhere-#{System.unique_integer([:positive])}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           created_by: "system"
         })
 

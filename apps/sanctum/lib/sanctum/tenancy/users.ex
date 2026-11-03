@@ -271,10 +271,8 @@ defmodule Sanctum.Tenancy.Users do
   @doc """
   Eject a person from this server, as one transaction
   (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
-  session and API key they created, archive their own athanor, every
-  frozen athanor they sit in and every group they leave empty (revoking
-  those athanors' keys), remove their memberships, the invitations
-  their identifier still holds and their thread follows, and remove their
+  session and API key they created, archive their own athanor (revoking
+  its keys), remove their memberships, and remove their
   seats and invitations in shared threads, archiving every pair they sit
   in and every shared thread they leave empty. Either all of it
   commits or none of it does, and a failure is answered, never reported
@@ -282,8 +280,8 @@ defmodule Sanctum.Tenancy.Users do
   caller (`Sanctum.Door.Store.deny/4`).
 
   After the commit, and only from what it returned: the removed sessions'
-  established contexts are dropped and their revocation announced, every
-  archived athanor's members lose their cached contexts and the athanor's
+  established contexts are dropped and their revocation announced, the
+  archived athanor's cached contexts are dropped and its
   archival is announced, every share the denial revoked announces it, and
   every roster the denial changed is told. Denying a person already
   denied re-runs the retirement and checks it.

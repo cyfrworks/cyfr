@@ -439,7 +439,9 @@ defmodule Arca.PairingInvitationsTest do
     {invitation, _hash, _digest} = open!(actor, person, m, by_passkey(passkey))
 
     {:ok, change} =
-      Arca.SecurityTransitions.leave_athanor(actor, person.id, verify: fn _ -> :ok end)
+      Arca.SecurityTransitions.archive_athanor(server(), actor.athanor_id,
+        verify: fn _ -> :ok end
+      )
 
     assert change.revoked_pairing_invitation_ids == [invitation.id]
 

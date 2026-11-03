@@ -31,9 +31,9 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
 
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
         name: "Staging",
         slug: "staging-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "test"
       })
 

@@ -465,7 +465,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # beside internal/identity/testdata/SOURCE, which names this file's
     # SHA-256), outside this roster's reach.
     "identity.json" => [
-      {"apps/codex/cmd/member_test.go", ~w(identifiers)},
       {"apps/prima/test/prima/identity_test.exs",
        ~w(chains directory entries identifiers keys kinds kits locate max_entry_bytes prefix protocol requests)}
     ],

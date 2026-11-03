@@ -14,7 +14,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   alias Sanctum.Provider
 
-  @tool_names ~w(session athanor member shared_thread invitation door oauth key tincture_visibility
+  @tool_names ~w(session athanor shared_thread invitation door oauth key tincture_visibility
                   webhook vault profile person pairing passkey confirmation share)
 
   @action_enums %{
@@ -30,23 +30,9 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "cli_approve",
       "cli_list",
       "cli_revoke",
-      "use",
       "read_resource"
     ],
-    "athanor" => [
-      "list",
-      "get",
-      "create",
-      "pair",
-      "rename",
-      "archive",
-      "unarchive",
-      "settings",
-      "provision",
-      "purge",
-      "destroy"
-    ],
-    "member" => ["list", "add", "remove", "leave"],
+    "athanor" => ["get", "settings", "provision"],
     "shared_thread" => [
       "create",
       "pair",
@@ -109,7 +95,6 @@ defmodule Sanctum.ProviderDispatchContractTest do
   @invalid_action_errors %{
     "session" => "Unknown action: session.___no_such_action___",
     "athanor" => "Unknown action: athanor.___no_such_action___",
-    "member" => "Unknown action: member.___no_such_action___",
     "shared_thread" => "Unknown action: shared_thread.___no_such_action___",
     "invitation" => "Unknown action: invitation.___no_such_action___",
     "door" => "Unknown action: door.___no_such_action___",

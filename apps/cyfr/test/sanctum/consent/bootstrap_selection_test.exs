@@ -46,9 +46,9 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
         name: "Selection",
         slug: "selection-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

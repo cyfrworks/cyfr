@@ -50,9 +50,6 @@ defmodule Emissary.Web.PulledTinctureTest do
       File.rm_rf!(base)
     end)
 
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure("usr_keeper", scope: "athanor", athanor_id: "ath_test")
-
     reader = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.TestContext.create_session(reader)
     {:ok, rctx} = Sanctum.Caller.establish(session.token)

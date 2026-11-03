@@ -22,29 +22,36 @@ defmodule Arca.Retention.FileOffersTest do
 
     n = System.unique_integer([:positive])
 
-    # The group the two share, and each one's own athanor, the one their
-    # offers are made from and accepted into.
-    [group, sender_home, recipient_home] =
-      for tag <- ~w(shared s r) do
+    # Each one's own athanor, the one their offers are made from and
+    # accepted into, and the thread the two share.
+    [sender, recipient] =
+      for tag <- ~w(s r) do
+        user_id = "usr_rfo_#{tag}#{n}"
+
         {:ok, athanor} =
           Arca.Athanors.insert(Prima.Actor.system(), %{
-            kind: "group",
             name: "Retention #{tag} #{n}",
             slug: "retention-offers-#{tag}-#{n}",
+            owner_user_id: user_id,
             created_by: "system"
           })
 
-        athanor
+        %Prima.Actor{athanor_id: athanor.id, user_id: user_id}
       end
 
-    sender = %Prima.Actor{athanor_id: sender_home.id, user_id: "usr_rfo_s#{n}"}
-    recipient = %Prima.Actor{athanor_id: recipient_home.id, user_id: "usr_rfo_r#{n}"}
+    {:ok, thread} =
+      Arca.SharedThreads.create(Prima.Actor.system(), %{
+        title: "Retention #{n}",
+        created_by: sender.user_id
+      })
 
-    seat = %{Prima.Actor.system() | athanor_id: group.id, scope: :athanor}
-
-    for who <- [sender, recipient] do
-      {:ok, _} = Arca.Members.seat(seat, %{user_id: who.user_id, added_by: "test"})
-    end
+    {:ok, _} =
+      Arca.SharedThreadMembers.seat(
+        Prima.Actor.system(),
+        thread.id,
+        recipient.user_id,
+        sender.user_id
+      )
 
     test_pid = self()
     handler = "retention-file-offers-#{n}"

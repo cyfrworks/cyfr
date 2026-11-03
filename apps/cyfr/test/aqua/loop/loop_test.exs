@@ -1740,7 +1740,7 @@ defmodule Aqua.LoopTest do
   # when the card was drawn, the root's id and the loop's result.
   defp launch_through_loop!(ctx, thread, app_answer, on_probe) do
     %{ref: app} = launchable_app!(ctx)
-    {:ok, _} = Aqua.Notes.pin(ctx, "about-us", "We are planning a trip.")
+    {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
 
     start_supervised!(
       {ScriptedWorker,

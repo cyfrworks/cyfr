@@ -133,7 +133,6 @@ defmodule PrismWeb.ThreadPaneLive do
         :model_ready,
         if(connected?(socket), do: model_ready(ctx, agents(ctx)), else: :pending)
       )
-      |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
       |> assign(:links, [])
       |> assign(:held_send, nil)
@@ -279,7 +278,6 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:tool_activity, live.tool_activity)
     |> assign(:token_usage, live.usage)
     |> assign(:grants, live.grants)
-    |> assign(:solo_human, Map.get(live, :solo_human, socket.assigns.solo_human))
     |> assign(:assistant, live.agent || socket.assigns.assistant)
   end
 
@@ -1281,8 +1279,7 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # What to call the athanor in its own chat: the person's own is "your
-  # AQUA" — the one their row names as theirs, not any person-kind
-  # athanor — a DM or a group goes by its label.
+  # AQUA" — the one their row names as theirs.
   defp athanor_label(%{} = athanor, ctx) do
     if PrismWeb.Athanors.own?(athanor, ctx),
       do: "your AQUA",
@@ -1308,21 +1305,11 @@ defmodule PrismWeb.ThreadPaneLive do
   defp assistant_label(%{} = o), do: o["title"] || o["name"]
   defp assistant_label(_), do: "your AQUA"
 
-  # Whether a mention is needed is derived from how many people are here,
-  # so the placeholder asks the same question the runner does rather than
-  # reading a setting.
-  defp composer_placeholder(false, {handle, label}),
-    do:
-      "Talk to the group · @#{handle} to ask #{label}" <>
-        "  (Enter to send · Shift+Enter for newline)"
-
-  defp composer_placeholder(_solo, {_handle, label}),
+  # Every message addresses the agent, so the placeholder names it.
+  defp composer_placeholder({_handle, label}),
     do: "Ask #{label}…  (Enter to send · Shift+Enter for newline)"
 
-  defp composer_placeholder(false, nil),
-    do: "Talk to the group  (Enter to send · Shift+Enter for newline)"
-
-  defp composer_placeholder(_solo, nil),
+  defp composer_placeholder(nil),
     do: "Say something…  (Enter to send · Shift+Enter for newline)"
 
   # The route a second device reads an attachment's bytes from.
@@ -1467,13 +1454,6 @@ defmodule PrismWeb.ThreadPaneLive do
                 The panel's header already says You. --%>
           <span :if={not @panel?} class="text-xs text-gray-500 shrink-0 truncate max-w-[10rem]">
             in {athanor_label(@athanor, @context)}
-          </span>
-          <span
-            :if={@athanor && @athanor.roster == "frozen"}
-            class="shrink-0 rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400"
-            title="A DM — a frozen two-person athanor; it ends when either of you leaves"
-          >
-            DM
           </span>
           <span
             :if={@roster != [] and not @panel?}
@@ -1732,7 +1712,6 @@ defmodule PrismWeb.ThreadPaneLive do
                   scope={scope_atom(resolution["scope"])}
                   resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
                   agent_label={@assistant && @assistant["title"]}
-                  shared_with={@athanor.kind == "group" && @athanor.name}
                 />
               <% else %>
                 <div class="group/aloud">
@@ -1950,10 +1929,7 @@ defmodule PrismWeb.ThreadPaneLive do
             phx-change="update_input"
             rows="1"
             placeholder={
-              composer_placeholder(
-                @solo_human,
-                assistant_handle(current_assistant(@assistant, @roster), @athanor)
-              )
+              composer_placeholder(assistant_handle(current_assistant(@assistant, @roster), @athanor))
             }
             class={[
               "flex-1 resize-none text-sm focus:outline-none max-h-40 overflow-y-auto",
@@ -2037,8 +2013,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # In the panel the status line is drawn only while it says something.
   defp panel_status?(assigns) do
     assigns.preparing? or assigns.roster == [] or assigns.queued > 0 or
-      MapSet.size(assigns.grants) > 0 or (assigns.running and assigns.turn_user != nil) or
-      (assigns.athanor != nil and assigns.athanor.roster == "frozen")
+      MapSet.size(assigns.grants) > 0 or (assigns.running and assigns.turn_user != nil)
   end
 
   attr :id, :string, required: true

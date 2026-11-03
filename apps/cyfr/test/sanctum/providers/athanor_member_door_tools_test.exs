@@ -3,8 +3,8 @@
 
 defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   @moduledoc """
-  The tenancy verbs through the MCP registry: `athanor.*`, `member.*` and
-  `door.*` — who may call them, what they answer, and what they never leak.
+  The tenancy verbs through the MCP registry: `athanor.*` and `door.*` —
+  who may call them, what they answer, and what they never leak.
   """
   use ExUnit.Case, async: false
 
@@ -54,74 +54,17 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
   defp call(ctx, tool, args), do: Sanctum.Gate.call_external(tool, ctx, args)
 
-  test "a person creates a group, is its only member, and the others see it once added",
-       %{alice: alice, bob: bob, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+  test "an API key cannot patch an athanor's settings or retry its fill",
+       %{alice: alice, ctx: ctx} do
+    k = ctx.(alice, personal!(alice).id, auth_method: :api_key)
 
-    assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Family #{n}"})
-    assert group.kind == "group"
-    assert group.member_count == 1
-    assert String.starts_with?(group.slug, "family-")
-
-    {:ok, %{athanors: mine}} = call(a, "athanor", %{"action" => "list"})
-    assert Enum.any?(mine, &(&1.id == group.id))
-
-    b = ctx.(bob, Sanctum.TestContext.athanor_id(), [])
-    {:ok, %{athanors: bobs}} = call(b, "athanor", %{"action" => "list"})
-    refute Enum.any?(bobs, &(&1.id == group.id))
-
-    # a non-member cannot act on it, and is told what a missing athanor tells them
-    assert {:error, msg} =
-             call(b, "member", %{"action" => "list", "athanor" => group.id})
-
-    assert Refusals.render(msg) =~ "not found"
-
-    # add by user id, then bob sees it
-    assert {:ok, %{state: "added"}} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "user_id" => bob})
-
-    {:ok, %{athanors: bobs}} = call(b, "athanor", %{"action" => "list"})
-    assert Enum.any?(bobs, &(&1.id == group.id))
-
-    {:ok, %{members: members}} = call(b, "member", %{"action" => "list", "athanor" => group.id})
-    assert length(members) == 2
-
-    # bob leaves; alice remains; alice leaves → the group is archived
-    assert {:ok, %{state: "left"}} =
-             call(b, "member", %{"action" => "leave", "athanor" => group.id})
-
-    assert {:ok, %{state: "left"}} =
-             call(a, "member", %{"action" => "leave", "athanor" => group.id})
-
-    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
-  end
-
-  test "an API key cannot create groups or add members, and lists its own athanor alone",
-       %{alice: alice, ctx: ctx, n: n} do
-    {:ok, home} = Athanors.create_group(alice, "Key home #{n}")
-    {:ok, other} = Athanors.create_group(alice, "Elsewhere #{n}")
-    k = ctx.(alice, home.id, auth_method: :api_key)
-
-    assert {:error, msg} = call(k, "athanor", %{"action" => "create", "name" => "Nope"})
-    assert Refusals.render(msg) =~ "person's act"
-    assert {:error, msg} = call(k, "member", %{"action" => "add", "user_id" => alice})
-    assert Refusals.render(msg) =~ "person's act"
-    # Reads are the key's athanor's, never its creator's other seats.
-    assert {:ok, %{athanors: [%{id: id}], count: 1}} = call(k, "athanor", %{"action" => "list"})
-    assert id == home.id
-    refute id == other.id
-  end
-
-  test "a person's own athanor cannot be archived here",
-       %{alice: alice, ctx: ctx, n: n} do
-    {:ok, athanor} = Athanors.create_group(alice, "Door #{n}")
-    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: athanor.id)
-    a = ctx.(alice, athanor.id, [])
-    personal = personal!(alice)
-    assert {:error, msg} = call(a, "athanor", %{"action" => "archive", "athanor" => personal.id})
-    assert Refusals.render(msg) =~ "own athanor"
-    assert {:error, msg} = call(a, "member", %{"action" => "leave", "athanor" => personal.id})
-    assert Refusals.render(msg) =~ "own athanor"
+    for args <- [
+          %{"action" => "settings", "settings" => %{"theme" => "dark"}},
+          %{"action" => "provision"}
+        ] do
+      assert {:error, msg} = call(k, "athanor", args)
+      assert Refusals.render(msg) =~ "person's act"
+    end
   end
 
   test "door.* is the operator's: refused for a member, open to an admin; a local person is admitted unless denied",
@@ -383,429 +326,83 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert Sanctum.Door.Store.list() == before
   end
 
-  test "member.add takes a handle, with or without @, alone; its identifier is seated or invited as by identifier",
-       %{alice: alice, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Handles #{n}"})
-    known = "per_" <> Prima.Digest.sha256_hex("member-handle-known-#{n}")
-    stranger = "per_" <> Prima.Digest.sha256_hex("member-handle-stranger-#{n}")
-    user = remote!(known)
-    RegistryStub.handles!(%{"known" => known, "stranger" => stranger})
-
-    assert {:ok, %{state: "added", member: %{handle: "known"}}} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@known"})
-
-    assert Members.member?(user.id, group.id)
-
-    assert {:ok, %{state: "added", member: %{handle: "stranger"}}} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "stranger"})
-
-    assert [%{status: "invited", user_id: nil}] =
-             Enum.filter(
-               rows!(Members.list_by_athanor(group.id)),
-               &(&1.person_identifier == stranger)
-             )
-
-    # A handle stands alone.
-    for other <- [%{"user_id" => alice}, %{"identifier" => known}] do
-      assert {:error, {:invalid_argument, message}} =
-               call(
-                 a,
-                 "member",
-                 Map.merge(
-                   %{"action" => "add", "athanor" => group.id, "handle" => "@known"},
-                   other
-                 )
-               )
-
-      assert message =~ "not two"
-    end
-
-    # Refused in its own sentence, and nothing written.
-    seats = rows!(Members.list_by_athanor(group.id))
-    RegistryStub.handles!(%{"down" => :close})
-
-    ExUnit.CaptureLog.capture_log(fn ->
-      assert {:error, reason} =
-               call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@down"})
-
-      assert %{reason: :registry_unavailable} = Refusals.classify(reason)
-    end)
-
-    RegistryStub.handles!(%{})
-
-    assert {:error, reason} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@nobody"})
-
-    assert Refusals.render(reason) == "No one holds that handle at the registry."
-
-    assert {:error, {:invalid_argument, message}} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@No"})
-
-    assert message =~ "not a handle"
-
-    Application.put_env(:sanctum, :registry_url, "none")
-
-    assert {:error, reason} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@known"})
-
-    assert %{reason: :no_registry} = Refusals.classify(reason)
-
-    assert rows!(Members.list_by_athanor(group.id)) == seats
-    assert Enum.map(Sanctum.Door.Store.requests(), & &1.value) == [stranger]
-  end
-
-  test "member.add and member.remove take an identifier: an invite waits at the door, list shows it, remove withdraws it",
-       %{alice: alice, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Ids #{n}"})
-    identifier = "per_" <> Prima.Digest.sha256_hex("member-id-#{n}")
-
-    # Nobody here holds it: the seat waits for their first cyfr sign-in,
-    # the door queues the identifier for the operator, and the answer is
-    # the one a known person's identifier gets.
-    assert {:ok, %{state: "added", member: %{identifier: ^identifier}}} =
-             call(a, "member", %{
-               "action" => "add",
-               "athanor" => group.id,
-               "identifier" => identifier
-             })
-
-    assert {:ok, %{members: members}} =
-             call(a, "member", %{"action" => "list", "athanor" => group.id})
-
-    assert [%{status: "invited", user_id: nil, email: nil}] =
-             Enum.filter(members, &(&1.identifier == identifier))
-
-    assert [%{kind: "identifier", status: "requested"}] =
-             Enum.filter(Sanctum.Door.Store.requests(), &(&1.value == identifier))
-
-    assert {:error, {:invalid_argument, message}} =
-             call(a, "member", %{
-               "action" => "add",
-               "athanor" => group.id,
-               "identifier" => "per_x"
-             })
-
-    assert message =~ "person identifier"
-
-    # Removing by identifier withdraws the invitation; once gone, there is
-    # nobody to remove.
-    assert {:ok, %{state: "removed", member: %{identifier: ^identifier}}} =
-             call(a, "member", %{
-               "action" => "remove",
-               "athanor" => group.id,
-               "identifier" => identifier
-             })
-
-    refute Enum.any?(
-             rows!(Members.list_by_athanor(group.id)),
-             &(&1.person_identifier == identifier)
-           )
-
-    assert {:error, {:not_found, "Member", ^identifier}} =
-             call(a, "member", %{
-               "action" => "remove",
-               "athanor" => group.id,
-               "identifier" => identifier
-             })
-  end
-
-  test "member.remove with invitation withdraws only a pending invitation: a claimed one is not found and its member stays",
-       %{alice: alice, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Withdraw #{n}"})
-    identifier = "per_" <> Prima.Digest.sha256_hex("member-withdraw-#{n}")
-    invitee = %{"identifier" => identifier}
-
-    withdraw =
-      &Map.merge(%{"action" => "remove", "athanor" => group.id, "invitation" => true}, &1)
-
-    # Pending: it is withdrawn, and a second withdrawal finds nothing.
-    {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, invitee))
-    assert {:ok, %{state: "removed"}} = call(a, "member", withdraw.(invitee))
-    assert {:error, {:not_found, "Invitation", _}} = call(a, "member", withdraw.(invitee))
-
-    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
-
-    # Claimed by the invitee's arrival: the invitation is a seat now, and
-    # a withdrawal reaches no seat.
-    {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, invitee))
-    by_identifier = remote!(identifier)
-    {:ok, 1} = Members.activate_invited(by_identifier)
-    assert Members.member?(by_identifier.id, group.id)
-
-    assert {:error, {:not_found, "Invitation", ^identifier}} =
-             call(a, "member", withdraw.(invitee))
-
-    assert Members.member?(by_identifier.id, group.id)
-
-    # A user id holds no invitation; the flag beside one is refused before
-    # anything is read.
-    assert {:error, {:invalid_argument, "invitation names an identifier"}} =
-             call(a, "member", withdraw.(%{"user_id" => by_identifier.id}))
-
-    assert Members.member?(by_identifier.id, group.id)
-
-    # The flag is a boolean, as declared: the gate refuses anything else.
-    assert {:error,
-            %Prima.Refusal{
-              stage: :admission,
-              reason: {:invalid_argument, "Field 'invitation' must be a boolean"}
-            }} =
-             call(a, "member", withdraw.(%{"identifier" => identifier, "invitation" => "yes"}))
-
-    # Without the flag, the identifier names its holder, who is removed.
-    assert {:ok, %{state: "removed"}} =
-             call(a, "member", %{
-               "action" => "remove",
-               "athanor" => group.id,
-               "identifier" => identifier
-             })
-
-    refute Members.member?(by_identifier.id, group.id)
-  end
-
-  test "a person here is added and removed by their identifier, and keeps their identity",
-       %{alice: alice, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Known #{n}"})
-    identifier = "per_" <> Prima.Digest.sha256_hex("member-known-#{n}")
-    user = remote!(identifier)
-
-    assert {:ok, %{state: "added"}} =
-             call(a, "member", %{
-               "action" => "add",
-               "athanor" => group.id,
-               "identifier" => identifier
-             })
-
-    assert Members.member?(user.id, group.id)
-
-    assert {:ok, %{state: "removed"}} =
-             call(a, "member", %{
-               "action" => "remove",
-               "athanor" => group.id,
-               "identifier" => identifier
-             })
-
-    refute Members.member?(user.id, group.id)
-    assert {:ok, %{status: "active"}} = Users.get(user.id)
-
-    assert {:ok, %{provenance: "remote", identifier: ^identifier}} =
-             Arca.PersonIdentities.get(Prima.Actor.system(), user.id)
-  end
-
-  test "door.deny of an identifier withdraws the seats its invitations were holding",
-       %{alice: alice, ops: ops, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Pending id #{n}"})
-    {:ok, other} = call(a, "athanor", %{"action" => "create", "name" => "Pending id 2 #{n}"})
-    identifier = "per_" <> Prima.Digest.sha256_hex("pending-id-#{n}")
-
-    for athanor <- [group, other] do
-      {:ok, _} =
-        call(a, "member", %{
-          "action" => "add",
-          "athanor" => athanor.id,
-          "identifier" => identifier
-        })
-    end
-
-    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
-
-    # Nobody holds the identifier here, so the seats are the whole of what
-    # the deny has to reach; the next allow seats nobody it threw out.
-    assert {:ok, %{ejected: 0, invites_withdrawn: 2}} =
-             call(admin, "door", %{"action" => "deny", "value" => identifier})
-
-    for athanor <- [group, other] do
-      refute Enum.any?(
-               rows!(Members.list_by_athanor(athanor.id)),
-               &(&1.person_identifier == identifier)
-             )
-    end
-
-    assert {:error, :denied} = Sanctum.Door.admit_identifier(identifier)
-  end
-
-  test "session.use repoints the session and refuses what focus refuses",
+  test "athanor.get answers a caller without a seat the same for an open, an archived and a missing athanor; its person hears archived",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Switch #{n}"})
+    open = personal!(bob)
 
-    # A seat where the session starts, so the repoint is observable.
-    {:ok, _} =
-      Members.ensure(alice, scope: "athanor", athanor_id: Sanctum.TestContext.athanor_id())
+    {:ok, carol} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|carol-#{n}",
+        provider: "github",
+        email: "carol#{n}@example.com",
+        verified: true
+      })
 
-    {:ok, session} = Sanctum.TestContext.create_session(a)
-    {:ok, loaded} = Sanctum.Session.load(session.token)
-    with_hash = %{a | session_token_hash: Sanctum.Session.token_hash(session.token)}
-
-    assert {:ok, %{athanor: %{id: gid}}} =
-             call(with_hash, "session", %{"action" => "use", "athanor" => group.slug})
-
-    assert gid == group.id
-    assert loaded.athanor_id != gid
-    {:ok, reloaded} = Sanctum.Session.load(session.token)
-    assert reloaded.athanor_id == gid
-
-    b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}
-
-    slug = group.slug
-
-    assert {:error, {:not_found, "Athanor", ^slug}} =
-             call(b, "session", %{"action" => "use", "athanor" => slug})
-
-    k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
-    assert {:error, msg} = call(k, "session", %{"action" => "use", "athanor" => group.slug})
-    assert Refusals.render(msg) =~ "needs a session"
-  end
-
-  test "athanor.get and session.use answer a caller without a seat the same for an open, an archived and a missing athanor; a member hears archived",
-       %{alice: alice, bob: bob, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, open} = call(a, "athanor", %{"action" => "create", "name" => "Open #{n}"})
-    {:ok, closed} = call(a, "athanor", %{"action" => "create", "name" => "Closed #{n}"})
-
-    {:ok, %{status: "archived"}} =
-      call(a, "athanor", %{"action" => "archive", "athanor" => closed.id})
-
+    closed = personal!(carol.id)
+    {:ok, %{status: "archived"}} = Athanors.archive(closed, force: true)
     missing = Prima.UUID7.generate_id("ath")
 
-    b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}
+    a = ctx.(alice, personal!(alice).id, [])
 
     # The refusal names what the caller named and nothing else, so with
     # the name taken out the three answers are one.
-    for id <- [open.id, closed.id, missing],
-        {tool, action} <- [{"athanor", "get"}, {"session", "use"}] do
+    for id <- [open.id, closed.id, missing] do
       assert {:error, {:not_found, "Athanor", ^id}} =
-               call(b, tool, %{"action" => action, "athanor" => id}),
-             "#{tool}.#{action} told a caller with no seat something of #{id}"
+               call(a, "athanor", %{"action" => "get", "athanor" => id}),
+             "athanor.get told a caller with no seat something of #{id}"
     end
 
-    # A former member is an outsider like any other.
-    {:ok, _} = Members.ensure(bob, scope: "athanor", athanor_id: open.id)
-    :ok = Members.remove_member(open, user_id: bob)
-
-    assert {:error, {:not_found, "Athanor", id}} =
-             call(b, "athanor", %{"action" => "get", "athanor" => open.id})
-
-    assert id == open.id
-
-    # The member hears that it is archived, and still reads it.
-    with_hash = %{a | session_token_hash: "x"}
-
-    assert {:error, {:invalid_argument, "That athanor is archived"}} =
-             call(with_hash, "session", %{"action" => "use", "athanor" => closed.id})
+    # Its person hears that it is archived, and still reads it.
+    c = ctx.(carol.id, closed.id, [])
 
     assert {:ok, %{status: "archived"}} =
-             call(a, "athanor", %{"action" => "get", "athanor" => closed.id})
+             call(c, "athanor", %{"action" => "get", "athanor" => closed.id})
 
     assert {:error, {:invalid_argument, "That athanor is archived"}} =
-             call(a, "athanor", %{"action" => "rename", "name" => "x", "athanor" => closed.id})
-  end
-
-  test "a person's own athanor has one member on every path — its owner is neither joined nor removed",
-       %{alice: alice, bob: bob, ctx: ctx, n: n} do
-    personal = personal!(alice)
-    a = ctx.(alice, personal.id, [])
-    identifier = "per_" <> Prima.Digest.sha256_hex("own-#{n}")
-
-    for target <- [%{"user_id" => bob}, %{"identifier" => identifier}] do
-      assert {:error, msg} = call(a, "member", Map.merge(%{"action" => "add"}, target))
-      assert Refusals.render(msg) =~ "one member"
-    end
-
-    assert {:error, msg} = call(a, "member", %{"action" => "remove", "user_id" => alice})
-    assert Refusals.render(msg) =~ "owner"
-    assert Members.member?(alice, personal.id)
-    assert Members.count_by_athanor(personal.id) == {:ok, 1}
-
-    # The domain function refuses too — the tool is not the only guard.
-    assert {:error, :person_athanor} = Members.add(personal, [user_id: bob], alice)
-    assert {:error, :person_athanor} = Members.remove_member(personal, user_id: alice)
-  end
-
-  test "an archived athanor refuses every mutation by id, for a member and for an operator; a member reads and unarchives it, and an operator with no seat is answered as for a missing athanor",
-       %{alice: alice, bob: bob, ops: ops, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Closed #{n}"})
-    a = ctx.(alice, group.id, [])
-    assert {:ok, %{status: "archived"}} = call(a, "athanor", %{"action" => "archive"})
-
-    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
-
-    for {who, refused} <- [{a, "archived"}, {operator, "not found"}],
-        {tool, args} <- [
-          {"athanor", %{"action" => "rename", "name" => "Reopened"}},
-          {"athanor",
-           %{"action" => "settings", "settings" => %{"aqua" => %{"answer_mode" => "all"}}}},
-          {"athanor", %{"action" => "provision"}},
-          {"member", %{"action" => "add", "user_id" => bob}},
-          {"member", %{"action" => "remove", "user_id" => alice}}
-        ] do
-      assert {:error, msg} = call(who, tool, Map.put(args, "athanor", group.id))
-
-      assert Refusals.render(msg) =~ refused,
-             "#{tool}.#{args["action"]} ran on an archived athanor"
-    end
-
-    {:ok, unchanged} = Athanors.get(group.id)
-    assert unchanged.name == "Closed #{n}"
-
-    # Reads still answer the member, whole.
-    assert {:ok, %{status: "archived", member_count: 1}} =
-             call(a, "athanor", %{"action" => "get", "athanor" => group.id})
-
-    assert {:ok, %{members: [_]}} =
-             call(a, "member", %{"action" => "list", "athanor" => group.id})
-
-    # An operator who was never a member hears nothing of it, not even that
-    # it is archived: their capability is over the instance, not a seat,
-    # and each read answers as it does for an athanor that does not exist.
-    missing = "ath_" <> Prima.UUID7.generate()
-
-    for named <- [group.id, missing] do
-      assert {:error, {:not_found, "Athanor", ^named}} =
-               call(operator, "athanor", %{"action" => "get", "athanor" => named})
-    end
-
-    for {tool, action} <- [{"member", "list"}, {"athanor", "unarchive"}] do
-      assert {:error, {:not_found, "Athanor", id}} =
-               call(operator, tool, %{"action" => action, "athanor" => group.id}),
-             "#{tool}.#{action} admitted a seatless operator"
-
-      assert id == group.id
-    end
-
-    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
-
-    # A member restores it.
-    assert {:ok, %{status: "active"}} =
-             call(a, "athanor", %{"action" => "unarchive", "athanor" => group.id})
-
-    # Open again, it is still its members' alone: an operator with no seat
-    # reads nothing of it and cannot archive it.
-    for action <- ["get", "archive"] do
-      assert {:error, {:not_found, "Athanor", id}} =
-               call(operator, "athanor", %{"action" => action, "athanor" => group.id}),
-             "athanor.#{action} admitted a seatless operator"
-
-      assert id == group.id
-    end
-
-    assert {:ok, %{status: "active"}} = Athanors.get(group.id)
-
-    assert {:ok, %{name: "Reopened"}} =
-             call(a, "athanor", %{
-               "action" => "rename",
-               "name" => "Reopened",
-               "athanor" => group.id
+             call(c, "athanor", %{
+               "action" => "settings",
+               "settings" => %{"theme" => "dark"},
+               "athanor" => closed.id
              })
   end
 
-  test "a denied person's own athanor is archived by deny at the door and reopened by removing the deny, never by an operator's unarchive",
+  test "an archived athanor refuses every mutation by id, for its person and for an operator; its person reads it, and an operator with no seat is answered as for a missing athanor",
+       %{alice: alice, ops: ops, ctx: ctx} do
+    personal = personal!(alice)
+    {:ok, %{status: "archived"}} = Athanors.archive(personal, force: true)
+    a = ctx.(alice, personal.id, [])
+    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    for {who, refused} <- [{a, "archived"}, {operator, "not found"}],
+        args <- [
+          %{"action" => "settings", "settings" => %{"aqua" => %{"answer_mode" => "all"}}},
+          %{"action" => "provision"}
+        ] do
+      assert {:error, msg} = call(who, "athanor", Map.put(args, "athanor", personal.id))
+
+      assert Refusals.render(msg) =~ refused,
+             "athanor.#{args["action"]} ran on an archived athanor"
+    end
+
+    {:ok, unchanged} = Athanors.get(personal.id)
+    assert Athanors.settings(unchanged) == Athanors.settings(personal)
+
+    # Reads still answer its person, whole.
+    assert {:ok, %{status: "archived"}} =
+             call(a, "athanor", %{"action" => "get", "athanor" => personal.id})
+
+    # An operator who holds no seat there hears nothing of it, not even that
+    # it is archived: their capability is over the instance, not a seat,
+    # and the read answers as it does for an athanor that does not exist.
+    missing = "ath_" <> Prima.UUID7.generate()
+
+    for named <- [personal.id, missing] do
+      assert {:error, {:not_found, "Athanor", ^named}} =
+               call(operator, "athanor", %{"action" => "get", "athanor" => named})
+    end
+  end
+
+  test "a denied person's own athanor is archived by deny at the door and reopened by removing the deny",
        %{alice: alice, ops: ops, ctx: ctx} do
     personal = personal!(alice)
 
@@ -820,14 +417,12 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{status: "denied"}} = Users.get(alice)
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    # The operator holds no seat in it, so unarchive and get refuse them as
-    # they refuse any non-member, as for an athanor that does not exist.
-    for action <- ["unarchive", "get"] do
-      assert {:error, msg} =
-               call(operator, "athanor", %{"action" => action, "athanor" => personal.id})
+    # The operator holds no seat in it, so get refuses them as it refuses
+    # any non-member, as for an athanor that does not exist.
+    assert {:error, msg} =
+             call(operator, "athanor", %{"action" => "get", "athanor" => personal.id})
 
-      assert Refusals.render(msg) =~ "not found"
-    end
+    assert Refusals.render(msg) =~ "not found"
 
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
@@ -840,157 +435,27 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert Members.member?(alice, personal.id)
   end
 
-  test "purge and destroy are platform-scope: an operator with no seat reclaims an archived group and learns its id and status alone, an open one answers them as a missing one does, and a member who is not an operator is refused at admission",
-       %{alice: alice, ops: ops, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Reclaim #{n}"})
-    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
-    refute Members.member?(ops, group.id)
-
-    # Still open, it is its members' alone: to the seatless operator it is
-    # what a missing athanor is, by id and by slug, for both verbs. A member
-    # who is an operator is told to archive it first.
-    missing = "ath_" <> Prima.UUID7.generate()
-
-    for action <- ["purge", "destroy"], named <- [group.id, group.slug, missing] do
-      assert {:error, {:not_found, "Athanor", ^named}} =
-               call(operator, "athanor", %{"action" => action, "athanor" => named}),
-             "athanor.#{action} told a seatless operator of #{named}"
-    end
-
-    seated_operator = ctx.(alice, group.id, platform_admin: true)
-
-    assert {:error, msg} =
-             call(seated_operator, "athanor", %{"action" => "purge", "athanor" => group.id})
-
-    assert Refusals.render(msg) =~ "archive it first"
-
-    assert {:ok, %{status: "archived"}} =
-             call(a, "athanor", %{"action" => "archive", "athanor" => group.id})
-
-    # A member who is not an operator is refused by the gate, before the
-    # handler runs, for both verbs.
-    for action <- ["purge", "destroy"] do
-      assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
-               call(a, "athanor", %{"action" => action, "athanor" => group.id})
-    end
-
-    # The operator, seated nowhere in it, purges by slug and then destroys
-    # by id: neither focuses the athanor, so no seat is asked for. Each
-    # answers the instance's record of what it reclaimed, the id and the
-    # status, and nothing the athanor held.
-    assert {:ok, purged} =
-             call(operator, "athanor", %{"action" => "purge", "athanor" => group.slug})
-
-    assert purged == %{:id => group.id, :status => "archived", "purged" => true}
-
-    assert {:ok, destroyed} =
-             call(operator, "athanor", %{"action" => "destroy", "athanor" => group.id})
-
-    # The id and status alone: no count of the rows the reclaim removed.
-    assert destroyed == %{:id => group.id, :status => "archived", "destroyed" => true}
-
-    # Only the archived tombstone survives, and nobody sits in it.
-    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
-    refute Members.member?(alice, group.id)
-
-    # A person's own athanor is not destroyed here, by anyone.
-    personal = personal!(alice)
-    {:ok, _} = Athanors.archive(personal, force: true)
-
-    assert {:error, msg} =
-             call(operator, "athanor", %{"action" => "destroy", "athanor" => personal.id})
-
-    assert Refusals.render(msg) =~ "own athanor is not destroyed here"
-    assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
-  end
-
-  describe "athanor.pair" do
-    test "mints a frozen DM with someone you share an athanor with — and finds it again",
-         %{alice: alice, bob: bob, ctx: ctx, n: n} do
-      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-
-      # Reachability first: they must already sit in one room.
-      {:ok, shared} = call(a, "athanor", %{"action" => "create", "name" => "Shared #{n}"})
-      {:ok, _} = Members.ensure(bob, scope: "athanor", athanor_id: shared.id)
-
-      assert {:ok, pair} = call(a, "athanor", %{"action" => "pair", "user" => bob})
-      assert pair.kind == "group"
-      assert pair.roster == "frozen"
-      assert pair.member_count == 2
-
-      # The row only — filling it is first need, so the click is instant.
-      refute pair.provisioned
-
-      # Click again (either side): the same tape, not a second one.
-      b = ctx.(bob, Sanctum.TestContext.athanor_id(), [])
-      assert {:ok, same} = call(b, "athanor", %{"action" => "pair", "user" => alice})
-      assert same.id == pair.id
-    end
-
-    test "a stranger is unreachable — no shared athanor, no pair", %{
-      alice: alice,
-      bob: bob,
-      ctx: ctx
-    } do
-      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-
-      # Bob exists on this server; that is not enough. The refusal reads
-      # the same as it would for an id that names nobody — the wire is not
-      # a directory.
-      assert {:error, {:invalid_argument, msg}} =
-               call(a, "athanor", %{"action" => "pair", "user" => bob})
-
-      assert msg =~ "already share an athanor"
-
-      assert {:error, {:invalid_argument, ^msg}} =
-               call(a, "athanor", %{
-                 "action" => "pair",
-                 "user" => "github|https://github.com|nobody"
-               })
-    end
-
-    test "a pair is two people, and never a standing credential", %{alice: alice, ctx: ctx} do
-      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-
-      assert {:error, {:invalid_argument, _}} =
-               call(a, "athanor", %{"action" => "pair", "user" => alice})
-
-      # `consent: :interactive` on the annotation: the registry refuses an
-      # API key before the handler runs, with the typed code.
-      key = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
-
-      assert {:error,
-              %Prima.Refusal{
-                stage: :admission,
-                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
-              }} =
-               call(key, "athanor", %{"action" => "pair", "user" => "github|x|other"})
-    end
-  end
-
   describe "Sanctum.Providers.Athanor.resolve/3 returns a focused context" do
     # Every downstream act (provisioning above all) must run at
     # `scope: :athanor` with the resolved athanor bound — a platform
     # context's wider scope stops at resolve, not in the handler, and only
     # a seat gets it there.
     test "a member's context is rebound to the named athanor",
-         %{alice: alice, ctx: ctx, n: n} do
+         %{alice: alice, ctx: ctx} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-      assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Focus #{n}"})
+      %{id: athanor_id} = personal!(alice)
 
       assert {:ok, athanor, focused} =
-               Sanctum.Providers.Athanor.resolve(a, %{"athanor" => group.id})
+               Sanctum.Providers.Athanor.resolve(a, %{"athanor" => athanor_id})
 
-      assert athanor.id == group.id
-      assert focused.athanor_id == group.id
+      assert athanor.id == athanor_id
+      assert focused.athanor_id == athanor_id
       assert focused.scope == :athanor
     end
 
     test "a platform context narrows to an athanor its person is seated in, and opens no other",
-         %{alice: alice, ops: ops, ctx: ctx, n: n} do
-      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-      assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Wide #{n}"})
+         %{alice: alice, ops: ops} do
+      %{id: athanor_id} = personal!(alice)
 
       operator =
         Sanctum.TestContext.platform(
@@ -1002,33 +467,31 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
       # No seat: the platform scope and the capability open nothing.
       assert {:error, {:not_found, "Athanor", id}} =
-               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => group.id})
+               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => athanor_id})
 
-      assert id == group.id
+      assert id == athanor_id
 
-      {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: group.id)
+      {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: athanor_id)
 
       assert {:ok, athanor, focused} =
-               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => group.id})
+               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => athanor_id})
 
-      assert athanor.id == group.id
-      assert focused.athanor_id == group.id
+      assert athanor.id == athanor_id
+      assert focused.athanor_id == athanor_id
       assert focused.scope == :athanor
     end
 
     test "a seat the store cannot read is unavailable, never not-a-member",
-         %{alice: alice, ctx: ctx, n: n} do
+         %{alice: alice, ctx: ctx} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-      assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Down #{n}"})
+      %{id: athanor_id} = personal!(alice)
 
       Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
 
       assert {:error, {:unavailable, "Storage"}} =
-               Sanctum.Providers.Athanor.resolve(a, %{"athanor" => group.id})
+               Sanctum.Providers.Athanor.resolve(a, %{"athanor" => athanor_id})
     end
   end
-
-  defp rows!({:ok, rows}), do: rows
 
   # The person's own athanor, made with them by their admission.
   defp personal!(user_id) do

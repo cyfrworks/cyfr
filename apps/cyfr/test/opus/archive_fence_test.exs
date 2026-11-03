@@ -88,9 +88,9 @@ defmodule Opus.ArchiveFenceTest do
   defp athanor! do
     {:ok, athanor} =
       Athanors.create(%{
-        kind: "group",
         name: "Fence",
         slug: "fence-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

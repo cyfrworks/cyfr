@@ -25,7 +25,6 @@ defmodule Sanctum.RemoteCertificationTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
   alias Sanctum.{Context, Person, RemoteCertification, TestContext}
-  alias Sanctum.Tenancy.Athanors
 
   @directory "https://dir.example"
   @hub "https://hub.example"
@@ -54,7 +53,7 @@ defmodule Sanctum.RemoteCertificationTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Certify #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

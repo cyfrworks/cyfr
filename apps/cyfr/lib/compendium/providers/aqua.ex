@@ -1097,9 +1097,8 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  # First need. A group athanor is minted as a row and filled the first time
-  # something actually reads its bundle, so clicking a person's name opens
-  # a chat instead of waiting on a registry round trip that can fail.
+  # First need: an athanor whose fill has not completed is filled the first
+  # time something reads its bundle.
   #
   # This tool is where every agent read from outside lands — the roster
   # and one agent's detail, for the console and any MCP client. The turn

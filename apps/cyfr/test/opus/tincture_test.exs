@@ -26,8 +26,8 @@ defmodule Opus.TinctureTest do
 
   @dep "reagent:local.tinc-dep"
   @dep_ref "reagent:local.tinc-dep:0.1.0"
-  # `Sanctum.TestContext.athanor!/0`'s group slug.
-  @address "test"
+  # `Sanctum.TestContext.athanor!/0`'s route slug.
+  @address "@test"
 
   setup do
     Arca.Cache.init()
@@ -245,7 +245,7 @@ defmodule Opus.TinctureTest do
       assert {:error, %Prima.Refusal{class: :not_found}} =
                Opus.Tincture.invoke(
                  ctx,
-                 Map.put(args("tinc-elsewhere", :public), "athanor", "no-such-athanor"),
+                 Map.put(args("tinc-elsewhere", :public), "athanor", "@no-such-athanor"),
                  :public
                )
 
@@ -273,9 +273,9 @@ defmodule Opus.TinctureTest do
       {:ok, other} =
         Sanctum.Tenancy.Athanors.create(%{
           id: "ath_tinc_other",
-          kind: "group",
           name: "Other",
           slug: "tinc-other",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           created_by: "system"
         })
 
@@ -319,7 +319,7 @@ defmodule Opus.TinctureTest do
       result =
         Opus.Tincture.invoke(
           ctx,
-          Map.put(args("tinc-across", :public), "athanor", other.slug),
+          Map.put(args("tinc-across", :public), "athanor", "@" <> other.slug),
           :public
         )
 

@@ -3,8 +3,8 @@
 
 defmodule PrismWeb.AquaLive.NotesComponent do
   @moduledoc """
-  The page the soul reads first — `about-you` in a person's athanor,
-  `about-us` in a group's, pinned through the `notes` tool — and the notes
+  The page the soul reads first — `about-you`, pinned through the `notes`
+  tool — and the notes
   kept here out of the threads. Both are written through the tool a
   card in chat goes through, so one gate answers for both; a write here
   changes nothing another section shows, so the section reloads itself.

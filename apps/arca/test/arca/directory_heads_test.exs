@@ -524,24 +524,12 @@ defmodule Arca.DirectoryHeadsTest do
   defp cached?(identifier),
     do: Arca.Repo.exists?(from(h in DirectoryHead, where: h.identifier == ^identifier))
 
-  # A group's pending invitation naming `identifier`.
+  # A shared thread's pending invitation naming `identifier`.
   defp invited!(identifier) do
-    n = System.unique_integer([:positive])
+    person = Arca.Test.Shares.person!()
+    thread = Arca.Test.Shares.thread!([person.id])
 
-    {:ok, athanor} =
-      Arca.Athanors.insert(server(), %{
-        kind: "group",
-        name: "Heads #{n}",
-        slug: "dh-g-#{n}",
-        created_by: "system"
-      })
-
-    {:ok, _} =
-      Arca.Members.seat(%{server() | athanor_id: athanor.id, scope: :athanor}, %{
-        person_identifier: identifier,
-        status: "invited",
-        added_by: "x"
-      })
+    {:ok, _} = Arca.SharedThreadMembers.invite(server(), thread.id, identifier, person.id)
 
     :ok
   end

@@ -849,23 +849,30 @@ defmodule Sanctum.SharesTest do
   describe "the owner's verbs" do
     test "are made from the owner's own athanor alone, with nothing written",
          %{terry: terry} do
-      # A group athanor Terry sits in: an athanor of theirs, not their own.
-      {:ok, traders} = Athanors.create_group(terry.user_id, "Traders #{uniq()}")
+      # A context of Terry's naming an athanor not their own.
+      {:ok, traders} =
+        Athanors.create(%{
+          name: "Traders",
+          slug: "traders-#{uniq()}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          created_by: "system"
+        })
+
       entry = key!(terry)
       share = share!(terry, entry)
-      in_group = %{terry | athanor_id: traders.id}
+      elsewhere = %{terry | athanor_id: traders.id}
       ids = %{share_id: share.id}
 
       for answer <- [
-            Shares.create(in_group, %{entry_id: entry.id, audience: "everyone"}),
-            Shares.list(in_group),
-            Shares.usage(in_group, share.id, 1),
+            Shares.create(elsewhere, %{entry_id: entry.id, audience: "everyone"}),
+            Shares.list(elsewhere),
+            Shares.usage(elsewhere, share.id, 1),
             Shares.set_audience(
-              in_group,
+              elsewhere,
               Map.merge(ids, %{audience: "everyone", expected: @everyone})
             ),
-            Shares.set_caps(in_group, Map.put(ids, :person_daily, 1)),
-            Shares.revoke(in_group, share.id)
+            Shares.set_caps(elsewhere, Map.put(ids, :person_daily, 1)),
+            Shares.revoke(elsewhere, share.id)
           ] do
         assert answer == {:error, :not_own_athanor}
       end

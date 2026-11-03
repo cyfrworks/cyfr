@@ -18,14 +18,12 @@ defmodule Aqua.Providers.Notes do
   inside the chain under the turn's authority. The consent class keeps its
   surface half there — only an `:oidc` session's chain gets through — so
   the same formula started by a key or a schedule is refused exactly as at
-  the door. A running chain reads across athanors only from the person's
-  own athanor (`Aqua.Notes`); a room's assistant sees the room's pile.
+  the door.
 
   ## Where a note lands
 
   Writes take no scope: `keep`, `pin` and `forget` act on the athanor in
-  focus — your own athanor when you are talking to your own assistant, the
-  room's when you are in a room. Reads take one: `athanor` (the default),
+  focus. Reads take one: `athanor` (the default),
   `mine`, or `everywhere` you hold a seat.
 
   ## What a person may pre-answer
@@ -72,7 +70,7 @@ defmodule Aqua.Providers.Notes do
     alias Prima.{Arg, Operation}
     # In-chain as well as at the door: the writes are `ask` in the
     # soul's policy, so from a chain each one is a card a person
-    # clicked; the reads are `auto`, bounded to the room by the
+    # clicked; the reads are `auto`, bounded to the athanor by the
     # domain. Interactive on every action — the credential gate is
     # the same on both planes. A write answers only the name it wrote
     # (`Aqua.Notes.describe/1`), so it carries no source; a read
@@ -267,7 +265,7 @@ defmodule Aqua.Providers.Notes do
         )
       ],
       description:
-        "What was kept out of a thread. Distinct from the transcript: erasing a thread does not erase what someone kept from it. A note lands in the athanor you are working in; two pinned pages (about-you, about-us) are read into every turn and held short.",
+        "What was kept out of a thread. Distinct from the transcript: erasing a thread does not erase what someone kept from it. A note lands in the athanor you are working in; the pinned page (about-you) is read into every turn and held short.",
       title: "Notes"
     )
   end

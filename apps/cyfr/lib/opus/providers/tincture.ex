@@ -57,9 +57,7 @@ defmodule Opus.Providers.Tincture do
   defp address do
     Arg.new("athanor", :string,
       required: true,
-      description:
-        "The tincture's public address: its athanor's URL segment " <>
-          "('@<namespace>' for a person's, the slug for a group's)"
+      description: "The tincture's public address: its athanor's URL segment ('@<namespace>')"
     )
   end
 

@@ -205,8 +205,8 @@ defmodule Cyfr.Test.ScriptedWorker do
     do: GenServer.call(__MODULE__, :await_reports, timeout_ms)
 
   @doc """
-  `ctx` moved into an athanor minted for the calling test alone: an
-  active group row under an id no other test names, so the node-global
+  `ctx` moved into an athanor minted for the calling test alone: a
+  second person's active row under an id no other test names, so the node-global
   state keyed by athanor (`Prima.Slots`'s unreaped kills, the consented
   rate windows, the slot counts) holds this test's runs and nobody
   else's. The row is written through the test's own sandbox checkout.
@@ -218,9 +218,9 @@ defmodule Cyfr.Test.ScriptedWorker do
     {:ok, %{id: athanor_id, status: "active"}} =
       Sanctum.Tenancy.Athanors.create(%{
         id: "ath_scripted_#{n}",
-        kind: "group",
         name: "Scripted #{n}",
         slug: "scripted-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

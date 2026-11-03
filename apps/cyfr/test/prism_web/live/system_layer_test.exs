@@ -90,30 +90,6 @@ defmodule PrismWeb.SystemLayerTest.Asker do
   def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
 end
 
-defmodule PrismWeb.SystemLayerTest.MovingHost do
-  @moduledoc false
-  # A page that opens another athanor, as the chat page's rail does: its
-  # context moves to the athanor `{:focus, athanor_id}` names, and the
-  # layer it renders is handed the moved context.
-  use Phoenix.LiveView
-
-  on_mount {CyfrWeb.ContextGuard, :protected}
-
-  @impl true
-  def mount(_params, session, socket), do: {:ok, assign(socket, :test, session["test"])}
-
-  @impl true
-  def handle_info({:focus, athanor_id}, socket) do
-    {:ok, moved} = Sanctum.Context.focus(socket.assigns.context, athanor_id)
-    {:noreply, assign(socket, :context, moved)}
-  end
-
-  def handle_info(message, socket), do: PrismWeb.SystemLayerTest.Relay.forward(message, socket)
-
-  @impl true
-  def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
-end
-
 defmodule PrismWeb.SystemLayerTest.BareHost do
   @moduledoc false
   # A page holding a context it was handed: a client no session backs.
@@ -193,7 +169,7 @@ defmodule PrismWeb.SystemLayerTest do
 
   alias Cyfr.Test.ShareFixtures
   alias PrismWeb.SystemLayer.Prompt
-  alias PrismWeb.SystemLayerTest.{BareHost, Host, MovingHost, QuietHost}
+  alias PrismWeb.SystemLayerTest.{BareHost, Host, QuietHost}
   alias Sanctum.Context
   alias Sanctum.TestContext.Authenticator
 
@@ -1698,74 +1674,6 @@ defmodule PrismWeb.SystemLayerTest do
       refute has_element?(view, ~s([data-lifetime="standing"][aria-pressed="true"]))
       %{current: %{subject: %{decisions: after_back}}} = layer_assigns(view)
       assert [%{"lifetime" => %{"kind" => "until", "until" => ^until}}] = after_back["bindings"]
-    end
-
-    test "a Connect prompt belongs to its grant's athanor: when the page opens another, it " <>
-           "ends with its grant, and no entry is made in either",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      here = seated_athanor()
-
-      {:ok, group} =
-        Sanctum.Tenancy.Athanors.create_group(user.user_id, "Elsewhere #{user.namespace}")
-
-      {:ok, view, _html} =
-        live_isolated(conn, MovingHost, session: %{"athanor_id" => here.id, "test" => self()})
-
-      ctx = person_context(user, here)
-      local = local_of(ctx)
-
-      name_ref =
-        publish_catalyst!(local, "layer-move-#{System.unique_integer([:positive])}", %{
-          "needs" => %{
-            "api_key" => %{
-              "type" => "api_key:move.test",
-              "reason" => "to call the service it moves with",
-              "fields" => ["MOVE_KEY"],
-              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
-              "hosts" => ["api.move.example"]
-            }
-          },
-          "caps" => %{"egress" => %{"domains" => ["api.move.example"]}}
-        })
-
-      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-move", name_ref)
-      prompt(view, grant)
-      click(view, ~s([data-test="grant-connect"]))
-      id = open_prompt(view)
-      assert "connect-" <> _ = id
-      assert has_element?(view, ~s(input[name="destination_hosts"][value="api.move.example"]))
-
-      # The page opens the group.
-      send(view.pid, {:focus, group.id})
-      render(view)
-      render(view)
-
-      # A key typed into the prompt, submitted after the move, is stored
-      # in neither athanor, nor asked to be.
-      view
-      |> layer()
-      |> render_submit("enter_credential", %{
-        "prompt_id" => id,
-        "name" => "move.test",
-        "secret" => "sk-moved",
-        "destination_hosts" => "api.move.example"
-      })
-
-      group_ctx = person_context(user, group)
-
-      for at <- [ctx, group_ctx] do
-        {:ok, entries} = Sanctum.Vault.list(at)
-        refute Enum.any?(entries, &(&1.provider_hint == "move.test"))
-        assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(at), user.user_id)
-      end
-
-      # The grant and the entry it asked for ended with the move.
-      assert outcome("g-move") == :dismissed
-      assert outcome(id) == :dismissed
-      assert open_prompt(view) == nil
-      refute render(view) =~ "Connect your move.test account"
     end
 
     # The entry now holds every field the need reads by name, so it has an

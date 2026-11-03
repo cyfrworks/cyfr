@@ -469,7 +469,7 @@ describe("a stream is delivered as the response's event stream", () => {
 describe("a public tincture's top-level page names itself", () => {
   test("its requests carry public and no bearer, and its streams too", async () => {
     const {api, server} = await frameClient({framed: false})
-    const identity = {athanor: "home", publisher: "local", name: "weather"}
+    const identity = {athanor: "@home", publisher: "local", name: "weather"}
     assert.deepEqual(api.public, identity)
 
     const [invoke] = fixture.requests.map((vector) => vector.body)
@@ -485,7 +485,7 @@ describe("a public tincture's top-level page names itself", () => {
     assert.deepEqual(server.requests[0].body, {...invoke, public: identity})
   })
 
-  test("a personal athanor's segment and an encoded path read the same", async () => {
+  test("an encoded path reads as its decoded one", async () => {
     const {api} = await frameClient({framed: false, pathname: "/t/%40alice/stripe.com/pay-desk/"})
     assert.deepEqual(api.public, {athanor: "@alice", publisher: "stripe.com", name: "pay-desk"})
   })

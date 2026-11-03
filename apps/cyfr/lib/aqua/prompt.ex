@@ -38,8 +38,7 @@ defmodule Aqua.Prompt do
 
   @type opts :: [
           agent: map(),
-          authority: term() | nil,
-          several_people?: boolean()
+          authority: term() | nil
         ]
 
   @typedoc "A composed prompt: its text and the sources it read."
@@ -65,7 +64,6 @@ defmodule Aqua.Prompt do
         "\n\n---\n\n## Runtime Context\n\n",
         file_paths(authority),
         Aqua.Prelude.system_prelude(tool_policy),
-        several_people(Keyword.get(opts, :several_people?, false)),
         scrolls(ctx),
         notes,
         clock()
@@ -132,16 +130,6 @@ defmodule Aqua.Prompt do
   defp scope_granted?("**", _scope), do: true
   defp scope_granted?(path, scope), do: path == scope or String.starts_with?(path, scope <> "/")
 
-  # Several people are speaking, so the task prefixes each line with a name
-  # and the prompt says so — otherwise the model reads a transcript as one
-  # voice and answers the wrong person.
-  @several_people "\n\nSeveral people are talking here. Each line of the task is prefixed " <>
-                    "with the name of the person who said it, as `Name: text`. Address " <>
-                    "people by name when it helps."
-
-  defp several_people(true), do: @several_people
-  defp several_people(_), do: []
-
   # The athanor's scrolls — procedures kept as Agent Skills — as an index
   # of name and line, read on demand with `aqua.skill_get`. The same
   # in-process read the `aqua` tool's `skill_list` makes
@@ -175,10 +163,8 @@ defmodule Aqua.Prompt do
     end
   end
 
-  # The athanor's notes, and the boundary said out loud. A room's turn is
-  # told it sees the room's pile and nothing else; a turn in the person's
-  # own athanor is told it may also search every athanor they belong to.
-  # The model never has to discover either by being refused.
+  # The athanor's notes, and the boundary said out loud, so the model never
+  # has to discover it by being refused.
   @notes_rule "These notes belong to the athanor this thread is in. Propose " <>
                 "`notes.keep` for what people would want found again — a decision, a " <>
                 "fact, a preference — and `notes.pin` only for what every future turn " <>
@@ -187,9 +173,6 @@ defmodule Aqua.Prompt do
   # The notes actions are interactive: only a session's chain reaches
   # them. A turn started any other way is not told to read what it cannot.
   @read_rule " Read a filed note with `notes.read` before answering from your memory of it."
-
-  @room_rule " Notes in other athanors, and a person's own, are not readable from " <>
-               "here — a person reads those from their own assistant."
 
   @home_rule " You may also search the notes of every athanor this person belongs to " <>
                "(`notes.search` with scope `everywhere`)."
@@ -204,12 +187,7 @@ defmodule Aqua.Prompt do
     interactive? = ctx.auth_method == :oidc
     read_rule = if interactive?, do: @read_rule, else: ""
 
-    rule =
-      cond do
-        not interactive? -> ""
-        Aqua.Notes.at_home?(ctx) -> @home_rule
-        true -> @room_rule
-      end
+    rule = if interactive?, do: @home_rule, else: ""
 
     {pinned, pinned_sources} =
       case Aqua.Notes.pinned(ctx) do

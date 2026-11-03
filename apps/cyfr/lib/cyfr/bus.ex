@@ -254,7 +254,6 @@ defmodule Cyfr.Bus do
         "PrismWeb.TopbarLive",
         "PrismWeb.ChatLive",
         "PrismWeb.ShellLive",
-        "PrismWeb.MembersLive",
         "PrismWeb.AquaLive",
         "PrismWeb.ThreadPaneLive",
         "Aqua.Runner"

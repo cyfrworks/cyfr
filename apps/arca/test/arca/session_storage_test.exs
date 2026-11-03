@@ -67,7 +67,7 @@ defmodule Arca.SessionStorageTest do
       assert session.athanor_id == "ath_home"
     end
 
-    test "update_athanor/2 repoints a live session; delete_by_user/1 drops every session" do
+    test "delete_by_user/1 drops every session" do
       hash = make_token_hash("repoint")
 
       :ok =
@@ -77,11 +77,7 @@ defmodule Arca.SessionStorageTest do
           Arca.Test.Actor.issuance()
         )
 
-      assert :ok = SessionStorage.update_athanor(hash, "ath_b")
-      assert {:ok, %{athanor_id: "ath_b"} = session} = SessionStorage.get_session(hash)
-
-      assert {:error, :not_found} =
-               SessionStorage.update_athanor(make_token_hash("none"), "ath_b")
+      assert {:ok, %{athanor_id: "ath_a"} = session} = SessionStorage.get_session(hash)
 
       assert {:ok, n} = SessionStorage.delete_by_user(session.user_id)
       assert n >= 1

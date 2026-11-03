@@ -17,7 +17,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
   before the commit, a lost slot or a postcondition that does not hold
   leaves the store and the marker as they were, and the next boot applies
   the transition once. Each person's `restore_people` row closes on its
-  own; a group with a member still recovering admits no new member; the
+  own; the shared threads, a pair among them and an invitation into one
+  stay as they were, frozen while one of their people recovers; the
   kit's challenge is redeemed once, before its expiry, for its own
   person, while that person's row is open.
   """
@@ -71,15 +72,14 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     user
   end
 
-  defp athanor!(kind, owner) do
+  defp athanor!(owner) do
     n = uniq()
 
     {:ok, athanor} =
       Arca.Athanors.insert(server(), %{
-        kind: kind,
         name: "R#{n}",
         slug: "rs-#{n}",
-        owner_user_id: if(kind == "person", do: owner),
+        owner_user_id: owner,
         created_by: owner
       })
 
@@ -487,34 +487,28 @@ defmodule Arca.SecurityTransitionsRestoreTest do
 
   defp get(schema, id), do: Arca.Repo.get(schema, id)
 
-  defp invited(athanor_id, invitee) do
-    Map.merge(
-      %{
-        id: Prima.UUID7.generate_id("mem"),
-        athanor_id: athanor_id,
-        scope: "athanor",
-        status: "invited",
-        added_by: "x",
-        created_at: now(),
-        updated_at: now()
-      },
-      invitee
-    )
-  end
-
-  # A home as a backup holds it: two people, each with their own athanor
-  # and a group they share, and in every store the transition moves an
-  # active, a blocked and a terminal row.
+  # A home as a backup holds it: two people, each with their own athanor,
+  # a shared thread they sit in, their pair and an invitation into the
+  # thread, and in every store the transition moves an active, a blocked
+  # and a terminal row.
   defp home! do
     alice = person!()
     bob = person!()
     # Carol signs in only through a door: no method for a restore to suspend.
     carol = person!()
-    own = athanor!("person", alice.id)
+    own = athanor!(alice.id)
     seat!(own.id, alice.id)
-    group = athanor!("group", alice.id)
-    seat!(group.id, alice.id)
-    seat!(group.id, bob.id)
+    bob_own = athanor!(bob.id)
+    seat!(bob_own.id, bob.id)
+
+    {:ok, shared_thread} =
+      Arca.SharedThreads.create(server(), %{title: "R#{uniq()}", created_by: alice.id})
+
+    {:ok, _seat} = Arca.SharedThreadMembers.seat(server(), shared_thread.id, bob.id, alice.id)
+    {:ok, pair} = Arca.SharedThreads.pair(server(), alice.id, bob.id)
+
+    {:ok, shared_invite} =
+      Arca.SharedThreadMembers.invite(server(), shared_thread.id, "per_#{uniq()}", alice.id)
 
     profile = profile!(own.id, "active")
     consent = consent!(own.id, profile)
@@ -522,7 +516,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     thread = thread!(own.id, alice.id)
     open_turn = turn!(own.id, thread, "running")
     {open_execution, open_attempt} = run!(own.id, alice.id, "running", "running")
-    {paused_execution, paused_attempt} = run!(group.id, bob.id, "paused", "paused")
+    {paused_execution, paused_attempt} = run!(bob_own.id, bob.id, "paused", "paused")
     {done_execution, done_attempt} = run!(own.id, alice.id, "completed", "completed")
 
     %{
@@ -531,7 +525,10 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       carol: carol,
       bob_passkey: passkey!(bob.id, "active"),
       own: own,
-      group: group,
+      bob_own: bob_own,
+      shared_thread: shared_thread,
+      pair: pair,
+      shared_invite: shared_invite,
       sessions: [session!(alice.id), session!(bob.id), session!(carol.id)],
       key: key!(own.id, alice.id),
       revoked_key: key!(own.id, alice.id, %{revoked: true}),
@@ -564,7 +561,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       share: share!(own.id, vault),
       revoked_share: share!(own.id, vault, "revoked"),
       open_turn: open_turn,
-      paused_turn: turn!(group.id, thread!(group.id, bob.id), "paused"),
+      paused_turn: turn!(bob_own.id, thread!(bob_own.id, bob.id), "paused"),
       done_turn: turn!(own.id, thread, "completed"),
       open_step: step!(own.id, open_turn, "dispatched"),
       closed_step: step!(own.id, open_turn, "closed"),
@@ -579,6 +576,13 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       done_attempt: done_attempt
     }
   end
+
+  defp frozen_threads,
+    do:
+      SecurityTransitions.frozen_shared_threads()
+      |> distinct(true)
+      |> Arca.Repo.all()
+      |> Enum.sort()
 
   defp marked! do
     {:ok, restore_id} = SecurityTransitions.mark_restore(server())
@@ -655,6 +659,9 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       alice_generation = fixture.alice.security_generation
       own_generation = get(Schemas.Athanor, fixture.own.id).security_generation
       revoked_at = get(Schemas.Invitation, fixture.revoked_invitation).revoked_at
+      threads = [fixture.shared_thread.id, fixture.pair.id]
+      threads_before = Enum.map(threads, &get(Schemas.SharedThread, &1))
+      invite_before = get(Schemas.SharedThreadMember, fixture.shared_invite.id)
       restore_id = marked!()
 
       assert {:ok, change} = SecurityTransitions.restore(slot: :none)
@@ -760,6 +767,20 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert change.user_ids == Enum.sort([fixture.alice.id, fixture.bob.id])
       assert rows(fixture.carol.id) == []
 
+      # The shared thread, the pair and the invitation into the thread stay
+      # the rows they were: no shared thread's standing moves with a
+      # restore. Each thread holds a person still recovering, so each is
+      # frozen until they have (`frozen_shared_threads/0`).
+      assert Enum.map(threads, &get(Schemas.SharedThread, &1)) == threads_before
+      assert [%{kind: "shared"}, %{kind: "pair"}] = threads_before
+      assert Enum.all?(threads_before, &(&1.status == "active"))
+
+      assert %{status: "invited", user_id: nil} =
+               get(Schemas.SharedThreadMember, fixture.shared_invite.id)
+
+      assert get(Schemas.SharedThreadMember, fixture.shared_invite.id) == invite_before
+      assert frozen_threads() == Enum.sort(threads)
+
       assert is_nil(marker())
     end
 
@@ -842,7 +863,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       # The lapsed rows are the one failure a successor may take up, and
       # the stamp each carries no longer stands.
       assert {:error, :not_standing} = takeover(fixture.own.id, fixture.open_execution)
-      assert {:error, :not_standing} = takeover(fixture.group.id, fixture.paused_execution)
+      assert {:error, :not_standing} = takeover(fixture.bob_own.id, fixture.paused_execution)
       assert get(Schemas.Execution, fixture.open_execution).status == "failed"
 
       # No pre-restore attempt is left open for the sweep's scan to cancel.
@@ -971,63 +992,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     test "only the system reads a person's row" do
       assert {:error, :cross_tenant} =
                SecurityTransitions.restore_open(Prima.Actor.in_athanor("ath_x"), "usr_x")
-    end
-
-    test "a group with a member still recovering is frozen until each has closed", %{
-      fixture: f
-    } do
-      group = Prima.Actor.in_athanor(f.group.id)
-      assert {:ok, true} = SecurityTransitions.restore_frozen?(group)
-
-      # The seat's own transaction refuses it, under the athanor's lock.
-      newcomer = person!()
-
-      assert {:error, :recovering_from_restore} =
-               Arca.Members.seat(group, %{user_id: newcomer.id, added_by: "x"})
-
-      # A person's own athanor is never frozen by it.
-      assert {:ok, false} = SecurityTransitions.restore_frozen?(Prima.Actor.in_athanor(f.own.id))
-
-      {:ok, _} =
-        Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(f.alice.id) end)
-
-      assert {:ok, true} = SecurityTransitions.restore_frozen?(group)
-
-      {:ok, _} =
-        Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(f.bob.id) end)
-
-      assert {:ok, false} = SecurityTransitions.restore_frozen?(group)
-      assert {:ok, _seated} = Arca.Members.seat(group, %{user_id: newcomer.id, added_by: "x"})
-    end
-
-    test "an invitation to a frozen group stays an invitation until every member has recovered",
-         %{fixture: f} do
-      newcomer = person!()
-
-      # Invitations made before the freeze, which a frozen group no longer
-      # takes (`Arca.Members.seat/3`).
-      identifier = "per_" <> String.duplicate("a", 64)
-
-      insert!(Schemas.Membership, invited(f.group.id, %{person_identifier: identifier}))
-
-      assert {:ok, []} =
-               Arca.Members.activate_invited_identifier(server(), newcomer.id, identifier, now())
-
-      refute Arca.Repo.exists?(
-               from(m in Schemas.Membership,
-                 where: m.user_id == ^newcomer.id and m.athanor_id == ^f.group.id
-               )
-             )
-
-      for person <- [f.alice, f.bob] do
-        {:ok, _} =
-          Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(person.id) end)
-      end
-
-      group = f.group.id
-
-      assert {:ok, [^group]} =
-               Arca.Members.activate_invited_identifier(server(), newcomer.id, identifier, now())
     end
 
     test "the checklist names what the person must re-enable, re-consent and rotate", %{

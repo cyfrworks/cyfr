@@ -3,31 +3,20 @@
 
 defmodule Sanctum.TenancyMCPTest do
   @moduledoc """
-  The `athanor` and `member` tools — the two verbs that shape the tenancy
-  fabric itself, and the only two Sanctum tools nothing called through the
-  tool surface.
+  The `athanor` tool — the verb that reads and patches the caller's own
+  athanor, and that nothing calls through the tool surface.
 
-  Everything else here is reachable a second way (a page, a fixture, an
-  underlying module with its own suite), so a broken handler shows up
-  somewhere. These do not have that: `Sanctum.Tenancy.Athanors` and
-  `Sanctum.Tenancy.Members` are well covered, but the ARGUMENT MAPPING
-  between the wire and them — which athanor an action resolves to, who may
-  name it, and what each refusal turns into — lived only here.
+  `Sanctum.Tenancy.Athanors` is well covered, but the ARGUMENT MAPPING
+  between the wire and it — which athanor an action resolves to, who may
+  name it, and what each refusal turns into — lives only here.
 
   What that mapping owes its callers, and what this file pins:
 
-  - `athanor.purge` and `athanor.destroy` are the operator's platform-scope
-    operations: declared `scope: :platform`, so the dispatch gate refuses
-    anyone else with `:platform_admin_required`, a JSON-RPC authorization
-    error rather than an `isError` content result, before the handler runs
-    (the refusal through the gate is pinned in
-    `Sanctum.Providers.AthanorMemberDoorToolsTest`). The handler names its
-    athanor explicitly and never reads the one in focus.
-  - An archived athanor is a hard stop on every path except the reads and
-    `unarchive` that ask for it by name, and those are a member's; an
-    operator with no seat reads its public facts alone.
-  - A person's own athanor takes no members, gives none up, and cannot be
-    left.
+  - An athanor the caller holds no seat in is answered as a missing one,
+    an operator's included, and the refusal reads nothing the athanor
+    holds.
+  - An archived athanor is a hard stop on every path except the read that
+    asks for it by name, and that is its person's.
   - The person-only verbs refuse an API key with a sentence, before doing
     anything.
   """
@@ -36,18 +25,26 @@ defmodule Sanctum.TenancyMCPTest do
 
   alias Sanctum.Provider
   alias Sanctum.Tenancy.Athanors
-  alias Sanctum.Tenancy.Members
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
 
-    user = "github|https://github.com|tenancy_#{System.unique_integer([:positive])}"
-    {:ok, athanor} = Athanors.create_group(user, "Tenancy #{System.unique_integer([:positive])}")
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|tenancy_#{n}",
+        provider: "github",
+        email: "tenancy#{n}@example.com",
+        verified: true
+      })
+
+    athanor = Sanctum.Test.People.athanor!(user)
 
     ctx =
       Sanctum.Context.build(
-        user_id: user,
-        email: "#{System.unique_integer([:positive])}@example.com",
+        user_id: user.id,
+        email: user.email,
         provider: "github",
         namespace: "tenancyns",
         athanor_id: athanor.id,
@@ -57,58 +54,35 @@ defmodule Sanctum.TenancyMCPTest do
         authenticated: true
       )
 
-    {:ok, _} = Members.ensure(user, scope: "athanor", athanor_id: athanor.id)
-
     {:ok, ctx: ctx, user: user, athanor: athanor}
   end
 
-  defp group!(ctx, name \\ nil) do
-    name = name || "Group #{System.unique_integer([:positive])}"
-    {:ok, result} = Provider.handle("athanor", ctx, %{"action" => "create", "name" => name})
-    result
-  end
-
-  # ==========================================================================
-  # athanor
-  # ==========================================================================
-
-  describe "athanor.create and athanor.get" do
-    test "a created group is readable by id and lists the caller as a member", %{ctx: ctx} do
-      created = group!(ctx, "Bells")
-
-      assert created.name == "Bells"
-
+  describe "athanor.get" do
+    test "the caller's athanor is readable by id", %{ctx: ctx, athanor: athanor} do
       assert {:ok, fetched} =
-               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
+               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => athanor.id})
 
-      assert fetched.id == created.id
-
-      assert {:ok, %{members: [member], count: 1}} =
-               Provider.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
-
-      assert member.user_id == ctx.user_id
-    end
-
-    test "create without a name is refused before anything is made", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Missing required argument: name"}} =
-               Provider.handle("athanor", ctx, %{"action" => "create"})
+      assert fetched.id == athanor.id
     end
 
     test "an unknown action names itself rather than falling through", %{ctx: ctx} do
       assert {:error, {:unknown_action, "athanor.explode"}} =
                Provider.handle("athanor", ctx, %{"action" => "explode"})
-
-      assert {:error, {:unknown_action, "member.explode"}} =
-               Provider.handle("member", ctx, %{"action" => "explode"})
     end
   end
 
   describe "resolve/3 — which athanor an action gets to name" do
-    test "an athanor the caller does not belong to is refused", %{ctx: ctx} do
-      stranger = "github|https://github.com|stranger_#{System.unique_integer([:positive])}"
+    test "an athanor the caller does not belong to is refused, an operator's read included",
+         %{ctx: ctx} do
+      n = System.unique_integer([:positive])
 
       {:ok, theirs} =
-        Athanors.create_group(stranger, "Not Yours #{System.unique_integer([:positive])}")
+        Athanors.create(%{
+          name: "Not Yours #{n}",
+          slug: "not-yours-#{n}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          created_by: "system"
+        })
 
       # Answered as a missing athanor is: the refusal tells the caller
       # nothing of whether it exists.
@@ -117,177 +91,8 @@ defmodule Sanctum.TenancyMCPTest do
       assert {:error, {:not_found, "Athanor", ^id}} =
                Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => id})
 
-      assert {:error, {:not_found, "Athanor", ^id}} =
-               Provider.handle("member", ctx, %{"action" => "list", "athanor" => id})
-    end
-
-    test "an archived athanor is a hard stop except where the action asks for it", %{ctx: ctx} do
-      created = group!(ctx)
-
-      assert {:ok, %{status: "archived"}} =
-               Provider.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
-
-      # The reads and `unarchive` pass `include_archived: true` and still work.
-      assert {:ok, %{status: "archived"}} =
-               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
-
-      assert {:ok, _} =
-               Provider.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
-
-      # Everything that would change it does not.
-      assert {:error, _} =
-               Provider.handle("athanor", ctx, %{
-                 "action" => "rename",
-                 "athanor" => created.id,
-                 "name" => "Renamed"
-               })
-
-      assert {:error, _} =
-               Provider.handle("member", ctx, %{
-                 "action" => "add",
-                 "athanor" => created.id,
-                 "identifier" => "per_" <> Prima.Digest.sha256_hex("someone")
-               })
-
-      # And it reopens.
-      assert {:ok, %{status: "active"}} =
-               Provider.handle("athanor", ctx, %{"action" => "unarchive", "athanor" => created.id})
-    end
-  end
-
-  describe "athanor.purge and athanor.destroy — the platform scope" do
-    test "are declared platform-scope, which the gate refuses a non-operator on the transport" do
-      scopes =
-        for %{tool: "athanor", action: action, scope: scope} <-
-              Sanctum.Providers.Athanor.definition().operations,
-            into: %{},
-            do: {action, scope}
-
-      # The two reclaiming verbs, and no other: everything else the tool
-      # does is a member's act in an athanor they hold a seat in.
-      assert for({action, :platform} <- scopes, do: action) |> Enum.sort() == ["destroy", "purge"]
-
-      # `:platform_admin_required` is what `Sanctum.Unauthorized` recognises,
-      # so the router answers the gate's refusal as a JSON-RPC error rather
-      # than an `isError` content result.
-      assert Sanctum.Unauthorized.reason?(:platform_admin_required),
-             "the purge refusal is not on the shared authorization vocabulary"
-    end
-
-    test "the operator may purge, but only what is archived", %{ctx: ctx, user: user} do
-      created = group!(ctx)
-      admin = %{ctx | platform_admin: true}
-
-      assert {:error, {:invalid_argument, message}} =
-               Provider.handle("athanor", admin, %{"action" => "purge", "athanor" => created.id})
-
-      assert message =~ "archive it first"
-
-      Provider.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
-
-      assert {:ok, purged} =
-               Provider.handle("athanor", admin, %{"action" => "purge", "athanor" => created.id})
-
-      assert purged["purged"] == true
-
-      # Purging takes the blobs, not the row: the athanor is still there and
-      # still the caller's.
-      assert Members.member?(user, created.id)
-    end
-
-    test "name their athanor and never read the one in focus", %{ctx: ctx} do
-      admin = %{ctx | platform_admin: true}
-
-      # The operator works in an athanor of their own; a platform operation
-      # acts on what it names and nothing else.
-      for action <- ["purge", "destroy"] do
-        assert {:error, {:invalid_argument, "No athanor in focus — pass athanor"}} =
-                 Provider.handle("athanor", admin, %{"action" => action})
-      end
-
-      assert {:ok, %{status: "active"}} = Athanors.get(ctx.athanor_id)
-    end
-  end
-
-  # ==========================================================================
-  # member
-  # ==========================================================================
-
-  describe "member.add" do
-    test "an identifier nobody here holds yet is seated all the same", %{ctx: ctx} do
-      created = group!(ctx)
-      identifier = "per_" <> Prima.Digest.sha256_hex("newcomer-#{System.unique_integer()}")
-
-      assert {:ok, %{member: %{identifier: ^identifier}, state: "added"}} =
-               Provider.handle("member", ctx, %{
-                 "action" => "add",
-                 "athanor" => created.id,
-                 "identifier" => identifier
-               })
-    end
-
-    test "a target that is neither a user id, an identifier nor a handle is refused, and an email names no one",
-         %{ctx: ctx} do
-      created = group!(ctx)
-
-      for args <- [%{}, %{"email" => "Newcomer@Example.com"}] do
-        assert {:error,
-                {:invalid_argument, "Missing required argument: user_id, identifier or handle"}} =
-                 Provider.handle(
-                   "member",
-                   ctx,
-                   Map.merge(%{"action" => "add", "athanor" => created.id}, args)
-                 )
-      end
-
-      assert {:error, {:invalid_argument, message}} =
-               Provider.handle("member", ctx, %{
-                 "action" => "add",
-                 "athanor" => created.id,
-                 "identifier" => "per_x"
-               })
-
-      assert message =~ "person identifier"
-    end
-  end
-
-  describe "member.remove and member.leave" do
-    test "removing someone who is not there names them", %{ctx: ctx} do
-      created = group!(ctx)
-
-      ghost = "per_" <> Prima.Digest.sha256_hex("ghost")
-
-      assert {:error, {:not_found, "Member", ^ghost}} =
-               Provider.handle("member", ctx, %{
-                 "action" => "remove",
-                 "athanor" => created.id,
-                 "identifier" => ghost
-               })
-    end
-
-    test "leaving a group gives up the seat, and the last one out archives it",
-         %{ctx: ctx, user: user} do
-      created = group!(ctx)
-      assert Members.member?(user, created.id)
-
-      assert {:ok, %{state: "left"}} =
-               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => created.id})
-
-      refute Members.member?(user, created.id)
-
-      # `Members.remove_member/2` archives a group nobody is left in — a
-      # group with no members is not a group anyone can act in — and the
-      # second attempt is refused for the missing seat before the archive
-      # is read. The former member reads nothing of it, not even that it is
-      # archived, and neither does an operator, who holds no seat either:
-      # athanor.get answers a seatless administrator as it answers for a
-      # missing athanor, and the archive is theirs to reach only through
-      # purge and destroy.
-      id = created.id
-
-      assert {:error, {:not_found, "Athanor", ^id}} =
-               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => id})
-
+      # An operator holds no seat there either: athanor.get answers a
+      # seatless administrator as it answers for a missing athanor.
       test = self()
       handler = "tenancy-mcp-facts-#{System.unique_integer([:positive])}"
 
@@ -307,7 +112,7 @@ defmodule Sanctum.TenancyMCPTest do
       assert {:error, {:not_found, "Athanor", ^id}} =
                Provider.handle("athanor", %{ctx | platform_admin: true}, %{
                  "action" => "get",
-                 "athanor" => created.id
+                 "athanor" => id
                })
 
       :telemetry.detach(handler)
@@ -315,60 +120,23 @@ defmodule Sanctum.TenancyMCPTest do
       # The row and the seat check, and nothing the athanor holds: no
       # thread, file, vault or member list is read for the refusal.
       assert Enum.reject(reads(), &(&1 in ["athanors", "memberships"])) == []
-
-      assert {:error, {:not_found, "Athanor", ^id}} =
-               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => id})
     end
 
-    test "a person's own athanor takes no members and cannot be left" do
-      n = System.unique_integer([:positive])
+    test "an archived athanor is a hard stop except where the action asks for it",
+         %{ctx: ctx, athanor: athanor} do
+      {:ok, _} = Athanors.archive(athanor, force: true)
 
-      {:ok, user} =
-        Sanctum.Test.People.linked(%{
-          id: "github|https://github.com|own-#{n}",
-          provider: "github",
-          email: "own#{n}@example.com",
-          verified: true,
-          name: "Own #{n}"
-        })
+      # The read passes `include_archived: true` and still works.
+      assert {:ok, %{status: "archived"}} =
+               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => athanor.id})
 
-      {:ok, user} = Sanctum.Tenancy.Users.set_namespace(user, "own#{n}")
-      own = Sanctum.Test.People.athanor!(user)
-      assert own.kind == "person"
-
-      ctx =
-        Sanctum.Context.build(
-          user_id: user.id,
-          email: user.email,
-          provider: "github",
-          namespace: user.namespace,
-          athanor_id: own.id,
-          permissions: [:*],
-          scope: :athanor,
-          auth_method: :oidc,
-          authenticated: true
-        )
-
-      assert {:error, {:invalid_argument, "You cannot leave your own athanor"}} =
-               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => own.id})
-
-      assert {:error, {:invalid_argument, message}} =
-               Provider.handle("member", ctx, %{
-                 "action" => "add",
-                 "athanor" => own.id,
-                 "identifier" => "per_" <> Prima.Digest.sha256_hex("someone")
+      # What would change it does not.
+      assert {:error, {:invalid_argument, "That athanor is archived"}} =
+               Provider.handle("athanor", ctx, %{
+                 "action" => "settings",
+                 "athanor" => athanor.id,
+                 "settings" => %{"x" => 1}
                })
-
-      assert message =~ "add people to a group"
-
-      assert {:error, {:invalid_argument, remove_message}} =
-               Provider.handle("member", ctx, %{
-                 "action" => "remove",
-                 "athanor" => own.id,
-                 "user_id" => user.id
-               })
-
-      assert remove_message =~ "cannot remove the owner"
     end
   end
 
@@ -376,20 +144,20 @@ defmodule Sanctum.TenancyMCPTest do
     test "an API key is refused with a sentence, before the athanor is even resolved", %{ctx: ctx} do
       key_ctx = %{ctx | auth_method: :api_key}
 
-      for action <- ["add", "remove", "leave"] do
+      for action <- ["settings", "provision"] do
         assert {:error, {:invalid_argument, message}} =
-                 Provider.handle("member", key_ctx, %{
+                 Provider.handle("athanor", key_ctx, %{
                    "action" => action,
                    "athanor" => "ath_does_not_exist",
-                   "identifier" => "per_" <> Prima.Digest.sha256_hex("someone")
+                   "settings" => %{}
                  })
 
-        assert message == "member.#{action} is a person's act — sign in; an API key cannot do it",
-               "member.#{action} let an API key through"
+        assert message == "athanor.#{action} is a person's act — sign in; an API key cannot do it",
+               "athanor.#{action} let an API key through"
       end
 
       # A read is not a person's act, so the key still gets it.
-      assert {:ok, _} = Provider.handle("member", key_ctx, %{"action" => "list"})
+      assert {:ok, _} = Provider.handle("athanor", key_ctx, %{"action" => "get"})
     end
   end
 

@@ -56,7 +56,7 @@ export async function stubServer(answer) {
 
 // A page's window: `parent` is the shell's window unless `framed` is false,
 // and `location.pathname` the page's path.
-export function frameWindow({framed = true, pathname = "/t/home/local/weather/index.html"} = {}) {
+export function frameWindow({framed = true, pathname = "/t/@home/local/weather/index.html"} = {}) {
   const win = {location: {pathname}}
   win.parent = framed ? {name: "shell"} : win
   return win

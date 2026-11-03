@@ -95,8 +95,9 @@ defmodule Prima.TinctureWireTest do
       assert {:error, _} = TinctureWire.decode_request(kind, %{body | "public" => bad})
     end
 
-    assert TinctureWire.public_identity?(%{athanor: "home", publisher: "local", name: "w"})
-    refute TinctureWire.public_identity?(%{athanor: "home", publisher: "local"})
+    assert TinctureWire.public_identity?(%{athanor: "@home", publisher: "local", name: "w"})
+    refute TinctureWire.public_identity?(%{athanor: "home", publisher: "local", name: "w"})
+    refute TinctureWire.public_identity?(%{athanor: "@home", publisher: "local"})
   end
 
   test "an admitted stream is the event stream the encoders write, and reads back as its events" do

@@ -90,7 +90,6 @@ defmodule Sanctum.Provider do
     [
       Sanctum.Providers.Session.definition(),
       Sanctum.Providers.Athanor.definition(),
-      Sanctum.Providers.Member.definition(),
       Sanctum.Providers.SharedThread.definition(),
       Sanctum.Providers.Invitation.definition(),
       Sanctum.Providers.Door.definition(),
@@ -122,7 +121,6 @@ defmodule Sanctum.Provider do
   @impl true
   def handle("session", ctx, args), do: Sanctum.Providers.Session.handle(ctx, args)
   def handle("athanor", ctx, args), do: Sanctum.Providers.Athanor.handle(ctx, args)
-  def handle("member", ctx, args), do: Sanctum.Providers.Member.handle(ctx, args)
   def handle("shared_thread", ctx, args), do: Sanctum.Providers.SharedThread.handle(ctx, args)
   def handle("invitation", ctx, args), do: Sanctum.Providers.Invitation.handle(ctx, args)
   def handle("door", ctx, args), do: Sanctum.Providers.Door.handle(ctx, args)

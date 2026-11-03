@@ -43,20 +43,20 @@ defmodule Cyfr.StandingWatchTest do
         verified: true
       })
 
-    {:ok, group} = Athanors.create_group(owner.id, "Standing #{n}")
+    athanor = Sanctum.Test.People.athanor!(owner)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(%{
-        member_ctx(group.id, owner.id)
+        member_ctx(athanor.id, owner.id)
         | provider: "github",
           email: owner.email
       })
 
-    {:ok, group: group, session: session, hash: Sanctum.Session.token_hash(session.token)}
+    {:ok, athanor: athanor, session: session, hash: Sanctum.Session.token_hash(session.token)}
   end
 
   test "an archive announces the row key on the bus, so a peer hears it", %{
-    group: group,
+    athanor: athanor,
     session: session,
     hash: hash
   } do
@@ -64,23 +64,23 @@ defmodule Cyfr.StandingWatchTest do
 
     Cyfr.Bus.subscribe_global(Cyfr.Bus.caller_invalidated_global())
 
-    assert {:ok, %{status: "archived"}} = Athanors.archive(group)
+    assert {:ok, %{status: "archived"}} = Athanors.archive(athanor, force: true)
 
     assert_receive %Cyfr.Bus.CallerInvalidated{session_key: ^hash}, 5_000
   end
 
   test "an athanor archived on another member refuses a caller this one had cached", %{
-    group: group,
+    athanor: athanor,
     session: session,
     hash: hash
   } do
     assert {:ok, %Context{athanor_id: cached} = ctx} = Sanctum.Caller.establish(session.token)
-    assert cached == group.id
+    assert cached == athanor.id
 
     # Member A archives. This VM is also member A, so it drops its own
     # copy; putting it back is what member B's table still holds, having
     # heard nothing yet.
-    assert {:ok, %{status: "archived"}} = Athanors.archive(group)
+    assert {:ok, %{status: "archived"}} = Athanors.archive(athanor, force: true)
     Arca.Cache.put(Arca.Cache.Keys.established(hash, nil), ctx, 60_000)
 
     assert {:ok, %Context{athanor_id: ^cached}} = Sanctum.Caller.establish(session.token),

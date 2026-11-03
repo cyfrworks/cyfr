@@ -277,8 +277,7 @@ defmodule Prism.Router do
       end
 
       # Opening an athanor is a link: focus is in the URL, `/a/<athanor>/…` —
-      # a person's athanor as `@<namespace>`, a group's by slug — so two tabs
-      # can be two athanors. `PrismWeb.Focus` resolves the segment and narrows
+      # a person's athanor as `@<namespace>`. `PrismWeb.Focus` resolves the segment and narrows
       # the context (`Sanctum.Context.focus/2`) before the page mounts.
       scope "/", PrismWeb do
         pipe_through :browser
@@ -332,7 +331,6 @@ defmodule Prism.Router do
             live "/builds", BuildsLive, :index, metadata: %{auth: :browser_authenticated}
             live "/vault", VaultLive, :index, metadata: %{auth: :browser_authenticated}
             live "/api-keys", ApiKeysLive, :index, metadata: %{auth: :browser_authenticated}
-            live "/members", MembersLive, :index, metadata: %{auth: :browser_authenticated}
             live "/webhooks", WebhooksLive, :index, metadata: %{auth: :browser_authenticated}
             live "/schedules", SchedulesLive, :index, metadata: %{auth: :browser_authenticated}
             live "/settings", SettingsLive, :index, metadata: %{auth: :browser_authenticated}

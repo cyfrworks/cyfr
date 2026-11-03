@@ -663,15 +663,14 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
 
   # A person whose home was restored from a backup with the marker: their
   # passkey, a paired device, an API key and a webhook of theirs and a
-  # profile and a vault entry of their own athanor, and an API key in a
-  # group they sit in, each standing before the restore; then signed in
-  # again with a door, since the restore ended every session.
+  # profile and a vault entry of their own athanor, each standing before
+  # the restore; then signed in again with a door, since the restore ended
+  # every session.
   defp restored(%{conn: conn}) do
     user = test_user()
     _before = log_in_user(conn, user)
     athanor = seated_athanor()
     authenticator = Sanctum.TestContext.passkey!(user.user_id)
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Restored #{uniq()}")
 
     passkey_id =
       Arca.Repo.one!(
@@ -686,8 +685,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       key: key!(athanor.id, user.user_id),
       webhook: webhook!(athanor.id, user.user_id, profile_id),
       profile: profile_id,
-      vault: vault!(athanor.id),
-      group_key: key!(group.id, user.user_id)
+      vault: vault!(athanor.id)
     }
 
     {:ok, _marked} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
@@ -700,7 +698,6 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       view: host!(conn, athanor),
       user: user,
       athanor: athanor,
-      group: group,
       authenticator: authenticator,
       restore_id: restore_id,
       ids: ids
@@ -769,23 +766,9 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "a key in another athanor is re-enabled there: the checklist links to it",
-         %{view: view, group: group, ids: ids} do
-      refute has_element?(view, ~s([data-test="restore-reenable"][data-id="#{ids.group_key}"]))
-
-      assert has_element?(
-               view,
-               ~s([data-test="restore-checklist-item"][data-id="#{ids.group_key}"] ) <>
-                 ~s([data-test="restore-checklist-elsewhere"][href="#{PrismWeb.Focus.path(group, "/api-keys")}"])
-             )
-
-      Cyfr.Test.Sandbox.end_views()
-    end
-
     test "a re-enable the checklist does not offer here dispatches nothing",
          %{view: view, user: user, ids: ids} do
       for {operation, id} <- [
-            {"key.reenable", ids.group_key},
             {"key.reenable", "key_not_listed"},
             {"vault.delete", ids.vault},
             {"passkey.reenable", ids.key}

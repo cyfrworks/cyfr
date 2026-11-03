@@ -95,9 +95,9 @@ defmodule Arca.CredentialIssuanceTest do
       {:ok, _} =
         Arca.Athanors.insert(server(), %{
           id: athanor_id,
-          kind: "group",
           name: "CI #{n}",
           slug: "ci-#{n}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           created_by: user_id
         })
     end)
@@ -236,14 +236,8 @@ defmodule Arca.CredentialIssuanceTest do
     } do
       test = self()
 
-      # The athanor stays open: the person is one of two, so the denial
-      # leaves the group standing and the refusal is the person's.
-      other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
-
-      unboxed(fn ->
-        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: other, added_by: "x"})
-      end)
-
+      # The athanor stays open: it is not the person's own, so the denial
+      # leaves it standing and the refusal is the person's.
       denier = paused_denial(user_id)
       assert_receive :denial_holds, 5_000
       attrs = key_attrs(user_id, athanor_id)
@@ -1395,7 +1389,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     }
   end
 
-  # A person seated in a group of their own, in this case's sandbox.
+  # A person seated in an athanor another person owns, in this case's sandbox.
   defp standing! do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
@@ -1428,9 +1422,9 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     {:ok, _} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
         id: athanor_id,
-        kind: "group",
         name: "Order #{n}",
         slug: "order-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: user_id
       })
 

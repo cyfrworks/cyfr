@@ -65,9 +65,9 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
         id: id,
-        kind: "group",
         name: "Cluster #{label}",
         slug: slug,
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 
@@ -445,7 +445,7 @@ defmodule Cyfr.Cluster.Fixtures do
         Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       )
 
-  @doc "A person with a session of their own, and their group athanor."
+  @doc "A person with a session of their own, in their own athanor."
   @spec person!() :: map()
   def person! do
     n = System.unique_integer([:positive])
@@ -459,13 +459,13 @@ defmodule Cyfr.Cluster.Fixtures do
         name: "Cluster #{n}"
       })
 
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.id, "Cluster #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(%{
         Sanctum.Context.build(
           user_id: user.id,
-          athanor_id: group.id,
+          athanor_id: athanor.id,
           permissions: [:*],
           scope: :athanor,
           auth_method: :oidc,
@@ -477,7 +477,7 @@ defmodule Cyfr.Cluster.Fixtures do
 
     %{
       user_id: user.id,
-      athanor_id: group.id,
+      athanor_id: athanor.id,
       token: session.token,
       hash: Sanctum.Session.token_hash(session.token)
     }
@@ -636,7 +636,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec archive!(String.t()) :: atom()
   def archive!(athanor_id) do
     {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
-    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(athanor)
+    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
     archived.status
   end
 

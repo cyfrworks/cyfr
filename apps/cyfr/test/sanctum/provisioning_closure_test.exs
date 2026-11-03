@@ -68,36 +68,43 @@ defmodule Sanctum.ProvisioningClosureTest do
         )
         |> Sanctum.TestContext.via(:prism)
 
-      assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
-      in_group = %{ctx | athanor_id: group.id}
-      :ok = Provisioning.start_provisioning(in_group)
+      {:ok, slugs} = Athanors.person_slugs(nil, "Offline #{n}")
 
-      {:ok, group} = Athanors.get(group.id)
+      {:ok, athanor} =
+        Athanors.create_personal(
+          %{name: "Offline #{n}", owner_user_id: ctx.user_id, created_by: ctx.user_id},
+          slugs
+        )
 
-      assert %DateTime{} = group.provisioned_at,
-             "the athanor did not provision: #{inspect(Athanors.settings(group))}"
+      in_athanor = %{ctx | athanor_id: athanor.id}
+      :ok = Provisioning.start_provisioning(in_athanor)
 
-      refute Athanors.provisioning_failure(group)
+      {:ok, athanor} = Athanors.get(athanor.id)
+
+      assert %DateTime{} = athanor.provisioned_at,
+             "the athanor did not provision: #{inspect(Athanors.settings(athanor))}"
+
+      refute Athanors.provisioning_failure(athanor)
 
       # Every model catalyst is a row of the athanor: shipped, never pulled.
       for unit <- SeedBundle.model_chat_units() do
         assert {:ok, %{publisher: "local"}} =
-                 Compendium.Registry.get_latest(in_group, unit.name, "local", "catalyst"),
+                 Compendium.Registry.get_latest(in_athanor, unit.name, "local", "catalyst"),
                "#{unit.ref} is not registered"
       end
 
       # The soul is consented and loads: its whole closure is the local seed.
       assert {:ok, [_profile]} =
-               Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_group), "agent:local.aqua")
+               Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_athanor), "agent:local.aqua")
 
       assert {:ok, %Prima.Authority{} = auth} =
-               Opus.authority_for(in_group, :default, "agent:local.aqua")
+               Opus.authority_for(in_athanor, :default, "agent:local.aqua")
 
       assert auth.cursor == {:bound, "agent:local.aqua"}
 
       # A second provisioning is a no-op.
-      assert {:ok, %{provisioned_at: at}} = Provisioning.provision(group, in_group)
-      assert at == group.provisioned_at
+      assert {:ok, %{provisioned_at: at}} = Provisioning.provision(athanor, in_athanor)
+      assert at == athanor.provisioned_at
     end
   end
 

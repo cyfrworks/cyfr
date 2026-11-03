@@ -11,12 +11,13 @@ defmodule Sanctum.TenancyTest do
   alias Sanctum.Tenancy
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  defp group!(name) do
+  # An athanor row owned by `owner` (by default an id no person holds).
+  defp athanor!(name, owner \\ Prima.UUID7.generate_id(Prima.PersonId.prefix())) do
     {:ok, athanor} =
       Athanors.create(%{
-        kind: "group",
         name: name,
         slug: "#{name}-#{System.unique_integer([:positive])}",
+        owner_user_id: owner,
         created_by: "system"
       })
 
@@ -101,7 +102,7 @@ defmodule Sanctum.TenancyTest do
 
     test "an athanor membership resolves scope and athanor" do
       uid = "u-ath-#{System.unique_integer([:positive])}"
-      athanor = group!("home-a")
+      athanor = athanor!("home-a", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
       {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
@@ -111,7 +112,7 @@ defmodule Sanctum.TenancyTest do
 
     test "a platform admin keeps :athanor scope with the capability; works in the first athanor" do
       uid = "u-multi-#{System.unique_integer([:positive])}"
-      athanor = group!("home-b")
+      athanor = athanor!("home-b", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
       {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
 
@@ -145,16 +146,14 @@ defmodule Sanctum.TenancyTest do
 
     test "an archived athanor is never chosen" do
       uid = "u-archived-#{System.unique_integer([:positive])}"
-      a = group!("arch-a")
-      b = group!("arch-b")
+      a = athanor!("arch-a", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: a.id})
-      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: b.id})
-      {:ok, _} = Athanors.archive(a)
+      {:ok, _} = Athanors.archive(a, force: true)
 
       {:ok, result} =
         Tenancy.resolve_status(%Context{user_id: uid, athanor_id: a.id}, force: true)
 
-      assert result.athanor_id == b.id
+      assert result.athanor_id == nil
     end
   end
 
@@ -166,8 +165,8 @@ defmodule Sanctum.TenancyTest do
 
     test "is the person's seat in the athanor, never their platform row" do
       uid = "u-basis-#{System.unique_integer([:positive])}"
-      seated = group!("basis-seated")
-      other = group!("basis-other")
+      seated = athanor!("basis-seated", uid)
+      other = athanor!("basis-other")
       {:ok, seat} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: seated.id})
       {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
       {:ok, memberships} = Members.list_by_user(uid)
@@ -199,12 +198,12 @@ defmodule Sanctum.TenancyTest do
       uid = "u-reval-keep-#{System.unique_integer([:positive])}"
       {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
 
-      # The session names a group the operator holds no seat in: the
+      # The session names an athanor the operator holds no seat in: the
       # capability is over the instance, not a seat, so it keeps them in
       # no athanor.
       ctx = %Context{
         user_id: uid,
-        athanor_id: group!("reval-keep").id,
+        athanor_id: athanor!("reval-keep").id,
         scope: :athanor,
         platform_admin: true,
         authenticated: true
@@ -216,7 +215,7 @@ defmodule Sanctum.TenancyTest do
       assert out.athanor_id == nil
 
       # With a seat elsewhere, they fall back to it like anyone else.
-      seated = group!("reval-seated")
+      seated = athanor!("reval-seated", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: seated.id})
 
       {:ok, out} = Tenancy.revalidate(ctx)
@@ -230,7 +229,7 @@ defmodule Sanctum.TenancyTest do
 
       ctx = %Context{
         user_id: uid,
-        athanor_id: group!("reval-revoke").id,
+        athanor_id: athanor!("reval-revoke").id,
         scope: :athanor,
         platform_admin: true,
         authenticated: true
@@ -251,7 +250,7 @@ defmodule Sanctum.TenancyTest do
 
     test "a stale capability on the context does not survive revalidation" do
       uid = "u-reval-down-#{System.unique_integer([:positive])}"
-      athanor = group!("home-c")
+      athanor = athanor!("home-c", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
       ctx = %Context{
@@ -269,7 +268,7 @@ defmodule Sanctum.TenancyTest do
 
     test "falls back to the broadest membership when the athanor is no longer granted" do
       uid = "u-reval-switch-#{System.unique_integer([:positive])}"
-      athanor = group!("home-d")
+      athanor = athanor!("home-d", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
       # Session points at an athanor the user is NOT a member of.
@@ -287,20 +286,19 @@ defmodule Sanctum.TenancyTest do
       :ok
     end
 
-    test "a member sees the athanors their memberships grant" do
+    test "a member sees the athanor their membership grants" do
       uid = "u-list-#{System.unique_integer([:positive])}"
-      a = group!("list-a")
-      b = group!("list-b")
+      a = athanor!("list-a", uid)
+      _other = athanor!("list-b")
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: a.id})
-      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: b.id})
 
       ids = Tenancy.list_athanors(%Context{user_id: uid, scope: :athanor}) |> Enum.map(& &1.id)
-      assert Enum.sort(ids) == Enum.sort([a.id, b.id])
+      assert ids == [a.id]
     end
 
     test "a platform admin sees their own memberships only, not every athanor" do
       uid = "u-list-plat-#{System.unique_integer([:positive])}"
-      _other = group!("list-other")
+      _other = athanor!("list-other")
       {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
 
       assert Tenancy.list_athanors(%Context{user_id: uid, scope: :athanor, platform_admin: true}) ==
@@ -320,7 +318,7 @@ defmodule Sanctum.TenancyTest do
     end
 
     test "true while the athanor is active and the creator is not denied" do
-      athanor = group!("chan-a")
+      athanor = athanor!("chan-a")
       user = person!("chan")
       bystander = person!("bystander")
 
@@ -340,7 +338,7 @@ defmodule Sanctum.TenancyTest do
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       refute Tenancy.channel_active?(athanor.id, user.id)
 
-      {:ok, _} = Athanors.archive(athanor)
+      {:ok, _} = Athanors.archive(athanor, force: true)
       refute Tenancy.channel_active?(athanor.id, bystander.id)
     end
 
@@ -348,185 +346,6 @@ defmodule Sanctum.TenancyTest do
       refute Tenancy.channel_active?(nil, "u")
       refute Tenancy.channel_active?("", "u")
       refute Tenancy.channel_active?("ath_ghost", "u")
-    end
-  end
-
-  describe "membership by identifier, and leaving one athanor" do
-    alias Sanctum.Test.DirectoryServer
-
-    setup tags do
-      Arca.Test.Sandbox.setup!(tags)
-
-      tls = DirectoryServer.tls()
-      DirectoryServer.listen!()
-      DirectoryServer.seam!(tls)
-      directory = DirectoryServer.start!(tls)
-      identity = DirectoryServer.identity!(directory.dir, directory.url)
-
-      {:ok, directory: directory, identity: identity}
-    end
-
-    test "an invite names an identifier with no directory read; the cyfr sign-in claims it; a removal takes the seat and its session; recovered, they sign in to their own athanor alone",
-         %{directory: directory, identity: identity} do
-      group = group!("join")
-      {:ok, peer} = Sanctum.Test.People.linked(github("peer"))
-      {:ok, :added} = Members.add(group, [user_id: peer.id], "system")
-
-      # Invited before they ever signed in here: held as invited, queued for
-      # the operator, and nothing asked of their directory, which only their
-      # own sign-in can locate.
-      assert {:ok, :invited} = Members.add(group, [identifier: identity.identifier], "system")
-      assert DirectoryServer.requests() == []
-      refute_received {:resolved, _}
-
-      assert Enum.any?(
-               Sanctum.Door.Store.requests(),
-               &(&1.kind == "identifier" and &1.value == identity.identifier)
-             )
-
-      # The operator admits the identifier, and the person signs in through
-      # the cyfr door: their head read fresh, then the door's admission.
-      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "ops")
-      key = Sanctum.Auth.Identity.cyfr_key(directory.url, identity.identifier)
-      user = cyfr_sign_in!(identity, key)
-      assert Members.member?(user.id, group.id)
-
-      session = session!(user.id, group.id)
-
-      assert :ok = Members.remove_member(group, user_id: user.id)
-
-      # The seat and the session bound to the group go together. A remote
-      # person holds their own athanor here, as everyone admitted does, so
-      # a removal is no last leave: their head here, their person row,
-      # identity row and door entry stand.
-      refute Members.member?(user.id, group.id)
-
-      assert {:ok, _head} = Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
-
-      assert {:error, _} = Arca.SessionStorage.get_session(session.hash)
-      assert {:ok, %{status: "active"}} = Sanctum.Tenancy.Users.get(user.id)
-
-      assert {:ok, %{provenance: "remote", identifier: identifier}} =
-               Arca.PersonIdentities.get(Prima.Actor.system(), user.id)
-
-      assert identifier == identity.identifier
-      assert {:ok, :allowed} = Sanctum.Door.admit_person(user)
-      assert Members.member?(peer.id, group.id)
-
-      # Recovered at their own home: their identity is current, and the
-      # cyfr door admits them again as the same person — to their own
-      # athanor alone.
-      identity = DirectoryServer.recover!(directory.dir, identity)
-      assert %{id: same} = cyfr_sign_in!(identity, key)
-      assert same == user.id
-      refute Members.member?(user.id, group.id)
-
-      # Their new session stands and opens their own athanor; the one they
-      # were removed from refuses them.
-      {:ok, own} = Sanctum.Tenancy.Users.personal_athanor_id(user.id)
-      again = session!(user.id, nil)
-      assert {:ok, _} = Arca.SessionStorage.get_session(again.hash)
-      assert {:ok, %{athanor_id: ^own}} = Sanctum.Caller.establish(again.token, refresh: false)
-
-      ctx =
-        Context.build(
-          user_id: user.id,
-          provider: "cyfr",
-          permissions: [:*],
-          auth_method: :oidc,
-          authenticated: true
-        )
-
-      assert {:error, :not_found} = Context.focus(ctx, group.id)
-    end
-
-    test "a person in two athanors leaving one keeps the other seat, their identity and their head",
-         %{identity: identity} do
-      stay = group!("stay")
-      leave = group!("leave")
-      {:ok, user} = Sanctum.Test.People.linked(github("two"))
-      :ok = DirectoryServer.remote_person!(user.id, identity)
-      {:ok, :added} = Members.add(stay, [user_id: user.id], "system")
-      {:ok, :added} = Members.add(leave, [user_id: user.id], "system")
-
-      bound = session!(user.id, leave.id)
-      kept = session!(user.id, stay.id)
-
-      assert :ok = Members.remove_member(leave, user_id: user.id)
-
-      refute Members.member?(user.id, leave.id)
-      assert Members.member?(user.id, stay.id)
-      assert {:error, _} = Arca.SessionStorage.get_session(bound.hash)
-      assert {:ok, _} = Arca.SessionStorage.get_session(kept.hash)
-      assert {:ok, _} = Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
-
-      assert {:ok, %{provenance: "remote", identifier: identifier}} =
-               Arca.PersonIdentities.get(Prima.Actor.system(), user.id)
-
-      assert identifier == identity.identifier
-
-      # The session that stands still establishes in the athanor they kept.
-      assert {:ok, %{athanor_id: athanor_id}} =
-               Sanctum.Caller.establish(kept.token, focus: stay.id, refresh: false)
-
-      assert athanor_id == stay.id
-    end
-
-    defp github(name) do
-      n = System.unique_integer([:positive])
-
-      %{
-        id: "github|https://github.com|#{name}-#{n}",
-        provider: "github",
-        email: "#{name}-#{n}@example.com",
-        verified: true
-      }
-    end
-
-    # What the cyfr door does once it verified the person's assertion: the
-    # head read fresh from the directory their genesis names, then the
-    # person the identity names unlocked, or a newcomer's remote admission.
-    defp cyfr_sign_in!(identity, key) do
-      _head = DirectoryServer.cached!(identity)
-
-      case Sanctum.SignIn.unlock(%{id: key, provider: "cyfr", verified: :unknown}) do
-        {:ok, user} ->
-          user
-
-        {:error, :no_person} ->
-          {:ok, %{person: user}} =
-            Sanctum.Newcomer.admit(
-              {:remote,
-               %{
-                 identifier: identity.identifier,
-                 directory_url: identity.url,
-                 genesis_hash: Prima.Identity.hash(identity.genesis),
-                 head_hash: DirectoryServer.key_epoch(identity)
-               }},
-              :none
-            )
-
-          user
-      end
-    end
-
-    # A session of the person, bound to `athanor_id` (or to none), as the
-    # sign-in mints one: a remote person's carries their fresh head's epoch.
-    defp session!(user_id, athanor_id) do
-      {:ok, session} =
-        Sanctum.TestContext.create_session(
-          Context.build(
-            user_id: user_id,
-            athanor_id: athanor_id,
-            provider: "cyfr",
-            permissions: [:*],
-            scope: :athanor,
-            auth_method: :oidc,
-            authenticated: true
-          )
-        )
-
-      %{token: session.token, hash: Sanctum.Session.token_hash(session.token)}
     end
   end
 

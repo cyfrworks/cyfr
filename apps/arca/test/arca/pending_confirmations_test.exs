@@ -773,8 +773,8 @@ defmodule Arca.PendingConfirmationsRaceTest do
         {:ok, _} =
           Arca.Athanors.insert(server(), %{
             id: athanor_id,
-            kind: "group",
             name: "Cnf #{n}",
+            owner_user_id: user_id,
             slug: "cnf-race-#{n}",
             created_by: user_id
           })

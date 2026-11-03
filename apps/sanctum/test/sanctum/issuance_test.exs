@@ -53,7 +53,7 @@ defmodule Sanctum.IssuanceTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A person seated in a group of their own, and the context their session
+  # A person seated in their own athanor, and the context their session
   # establishes there.
   defp seated! do
     n = System.unique_integer([:positive])
@@ -66,7 +66,7 @@ defmodule Sanctum.IssuanceTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Issuance #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(
@@ -251,6 +251,16 @@ defmodule Sanctum.IssuanceTest do
       end
 
     {result, attrs}
+  end
+
+  # The person's seat in the athanor, deleted without an announcement:
+  # the athanor stays active and the platform row stays.
+  defp drop_seat!(user_id, athanor_id) do
+    Arca.Repo.delete_all(
+      from(m in Arca.Schemas.Membership,
+        where: m.user_id == ^user_id and m.athanor_id == ^athanor_id
+      )
+    )
   end
 
   defp minted?(%{key_hash: hash}),
@@ -640,20 +650,11 @@ defmodule Sanctum.IssuanceTest do
     assert {:ok, seated} = mint(session_ctx)
     assert minted?(seated)
 
-    # The seat lost while another member keeps the group open: the
-    # platform row still stands, and a context that kept its id, read at
-    # the person's and the athanor's current generations, still issues
-    # nothing in the athanor.
-    {:ok, other} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|issuance-other-#{System.unique_integer([:positive])}",
-        provider: "github",
-        email: "issuance-other#{System.unique_integer([:positive])}@example.com",
-        verified: true
-      })
-
-    {:ok, :added} = Members.add(athanor, [user_id: other.id], user.id)
-    :ok = Members.remove_member(athanor, user_id: user.id)
+    # The seat lost while the athanor stays active: the platform row
+    # still stands, and a context that kept its id, read at the person's
+    # and the athanor's current generations, still issues nothing in the
+    # athanor.
+    drop_seat!(user.id, athanor.id)
     refute Members.member?(user.id, athanor.id)
     assert {:ok, %{status: "active"}} = Athanors.get(athanor.id)
     assert {:ok, %{id: platform_id}} = Members.platform_seat(user.id)
@@ -729,18 +730,9 @@ defmodule Sanctum.IssuanceTest do
 
     assert seated_in == athanor.id
 
-    # The seat lost, another member keeping the group open: the platform
-    # row still stands, and stands for nothing in the athanor.
-    {:ok, other} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|device-other-#{System.unique_integer([:positive])}",
-        provider: "github",
-        email: "device-other#{System.unique_integer([:positive])}@example.com",
-        verified: true
-      })
-
-    {:ok, :added} = Members.add(athanor, [user_id: other.id], user.id)
-    :ok = Members.remove_member(athanor, user_id: user.id)
+    # The seat lost while the athanor stays active: the platform row
+    # still stands, and stands for nothing in the athanor.
+    drop_seat!(user.id, athanor.id)
     assert {:ok, %{status: "active"}} = Athanors.get(athanor.id)
     assert {:ok, %{id: platform_id}} = Members.platform_seat(user.id)
     assert platform_id == platform.id
@@ -813,7 +805,7 @@ defmodule Sanctum.IssuanceTest do
     n = System.unique_integer([:positive])
     {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
 
-    # A group the person holds no seat in, kept open by its own member.
+    # Another person's athanor, which the person holds no seat in.
     {:ok, other} =
       Sanctum.Test.People.linked(%{
         id: "github|https://github.com|pairing-other-#{n}",
@@ -822,7 +814,7 @@ defmodule Sanctum.IssuanceTest do
         verified: true
       })
 
-    {:ok, elsewhere} = Athanors.create_group(other.id, "Elsewhere #{n}")
+    elsewhere = Sanctum.Test.People.athanor!(other)
     refute Members.member?(user.id, elsewhere.id)
 
     # An invitation there whose only basis is the person's platform row,
@@ -1530,7 +1522,7 @@ defmodule Sanctum.IssuanceRaceTest do
     {:ok, _} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
         id: athanor_id,
-        kind: "group",
+        owner_user_id: user_id,
         name: "Race #{n}",
         slug: "race-#{n}",
         created_by: user_id

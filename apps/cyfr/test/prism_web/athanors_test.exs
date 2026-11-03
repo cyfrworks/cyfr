@@ -3,11 +3,9 @@
 
 defmodule PrismWeb.AthanorsTest do
   # One spelling of "what to call this athanor to this person": the
-  # person's OWN athanor is "You" — the one their row names as theirs, not
-  # any person-kind athanor.
+  # person's OWN athanor is "You" — the one their row names as theirs —
+  # and another person's is its name.
   use ExUnit.Case, async: false
-
-  alias Sanctum.Tenancy.{Athanors, Members}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -41,23 +39,5 @@ defmodule PrismWeb.AthanorsTest do
     refute PrismWeb.Athanors.own?(mine, operator)
 
     assert PrismWeb.Athanors.label(mine, nil) == "Alice"
-  end
-
-  test "a group is its name and a pair is the other person", %{alice: alice, n: n} do
-    {:ok, group} = Athanors.create_group(alice, "Trip #{n}")
-    assert PrismWeb.Athanors.label(group, %{user_id: alice}) == "Trip #{n}"
-
-    {:ok, %{id: bob}} =
-      Sanctum.Test.People.linked(%{
-        id: "local|idp|bob-#{n}",
-        provider: "local",
-        name: "Bob",
-        email: "bob-#{n}@example.com"
-      })
-
-    {:ok, _} = Members.add(group, [user_id: bob], alice)
-    {:ok, pair} = Athanors.create_pair(alice, bob)
-    assert PrismWeb.Athanors.label(pair, %{user_id: alice}) == "Bob"
-    assert PrismWeb.Athanors.label(pair, %{user_id: bob}) == "Alice"
   end
 end

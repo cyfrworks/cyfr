@@ -3,31 +3,16 @@
 
 defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   @moduledoc """
-  `destroy/1` is the only verb that deletes a tenant's rows.
-
-  Checks that destruction removes tenant rows and credentials as well as stored objects.
+  `destroy/1` is the only verb that deletes a tenant's rows: it refuses
+  an athanor that is not archived and a person's own athanor, and its
+  roster of tenant tables is closed.
   """
   use ExUnit.Case, async: false
 
-  import Ecto.Query
-
-  alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-
-    test_path = Path.join(System.tmp_dir!(), "destroy_#{:rand.uniform(1_000_000)}")
-    prev = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
-
-    on_exit(fn ->
-      File.rm_rf!(test_path)
-
-      if prev,
-        do: Application.put_env(:arca, :base_path, prev),
-        else: Application.delete_env(:arca, :base_path)
-    end)
 
     n = System.unique_integer([:positive])
 
@@ -39,194 +24,18 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
         verified: true
       })
 
-    {:ok, group} = Athanors.create_group(user.id, "Destroy #{n}")
-
-    ctx =
-      Context.build(
-        user_id: user.id,
-        athanor_id: group.id,
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    {:ok, group: group, ctx: ctx, user: user}
+    {:ok, athanor: Sanctum.Test.People.athanor!(user), user: user}
   end
 
-  # One row in each table whose survival would leak the most: a sealed
-  # credential, a thread with a message, and a request log.
-  defp seed_rows!(ctx) do
-    params = %{
-      name: "to-be-erased",
-      kind: "api_key",
-      fields: %{"token" => "super-secret-value"},
-      destination: %{"hosts" => ["api.example.com"]}
-    }
-
-    entering =
-      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
-        operation: "vault.create",
-        arguments: params,
-        resource: params.name
-      })
-
-    {:ok, _entry} = Sanctum.Vault.create(entering, params)
-
-    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
-
-    {:ok, _msg} =
-      Arca.ThreadStorage.append(Sanctum.Context.actor(ctx), thread.id, %{
-        author: ctx.user_id,
-        kind: "text",
-        content: "something private"
-      })
-
-    :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "notes.txt"], "kept until destroy")
-
-    # The rest of the roster, written straight through the row plane. Going
-    # via each domain API would need a component, a consent walk and a
-    # webhook target apiece; what this test has to prove is that
-    # `delete_all_for/1` reaches every table, and for that the rows only
-    # have to exist. Four of them arrive above through their real APIs,
-    # which is what proves the roster describes the real schema.
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    a = ctx.athanor_id
-
-    insert_row!("api_keys", %{
-      id: "key_#{uniq()}",
-      athanor_id: a,
-      name: "erase-me",
-      key_hash: "hash_#{uniq()}",
-      key_prefix: "cyk_test",
-      type: "application",
-      scope: "[]",
-      created_by: ctx.user_id,
-      revoked: false,
-      inserted_at: now,
-      updated_at: now
-    })
-
-    insert_row!("mcp_logs", %{
-      id: "mcp_#{uniq()}",
-      athanor_id: a,
-      user_id: ctx.user_id,
-      tool: "component",
-      status: "completed",
-      timestamp: now
-    })
-
-    insert_row!("policy_logs", %{
-      id: "pol_#{uniq()}",
-      athanor_id: a,
-      user_id: ctx.user_id,
-      event_type: "decision",
-      decision: "allow",
-      timestamp: now
-    })
-
-    :ok
+  test "refused while the athanor is active — archive first", %{athanor: athanor} do
+    assert {:error, :not_archived} = Athanors.destroy(athanor)
   end
 
-  defp uniq, do: System.unique_integer([:positive])
-
-  defp insert_row!(table, row) do
-    {1, _} = Arca.Repo.insert_all(table, [row])
-    :ok
-  end
-
-  defp count(table, athanor_id) do
-    Arca.Repo.aggregate(from(t in table, where: t.athanor_id == ^athanor_id), :count)
-  end
-
-  test "refused while the athanor is active — archive first", %{group: group} do
-    assert {:error, :not_archived} = Athanors.destroy(group)
-  end
-
-  test "erases every athanor-scoped row and the blob tree", %{group: group, ctx: ctx} do
-    :ok = seed_rows!(ctx)
-
-    for table <-
-          ~w(vault_entries threads messages memberships api_keys mcp_logs policy_logs) do
-      assert count(table, group.id) >= 1, "#{table} was not seeded — the erasure proves nothing"
-    end
-
-    {:ok, archived} = Athanors.archive(group)
-    assert {:ok, _counts} = Athanors.destroy(archived)
-
-    # Every table on the roster, not just the ones this test seeded — a
-    # table left behind is data somebody was told had been deleted.
-    #
-    # The seeded tables are non-zero going in (asserted above), so for
-    # those this is a real before/after. For the rest it proves the query
-    # runs and the roster is walked; `verify_roster!/1`'s two negative
-    # tests below are what cover the roster being complete.
-    for table <- Arca.TenantTables.roster() do
-      assert count(table, group.id) == 0,
-             "#{table} still holds rows for a destroyed athanor"
-    end
-
-    refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "notes.txt"])
-    assert {:ok, []} = Arca.list_recursive(Sanctum.Context.actor(ctx), [])
-
-    # The tombstone stands: an audit trail that forgets an athanor existed
-    # cannot say what happened to it.
-    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
-  end
-
-  test "the athanor's decisions go with it, and the host's decisions stay", %{
-    group: group,
-    ctx: ctx
+  test "refuses a personal athanor — its person's row names it", %{
+    athanor: personal,
+    user: user
   } do
-    decision = fn admission ->
-      Prima.Decision.new(
-        call_id: "call_destroy_#{uniq()}",
-        plane: :external,
-        admission: admission,
-        refusal_class: if(admission == :refused, do: :unauthenticated),
-        inserted_at: DateTime.utc_now()
-      )
-    end
-
-    athanor = decision.(:admitted)
-    host = decision.(:refused)
-    :ok = Arca.DecisionLog.append(Sanctum.Context.actor(ctx), athanor)
-    :ok = Arca.DecisionLog.append(nil, host)
-    assert count("decision_logs", group.id) == 1
-
-    {:ok, archived} = Athanors.archive(group)
-    assert {:ok, %{"decision_logs" => 1}} = Athanors.destroy(archived)
-
-    assert count("decision_logs", group.id) == 0
-
-    admin = %{Prima.Actor.system() | platform_admin: true}
-    assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, athanor.call_id)
-    assert {:ok, %{athanor_id: nil}} = Arca.DecisionLog.get_global(admin, host.call_id)
-  end
-
-  test "the sealed payload itself is gone, not merely unreferenced", %{group: group, ctx: ctx} do
-    :ok = seed_rows!(ctx)
-
-    {:ok, archived} = Athanors.archive(group)
-    assert {:ok, _} = Athanors.destroy(archived)
-
-    payloads =
-      Arca.Repo.all(from(v in "vault_entries", where: v.athanor_id == ^group.id, select: v.id))
-
-    assert payloads == []
-  end
-
-  test "refuses a personal athanor — its person's row names it", %{user: user} do
-    # The fixture only makes a group. A personal athanor is what
-    # `Sanctum.Provisioning` records on first sign-in, so make that link
-    # explicitly rather than hoping the fixture has one: a test guarded on
-    # the link's presence would assert nothing whenever it is absent.
-    {:ok, personal} =
-      Athanors.create_group(user.id, "Personal #{System.unique_integer([:positive])}")
-
-    {:ok, _} = Users.set_personal_athanor(user, personal.id)
-
-    {:ok, refreshed} = Users.get(user.id)
+    {:ok, refreshed} = Sanctum.Tenancy.Users.get(user.id)
     assert refreshed.personal_athanor_id == personal.id
 
     # `users.personal_athanor_id` is not an athanor-scoped column, so
@@ -237,7 +46,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
 
     # Archive the persisted row so destroy/1 reaches the personal-athanor
     # check after rereading its status.
-    {:ok, archived} = Athanors.archive(personal)
+    {:ok, archived} = Athanors.archive(personal, force: true)
     assert archived.status == "archived"
 
     assert {:error, :personal_athanor} = Athanors.destroy(archived)

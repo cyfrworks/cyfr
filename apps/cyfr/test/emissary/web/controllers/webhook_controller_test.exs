@@ -130,13 +130,21 @@ defmodule Emissary.Web.WebhookControllerTest do
       assert conn.status == 404
     end
 
-    test "the channel is the athanor's: a departed creator leaves it running, an archived athanor or a denied creator closes it (no enumeration leak)",
+    test "the channel is the athanor's: an archived athanor or a denied creator closes it (no enumeration leak)",
          %{conn: conn, ctx: ctx} do
       n = System.unique_integer([:positive])
-      # The creator is a person this server knows, named by their own id.
-      {ctx, creator} = Sanctum.TestContext.person!(ctx, %{email: "hooks#{n}@example.com"})
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Hooks #{n}")
-      in_group = %{ctx | athanor_id: group.id}
+
+      # The creator is a person this server knows, in their own athanor.
+      {:ok, creator} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|hooks-#{n}",
+          provider: "github",
+          email: "hooks#{n}@example.com",
+          verified: true
+        })
+
+      athanor = Sanctum.Test.People.athanor!(creator)
+      in_athanor = %{ctx | user_id: creator.id, athanor_id: athanor.id}
 
       comp = "wh-chan-#{n}"
 
@@ -145,43 +153,30 @@ defmodule Emissary.Web.WebhookControllerTest do
         "1.0.0",
         "formula",
         %{},
-        in_group
+        in_athanor
       )
 
       profile =
-        Sanctum.Test.ConsentFixtures.bindable_profile(in_group, "f:local.#{comp}",
+        Sanctum.Test.ConsentFixtures.bindable_profile(in_athanor, "f:local.#{comp}",
           origins: [:webhook]
         )
 
       {:ok, %{slug: slug, secret: secret}} =
-        Sanctum.TestContext.create_webhook(in_group, %{
+        Sanctum.TestContext.create_webhook(in_athanor, %{
           name: "channel",
           replay_protection: "none",
           target_ref: "f:local.#{comp}",
           profile_id: profile
         })
 
-      # the creator leaving the group (another member remains) changes nothing
-      other = "github|https://github.com|other-#{n}"
-
-      {:ok, _} =
-        Sanctum.Test.People.linked(%{
-          id: other,
-          provider: "github",
-          email: "other#{n}@example.com",
-          verified: true
-        })
-
-      {:ok, :added} = Sanctum.Tenancy.Members.add(group, [user_id: other], ctx.user_id)
-      :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: ctx.user_id)
       refute post_signed(conn, slug, secret, ~s({})).status == 404
 
       # an archived athanor closes it, without leaking existence
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
       conn2 = post_signed(conn, slug, secret, ~s({}))
       assert conn2.status == 404
       assert json_response(conn2, 404)["code"] == "not_found"
-      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
+      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(athanor)
 
       # a denied creator closes it too
       {:ok, _} = Sanctum.Tenancy.Users.deny(creator)

@@ -3,17 +3,14 @@
 
 defmodule Arca.Schemas.Membership do
   @moduledoc """
-  A presence-only assignment: "user X is a member of athanor A".
+  A presence-only assignment: "user X is a member of athanor A", the
+  person's seat in their own athanor.
 
   `scope` is `"athanor"` (the row names an athanor) or `"platform"` (the row
   names none — a platform admin, the server's operator). Membership carries
   no role: every member of an athanor is its admin.
 
-  `status` is `"active"` (the row names a `user_id`) or `"invited"` (the row
-  names a `person_identifier`, the `per_…` identifier of a person who has
-  not signed in yet; it becomes active, and gains the `user_id`, on their
-  first admitted sign-in). `added_by` records
-  who wrote the row.
+  `status` is `"active"`. `added_by` records who wrote the row.
   """
 
   use Ecto.Schema
@@ -21,13 +18,12 @@ defmodule Arca.Schemas.Membership do
 
   @primary_key {:id, :string, autogenerate: false}
 
-  @statuses ["active", "invited"]
+  @statuses ["active"]
 
   @type t :: %__MODULE__{}
 
   schema "memberships" do
     field :user_id, :string
-    field :person_identifier, :string
     field :scope, :string, default: "athanor"
     field :status, :string, default: "active"
     field :added_by, :string
@@ -44,7 +40,6 @@ defmodule Arca.Schemas.Membership do
     |> cast(attrs, [
       :id,
       :user_id,
-      :person_identifier,
       :scope,
       :status,
       :added_by,
@@ -52,13 +47,12 @@ defmodule Arca.Schemas.Membership do
       :created_at,
       :updated_at
     ])
-    |> validate_required([:id, :scope, :status])
+    |> validate_required([:id, :user_id, :scope, :status])
     |> validate_inclusion(:scope, Prima.TenancyScope.values())
     |> validate_inclusion(:status, @statuses)
     |> validate_scope_target()
-    |> validate_principal()
     |> foreign_key_constraint(:athanor_id)
-    |> unique_constraint([:user_id, :person_identifier, :scope, :athanor_id],
+    |> unique_constraint([:user_id, :scope, :athanor_id],
       name: :memberships_assignment_index
     )
   end
@@ -69,34 +63,6 @@ defmodule Arca.Schemas.Membership do
       "athanor" -> validate_required(changeset, [:athanor_id])
       "platform" -> put_change(changeset, :athanor_id, nil)
       _ -> changeset
-    end
-  end
-
-  # An active row names a person; an invited row names the identifier the
-  # person will arrive with. Platform rows are always active.
-  defp validate_principal(changeset) do
-    case get_field(changeset, :status) do
-      "active" ->
-        changeset
-        |> validate_required([:user_id])
-        |> put_change(:person_identifier, nil)
-
-      "invited" ->
-        if get_field(changeset, :scope) == "platform" do
-          add_error(changeset, :status, "a platform assignment cannot be invited")
-        else
-          changeset
-          |> validate_required([:person_identifier])
-          |> validate_change(:person_identifier, fn :person_identifier, identifier ->
-            if Prima.Identity.Encoding.identifier?(identifier),
-              do: [],
-              else: [person_identifier: "is not a person identifier"]
-          end)
-          |> put_change(:user_id, nil)
-        end
-
-      _ ->
-        changeset
     end
   end
 end

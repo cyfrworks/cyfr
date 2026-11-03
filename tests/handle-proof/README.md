@@ -283,7 +283,6 @@ row per field of each row of each step's objects:
 | setup:a.identity_attempts[row] | updated_at | bound | a time inside saving the recovery code, to CYFR |
 | setup:a.identity_attempts[row] | user_id | exact | as read before the recovery code was saved |
 | setup:a.athanors[row] | id | captured | a new ath_ id |
-| setup:a.athanors[row] | kind | exact | `"person"` |
 | setup:a.athanors[row] | name | exact | `"Me"` |
 | setup:a.athanors[row] | slug | exact | `"me"` |
 | setup:a.athanors[row] | owner_user_id | derived | A's person |
@@ -294,14 +293,11 @@ row per field of each row of each step's objects:
 | setup:a.athanors[row] | provisioned_at | bound | a time inside setup at A up to setup:a.athanors's read |
 | setup:a.athanors[row] | provisioning_failed_at | exact | `null` |
 | setup:a.athanors[row] | provisioning_failure | exact | `null` |
-| setup:a.athanors[row] | roster | exact | `"open"` |
-| setup:a.athanors[row] | pair_key | exact | `null` |
 | setup:a.athanors[row] | security_generation | exact | `1` |
 | setup:a.athanors[row] | created_at | bound | a time inside setup at A |
 | setup:a.athanors[row] | updated_at | bound | a time inside setup at A up to setup:a.athanors's read |
 | setup:a.memberships[the athanor's seat] | id | captured | a new mem_ id |
 | setup:a.memberships[the athanor's seat] | user_id | derived | the person |
-| setup:a.memberships[the athanor's seat] | person_identifier | exact | `null` |
 | setup:a.memberships[the athanor's seat] | scope | exact | `"athanor"` |
 | setup:a.memberships[the athanor's seat] | status | exact | `"active"` |
 | setup:a.memberships[the athanor's seat] | added_by | exact | `null` |
@@ -310,7 +306,6 @@ row per field of each row of each step's objects:
 | setup:a.memberships[the athanor's seat] | updated_at | bound | a time inside setup at A |
 | setup:a.memberships[the platform grant] | id | captured | a new mem_ id |
 | setup:a.memberships[the platform grant] | user_id | derived | the person |
-| setup:a.memberships[the platform grant] | person_identifier | exact | `null` |
 | setup:a.memberships[the platform grant] | scope | exact | `"platform"` |
 | setup:a.memberships[the platform grant] | status | exact | `"active"` |
 | setup:a.memberships[the platform grant] | added_by | exact | `null` |
@@ -366,7 +361,6 @@ row per field of each row of each step's objects:
 | allow:b.passkeys[row] | inserted_at | bound | a time inside setup at B |
 | allow:b.passkeys[row] | updated_at | bound | a time inside setup at B |
 | allow:b.athanors[row] | id | captured | a new ath_ id |
-| allow:b.athanors[row] | kind | exact | `"person"` |
 | allow:b.athanors[row] | name | exact | `"Me"` |
 | allow:b.athanors[row] | slug | exact | `"me"` |
 | allow:b.athanors[row] | owner_user_id | derived | B's administrator |
@@ -377,14 +371,11 @@ row per field of each row of each step's objects:
 | allow:b.athanors[row] | provisioned_at | bound | a time inside setup at B up to allow:b.athanors's read |
 | allow:b.athanors[row] | provisioning_failed_at | exact | `null` |
 | allow:b.athanors[row] | provisioning_failure | exact | `null` |
-| allow:b.athanors[row] | roster | exact | `"open"` |
-| allow:b.athanors[row] | pair_key | exact | `null` |
 | allow:b.athanors[row] | security_generation | exact | `1` |
 | allow:b.athanors[row] | created_at | bound | a time inside setup at B |
 | allow:b.athanors[row] | updated_at | bound | a time inside setup at B up to allow:b.athanors's read |
 | allow:b.memberships[the athanor's seat] | id | captured | a new mem_ id |
 | allow:b.memberships[the athanor's seat] | user_id | derived | the person |
-| allow:b.memberships[the athanor's seat] | person_identifier | exact | `null` |
 | allow:b.memberships[the athanor's seat] | scope | exact | `"athanor"` |
 | allow:b.memberships[the athanor's seat] | status | exact | `"active"` |
 | allow:b.memberships[the athanor's seat] | added_by | exact | `null` |
@@ -393,7 +384,6 @@ row per field of each row of each step's objects:
 | allow:b.memberships[the athanor's seat] | updated_at | bound | a time inside setup at B |
 | allow:b.memberships[the platform grant] | id | captured | a new mem_ id |
 | allow:b.memberships[the platform grant] | user_id | derived | the person |
-| allow:b.memberships[the platform grant] | person_identifier | exact | `null` |
 | allow:b.memberships[the platform grant] | scope | exact | `"platform"` |
 | allow:b.memberships[the platform grant] | status | exact | `"active"` |
 | allow:b.memberships[the platform grant] | added_by | exact | `null` |
@@ -525,14 +515,11 @@ row per field of each row of each step's objects:
 | sign_in:b.athanors[row] | created_at | exact | as read at allow |
 | sign_in:b.athanors[row] | created_by | exact | as read at allow |
 | sign_in:b.athanors[row] | id | exact | as read at allow |
-| sign_in:b.athanors[row] | kind | exact | as read at allow |
 | sign_in:b.athanors[row] | name | exact | as read at allow |
 | sign_in:b.athanors[row] | owner_user_id | exact | as read at allow |
-| sign_in:b.athanors[row] | pair_key | exact | as read at allow |
 | sign_in:b.athanors[row] | provisioned_at | exact | as read at allow |
 | sign_in:b.athanors[row] | provisioning_failed_at | exact | as read at allow |
 | sign_in:b.athanors[row] | provisioning_failure | exact | as read at allow |
-| sign_in:b.athanors[row] | roster | exact | as read at allow |
 | sign_in:b.athanors[row] | security_generation | exact | as read at allow |
 | sign_in:b.athanors[row] | settings | exact | as read at allow |
 | sign_in:b.athanors[row] | slug | exact | as read at allow |
@@ -542,7 +529,6 @@ row per field of each row of each step's objects:
 | sign_in:b.memberships[row 1] | athanor_id | exact | as read at allow |
 | sign_in:b.memberships[row 1] | created_at | exact | as read at allow |
 | sign_in:b.memberships[row 1] | id | exact | as read at allow |
-| sign_in:b.memberships[row 1] | person_identifier | exact | as read at allow |
 | sign_in:b.memberships[row 1] | scope | exact | as read at allow |
 | sign_in:b.memberships[row 1] | status | exact | as read at allow |
 | sign_in:b.memberships[row 1] | updated_at | exact | as read at allow |
@@ -551,7 +537,6 @@ row per field of each row of each step's objects:
 | sign_in:b.memberships[row 2] | athanor_id | exact | as read at allow |
 | sign_in:b.memberships[row 2] | created_at | exact | as read at allow |
 | sign_in:b.memberships[row 2] | id | exact | as read at allow |
-| sign_in:b.memberships[row 2] | person_identifier | exact | as read at allow |
 | sign_in:b.memberships[row 2] | scope | exact | as read at allow |
 | sign_in:b.memberships[row 2] | status | exact | as read at allow |
 | sign_in:b.memberships[row 2] | updated_at | exact | as read at allow |
@@ -678,14 +663,11 @@ row per field of each row of each step's objects:
 | held:a.athanors[row] | created_at | exact | as read at setup |
 | held:a.athanors[row] | created_by | exact | as read at setup |
 | held:a.athanors[row] | id | exact | as read at setup |
-| held:a.athanors[row] | kind | exact | as read at setup |
 | held:a.athanors[row] | name | exact | as read at setup |
 | held:a.athanors[row] | owner_user_id | exact | as read at setup |
-| held:a.athanors[row] | pair_key | exact | as read at setup |
 | held:a.athanors[row] | provisioned_at | exact | as read at setup |
 | held:a.athanors[row] | provisioning_failed_at | exact | as read at setup |
 | held:a.athanors[row] | provisioning_failure | exact | as read at setup |
-| held:a.athanors[row] | roster | exact | as read at setup |
 | held:a.athanors[row] | security_generation | exact | as read at setup |
 | held:a.athanors[row] | settings | exact | as read at setup |
 | held:a.athanors[row] | slug | exact | as read at setup |
@@ -695,7 +677,6 @@ row per field of each row of each step's objects:
 | held:a.memberships[the athanor's seat] | athanor_id | exact | as read at setup |
 | held:a.memberships[the athanor's seat] | created_at | exact | as read at setup |
 | held:a.memberships[the athanor's seat] | id | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | person_identifier | exact | as read at setup |
 | held:a.memberships[the athanor's seat] | scope | exact | as read at setup |
 | held:a.memberships[the athanor's seat] | status | exact | as read at setup |
 | held:a.memberships[the athanor's seat] | updated_at | exact | as read at setup |
@@ -704,7 +685,6 @@ row per field of each row of each step's objects:
 | held:a.memberships[the platform grant] | athanor_id | exact | as read at setup |
 | held:a.memberships[the platform grant] | created_at | exact | as read at setup |
 | held:a.memberships[the platform grant] | id | exact | as read at setup |
-| held:a.memberships[the platform grant] | person_identifier | exact | as read at setup |
 | held:a.memberships[the platform grant] | scope | exact | as read at setup |
 | held:a.memberships[the platform grant] | status | exact | as read at setup |
 | held:a.memberships[the platform grant] | updated_at | exact | as read at setup |
@@ -917,14 +897,11 @@ row per field of each row of each step's objects:
 | held:b.athanors[row] | created_at | exact | as read at allow |
 | held:b.athanors[row] | created_by | exact | as read at allow |
 | held:b.athanors[row] | id | exact | as read at allow |
-| held:b.athanors[row] | kind | exact | as read at allow |
 | held:b.athanors[row] | name | exact | as read at allow |
 | held:b.athanors[row] | owner_user_id | exact | as read at allow |
-| held:b.athanors[row] | pair_key | exact | as read at allow |
 | held:b.athanors[row] | provisioned_at | exact | as read at allow |
 | held:b.athanors[row] | provisioning_failed_at | exact | as read at allow |
 | held:b.athanors[row] | provisioning_failure | exact | as read at allow |
-| held:b.athanors[row] | roster | exact | as read at allow |
 | held:b.athanors[row] | security_generation | exact | as read at allow |
 | held:b.athanors[row] | settings | exact | as read at allow |
 | held:b.athanors[row] | slug | exact | as read at allow |
@@ -934,7 +911,6 @@ row per field of each row of each step's objects:
 | held:b.memberships[the athanor's seat] | athanor_id | exact | as read at allow |
 | held:b.memberships[the athanor's seat] | created_at | exact | as read at allow |
 | held:b.memberships[the athanor's seat] | id | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | person_identifier | exact | as read at allow |
 | held:b.memberships[the athanor's seat] | scope | exact | as read at allow |
 | held:b.memberships[the athanor's seat] | status | exact | as read at allow |
 | held:b.memberships[the athanor's seat] | updated_at | exact | as read at allow |
@@ -943,7 +919,6 @@ row per field of each row of each step's objects:
 | held:b.memberships[the platform grant] | athanor_id | exact | as read at allow |
 | held:b.memberships[the platform grant] | created_at | exact | as read at allow |
 | held:b.memberships[the platform grant] | id | exact | as read at allow |
-| held:b.memberships[the platform grant] | person_identifier | exact | as read at allow |
 | held:b.memberships[the platform grant] | scope | exact | as read at allow |
 | held:b.memberships[the platform grant] | status | exact | as read at allow |
 | held:b.memberships[the platform grant] | updated_at | exact | as read at allow |

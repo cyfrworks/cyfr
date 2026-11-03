@@ -10,8 +10,8 @@ release fixture (`tests/release-boot/fixture.exs` `person`): the sender,
 the installation's first person and so its administrator, made by setup,
 who opens the door to newcomers (`door.allow` of `*`), which admits the
 other two; the recipient, seated with the sender in a
-group the sender creates (`athanor.create`, `member.add`); and the
-outsider, who sits in no athanor but their own. It writes the sender's
+shared thread the sender makes (`shared_thread.create`, `shared_thread.add`);
+and the outsider, who sits in no thread with them. It writes the sender's
 three files under `data/reports/` (`file.write`), each call through the
 gate under the person's own session, and waits until each person's own
 athanor is filled, since its fill writes into the tree the counts are read

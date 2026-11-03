@@ -27,8 +27,8 @@ A tincture is private unless it has an active public consent profile. Publish on
 
 | | Private | Public |
 |---|---|---|
-| **Its files** | `/_s/<asset credential>/<publisher>/<name>/<version>/<file>`, only under a credential the shell minted for the person | `/t/<athanor>/<publisher>/<name>` and the files under it, to anyone |
-| **Opened by** | the shell, for a member of its athanor | the shell, or anyone at its address |
+| **Its files** | `/_s/<asset credential>/<publisher>/<name>/<version>/<file>`, only under a credential the shell minted for the person | `/t/@<namespace>/<publisher>/<name>` and the files under it, to anyone |
+| **Opened by** | the shell, for the person whose athanor holds it | the shell, or anyone at its address |
 | **Data requests** | the frame credential as a bearer | in the shell, the frame credential; at its address, the page names itself as `public` and sends no bearer |
 | **Runs under** | the tincture's owner profile | the owner profile in the shell; its public profile at its address |
 
@@ -163,7 +163,7 @@ asks for consent again. Keep private keys in the vault.
 
 ## Addresses, Credentials and Headers
 
-A public tincture is served at its address, `/t/<athanor>/<publisher>/<name>` (the athanor segment is `@<namespace>` for a person's athanor, the group's slug for a group's), with its files under it. The address follows the tincture's latest version. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none.
+A public tincture is served at its address, `/t/@<namespace>/<publisher>/<name>`, `@<namespace>` being the personal namespace of the person whose athanor publishes it, with its files under it. The address follows the tincture's latest version. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none.
 
 A private tincture version's files are served only at `/_s/<credential>/<publisher>/<name>/<version>/<file>`. The asset credential is signed, opaque and URL-safe; it names the person, the version's release digest and a window (`asset_credential_window_s`), carries no secret, and is verified against its source's standing at every request — a session that ended, a key that was revoked, a person denied or an athanor archived refuses the next fetch. It stays one credential for one person and one version for the window, so a browser's cache holds across opens, and it opens nothing but that version's files: another version's path under it is not found.
 

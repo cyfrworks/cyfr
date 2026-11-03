@@ -9,10 +9,9 @@ defmodule Arca.FileOffers do
   ## The offer
 
   `offer/3` takes the sender's actor, the recipient's person id and files
-  under `data/`. The two must sit together in an active athanor
-  (`Arca.Members.shared_athanor?/3`) or an active shared thread
-  (`Arca.SharedThreadMembers.together?/3`), each asked under the
-  platform's actor.
+  under `data/`. The two must sit together in an active shared thread
+  (`Arca.SharedThreadMembers.together?/3`), asked under the platform's
+  actor.
   Each file's bytes are copied at once into the sender's reserved
   `payloads/offers/<offer id>/`, a snapshot counted against the sender's
   storage cap, and one `file_offers` row per file, in the sender's
@@ -202,7 +201,7 @@ defmodule Arca.FileOffers do
   people's and the sender's athanor's locks, the head of
   `Arca.SecurityTransitions`' one order, then the locks of the shared
   threads the two sit in, and only once those are still active and still
-  share an athanor or a thread: a denial, an archive, or a removal or
+  share a thread: a denial, an archive, or a removal or
   leave from one of those threads, in flight, is waited for, and an
   offer it overtook is
   refused, `{:error, :denied}` for the sender, `{:error, :not_shared}`
@@ -809,13 +808,9 @@ defmodule Arca.FileOffers do
   defp segments(_path), do: :error
 
   defp shared(sender, recipient) do
-    server = Prima.Actor.system()
-
-    with {:ok, false} <- Arca.Members.shared_athanor?(server, sender, recipient),
-         {:ok, false} <- Arca.SharedThreadMembers.together?(server, sender, recipient) do
-      {:error, :not_shared}
-    else
+    case Arca.SharedThreadMembers.together?(Prima.Actor.system(), sender, recipient) do
       {:ok, true} -> :ok
+      {:ok, false} -> {:error, :not_shared}
       {:error, _} = error -> error
     end
   end

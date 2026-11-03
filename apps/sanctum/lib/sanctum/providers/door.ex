@@ -20,8 +20,7 @@ defmodule Sanctum.Providers.Door do
   unless denied, so a person is never allowed.
   `deny` writes a sticky exclusion of a person or an identifier, ejects
   the person when they are already known
-  (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
-  identifier was holding either way; `remove` deletes an entry — and,
+  (`Sanctum.Tenancy.Users.deny/1`); `remove` deletes an entry — and,
   when it was an allow, ejects everyone the door would now refuse
   (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered,
   since it names nobody; `list` shows the door; `requests` what is
@@ -135,8 +134,8 @@ defmodule Sanctum.Providers.Door do
       case Store.allow(kind, value, ctx.user_id, note: Map.get(args, "note"), label: label) do
         {:ok, entry} ->
           # A person denied earlier may sign in again and their own athanor
-          # reopens; the group seats the deny removed stay removed — a
-          # member adds them again. Said in the result, not left to guess.
+          # reopens; the thread seats the deny removed stay removed — a
+          # thread's people add them again. Said in the result, not left to guess.
           restored = denied_users(kind, value)
           Enum.each(restored, &Users.allow/1)
           Sanctum.Notify.allowlist_changed()
@@ -158,13 +157,7 @@ defmodule Sanctum.Providers.Door do
           results = Enum.map(denied, &Users.deny/1)
           ejected = Enum.count(results, &match?({:ok, _}, &1))
 
-          # An identifier nobody here holds can still be holding group
-          # seats. `Users.deny/1` withdraws them for a person it knows; for
-          # an identifier it does not, this is the whole eject.
-          withdrawn = withdraw_pending(kind, value)
-
-          rendered =
-            render(entry) |> Map.put(:ejected, ejected) |> Map.put(:invites_withdrawn, withdrawn)
+          rendered = render(entry) |> Map.put(:ejected, ejected)
 
           Sanctum.Notify.allowlist_changed()
 
@@ -270,17 +263,9 @@ defmodule Sanctum.Providers.Door do
   defp with_restore_note(result, restored) do
     Map.merge(result, %{
       restored: length(restored),
-      note: "Their own athanor is reopened; group seats removed by the deny are not restored"
+      note: "Their own athanor is reopened; thread seats removed by the deny are not restored"
     })
   end
-
-  # Every invitation the identifier still holds, dropped once.
-  # `Users.deny/1` already did this for the person it names, and the sweep
-  # is idempotent, so the count is what a *pending* seat cost.
-  defp withdraw_pending("identifier", value),
-    do: Sanctum.Tenancy.Members.withdraw_invites_for_identifier(value)
-
-  defp withdraw_pending(_kind, _value), do: 0
 
   defp known_users("person", value) do
     case Users.get(value) do

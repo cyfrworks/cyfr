@@ -6,7 +6,7 @@
 # evaluates to a function of the argument list; each command answers one
 # line, `OFFER=` and a JSON object. Every step a person takes is the
 # proof's, in the browser (proof.mjs). What is here seeds the three people,
-# their group and the sender's files through the paths a sign-in and the
+# their shared thread and the sender's files through the paths a sign-in and the
 # console take, and reads back what the steps committed. Of the files'
 # bytes it reads each offer's snapshot and the accepted copy, and answers
 # only the digests and sizes it computes from the bytes read, never the
@@ -26,10 +26,10 @@
 #       administrator, as the console opens it (`door.allow` of `*` through
 #       the gate).
 #
-#   group SESSION_TOKEN USER_ID NAME
-#       A group NAME created by the session's person and the person USER_ID
-#       added to it, as the console does both (`athanor.create`, then
-#       `member.add` through the gate).
+#   thread SESSION_TOKEN USER_ID TITLE
+#       A shared thread TITLE made by the session's person and the person
+#       USER_ID added to it, as the console does both (`shared_thread.create`,
+#       then `shared_thread.add` through the gate).
 #
 #   file SESSION_TOKEN PATH BASE64
 #       The bytes BASE64 written at PATH in the athanor the session is
@@ -193,13 +193,13 @@ fn args ->
       entry = console.(token, "door/allow", %{"value" => "*"})
       answer.(%{allowed: "*", entry: Map.get(entry, :id)})
 
-    ["group", token, user_id, name] ->
-      group = console.(token, "athanor/create", %{"name" => name})
+    ["thread", token, user_id, title] ->
+      thread = console.(token, "shared_thread/create", %{"title" => title})
 
       added =
-        console.(token, "member/add", %{"athanor" => group.id, "user_id" => user_id})
+        console.(token, "shared_thread/add", %{"thread" => thread.id, "user_id" => user_id})
 
-      answer.(%{id: group.id, slug: group.slug, route: group.route, added: added.state})
+      answer.(%{id: thread.id, title: thread.title, added: added.state})
 
     ["file", token, path, base64] ->
       console.(token, "file/write", %{

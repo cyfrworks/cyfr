@@ -136,7 +136,7 @@ defmodule Arca.Providers.Files do
         Operation.new(
           "file",
           "offer",
-          "Offer a copy of files under data/ to a person you share an athanor with",
+          "Offer a copy of files under data/ to a person you share a thread with",
           [
             Arg.new("paths", {:array, Arg.new(nil, :string)},
               required: true,
@@ -208,7 +208,7 @@ defmodule Arca.Providers.Files do
           "components/ and aqua/ hold shaped units you may edit in place; notes/ and " <>
           "threads/ are read here and managed on their own pages. Paths are " <>
           "folder-relative, like data/reports/q3.csv. An offer sends a copy of files " <>
-          "under data/ to a person you share an athanor with, who accepts it into " <>
+          "under data/ to a person you share a thread with, who accepts it into " <>
           "their own data/."
     )
   end
@@ -533,7 +533,7 @@ defmodule Arca.Providers.Files do
       :not_shared ->
         {:error,
          {:invalid_argument,
-          "You share no athanor with #{to} — an offer goes to someone you share an athanor with"}}
+          "You share no thread with #{to} — an offer goes to someone you share a thread with"}}
 
       # Refused under the parties' locks: a denial or an archive landed
       # while the offer was being made.

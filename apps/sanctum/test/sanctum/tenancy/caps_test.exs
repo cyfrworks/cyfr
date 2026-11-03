@@ -14,15 +14,15 @@ defmodule Sanctum.Tenancy.CapsTest do
   @moduledoc """
   The public-door caps: each count ships a generous default and the bytes
   per athanor ship with none, 0 turns any of them off, and each is
-  enforced where it applies — athanors per server, groups per person, members per group,
-  bytes per athanor. Each is a platform setting, set here
+  enforced where it applies — athanors per server and bytes per athanor
+  here. Each is a platform setting, set here
   as an operator's write leaves it and read on the next check, and a cap
   the store cannot answer refuses.
   """
   use ExUnit.Case, async: false
 
   alias Sanctum.Test.Settings
-  alias Sanctum.Tenancy.{Athanors, Caps, Members}
+  alias Sanctum.Tenancy.{Athanors, Caps}
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -86,9 +86,7 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     assert Map.new(Prima.Caps.keys(), &{&1, Caps.get(&1)}) == %{
              max_athanors: {:ok, 10_000},
-             max_groups_per_person: {:ok, 50},
              max_pairs_per_person: {:ok, nil},
-             max_members_per_group: {:ok, 1_000},
              max_shared_threads_per_person: {:ok, nil},
              max_people_per_thread: {:ok, nil},
              max_threads_per_athanor: {:ok, 1_000},
@@ -99,9 +97,9 @@ defmodule Sanctum.Tenancy.CapsTest do
              Caps.check_counted(:max_athanors, fn -> {:ok, 10_000} end)
 
     # Zero turns a cap off, never "nothing allowed".
-    put_caps(max_athanors: 0, max_members_per_group: 0, athanor_storage_bytes: 0)
+    put_caps(max_athanors: 0, max_threads_per_athanor: 0, athanor_storage_bytes: 0)
     assert Caps.get(:max_athanors) == {:ok, nil}
-    assert Caps.get(:max_members_per_group) == {:ok, nil}
+    assert Caps.get(:max_threads_per_athanor) == {:ok, nil}
     assert Caps.get(:athanor_storage_bytes) == {:ok, nil}
     assert :ok = Caps.check_counted(:max_athanors, fn -> {:ok, 1_000_000} end)
 
@@ -140,24 +138,17 @@ defmodule Sanctum.Tenancy.CapsTest do
              Prima.Refusal.classify({:cap_unverifiable, :max_athanors})
   end
 
-  test "max_athanors stops Athanors.create; max_groups_per_person stops create_group" do
+  test "max_athanors stops Athanors.create, and an archived athanor frees its place" do
     put_caps(max_athanors: active_count())
 
-    assert {:error, {:limit_reached, :max_athanors, _}} =
-             Athanors.create(%{
-               kind: "group",
-               name: "One more",
-               slug: "onemore-#{System.unique_integer([:positive])}",
-               created_by: "system"
-             })
+    assert {:error, {:limit_reached, :max_athanors, _}} = create("One more")
 
     # An archived athanor frees its place: the cap counts active furnaces.
-    uid0 = "github|https://github.com|freed-#{System.unique_integer([:positive])}"
     reset_caps()
-    {:ok, doomed} = Athanors.create_group(uid0, "Doomed")
-    {:ok, _} = Athanors.archive(doomed)
+    {:ok, doomed} = create("Doomed")
+    {:ok, _} = Athanors.archive(doomed, force: true)
     put_caps(max_athanors: active_count() + 1)
-    assert {:ok, _} = Athanors.create_group(uid0, "Fits")
+    assert {:ok, _} = create("Fits")
 
     # ...and taking the place back has to ask for it, or archive-then-reopen
     # would be the way past the cap.
@@ -165,14 +156,6 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert {:error, {:limit_reached, :max_athanors, _}} = Athanors.unarchive(doomed)
     put_caps(max_athanors: active_count() + 1)
     assert {:ok, %{status: "active"}} = Athanors.unarchive(doomed)
-
-    reset_caps()
-    put_caps(max_groups_per_person: 1)
-    uid = "github|https://github.com|capped-#{System.unique_integer([:positive])}"
-    assert {:ok, _} = Athanors.create_group(uid, "First")
-
-    assert {:error, {:limit_reached, :max_groups_per_person, 1}} =
-             Athanors.create_group(uid, "Second")
   end
 
   test "athanor_storage_bytes is one check for every writer" do
@@ -284,16 +267,14 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert Arca.Cache.get(key) == {:ok, rewalked}
   end
 
-  test "max_members_per_group counts seats — active and invited" do
-    put_caps(max_members_per_group: 2)
-    uid = "github|https://github.com|seat-#{System.unique_integer([:positive])}"
-    {:ok, group} = Athanors.create_group(uid, "Seats")
-    # creator holds one seat; one invitation fills the second
-    invitee = fn name -> "per_" <> Prima.Digest.sha256_hex("#{name}-#{uid}") end
-    assert {:ok, :invited} = Members.add(group, [identifier: invitee.("a")], uid)
-
-    assert {:error, {:limit_reached, :max_members_per_group, 2}} =
-             Members.add(group, [identifier: invitee.("b")], uid)
+  # An athanor row of an owner no person holds.
+  defp create(name) do
+    Athanors.create(%{
+      name: name,
+      slug: "caps-#{System.unique_integer([:positive])}",
+      owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+      created_by: "system"
+    })
   end
 
   defp active_count do

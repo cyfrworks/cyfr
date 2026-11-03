@@ -77,13 +77,12 @@ defmodule Emissary.Web.TinctureAssetsTest do
 
   describe "the tincture URL the adapter is served under" do
     test "is the canonical athanor-scoped path" do
-      assert Prima.TinctureUrl.path("home", "moonmoon", "app") == "/t/home/moonmoon/app"
+      assert Prima.TinctureUrl.path("@home", "moonmoon", "app") == "/t/@home/moonmoon/app"
     end
 
-    test "a person athanor's segment is its @namespace" do
+    test "an athanor's segment is its @namespace" do
       {:ok, athanor} =
         Sanctum.Tenancy.Athanors.create(%{
-          kind: "person",
           name: "alice",
           slug: "alice",
           created_by: "test",
@@ -387,10 +386,10 @@ defmodule Emissary.Web.TinctureAssetsTest do
     test "a head with attributes is injected after its opening tag",
          %{ctx: ctx, tincture: t, base: base} do
       page!(base, "index.html", ~s(<html><head lang="en"><meta charset="utf-8"></head></html>))
-      conn = serve(ctx, t, ["index.html"], base: "/t/home/local/app/")
+      conn = serve(ctx, t, ["index.html"], base: "/t/@home/local/app/")
 
       assert conn.resp_body =~
-               ~r{\A<html><head lang="en">\n<base href="/t/home/local/app/">\n<script nonce=}
+               ~r{\A<html><head lang="en">\n<base href="/t/@home/local/app/">\n<script nonce=}
     end
 
     test "the base names the entry's own directory, escaped", %{ctx: ctx, base: base} do

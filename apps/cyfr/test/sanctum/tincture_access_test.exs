@@ -457,36 +457,26 @@ defmodule Sanctum.TinctureAccessTest do
     do: TinctureAccess.get_private(Sanctum.TestContext.local(), "local", "public-dash")
 
   describe "public_context/1" do
-    defp create_athanor!(kind, slug) do
+    defp create_athanor!(slug) do
       {:ok, athanor} =
         Sanctum.Tenancy.Athanors.create(%{
-          kind: kind,
           name: slug,
           slug: slug,
           created_by: "test",
-          owner_user_id: if(kind == "person", do: "github|https://github.com|#{slug}")
+          owner_user_id: "github|https://github.com|#{slug}"
         })
 
       athanor
     end
 
-    test "resolves a group by slug into an unauthenticated context anchored to it" do
-      athanor = create_athanor!("group", "acme")
+    test "resolves an athanor by @namespace into an unauthenticated context anchored to it, and a bare slug to nothing" do
+      athanor = create_athanor!("bob")
 
-      assert {:ok, %Context{} = ctx} = TinctureAccess.public_context("acme")
+      assert {:ok, %Context{} = ctx} = TinctureAccess.public_context("@bob")
       assert ctx.athanor_id == athanor.id
       assert ctx.scope == :athanor
       assert ctx.authenticated == false
-    end
 
-    test "resolves a person by @namespace, and a bare slug only as a group" do
-      athanor = create_athanor!("person", "bob")
-
-      assert {:ok, ctx} = TinctureAccess.public_context("@bob")
-      assert ctx.athanor_id == athanor.id
-      assert ctx.authenticated == false
-
-      # A bare "bob" is a group slug, which nobody created.
       assert {:error, :not_found} = TinctureAccess.public_context("bob")
     end
 
@@ -496,25 +486,20 @@ defmodule Sanctum.TinctureAccessTest do
       end
     end
 
-    test "an archived athanor is not found, in either form" do
-      group = create_athanor!("group", "gone")
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
-      assert {:error, :not_found} = TinctureAccess.public_context("gone")
-
-      person = create_athanor!("person", "left")
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(person, force: true)
+    test "an archived athanor is not found" do
+      athanor = create_athanor!("left")
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
       assert {:error, :not_found} = TinctureAccess.public_context("@left")
     end
 
-    test "a store that cannot answer is unavailable, never not found, in either form" do
-      create_athanor!("group", "acme")
-      assert {:ok, _} = TinctureAccess.public_context("acme")
+    test "a store that cannot answer is unavailable, never not found" do
+      create_athanor!("acme")
+      assert {:ok, _} = TinctureAccess.public_context("@acme")
 
       # An outage, simulated inside the test's transaction: the table the
       # slug is read from is gone until the sandbox rolls it back.
       Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unreachable")
 
-      assert {:error, :unavailable} = TinctureAccess.public_context("acme")
       assert {:error, :unavailable} = TinctureAccess.public_context("@acme")
     end
   end

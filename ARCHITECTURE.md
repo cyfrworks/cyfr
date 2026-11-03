@@ -6,7 +6,7 @@ This document outlines CYFR's architecture in the present tense of its end state
 
 ### 1.1 What CYFR is for
 
-CYFR is a home for a person's or a group's work with AI: components an assistant can build and run, the assistant itself, files, schedules and credentials, on infrastructure the person controls. It rests on one idea: **a model proposes, and CYFR decides.** A model may suggest any action; only a declared operation, admitted by one gate under a consent the person gave for exactly that action and those resources, carries it out, and credentials live in a vault no model sees. Three consequences follow: the person, not a provider, device or sign-in, is the lasting thing; authority is decided at the one home of what it concerns; and untrusted code runs outside the control plane, isolated from it.
+CYFR is a home for a person's work with AI, and a place to talk with other people: components an assistant can build and run, the assistant itself, files, schedules and credentials, on infrastructure the person controls. It rests on one idea: **a model proposes, and CYFR decides.** A model may suggest any action; only a declared operation, admitted by one gate under a consent the person gave for exactly that action and those resources, carries it out, and credentials live in a vault no model sees. Three consequences follow: the person, not a provider, device or sign-in, is the lasting thing; authority is decided at the one home of what it concerns; and untrusted code runs outside the control plane, isolated from it.
 
 ### 1.2 Principles
 
@@ -26,7 +26,7 @@ CYFR is a home for a person's or a group's work with AI: components an assistant
 ### 1.3 What CYFR trusts
 
 - **Trusted:** the home's own code, the system layer and the command line among it (§7); the platform administrator; the home's store; a passkey or fresh sign-in, for fresh confirmation (§9.3); the identity directory, for consistently ordered state alone (§9.1).
-- **Not trusted:** models and their output, components and tinctures, untrusted processes, another member's session, another home's word, and anything a guest hands back.
+- **Not trusted:** models and their output, components and tinctures, untrusted processes, another person's session, another home's word, and anything a guest hands back.
 - **Stated limits.** Fresh confirmation protects against a stolen session, not a compromised administrator; no digest proves what a client displayed; a recovery code, a backup or a session is authority to whoever holds it.
 - **The trusted computing base** is the control plane, which holds the decrypted credentials; Locus is the process boundary for untrusted code.
 - **Clock trust.** Expiry, leases and freshness are read on the deciding home's clock, and a cell's leases on its database's.
@@ -72,7 +72,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Sanctum: decisions and the gate
 
 - Identity, sessions, doors, keys, devices, passkeys, recovery and fresh confirmation.
-- Membership, tenancy, caps and the caller context (`Sanctum.Caller`).
+- Membership, tenancy, shared threads and their people (`Sanctum.SharedThreads`), caps and the caller context (`Sanctum.Caller`).
 - Consent, the vault and its shares, credential attachment and the credentials tinctures are served under.
 - The gate: the operation table (`Sanctum.Catalog`), its entries (`Sanctum.Gate`, `Sanctum.Streams`), discovery, the request log and the decision record (`Sanctum.Decisions`).
 - No Ecto and no broadcast; it alone reads security rows, and its internal strategies are behaviours selected by configuration.
@@ -92,7 +92,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 ### Aqua: the assistant
 
-- Threads, rooms, turns and their loop, approvals (§10), notes and memory (§11).
+- A person's own threads, turns and their loop, approvals (§10), notes and memory (§11), and saying a line aloud into a shared thread (`Aqua.Aloud`), the one deliberate copy out of an athanor.
 - Agent configuration and model orchestration: one turn under one grant, whatever the model. *Not built yet:* Aqua's model policy, which chooses a model per step.
 
 ### Opus: execution
@@ -180,12 +180,13 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 ### 5.1 Tenancy
 
-- The athanor is the one tenancy unit, a person's or a group's, and every active member holds the same authority.
+- The athanor is the one tenancy unit, one person's own: their assistant, vault, components, files, schedules, keys, webhooks, devices and storage. Nobody else sits in it, and every person admitted to a CYFR has one there, minted in their admission.
 - Tenant identity comes from the authenticated actor, never from a guest's argument, and ownership travels with rows, blobs, events and cache keys.
-- An athanor's rows stay its own. The one widening across athanors is a share, an entry its owner offers to everyone or to one group: a person in its audience sees the entry only through the share, never its material, and a recipient uses it only through the share their own consent names, read under the owner's athanor (`Sanctum.Shares`).
-- A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions and archived athanors, never an athanor's decisions. The installation's first person, made by its setup or by a restore onto it empty, is its platform administrator, and no other grant exists.
-- Outsiders learn nothing of an athanor: anyone without a current seat gets the answer a missing athanor gets.
-- Nothing lands in an athanor its members did not accept.
+- An athanor's rows stay its own. The one widening across athanors is a share, an entry its owner offers to everyone or to one shared thread: a person in its audience sees the entry only through the share, never its material, and a recipient uses it only through the share their own consent names, read under the owner's athanor (`Sanctum.Shares`).
+- A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions, never an athanor's decisions. The installation's first person, made by its setup or by a restore onto it empty, is its platform administrator, and no other grant exists.
+- A shared thread belongs to no athanor: a title, its people, each equal, and their messages and attachments, with no assistant, approval or execution in it. Every read and write of one checks the caller's seat (`Sanctum.SharedThreads`); a pair is a shared thread of two fixed at its birth, and the platform administrator reads a thread only where they sit.
+- Outsiders learn nothing of an athanor: anyone but its person gets the answer a missing athanor gets.
+- Nothing lands in an athanor its person did not accept.
 
 ### 5.2 Identity and standing
 
@@ -285,7 +286,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 - A home is the one installation that decides for an athanor. Home, glass, hub, cell, node and door are this document's words: what a person reads, the setup pages, the command line, Prism, the README and the guides, says CYFR for the installation and Aqua for the assistant, device or browser for the glass, the CYFR you join for a hub, cluster for a cell and server for a member of it, machine or server or CYFR for a node by its sense, and sign-in method for a door, and never these words.
 - Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and their journal, and home transfer; a node is the home of every athanor its store holds.
 - The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, a device's own first proof, the pairing of a key it holds with the setup token authorizing the first, for a home that a carried device with its own screen and no phone runs, and push delivery.
-- A hub is the always-on home of shared athanors, where people, its platform administrator among them, share keys from their own vaults with a group or with everyone (§5.5). Any home may require a company's sign-in of every person there: a standing condition, checked last wherever a person's standing is read, and never a door or the person's identity (`Sanctum.CompanyLogin`). *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored.
+- A hub is the always-on home of shared threads, where people, its platform administrator among them, share keys from their own vaults with a shared thread or with everyone (§5.5). Any home may require a company's sign-in of every person there: a standing condition, checked last wherever a person's standing is read, and never a door or the person's identity (`Sanctum.CompanyLogin`). *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every person in a shared thread a consent that exports their contributions and lets each withhold what they authored.
 - Every wire between homes names its version, and CYFR has no relay.
 
 **Why.** A decision about an athanor is made in one place, so no node acts for a home because a lease looks expired or a clock says it is lost.
@@ -298,7 +299,7 @@ A person is made only by an admission at the CYFR that holds them: its setup, an
 
 ### 9.2 Joining a home that is not your own
 
-A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`) with an assertion their own home signs after a fresh confirmation, carried by the browser (`Sanctum.Carry`) from the home address the person types, their browser remembers for that page, or a link carries; their devices there are certified by their own home (`Sanctum.RemoteCertification`), and each home admits under its own rules. An invitation admits whoever redeems it, once. It admits a newcomer, or an identity signing in from its own home, for whom the redemption writes a lasting allow only where no deny stands, so a deny always wins (`Sanctum.Door`). A home knows a person by identifier. A handle is resolved to its identifier when an allowlist entry or a membership names it, and the handle is never stored as the key. The registry holds no address of any home. A home learns a signing-in person's home address from the carry alone, keeps it for that sign-in's own use, and renders no address it stored or learned on a page without a session.
+A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`) with an assertion their own home signs after a fresh confirmation, carried by the browser (`Sanctum.Carry`) from the home address the person types, their browser remembers for that page, or a link carries; their devices there are certified by their own home (`Sanctum.RemoteCertification`), and each home admits under its own rules. An invitation admits whoever redeems it, once. It admits a newcomer, or an identity signing in from its own home, for whom the redemption writes a lasting allow only where no deny stands, so a deny always wins (`Sanctum.Door`). A home knows a person by identifier. A handle is resolved to its identifier when an allowlist entry or a shared thread's seat names it, and the handle is never stored as the key. The registry holds no address of any home. A home learns a signing-in person's home address from the carry alone, keeps it for that sign-in's own use, and renders no address it stored or learned on a page without a session.
 
 ### 9.3 Devices and fresh confirmation
 
@@ -306,7 +307,7 @@ Who a person is, which devices they connected and whether a change needs a fresh
 
 ### 9.4 Communication
 
-People talk by sharing an athanor whose home is always on; there is no messaging protocol beside it and no directory of strangers.
+People talk in shared threads of a CYFR that is always on, each from their own athanor there; there is no messaging protocol beside it and no directory of strangers.
 
 **Why.** The person outlives every device, key and door, so identity is a log their own keys extend, checked at each home that relies on it, never vouched for by a home or a provider.
 

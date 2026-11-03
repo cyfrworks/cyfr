@@ -77,7 +77,13 @@ defmodule Aqua.ScheduleNotesTest do
 
     n = System.unique_integer([:positive])
     user = "local|idp|sched-#{n}"
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Ops #{n}")
+
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Ops #{n}", owner_user_id: user, created_by: user},
+        ["ops-#{n}"]
+      )
+
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
     profile_id = "prof_notes_#{n}"
     :ok = granted!(ctx, profile_id)
@@ -530,7 +536,7 @@ defmodule Aqua.ScheduleNotesTest do
 
     test "a note_name no note may carry is refused, and the id is not used instead",
          %{athanor: athanor, ctx: ctx} = context do
-      for name <- ["nightly: sync", "../escape", "about-us"] do
+      for name <- ["nightly: sync", "../escape", "about-you"] do
         schedule = keeping(context, name)
         _ = ran!(schedule, 60, "x")
         assert {:ok, %{"refused" => 1}} = drain(athanor)
@@ -576,7 +582,7 @@ defmodule Aqua.ScheduleNotesTest do
       schedule = keeping(context)
       run = ran!(schedule, 60, "must not land after archive")
       with_between(context)
-      plant(fn -> {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor) end)
+      plant(fn -> {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true) end)
 
       assert {:ok, %{"refused" => 1}} = drain(athanor)
       assert {:ok, "refused"} = outcome(athanor, source(run, schedule))
@@ -586,7 +592,7 @@ defmodule Aqua.ScheduleNotesTest do
     test "an archived athanor's schedule writes nothing", %{athanor: athanor} = context do
       schedule = keeping(context)
       run = ran!(schedule, 60, "x")
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
 
       assert {:ok, %{"refused" => 1}} = drain(athanor)
       assert {:ok, "refused"} = outcome(athanor, source(run, schedule))

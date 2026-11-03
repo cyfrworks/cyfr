@@ -392,10 +392,10 @@ defmodule Arca.ConsentStorage do
   end
 
   # With a person, the athanor is that person's own, by `Arca.Shares`' one
-  # rule; with none, the bootstrap's revision, it is a person's athanor.
+  # rule; with none, the bootstrap's revision, it is an athanor.
   defp binds_shares(athanor_id, nil) do
     case Arca.Repo.get(Arca.Schemas.Athanor, athanor_id) do
-      %Arca.Schemas.Athanor{kind: "person"} -> :ok
+      %Arca.Schemas.Athanor{} -> :ok
       _other -> {:error, :not_own_athanor}
     end
   end

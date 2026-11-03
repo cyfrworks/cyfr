@@ -109,8 +109,8 @@ defmodule Emissary.Web.TinctureControllerTest do
   # request under a tincture that does not exist.
   defp assert_not_public(name, paths) do
     for path <- paths do
-      served = get(build_conn(), "/t/test/local/#{name}#{path}")
-      absent = get(build_conn(), "/t/test/local/nonexistent#{path}")
+      served = get(build_conn(), "/t/@test/local/#{name}#{path}")
+      absent = get(build_conn(), "/t/@test/local/nonexistent#{path}")
       assert json_response(absent, 404)["code"] == "not_found"
 
       assert {name, path, served.status, get_resp_header(served, "content-type"),
@@ -311,14 +311,14 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
 
     test "is not found without a credential", %{conn: conn} do
-      assert get(conn, "/t/test/local/auth-dash").status == 404
-      assert get(build_conn(), "/t/test/local/auth-dash/app.js").status == 404
-      assert get(build_conn(), "/t/test/local/auth-dash/data.db").status == 404
+      assert get(conn, "/t/@test/local/auth-dash").status == 404
+      assert get(build_conn(), "/t/@test/local/auth-dash/app.js").status == 404
+      assert get(build_conn(), "/t/@test/local/auth-dash/data.db").status == 404
     end
 
     test "is not found under an Authorization bearer", %{api_key: key, session: session} do
       for bearer <- [key, session.token],
-          path <- ["/t/test/local/auth-dash", "/t/test/local/auth-dash/app.js"] do
+          path <- ["/t/@test/local/auth-dash", "/t/@test/local/auth-dash/app.js"] do
         conn = build_conn() |> put_req_header("authorization", "Bearer #{bearer}") |> get(path)
         assert json_response(conn, 404)["code"] == "not_found", path
         refute conn.resp_body =~ "Auth"
@@ -336,28 +336,28 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
 
     test "serves index.html without authentication", %{conn: conn} do
-      conn = get(conn, "/t/test/local/pub-dash")
+      conn = get(conn, "/t/@test/local/pub-dash")
       assert conn.status == 200
       assert conn.resp_body =~ "Public"
     end
 
     test "serves a frame: the tincture routes read no session to refuse it for",
          %{conn: conn} do
-      page = conn |> put_req_header("sec-fetch-dest", "iframe") |> get("/t/test/local/pub-dash")
+      page = conn |> put_req_header("sec-fetch-dest", "iframe") |> get("/t/@test/local/pub-dash")
       assert page.status == 200
       assert page.resp_body =~ "Public"
 
       asset =
         build_conn()
         |> put_req_header("sec-fetch-dest", "iframe")
-        |> get("/t/test/local/pub-dash/style.css")
+        |> get("/t/@test/local/pub-dash/style.css")
 
       assert asset.status == 200
     end
 
     test "its policy is the frame's rules' derivation, sandboxed like a private one's",
          %{conn: conn} do
-      conn = get(conn, "/t/test/local/pub-dash")
+      conn = get(conn, "/t/@test/local/pub-dash")
       [csp] = get_resp_header(conn, "content-security-policy")
       [_, nonce] = Regex.run(~r/'nonce-([A-Za-z0-9_-]+)'/, csp)
 
@@ -391,7 +391,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       # `put_resp_header/3` raised on the control character — a manifest could
       # 500 its own tincture's index for good, with nothing pointing at the
       # field. `\A…\z` is the anchor that means what this check meant.
-      conn = get(conn, "/t/test/local/nl-dash")
+      conn = get(conn, "/t/@test/local/nl-dash")
 
       assert conn.status == 200
       [csp] = get_resp_header(conn, "content-security-policy")
@@ -414,7 +414,7 @@ defmodule Emissary.Web.TinctureControllerTest do
         "<html><body>Two</body></html>"
       )
 
-      conn = get(conn, "/t/test/local/pub-dash/page2.html")
+      conn = get(conn, "/t/@test/local/pub-dash/page2.html")
 
       assert conn.status == 200
       [csp] = get_resp_header(conn, "content-security-policy")
@@ -425,7 +425,7 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
 
     test "a non-HTML asset keeps the locked-down header", %{conn: conn} do
-      conn = get(conn, "/t/test/local/pub-dash/style.css")
+      conn = get(conn, "/t/@test/local/pub-dash/style.css")
 
       assert conn.status == 200
       [csp] = get_resp_header(conn, "content-security-policy")
@@ -433,25 +433,25 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
 
     test "injects plain base tag (no token) for public tincture", %{conn: conn} do
-      conn = get(conn, "/t/test/local/pub-dash")
-      assert conn.resp_body =~ ~s(<base href="/t/test/local/pub-dash/">)
+      conn = get(conn, "/t/@test/local/pub-dash")
+      assert conn.resp_body =~ ~s(<base href="/t/@test/local/pub-dash/">)
       refute conn.resp_body =~ "_s/"
     end
 
     test "a built entry is served from dist/, and its relative assets resolve there",
          %{conn: conn} do
-      page = get(conn, "/t/test/local/built-dash")
+      page = get(conn, "/t/@test/local/built-dash")
       assert page.status == 200
       assert page.resp_body =~ "Built"
-      assert page.resp_body =~ ~s(<base href="/t/test/local/built-dash/dist/">)
+      assert page.resp_body =~ ~s(<base href="/t/@test/local/built-dash/dist/">)
 
-      asset = get(build_conn(), "/t/test/local/built-dash/dist/assets/app.js")
+      asset = get(build_conn(), "/t/@test/local/built-dash/dist/assets/app.js")
       assert asset.status == 200
       assert asset.resp_body == "// built"
     end
 
     test "returns 404 for nonexistent tincture (indistinguishable from private)", %{conn: conn} do
-      conn = get(conn, "/t/test/local/nonexistent")
+      conn = get(conn, "/t/@test/local/nonexistent")
       assert conn.status == 404
     end
 
@@ -477,10 +477,10 @@ defmodule Emissary.Web.TinctureControllerTest do
       assert_not_public("canvas-dash", ["", "/index.html", "/app.js", "/style.css"])
 
       # A tincture that is no canvas is still served at its address.
-      page = get(build_conn(), "/t/test/local/pub-dash")
+      page = get(build_conn(), "/t/@test/local/pub-dash")
       assert page.status == 200
       assert page.resp_body =~ "Public"
-      assert get(build_conn(), "/t/test/local/pub-dash/style.css").status == 200
+      assert get(build_conn(), "/t/@test/local/pub-dash/style.css").status == 200
     end
 
     test "a version whose declaration today's rules refuse is never served on the public route, even with a public profile" do
@@ -508,32 +508,34 @@ defmodule Emissary.Web.TinctureControllerTest do
       end
 
       # A tincture whose declaration the rules read is still served.
-      assert get(build_conn(), "/t/test/local/pub-dash").status == 200
+      assert get(build_conn(), "/t/@test/local/pub-dash").status == 200
     end
 
     test "does not serve a public tincture from a different athanor", %{conn: conn} do
       # pub-dash is public in the test athanor; another athanor must not
-      # resolve it (athanor isolation), and an unknown athanor is a 404 too.
+      # resolve it (athanor isolation), an unknown athanor is a 404 too, and
+      # so is the test athanor's bare slug: the segment is `@<namespace>`.
       {:ok, _} =
         Sanctum.Tenancy.Athanors.create(%{
-          kind: "group",
           name: "Other",
           slug: "other",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           created_by: "test"
         })
 
-      assert get(conn, "/t/other/local/pub-dash").status == 404
-      assert get(conn, "/t/nobody/local/pub-dash").status == 404
+      assert get(conn, "/t/@other/local/pub-dash").status == 404
+      assert get(conn, "/t/@nobody/local/pub-dash").status == 404
+      assert get(conn, "/t/test/local/pub-dash").status == 404
     end
 
     test "an athanor the store cannot resolve is a 503, never a 404", %{conn: conn} do
-      assert get(conn, "/t/test/local/pub-dash").status == 200
+      assert get(conn, "/t/@test/local/pub-dash").status == 200
 
       # The route's athanor segment is read before any lookup; with the
       # table gone the store cannot say whether it exists.
       Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
 
-      for path <- ["/t/test/local/pub-dash", "/t/test/local/pub-dash/style.css"] do
+      for path <- ["/t/@test/local/pub-dash", "/t/@test/local/pub-dash/style.css"] do
         refused = get(build_conn(), path)
         assert json_response(refused, 503)["code"] == "unavailable"
         assert get_resp_header(refused, "retry-after") == ["5"]
@@ -544,11 +546,11 @@ defmodule Emissary.Web.TinctureControllerTest do
     # One outage and one request per test: on PostgreSQL the failed read
     # aborts the test's transaction, so a second request would meet that,
     # not the outage.
-    for path <- ["/t/test/local/pub-dash", "/t/test/local/pub-dash/style.css"] do
+    for path <- ["/t/@test/local/pub-dash", "/t/@test/local/pub-dash/style.css"] do
       test "a registry that cannot answer for a public tincture is a 503, never a 404 or a " <>
              "crash: #{path}",
            %{conn: conn} do
-        assert get(conn, "/t/test/local/pub-dash").status == 200
+        assert get(conn, "/t/@test/local/pub-dash").status == 200
 
         # The athanor and the public profile resolve; the version cannot.
         Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
@@ -561,10 +563,10 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
 
     for path <- [
-          "/t/test/local/pub-dash",
-          "/t/test/local/pub-dash/style.css",
-          "/t/test/local/auth-dash",
-          "/t/test/local/nonexistent"
+          "/t/@test/local/pub-dash",
+          "/t/@test/local/pub-dash/style.css",
+          "/t/@test/local/auth-dash",
+          "/t/@test/local/nonexistent"
         ] do
       test "a profile store that cannot answer is a 503 for a public, a private and an absent " <>
              "tincture alike, never a 404: #{path}" do
@@ -582,19 +584,19 @@ defmodule Emissary.Web.TinctureControllerTest do
 
   describe "assets — public tinctures" do
     test "serves public tincture assets with CORS header", %{conn: conn} do
-      conn = get(conn, "/t/test/local/pub-dash/style.css")
+      conn = get(conn, "/t/@test/local/pub-dash/style.css")
       assert conn.status == 200
       assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
       assert get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
     end
 
     test "returns 404 for asset requests for unknown tincture", %{conn: conn} do
-      conn = get(conn, "/t/test/local/no-such-tincture/app.js")
+      conn = get(conn, "/t/@test/local/no-such-tincture/app.js")
       assert conn.status == 404
     end
 
     test "blocks data.db for public tincture", %{conn: conn} do
-      conn = get(conn, "/t/test/local/pub-dash/data.db")
+      conn = get(conn, "/t/@test/local/pub-dash/data.db")
       assert conn.status == 404
     end
   end
@@ -605,11 +607,7 @@ defmodule Emissary.Web.TinctureControllerTest do
     setup do
       # The credential is minted from the reader's own session: a private
       # app's files are theirs to read while that session and their seat
-      # stand, not anyone's who has the URL. A second seat keeps the athanor
-      # open when the reader leaves it.
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure("usr_keeper", scope: "athanor", athanor_id: "ath_test")
-
+      # stand, not anyone's who has the URL.
       reader = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.TestContext.create_session(reader)
       {:ok, ctx} = Sanctum.Caller.establish(session.token)
@@ -831,16 +829,6 @@ defmodule Emissary.Web.TinctureControllerTest do
       refute gone.resp_body =~ "auth app"
     end
 
-    test "a reader who left the athanor is refused by name",
-         %{conn: conn, ctx: ctx, reader: reader} do
-      credential = credential(ctx)
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_test")
-      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: reader.user_id)
-
-      assert json_response(get(conn, served(credential, ["app.js"])), 403)["code"] ==
-               "forbidden"
-    end
-
     test "a key's allowlist holds its credential: admitted address served, other refused" do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
@@ -900,24 +888,24 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     test "page requests over the limit get 429 with retry-after", %{conn: conn} do
       for _ <- 1..2 do
-        assert get(build_conn(), "/t/test/local/pub-dash").status != 429
+        assert get(build_conn(), "/t/@test/local/pub-dash").status != 429
       end
 
-      blocked = get(build_conn(), "/t/test/local/pub-dash")
+      blocked = get(build_conn(), "/t/@test/local/pub-dash")
       assert blocked.status == 429
       assert get_resp_header(blocked, "retry-after") != []
 
       # Other tinctures are unaffected (separate bucket key).
-      assert get(build_conn(), "/t/test/local/auth-dash").status != 429
+      assert get(build_conn(), "/t/@test/local/auth-dash").status != 429
       _ = conn
     end
 
     test "asset requests over the limit get 429", %{conn: _conn} do
       for _ <- 1..2 do
-        assert get(build_conn(), "/t/test/local/pub-dash/app.js").status != 429
+        assert get(build_conn(), "/t/@test/local/pub-dash/app.js").status != 429
       end
 
-      assert get(build_conn(), "/t/test/local/pub-dash/app.js").status == 429
+      assert get(build_conn(), "/t/@test/local/pub-dash/app.js").status == 429
     end
   end
 end

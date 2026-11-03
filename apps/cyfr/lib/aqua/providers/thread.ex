@@ -18,8 +18,7 @@ defmodule Aqua.Providers.Thread do
   is no second implementation of a turn, and no path that starts one
   without the runner's gates. The rest wrap the domain verbs the console
   itself uses: `create`/`list` are `Arca.ThreadStorage` (how a
-  headless client gets an id at all), `follow`/`unfollow` are
-  `Arca.ThreadSubscriptionStorage` for the caller alone, and `aloud` is
+  headless client gets an id at all), and `aloud` is
   `Aqua.Aloud.post/4` with every rule decided there.
 
   It lives beside the runner because the assistant owns its providers,
@@ -363,34 +362,6 @@ defmodule Aqua.Providers.Thread do
         ),
         Operation.new(
           "thread",
-          "follow",
-          "Follow thread",
-          [
-            Arg.new("thread", :string,
-              required: true,
-              description: "Thread id (all actions except create and list)"
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "thread",
-          "unfollow",
-          "Unfollow thread",
-          [
-            Arg.new("thread", :string,
-              required: true,
-              description: "Thread id (all actions except create and list)"
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "thread",
           "aloud",
           "Aloud thread",
           [
@@ -428,7 +399,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, follow or unfollow a thread, and say one of your own private lines aloud into a shared thread you sit in. Addressing: in an athanor with one person every send starts a turn; with more than one, a send starts a turn only when it names one — @aqua for the athanor's assistant, or @<role> for one of its roles. An unaddressed send is people talking: it persists and starts nothing (the result says running: false). A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, and say one of your own private lines aloud into a shared thread you sit in. Every send starts a turn: @<role> names one of the athanor's roles, else the thread's agent, else the athanor's assistant. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -692,7 +663,7 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A thread is deleted whole — its rows, its blobs, what followed it —
+  # A thread is deleted whole — its rows and its blobs —
   # and never under a running turn.
   defp act("delete", ctx, id, _args) do
     cond do
@@ -760,29 +731,6 @@ defmodule Aqua.Providers.Thread do
         {:error, _} ->
           {:error, {:unavailable, "Storage"}}
       end
-    else
-      {:error, reason} -> {:error, refusal(reason, id)}
-    end
-  end
-
-  # Following is a person's sidebar and notify roster, never an ACL — and
-  # never someone else's: the row is always the CALLER's, no `user_id`
-  # argument exists on the wire. The tenant-scoped `get` proves the thread
-  # is the focused athanor's before the row is written.
-  defp act("follow", ctx, id, _args) do
-    with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id),
-         :ok <- Arca.ThreadSubscriptionStorage.follow(Sanctum.Context.actor(ctx), id, ctx.user_id) do
-      {:ok, %{following: true, thread: id}}
-    else
-      {:error, reason} -> {:error, refusal(reason, id)}
-    end
-  end
-
-  defp act("unfollow", ctx, id, _args) do
-    with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id),
-         :ok <-
-           Arca.ThreadSubscriptionStorage.unfollow(Sanctum.Context.actor(ctx), id, ctx.user_id) do
-      {:ok, %{following: false, thread: id}}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end

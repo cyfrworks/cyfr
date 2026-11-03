@@ -25,10 +25,10 @@ defmodule MultiTenantIsolationTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     {:ok, athanor_a} =
-      Athanors.create(%{kind: "group", name: "Alpha", slug: "alpha", created_by: "u_a"})
+      Athanors.create(%{name: "Alpha", slug: "alpha", owner_user_id: "u_a", created_by: "u_a"})
 
     {:ok, athanor_b} =
-      Athanors.create(%{kind: "group", name: "Beta", slug: "beta", created_by: "u_b"})
+      Athanors.create(%{name: "Beta", slug: "beta", owner_user_id: "u_b", created_by: "u_b"})
 
     # Two athanor contexts; the same namespace on both, because identity is
     # not what separates them.

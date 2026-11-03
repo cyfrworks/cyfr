@@ -175,12 +175,19 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
         authenticated: true
       )
 
-    {:ok, group} = Athanors.create_group(ctx.user_id, "Deadline #{n}")
-    {:ok, ctx: %{ctx | athanor_id: group.id}, group: group, stall: stall}
+    {:ok, slugs} = Athanors.person_slugs(nil, "Deadline #{n}")
+
+    {:ok, athanor} =
+      Athanors.create_personal(
+        %{name: "Deadline #{n}", owner_user_id: ctx.user_id, created_by: ctx.user_id},
+        slugs
+      )
+
+    {:ok, ctx: %{ctx | athanor_id: athanor.id}, athanor: athanor, stall: stall}
   end
 
   test "a remote dependency of a stale fill cannot overwrite its successor after slot regain",
-       %{ctx: ctx, group: group, stall: stall} do
+       %{ctx: ctx, athanor: athanor, stall: stall} do
     enabled = Application.fetch_env(:arca, :control_plane_claim_enabled)
 
     slot_keys =
@@ -205,7 +212,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     node = "remote-regain-#{System.unique_integer([:positive])}"
     {:ok, original} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
     Agent.update(stall, fn _ -> "someone/catalysts/elsewhere" end)
-    old_fill = Task.async(fn -> Provisioning.provision(group, ctx) end)
+    old_fill = Task.async(fn -> Provisioning.provision(athanor, ctx) end)
 
     on_exit(fn ->
       if Process.alive?(old_fill.pid) do
@@ -236,11 +243,11 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     {1, _} =
       Arca.Repo.update_all(
-        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^group.id),
+        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^athanor.id),
         set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
       )
 
-    {:ok, next} = Provisioning.take_claim(group.id, "first_need")
+    {:ok, next} = Provisioning.take_claim(athanor.id, "first_need")
     assert next.fence > held.fence
     unit = ["components", "catalysts", "someone", "elsewhere", "1.0.0"]
 
@@ -282,7 +289,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   end
 
   test "a stale fill cannot replace its successor component row after committing its unit",
-       %{ctx: ctx, group: group, stall: stall} do
+       %{ctx: ctx, athanor: athanor, stall: stall} do
     enabled = Application.fetch_env(:arca, :control_plane_claim_enabled)
 
     slot_keys =
@@ -319,7 +326,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
         handler,
         Arca.StorageProjectionChanges.event(),
         fn _, _, metadata, _ ->
-          if metadata.athanor_id == group.id and metadata.root == "components" and metadata.ready and
+          if metadata.athanor_id == athanor.id and metadata.root == "components" and
+               metadata.ready and
                match?({:ok, _}, Arca.StorageUnits.current(actor, root, key)) do
             send(observer, {:published_before_row, self()})
 
@@ -333,7 +341,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
         nil
       )
 
-    old_fill = Task.async(fn -> Provisioning.provision(group, ctx) end)
+    old_fill = Task.async(fn -> Provisioning.provision(athanor, ctx) end)
 
     on_exit(fn ->
       if Process.alive?(old_fill.pid) do
@@ -367,11 +375,11 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     {1, _} =
       Arca.Repo.update_all(
-        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^group.id),
+        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^athanor.id),
         set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
       )
 
-    {:ok, next} = Provisioning.take_claim(group.id, "first_need")
+    {:ok, next} = Provisioning.take_claim(athanor.id, "first_need")
     assert next.fence > held.fence
     {:ok, manifest} = Arca.get(actor, unit ++ ["cyfr-manifest.json"])
 
@@ -419,7 +427,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   end
 
   test "a stale fill's refused row cleans up nothing its successor published",
-       %{ctx: ctx, group: group} do
+       %{ctx: ctx, athanor: athanor} do
     enabled = Application.fetch_env(:arca, :control_plane_claim_enabled)
     slot_keys = for key <- [:standing, :generation, :slot], do: {Arca.ControlPlane, key}
     previous = Map.new(slot_keys, &{&1, :persistent_term.get(&1, :absent)})
@@ -440,7 +448,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     Application.put_env(:arca, :control_plane_claim_enabled, true)
     node = "remote-cleanup-#{System.unique_integer([:positive])}"
     {:ok, original} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
-    {:ok, held} = Provisioning.take_claim(group.id, "first_need")
+    {:ok, held} = Provisioning.take_claim(athanor.id, "first_need")
     actor = Sanctum.Context.actor(ctx)
     unit = ["components", "catalysts", "someone", "cleanup", "1.0.0"]
     {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
@@ -457,7 +465,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
         handler,
         Arca.StorageProjectionChanges.event(),
         fn _, _, metadata, _ ->
-          if metadata.athanor_id == group.id and metadata.root == "components" and
+          if metadata.athanor_id == athanor.id and metadata.root == "components" and
                metadata.ready and self() != observer and
                match?({:ok, _}, Arca.StorageUnits.current(actor, root, key)) do
             :telemetry.detach(handler)
@@ -519,11 +527,11 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     {1, _} =
       Arca.Repo.update_all(
-        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^group.id),
+        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^athanor.id),
         set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
       )
 
-    {:ok, next} = Provisioning.take_claim(group.id, "first_need")
+    {:ok, next} = Provisioning.take_claim(athanor.id, "first_need")
     assert next.fence > held.fence
 
     assert {:ok, _} =
@@ -557,7 +565,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   end
 
   test "a stalled required pull ends within its budget, releases coordination, and the next attempt completes the closure",
-       %{ctx: ctx, group: group, stall: stall} do
+       %{ctx: ctx, athanor: athanor, stall: stall} do
     Agent.update(stall, fn _ -> "someone/catalysts/below" end)
     Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, @cut_budget_ms)
 
@@ -570,10 +578,10 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # transport's own minutes-long patience.
     assert elapsed < 10 * @cut_budget_ms
 
-    {:ok, group} = Athanors.get(group.id)
-    refute group.provisioned_at
+    {:ok, athanor} = Athanors.get(athanor.id)
+    refute athanor.provisioned_at
 
-    assert %{step: "closure", detail: detail} = Athanors.provisioning_failure(group)
+    assert %{step: "closure", detail: detail} = Athanors.provisioning_failure(athanor)
 
     assert detail =~ "timeout"
 
@@ -585,7 +593,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     # The deadline settled the claim: failed, saying where and why, and no
     # longer standing — the retry below takes the athanor at once.
-    actor = %Prima.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: athanor.id}
     assert {:ok, %{outcome: "failed", outcome_detail: settled} = claim} = Claims.current(actor)
     assert settled =~ "closure"
     assert settled =~ "timeout"
@@ -595,14 +603,14 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # remote component's manifest, finds the dependency below it, and
     # finishes the closure.
     Agent.update(stall, fn _ -> nil end)
-    assert {:ok, %{provisioned_at: %DateTime{}}} = Provisioning.provision(group, ctx)
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Provisioning.provision(athanor, ctx)
     assert {:ok, _} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
   end
 
-  test "the seed sync heals a dependency an earlier attempt lost", %{ctx: ctx, group: group} do
+  test "the seed sync heals a dependency an earlier attempt lost", %{ctx: ctx, athanor: athanor} do
     :ok = Provisioning.start_provisioning(ctx)
-    {:ok, group} = Athanors.get(group.id)
-    assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
+    {:ok, athanor} = Athanors.get(athanor.id)
+    assert %DateTime{} = athanor.provisioned_at, inspect(Athanors.settings(athanor))
 
     # A transient outage at an earlier sync leaves one dependency of the
     # closure unpulled; dropping its row is exactly that state. The next
@@ -626,21 +634,21 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   end
 
   test "two members on one athanor's first touch: one fills it, the other pulls nothing and is told which case it is",
-       %{ctx: ctx, group: group, stall: stall} do
-    actor = %Prima.Actor{athanor_id: group.id}
+       %{ctx: ctx, athanor: athanor, stall: stall} do
+    actor = %Prima.Actor{athanor_id: athanor.id}
 
     # The first member's attempt holds the athanor's claim and is parked in
     # its required pull. It runs in a process of its own so the second
     # member's touch happens beside it, as two members' would.
     Agent.update(stall, fn _ -> "someone/catalysts/elsewhere" end)
-    first = Task.async(fn -> Provisioning.provision(group, ctx) end)
+    first = Task.async(fn -> Provisioning.provision(athanor, ctx) end)
     assert_receive {:stalled, "someone/catalysts/elsewhere"}, 10_000
     drain_manifests()
 
     # The second member's first touch of the same athanor. It is told the
     # athanor is being filled — not that it failed, and not silence — and
     # it asks the registry for nothing: one claim, one closure walk.
-    assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
+    assert {:error, :provisioning_busy} = Provisioning.provision(athanor, ctx)
     assert Provisioning.status(ctx) == :filling
     assert {:ok, %{fence: 1, outcome: nil}} = Claims.current(actor)
     refute_receive {:manifest, _repo}, 300
@@ -658,14 +666,14 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   end
 
   test "an explicit retry that meets a running attempt is told it is in progress, at once",
-       %{ctx: ctx, group: group} do
+       %{ctx: ctx, athanor: athanor} do
     # Another caller's attempt holds the claim — a background fill in
     # flight. The explicit verb does not queue behind it.
-    actor = %Prima.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: athanor.id}
     {:ok, _held} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000, :none)
 
     started = System.monotonic_time(:millisecond)
-    assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
+    assert {:error, :provisioning_busy} = Provisioning.provision(athanor, ctx)
     assert System.monotonic_time(:millisecond) - started < 1_000
 
     # The verb renders it as the same typed answer a turn gives while the
@@ -692,8 +700,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     end
 
     test "an explicit retry and an install are told busy at once; the deadline settles it failed, and readers back off",
-         %{ctx: ctx, group: group} do
-      actor = %Prima.Actor{athanor_id: group.id}
+         %{ctx: ctx, athanor: athanor} do
+      actor = %Prima.Actor{athanor_id: athanor.id}
 
       # The reader answers and the fill goes on without it: the fill it
       # started still stands after the answer, unsettled, where a reader
@@ -707,7 +715,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       # Racing it: the explicit retry, the verb over it, and an install —
       # each refused without waiting, none of them touching the claim.
       started = System.monotonic_time(:millisecond)
-      assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
+      assert {:error, :provisioning_busy} = Provisioning.provision(athanor, ctx)
 
       assert {:error, :not_provisioned} =
                Sanctum.Providers.Athanor.handle(ctx, %{"action" => "provision"})
@@ -735,7 +743,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
       wait_until(
         fn ->
-          {:ok, row} = Athanors.get(group.id)
+          {:ok, row} = Athanors.get(athanor.id)
           Athanors.provisioning_failure(row) != nil
         end,
         5_000,
@@ -757,13 +765,13 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     end
 
     test "an attempt killed where it stands is released by its keeper, once its pull has stopped",
-         %{ctx: ctx, group: group} do
-      actor = %Prima.Actor{athanor_id: group.id}
+         %{ctx: ctx, athanor: athanor} do
+      actor = %Prima.Actor{athanor_id: athanor.id}
       before = MapSet.new(Task.Supervisor.children(Compendium.ProvisioningSupervisor))
 
       # An explicit attempt, so the process to kill is known: it stalls in
       # its required pull, holding the claim.
-      attempt = spawn(fn -> Provisioning.provision(group, ctx) end)
+      attempt = spawn(fn -> Provisioning.provision(athanor, ctx) end)
 
       wait_until(fn -> Provisioning.status(ctx) == :filling end, 5_000, "the attempt to claim")
       assert {:ok, %{entry_kind: "provision", fence: 1} = held} = Claims.current(actor)
@@ -797,14 +805,14 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
       # Nothing was marked or recorded for it, and nothing half-landed:
       # the athanor is unfilled, not partly filled.
-      {:ok, row} = Athanors.get(group.id)
+      {:ok, row} = Athanors.get(athanor.id)
       refute row.provisioned_at
       refute Athanors.provisioning_failure(row)
       assert Provisioning.status(ctx) == :unfilled
 
       assert {:ok, []} =
                Arca.ProfileStorage.list_for_source(
-                 Prima.Actor.in_athanor(group.id),
+                 Prima.Actor.in_athanor(athanor.id),
                  "catalyst:local.foo"
                )
 

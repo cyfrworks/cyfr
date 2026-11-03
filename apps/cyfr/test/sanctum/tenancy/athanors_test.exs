@@ -11,12 +11,17 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     :ok
   end
 
-  defp slug, do: "grp-#{System.unique_integer([:positive])}"
+  defp slug, do: "ath-#{System.unique_integer([:positive])}"
 
-  defp group!(overrides \\ %{}) do
+  defp owner, do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+  defp athanor!(overrides \\ %{}) do
     {:ok, athanor} =
       Athanors.create(
-        Map.merge(%{kind: "group", name: "Group", slug: slug(), created_by: "system"}, overrides)
+        Map.merge(
+          %{name: "Athanor", slug: slug(), owner_user_id: owner(), created_by: "system"},
+          overrides
+        )
       )
 
     athanor
@@ -24,7 +29,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
   describe "put_settings/2" do
     test "merges over the row as it is now, not the caller's copy" do
-      athanor = group!()
+      athanor = athanor!()
 
       # The shape `Sanctum.Provisioning` takes: read the athanor, do a dozen
       # steps, write the outcome. A merge based on the struct read first
@@ -46,54 +51,47 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
   describe "create/1" do
     test "mints an ath_ id and defaults to active" do
-      athanor = group!()
+      athanor = athanor!()
       assert String.starts_with?(athanor.id, "ath_")
       assert athanor.status == "active"
       assert athanor.provisioned_at == nil
     end
 
-    test "a person athanor names its owner" do
-      assert {:ok, person} =
+    test "an athanor names its owner" do
+      assert {:ok, athanor} =
                Athanors.create(%{
-                 kind: "person",
                  name: "Alice",
                  slug: "alice-#{System.unique_integer([:positive])}",
                  owner_user_id: "github|https://github.com|1",
                  created_by: "system"
                })
 
-      assert person.kind == "person"
-      assert person.owner_user_id == "github|https://github.com|1"
+      assert athanor.owner_user_id == "github|https://github.com|1"
     end
 
-    test "a person athanor without an owner is rejected" do
+    test "an athanor without an owner is rejected" do
       assert {:error, {:invalid, %{owner_user_id: [_ | _]}}} =
-               Athanors.create(%{kind: "person", name: "X", slug: slug(), created_by: "system"})
+               Athanors.create(%{name: "X", slug: slug(), created_by: "system"})
     end
 
-    test "rejects an unknown kind" do
-      assert {:error, {:invalid, %{kind: [_ | _]}}} =
-               Athanors.create(%{kind: "team", name: "X", slug: slug(), created_by: "system"})
-    end
-
-    test "slugs are unique per kind" do
+    test "slugs are unique" do
       s = slug()
 
       assert {:ok, _} =
-               Athanors.create(%{kind: "group", name: "A", slug: s, created_by: "system"})
-
-      # The unique index on kind and slug is the one refusal a caller acts
-      # on rather than reports: a derived slug asks again with the next name.
-      assert {:error, :slug_taken} =
-               Athanors.create(%{kind: "group", name: "B", slug: s, created_by: "system"})
-
-      # The same slug is free for a person athanor.
-      assert {:ok, _} =
                Athanors.create(%{
-                 kind: "person",
                  name: "A",
                  slug: s,
-                 owner_user_id: "user_#{s}",
+                 owner_user_id: owner(),
+                 created_by: "system"
+               })
+
+      # The unique index on the slug is the one refusal a caller acts on
+      # rather than reports: a derived slug asks again with the next name.
+      assert {:error, :slug_taken} =
+               Athanors.create(%{
+                 name: "B",
+                 slug: s,
+                 owner_user_id: owner(),
                  created_by: "system"
                })
     end
@@ -103,21 +101,26 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       # collision suffix without doubled hyphens.
       n = System.unique_integer([:positive])
       name = "alice-#{n}@example.com & bob-#{n}@example.com"
+      {:ok, slugs} = Athanors.person_slugs(nil, name)
 
-      assert {:ok, first} = Athanors.create_group("user_a_#{n}", name)
-      assert {:ok, second} = Athanors.create_group("user_b_#{n}", name)
+      personal = fn ->
+        id = owner()
+        Athanors.create_personal(%{name: name, owner_user_id: id, created_by: id}, slugs)
+      end
+
+      assert {:ok, first} = personal.()
+      assert {:ok, second} = personal.()
 
       assert second.slug != first.slug
       refute second.slug =~ "--"
       assert second.slug =~ Prima.ComponentRef.personal_slug_regex()
     end
 
-    test "one person, one personal athanor" do
+    test "one person, one athanor" do
       owner = "github|https://github.com|#{System.unique_integer([:positive])}"
 
       assert {:ok, _} =
                Athanors.create(%{
-                 kind: "person",
                  name: "A",
                  slug: slug(),
                  owner_user_id: owner,
@@ -126,7 +129,6 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
       assert {:error, {:invalid, %{owner_user_id: [_ | _]}}} =
                Athanors.create(%{
-                 kind: "person",
                  name: "A again",
                  slug: slug(),
                  owner_user_id: owner,
@@ -137,31 +139,34 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     test "rejects a slug outside the namespace grammar" do
       assert {:error, {:invalid, %{slug: [_ | _]}}} =
                Athanors.create(%{
-                 kind: "group",
                  name: "X",
                  slug: "Bad Slug",
+                 owner_user_id: owner(),
                  created_by: "system"
                })
     end
   end
 
-  describe "get/1 and get_by_slug/2" do
-    test "finds by id and by (kind, slug)" do
-      athanor = group!()
+  describe "get/1, get_by_owner/1 and get_by_slug/1" do
+    test "finds by id, by owner and by slug" do
+      athanor = athanor!()
       assert {:ok, ^athanor} = Athanors.get(athanor.id)
-      assert {:ok, found} = Athanors.get_by_slug("group", athanor.slug)
+      assert {:ok, found} = Athanors.get_by_slug(athanor.slug)
       assert found.id == athanor.id
-      assert {:error, :not_found} = Athanors.get_by_slug("person", athanor.slug)
+      assert {:ok, %{id: by_owner}} = Athanors.get_by_owner(athanor.owner_user_id)
+      assert by_owner == athanor.id
+      assert {:error, :not_found} = Athanors.get_by_slug("no-such-#{athanor.slug}")
+      assert {:error, :not_found} = Athanors.get_by_owner(owner())
       assert {:error, :not_found} = Athanors.get("ath_nope")
     end
   end
 
   describe "archive/1, unarchive/1, active?/1" do
     test "archiving flips status and stamps archived_at; nothing is deleted" do
-      athanor = group!()
+      athanor = athanor!()
       assert Athanors.active?(athanor.id)
 
-      assert {:ok, archived} = Athanors.archive(athanor)
+      assert {:ok, archived} = Athanors.archive(athanor, force: true)
       assert archived.status == "archived"
       assert archived.archived_at != nil
       refute Athanors.active?(athanor.id)
@@ -182,7 +187,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
   describe "settings" do
     test "settings default to an empty map and merge on put" do
-      athanor = group!()
+      athanor = athanor!()
       assert Athanors.settings(athanor) == %{}
 
       {:ok, athanor} = Athanors.put_settings(athanor, %{"aqua" => %{"name" => "Home"}})
@@ -192,7 +197,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
 
     test "a nested patch merges into the map already there; nil deletes a key" do
-      athanor = group!()
+      athanor = athanor!()
       {:ok, athanor} = Athanors.put_settings(athanor, %{"aqua" => %{"name" => "Home"}})
       {:ok, athanor} = Athanors.put_settings(athanor, %{"aqua" => %{"answer_mode" => "all"}})
 
@@ -206,7 +211,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
 
     test "a settings change is broadcast on the athanor's notify topic" do
-      athanor = group!()
+      athanor = athanor!()
 
       Cyfr.Bus.subscribe(
         Prima.Actor.in_athanor(athanor.id),
@@ -221,8 +226,8 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
   describe "provisioning_failure/1 and list_by_ids/1" do
     test "reads the failure a fill recorded, and lists by ids" do
-      a = group!()
-      b = group!()
+      a = athanor!()
+      b = athanor!()
 
       :ok =
         Arca.Athanors.set(Prima.Actor.in_athanor(a.id),
@@ -243,43 +248,6 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       ids = Athanors.list_by_ids([a.id, b.id, "ath_missing"]) |> Enum.map(& &1.id)
       assert Enum.sort(ids) == Enum.sort([a.id, b.id])
       assert Athanors.list_by_ids([]) == []
-    end
-  end
-
-  describe "create_group/3" do
-    test "derives a slug from the name, suffixes a taken one, seats the creator" do
-      n = System.unique_integer([:positive])
-      creator = "u-#{n}"
-      {:ok, a} = Athanors.create_group(creator, "Home & Family #{n}!")
-      assert a.slug == "home-family-#{n}"
-      assert a.kind == "group"
-      assert a.created_by == creator
-      assert Sanctum.Tenancy.Members.member?(creator, a.id)
-
-      {:ok, b} = Athanors.create_group(creator, "Home & Family #{n}!")
-      assert b.slug == "home-family-#{n}-2"
-
-      assert {:error, :slug_taken_or_invalid} =
-               Athanors.create_group(creator, "Whatever", slug: a.slug)
-
-      assert {:error, :invalid_name} = Athanors.create_group(creator, "   ")
-      assert {:error, :invalid_name} = Athanors.create_group(creator, "!!!")
-    end
-
-    test "the per-person group cap applies, and a mint that trips it commits nothing" do
-      n = System.unique_integer([:positive])
-      creator = "u-cap-#{n}"
-      Cyfr.Test.Settings.put("max_groups_per_person", 1)
-
-      assert {:ok, first} = Athanors.create_group(creator, "One #{n}")
-
-      assert {:error, {:limit_reached, :max_groups_per_person, 1}} =
-               Athanors.create_group(creator, "Two #{n}")
-
-      # The cap, the slug, the athanor row and the creator's seat are one
-      # transaction: a refused mint leaves no athanor row and no membership.
-      assert {:error, :not_found} = Athanors.get_by_slug("group", "two-#{n}")
-      assert Enum.map(Athanors.list_for_user(creator), & &1.id) == [first.id]
     end
   end
 
@@ -304,58 +272,46 @@ defmodule Sanctum.Tenancy.AthanorsTest do
   end
 
   describe "by_route_slug/1 and archive rules" do
-    test "@namespace names a person, a bare slug a group; archived athanors do not resolve" do
+    test "@namespace names an athanor, a bare slug nothing; archived athanors do not resolve" do
       n = System.unique_integer([:positive])
 
       {:ok, person} =
         Athanors.create(%{
-          kind: "person",
           name: "Alice",
           slug: "alice#{n}",
           owner_user_id: "u-#{n}",
           created_by: "u-#{n}"
         })
 
-      {:ok, group} = Athanors.create_group("u-#{n}", "Group #{n}")
-
       assert {:ok, %{id: pid}} = Athanors.by_route_slug("@alice#{n}")
       assert pid == person.id
-      assert {:ok, %{id: gid}} = Athanors.by_route_slug(group.slug)
-      assert gid == group.id
       assert {:error, :not_found} = Athanors.by_route_slug("alice#{n}")
       assert Athanors.route_slug(person) == "@alice#{n}"
-      assert Athanors.route_slug(group) == group.slug
 
       # a person's athanor refuses archive unless forced
-      assert {:error, :person_athanor_cannot_be_archived} = Athanors.archive(person)
+      assert {:error, :archive_not_forced} = Athanors.archive(person)
       assert {:ok, %{status: "archived"}} = Athanors.archive(person, force: true)
       assert {:error, :not_found} = Athanors.by_route_slug("@alice#{n}")
-
-      assert {:ok, _} = Athanors.archive(group)
-      assert {:error, :not_found} = Athanors.by_route_slug(group.slug)
     end
 
-    test "list_for_user lists the person's active athanors, own first" do
+    test "list_for_user lists the person's own athanor while it is active" do
       n = System.unique_integer([:positive])
       uid = "u-list-#{n}"
 
       {:ok, person} =
         Athanors.create(%{
-          kind: "person",
           name: "Me",
           slug: "me#{n}",
           owner_user_id: uid,
           created_by: uid
         })
 
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(uid, scope: "athanor", athanor_id: person.id)
-      {:ok, g1} = Athanors.create_group(uid, "G1 #{n}")
-      {:ok, g2} = Athanors.create_group(uid, "G2 #{n}")
-      {:ok, _} = Athanors.archive(g2)
+      assert [%{id: id}] = Athanors.list_for_user(uid)
+      assert id == person.id
+      assert [] = Athanors.list_for_user("u-nobody-#{n}")
 
-      assert [first | rest] = Athanors.list_for_user(uid)
-      assert first.id == person.id
-      assert Enum.map(rest, & &1.id) == [g1.id]
+      {:ok, _} = Athanors.archive(person, force: true)
+      assert [] = Athanors.list_for_user(uid)
     end
   end
 end

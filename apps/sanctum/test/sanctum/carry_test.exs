@@ -23,7 +23,6 @@ defmodule Sanctum.CarryTest do
   alias Prima.Identity
   alias Prima.Identity.{Entry, RecoverRequest}
   alias Sanctum.{Caller, Cipher, CipherAAD, Context}
-  alias Sanctum.Tenancy.{Athanors, Members}
 
   @destination "https://hub.example"
 
@@ -38,7 +37,7 @@ defmodule Sanctum.CarryTest do
   defp request_id, do: "req_#{System.unique_integer([:positive])}"
   defp row(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
 
-  # A person seated in a group of their own, and their session's context.
+  # A person seated in their own athanor, and their session's context.
   defp seated! do
     n = System.unique_integer([:positive])
 
@@ -50,8 +49,7 @@ defmodule Sanctum.CarryTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Carry #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

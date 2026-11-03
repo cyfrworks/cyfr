@@ -22,8 +22,8 @@ defmodule Arca.Athanors do
       named `""` — and a guard that took it would turn that refusal into
       an ordinary empty result.
 
-    * **Across tenants.** Minting an athanor, finding one by slug, owner
-      or pair key, listing the ones a person may work in, and counting
+    * **Across tenants.** Minting an athanor, finding one by slug or
+      owner, listing the active ones, and counting
       what a cap bounds each decide *which* athanor a caller works in.
       None of them can be filtered by an athanor the caller does not hold
       yet — a mint has no athanor at all, and route resolution is how one
@@ -34,7 +34,7 @@ defmodule Arca.Athanors do
 
   Nothing that belongs to Ecto crosses the boundary: a row is answered,
   and handed to a callback, as a plain map (`Arca.Data`). A refusal is
-  `:slug_taken` (the unique index on kind and slug, which a derived slug
+  `:slug_taken` (the unique index on the slug, which a derived slug
   retries against), `{:invalid, %{field => [message]}}`, `:not_found`,
   `:cross_tenant`, `:no_athanor` or `:database_error`. Reads that a
   caller may want to default on an outage say so with
@@ -44,7 +44,7 @@ defmodule Arca.Athanors do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{Athanor, Membership, User}
+  alias Arca.Schemas.{Athanor, User}
 
   @type refusal :: {:error, :cross_tenant | :database_error}
   @type write_refusal ::
@@ -165,19 +165,17 @@ defmodule Arca.Athanors do
     * `:caps` — the ceilings the mint must stay under, each counted here
       with the rows already held and asked of the caps port
       (`Prima.Caps.check_counted/3`): `:max_athanors`, the server's
-      active athanors; `{:max_groups_per_person, user_id}`, the open
-      groups that person created; `{:max_pairs_per_person, user_id}`, the
-      pairs that person sits in. A cap refused is the port's answer.
+      active athanors. A cap refused is the port's answer.
     * the slug: `:attrs` is the row, and `:slugs`, when given, the
-      candidates for its slug in order of preference — the first the
-      athanor's kind does not hold in this transaction is the slug. None
+      candidates for its slug in order of preference — the first no
+      athanor holds in this transaction is the slug. None
       free is `:slug_taken`, as a slug the unique index refuses is.
     * `:also` — a one-arity function taking the inserted athanor, as the
       plain map the mint answers, and answering `:ok` or
-      `{:error, reason}`: the memberships an athanor is born with, which
+      `{:error, reason}`: the membership an athanor is born with, which
       the owner of memberships writes beside the row (§4.4).
   """
-  @type cap :: :max_athanors | {:max_groups_per_person | :max_pairs_per_person, String.t()}
+  @type cap :: :max_athanors
 
   @spec mint(Prima.Actor.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def mint(%Prima.Actor{scope: :platform} = actor, opts) when is_list(opts) do
@@ -233,47 +231,30 @@ defmodule Arca.Athanors do
 
   @doc """
   A person's own athanor, by its owner. At most one exists per person (a
-  partial unique index on `owner_user_id` where `kind = 'person'`).
+  unique index on `owner_user_id`).
   """
   @spec get_by_owner(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
   def get_by_owner(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_owner", fn ->
-      found(Arca.Repo.get_by(Athanor, kind: "person", owner_user_id: user_id))
+      found(Arca.Repo.get_by(Athanor, owner_user_id: user_id))
     end)
     |> Arca.Data.project()
   end
 
   def get_by_owner(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
-  @doc "The athanor with this kind and slug — how a route segment resolves."
-  @spec get_by_slug(Prima.Actor.t(), String.t(), String.t()) ::
+  @doc "The athanor with this slug — how a route segment resolves."
+  @spec get_by_slug(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
-  def get_by_slug(%Prima.Actor{scope: :platform}, kind, slug)
-      when is_binary(kind) and is_binary(slug) do
+  def get_by_slug(%Prima.Actor{scope: :platform}, slug) when is_binary(slug) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_slug", fn ->
-      found(Arca.Repo.get_by(Athanor, kind: kind, slug: slug))
+      found(Arca.Repo.get_by(Athanor, slug: slug))
     end)
     |> Arca.Data.project()
   end
 
-  def get_by_slug(%Prima.Actor{}, _kind, _slug), do: {:error, :cross_tenant}
-
-  @doc "The ACTIVE frozen athanor with this canonical pair key, if there is one."
-  @spec get_by_pair_key(Prima.Actor.t(), String.t()) ::
-          {:ok, map()} | {:error, :not_found} | refusal()
-  def get_by_pair_key(%Prima.Actor{scope: :platform}, key) when is_binary(key) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_pair_key", fn ->
-      found(
-        Arca.Repo.one(
-          from(a in Athanor, where: a.pair_key == ^key and a.status == "active", limit: 1)
-        )
-      )
-    end)
-    |> Arca.Data.project()
-  end
-
-  def get_by_pair_key(%Prima.Actor{}, _key), do: {:error, :cross_tenant}
+  def get_by_slug(%Prima.Actor{}, _slug), do: {:error, :cross_tenant}
 
   @doc "The rows these ids name, oldest first. Ids with no row are simply absent."
   @spec list_by_ids(Prima.Actor.t(), [String.t()]) :: {:ok, [map()]} | refusal()
@@ -302,37 +283,6 @@ defmodule Arca.Athanors do
 
   def list_active(%Prima.Actor{}), do: {:error, :cross_tenant}
 
-  @doc """
-  The active athanors a person may work in: their own first, then every
-  group an active membership grants, oldest first.
-
-  One row per athanor without `DISTINCT`: the membership assignment index
-  admits one active row per person and athanor, and Postgres refuses a
-  `SELECT DISTINCT` ordered by an expression outside the select list.
-  """
-  @spec list_for_user(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
-  # arca:unscoped-ok a person's athanors are read across tenants by design, under the
-  # platform actor alone: the query is keyed by the person's active memberships, and the
-  # athanor column only joins each membership to its athanor.
-  def list_for_user(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_for_user", fn ->
-      {:ok,
-       Arca.Repo.all(
-         from(a in Athanor,
-           join: m in Membership,
-           on: m.athanor_id == a.id,
-           where:
-             m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
-               a.status == "active",
-           order_by: [desc: a.kind == "person", asc: a.created_at, asc: a.id]
-         )
-       )}
-    end)
-    |> Arca.Data.project()
-  end
-
-  def list_for_user(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
-
   @doc "How many active athanors this server holds — an archived one frees its place."
   @spec count_active(Prima.Actor.t()) :: {:ok, non_neg_integer()} | refusal()
   def count_active(%Prima.Actor{scope: :platform}) do
@@ -343,21 +293,16 @@ defmodule Arca.Athanors do
 
   def count_active(%Prima.Actor{}), do: {:error, :cross_tenant}
 
-  @doc "How many person athanors were minted after `since` — the mint-rate cap's measure."
-  @spec count_people_created_since(Prima.Actor.t(), DateTime.t()) ::
+  @doc "How many athanors were minted after `since` — the mint-rate cap's measure."
+  @spec count_created_since(Prima.Actor.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | refusal()
-  def count_people_created_since(%Prima.Actor{scope: :platform}, %DateTime{} = since) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_people_created_since", fn ->
-      counted(
-        from(a in Athanor,
-          where: a.kind == "person" and a.created_at > ^since,
-          select: count(a.id)
-        )
-      )
+  def count_created_since(%Prima.Actor{scope: :platform}, %DateTime{} = since) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_created_since", fn ->
+      counted(from(a in Athanor, where: a.created_at > ^since, select: count(a.id)))
     end)
   end
 
-  def count_people_created_since(%Prima.Actor{}, _since), do: {:error, :cross_tenant}
+  def count_created_since(%Prima.Actor{}, _since), do: {:error, :cross_tenant}
 
   # ---- internal --------------------------------------------------------------
 
@@ -405,28 +350,17 @@ defmodule Arca.Athanors do
   defp cap_count(:max_athanors),
     do: {:max_athanors, fn -> counted(active_athanors()) end}
 
-  defp cap_count({:max_groups_per_person, user_id}) when is_binary(user_id),
-    do: {:max_groups_per_person, fn -> counted(groups_created_by(user_id)) end}
-
-  defp cap_count({:max_pairs_per_person, user_id}) when is_binary(user_id),
-    do: {:max_pairs_per_person, fn -> counted(pairs_of(user_id)) end}
-
   defp slugged(attrs, nil), do: {:ok, attrs}
 
-  defp slugged(%{kind: kind} = attrs, candidates) when is_list(candidates) do
-    case Enum.find(candidates, &slug_free?(kind, &1)) do
+  defp slugged(attrs, candidates) when is_list(candidates) do
+    case Enum.find(candidates, &slug_free?/1) do
       nil -> {:error, :slug_taken}
       slug -> {:ok, Map.put(attrs, :slug, slug)}
     end
   end
 
-  defp slug_free?(kind, slug) when is_binary(slug),
-    do:
-      is_nil(
-        Arca.Repo.one(
-          from(a in Athanor, where: a.kind == ^kind and a.slug == ^slug, select: a.id)
-        )
-      )
+  defp slug_free?(slug) when is_binary(slug),
+    do: is_nil(Arca.Repo.one(from(a in Athanor, where: a.slug == ^slug, select: a.id)))
 
   defp read(id), do: found(Arca.Repo.get(Athanor, id))
 
@@ -438,35 +372,10 @@ defmodule Arca.Athanors do
   # What each cap counts, one definition for the mint and the reads.
   defp active_athanors, do: from(a in Athanor, where: a.status == "active", select: count(a.id))
 
-  # The ACTIVE open groups this person created. A frozen pair is not a
-  # group they made and is counted by `pairs_of/1` instead.
-  defp groups_created_by(user_id) do
-    from(a in Athanor,
-      where:
-        a.kind == "group" and a.roster == "open" and
-          a.created_by == ^user_id and a.status == "active",
-      select: count(a.id)
-    )
-  end
-
-  # Every ACTIVE pair this person sits in, counted by membership and not by
-  # `created_by`: a pair is minted for two, and the one who did not click
-  # holds it just the same.
-  defp pairs_of(user_id) do
-    from(a in Athanor,
-      join: m in Membership,
-      on: m.athanor_id == a.id,
-      where:
-        m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
-          a.roster == "frozen" and a.status == "active",
-      select: count(a.id)
-    )
-  end
-
   defp settled({:ok, %Athanor{} = athanor}), do: {:ok, athanor}
   defp settled({:error, %Ecto.Changeset{} = changeset}), do: {:error, refusal(changeset)}
 
-  # The unique index on kind and slug is the one refusal a caller acts on
+  # The unique index on the slug is the one refusal a caller acts on
   # rather than reports: a derived slug asks again with the next name.
   defp refusal(%Ecto.Changeset{errors: errors} = changeset) do
     if slug_conflict?(errors), do: :slug_taken, else: Arca.Data.invalid(changeset)
@@ -474,7 +383,7 @@ defmodule Arca.Athanors do
 
   defp slug_conflict?(errors) do
     Enum.any?(errors, fn {field, {_message, meta}} ->
-      field in [:kind, :slug] and meta[:constraint] == :unique
+      field == :slug and meta[:constraint] == :unique
     end)
   end
 

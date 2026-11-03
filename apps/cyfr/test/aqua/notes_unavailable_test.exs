@@ -19,20 +19,33 @@ defmodule Aqua.NotesUnavailableTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     person = "github|https://github.com|notes-#{System.unique_integer([:positive])}"
-    {:ok, home} = Athanors.create_group(person, "Home")
-    {:ok, other} = Athanors.create_group(person, "Other")
+    n = System.unique_integer([:positive])
+
+    {:ok, home} =
+      Athanors.create_personal(%{name: "Home", owner_user_id: person, created_by: person}, [
+        "home-#{n}"
+      ])
+
+    owner = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+    {:ok, other} =
+      Athanors.create_personal(%{name: "Other", owner_user_id: owner, created_by: owner}, [
+        "other-#{n}"
+      ])
+
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(person, scope: "athanor", athanor_id: home.id)
 
     ctx =
       Context.build(
         user_id: person,
-        athanor_id: home.id,
+        athanor_id: other.id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
 
-    {:ok, ctx: ctx, other: other}
+    {:ok, ctx: ctx, home: home}
   end
 
   # The seat read fails while the athanor listing still answers: the
@@ -42,17 +55,17 @@ defmodule Aqua.NotesUnavailableTest do
 
   test "a locator whose seat cannot be read is unavailable, not a missing athanor", %{
     ctx: ctx,
-    other: other
+    home: home
   } do
     refute match?(
              {:error, {:unavailable, _}},
-             Notes.read(ctx, "flight", "athanor", athanor_id: other.id)
+             Notes.read(ctx, "flight", "athanor", athanor_id: home.id)
            )
 
     seats_unreadable!()
 
     assert {:error, {:unavailable, "Storage"}} =
-             Notes.read(ctx, "flight", "athanor", athanor_id: other.id)
+             Notes.read(ctx, "flight", "athanor", athanor_id: home.id)
   end
 
   test "an everywhere page refuses rather than leave out an athanor it could not open", %{

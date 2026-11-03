@@ -264,12 +264,13 @@ describe("a public page's identity", () => {
     })
   })
 
-  test("is none for any other path", () => {
+  test("is none for any other path, a bare athanor segment included", () => {
     for (const path of [
-      "/t/home/local",
+      "/t/home/local/weather",
+      "/t/@home/local",
       "/t//local/weather",
-      "/t/home/Local/weather",
-      "/t/home/local/../weather",
+      "/t/@home/Local/weather",
+      "/t/@home/local/../weather",
       "/t/%E0%A4%A/local/weather",
       "/tinctures",
       "/",
@@ -280,7 +281,7 @@ describe("a public page's identity", () => {
   })
 
   test("travels in the body as public, beside the kind's fields", () => {
-    const identity = {athanor: "home", publisher: "local", name: "weather"}
+    const identity = {athanor: "@home", publisher: "local", name: "weather"}
     const [invoke] = fixture.requests
 
     assert.deepEqual(

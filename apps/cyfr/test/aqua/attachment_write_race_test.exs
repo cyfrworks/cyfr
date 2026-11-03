@@ -11,7 +11,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
 
   use ExUnit.Case, async: false
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Members
 
   defmodule ParkedPut do
     @moduledoc false
@@ -82,14 +82,16 @@ defmodule Aqua.AttachmentWriteRaceTest do
         user.id
       end
 
-    {:ok, group} = Athanors.create_group(alice, "Attachment race #{n}")
-    {:ok, _} = Members.ensure(bob, scope: "athanor", athanor_id: group.id)
+    athanor = Sanctum.Test.People.athanor!(alice)
+    {:ok, _} = Members.ensure(bob, scope: "athanor", athanor_id: athanor.id)
+    # A send starts a turn, which a filled athanor admits.
+    Sanctum.TestContext.ready!(athanor.id)
 
     [a, b] =
       for user <- [alice, bob] do
         Context.build(
           user_id: user,
-          athanor_id: group.id,
+          athanor_id: athanor.id,
           provider: "github",
           permissions: [:*],
           scope: :athanor,
@@ -122,6 +124,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
                    "action" => "send",
                    "thread" => thread.id,
                    "message" => "with a file",
+                   "agent" => "aqua",
                    "id" => message,
                    "attachments" => [ref],
                    "client_id" => "race-sent"

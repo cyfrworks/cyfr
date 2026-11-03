@@ -46,9 +46,9 @@ defmodule Locus.Runtime.MemoryBoundTest do
     # only one idle for it.
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
         name: "Memory bound #{unique}",
         slug: "memory-bound-#{unique}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

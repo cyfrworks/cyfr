@@ -707,7 +707,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       :ok
     end
 
-    defp public(name), do: %{athanor: "test", publisher: "local", name: name}
+    defp public(name), do: %{athanor: "@test", publisher: "local", name: name}
 
     test "invokes under its public profile, named by its address, with no bearer" do
       body =
@@ -723,7 +723,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       assert [row] = mcp_rows("tincture")
       assert row.action == "invoke_public"
-      assert %{"athanor" => "test", "tincture_name" => "pub-data"} = Jason.decode!(row.input)
+      assert %{"athanor" => "@test", "tincture_name" => "pub-data"} = Jason.decode!(row.input)
     end
 
     test "a private tincture named as public is not found, whoever asks" do
@@ -1369,7 +1369,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     test "a public page's invoke is held to its public profile's flows", %{source: source} do
       name = "flow-pub"
       tincture!(source, name, %{"connect" => [@origin]}, [@echo])
-      public = %{athanor: "test", publisher: "local", name: name}
+      public = %{athanor: "@test", publisher: "local", name: name}
 
       grant!(source, name, :public, [])
       conn = invoke(public: public)
@@ -1591,7 +1591,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     end
 
     test "takes no public page's request", %{mine: mine} do
-      public = %{athanor: "test", publisher: "local", name: "home-canvas"}
+      public = %{athanor: "@test", publisher: "local", name: "home-canvas"}
       path = Prima.TinctureWire.stream_path(mine.frame_id)
 
       body =

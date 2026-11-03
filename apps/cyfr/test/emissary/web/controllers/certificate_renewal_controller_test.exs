@@ -20,7 +20,6 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
   alias Sanctum.{Context, TestContext}
-  alias Sanctum.Tenancy.Athanors
 
   @directory "https://dir.example"
   @hub "https://hub.example"
@@ -57,7 +56,7 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Renewal #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

@@ -106,9 +106,9 @@ defmodule Arca.ActorStandingDriftTest do
   defp athanor! do
     {:ok, athanor} =
       Athanors.create(%{
-        kind: "group",
         name: "Drift",
         slug: "drift-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

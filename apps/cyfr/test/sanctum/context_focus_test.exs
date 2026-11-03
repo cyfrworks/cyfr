@@ -11,15 +11,15 @@ defmodule Sanctum.ContextFocusTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
     alice = "github|https://github.com|alice-#{System.unique_integer([:positive])}"
     ops = "github|https://github.com|ops-#{System.unique_integer([:positive])}"
-    {:ok, a} = Athanors.create_group(alice, "A group")
-    {:ok, b} = Athanors.create_group("github|https://github.com|someone", "B group")
+    a = own!(alice, "A")
+    b = own!("github|https://github.com|someone", "B")
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
 
     ctx = fn user_id, athanor_id, admin? ->
@@ -38,6 +38,18 @@ defmodule Sanctum.ContextFocusTest do
     {:ok, a: a, b: b, alice: alice, ops: ops, ctx: ctx}
   end
 
+  # The athanor `user_id` owns, with their seat there, as their admission
+  # mints it.
+  defp own!(user_id, name) do
+    name = "#{name} #{System.unique_integer([:positive])}"
+    {:ok, slugs} = Athanors.person_slugs(nil, name)
+
+    {:ok, athanor} =
+      Athanors.create_personal(%{name: name, owner_user_id: user_id, created_by: user_id}, slugs)
+
+    athanor
+  end
+
   test "a member focuses their athanor; a non-member is refused", %{
     a: a,
     b: b,
@@ -54,19 +66,13 @@ defmodule Sanctum.ContextFocusTest do
 
   test "a caller without a seat is answered alike for an open, an archived and a missing athanor; a member hears archived",
        %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
-    {:ok, archived} = Athanors.archive(a)
+    {:ok, archived} = Athanors.archive(a, force: true)
     missing = Prima.UUID7.generate_id("ath")
 
-    # Neither a stranger, nor an operator, nor a member who left learns
-    # which of the three it is.
-    former = "github|https://github.com|former-#{System.unique_integer([:positive])}"
-    {:ok, _} = Members.ensure(former, scope: "athanor", athanor_id: b.id)
-    :ok = Members.remove_member(b, user_id: former)
-
+    # Neither a stranger nor an operator learns which of the three it is.
     for caller <- [
           ctx.("github|https://github.com|stranger", nil, false),
-          ctx.(ops, nil, true),
-          ctx.(former, nil, false)
+          ctx.(ops, nil, true)
         ] do
       answers = for id <- [b.id, archived.id, missing], do: Context.focus(caller, id)
       assert answers == List.duplicate({:error, :not_found}, 3)
@@ -78,14 +84,14 @@ defmodule Sanctum.ContextFocusTest do
   end
 
   test "an archived athanor cannot be focused", %{a: a, alice: alice, ctx: ctx} do
-    {:ok, archived} = Athanors.archive(a)
+    {:ok, archived} = Athanors.archive(a, force: true)
     assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), archived)
   end
 
   test "a stale copy of the row is read for its id alone: focus rereads the standing",
        %{a: a, alice: alice, ctx: ctx} do
     {:ok, before_archive} = Athanors.get(a.id)
-    {:ok, _} = Athanors.archive(a)
+    {:ok, _} = Athanors.archive(a, force: true)
 
     # The copy still says active; the row it names does not.
     assert before_archive.status == "active"
@@ -100,7 +106,7 @@ defmodule Sanctum.ContextFocusTest do
   test "a store that cannot answer is unavailable, never an absence or a refusal",
        %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
     c = ctx.(alice, nil, false)
-    {:ok, _} = Athanors.archive(b)
+    {:ok, _} = Athanors.archive(b, force: true)
 
     Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
     assert {:error, :unavailable} = Context.focus(c, a.id)
@@ -141,7 +147,7 @@ defmodule Sanctum.ContextFocusTest do
     assert Context.actor(crossed).system
     assert Context.actor(crossed).scope == :athanor
 
-    {:ok, _} = Athanors.archive(b)
+    {:ok, _} = Athanors.archive(b, force: true)
     assert {:error, :archived} = Context.refocus(sys, b.id)
     assert {:error, :not_found} = Context.refocus(sys, "ath_nope")
 
@@ -152,18 +158,7 @@ defmodule Sanctum.ContextFocusTest do
   end
 
   test "a platform administrator without a seat cannot focus an athanor",
-       %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
-    {:ok, personal} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Alice",
-        slug: "alice-#{System.unique_integer([:positive])}",
-        owner_user_id: alice,
-        created_by: alice
-      })
-
-    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
-
+       %{a: a, b: b, ops: ops, ctx: ctx} do
     handler = "focus-test-#{System.unique_integer([:positive])}"
     parent = self()
 
@@ -181,9 +176,9 @@ defmodule Sanctum.ContextFocusTest do
     admin = ctx.(ops, nil, true)
     assert admin.platform_admin
 
-    # A group, another person's own athanor: the capability is no seat in
-    # either, so focus refuses the operator exactly as it refuses anyone.
-    for athanor <- [a, b, personal] do
+    # Two other people's own athanors: the capability is no seat in either,
+    # so focus refuses the operator exactly as it refuses anyone.
+    for athanor <- [a, b] do
       assert {:error, :not_found} = Context.focus(admin, athanor)
       assert {:error, :not_found} = Context.focus(admin, athanor.id)
       assert {:error, :not_found} = Context.refocus(admin, athanor.id)
@@ -207,45 +202,11 @@ defmodule Sanctum.ContextFocusTest do
     refute_received {:audit, _}
   end
 
-  test "an administrator who left a group cannot focus it, and their session falls back to their own athanor",
-       %{a: a, ctx: ctx} do
-    n = System.unique_integer([:positive])
-
-    {:ok, user} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|ops-own-#{n}",
-        provider: "github",
-        email: "ops-own#{n}@example.com",
-        verified: true
-      })
-
-    own = Sanctum.Test.People.athanor!(user)
-    {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: a.id)
-
-    admin = ctx.(user.id, nil, true)
-    assert {:ok, %{athanor_id: focused}} = Context.focus(admin, a)
-    assert focused == a.id
-
-    # They leave; alice stays, so the group stays open.
-    :ok = Members.remove_member(a, user_id: user.id)
-    assert {:ok, %{status: "active"}} = Athanors.get(a.id)
-
-    assert {:error, :not_found} = Context.focus(admin, a)
-
-    # A session still naming the group is moved on its next revalidation to
-    # their own athanor: the capability stays, and keeps them in no other.
-    {:ok, revalidated} = Sanctum.Tenancy.revalidate(ctx.(user.id, a.id, true))
-    assert revalidated.athanor_id == own.id
-    assert revalidated.platform_admin
-    assert revalidated.scope == :athanor
-  end
-
   test "a member focused on A cannot read B's records, operator or not — no scope bypass",
-       %{a: a, b: b, ops: ops, ctx: ctx} do
-    # The operator holds a seat in A: a member like any other, whose
-    # capability widens nothing.
-    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: a.id)
+       %{b: b, ops: ops, ctx: ctx} do
+    # The operator focuses their own athanor A: a member like any other,
+    # whose capability widens nothing.
+    a = own!(ops, "Ops")
     {:ok, focused} = Context.focus(ctx.(ops, nil, true), a)
     assert focused.platform_admin
 
@@ -268,8 +229,8 @@ defmodule Sanctum.ContextFocusTest do
   end
 
   test "a member focused on A cannot reach B's execution or files through the tools either, operator or not",
-       %{a: a, b: b, ops: ops, ctx: ctx} do
-    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: a.id)
+       %{b: b, ops: ops, ctx: ctx} do
+    a = own!(ops, "Ops")
     {:ok, focused} = Context.focus(ctx.(ops, nil, true), a)
     b_exec = "exec_b_#{System.unique_integer([:positive])}"
 
@@ -314,8 +275,7 @@ defmodule Sanctum.ContextFocusTest do
 
   test "resolve_status gives an admin the capability, an :athanor scope, and their own athanor",
        %{ops: ops} do
-    {:ok, athanor} = Athanors.create_group(ops, "Ops #{System.unique_integer([:positive])}")
-    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: athanor.id)
+    athanor = own!(ops, "Ops")
 
     {:ok, resolved} =
       Sanctum.Tenancy.resolve_status(
@@ -337,10 +297,6 @@ defmodule Sanctum.ContextFocusTest do
     {:ok, out} = Sanctum.Tenancy.revalidate(c)
     assert out.athanor_id == a.id
     refute out.platform_admin
-
-    :ok = Members.remove_member(a, user_id: alice)
-    {:ok, out} = Sanctum.Tenancy.revalidate(c)
-    assert out.athanor_id == nil
   end
 
   # Providers answer typed reasons where the class is clear; the shared

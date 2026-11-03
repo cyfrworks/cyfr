@@ -164,6 +164,12 @@ defmodule Arca.Test.Actor do
     :ok
   end
 
+  # Each athanor is one person's. `ath_test` is the local test person's
+  # (`Sanctum.TestContext.local/0`); any other row a test seeds is a second
+  # person's, under an owner id no other row holds.
+  defp owner_of("ath_test"), do: "local|local|testns"
+  defp owner_of(_athanor_id), do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
   @doc """
   Insert an `athanors` row so settings-bearing paths can resolve it.
   Idempotent.
@@ -188,11 +194,10 @@ defmodule Arca.Test.Actor do
         {:ok, athanor} =
           Arca.Athanors.insert(system, %{
             id: athanor_id,
-            kind: Keyword.get(opts, :kind, "group"),
             name: Keyword.get(opts, :name, athanor_id),
             slug: slug,
             created_by: Keyword.get(opts, :created_by, "system"),
-            owner_user_id: Keyword.get(opts, :owner_user_id)
+            owner_user_id: Keyword.get_lazy(opts, :owner_user_id, fn -> owner_of(athanor_id) end)
           })
 
         athanor

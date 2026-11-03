@@ -165,9 +165,9 @@ defmodule Sanctum.TestContext do
         {:ok, athanor} =
           Sanctum.Tenancy.Athanors.create(%{
             id: @athanor_id,
-            kind: "group",
             name: "Test",
             slug: "test",
+            owner_user_id: local().user_id,
             created_by: "system"
           })
 

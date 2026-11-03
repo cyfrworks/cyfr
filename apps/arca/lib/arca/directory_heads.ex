@@ -65,7 +65,7 @@ defmodule Arca.DirectoryHeads do
   import Ecto.Query
 
   alias Arca.{DeviceCertificates, Passkeys, PendingConfirmations, SessionStorage}
-  alias Arca.Schemas.{DirectoryHead, ExternalIdentity, Membership, PersonIdentity, User}
+  alias Arca.Schemas.{DirectoryHead, ExternalIdentity, PersonIdentity, SharedThreadMember, User}
 
   # Publishing a head decides which remote credentials this home accepts,
   # so each write first proves this member still owns its slot on the
@@ -238,7 +238,7 @@ defmodule Arca.DirectoryHeads do
   Remove at most `limit` cached heads no one here holds, least recently
   verified first: a head whose identifier no person's identity row names
   (`Arca.PersonIdentities`, whatever its provenance) and no pending
-  invitation names (an invited membership's `person_identifier`), last
+  invitation names (an invited shared-thread seat's `person_identifier`), last
   verified more than `older_than_ms` before the database's clock now.
   Answers how many went.
 
@@ -264,14 +264,14 @@ defmodule Arca.DirectoryHeads do
   # again on the row it reaches: on PostgreSQL a delete that waited on a
   # refresh re-reads the refreshed row's own columns, never the subquery's
   # choice, so a head verified meanwhile is kept.
-  # arca:unscoped-ok the platform's housekeeping keeps a head any athanor's pending invitation names, whichever athanor it is.
+  # arca:unscoped-ok the platform's housekeeping keeps a head any shared thread's pending invitation names, whichever thread it is.
   defp unheld_swept(older_than_ms, limit) do
     before = DateTime.add(Arca.ServerMetaStorage.now!(), -older_than_ms, :millisecond)
 
     people = from(p in PersonIdentity, where: not is_nil(p.identifier), select: p.identifier)
 
     invited =
-      from(m in Membership,
+      from(m in SharedThreadMember,
         where: m.status == "invited" and not is_nil(m.person_identifier),
         select: m.person_identifier
       )

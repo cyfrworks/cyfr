@@ -265,7 +265,7 @@ defmodule Arca.Shares do
   # athanor of the person `user_id`: the one rule a share is made from and
   # bound in (`Arca.ConsentStorage` binds by it too).
   @spec own_athanor(Athanor.t() | nil, String.t()) :: :ok | {:error, :not_own_athanor}
-  def own_athanor(%Athanor{kind: "person", status: "active", owner_user_id: owner}, owner)
+  def own_athanor(%Athanor{status: "active", owner_user_id: owner}, owner)
       when is_binary(owner),
       do: :ok
 
@@ -812,7 +812,7 @@ defmodule Arca.Shares do
     from([s, v, a] in sources(),
       where:
         s.status == "active" and v.status == "active" and v.attach_only == true and
-          a.status == "active" and a.kind == "person",
+          a.status == "active",
       order_by: [desc: s.inserted_at, desc: s.id],
       select: {s, v, a.owner_user_id}
     )

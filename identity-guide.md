@@ -15,7 +15,7 @@ Both are sealed at your CYFR, each under its own purpose, apart from every athan
 
 The same admission registers your identity at cyfr.run and claims your **name** there. Your **identifier** (`per_…`) is the hash of the first entry of your identity's log, and never changes. The log lives at one directory, cyfr.run's unless the operator names another (below), which orders every change of your keys; every CYFR that relies on your identity reads your current keys there, never from your own CYFR, which may be the stolen one.
 
-Your name (`@mira`) is how people find you: an administrator or a member adds you by it, and it is your personal namespace for publishing components. It is yours for life: nobody else can take it, it is never released, and it cannot be changed. Someone who wants another name makes another identity, with its own keys and recovery code. cyfr.run answers a name with the identifier it names, never with keys or an address: your keys are read at the directory, and no address of any CYFR is kept there. Every CYFR stores the identifier a name named when it was given, never the name, as the key to your access.
+Your name (`@mira`) is how people find you: an administrator or someone in a shared thread adds you by it, and it is your personal namespace for publishing components. It is yours for life: nobody else can take it, it is never released, and it cannot be changed. Someone who wants another name makes another identity, with its own keys and recovery code. cyfr.run answers a name with the identifier it names, never with keys or an address: your keys are read at the directory, and no address of any CYFR is kept there. Every CYFR stores the identifier a name named when it was given, never the name, as the key to your access.
 
 Settings shows your name, and your identifier once, for the command line; no other default page shows the identifier or asks for it.
 
@@ -91,7 +91,7 @@ The token restores one identity, once. Another identity's code under the same to
 - **Pair your devices again.** A device paired with your old CYFR is not known here; its old certificate is refused, and it pairs anew.
 - **Add your saved addresses back.** See below.
 
-A restore brings back your identity alone. It restores no private data (a backup does that) and no membership another CYFR revoked.
+A restore brings back your identity alone. It restores no private data (a backup does that) and nothing another CYFR revoked.
 
 ### When your CYFR is restored from a backup
 
@@ -101,15 +101,15 @@ Putting a backup back is a different thing: the operator runs `cyfr restore`, wh
 - **No sign-in method left?** Open `https://<your CYFR>/restore` and use **Recover after a restore**: type your recovery code. It stays in the browser, which reads your identifier and secret from it and signs your CYFR's challenge with the secret; your CYFR checks the signature against your identity read fresh from its directory. It answers a short credential that re-enables your passkeys, devices, keys and webhooks, and nothing else. Without your recovery code, a platform administrator authorizes a passkey you register for you instead.
 - **Re-enable from the checklist.** The system layer lists what the restore suspended. Re-enabling a passkey or a device needs a fresh sign-in with GitHub, Google or your organization's sign-in, or your recovery code, never the passkey or device itself; once one is re-enabled, or a fresh one registered or paired under such a proof, your recovery is over and it confirms as before. A platform administrator can also end your recovery; what the restore suspended stays suspended. API keys and webhooks are re-enabled the same way.
 - **Consent again, and rotate.** Every component's grant asks for consent again from the checklist, and every stored credential needs re-entering after you rotate it where it came from, since the backup's copy may be known. The restore revokes every key you shared: share it again once you have rotated it, and the people it was shared with grant it again. A run open at the backup ended uncertain and is never resumed; start it again.
-- **Groups wait for everyone.** A group with a member still recovering admits no new member until each has. Someone who signs in only through GitHub, Google or an organization's sign-in, with no passkey or device, has nothing to recover and holds no group up. Removing someone and leaving work as before.
+- **Shared threads wait for everyone.** A shared thread with someone still recovering admits no one new until each of its people has. Someone who signs in only through GitHub, Google or an organization's sign-in, with no passkey or device, has nothing to recover and holds no thread up. Removing someone and leaving work as before.
 
 ---
 
 ## Your Saved Addresses Are Your Device's
 
-The address of each CYFR you visit, saved as a tab or a bookmark, belongs to the device that saved it. No CYFR stores, synchronizes or backs up your list of saved addresses, and a new browser starts with none. Saving an address grants no membership, and forgetting one revokes nothing.
+The address of each CYFR you visit, saved as a tab or a bookmark, belongs to the device that saved it. No CYFR stores, synchronizes or backs up your list of saved addresses, and a new browser starts with none. Saving an address grants no access, and forgetting one revokes nothing.
 
-So a recovery, or a new device, restores no list of saved addresses: you add each address again, from a device that still holds it, from your bookmarks, or from an invitation, and sign in at each CYFR. Each CYFR keeps your memberships there on its own.
+So a recovery, or a new device, restores no list of saved addresses: you add each address again, from a device that still holds it, from your bookmarks, or from an invitation, and sign in at each CYFR. Each CYFR keeps your athanor and your shared threads there on its own.
 
 ### Signing in at another CYFR
 
@@ -119,18 +119,18 @@ Signing in at another CYFR with your CYFR identity begins at your own CYFR. On t
 
 ## Joining a CYFR That Is Not Your Own
 
-Any CYFR that is not your own, a household's or a team's included, lets you in by your name (`@mira`): its platform administrator adds you to its allowlist, and a member adds you to an athanor there, or sends you an invitation link (below). The command line also takes your identifier (`per_…`, shown once in your settings). Either way the CYFR you join keeps the identifier your name names when you are added, never the name. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
+Any CYFR that is not your own, a household's or a team's included, lets you in by your name (`@mira`): its platform administrator adds you to its allowlist, and someone there adds you to a shared thread, or sends you an invitation link (below). The command line also takes your identifier (`per_…`, shown once in your settings). Either way the CYFR you join keeps the identifier your name names when you are added, never the name. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
 
 1. Open the address of the CYFR you join. On its sign-in page, choose **Sign in from your CYFR** and type your own CYFR's address. It sends you there; a link someone sends you only fills that field, and never begins or confirms anything.
 2. At your CYFR's `/carry` page, press **Begin**: the sign-in is for that one CYFR. Sign in at your CYFR first if you are not.
 3. The CYFR you join shows a short code, and your CYFR's confirmation names the same code. Confirm at your CYFR with a fresh proof only if they match. Your CYFR signs an assertion for the other CYFR's challenge alone, and the browser takes it back.
-4. The CYFR you join reads your identity at the directory your identity names, which need not be its own, checks the assertion under your current keys, admits you, and makes you a member of the athanors you were invited to. Your CYFR's `/carry` page records that you were admitted, and sends you on to the CYFR you joined.
+4. The CYFR you join reads your identity at the directory your identity names, which need not be its own, checks the assertion under your current keys, admits you, makes you an athanor of your own there, and seats you in the shared threads you were added to. Your CYFR's `/carry` page records that you were admitted, and sends you on to the CYFR you joined.
 
 No cookie or session crosses from one CYFR to the other, and no CYFR keeps a list of where you sign in. A step that is interrupted, a closed tab or a lost answer, resumes from your CYFR's `/carry` page (**Resume**), under the same sign-in; a sign-in already admitted answers with the session it made, never a second one. **Cancel** ends one you no longer want.
 
 At the CYFR you join, signing in with your CYFR identity is not a fresh proof. Register a passkey there for the changes that need one: its administrator authorizes your first one (`Passkeys at Each CYFR` below). To pair a phone there, open that CYFR's pairing code on the phone: the phone asks for your CYFR's address, you certify it at your CYFR under a fresh confirmation there, and it comes back and pairs. It renews its certificate at your CYFR by proving its key, with no confirmation, until your keys change (`devices-guide.md`).
 
-- **Leaving one athanor**, or being removed from it, ends that membership, your sessions bound to it and the devices you paired for it. Your other athanors there, and your own CYFR, are untouched.
+- **Leaving a shared thread**, or being removed from it, ends that seat and nothing else. Your athanor there, its sessions and devices, and your own CYFR are untouched.
 - **After you rotate your live key**, the CYFR you joined ends your sessions there within its `identity_freshness_seconds` (five minutes by default); sign in again. Your passkeys there stay, and your devices there are certified again at your CYFR.
 - **After a recovery**, the CYFR you joined ends your sessions there within the same bound, and with them the passkeys and device certificates bound to the old keys. Sign in again, typing your CYFR's new address if it moved; your next passkey there is authorized by its administrator again, and your devices are certified again at your CYFR.
 - **With your identity's directory unreachable**, the CYFR you joined keeps admitting you on the head it last read for its `identity_freshness_seconds`, then pauses your protected work there with a sentence saying so, until the directory answers again. A new sign-in waits for the directory.
@@ -138,24 +138,24 @@ At the CYFR you join, signing in with your CYFR identity is not a fresh proof. R
 
 ### Joining by an invitation link
 
-An invitation link admits someone new to a CYFR, or someone who already has a CYFR name. A member creates one for a group they sit in, on **Members**, where a name nobody holds yet offers a link with that name filled in; the platform administrator may also create one that names no group. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash.
+An invitation link admits someone new to a CYFR, or someone who already has a CYFR name. The platform administrator creates one to the CYFR on **Settings** (**Invite to this CYFR**); anyone in a shared thread creates one that also seats the newcomer there, from the thread's header. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash.
 
-- **Someone new.** The page names who invited you and to which group, and shows the two screens of [Your Name and Recovery Code](#your-name-and-recovery-code), with the name field filled from the invitation. Your passkey makes you, your keys, your own athanor and your seat in the group at that CYFR. The identity made this way is held by that CYFR, as one made by its setup is.
-- **Someone with a CYFR name.** **Already have a CYFR name? Sign in with it.** opens that CYFR's sign-in page with the invitation kept, and **Sign in from your CYFR** signs you in from your own CYFR as above. The sign-in redeems the invitation: it seats you in the group, and lets your identifier in from then on, so you sign in later without the link. That entry shows in the CYFR's allowlist, where its administrator can remove it. A deny always wins: an identity the CYFR denies is refused, the invitation stays unspent, and a deny written later outranks the entry the invitation left.
+- **Someone new.** The page names who invited you and to which thread, if any, and shows the two screens of [Your Name and Recovery Code](#your-name-and-recovery-code), with the name field filled from the invitation. Your passkey makes you, your keys, your own athanor and your seat in the thread at that CYFR. The identity made this way is held by that CYFR, as one made by its setup is.
+- **Someone with a CYFR name.** **Already have a CYFR name? Sign in with it.** opens that CYFR's sign-in page with the invitation kept, and **Sign in from your CYFR** signs you in from your own CYFR as above. The sign-in redeems the invitation: it makes you an athanor there, seats you in the thread, and lets your identifier in from then on, so you sign in later without the link. That entry shows in the CYFR's allowlist, where its administrator can remove it. A deny always wins: an identity the CYFR denies is refused, the invitation stays unspent, and a deny written later outranks the entry the invitation left.
 
-A link that has expired, been used or been revoked, whose issuer has since left the group or been denied (it stays dead if they are let back in), or that was made before the CYFR was restored from a backup, says it can no longer be used; signing in from your CYFR with it still signs in someone that CYFR already lets in, and grants nothing more.
+A link that has expired, been used or been revoked, whose issuer has since left the thread or been denied (it stays dead if they are let back in), or that was made before the CYFR was restored from a backup, says it can no longer be used; signing in from your CYFR with it still signs in someone that CYFR already lets in, and grants nothing more.
 
 ### When a CYFR Requires Your Company's Sign-in
 
 A CYFR run for a company may require each person there to sign in with their company's account as well: once, or again every set number of days. That sign-in is a condition of being there. It is not a way to sign in, and it is not your identity. You still sign in with your passkey, a paired device, your CYFR identity or a linked sign-in method, and you keep each of them.
 
-While your company sign-in is missing or past its days, every page of that CYFR sends you to its company page. **Sign in with your company** takes you to your company's sign-in and back, and **Sign out** ends your session. Nothing else there opens until your company sign-in stands, and the API keys you made and the devices you paired there are refused. Your session, API keys, devices and memberships all stay, and work again once you sign in with your company.
+While your company sign-in is missing or past its days, every page of that CYFR sends you to its company page. **Sign in with your company** takes you to your company's sign-in and back, and **Sign out** ends your session. Nothing else there opens until your company sign-in stands, and the API keys you made and the devices you paired there are refused. Your session, API keys, devices and thread seats all stay, and work again once you sign in with your company.
 
 The CYFR binds your company account to you by the subject your company's sign-in names for it, never by an email address. A company account already bound to someone else there is refused, and once one is bound to you, another is refused too. No CYFR merges two people because their email addresses match, and a company sign-in never makes or unlocks a person. When the CYFR moves to another company configuration (another issuer, client or organization), everyone there signs in with their company again, and the new sign-in replaces the old binding.
 
 ### Where joining is proven
 
-The join proof (`tests/join-proof/`) runs every step in Chromium on the desktop, and a paired device's steps again in Chromium at a 720×720 touch viewport; in Firefox and WebKit it runs the sign-in at the group's CYFR, the carry between the person's own CYFR and the group's, and a second browser profile, each fresh confirmation those need given on a device paired in Chromium. Steps that use a passkey run in Chromium alone, whose virtual authenticator the proof drives. In-app browsers and mail clients that rewrite links are not covered.
+The join proof (`tests/join-proof/`) runs every step in Chromium on the desktop, and a paired device's steps again in Chromium at a 720×720 touch viewport; in Firefox and WebKit it runs the sign-in at the CYFR they join, the carry between the person's own CYFR and that one, and a second browser profile, each fresh confirmation those need given on a device paired in Chromium. Steps that use a passkey run in Chromium alone, whose virtual authenticator the proof drives. In-app browsers and mail clients that rewrite links are not covered.
 
 ---
 
@@ -163,7 +163,7 @@ The join proof (`tests/join-proof/`) runs every step in Chromium on the desktop,
 
 A passkey belongs to the one CYFR it was registered at, under that CYFR's host, and proves things only there. Register one at each CYFR where you confirm changes.
 
-At a CYFR that is not your own, a member who signed in only with their CYFR identity holds no fresh method there. Their first passkey at that CYFR is authorized by its platform administrator, who confirms that exact registration with a fresh proof of their own; the member and the administrator are told. A recovery of the member's identity retires the passkeys registered at that CYFR before it, so the next one again needs the administrator; an ordinary rotation of the live key, or adding a recovery code, keeps them.
+At a CYFR that is not your own, someone who signed in only with their CYFR identity holds no fresh method there. Their first passkey at that CYFR is authorized by its platform administrator, who confirms that exact registration with a fresh proof of their own; they and the administrator are told. A recovery of their identity retires the passkeys registered at that CYFR before it, so the next one again needs the administrator; an ordinary rotation of the live key, or adding a recovery code, keeps them.
 
 ---
 

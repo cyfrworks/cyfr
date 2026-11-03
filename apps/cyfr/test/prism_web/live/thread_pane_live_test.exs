@@ -17,7 +17,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # The pane on its own: what it says when the session is gone, that a
   # refusal reaches the person as a sentence, that what it pushes names
   # the pane it is for, and that a kept model catalogue is read without a
-  # run. On a group's room.
+  # run. On the person's own athanor.
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -45,22 +45,21 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end)
 
     user = test_user()
-    n = System.unique_integer([:positive])
-    {:ok, room} = Athanors.create_group(user.user_id, "Team #{n}")
-    conn = log_in_user(conn, user, athanor_id: room.id)
-    in_room = %{Sanctum.TestContext.local(:prism) | user_id: user.user_id, athanor_id: room.id}
+    athanor = Sanctum.Test.People.athanor!(user.user_id)
+    conn = log_in_user(conn, user, athanor_id: athanor.id)
+    here = %{Sanctum.TestContext.local(:prism) | user_id: user.user_id, athanor_id: athanor.id}
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_room))
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
 
     {:ok, _} =
-      Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
         author: user.user_id,
         content: "hello"
       })
 
-    {:ok, thread} = Threads.get(Sanctum.Context.actor(in_room), thread.id)
+    {:ok, thread} = Threads.get(Sanctum.Context.actor(here), thread.id)
 
-    {:ok, conn: conn, user: user, room: room, in_room: in_room, thread: thread}
+    {:ok, conn: conn, user: user, athanor: athanor, here: here, thread: thread}
   end
 
   defp route(athanor), do: Athanors.route_slug(athanor)
@@ -158,32 +157,32 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
-  defp room_pane(conn, room, thread) do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+  defp open_pane(conn, athanor, thread) do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(athanor), thread.id))
     settled_render(view)
-    child!(view, "pane-" <> room.id)
+    child!(view, "pane-" <> athanor.id)
   end
 
-  test "a session that no longer establishes is sent to sign in", %{room: room} do
+  test "a session that no longer establishes is sent to sign in", %{athanor: athanor} do
     stale =
       Plug.Test.init_test_session(build_conn(), %{
         to_string(CyfrWeb.SignInResponse.session_key()) => "not-a-session"
       })
 
     assert {:error, {:redirect, %{to: "/login"}}} =
-             live_isolated(stale, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => room.id})
+             live_isolated(stale, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => athanor.id})
   end
 
   test "a refused standing answer reaches the person as a sentence, not the machine's atom",
-       %{conn: conn, room: room, in_room: in_room, thread: thread} do
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
     card =
-      card!(in_room, thread, %{
+      card!(here, thread, %{
         "tool" => "notes",
         "action" => "pin",
         "args" => %{"name" => "plan"}
       })
 
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
 
     # What the card dispatches for "always".
     send(pane.pid, {:approval_approve, card.approval_id, %{scope: :always}})
@@ -194,10 +193,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   test "a card is decided through approval.resolve by its approval, with the bounds chosen",
-       %{conn: conn, room: room, in_room: in_room, thread: thread} do
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
     card =
       card!(
-        in_room,
+        here,
         thread,
         %{
           "tool" => "files",
@@ -207,7 +206,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         %{"standing" => nil}
       )
 
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
     card_dom = ~s([id$="-card-#{card.id}"])
 
     # Its run was started by no schedule, so no answer can end with one.
@@ -234,7 +233,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   test "a card that also follows the outside sources it names sends them to approval.resolve",
-       %{conn: conn, room: room, in_room: in_room, thread: thread} do
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
     shown = [
       %{"class" => "filed", "name" => nil},
       %{"class" => "outside", "name" => "news.example"}
@@ -242,13 +241,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     card =
       card!(
-        in_room,
+        here,
         thread,
         %{"tool" => "files", "action" => "write", "args" => %{"path" => "data/a.md"}},
         %{"standing" => nil, "sources" => shown}
       )
 
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
     card_dom = ~s([id$="-card-#{card.id}"])
     assert has_element?(pane, ~s(#{card_dom} [data-test="approval-sources"]), "news.example")
 
@@ -280,9 +279,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # A card of its own in a thread of its own: deciding a card settles it.
   # A scheduled card's run row names the schedule it was started by.
-  defp offer!(conn, room, in_room, scheduled?) do
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_room))
-    card = card!(in_room, thread, @write, %{"standing" => nil})
+  defp offer!(conn, athanor, here, scheduled?) do
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
+    card = card!(here, thread, @write, %{"standing" => nil})
 
     if scheduled? do
       {1, _} =
@@ -292,7 +291,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         )
     end
 
-    {room_pane(conn, room, thread), card}
+    {open_pane(conn, athanor, thread), card}
   end
 
   # The grant that reached `approval.resolve` for `card`, as it was asked.
@@ -320,13 +319,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   describe "each offer of a card" do
     test "once, for this run and always reach approval.resolve with their scope and lifecycle",
-         %{conn: conn, room: room, in_room: in_room} do
+         %{conn: conn, athanor: athanor, here: here} do
       for {selector, scope, lifecycle} <- [
             {~s(button[phx-value-scope="once"]), "once", nil},
             {~s(button[phx-value-lifecycle="execution"]), "thread", "execution"},
             {~s|button[phx-value-scope="always"]:not([phx-value-lifecycle])|, "always", nil}
           ] do
-        {pane, card} = offer!(conn, room, in_room, false)
+        {pane, card} = offer!(conn, athanor, here, false)
         click_offer(pane, card, selector)
         input = resolved(card)
 
@@ -339,9 +338,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     test "for this thread until ends 1, 8 or 24 hours from the click",
-         %{conn: conn, room: room, in_room: in_room} do
+         %{conn: conn, athanor: athanor, here: here} do
       for hours <- [1, 8, 24] do
-        {pane, card} = offer!(conn, room, in_room, false)
+        {pane, card} = offer!(conn, athanor, here, false)
         before = DateTime.utc_now()
         click_offer(pane, card, ~s(button[phx-value-hours="#{hours}"]))
         later = DateTime.utc_now()
@@ -361,15 +360,15 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     test "for this schedule is offered only for a scheduled run, and ends with its schedule",
-         %{conn: conn, room: room, in_room: in_room} do
-      {unscheduled, plain} = offer!(conn, room, in_room, false)
+         %{conn: conn, athanor: athanor, here: here} do
+      {unscheduled, plain} = offer!(conn, athanor, here, false)
 
       refute has_element?(
                unscheduled,
                ~s([id$="-card-#{plain.id}"] [phx-value-lifecycle="schedule"])
              )
 
-      {pane, card} = offer!(conn, room, in_room, true)
+      {pane, card} = offer!(conn, athanor, here, true)
       click_offer(pane, card, ~s(button[phx-value-lifecycle="schedule"]))
       input = resolved(card)
 
@@ -380,8 +379,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   test "the thread's standing answers are listed, bounded ones too, each to withdraw",
-       %{conn: conn, room: room, thread: thread} do
-    pane = room_pane(conn, room, thread)
+       %{conn: conn, athanor: athanor, thread: thread} do
+    pane = open_pane(conn, athanor, thread)
 
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
       athanor_id: thread.athanor_id,
@@ -408,13 +407,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   test "what the pane pushes names the pane it is for", %{
     conn: conn,
     user: user,
-    room: room,
+    athanor: athanor,
     thread: thread
   } do
     # The pages these navigate to are dev's, which a person chooses.
     dev!(user)
-    pane = room_pane(conn, room, thread)
-    pane_id = "pane-" <> room.id <> "-pane"
+    pane = open_pane(conn, athanor, thread)
+    pane_id = "pane-" <> athanor.id <> "-pane"
     intents = [%{kind: "copy_clipboard", text: "friday"}, %{kind: "navigate", to: "/activities"}]
 
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
@@ -428,9 +427,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     assert_push_event(pane, "aqua:intents", %{pane: ^pane_id, intents: pushed})
     assert [%{kind: "copy_clipboard"}, %{kind: "navigate", to: to}] = pushed
-    assert to == PrismWeb.Focus.path(route(room), "/activities")
+    assert to == PrismWeb.Focus.path(route(athanor), "/activities")
 
-    # Another member's intents are theirs alone.
+    # Another person's intents are theirs alone.
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
       athanor_id: thread.athanor_id,
       thread_id: thread.id,
@@ -445,12 +444,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   test "a navigate is pushed only for a page the console serves", %{
     conn: conn,
     user: user,
-    room: room,
+    athanor: athanor,
     thread: thread
   } do
     # The pages these navigate to are dev's, which a person chooses.
     dev!(user)
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
 
     intents = [
       %{kind: "navigate", to: "/etc/passwd"},
@@ -470,36 +469,36 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     assert_push_event(pane, "aqua:intents", %{intents: pushed})
     assert [%{kind: "navigate", to: to}] = pushed
-    assert to == PrismWeb.Focus.path(route(room), "/executions?id=exec_a")
+    assert to == PrismWeb.Focus.path(route(athanor), "/executions?id=exec_a")
   end
 
   test "a kept model catalogue is read on mount without a run", %{
     conn: conn,
-    room: room,
+    athanor: athanor,
     thread: thread,
-    in_room: in_room
+    here: here
   } do
-    :ok = PrismWeb.ModelCatalog.remember(room.id, %{"models" => %{"kept" => ["kept-model-1"]}})
-    on_exit(fn -> PrismWeb.ModelCatalog.forget(room.id) end)
+    :ok = PrismWeb.ModelCatalog.remember(athanor.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+    on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
 
     # A hit answers the caller at once — the result is in the mailbox before
     # `load/1` returns, so no run was spawned and no deadline armed — with
     # or without an engine on the box.
-    assert :ok = PrismWeb.ModelCatalog.load(in_room)
+    assert :ok = PrismWeb.ModelCatalog.load(here)
 
     assert_received {:list_models_result, _tag,
                      {:ok, %{"models" => %{"kept" => ["kept-model-1"]}}}}
 
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
     assert has_element?(pane, ~s(select[name="model"] option[value="kept-model-1"]))
   end
 
   test "the pane's copy: its chrome and the composer's stop", %{
     conn: conn,
-    room: room,
+    athanor: athanor,
     thread: thread
   } do
-    html = render(room_pane(conn, room, thread))
+    html = render(open_pane(conn, athanor, thread))
     assert html =~ "The soul or role this thread is on"
     refute html =~ "autofocus"
     refute html =~ ~r/\bagent\b/
@@ -508,10 +507,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   test "at 720×720 an open thread draws no text under 12 px and no target under 24 px", %{
     conn: conn,
-    room: room,
+    athanor: athanor,
     thread: thread
   } do
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
     html = render(pane)
     assert html =~ "hello"
 
@@ -529,12 +528,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   test "at 720×720 every state the pane draws holds the same sizes", %{
     conn: conn,
     user: user,
-    room: room,
-    in_room: in_room,
+    athanor: athanor,
+    here: here,
     thread: thread
   } do
-    # A state no test here reaches — a DM's header, several approvals
-    # pending, a held send, the panel's links and its read-the-room box —
+    # A state no test here reaches — several approvals pending, a held
+    # send, the panel's links and its read-the-thread box —
     # is held by the template itself: no text class under 12 px anywhere,
     # and each of those small targets at 24 px.
     source =
@@ -550,7 +549,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert source =~ ~r/phx-click="toggle_read_room"[^>]*class="h-6 w-6/
 
     {:ok, _} =
-      Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
         author: user.user_id,
         content: "two files",
         payload: %{
@@ -561,7 +560,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         }
       })
 
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
 
     event = fn kind, data ->
       send(pane.pid, %Cyfr.Bus.ThreadEvent{
@@ -614,11 +613,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   test "a turn stopped on an unknown outcome shows so until it goes on", %{
     conn: conn,
-    room: room,
+    athanor: athanor,
     thread: thread,
     user: user
   } do
-    pane = room_pane(conn, room, thread)
+    pane = open_pane(conn, athanor, thread)
 
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
       athanor_id: thread.athanor_id,
@@ -688,13 +687,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   test "a grant the turn needs is asked in the layer of the view that renders the pane, never on the pane",
-       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
-    {name_ref, ref} = grantable!(in_room)
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    {name_ref, ref} = grantable!(here)
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(athanor), thread.id))
     settled_render(view)
-    pane = child!(view, "pane-" <> room.id)
+    pane = child!(view, "pane-" <> athanor.id)
 
-    # Another member's turn asks them, not this person.
+    # Another person's turn asks them, not this person.
     consent_required(pane, thread, ref, "someone-else")
     refute render(view) =~ ~s(data-kind="grant")
 
@@ -721,7 +720,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     )
 
     refute render(view) =~ ~s(data-kind="grant")
-    assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(in_room, name_ref)
+    assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(here, name_ref)
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -770,8 +769,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # The text line of `thread` whose content is `content`: the message a
   # turn answered.
-  defp line_id!(in_room, thread, content) do
-    rows = Threads.latest_messages(Sanctum.Context.actor(in_room), thread.id, 500)
+  defp line_id!(here, thread, content) do
+    rows = Threads.latest_messages(Sanctum.Context.actor(here), thread.id, 500)
     assert %{id: id} = Enum.find(rows, &(&1.kind == "text" and &1.content == content))
     id
   end
@@ -780,11 +779,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # for, asked in the view's layer on a fresh app's own profile and
   # granted there. Answers the view and the pane once the pane has heard
   # its grant.
-  defp grant_launch_account!(conn, room, thread, user, in_room, message_id) do
-    {_name_ref, ref} = needy_app!(in_room)
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+  defp grant_launch_account!(conn, athanor, thread, user, here, message_id) do
+    {_name_ref, ref} = needy_app!(here)
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(athanor), thread.id))
     settled_render(view)
-    pane = child!(view, "pane-" <> room.id)
+    pane = child!(view, "pane-" <> athanor.id)
 
     data = %{ref: ref, user_id: user.user_id, account: %{name: "Supabase 2", need: nil}}
 
@@ -828,9 +827,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   test "a launch's account is asked on the app's own profile, opened on that account, and the " <>
          "pane then offers the ended turn's message again as a new turn",
-       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
-    hello = line_id!(in_room, thread, "hello")
-    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    hello = line_id!(here, thread, "hello")
+    {_view, pane} = grant_launch_account!(conn, athanor, thread, user, here, hello)
 
     # The turn that asked already ended: nothing is cut, and its message
     # is offered again, to be sent as a new turn.
@@ -845,16 +844,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   test "the retry offered is the ended turn's own message, never a line queued while it ran",
-       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
-    hello = line_id!(in_room, thread, "hello")
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    hello = line_id!(here, thread, "hello")
 
     {:ok, _} =
-      Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
         author: user.user_id,
         content: "and one more thing"
       })
 
-    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+    {_view, pane} = grant_launch_account!(conn, athanor, thread, user, here, hello)
 
     assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
     assert restarts_for_consent() == []
@@ -863,18 +862,18 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   test "the retry offered is the ended turn's own message, however many rows follow it",
-       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
-    hello = line_id!(in_room, thread, "hello")
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    hello = line_id!(here, thread, "hello")
 
     for n <- 1..55 do
       {:ok, _} =
-        Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
           author: "aqua",
           content: "reply #{n}"
         })
     end
 
-    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+    {_view, pane} = grant_launch_account!(conn, athanor, thread, user, here, hello)
 
     # Nothing is cut: the turn that asked has ended, and no other turn is
     # the grant's to cut.
@@ -885,18 +884,18 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   test "with no message of the turn that asked to offer, the pane cuts nothing and says so",
-       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
     # A line of another thread is no message of this thread's turn.
-    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(in_room))
+    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(here))
 
     {:ok, foreign} =
-      Threads.append(Sanctum.Context.actor(in_room), elsewhere.id, %{
+      Threads.append(Sanctum.Context.actor(here), elsewhere.id, %{
         author: user.user_id,
         content: "a line of another thread"
       })
 
     for message_id <- [nil, foreign.id] do
-      {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, message_id)
+      {_view, pane} = grant_launch_account!(conn, athanor, thread, user, here, message_id)
       assigns = :sys.get_state(pane.pid).socket.assigns
 
       assert assigns.restart_prompt == nil
@@ -911,8 +910,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   test "a launch's card names the account it binds and takes no standing answer", %{
     conn: conn,
-    room: room,
-    in_room: in_room,
+    athanor: athanor,
+    here: here,
     thread: thread
   } do
     proposal = %{
@@ -926,8 +925,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       "vault_entry" => "vlt_work-1"
     }
 
-    card = card!(in_room, thread, proposal, %{"action_kind" => "execute", "standing" => false})
-    pane = room_pane(conn, room, thread)
+    card = card!(here, thread, proposal, %{"action_kind" => "execute", "standing" => false})
+    pane = open_pane(conn, athanor, thread)
     card_dom = ~s([id$="-card-#{card.id}"])
 
     assert has_element?(pane, ~s(#{card_dom} [data-test="approval-account"]), "Work")
@@ -936,7 +935,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, ~s(#{card_dom} button[phx-value-scope="once"]))
 
     # A launch that names no account says none.
-    {:ok, other} = Threads.create(Sanctum.Context.actor(in_room))
+    {:ok, other} = Threads.create(Sanctum.Context.actor(here))
 
     unnamed = %{
       "tool" => "execution",
@@ -945,29 +944,29 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     }
 
     plain =
-      card!(in_room, other, unnamed, %{"action_kind" => "execute", "standing" => false})
+      card!(here, other, unnamed, %{"action_kind" => "execute", "standing" => false})
 
-    other_pane = room_pane(conn, room, other)
+    other_pane = open_pane(conn, athanor, other)
     refute has_element?(other_pane, ~s([id$="-card-#{plain.id}"] [data-test="approval-account"]))
   end
 
-  # The pane on the room with no thread open: its empty state.
-  defp empty_pane(conn, room) do
+  # The pane on the athanor with no thread open: its empty state.
+  defp empty_pane(conn, athanor) do
     {:ok, pane, _} =
-      live_isolated(conn, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => room.id})
+      live_isolated(conn, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => athanor.id})
 
     pane
   end
 
   describe "the chat's empty state over the model's consent" do
-    # The room is ready, and its soul's model is installed with an owner
+    # The athanor is ready, and its soul's model is installed with an owner
     # profile whose head exists: the empty state reads the model through
     # `Aqua.model_status/2`.
-    setup %{room: room, in_room: in_room} do
-      {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
+    setup %{athanor: athanor, here: here} do
+      {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(in_room, Cyfr.Test.Guests.wasm(:catalyst), %{
+        Compendium.Registry.publish_bytes(here, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "claude",
           version: "0.1.0",
           type: "catalyst",
@@ -988,16 +987,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       :ok =
         Sanctum.Test.ConsentFixtures.seed_head!(
-          in_room,
+          here,
           %{
-            id: "prof_room_claude",
+            id: "prof_soul_claude",
             source_ref: "catalyst:local.claude",
             kind: :owner,
             label: "default",
             status: :active
           },
           %{
-            id: "cons_room_claude",
+            id: "cons_soul_claude",
             revision: 1,
             scope: :versionless,
             shape_digest: "sha256:shape",
@@ -1012,13 +1011,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     test "a consent that exists but is damaged is said as such, never as no model",
-         %{conn: conn, room: room, in_room: in_room} do
+         %{conn: conn, athanor: athanor, here: here} do
       :ok =
-        Sanctum.Test.ConsentFixtures.hand_edit_head!(in_room, "prof_room_claude",
-          scope: "sideways"
-        )
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(here, "prof_soul_claude", scope: "sideways")
 
-      pane = empty_pane(conn, room)
+      pane = empty_pane(conn, athanor)
 
       assert has_element?(
                pane,
@@ -1035,9 +1032,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     @tag :capture_log
     test "a consent the store cannot answer is said as such, never as no model",
-         %{conn: conn, room: room} do
+         %{conn: conn, athanor: athanor} do
       Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
-      pane = empty_pane(conn, room)
+      pane = empty_pane(conn, athanor)
 
       assert has_element?(
                pane,
@@ -1051,8 +1048,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "a model whose head binds no key is still one to connect", %{conn: conn, room: room} do
-      pane = empty_pane(conn, room)
+    test "a model whose head binds no key is still one to connect", %{
+      conn: conn,
+      athanor: athanor
+    } do
+      pane = empty_pane(conn, athanor)
 
       assert render(pane) =~ "has no model yet"
       assert has_element?(pane, "a", "Connect a model")
@@ -1062,15 +1062,15 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
-  # The room as a fill leaves it, its soul's model connected
+  # The athanor as a fill leaves it, its soul's model connected
   # (`ready_athanor!/2`): what the server ships, the components the soul
   # depends on among them (the suite's own seed tree ships the AQUA
   # template alone), the soul's consent selecting its model's default
   # profile, and a key bound to that profile. The seed path it moves is
   # restored only once the work the test's views started has stopped.
-  defp connected_room!(room, user) do
-    {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
-    ctx = ready_athanor!(room.id, user.user_id)
+  defp connected!(athanor, user) do
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
+    ctx = ready_athanor!(athanor.id, user.user_id)
     Cyfr.Test.Sandbox.stop_work_on_exit()
     ctx
   end
@@ -1079,9 +1079,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # so its empty state offered a model to connect over one connected. It
   # reads the agents with their model now.
   test "a connected model reads ready, and the empty state offers no model to connect",
-       %{room: room, user: user, conn: conn} do
-    connected_room!(room, user)
-    pane = empty_pane(conn, room)
+       %{athanor: athanor, user: user, conn: conn} do
+    connected!(athanor, user)
+    pane = empty_pane(conn, athanor)
 
     assert render(pane) =~ "anything."
     refute render(pane) =~ "has no model yet"
@@ -1091,11 +1091,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # Before its socket connects the pane has read no model: its first render
-  # says the status is pending, never that a ready room has no model, and
+  # says the status is pending, never that a ready athanor has no model, and
   # the connected mount reads it.
-  test "the disconnected render of a ready room is pending, and offers no model to connect",
-       %{room: room, user: user, conn: conn} do
-    connected_room!(room, user)
+  test "the disconnected render of a ready athanor is pending, and offers no model to connect",
+       %{athanor: athanor, user: user, conn: conn} do
+    connected!(athanor, user)
 
     html =
       conn
@@ -1103,7 +1103,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       |> Plug.Test.init_test_session(%{})
       |> Phoenix.LiveView.Router.fetch_live_flash([])
       |> Phoenix.LiveView.Controller.live_render(PrismWeb.ThreadPaneLive,
-        session: %{"athanor_id" => room.id}
+        session: %{"athanor_id" => athanor.id}
       )
       |> html_response(200)
 
@@ -1111,7 +1111,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute html =~ "Connect a model"
     assert html =~ ~s(data-test="model-pending")
 
-    pane = empty_pane(conn, room)
+    pane = empty_pane(conn, athanor)
     assert render(pane) =~ "anything."
     refute has_element?(pane, ~s([data-test="model-pending"]))
 
@@ -1123,16 +1123,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   @unanswered "A consent this model runs under cannot be read right now — try again."
 
   # What the pane's empty state and the AQUA page's agents panel each say
-  # of the room's model: `sentence`, with no model to connect and no key
+  # of the athanor's model: `sentence`, with no model to connect and no key
   # to change over a consent that exists.
-  defp model_consent_reads!(conn, room, sentence) do
-    pane = empty_pane(conn, room)
+  defp model_consent_reads!(conn, athanor, sentence) do
+    pane = empty_pane(conn, athanor)
     assert has_element?(pane, ~s([data-test="model-consent"]), sentence)
     refute render(pane) =~ "has no model yet"
     refute render(pane) =~ "anything."
     refute has_element?(pane, "a", "Connect a model")
 
-    {panel, _html} = mount_athanor(conn, "/aqua", room)
+    {panel, _html} = mount_athanor(conn, "/aqua", athanor)
     assert has_element?(panel, "#aqua-card-aqua span", sentence)
     refute render(panel) =~ "Model connected"
     refute render(panel) =~ "the model has no key yet"
@@ -1183,25 +1183,25 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     # refused for damage, or because the store could not answer, is said
     # as such by the pane and by the agents panel alike, never as a model
     # to connect, and a launch is refused for the same reason.
-    setup %{room: room, user: user} do
-      ctx = connected_room!(room, user)
+    setup %{athanor: athanor, user: user} do
+      ctx = connected!(athanor, user)
       soul = Prima.AgentRef.soul_ref()
       {:ok, %{profile_id: soul_profile}} = Opus.authority_for(ctx, :default, soul)
       {:ok, ctx: ctx, soul: soul, soul_profile: soul_profile}
     end
 
     test "the assistant's own head damaged reads damaged",
-         %{conn: conn, room: room, ctx: ctx, soul: soul, soul_profile: soul_profile} do
+         %{conn: conn, athanor: athanor, ctx: ctx, soul: soul, soul_profile: soul_profile} do
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, soul_profile, scope: "sideways")
 
       assert {:error, {:head_corrupt, ^soul_profile}} =
                Opus.authority_for(ctx, :default, soul)
 
-      model_consent_reads!(conn, room, @damaged)
+      model_consent_reads!(conn, athanor, @damaged)
     end
 
     test "a damaged second profile row of the model's catalyst reads damaged",
-         %{conn: conn, room: room, ctx: ctx, soul: soul} do
+         %{conn: conn, athanor: athanor, ctx: ctx, soul: soul} do
       :ok =
         Sanctum.Test.ConsentFixtures.seed_profile!(ctx, %{
           id: "prof_claude_twin",
@@ -1222,22 +1222,22 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert {:error, {:lender_corrupt, "catalyst:local.claude", "prof_claude_twin"}} =
                Opus.authority_for(ctx, :default, soul)
 
-      model_consent_reads!(conn, room, @damaged)
+      model_consent_reads!(conn, athanor, @damaged)
     end
 
     @tag :capture_log
     test "an outage of the assistant's own head reads unanswered",
-         %{conn: conn, room: room, ctx: ctx, soul: soul, soul_profile: soul_profile} do
+         %{conn: conn, athanor: athanor, ctx: ctx, soul: soul, soul_profile: soul_profile} do
       head_outage!(ctx, soul_profile)
 
       assert {:error, {:head_unavailable, ^soul_profile}} =
                Opus.authority_for(ctx, :default, soul)
 
-      model_consent_reads!(conn, room, @unanswered)
+      model_consent_reads!(conn, athanor, @unanswered)
     end
 
     test "a blob digest mismatch on the assistant's own head reads damaged",
-         %{conn: conn, room: room, ctx: ctx, soul: soul, soul_profile: soul_profile} do
+         %{conn: conn, athanor: athanor, ctx: ctx, soul: soul, soul_profile: soul_profile} do
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, soul_profile,
           blob_digest: "sha256:" <> String.duplicate("0", 64)
@@ -1246,7 +1246,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert {:error, {:head_corrupt, ^soul_profile}} =
                Opus.authority_for(ctx, :default, soul)
 
-      model_consent_reads!(conn, room, @damaged)
+      model_consent_reads!(conn, athanor, @damaged)
     end
   end
 
@@ -1254,8 +1254,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # The pane's empty state over a model that could not be read: it says
   # so, and offers nothing but to try again.
-  defp pane_reads_unread!(conn, room) do
-    pane = empty_pane(conn, room)
+  defp pane_reads_unread!(conn, athanor) do
+    pane = empty_pane(conn, athanor)
     assert has_element?(pane, ~s([data-test="model-unavailable"]), @model_unread)
     refute render(pane) =~ "has no model yet"
     refute render(pane) =~ "anything."
@@ -1265,8 +1265,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # The AQUA page's agents panel over the same: no model to install, no
   # key to connect or change.
-  defp panel_reads_unread!(conn, room) do
-    {panel, _html} = mount_athanor(conn, "/aqua", room)
+  defp panel_reads_unread!(conn, athanor) do
+    {panel, _html} = mount_athanor(conn, "/aqua", athanor)
     assert has_element?(panel, "#aqua-card-aqua span", @model_unread)
     refute render(panel) =~ "not installed here yet"
     refute has_element?(panel, "button[phx-click=install_catalyst]")
@@ -1293,20 +1293,20 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   describe "a model whose catalysts or setup cannot be read" do
-    # The room is connected (`ready_athanor!/2`). A store that cannot give
+    # The athanor is connected (`ready_athanor!/2`). A store that cannot give
     # the athanor's catalysts, or the model's setup plan, leaves whether
     # the model is installed unknown: it is said as such, never as a model
     # to install or to connect. The outage is the component index left
     # behind by an edit (`Arca.StorageProjectionChanges.begin_edit/3`), as
     # `Aqua.ModelsTest` leaves it.
-    setup %{room: room, user: user} do
-      ctx = connected_room!(room, user)
+    setup %{athanor: athanor, user: user} do
+      ctx = connected!(athanor, user)
       {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
     end
 
     @tag :capture_log
     test "a catalyst listing that cannot be read reads unread, never a model to install",
-         %{conn: conn, room: room, ctx: ctx, actor: actor} do
+         %{conn: conn, athanor: athanor, ctx: ctx, actor: actor} do
       {:ok, _pending} =
         Arca.StorageProjectionChanges.begin_edit(
           actor,
@@ -1316,14 +1316,14 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       assert {:error, :catalyst_lookup_failed} = Aqua.AgentConfig.catalyst_listing(ctx)
 
-      pane_reads_unread!(conn, room)
-      panel_reads_unread!(conn, room)
+      pane_reads_unread!(conn, athanor)
+      panel_reads_unread!(conn, athanor)
       Cyfr.Test.Sandbox.end_views()
     end
 
     @tag :capture_log
     test "a setup plan the store cannot answer reads unread, never a model to install",
-         %{conn: conn, room: room, actor: actor} do
+         %{conn: conn, athanor: athanor, actor: actor} do
       test = self()
       unit = "catalysts/local/claude/0.0.0"
 
@@ -1332,18 +1332,18 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         send(test, {:index_behind, generation})
       end)
 
-      pane_reads_unread!(conn, room)
+      pane_reads_unread!(conn, athanor)
       assert_received {:index_behind, generation}
 
       # The panel's own listing reads; its setup plan meets the outage again.
       {:ok, _} = Arca.StorageProjectionChanges.finish_edit(actor, "components", unit, generation)
-      panel_reads_unread!(conn, room)
+      panel_reads_unread!(conn, athanor)
       assert_received {:index_behind, _again}
       Cyfr.Test.Sandbox.end_views()
     end
 
     test "a setup plan that finds no such component still reads missing, with Install",
-         %{conn: conn, room: room, ctx: ctx} do
+         %{conn: conn, athanor: athanor, ctx: ctx} do
       test = self()
       athanor_id = ctx.athanor_id
 
@@ -1359,7 +1359,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       on_setup_plan!(fn -> send(test, {:gone, named.("claude", "claude-gone")}) end)
 
-      pane = empty_pane(conn, room)
+      pane = empty_pane(conn, athanor)
       assert_received {:gone, {n, _}} when n > 0
       assert render(pane) =~ "has no model yet"
       assert has_element?(pane, "a", "Connect a model")
@@ -1367,7 +1367,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       # The panel's own listing names the model; its setup plan finds none.
       {^n, _} = named.("claude-gone", "claude")
-      {panel, _html} = mount_athanor(conn, "/aqua", room)
+      {panel, _html} = mount_athanor(conn, "/aqua", athanor)
       assert_received {:gone, {^n, _}}
       assert render(panel) =~ "not installed here yet"
       assert has_element?(panel, "button[phx-click=install_catalyst]", "Install")
@@ -1389,19 +1389,19 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   describe "an agents list that cannot be read" do
-    # A store that cannot give the room's agents leaves whether it has a
+    # A store that cannot give the athanor's agents leaves whether it has a
     # model unknown: the pane says so and offers nothing but to try again.
-    # A store that answers with no agents is a room with no model, which
+    # A store that answers with no agents is an athanor with no model, which
     # is one to connect.
-    setup %{room: room} do
-      {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
+    setup %{athanor: athanor} do
+      {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
       :ok
     end
 
     @tag :capture_log
-    test "reads unread, never no model, with no link", %{conn: conn, room: room} do
+    test "reads unread, never no model, with no link", %{conn: conn, athanor: athanor} do
       storage!(PrismWeb.ThreadPaneLiveTest.UnreadableRoles)
-      pane = empty_pane(conn, room)
+      pane = empty_pane(conn, athanor)
 
       assert has_element?(
                pane,
@@ -1416,21 +1416,21 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     test "a store that answers with no agents still offers a model to connect",
-         %{conn: conn, room: room, in_room: in_room} do
+         %{conn: conn, athanor: athanor, here: here} do
       # Every agent the fill shipped goes, unit by unit, as a reset of the
       # whole root would take them.
       assert :ok =
                Arca.Overlay.with_internal_writes(fn ->
-                 Arca.delete_tree(Sanctum.Context.actor(in_room), ["aqua"])
+                 Arca.delete_tree(Sanctum.Context.actor(here), ["aqua"])
                end)
 
-      # The room's list reads, and holds the guides alone: no soul, no role.
+      # The athanor's list reads, and holds the guides alone: no soul, no role.
       assert {:ok, %{guides: guides}} =
-               Aqua.Ops.call_tool("aqua", in_room, %{"action" => "list", "detail" => true})
+               Aqua.Ops.call_tool("aqua", here, %{"action" => "list", "detail" => true})
 
       assert Enum.all?(guides, &(&1.type == "doc"))
 
-      pane = empty_pane(conn, room)
+      pane = empty_pane(conn, athanor)
 
       assert render(pane) =~ "has no model yet"
       assert has_element?(pane, "a", "Connect a model")
@@ -1442,15 +1442,15 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   test "a pane with no view around it has no layer to ask in, and says so", %{
     conn: conn,
     user: user,
-    room: room,
+    athanor: athanor,
     thread: thread,
-    in_room: in_room
+    here: here
   } do
-    {_name_ref, ref} = grantable!(in_room)
+    {_name_ref, ref} = grantable!(here)
 
     {:ok, pane, _} =
       live_isolated(conn, PrismWeb.ThreadPaneLive,
-        session: %{"athanor_id" => room.id, "thread_id" => thread.id}
+        session: %{"athanor_id" => athanor.id, "thread_id" => thread.id}
       )
 
     html = consent_required(pane, thread, ref, user.user_id)

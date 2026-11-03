@@ -41,8 +41,8 @@ defmodule Aqua.AgentConfig do
   (`Compendium.agents/1`).
 
   The read is also where an athanor gets its bundle on first need
-  (`Sanctum.Provisioning.start_provisioning/1`): a group athanor is minted
-  as a bare row and filled the first time something reads it, and a turn
+  (`Sanctum.Provisioning.start_provisioning/1`): an athanor whose fill has
+  not completed is filled the first time something reads it, and a turn
   roots an authority in that bundle right after this read. The `aqua`
   tool hooks its own reads the same way for callers outside the harness.
   """

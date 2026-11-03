@@ -17,8 +17,7 @@ defmodule Sanctum.RestoreKitProofTest do
   recovery and leaves the other's open. A proof by a secret that is not
   one of the identity's now, a replayed challenge and a person whose
   recovery has closed are refused. The proof's vectors (`tests/fixtures/
-  restore_kit.json`) verify here as the browser signs them. A group with a
-  member still recovering admits no new member.
+  restore_kit.json`) verify here as the browser signs them.
   """
 
   # The directory client's seam and the rate counters are process-wide.
@@ -29,7 +28,6 @@ defmodule Sanctum.RestoreKitProofTest do
   alias Prima.Identity.{Encoding, Entry, RestoreKit}
   alias Sanctum.{Context, TestContext}
   alias Sanctum.Test.DirectoryServer, as: Directory
-  alias Sanctum.Tenancy.Athanors
 
   @fixture "../../../../tests/fixtures/restore_kit.json"
 
@@ -67,7 +65,7 @@ defmodule Sanctum.RestoreKitProofTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Kit #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     ctx =
       Context.build(
@@ -429,53 +427,6 @@ defmodule Sanctum.RestoreKitProofTest do
              )
   end
 
-  # ---- the group freeze ------------------------------------------------------------
-
-  test "a group with a member still recovering admits no new member; removal stays admitted",
-       %{directory: directory} do
-    person = enrolled!(directory)
-    restored!()
-
-    {:ok, newcomer} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|kit-new-#{System.unique_integer([:positive])}",
-        provider: "github",
-        email: "kit-new@example.com",
-        verified: true
-      })
-
-    ctx =
-      Context.build(
-        user_id: person.user.id,
-        provider: "github",
-        athanor_id: person.athanor.id,
-        permissions: [:*],
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    assert {:error, %Prima.Refusal{reason: :recovering_from_restore, message: message}} =
-             Sanctum.Providers.Member.handle(ctx, %{
-               "action" => "add",
-               "athanor" => person.athanor.id,
-               "user_id" => newcomer.id
-             })
-
-    assert message =~ "restored from a backup"
-
-    {:ok, _} =
-      Arca.Repo.locking_transaction(fn ->
-        Arca.SecurityTransitions.close_restore!(person.user.id)
-      end)
-
-    assert {:ok, %{state: "added"}} =
-             Sanctum.Providers.Member.handle(ctx, %{
-               "action" => "add",
-               "athanor" => person.athanor.id,
-               "user_id" => newcomer.id
-             })
-  end
-
   # ---- the administrator's close ------------------------------------------------------
 
   # A platform administrator signed in after the restore, in an athanor of
@@ -491,7 +442,7 @@ defmodule Sanctum.RestoreKitProofTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Kit admin #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     ctx =
       Context.build(

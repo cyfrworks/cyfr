@@ -23,7 +23,7 @@ defmodule Sanctum.ExecutionStandingTest do
 
     {:ok, athanor} =
       Athanors.create(%{
-        kind: "group",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         name: "Standing",
         slug: "standing-#{System.unique_integer([:positive])}",
         created_by: "system"
@@ -72,7 +72,7 @@ defmodule Sanctum.ExecutionStandingTest do
     assert {:error, :not_standing} = ExecutionStanding.capture(ctx(nil))
     assert {:error, :not_standing} = ExecutionStanding.capture(ctx("ath_no_such_athanor"))
 
-    {:ok, _} = Athanors.archive(athanor)
+    {:ok, _} = Athanors.archive(athanor, force: true)
     assert {:error, :not_standing} = ExecutionStanding.capture(ctx(athanor.id))
   end
 
@@ -87,7 +87,7 @@ defmodule Sanctum.ExecutionStandingTest do
     {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
     assert :ok = verify(grant)
 
-    {:ok, archived} = Athanors.archive(athanor)
+    {:ok, archived} = Athanors.archive(athanor, force: true)
     assert {:error, :not_standing} = verify(grant)
 
     {:ok, _reopened} = Athanors.unarchive(archived)
@@ -103,7 +103,7 @@ defmodule Sanctum.ExecutionStandingTest do
 
   test "a retirement's check asks nothing of the athanor", %{athanor: athanor} do
     {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
-    {:ok, _} = Athanors.archive(athanor)
+    {:ok, _} = Athanors.archive(athanor, force: true)
     assert :ok = ExecutionStanding.stamp_only(grant)
   end
 
@@ -115,7 +115,7 @@ defmodule Sanctum.ExecutionStandingTest do
 
     assert {:ok, []} = scan_of(athanor.id)
 
-    {:ok, archived} = Athanors.archive(athanor)
+    {:ok, archived} = Athanors.archive(athanor, force: true)
     {:ok, _reopened} = Athanors.unarchive(archived)
 
     # Work admitted after the reopen stands, and is not found.

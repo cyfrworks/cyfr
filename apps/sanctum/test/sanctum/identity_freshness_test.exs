@@ -34,7 +34,6 @@ defmodule Sanctum.IdentityFreshnessTest do
   alias Prima.Identity.{Entry, RecoverRequest}
   alias Sanctum.{Caller, Cipher, CipherAAD, Context, IdentityFreshness}
   alias Sanctum.Consent.Authz
-  alias Sanctum.Tenancy.{Athanors, Members}
   alias Sanctum.Test.DirectoryServer.{Resolver, Server}
 
   @host "dir-a.test"
@@ -225,7 +224,7 @@ defmodule Sanctum.IdentityFreshnessTest do
   defp keypair, do: :crypto.generate_key(:eddsa, :ed25519)
   defp request_id, do: "req_#{System.unique_integer([:positive])}"
 
-  # A person seated in a group of their own, and their session's context.
+  # A person seated in their own athanor, and their session's context.
   defp seated! do
     n = System.unique_integer([:positive])
 
@@ -237,8 +236,7 @@ defmodule Sanctum.IdentityFreshnessTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Freshness #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    athanor = Sanctum.Test.People.athanor!(user)
     %{user: user, athanor: athanor}
   end
 

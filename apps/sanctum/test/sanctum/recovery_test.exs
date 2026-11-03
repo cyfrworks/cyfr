@@ -77,7 +77,7 @@ defmodule Sanctum.RecoveryTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry, RecoverRequest}
   alias Sanctum.{Caller, Context, Passkeys, Recovery, SignIn, TestContext}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.Users
   alias Sanctum.Test.DirectoryServer, as: Directory
   alias Sanctum.Test.Newcomers
   alias Sanctum.TestContext.Authenticator
@@ -178,7 +178,7 @@ defmodule Sanctum.RecoveryTest do
     )
   end
 
-  # A person seated in a group of their own, and the context their session
+  # A person seated in their own athanor, and the context their session
   # establishes there.
   defp seated! do
     n = System.unique_integer([:positive])
@@ -191,8 +191,7 @@ defmodule Sanctum.RecoveryTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Recovery #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

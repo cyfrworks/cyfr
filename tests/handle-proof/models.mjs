@@ -508,7 +508,6 @@ function models(S) {
   }];
   M["setup:a.athanors"] = () => [{
     id: anId("ath"),
-    kind: exact("person"),
     name: exact("Me"),
     slug: exact("me"),
     owner_user_id: derived(aUser(), "A's person"),
@@ -519,8 +518,6 @@ function models(S) {
     provisioned_at: within(until(S, "setup", "setup:a.athanors")),
     provisioning_failed_at: noTime(),
     provisioning_failure: nil(),
-    roster: exact("open"),
-    pair_key: nil(),
     security_generation: exact(1),
     created_at: within(win(S, "setup")),
     updated_at: within(until(S, "setup", "setup:a.athanors")),
@@ -528,7 +525,6 @@ function models(S) {
   const membership = (user, athanor, scope, window) => ({
     id: anId("mem"),
     user_id: derived(user, "the person"),
-    person_identifier: nil(),
     scope: exact(scope),
     status: exact("active"),
     added_by: nil(),

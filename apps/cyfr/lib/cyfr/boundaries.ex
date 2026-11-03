@@ -370,7 +370,7 @@ defmodule Cyfr.Boundaries do
           "checks which may stand, and reads and writes the rows only through it. " <>
           "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s in-process agent read " <>
           "alone — the first-need hook: a turn reads its athanor's tree in-process " <>
-          "rather than through the `aqua` tool, and the bundle a group athanor " <>
+          "rather than through the `aqua` tool, and the bundle an unfilled athanor " <>
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
@@ -1509,14 +1509,6 @@ defmodule Cyfr.Boundaries do
           "actor; the assistant owns every thread write."
     },
     %{
-      from: "PrismWeb.ChatLive",
-      into: "Arca.ThreadSubscriptionStorage",
-      functions: [:followed],
-      reason:
-        "the chat page marks the threads the person follows, read under the focused " <>
-          "athanor's actor; following is changed through the assistant."
-    },
-    %{
       from: "PrismWeb.ExecutionsLive",
       into: "Arca.Execution",
       functions: [:statuses],
@@ -1625,14 +1617,6 @@ defmodule Cyfr.Boundaries do
         "the pane opens a thread and its latest messages under the pane's actor, and " <>
           "decodes a message's stored payload and resolution with the store's own " <>
           "projections, which read no row; the assistant owns every thread write."
-    },
-    %{
-      from: "PrismWeb.TopbarLive",
-      into: "Arca.ThreadSubscriptionStorage",
-      functions: [:follows?],
-      reason:
-        "the top bar shows whether the person follows the open thread, read under the " <>
-          "actor; following is changed through the assistant."
     },
     # --- the MCP surface's web adapters ---
     %{
@@ -2130,9 +2114,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Tenancy.Members" => [
       list_by_athanor: 1,
-      member?: 2,
-      people_sharing: 1,
-      solo?: 1
+      member?: 2
     ],
     "Sanctum.Tenancy.Users" => [
       display_name: 1,

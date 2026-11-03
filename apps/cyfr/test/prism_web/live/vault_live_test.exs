@@ -134,12 +134,12 @@ defmodule PrismWeb.VaultLiveTest do
 
   test "a vault entry shows the MCP servers that read it through vault: headers", %{conn: conn} do
     user = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Wired #{user.namespace}")
+    own = Sanctum.Test.People.athanor!(user.user_id)
 
     ctx =
       Sanctum.Context.build(
         user_id: user.user_id,
-        athanor_id: group.id,
+        athanor_id: own.id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -170,8 +170,8 @@ defmodule PrismWeb.VaultLiveTest do
         }
       })
 
-    conn = log_in_user(conn, user, athanor_id: group.id)
-    {_view, html} = mount_athanor(conn, "/vault", group)
+    conn = log_in_user(conn, user, athanor_id: own.id)
+    {_view, html} = mount_athanor(conn, "/vault", own)
     assert html =~ "bridge-token"
     assert html =~ "used by MCP server bridge"
 
@@ -1056,27 +1056,6 @@ defmodule PrismWeb.VaultLiveTest do
 
       refute has_element?(view, "#system-layer-dialog [data-kind=share]")
       refute render(view) =~ "mk-sentinel"
-      Cyfr.Test.Sandbox.end_views()
-    end
-
-    test "a group's vault offers no Share and lists no shares: a key is shared, and a share " <>
-           "granted, from the person's own athanor" do
-      %{terry: terry, traders: traders} = traders!()
-      market = key!(terry, "market key", @market)
-      _share = share!(terry, market, %{"audience" => "thread", "thread_id" => traders.id})
-
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(terry.user.user_id, "Desk")
-      group_ctx = %{terry.ctx | athanor_id: group.id}
-      group_key = key!(%{ctx: group_ctx}, "group key", @market)
-
-      conn = log_in_user(build_conn(), terry.user, athanor_id: group.id)
-      {view, html} = mount_athanor(conn, "/vault", group)
-
-      assert html =~ "group key"
-      refute has_element?(view, share_button(group_key))
-      refute has_element?(view, ~s([data-test="shared-by-you"]))
-      refute has_element?(view, ~s([data-test="shared-with-you"]))
-      refute html =~ "could not be read"
       Cyfr.Test.Sandbox.end_views()
     end
 

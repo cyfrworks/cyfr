@@ -21,20 +21,16 @@ defmodule Aqua.Notes do
 
   ## One pile, two temperatures
 
-  An athanor has one flat pile. Two names in it are **pinned** — `about-you`
-  in a person's own athanor, `about-us` in a shared one — and a pinned page
-  is read into every turn, so it is held short (`pin_max_bytes/0`, refused
+  An athanor has one flat pile. One name in it is **pinned** — `about-you`
+  — and the pinned page is read into every turn, so it is held short (`pin_max_bytes/0`, refused
   rather than truncated). Everything else is **filed**: listed by name,
   read on demand. Pinning an empty page clears it; that is unpin.
 
   ## A note lands where you are
 
   Writes take no scope. `keep/4`, `pin/4` and `forget/2` act on the athanor
-  the context is focused on: your own when you are talking to your own
-  assistant, the room's when you are in a room. A room's assistant cannot
-  file into your private pile and nothing you keep at home reaches a room —
-  the tenant boundary is the whole rule, and there is no argument to get it
-  wrong with.
+  the context is focused on — the tenant boundary is the whole rule, and
+  there is no argument to get it wrong with.
 
   Reads take a scope: `"athanor"` (where you are; the default), `"mine"`
   (your own athanor, reached through `Sanctum.Context.focus/2` so
@@ -78,7 +74,7 @@ defmodule Aqua.Notes do
   @key_prefix @root <> "/"
   @key_suffix ".md"
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9 _.-]{0,80}\z/
-  @pinned_names ~w(about-you about-us)
+  @pinned_names ~w(about-you)
   @pin_max_bytes 2048
   @scopes ~w(athanor mine everywhere)
   @snippet_chars 160
@@ -115,29 +111,15 @@ defmodule Aqua.Notes do
           | {:unavailable, String.t()}
 
   @doc """
-  The one pinned page this athanor has: `about-you` in a person's own
-  athanor, `about-us` in a shared one. The other name is refused at
-  `pin/4` — an athanor has one page, and which one is a fact about the
-  athanor, not a choice per call.
+  The one pinned page this athanor has: `about-you`.
   """
   @spec pinned_page(Context.t()) :: {:ok, String.t()} | {:error, :not_found}
   def pinned_page(%Context{} = ctx) do
     case Sanctum.Tenancy.Athanors.get(Context.athanor!(ctx)) do
-      {:ok, %{kind: "person"}} -> {:ok, "about-you"}
-      {:ok, _} -> {:ok, "about-us"}
+      {:ok, _} -> {:ok, "about-you"}
       {:error, _} -> {:error, :not_found}
     end
   end
-
-  @doc """
-  Whether the context is focused on the person's own athanor. A running
-  chain may read across athanors only from there — see `list/2`. The
-  predicate itself is tenancy's (`Sanctum.Tenancy.Users.own_athanor?/2`);
-  this is its spelling over a context.
-  """
-  @spec at_home?(Context.t()) :: boolean()
-  def at_home?(%Context{user_id: user_id, athanor_id: focus}),
-    do: Users.own_athanor?(user_id, focus)
 
   @spec pinned?(String.t()) :: boolean()
   def pinned?(name), do: name in @pinned_names
@@ -585,7 +567,7 @@ defmodule Aqua.Notes do
   search answers the athanor each match lives in, and a read follows it
   with the `:athanor_id` locator — the one athanor, opened under the
   reader's own seat (`Sanctum.Context.focus/2`: membership and archive
-  checked), and never from a room's chain, which reads its own pile alone.
+  checked).
 
   `:root_execution_id` names the chain the read is made in, as the host
   stamped it (never a value a model wrote). A scheduled run's first read
@@ -922,20 +904,17 @@ defmodule Aqua.Notes do
   # The one athanor a read names: the locator a search answered, else
   # `athanor` (the focus) or `mine` (the person's own). `everywhere` is not
   # one athanor, so it is not a read scope. A locator for the focus is the
-  # focus; any other athanor is opened under the reader's seat, and never
-  # from a room's chain.
+  # focus; any other athanor is opened under the reader's seat.
   defp read_context(ctx, _scope, athanor_id) when is_binary(athanor_id) and athanor_id != "" do
     cond do
       athanor_id == ctx.athanor_id -> {:ok, ctx}
-      true -> with :ok <- guest_may_cross(ctx), do: locate(ctx, athanor_id)
+      true -> locate(ctx, athanor_id)
     end
   end
 
   defp read_context(ctx, "athanor", _none), do: {:ok, ctx}
 
-  defp read_context(ctx, "mine", _none) do
-    with :ok <- guest_may_cross(ctx), do: personal(ctx)
-  end
+  defp read_context(ctx, "mine", _none), do: personal(ctx)
 
   defp read_context(_ctx, _other, _none) do
     {:error, {:invalid_argument, "scope must be one of #{Enum.join(@scopes, ", ")}"}}
@@ -959,8 +938,7 @@ defmodule Aqua.Notes do
   # answer refuses the whole read: an athanor skipped for an outage would
   # read as one holding no notes.
   defp contexts(%Context{} = ctx, "everywhere") do
-    with :ok <- guest_may_cross(ctx),
-         {:ok, others} <- other_seats(ctx) do
+    with {:ok, others} <- other_seats(ctx) do
       {:ok, [ctx | others]}
     end
   end
@@ -986,22 +964,6 @@ defmodule Aqua.Notes do
       refused -> refused
     end
   end
-
-  # A running chain reads across athanors only from the person's own
-  # athanor. In a room, the room's assistant sees the room's pile and
-  # nothing else — a private ledger is not something a shared turn can
-  # open, however politely it asks. The person can, from their own
-  # assistant or from the door.
-  defp guest_may_cross(%Context{plane: :guest} = ctx) do
-    if at_home?(ctx),
-      do: :ok,
-      else:
-        {:error,
-         {:invalid_argument,
-          "a room's assistant reads only the room's notes — look in your own from your own assistant"}}
-  end
-
-  defp guest_may_cross(_ctx), do: :ok
 
   # "Mine" is the person's own athanor, reached through `Context.focus/2` —
   # the narrowing entry, not a raw struct update: focus checks

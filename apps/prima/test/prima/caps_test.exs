@@ -181,9 +181,7 @@ defmodule Prima.CapsTest do
   test "keys/0 is the shared vocabulary, one atom per ceiling" do
     assert Caps.keys() == [
              :max_athanors,
-             :max_groups_per_person,
              :max_pairs_per_person,
-             :max_members_per_group,
              :max_shared_threads_per_person,
              :max_people_per_thread,
              :max_threads_per_athanor,

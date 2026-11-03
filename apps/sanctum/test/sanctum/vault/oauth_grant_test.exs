@@ -15,7 +15,6 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
   import Ecto.Query
 
   alias Sanctum.{Caller, Context}
-  alias Sanctum.Tenancy.{Athanors, Members}
   alias Sanctum.Vault.OAuthGrant
 
   @redirect "https://cyfr.test/auth/oauth/callback"
@@ -37,8 +36,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Grant #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    athanor = Sanctum.Test.People.athanor!(user)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(

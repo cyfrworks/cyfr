@@ -61,7 +61,7 @@ defmodule Sanctum.AnonymousIngressTest do
     test "a standing channel needs an active athanor and a creator who is not denied" do
       {:ok, athanor} =
         Sanctum.Tenancy.Athanors.create(%{
-          kind: "group",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           name: "Athanor X",
           slug: "athanor-x-#{System.unique_integer([:positive])}",
           created_by: "system"
@@ -84,7 +84,7 @@ defmodule Sanctum.AnonymousIngressTest do
       assert Sanctum.Tenancy.channel_active?(athanor.id, nil)
 
       # An archived athanor closes every channel it owns.
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
       refute Sanctum.Tenancy.channel_active?(athanor.id, departed.id)
 
       # And no channel survives without an athanor.

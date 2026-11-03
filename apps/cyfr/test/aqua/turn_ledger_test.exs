@@ -88,7 +88,7 @@ defmodule Aqua.TurnLedgerTest do
   describe "a child of the turn's root is seeded with its step's turn as it stands" do
     test "a source the turn read after its root was admitted reaches the next model and hand children",
          %{ctx: ctx, thread: thread, actor: actor} do
-      {:ok, _} = Aqua.Notes.pin(ctx, "about-us", "We are planning a trip.")
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
 
       script!([
         calls([get("g1")]),

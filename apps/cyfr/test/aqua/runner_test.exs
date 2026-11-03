@@ -24,7 +24,7 @@ defmodule Aqua.RunnerTest do
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Members
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -205,11 +205,9 @@ defmodule Aqua.RunnerTest do
     assert {:error, :not_member} = Runner.send_message(stranger, thread.id, "@aqua hi")
 
     # An athanor not yet filled refuses an addressed send before any row.
-    {:ok, fresh} =
-      Athanors.create_group(ctx.user_id, "Fresh #{System.unique_integer([:positive])}")
-
-    {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: fresh.id)
-    {:ok, fresh_ctx} = Sanctum.Context.focus(ctx, fresh.id)
+    %{athanor_id: fresh} = ScriptedWorker.athanor!(ctx)
+    {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: fresh)
+    {:ok, fresh_ctx} = Sanctum.Context.focus(ctx, fresh)
     # The refused send starts the athanor's fill, which writes its tree.
     remove_on_exit(own_tree!(fresh_ctx))
     {:ok, fresh_thread} = Threads.create(Sanctum.Context.actor(fresh_ctx))
@@ -224,15 +222,11 @@ defmodule Aqua.RunnerTest do
     assert [] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
   end
 
-  test "people talking is a row and no turn; an addressed line starts one and completes", %{
+  test "an addressed line starts a turn, which completes", %{
     ctx: ctx,
     thread: thread
   } do
-    other = second_member(ctx)
     script!([reply("hello back")])
-
-    assert {:ok, %{accepted: true, turn_id: nil, admitted: :post}} =
-             Runner.send_message(other, thread.id, "morning everyone")
 
     assert {:ok, %{accepted: true, turn_id: turn_id, admitted: :turn, replayed: false} = sent} =
              Runner.send_message(ctx, thread.id, "@aqua say hello", client_id: "c-1")
@@ -911,11 +905,9 @@ defmodule Aqua.RunnerTest do
 
       # Another athanor's caller is told the turn does not exist — the same
       # answer an id nobody minted gets, so an id cannot be probed for.
-      {:ok, other} =
-        Athanors.create_group(ctx.user_id, "Other #{System.unique_integer([:positive])}")
-
-      {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: other.id)
-      {:ok, other_ctx} = Sanctum.Context.focus(ctx, other.id)
+      %{athanor_id: other} = ScriptedWorker.athanor!(ctx)
+      {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: other)
+      {:ok, other_ctx} = Sanctum.Context.focus(ctx, other)
 
       assert {:error, :not_found} = Runner.recover_turn(other_ctx, thread.id, turn_id)
       assert {:error, :not_found} = Runner.recover_turn(ctx, thread.id, "trn_never_minted")

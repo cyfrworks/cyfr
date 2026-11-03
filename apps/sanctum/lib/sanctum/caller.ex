@@ -188,9 +188,9 @@ defmodule Sanctum.Caller do
       # a second (the plug, the dead render, the connected mount, the
       # nested topbar). The short memo collapses those to one pipeline
       # run. Only successes are cached, and every session mutation
-      # (`Session.destroy/1`, `destroy_by_hash/1`, `use_athanor/2`,
+      # (`Session.destroy/1`, `destroy_by_hash/1`,
       # `revoke_all_for_user/1`) calls `invalidate_hash/1`, so a revoked
-      # or repointed session misses on its very next establish — the TTL
+      # session misses on its very next establish — the TTL
       # only bounds reads that race the mutation itself, and, on a peer,
       # an announcement the bus did not deliver. What is cached is an
       # AUTHORIZATION decision, so the TTL is a security bound and not a
@@ -1311,9 +1311,9 @@ defmodule Sanctum.Caller do
   member and on every other.
 
   Called by the session mutations (`Sanctum.Session.destroy/1`,
-  `destroy_by_hash/1`, `use_athanor/2`, `revoke_all_for_user/1`,
+  `destroy_by_hash/1`, `revoke_all_for_user/1`,
   `invalidate_memo_for_user/1` — which is what archiving an athanor uses)
-  so a revoked or repointed session is a next-request fact rather than a
+  so a revoked session is a next-request fact rather than a
   TTL-bounded one — the same invalidate-on-write discipline
   `Sanctum.Namespace.invalidate/1` applies to its cache.
 

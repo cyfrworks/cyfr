@@ -1119,32 +1119,6 @@ defmodule Cyfr.BoundariesTest do
       assert callers == ["Elixir.Emissary.Web.CanvasController"]
     end
 
-    # Who a person may send a copy to is the tenancy's answer: the Files
-    # page's picker reads it, and nothing else of the host does.
-    test "the host reads the people a person shares an athanor with from the Files page alone" do
-      assert Boundaries.sanctum_exports()["Sanctum.Tenancy.Members"] ==
-               [list_by_athanor: 1, member?: 2, people_sharing: 1, solo?: 1]
-
-      callers =
-        for path <- beams(:cyfr),
-            Beams.production?(path),
-            {"Sanctum.Tenancy.Members", :people_sharing, 1} in sanctum_reaches(
-              String.to_charlist(path)
-            ),
-            do: Path.basename(path, ".beam")
-
-      assert callers == ["Elixir.PrismWeb.FilesLive"]
-
-      assert [row] =
-               for(
-                 %{into: "Sanctum", from: from} = row <- Boundaries.surfaces(),
-                 "apps/cyfr/lib/prism_web/**/*.ex" in from,
-                 do: row
-               )
-
-      assert "Sanctum.Tenancy" in row.allow
-    end
-
     test "a planted call or capture outside the roster is reported, and a dropped one is stale" do
       [{Cyfr.PlantedSanctumReach, binary}] =
         Code.compile_string(~S'''
@@ -1658,9 +1632,9 @@ defmodule Cyfr.BoundariesTest do
       # Standing is a security row too: a surface that asks the membership
       # store who is seated, rather than Sanctum, is refused.
       standing = [
-        {"apps/cyfr/lib/prism_web/live/planted_members_live.ex",
+        {"apps/cyfr/lib/prism_web/live/planted_seats_live.ex",
          CodeLines.aliases(~S'''
-         defmodule PrismWeb.PlantedMembersLive do
+         defmodule PrismWeb.PlantedSeatsLive do
            def seated(actor), do: Arca.Members.active_user_ids(actor)
          end
          ''')}

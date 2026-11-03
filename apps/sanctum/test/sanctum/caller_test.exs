@@ -83,21 +83,6 @@ defmodule Sanctum.CallerTest do
     {user, athanor}
   end
 
-  # A group of this person's own, with their seat: an athanor a plain
-  # removal can take them out of.
-  defp group_member!(user) do
-    {:ok, athanor} =
-      Sanctum.Tenancy.Athanors.create_group(
-        user.user_id,
-        "Caller #{System.unique_integer([:positive])}"
-      )
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor.id)
-
-    {user, athanor}
-  end
-
   describe "establish/2" do
     test "a claimed member's token becomes a finished Context" do
       {user, home} = new_user() |> claim!() |> member!()
@@ -244,22 +229,6 @@ defmodule Sanctum.CallerTest do
       assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
       assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
       assert Arca.Cache.match({:established, :_, :_}) == []
-    end
-
-    test "a plain member removal drops the memo like the door's revocations do" do
-      # Warm the context memo with a nonzero TTL before checking immediate membership revocation.
-      {user, group} = new_user() |> claim!() |> group_member!()
-      user = Map.put(user, :namespace, user.slug)
-      session = session_for(user, athanor_id: group.id)
-
-      assert {:ok, %Context{athanor_id: focused}} = Caller.establish(session.token)
-      assert focused == group.id
-      refute Arca.Cache.match({:established, :_, :_}) == []
-
-      :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: user.user_id)
-
-      assert Arca.Cache.match({:established, :_, :_}) == [],
-             "the removed member's cached context survived the removal"
     end
 
     test "an invalidation announces the row key, so every member drops what it holds" do

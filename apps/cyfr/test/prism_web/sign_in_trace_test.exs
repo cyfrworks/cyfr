@@ -147,7 +147,8 @@ defmodule PrismWeb.SignInTraceTest do
   defp assert_console_on_filled_athanor(signed_in, identity) do
     {:ok, user} = Users.get_by_identity(identity)
     athanor_id = user.personal_athanor_id
-    assert {:ok, %{kind: "person"}} = Athanors.get(athanor_id)
+    assert {:ok, %{owner_user_id: owner}} = Athanors.get(athanor_id)
+    assert owner == user.id
 
     wait_until(
       fn ->

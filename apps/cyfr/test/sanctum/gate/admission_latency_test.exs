@@ -668,9 +668,9 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
 
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
         name: "Admission bench #{n}",
         slug: "admission-bench-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

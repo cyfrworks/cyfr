@@ -20,7 +20,6 @@ defmodule Sanctum.Providers.AssertionTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
   alias Sanctum.{Cipher, CipherAAD, Context, TestContext}
-  alias Sanctum.Tenancy.Athanors
 
   @directory "https://dir.example"
   @hub "https://hub.example"
@@ -32,7 +31,7 @@ defmodule Sanctum.Providers.AssertionTest do
     :ok
   end
 
-  # A person seated in a group of their own, enrolled here: their genesis
+  # A person seated in their own athanor, enrolled here: their genesis
   # signed by their operational key and their enrollment accepted.
   defp enrolled! do
     n = System.unique_integer([:positive])
@@ -45,7 +44,7 @@ defmodule Sanctum.Providers.AssertionTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Assert #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
     keys = Arca.Repo.get_by!(PersonIdentity, user_id: user.id)
 
     {:ok, operational} =
