@@ -15,7 +15,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
   alias Sanctum.Provider
 
   @tool_names ~w(session athanor shared_thread invitation door oauth key tincture_visibility
-                  webhook vault profile person pairing passkey confirmation share)
+                  webhook vault profile person pairing pin passkey confirmation share)
 
   @action_enums %{
     "session" => [
@@ -80,6 +80,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "assert"
     ],
     "pairing" => ["begin", "complete", "renew", "revoke", "list", "reenable"],
+    "pin" => ["enroll"],
     "passkey" => ["register", "list", "revoke", "reenable", "recover_admin"],
     "confirmation" => ["confirm", "reauth", "pending", "cancel"],
     "share" => ["create", "list", "set_audience", "set_caps", "revoke", "usage", "offered"]
@@ -102,6 +103,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "Invalid profile action. Use: plan, preview, commit, grant, publish, list, grants, or revoke",
     "person" => "Unknown action: person.___no_such_action___",
     "pairing" => "Unknown action: pairing.___no_such_action___",
+    "pin" => "Unknown action: pin.___no_such_action___",
     "passkey" => "Unknown action: passkey.___no_such_action___",
     "confirmation" => "Unknown action: confirmation.___no_such_action___",
     "share" =>
