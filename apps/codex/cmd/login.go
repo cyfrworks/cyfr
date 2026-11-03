@@ -125,6 +125,17 @@ not cyfr login.`,
 // shell (holdShell).
 func runLogin(cmd *cobra.Command, _ []string) error {
 	joining := flagLoginJoin || cmd.Flags().Changed("invitation")
+	if flagLoginPIN {
+		// Refused before anything is asked or made: a PIN the home counts
+		// protects nothing where the home is this machine.
+		address, err := loginAddress()
+		if err != nil {
+			return err
+		}
+		if homeHere(address) {
+			return errors.New(shell.PINHereSentence("command line"))
+		}
+	}
 	switch {
 	case flagLoginSetup && joining:
 		return errors.New("--setup makes this CYFR's first person and --join a new person at a CYFR that has one: use one of them.")
@@ -141,9 +152,6 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	address, err := loginAddress()
 	if err != nil {
 		return err
-	}
-	if flagLoginPIN && homeHere(address) {
-		return errors.New(shell.PINHereSentence("command line"))
 	}
 	o := deviceOptions{address: address, invitation: strings.TrimSpace(flagLoginInvitation)}
 	// pin.enroll goes through the session this unlock opens, set below

@@ -295,6 +295,20 @@ const screenProxy = "socks5://127.0.0.1:1055"
 // own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
 // the sessions at the home first, then starts Chrome again, so no page of
 // the unlocked session outlives it.
+// screenShellConfig is the box's own screen's shell in dir, for the home
+// at address. Its home is this machine, so no PIN the home counts is
+// offered or opened there: without a chip the screen keeps a passphrase.
+func screenShellConfig(dir, address string, client *http.Client, host string, restart func()) shell.Config {
+	return shell.Config{
+		Address: address, Client: client, DisplayName: host,
+		Record:   filepath.Join(dir, screenDir, "holder.json"),
+		DataDir:  filepath.Join(dir, "data"),
+		Tokens:   screenTokens,
+		Restart:  restart,
+		HomeHere: true,
+	}
+}
+
 func runScreenShell(ctx context.Context) error {
 	_ = holder.HardenProcess()
 	dir, err := os.Getwd()
@@ -328,16 +342,7 @@ func runScreenShell(ctx context.Context) error {
 	_ = exec.Command("pkill", "-f", "--", "^swayidle -w timeout [0-9]+ kill -USR1 ").Run()
 	chrome := &screenChrome{args: chromeArgs}
 	host, _ := os.Hostname()
-	sh, err := shell.New(shell.Config{
-		Address: address, Client: client, DisplayName: host,
-		Record:  filepath.Join(dir, screenDir, "holder.json"),
-		DataDir: filepath.Join(dir, "data"),
-		Tokens:  screenTokens,
-		Restart: chrome.restart,
-		// The box's own screen: its home is this machine, so no PIN the
-		// home counts is offered.
-		HomeHere: true,
-	})
+	sh, err := shell.New(screenShellConfig(dir, address, client, host, chrome.restart))
 	if err != nil {
 		return err
 	}

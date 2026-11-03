@@ -5,6 +5,8 @@ package cmd
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -32,5 +34,31 @@ func TestHomeHere(t *testing.T) {
 		if got := homeHere(address); got != want {
 			t.Errorf("homeHere(%q) = %v, want %v", address, got, want)
 		}
+	}
+}
+
+// The box's own screen counts its home as this machine whatever the
+// address it is reached at, so it never keeps a PIN the home counts.
+func TestScreenShell_TheHomeIsThisMachine(t *testing.T) {
+	if c := screenShellConfig(t.TempDir(), "https://box.tail0000.ts.net", nil, "box", func() {}); !c.HomeHere || c.EnrollPIN != nil {
+		t.Fatalf("the screen's shell: HomeHere %v, EnrollPIN set %v", c.HomeHere, c.EnrollPIN != nil)
+	}
+}
+
+// The stack in the working directory, reached through a tailnet node in
+// a container, names no address of this machine's interfaces: its .env
+// says the home is here.
+func TestHomeHere_TheStackHereServesIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	env := "CYFR_ACCESS=tailnet\nCYFR_HOST=cyfr.tail1234.ts.net\nCYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nTESTNODE1CNTRL\nCYFR_PORT=4000\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !stackServes("https://cyfr.tail1234.ts.net") || !homeHere("https://cyfr.tail1234.ts.net/") {
+		t.Fatal("the stack here does not serve its own address")
+	}
+	if stackServes("https://other.tail1234.ts.net") {
+		t.Fatal("the stack here serves another home's address")
 	}
 }

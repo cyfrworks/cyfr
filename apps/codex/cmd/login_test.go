@@ -305,6 +305,10 @@ func TestLogin_RefusesWhatItCannotHold(t *testing.T) {
 			t.Errorf("%s: %v, want %q", args, err, want)
 		}
 	}
+	// The home at 127.0.0.1 is this machine: --pin is refused first.
+	if _, err := runCommand(t, t.Context(), "login", "--pin"); err == nil || err.Error() != shell.PINHereSentence("command line") {
+		t.Errorf("login --pin at a home here: %v", err)
+	}
 	t.Setenv(sessionHomeEnv, home.URL)
 	if _, err := runCommand(t, t.Context(), "login"); err == nil || !strings.Contains(err.Error(), "unlocked by cyfr login already") {
 		t.Errorf("a login shell's login: %v", err)
@@ -631,5 +635,44 @@ func TestDeviceShell_ALoopbackContextIsTheHomesLocalhost(t *testing.T) {
 			t.Errorf("%s: the key is for %v (%v), want %s", address, rec, err, want)
 		}
 		_ = os.Remove(path)
+	}
+}
+
+// cyfr login --pin asks the new PIN twice once unlocked and hands both to
+// SetPIN; the device's sentence ends the run when no PIN was set.
+func TestLoginDriver_SetPINAsksThePINTwice(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageUnlocked}, func(call string, d *fakeDevice) {
+		if call == "setpin" {
+			d.set(shell.View{Page: shell.PageUnlocked, Notice: "This command line's key is now kept under your six-digit PIN."})
+		}
+	})
+	c, out := typed("123456", "123456")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.setPIN(t.Context()); err != nil {
+		t.Fatalf("setPIN: %v\n%s", err, out)
+	}
+	if string(dev.secrets["setpin"]) != "123456" || dev.given["setpin"] != "123456" || !strings.Contains(out.String(), "now kept under") {
+		t.Fatalf("SetPIN given %q and %q\n%s", dev.secrets["setpin"], dev.given["setpin"], out)
+	}
+
+	refused := newFakeDevice(shell.View{Page: shell.PageUnlocked}, func(call string, d *fakeDevice) {
+		d.set(shell.View{Page: shell.PageUnlocked, Notice: "The two entries differ. Enter the same one twice."})
+	})
+	c, _ = typed("123456", "654321")
+	d = &loginDriver{sh: refused, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.setPIN(t.Context()); err == nil || err.Error() != "The two entries differ. Enter the same one twice." {
+		t.Fatalf("a refused PIN: %v", err)
+	}
+}
+
+// A key under a PIN its home counts is asked for as a PIN.
+func TestLoginDriver_AKeyUnderAPINAsksAPIN(t *testing.T) {
+	c, out := typed("123456")
+	d := &loginDriver{c: c}
+	if _, err := d.askSecret(t.Context(), shell.View{Kind: holder.KindSoftware, PIN: true}, "Unlock this command line with its"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "its PIN: ") {
+		t.Fatalf("asked %q", out)
 	}
 }
