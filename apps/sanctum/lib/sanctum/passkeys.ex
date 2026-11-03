@@ -1179,8 +1179,7 @@ defmodule Sanctum.Passkeys do
   person is locked and read active, so a person denied first gains no
   passkey (`{:conflict, _}`). Recorded by the gate's decision, and
   announced to the person's own clients (`:passkey_registered`) and to
-  them and the members of every athanor they belong to
-  (`:passkey_recovered`), never to the administrator's.
+  them and their own athanor (`:passkey_recovered`), never to the administrator's.
 
   For a person whose keys are at another home, their head is read fresh
   from their directory first, and the authorization names its current

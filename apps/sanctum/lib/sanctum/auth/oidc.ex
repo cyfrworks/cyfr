@@ -177,7 +177,7 @@ defmodule Sanctum.Auth.OIDC do
 
   Called after successful OAuth callback with the auth struct from Ueberauth.
   Builds a `Sanctum.Context` from the OAuth provider's response and resolves
-  athanor membership.
+  the person's athanor.
 
   ## Examples
 

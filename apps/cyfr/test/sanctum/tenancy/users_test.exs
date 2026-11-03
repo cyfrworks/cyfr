@@ -7,7 +7,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   import Ecto.Query, only: [from: 2]
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -156,7 +156,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert Users.prefs(u) == %{"mode" => "lite", "theme" => "dark"}
   end
 
-  test "personal_athanor_id/1 and own_athanor?/2 are the one read of a person's own furnace" do
+  test "personal_athanor_id/1 is the person's lookup and own_athanor?/2 reads the owner" do
     u = unhoused(7)
 
     # Known, but no furnace minted yet — and an unknown id, and no id at all.
@@ -180,6 +180,42 @@ defmodule Sanctum.Tenancy.UsersTest do
     refute Users.own_athanor?(u.id, "ath_elsewhere")
     # A context with no person (the public or an internal one) is never at home.
     refute Users.own_athanor?(nil, personal.id)
+  end
+
+  test "an athanor whose owner is the person is theirs to every reader, the personal pointer unset" do
+    u = unhoused(8)
+
+    {:ok, own} =
+      Athanors.create(%{
+        name: "P8",
+        slug: "p8-#{System.unique_integer([:positive])}",
+        owner_user_id: u.id,
+        created_by: u.id
+      })
+
+    assert :none = Users.personal_athanor_id(u.id)
+
+    ctx =
+      Context.build(
+        user_id: u.id,
+        auth_method: :oidc,
+        authenticated: true,
+        scope: :athanor,
+        permissions: Context.person_permissions()
+      )
+
+    assert {:ok, %Context{athanor_id: own_id}} = Context.focus(ctx, own.id)
+    assert own_id == own.id
+    assert Users.own_athanor?(u.id, own.id)
+
+    assert {:ok, %Context{athanor_id: ^own_id}} =
+             Sanctum.Tenancy.continuation(u.id, own.id, "interactive")
+
+    # The denial archives the athanor by its owner, and the allow reopens it.
+    assert {:ok, _} = Users.deny(u)
+    assert {:ok, %{status: "archived"}} = Athanors.get(own.id)
+    assert {:ok, _} = Users.allow(%{u | status: "denied"})
+    assert {:ok, %{status: "active"}} = Athanors.get(own.id)
   end
 
   test "deny ejects: sessions and keys revoked, own athanor archived" do
@@ -212,11 +248,12 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    # allow reverses the standing, reopens the athanor and seats its owner in
-    # it again; the credentials stay revoked
+    # allow reverses the standing and reopens the athanor, which its person
+    # focuses again; the credentials stay revoked
     assert {:ok, %{status: "active"}} = Users.allow(denied)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
-    assert Members.member?(u.id, personal.id)
+    assert {:ok, %{athanor_id: focused}} = Context.focus(%{ctx | athanor_id: nil}, personal.id)
+    assert focused == personal.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
 

@@ -117,14 +117,12 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     assert entries(ctx.athanor_id) == []
   end
 
-  test "a seat lost in the grant's athanor writes nothing there" do
+  test "the grant's athanor archived since the grant started writes nothing there" do
     ctx = person!()
     state = for_context(ctx)
 
-    Arca.Repo.delete_all(
-      from(m in Arca.Schemas.Membership,
-        where: m.user_id == ^ctx.user_id and m.athanor_id == ^ctx.athanor_id
-      )
+    Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id),
+      set: [status: "archived"]
     )
 
     assert {:error, :unauthenticated} = OAuthGrant.complete(state, "code", @redirect)

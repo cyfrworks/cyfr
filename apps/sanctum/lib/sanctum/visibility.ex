@@ -75,8 +75,8 @@ defmodule Sanctum.Visibility do
   end
 
   # `scope: :platform` is the operator capability, not a widened tenant scope:
-  # the caller still works inside one athanor and only the membership fact
-  # (`platform_admin`) admits them.
+  # the caller still works inside one athanor and only the mark on their
+  # person row (`platform_admin`) admits them.
   defp check_scope(ctx, annotation) do
     case Map.get(annotation, :scope) do
       nil -> :ok

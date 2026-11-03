@@ -5,9 +5,9 @@ defmodule Sanctum.TenancyContinuationTest do
   @moduledoc """
   A recovered turn continues as the person, with the person's surface,
   under the origin its row stores, or not at all: a missing or unknown
-  origin is refused before anything is read, and a denied user with a
-  surviving membership, a person not seated and an archived athanor are
-  refused, never degraded.
+  origin is refused before anything is read, and a denied user whose
+  athanor stands, a turn in an athanor not the person's and an archived
+  athanor are refused, never degraded.
   """
 
   use ExUnit.Case, async: false
@@ -15,7 +15,7 @@ defmodule Sanctum.TenancyContinuationTest do
   import Ecto.Query, only: [from: 2]
 
   alias Sanctum.Tenancy
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.Users
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -34,7 +34,7 @@ defmodule Sanctum.TenancyContinuationTest do
     {:ok, user: user, athanor: Sanctum.Test.People.athanor!(user)}
   end
 
-  test "a seated person continues with the person's surface, under the stored origin", %{
+  test "the athanor's person continues with the person's surface, under the stored origin", %{
     user: user,
     athanor: athanor
   } do
@@ -73,45 +73,45 @@ defmodule Sanctum.TenancyContinuationTest do
     assert {:error, :denied} = Tenancy.continuation("usr_nobody", "ath_nowhere", "interactive")
   end
 
-  test "a person not seated in the turn's athanor, and an unknown person, are refused", %{
-    user: user
-  } do
+  test "a turn in an athanor not the person's, or in none, and an unknown person, are refused",
+       %{user: user} do
     n = System.unique_integer([:positive])
 
-    {:ok, other} =
-      Athanors.create(%{
-        name: "Elsewhere #{n}",
-        slug: "elsewhere-#{n}",
-        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-        created_by: "system"
+    {:ok, someone} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|cont-other#{n}",
+        provider: "github"
       })
 
-    refute Members.member?(user.id, other.id)
+    other = Sanctum.Test.People.athanor!(someone)
+
     assert {:error, :not_member} = Tenancy.continuation(user.id, other.id, "programmatic")
+    assert {:error, :not_member} = Tenancy.continuation(user.id, "ath_nowhere", "programmatic")
     assert {:error, :denied} = Tenancy.continuation("usr_nobody", other.id, "programmatic")
   end
 
-  test "a denied person is refused even while a membership row survives", %{
+  test "a denied person is refused even while their athanor stands", %{
     user: user,
     athanor: athanor
   } do
-    # The denial archives the person's athanor and takes their seat; both
-    # put back by hand, the surviving row lands in an athanor that stands.
+    # The denial archives the person's athanor; put back by hand, it is
+    # their own and active.
     {:ok, _} = Users.deny(user)
 
     Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id),
       set: [status: "active"]
     )
 
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
-    assert Members.member?(user.id, athanor.id)
+    assert {:ok, %{status: "active", owner_user_id: owner}} =
+             Sanctum.Tenancy.Athanors.get(athanor.id)
+
+    assert owner == user.id
     assert {:error, :denied} = Tenancy.continuation(user.id, athanor.id, "schedule")
   end
 
   test "a person whose athanor was archived is refused", %{user: user, athanor: athanor} do
     Sanctum.TestContext.archive!(athanor.id)
-    # Archiving deletes nothing: the seat stands, and the athanor refuses.
-    assert Members.member?(user.id, athanor.id)
+    # Archiving deletes nothing: the athanor stays the person's, and refuses.
     assert {:error, :archived} = Tenancy.continuation(user.id, athanor.id, "webhook")
   end
 end

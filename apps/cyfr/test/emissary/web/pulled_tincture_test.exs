@@ -40,7 +40,6 @@ defmodule Emissary.Web.PulledTinctureTest do
     base = Path.join(System.tmp_dir!(), "pulled_tincture_#{System.unique_integer([:positive])}")
     original = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, base)
-    _ = Sanctum.TestContext.athanor!()
 
     on_exit(fn ->
       if original,
@@ -50,10 +49,12 @@ defmodule Emissary.Web.PulledTinctureTest do
       File.rm_rf!(base)
     end)
 
-    reader = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-    {:ok, session} = Sanctum.TestContext.create_session(reader)
+    # The reader is the person of the athanor the tinctures are pulled into.
+    {reader, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    reader = %{reader | athanor_id: Sanctum.Test.People.athanor!(user).id}
+    {:ok, session} = Sanctum.TestContext.create_session(Sanctum.TestContext.issuer!(reader))
     {:ok, rctx} = Sanctum.Caller.establish(session.token)
-    {:ok, rctx: rctx, ctx: Sanctum.TestContext.local()}
+    {:ok, rctx: rctx, ctx: reader}
   end
 
   defp publish(ctx, name, archive, manifest, opts \\ []) do

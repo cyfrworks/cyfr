@@ -8,7 +8,7 @@ defmodule Arca.RowPlaneSeamTest do
   Checks that database queries stay in the storage layer or carry an explicit scoped exemption.
 
   Rows belong to `Arca` (its schemas and `*Storage` modules) and to
-  `Sanctum`, whose tenancy fabric — users, memberships, athanors, the door
+  `Sanctum`, whose tenancy fabric — users, athanors, the door
   — is its own domain rather than a storage concern. The surfaces do not
   reach past them.
   """

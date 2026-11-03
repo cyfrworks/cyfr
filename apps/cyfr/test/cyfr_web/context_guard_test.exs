@@ -59,17 +59,9 @@ defmodule CyfrWeb.ContextGuardTest do
     )
   end
 
-  defp drop_seats!(user_id, scope) do
-    Arca.Repo.delete_all(
-      from(m in Arca.Schemas.Membership, where: m.user_id == ^user_id and m.scope == ^scope)
-    )
-  end
-
-  defp drop_seat!(user_id, athanor_id) do
-    Arca.Repo.delete_all(
-      from(m in Arca.Schemas.Membership,
-        where: m.user_id == ^user_id and m.athanor_id == ^athanor_id
-      )
+  defp clear_admin_mark!(user_id) do
+    Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user_id),
+      set: [platform_admin_at: nil]
     )
   end
 
@@ -103,9 +95,9 @@ defmodule CyfrWeb.ContextGuardTest do
       {view, html} = mount_athanor(conn, "/settings")
       assert html =~ "Server allowlist"
 
-      # The grant and the session go with no announcement, and the memo's
+      # The mark and the session go with no announcement, and the memo's
       # bound has passed.
-      drop_seats!(captured.user_id, "platform")
+      clear_admin_mark!(captured.user_id)
       delete_session!(hash)
       bound!(0)
 
@@ -120,13 +112,13 @@ defmodule CyfrWeb.ContextGuardTest do
       refute door_has?(identifier)
     end
 
-    test "the grant alone withdrawn: the refreshed context carries no capability to act on",
+    test "the mark alone withdrawn: the refreshed context carries no capability to act on",
          %{conn: conn} do
       {_ops, conn, _token, _hash} = operator!(conn)
       {view, _html} = mount_athanor(conn, "/settings")
       ctx = :sys.get_state(view.pid).socket.assigns.context
 
-      drop_seats!(ctx.user_id, "platform")
+      clear_admin_mark!(ctx.user_id)
       bound!(0)
 
       identifier = identifier("not-now")
@@ -184,22 +176,6 @@ defmodule CyfrWeb.ContextGuardTest do
 
       send(view.pid, :load)
       assert_redirect(view, "/login", 2_000)
-    end
-
-    test "a lost seat nobody announced ends the focus, and the page is not moved to another athanor",
-         %{conn: conn} do
-      user = test_user()
-      {conn, _token, _hash} = signed_in(conn, user)
-      own = Sanctum.Test.People.athanor!(user.user_id)
-
-      {view, _html} = mount_athanor(conn, "/settings", own)
-      drop_seat!(user.user_id, own.id)
-      bound!(0)
-
-      assert {:error, {:redirect, %{to: "/"}}} =
-               view
-               |> element("button[phx-click=set_mode][phx-value-mode=lite]")
-               |> render_click()
     end
 
     test "an archive nobody announced ends the focus", %{conn: conn} do
@@ -288,7 +264,7 @@ defmodule CyfrWeb.ContextGuardTest do
   # identity row is `remote`, their head cached as verified now from a
   # genesis naming a directory nothing answers at, and the conn holds a
   # session of theirs bound to that head's `key_epoch`. The athanor is the
-  # one the sign-in seated them in.
+  # one the sign-in focused them on.
   defp remote!(conn, user) do
     {conn, _token, _hash} = signed_in(conn, user)
     athanor_id = Process.get(:prism_test_athanor_id)
@@ -453,20 +429,6 @@ defmodule CyfrWeb.ContextGuardTest do
 
       moved = socket_with(%{ctx | athanor_id: "ath_elsewhere"})
       assert {:noreply, ^moved} = ContextGuard.deliver(moved, tag, &{:delivered, &1})
-
-      rebased =
-        socket_with(%{
-          ctx
-          | credential_binding: %{
-              source_kind: :session,
-              source_id: "x",
-              focus_basis: "mem_other",
-              user_generation: 1,
-              athanor_generation: 1
-            }
-        })
-
-      assert {:noreply, ^rebased} = ContextGuard.deliver(rebased, tag, &{:delivered, &1})
     end
 
     test "a page drops a task's answer computed for another focus", %{conn: conn} do
@@ -475,7 +437,7 @@ defmodule CyfrWeb.ContextGuardTest do
 
       pulled = fn -> :sys.get_state(view.pid).socket.assigns.pull_results end
 
-      elsewhere = {"ath_elsewhere", "mem_elsewhere", DateTime.utc_now()}
+      elsewhere = {"ath_elsewhere", DateTime.utc_now()}
       send(view.pid, {:deliver, elsewhere, {:pull_complete, "reagent:local.a:1.0.0", {:ok, %{}}}})
       _ = render(view)
       refute Map.has_key?(pulled.(), "reagent:local.a:1.0.0")
@@ -514,6 +476,24 @@ defmodule CyfrWeb.ContextGuardTest do
       watch = ContextGuard.watch(ctx, every: 40)
       :ok = ContextGuard.unwatch(watch)
       refute_receive ^recheck, 200
+    end
+
+    test "ends on its own athanor's archive and stands through another's", %{conn: conn} do
+      user = test_user()
+      {_conn, token, _hash} = signed_in(conn, user)
+      {:ok, ctx} = Caller.establish(token)
+      own = Sanctum.Test.People.athanor!(user.user_id)
+      watch = ContextGuard.watch(ctx, every: 60_000)
+
+      assert {:ok, watch} =
+               ContextGuard.standing(Cyfr.Bus.AthanorArchived.new("ath_elsewhere"), watch)
+
+      archive_row!(own.id)
+
+      assert {:refused, :not_member} =
+               ContextGuard.standing(Cyfr.Bus.AthanorArchived.new(own.id), watch)
+
+      :ok = ContextGuard.unwatch(watch)
     end
   end
 

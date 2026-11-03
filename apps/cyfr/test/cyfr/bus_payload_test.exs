@@ -27,7 +27,6 @@ defmodule Cyfr.BusPayloadTest do
     FrameCredential,
     LayoutPublished,
     McpServers,
-    Membership,
     Notify,
     Ping,
     PolicyDecision,
@@ -102,7 +101,6 @@ defmodule Cyfr.BusPayloadTest do
       ),
       Session.new(:revoked, "u"),
       SettingsChanged.new(:changed, setting: "log_level", revision: 3, op: :put, value: "debug"),
-      Membership.new(:changed, "u", "ath_payload", :joined),
       CallerInvalidated.new(:crypto.hash(:sha256, "session")),
       AthanorArchived.new("ath_payload"),
       ShareChanged.new(:revoked, "shr_payload"),
@@ -250,7 +248,6 @@ defmodule Cyfr.BusPayloadTest do
             fn -> Notify.new(@actor, :not_a_kind) end,
             fn -> Notify.platform(:not_a_kind) end,
             fn -> Session.new(:minted) end,
-            fn -> Membership.new(:left, "u", nil, :left) end,
             fn -> ThreadEvent.new(@actor, "t", :message_updated, %{}) end,
             fn -> Progress.new(@actor, {:request, "r"}) end,
             fn -> ExecutionEvent.new(@actor, :durable, %{delta: 1}) end,
@@ -305,19 +302,6 @@ defmodule Cyfr.BusPayloadTest do
       assert byte_size(cut) <= 200 and String.valid?(cut)
     end
 
-    test "a seat change is one of a closed set, and anything else raises" do
-      for change <- [:joined, :left, :athanor_changed, :platform_granted] do
-        assert %Membership{change: ^change} = Membership.new(:changed, "u", nil, change)
-      end
-
-      # Built at runtime, as the bridge builds it from telemetry metadata.
-      for change <- ["joined", {:joined, "sk"}, :deleted] do
-        assert_raise ArgumentError, fn ->
-          apply(Membership, :new, [:changed, "u", nil, change])
-        end
-      end
-    end
-
     test "a tenant payload refuses an actor that names no athanor, and a field it does not declare" do
       assert_raise ArgumentError, fn -> Execution.new(%Prima.Actor{}, :started) end
       assert_raise ArgumentError, fn -> Execution.new(@actor, :started, token: "sk") end
@@ -356,8 +340,7 @@ defmodule Cyfr.BusPayloadTest do
     end
 
     test "names its tenant, from the actor it was built for" do
-      for %{athanor_id: athanor_id} = sample <- samples(),
-          sample.__struct__ != Membership,
+      for %{athanor_id: athanor_id} <- samples(),
           do: assert(athanor_id in ["ath_payload", :platform])
     end
 

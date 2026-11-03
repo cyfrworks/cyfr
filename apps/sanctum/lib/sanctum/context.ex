@@ -41,12 +41,12 @@ defmodule Sanctum.Context do
   session or `focus/2` named. `:platform` is the server itself: the internal
   contexts `internal/1` builds for sweepers, retention, health probes and
   seeding, which cross athanors by nature. A platform admin (the operator)
-  is a person like any other, focused on one athanor at a time and only on
-  one they hold a seat in; the capability rides on the context as
-  `platform_admin: true`, is re-derived from the membership row whenever
+  is a person like any other, focused on their own athanor only; the
+  capability rides on the context as `platform_admin: true`, is re-derived
+  from the mark on their person row (`users.platform_admin_at`) whenever
   the context is established (behind `Sanctum.Caller`'s short memo, which
   revocation invalidates), and is what the platform-scope operations check
-  — never a widened scope and never a seat.
+  — never a widened scope.
   Only *how* a context is constructed varies by deployment configuration —
   never the functions that consume it.
   """
@@ -54,7 +54,7 @@ defmodule Sanctum.Context do
   require Logger
 
   # The vocabulary is `Prima.TenancyScope`'s, where the actor and the
-  # stored membership row read it too.
+  # stored athanor row read it too.
   @type scope :: Prima.TenancyScope.t()
   @type auth_method ::
           :oidc
@@ -70,9 +70,9 @@ defmodule Sanctum.Context do
   @typedoc """
   What a credential this context holds was issued against, read when the
   context was established: which credential (`source_kind`, `source_id`),
-  which membership authorized its focus (`focus_basis`: the membership
-  row id, `:key` for an athanor's key, or nil where no row does), and the
-  person's and the focused athanor's standing generations. A freshly
+  and the person's and the focused athanor's standing generations. The
+  focus needs nothing more: an athanor is its owner's, and every check
+  holds the athanor's `owner_user_id` to the person. A freshly
   admitted sign-in, which holds no credential yet, carries
   `source_kind: :identity` and as `source_id` the identity key of the door
   it came through (the context's `door`), or nil where the door named
@@ -100,7 +100,6 @@ defmodule Sanctum.Context do
   @type credential_binding :: %{
           required(:source_kind) => :identity | :session | :api_key | :device,
           required(:source_id) => String.t() | nil,
-          required(:focus_basis) => String.t() | :key | nil,
           required(:user_generation) => pos_integer(),
           required(:athanor_generation) => pos_integer() | nil,
           optional(:identity) => device_identity() | nil,
@@ -277,9 +276,9 @@ defmodule Sanctum.Context do
     # (Sanctum.VaultReader) denies anonymous contexts — an anonymous internet
     # caller must never reach operator credentials.
     anonymous: false,
-    # The server's operator: a platform-scope membership row grants it. It is
-    # a capability, not a scope and not a seat — the context still works
-    # inside one athanor, and only one the person is seated in.
+    # The server's operator: the mark on their person row grants it. It is
+    # a capability, not a scope — the context still works inside one
+    # athanor, the person's own.
     platform_admin: false,
     # Which authorization plane this context is on. :external is every real
     # ingress; :guest is stamped one-way by enter_guest/1 when a context
@@ -504,14 +503,13 @@ defmodule Sanctum.Context do
          %{
            source_kind: kind,
            source_id: source_id,
-           focus_basis: basis,
            user_generation: user_generation,
            athanor_generation: athanor_generation
          } = binding,
          attrs
        )
        when kind in @binding_sources and (is_binary(source_id) or is_nil(source_id)) and
-              (is_binary(basis) or basis in [:key, nil]) and is_integer(user_generation) and
+              is_integer(user_generation) and
               user_generation > 0 and
               (is_nil(athanor_generation) or
                  (is_integer(athanor_generation) and athanor_generation > 0)) do
@@ -833,18 +831,17 @@ defmodule Sanctum.Context do
   Focus the context on an athanor: the one narrowing entry every LiveView
   mount runs through.
 
-  The athanor's person may focus it, and no one else. Anyone without a
-  current seat there is answered `{:error, :not_found}`, whether the
+  The athanor's person may focus it, and no one else. Anyone who is not
+  its owner is answered `{:error, :not_found}`, whether the
   athanor is open, archived or does not exist: the refusal is the same for
   all three, so an outsider learns nothing of which athanors exist or
-  what became of them. A platform admin holding no seat is answered so
-  like anyone else, since the capability is over the instance and is not a
-  seat. An archived athanor cannot be focused by anyone, and only its
-  seated person is told that it is archived (`:archived`): the seat is
-  read before the standing.
+  what became of them. A platform admin is answered so like anyone else,
+  since the capability is over the instance. An archived athanor cannot be
+  focused by anyone, and only its person is told that it is archived
+  (`:archived`): the owner is read before the standing.
 
   The athanor is named by its id, or by a map carrying it (`:id`), and
-  only the id is read: its row, its standing and the seat are read again
+  only the id is read: its row, its standing and its owner are read again
   here, so a caller's stale copy of a row cannot focus an athanor that has
   since been archived or bind the context to a generation it no longer
   has. A store that cannot answer either read is `{:error, :unavailable}`,
@@ -852,10 +849,9 @@ defmodule Sanctum.Context do
 
   A context an API key stands behind (`key_bound?/1`: the key's own, or a
   credential derived from it) works in the athanor the key was minted in
-  and no other. Its focus is the key, not a seat: it focuses that athanor
-  whether or not the key's creator still sits there, and any other is
-  answered `{:error, :not_found}` before any row is read, whatever seats
-  the creator holds. Its athanor is archived to it as to a member.
+  and no other: it focuses that athanor, and any other is answered
+  `{:error, :not_found}` before any row is read. Its athanor is archived
+  to it as to its person.
   """
   @spec focus(t(), String.t() | %{required(:id) => String.t(), optional(atom()) => term()}) ::
           {:ok, t()} | {:error, :not_found | :archived | :unavailable}
@@ -864,7 +860,7 @@ defmodule Sanctum.Context do
 
   def focus(%__MODULE__{athanor_id: home} = ctx, athanor_id) when is_binary(athanor_id) do
     cond do
-      not key_bound?(ctx) -> read_and_focus(ctx, athanor_id, &seated/2)
+      not key_bound?(ctx) -> read_and_focus(ctx, athanor_id, &owned/2)
       athanor_id == home -> read_and_focus(ctx, athanor_id, &keyed/2)
       true -> {:error, :not_found}
     end
@@ -891,57 +887,39 @@ defmodule Sanctum.Context do
   def key_bound?(%__MODULE__{}), do: false
 
   # A key's own athanor: its standing is the key's (`Sanctum.ApiKey`
-  # re-checks the channel on every use), so no seat is read; the athanor's
+  # re-checks the channel on every use), so no owner is read; the athanor's
   # row and standing are, as for anyone.
   defp keyed(_ctx, %{status: "archived"}), do: {:error, :archived}
-  defp keyed(ctx, athanor), do: {:ok, refocused(ctx, athanor, :key)}
+  defp keyed(ctx, athanor), do: {:ok, refocused(ctx, athanor)}
 
-  # The seat first, the standing second: whether an athanor is archived is
-  # its members' to hear, and a caller with no seat is told what a missing
-  # athanor tells them.
-  defp seated(ctx, %{id: id} = athanor) do
-    case Sanctum.Tenancy.Members.active_seat(ctx.user_id, id) do
-      {:ok, _seat} when athanor.status == "archived" ->
-        {:error, :archived}
-
-      {:ok, seat} ->
-        {:ok, refocused(ctx, athanor, seat.id)}
-
-      :none ->
-        {:error, :not_found}
-
-      {:error, _unreadable} ->
-        {:error, :unavailable}
-    end
+  # The owner first, the standing second: whether an athanor is archived is
+  # its person's to hear, and anyone else is told what a missing athanor
+  # tells them.
+  defp owned(%__MODULE__{user_id: user_id} = ctx, %{owner_user_id: user_id} = athanor)
+       when is_binary(user_id) do
+    if athanor.status == "archived",
+      do: {:error, :archived},
+      else: {:ok, refocused(ctx, athanor)}
   end
 
+  defp owned(_ctx, _athanor), do: {:error, :not_found}
+
   # A new focus is a new standing read: the binding follows it, naming the
-  # athanor's generation as read now and the membership that authorized
-  # it. An athanor's key keeps `:key` — its standing is the key's, not a
-  # seat's.
-  defp refocused(%__MODULE__{credential_binding: nil} = ctx, %{id: id}, _basis),
+  # athanor's generation as read now.
+  defp refocused(%__MODULE__{credential_binding: nil} = ctx, %{id: id}),
     do: %{ctx | athanor_id: id, scope: :athanor}
 
-  defp refocused(%__MODULE__{credential_binding: binding} = ctx, athanor, basis) do
-    basis = if binding.focus_basis == :key, do: :key, else: basis
+  defp refocused(%__MODULE__{credential_binding: binding} = ctx, athanor) do
     ctx = %{ctx | athanor_id: athanor.id, scope: :athanor}
-
-    %{
-      ctx
-      | credential_binding: %{
-          binding
-          | focus_basis: basis,
-            athanor_generation: athanor.security_generation
-        }
-    }
+    %{ctx | credential_binding: %{binding | athanor_generation: athanor.security_generation}}
   end
 
   @doc """
   Focuses the caller on another athanor for domain reads or writes after
-  checking membership and archive status. Archived-athanor management uses
+  checking its owner and archive status. Archived-athanor management uses
   `Sanctum.Providers.Athanor.resolve/3`, which permits get and unarchive.
 
-  A user context goes through `focus/2` whole: a seat, and an archived
+  A user context goes through `focus/2` whole: its owner, and an archived
   athanor refused. A **system** context
   (`auth_method: :system`) crosses tenants by design — recovery resolving
   a stored agent from its owner's tree has no member to speak as — but an
@@ -1003,8 +981,7 @@ defmodule Sanctum.Context do
 
   - `{:execution, record}` — permission + per-record
     `verify_tenant`; the record must carry `:user_id` (attribution) and
-    `:athanor_id`. There is no owner gate: members of an athanor are
-    interchangeable.
+    `:athanor_id`. There is no per-person gate: the athanor is one person's.
   - `{:tenant, record}` — permission + per-record `verify_tenant`.
   - `nil` / a shape with no tenant identity — permission + tenant *presence*
     only. The storage primitive (`Arca.QueryHelpers.where_tenant/2`,
@@ -1060,8 +1037,8 @@ defmodule Sanctum.Context do
   end
 
   # Tenant-bearing resources authorize identically: permission + per-record
-  # athanor equality via verify_tenant. Members of an athanor are
-  # interchangeable — there is NO owner gate; user_id stays on records for
+  # athanor equality via verify_tenant. The athanor is one person's, so
+  # there is NO per-person gate; user_id stays on records for
   # attribution only. :execution still requires a :user_id key so a tag
   # that promises an owner but carries none fails closed in the malformed
   # clause below (rather than passing on tenant presence alone).

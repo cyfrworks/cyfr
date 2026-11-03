@@ -3,25 +3,25 @@
 
 defmodule Sanctum.Tenancy do
   @moduledoc """
-  Tenant resolution from memberships.
+  Tenant resolution from the person's row.
 
   `resolve_status/2` is the single chokepoint the one establish recipe
   (`Sanctum.Caller`) flows through to attach the caller's athanor and
-  capabilities to their Context. It reads the user's membership rows: an
-  athanor row grants that athanor; a platform row makes the caller a
-  platform admin (`platform_admin: true`), which is a capability the
-  context carries, never a wider scope and never a seat — every request
-  works inside one athanor, and only one a seat grants.
+  capabilities to their Context. The athanor is the person's own, the one
+  whose owner they are; the mark on their row (`users.platform_admin_at`)
+  makes them the platform admin (`platform_admin: true`), which is a
+  capability the context carries, never a wider scope — every request
+  works inside one athanor, the person's own.
 
   There is no deployment "mode". A fresh install with no auth configured never
   reaches here (requests run as the unauthenticated public context). With
   auth configured, who may sign in is decided at the door
-  (`Sanctum.Door`), and the rows this module reads are written at sign-in
-  (`Sanctum.SignIn`) and by the `athanor.*` / `member.*` verbs.
+  (`Sanctum.Door`), and the rows this module reads are written by the
+  person's admission (`Sanctum.Newcomer`).
 
   ## Test overrides
 
-  Tests can bypass membership resolution by setting
+  Tests can bypass the resolution by setting
   `config :sanctum, :tenancy_resolver_override, MyResolver` — the override's
   `resolve/1` runs instead. This is honored only when the compile-time flag
   `config :sanctum, :allow_tenancy_resolver_override, true` is set (test/dev);
@@ -30,7 +30,7 @@ defmodule Sanctum.Tenancy do
 
   require Logger
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   @doc """
   Merge the caller's athanor and capabilities into the context.
@@ -44,8 +44,8 @@ defmodule Sanctum.Tenancy do
   whose athanor is archived, or who has none, has no working athanor,
   operator or not.
 
-  A membership read that FAILED is `{:error, :unavailable}`, distinct from
-  a person who genuinely belongs to no athanor (`{:ok, ctx}` with no
+  A read that FAILED is `{:error, :unavailable}`, distinct from
+  a person who genuinely has no athanor (`{:ok, ctx}` with no
   athanor, which the tenant gate refuses): a database blip must never read
   as "you belong nowhere, contact your administrator" — a permanent-
   sounding answer to a transient fault no operator can see.
@@ -54,7 +54,7 @@ defmodule Sanctum.Tenancy do
   (`t:Sanctum.Context.credential_binding/0`). A context that holds no
   credential yet — an admitted sign-in, the only caller that passes
   `force: true` — is stamped `source_kind: :identity` with the person's
-  and the chosen athanor's generations and the membership that granted it,
+  and the chosen athanor's generations,
   read after the door's verdict, and the door it came through
   (`Sanctum.Context`'s `door`) as its source; a session or key context
   keeps its source and person generation and takes the new athanor's. A
@@ -100,23 +100,23 @@ defmodule Sanctum.Tenancy do
 
   defp key_athanor(%Context{}), do: []
 
-  # The membership-resolution override is a test-only seam. `do_resolve/1` is
+  # The resolution override is a test-only seam. `do_resolve/1` is
   # defined in two compile-time variants: a production release — compiled with
-  # prod config, where the flag is false — gets the plain membership path with
-  # NO override code at all, so the override can never bypass membership
+  # prod config, where the flag is false — gets the plain path with
+  # NO override code at all, so the override can never bypass the
   # resolution regardless of how the app env is set at runtime.
   if Application.compile_env(:sanctum, :allow_tenancy_resolver_override, false) do
     defp do_resolve(%Context{} = ctx) do
       case Application.get_env(:sanctum, :tenancy_resolver_override) do
         nil ->
-          resolve_from_memberships(ctx)
+          resolve_from_person(ctx)
 
         module ->
           case module.resolve(ctx.user_id) do
             %{athanor_id: athanor_id} ->
               {:ok, %{ctx | athanor_id: athanor_id, scope: :athanor}}
 
-            :no_membership ->
+            :no_athanor ->
               {:ok, ctx}
 
             {:error, reason} ->
@@ -129,15 +129,15 @@ defmodule Sanctum.Tenancy do
       end
     end
   else
-    defp do_resolve(%Context{} = ctx), do: resolve_from_memberships(ctx)
+    defp do_resolve(%Context{} = ctx), do: resolve_from_person(ctx)
   end
 
-  defp resolve_from_memberships(%Context{user_id: user_id} = ctx) do
-    with {:ok, user} <- user_row(user_id),
-         {:ok, memberships} <- Members.list_by_user(user_id) do
-      {ctx, athanor} = apply_membership(ctx, memberships)
-      {:ok, bind(ctx, user, athanor, memberships)}
-    else
+  defp resolve_from_person(%Context{user_id: user_id} = ctx) do
+    case user_row(user_id) do
+      {:ok, user} ->
+        {ctx, athanor} = apply_person(ctx, user)
+        {:ok, bind(ctx, user, athanor)}
+
       {:error, reason} ->
         Logger.error("[Sanctum.Tenancy] resolve failed for #{user_id}: #{inspect(reason)}")
         {:error, :unavailable}
@@ -154,15 +154,15 @@ defmodule Sanctum.Tenancy do
     end
   end
 
-  # Set capability and athanor from an already-loaded membership list;
+  # Set capability and athanor from the person's row, already read;
   # answers the context and the chosen athanor's row.
-  defp apply_membership(%Context{} = ctx, memberships) do
+  defp apply_person(%Context{} = ctx, user) do
     athanor = working_athanor(ctx)
 
     {%{
        ctx
        | scope: :athanor,
-         platform_admin: platform_admin?(memberships),
+         platform_admin: platform_admin?(user),
          athanor_id: athanor && athanor.id
      }, athanor}
   end
@@ -171,58 +171,29 @@ defmodule Sanctum.Tenancy do
   # of its own — an admitted sign-in — is bound as `:identity`; a session
   # or key context keeps its source and its person generation and follows
   # the athanor this resolve chose.
-  defp bind(%Context{} = ctx, nil, _athanor, _memberships), do: %{ctx | credential_binding: nil}
+  defp bind(%Context{} = ctx, nil, _athanor), do: %{ctx | credential_binding: nil}
 
-  defp bind(
-         %Context{credential_binding: %{source_kind: kind} = binding} = ctx,
-         _user,
-         athanor,
-         memberships
-       )
+  defp bind(%Context{credential_binding: %{source_kind: kind} = binding} = ctx, _user, athanor)
        when kind in [:session, :api_key] do
-    basis =
-      if binding.focus_basis == :key, do: :key, else: focus_basis(ctx, athanor, memberships)
-
     %{
       ctx
       | credential_binding: %{
           binding
-          | focus_basis: basis,
-            athanor_generation: athanor && athanor.security_generation
+          | athanor_generation: athanor && athanor.security_generation
         }
     }
   end
 
-  defp bind(%Context{} = ctx, user, athanor, memberships) do
+  defp bind(%Context{} = ctx, user, athanor) do
     %{
       ctx
       | credential_binding: %{
           source_kind: :identity,
           source_id: ctx.door,
-          focus_basis: focus_basis(ctx, athanor, memberships),
           user_generation: user.security_generation,
           athanor_generation: athanor && athanor.security_generation
         }
     }
-  end
-
-  @doc """
-  The membership row that authorizes `ctx`'s focus on `athanor`: the
-  person's active seat there, else nil. A platform row is never a focus
-  basis, the operator's included: the capability is over the instance,
-  not a seat in any athanor. `memberships` are the person's active rows.
-  """
-  @spec focus_basis(Context.t(), map() | nil, [map()]) :: String.t() | nil
-  def focus_basis(_ctx, nil, _memberships), do: nil
-
-  def focus_basis(%Context{}, %{id: athanor_id}, memberships) do
-    case Enum.find(memberships, fn
-           %{scope: "athanor", status: "active", athanor_id: ^athanor_id} -> true
-           _ -> false
-         end) do
-      %{id: id} -> id
-      nil -> nil
-    end
   end
 
   @typedoc """
@@ -272,7 +243,7 @@ defmodule Sanctum.Tenancy do
 
   # The person's own athanor, by its owner, while it is active; otherwise
   # none. The capability keeps no athanor. An unanswerable read is none:
-  # entering an athanor still resolves its seat strictly.
+  # entering an athanor still reads its owner strictly.
   defp working_athanor(%Context{user_id: user_id}) when is_binary(user_id) do
     case Athanors.get_by_owner(user_id) do
       {:ok, %{status: "active"} = athanor} -> athanor
@@ -288,8 +259,8 @@ defmodule Sanctum.Tenancy do
 
   Sessions persist their athanor so the per-request hot path doesn't
   re-resolve, but a change after the session was created MUST take effect
-  immediately: a denied user is dropped to unauthenticated, a revoked
-  platform membership loses the capability, and a session pointing at an
+  immediately: a denied user is dropped to unauthenticated, a cleared
+  platform administrator's mark loses the capability, and a session pointing at an
   athanor that is not the user's own active one is moved to their own —
   a platform admin included, whose capability keeps no athanor. A user
   whose own athanor is archived, or who has none, is dropped to an
@@ -298,11 +269,11 @@ defmodule Sanctum.Tenancy do
 
   A context an API key stands behind (`Sanctum.Context.key_bound?/1`)
   keeps the athanor the key was minted in, as `Sanctum.Context.focus/2`
-  and `list_athanors/1` do: its creator's seats never move it. Its
+  and `list_athanors/1` do. Its
   creator's denial drops it like any other; an athanor since archived or
   removed leaves it athanor-less.
 
-  Cost: one `users` read and one `Members.list_by_user/1` query per restored
+  Cost: one `users` read and one `athanors` read by owner per restored
   request (both indexed). It trades those for immediate revocation instead
   of waiting out the session TTL.
 
@@ -317,8 +288,8 @@ defmodule Sanctum.Tenancy do
       {:ok, %{status: "denied"}} ->
         {:ok, %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}}
 
-      {:ok, _user} ->
-        if Context.key_bound?(ctx), do: revalidate_key(ctx), else: revalidate_seats(ctx)
+      {:ok, user} ->
+        if Context.key_bound?(ctx), do: revalidate_key(ctx), else: revalidate_person(ctx, user)
 
       {:error, reason} ->
         unavailable("user", user_id, reason)
@@ -327,12 +298,8 @@ defmodule Sanctum.Tenancy do
 
   def revalidate(%Context{} = ctx), do: {:ok, ctx}
 
-  defp revalidate_seats(%Context{user_id: user_id} = ctx) do
-    case Members.list_by_user(user_id) do
-      {:ok, memberships} -> {:ok, ctx |> apply_membership(memberships) |> elem(0)}
-      {:error, reason} -> unavailable("memberships", user_id, reason)
-    end
-  end
+  defp revalidate_person(%Context{} = ctx, user),
+    do: {:ok, ctx |> apply_person(user) |> elem(0)}
 
   defp revalidate_key(%Context{athanor_id: id} = ctx) when is_binary(id) and id != "" do
     case Athanors.get(id) do
@@ -362,11 +329,10 @@ defmodule Sanctum.Tenancy do
 
   Unlike `revalidate/1`, it refuses instead of degrading: `:no_origin`
   when `origin` is missing or names no origin, before anything is read;
-  `:denied` when the `users` row is denied or missing (read first — a
-  denial marks the user before memberships are swept, so a surviving
-  membership proves nothing), `:not_member` when the person is not
-  seated in the turn's own athanor, `:archived` when the athanor is not
-  active, `:unavailable` when the store cannot answer.
+  `:denied` when the `users` row is denied or missing (read first),
+  `:not_member` when the turn's own athanor is not the person's,
+  `:archived` when the athanor is not active, `:unavailable` when the
+  store cannot answer.
   """
   @spec continuation(String.t(), String.t(), String.t() | nil) ::
           {:ok, Context.t()}
@@ -379,10 +345,21 @@ defmodule Sanctum.Tenancy do
           {:error, :denied}
 
         {:ok, _user} ->
-          cond do
-            not Members.member?(user_id, athanor_id) -> {:error, :not_member}
-            not Athanors.active?(athanor_id) -> {:error, :archived}
-            true -> {:ok, continuation_context(user_id, athanor_id, origin)}
+          case Athanors.get(athanor_id) do
+            {:ok, %{owner_user_id: ^user_id, status: "active"}} ->
+              {:ok, continuation_context(user_id, athanor_id, origin)}
+
+            {:ok, %{owner_user_id: ^user_id}} ->
+              {:error, :archived}
+
+            {:ok, _another} ->
+              {:error, :not_member}
+
+            {:error, :not_found} ->
+              {:error, :not_member}
+
+            {:error, _reason} ->
+              {:error, :unavailable}
           end
 
         {:error, :not_found} ->
@@ -511,20 +488,20 @@ defmodule Sanctum.Tenancy do
     do: id in @synthetic_principals or String.starts_with?(id, "webhook:")
 
   @doc """
-  Whether this person holds the operator capability — an ACTIVE platform
-  membership row.
+  Whether this person holds the operator capability: an active person
+  whose row carries the platform administrator's mark
+  (`users.platform_admin_at`), by id or as the row already read.
 
-  Returns false on a failed membership read; capability checks fail closed.
+  Returns false on a failed read; capability checks fail closed.
   """
-  @spec platform_admin?(String.t() | [map()]) :: boolean()
+  @spec platform_admin?(String.t() | map() | nil) :: boolean()
   def platform_admin?(user_id) when is_binary(user_id) do
-    case Members.list_by_user(user_id) do
-      {:ok, rows} -> platform_admin?(rows)
+    case Users.get(user_id) do
+      {:ok, user} -> platform_admin?(user)
       {:error, _} -> false
     end
   end
 
-  def platform_admin?(memberships) when is_list(memberships) do
-    Enum.any?(memberships, &(&1.scope == "platform" and &1.status == "active"))
-  end
+  def platform_admin?(%{status: "active", platform_admin_at: %DateTime{}}), do: true
+  def platform_admin?(_user), do: false
 end

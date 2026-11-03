@@ -91,7 +91,8 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
   test "the key works in its own athanor", %{a: a, key_ctx: key_ctx} do
     assert {:ok, focused} = Context.focus(key_ctx, a.id)
     assert focused.athanor_id == a.id
-    assert focused.credential_binding.focus_basis == :key
+    assert %{source_kind: :api_key, source_id: key_id} = focused.credential_binding
+    assert key_id == key_ctx.api_key_id
 
     assert {:ok, %{id: id}} = Gate.call_external("athanor", key_ctx, %{"action" => "get"})
     assert id == a.id

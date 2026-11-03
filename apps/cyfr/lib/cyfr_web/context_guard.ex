@@ -12,8 +12,8 @@ defmodule CyfrWeb.ContextGuard do
   context validated within the freshness bound (`Sanctum.Caller.fresh?/1`)
   is used as it is, and any other is revalidated from the store
   (`Sanctum.Caller.revalidate_session/1`) before the work runs. A standing
-  announcement — sessions revoked, this session invalidated, a membership
-  changed, the focused athanor archived — revalidates at once, whatever
+  announcement — sessions revoked, this session invalidated, the focused
+  athanor archived — revalidates at once, whatever
   the context's age. Announcements are the prompt path; the bound is the
   backstop for one that never arrives.
 
@@ -56,7 +56,7 @@ defmodule CyfrWeb.ContextGuard do
 
   import Phoenix.Component, only: [assign: 3]
 
-  alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, Membership, Session}
+  alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, Session}
   alias Phoenix.LiveView
   alias Phoenix.LiveView.Socket
   alias Sanctum.{Caller, Context}
@@ -82,21 +82,19 @@ defmodule CyfrWeb.ContextGuard do
   @type refusal :: Caller.revalidation_refusal()
 
   @typedoc """
-  What a deferred result was computed under: the tenant, the membership
-  that authorized the focus, and when that context was last validated.
+  What a deferred result was computed under: the tenant, and when that
+  context was last validated.
   """
-  @type tag :: {String.t() | nil, String.t() | :key | nil, DateTime.t() | nil}
+  @type tag :: {String.t() | nil, DateTime.t() | nil}
 
   @typedoc """
-  A stream's standing watch (`watch/2`): the context it holds, the
-  recheck's cadence and timer, and the person whose standing it
-  subscribed to.
+  A stream's standing watch (`watch/2`): the context it holds and the
+  recheck's cadence and timer.
   """
   @type watch :: %{
           context: Context.t(),
           every: pos_integer(),
-          timer: reference(),
-          user_id: String.t() | nil
+          timer: reference()
         }
 
   @doc "The Plug session key holding the Sanctum session token."
@@ -182,8 +180,7 @@ defmodule CyfrWeb.ContextGuard do
   defp on_params(_params, _uri, socket), do: proceed(socket)
 
   # Announcements about this caller revalidate now; announcements about
-  # anyone else are consumed here, as the gate's own traffic. A membership
-  # change goes on to the page afterwards, which may have a list to reread.
+  # anyone else are consumed here, as the gate's own traffic.
   defp on_info(%Session{kind: :revoked, user_id: user_id}, socket) do
     if caller?(socket, &(&1.user_id == user_id)),
       do: settle(socket, :halt),
@@ -202,7 +199,6 @@ defmodule CyfrWeb.ContextGuard do
       else: {:halt, socket}
   end
 
-  defp on_info(%Membership{}, socket), do: settle(socket, :cont)
   defp on_info(%Session{kind: :created}, socket), do: {:halt, socket}
   defp on_info(@recheck, socket), do: settle(socket, :halt)
   defp on_info(_message, socket), do: proceed(socket)
@@ -387,15 +383,15 @@ defmodule CyfrWeb.ContextGuard do
   # ---------------------------------------------------------------------------
 
   @doc """
-  What a task started now is computed under: the tenant, the membership
-  that authorized the focus, and when that context was validated. The
-  task sends it back with its result, for `deliver/3`.
+  What a task started now is computed under: the tenant, and when that
+  context was validated. The task sends it back with its result, for
+  `deliver/3`.
   """
   @spec capture(Socket.t() | Context.t()) :: tag()
   def capture(%Socket{assigns: assigns}), do: capture(Map.get(assigns, :context))
 
-  def capture(%Context{} = ctx), do: {ctx.athanor_id, basis(ctx), ctx.validated_at}
-  def capture(_none), do: {nil, nil, nil}
+  def capture(%Context{} = ctx), do: {ctx.athanor_id, ctx.validated_at}
+  def capture(_none), do: {nil, nil}
 
   @doc """
   Deliver a deferred result to the socket only if it was computed for the
@@ -405,14 +401,11 @@ defmodule CyfrWeb.ContextGuard do
   """
   @spec deliver(Socket.t(), tag(), (Socket.t() -> result)) :: result | {:noreply, Socket.t()}
         when result: term()
-  def deliver(%Socket{} = socket, {athanor_id, basis, _validated_at}, fun)
+  def deliver(%Socket{} = socket, {athanor_id, _validated_at}, fun)
       when is_function(fun, 1) do
     case socket.assigns[:context] do
-      %Context{athanor_id: ^athanor_id} = ctx ->
-        if basis(ctx) == basis, do: fun.(socket), else: discard(socket)
-
-      _ ->
-        discard(socket)
+      %Context{athanor_id: ^athanor_id} -> fun.(socket)
+      _ -> discard(socket)
     end
   end
 
@@ -420,9 +413,6 @@ defmodule CyfrWeb.ContextGuard do
     Logger.debug("[CyfrWeb.ContextGuard] dropped a result computed under another focus")
     {:noreply, socket}
   end
-
-  defp basis(%Context{credential_binding: %{focus_basis: basis}}), do: basis
-  defp basis(%Context{}), do: nil
 
   # ---------------------------------------------------------------------------
   # Streams
@@ -438,8 +428,8 @@ defmodule CyfrWeb.ContextGuard do
   @spec watch(Context.t(), keyword()) :: watch()
   def watch(%Context{} = ctx, opts \\ []) do
     every = Keyword.get(opts, :every, @stream_recheck_ms)
-    :ok = Cyfr.Bus.subscribe_standing(ctx.user_id)
-    %{context: ctx, every: every, timer: arm(every), user_id: ctx.user_id}
+    :ok = Cyfr.Bus.subscribe_standing()
+    %{context: ctx, every: every, timer: arm(every)}
   end
 
   @doc """
@@ -448,7 +438,7 @@ defmodule CyfrWeb.ContextGuard do
   """
   defguard standing_message(message)
            when is_struct(message, Session) or is_struct(message, CallerInvalidated) or
-                  is_struct(message, AthanorArchived) or is_struct(message, Membership) or
+                  is_struct(message, AthanorArchived) or
                   message == @recheck
 
   @doc """
@@ -476,15 +466,14 @@ defmodule CyfrWeb.ContextGuard do
   def standing(%AthanorArchived{athanor_id: athanor_id}, %{context: ctx} = watch),
     do: if(ctx.athanor_id == athanor_id, do: revalidate(watch), else: {:ok, watch})
 
-  def standing(%Membership{}, watch), do: revalidate(watch)
   def standing(%Session{kind: :created}, watch), do: {:ok, watch}
   def standing(_message, _watch), do: :ignore
 
   @doc "End a watch: unsubscribe, disarm, and drop a recheck already queued."
   @spec unwatch(watch()) :: :ok
-  def unwatch(%{timer: timer, user_id: user_id}) do
+  def unwatch(%{timer: timer}) do
     Process.cancel_timer(timer)
-    :ok = Cyfr.Bus.unsubscribe_standing(user_id)
+    :ok = Cyfr.Bus.unsubscribe_standing()
 
     receive do
       @recheck -> :ok
@@ -507,10 +496,10 @@ defmodule CyfrWeb.ContextGuard do
   # ---------------------------------------------------------------------------
 
   # Every announcement that can end a context's standing
-  # (`Cyfr.Bus.subscribe_standing/1`). The archive and invalidation topics
+  # (`Cyfr.Bus.subscribe_standing/0`). The archive and invalidation topics
   # are server-wide, so a move to another athanor needs no new
   # subscription; each holder filters for its own caller.
-  defp subscribe(%Context{user_id: user_id}), do: Cyfr.Bus.subscribe_standing(user_id)
+  defp subscribe(%Context{}), do: Cyfr.Bus.subscribe_standing()
 
   defp refusal_path(:not_member), do: "/"
   defp refusal_path(:company_login_required), do: "/company-login"

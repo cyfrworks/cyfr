@@ -11,11 +11,10 @@ defmodule Arca.SecurityTransitions.Projection do
   # lookup keys the caller already holds, and a callback has no use for
   # them.
 
-  alias Arca.Schemas.{ApiKey, Athanor, Membership, Session, User}
+  alias Arca.Schemas.{ApiKey, Athanor, Session, User}
 
-  @user ~w(id email email_verified status denied_at personal_athanor_id security_generation)a
-  @athanor ~w(id kind roster name owner_user_id created_by status archived_at security_generation)a
-  @membership ~w(id user_id email athanor_id scope status)a
+  @user ~w(id email email_verified status denied_at platform_admin_at personal_athanor_id security_generation)a
+  @athanor ~w(id name owner_user_id created_by status archived_at security_generation)a
   @session ~w(id user_id athanor_id expires_at)a
   @api_key ~w(id name athanor_id created_by revoked suspended ip_allowlist)a
 
@@ -24,9 +23,6 @@ defmodule Arca.SecurityTransitions.Projection do
 
   @spec athanor(Athanor.t() | nil) :: map() | nil
   def athanor(row), do: narrowed(row, Athanor, @athanor)
-
-  @spec membership(Membership.t() | nil) :: map() | nil
-  def membership(row), do: narrowed(row, Membership, @membership)
 
   @spec session(Session.t() | nil) :: map() | nil
   def session(row), do: narrowed(row, Session, @session)

@@ -118,7 +118,6 @@ defmodule Sanctum do
       Tenancy,
       Tenancy.Athanors,
       Tenancy.Caps,
-      Tenancy.Members,
       Tenancy.Users,
       TinctureAccess,
       TinctureAuth,

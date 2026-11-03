@@ -127,56 +127,37 @@ defmodule PrismWeb.OpsTest do
 
       {:ok, session} = Sanctum.TestContext.create_session(ctx)
       {:ok, established} = Sanctum.Caller.establish(session.token)
-      {:ok, person: person, established: established}
+      {:ok, person: person, home: home, established: established}
     end
 
     test "an archived athanor: one decision with no athanor, and no row names it",
-         %{person: person, established: established} do
-      kept = place!(person)
-      {:ok, on_kept} = Sanctum.Context.focus(established, kept.id)
-      Sanctum.TestContext.archive!(kept.id)
+         %{person: person, home: home, established: established} do
+      Sanctum.TestContext.archive!(home.id)
 
-      assert_no_tenant(on_kept, kept, person)
+      assert_no_tenant(established, home, person)
     end
 
-    test "a seat removed in an active athanor: one decision with no athanor, the person kept",
+    test "an active athanor not the person's: focus refuses it, and a context naming it is " <>
+           "one decision with no athanor, the person kept",
          %{person: person, established: established} do
-      left = place!(person)
-      on_left = seat_removed!(left, person, established)
-      assert Sanctum.Tenancy.Athanors.active?(left.id)
+      other = other_athanor!()
+      assert {:error, :not_found} = Sanctum.Context.focus(established, other.id)
+      assert Sanctum.Tenancy.Athanors.active?(other.id)
 
-      assert_no_tenant(on_left, left, person)
+      assert_no_tenant(%{established | athanor_id: other.id}, other, person)
     end
 
-    # An athanor no person's admission made, with `person` seated in it.
-    defp place!(person) do
+    # An active athanor another person owns.
+    defp other_athanor! do
       {:ok, athanor} =
         Sanctum.Tenancy.Athanors.create(%{
-          name: "Place #{person.namespace}",
-          slug: "place-#{System.unique_integer([:positive])}",
+          name: "Elsewhere",
+          slug: "elsewhere-#{System.unique_integer([:positive])}",
           owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           created_by: "system"
         })
 
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(person.user_id, scope: "athanor", athanor_id: athanor.id)
-
       athanor
-    end
-
-    # `person`, focused in `athanor`, and then their seat's row deleted
-    # with no announcement: the athanor stays active and the focus no
-    # longer stands.
-    defp seat_removed!(athanor, person, established) do
-      {:ok, focused} = Sanctum.Context.focus(established, athanor.id)
-
-      Arca.Repo.delete_all(
-        from(m in Arca.Schemas.Membership,
-          where: m.user_id == ^person.user_id and m.athanor_id == ^athanor.id
-        )
-      )
-
-      focused
     end
 
     # A call from `focused`, once the guard refuses it, leaves one refused

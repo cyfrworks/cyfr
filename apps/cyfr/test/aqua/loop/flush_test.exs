@@ -51,6 +51,13 @@ defmodule Aqua.Loop.FlushTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     ctx = Sanctum.TestContext.local(:prism)
+    {:ok, ctx: ctx, thread: ready!(ctx)}
+  end
+
+  # The athanor `ctx` works in, made one the soul's turns run in: the
+  # shipped tree indexed, the soul's consent minted and the model's key
+  # bound. Answers a thread there.
+  defp ready!(ctx) do
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -61,7 +68,7 @@ defmodule Aqua.Loop.FlushTest do
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    {:ok, ctx: ctx, thread: thread}
+    thread
   end
 
   test "under a standing auto, the model keeps a note before the summary, and says nothing", %{
@@ -112,18 +119,13 @@ defmodule Aqua.Loop.FlushTest do
   end
 
   test "a flush in the round that reads the room neither sends nor keeps the room's lines", %{
-    ctx: ctx,
-    thread: thread
+    ctx: ctx
   } do
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
-
-    # The sender is a person, seated here and in a shared thread beside
-    # their own thread.
-    {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+    # The sender is a person, in their own athanor and in a shared thread
+    # beside their own thread.
+    {ctx, user} = Sanctum.TestContext.person!(ctx)
+    ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
+    thread = ready!(ctx)
 
     {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
     {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "ROOM-ONLY-LINE")

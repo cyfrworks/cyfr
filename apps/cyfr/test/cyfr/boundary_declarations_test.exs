@@ -94,7 +94,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   @export_additions %{
     Arca => [
       {~w(ApiKeyStorage Athanors ConsentProofStorage ConsentStorage DecisionLog
-          DecisionLog.AuditFailure Doors FrameCredentials McpLog Members PairedClients
+          DecisionLog.AuditFailure Doors FrameCredentials McpLog PairedClients
           ProfileStorage ProviderCredentialStorage RegistryTokenStorage SessionStorage
           ShareUsage SharedMessages SharedThreadMembers SharedThreads Shares ToolGrantStorage
           Users VaultStorage WebhookStorage),
@@ -142,7 +142,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement PolicyLog Provisioning Session SignIn Tenancy Tenancy.Athanors
-          Tenancy.Members Tenancy.Users TinctureAuth ToolServerDigest Unauthorized
+          Tenancy.Users TinctureAuth ToolServerDigest Unauthorized
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},

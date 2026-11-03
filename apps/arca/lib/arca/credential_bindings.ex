@@ -6,13 +6,13 @@ defmodule Arca.CredentialBindings do
   The rows a derived credential is held to, read under lock.
 
   A tincture access or asset token is a narrowed derivative of one stored
-  session or API key: it names the person, the athanor, the membership
-  that authorized the focus and the credential it was minted from, with
+  session or API key: it names the person, the athanor and the credential
+  it was minted from, with
   the standing generations read when it was minted. Whether it still
   opens anything is decided on those rows as they are now. `check/3`
   locks and rereads them in the order every standing transition takes
-  (`Arca.SecurityTransitions`) — the person, the athanor, the membership,
-  then the session or the key — reads the database's own time after every
+  (`Arca.SecurityTransitions`) — the person, the athanor, then the
+  session or the key — reads the database's own time after every
   lock was won, and hands the caller's policy plain maps of what it found
   (nil where there is no row). Nothing is written.
 
@@ -20,7 +20,7 @@ defmodule Arca.CredentialBindings do
   change it asked for is written: its binding names its paired client and
   the expiry of the certificate it stands under, and the check locks the
   client and then that client's certificates expiring then, after the
-  membership, and reads the person's identity row and cached head under
+  athanor, and reads the person's identity row and cached head under
   the person's lock (`Arca.SecurityTransitions.Issuance`).
 
   A denial, an archive or a revocation that commits first is what the
@@ -36,15 +36,12 @@ defmodule Arca.CredentialBindings do
 
   @typedoc """
   The rows a credential names: the person, the athanor it works in (nil
-  for a session with no current focus), the
-  membership its focus rests on (nil for a key, whose focus is itself)
-  and the source credential, `{:session, token_hash}`, `{:api_key, id}`
+  for a session with no current focus) and the source credential, `{:session, token_hash}`, `{:api_key, id}`
   or a paired device's `{:device, client_id, expires_at}`.
   """
   @type binding :: %{
           required(:user_id) => String.t(),
           required(:athanor_id) => String.t() | nil,
-          required(:membership_id) => String.t() | nil,
           required(:source) =>
             {:session, binary()} | {:api_key, String.t()} | {:device, String.t(), DateTime.t()}
         }

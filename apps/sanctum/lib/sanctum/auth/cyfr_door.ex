@@ -573,7 +573,7 @@ defmodule Sanctum.Auth.CyfrDoor do
          do: {:ok, user, outcome}
   end
 
-  # The person's own context, bound to the athanor their memberships give,
+  # The person's own context, bound to their own athanor,
   # or none: a person admitted to nothing here holds a session with no
   # athanor and is told so.
   defp context(user) do

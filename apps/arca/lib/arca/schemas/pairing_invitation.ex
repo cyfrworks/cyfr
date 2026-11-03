@@ -24,7 +24,6 @@ defmodule Arca.Schemas.PairingInvitation do
     field :athanor_id, :string
     field :secret_hash, :string
     field :user_id, :string
-    field :membership_id, :string
     field :prospective_client_id, :string
     field :audience_home, :string
     field :expires_at, :utc_datetime_usec

@@ -659,11 +659,11 @@ defmodule Arca.DecisionLog do
   # Global readers — the platform admin's, over the host's own rows
   # ============================================================================
 
-  # A platform administrator holds a capability over the instance, not a
-  # seat (`ARCHITECTURE.md` §5.1): the rows these read are the host's own,
+  # A platform administrator holds a capability over the instance
+  # (`ARCHITECTURE.md` §5.1): the rows these read are the host's own,
   # the decisions made before any athanor was resolved, and never an
-  # athanor's. An athanor's decisions are its members' (`list/2`, `get/2`),
-  # an administrator's included only through a seat of their own there.
+  # athanor's. An athanor's decisions are its person's (`list/2`, `get/2`),
+  # an administrator's only in their own athanor.
 
   @doc """
   The host's own decision under `call_id`: a row no athanor holds. The

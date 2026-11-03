@@ -25,7 +25,7 @@ defmodule Sanctum.Unauthorized do
           | :malformed_record
           | :untagged_tenant_resource
           | :platform_admin_required
-          | {:missing_tenant, :no_membership}
+          | {:missing_tenant, :no_athanor}
           | {:missing_permission, atom()}
           | {:guest_plane, atom()}
           | {:guest_plane_call, String.t()}
@@ -56,7 +56,7 @@ defmodule Sanctum.Unauthorized do
            ],
       do: true
 
-  def reason?({:missing_tenant, :no_membership}), do: true
+  def reason?({:missing_tenant, :no_athanor}), do: true
   def reason?({:missing_permission, p}) when is_atom(p), do: true
   def reason?({:guest_plane, p}) when is_atom(p), do: true
   def reason?({:guest_plane_call, n}) when is_binary(n), do: true
@@ -104,7 +104,7 @@ defmodule Sanctum.Unauthorized do
       when reason in [:missing_tenant, :tenant_mismatch, :platform_admin_required],
       do: :forbidden
 
-  def class({:missing_tenant, :no_membership}), do: :forbidden
+  def class({:missing_tenant, :no_athanor}), do: :forbidden
   def class({:missing_permission, _permission}), do: :forbidden
   def class({:guest_plane, _permission}), do: :forbidden
   def class({:guest_plane_call, _name}), do: :forbidden
@@ -136,8 +136,8 @@ defmodule Sanctum.Unauthorized do
   def message(:missing_tenant, _),
     do: "Unauthorized: this request needs an athanor, and none is resolved"
 
-  # An authenticated person with no athanor membership needs operator assistance.
-  def message({:missing_tenant, :no_membership}, _),
+  # An authenticated person with no athanor of their own needs operator assistance.
+  def message({:missing_tenant, :no_athanor}, _),
     do: "Unauthorized: your account has no athanor — contact your administrator"
 
   def message(:tenant_mismatch, _), do: "Unauthorized: this belongs to another athanor"

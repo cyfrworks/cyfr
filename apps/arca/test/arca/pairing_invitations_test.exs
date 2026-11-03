@@ -7,8 +7,8 @@ defmodule Arca.PairingInvitationsTest do
   verifier, stored by the hash of their secret with a reserved client id,
   the digest of the one device key that may redeem them and the confirmer
   read from the consumed `pairing.begin` confirmation; looked up by hash
-  for routing alone; redeemed once, under the person, athanor and
-  membership locked first and the invitation last, with its state, expiry,
+  for routing alone; redeemed once, under the person and athanor locked
+  first and the invitation last, with its state, expiry,
   key, confirmer, the person's first-method latch and the member's
   ownership rechecked, the client and its certificate recorded and the
   invitation consumed in one transaction, or nothing. A standing
@@ -23,7 +23,6 @@ defmodule Arca.PairingInvitationsTest do
   alias Arca.{
     ControlPlane,
     DeviceCertificates,
-    Members,
     PairedClients,
     PairingInvitations,
     Passkeys,
@@ -43,12 +42,10 @@ defmodule Arca.PairingInvitationsTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     slot = hold_slot!()
-    athanor = "ath_pin_#{System.unique_integer([:positive])}"
-    Arca.Test.Actor.ensure_athanor_row(athanor)
-    {person, membership, actor} = member!(athanor)
+    {person, actor} = member!()
     passkey = passkey!(person)
 
-    {:ok, actor: actor, person: person, membership: membership, passkey: passkey, slot: slot}
+    {:ok, actor: actor, person: person, passkey: passkey, slot: slot}
   end
 
   # The writes under test are fenced by the member's slot: a claimant runs
@@ -79,8 +76,8 @@ defmodule Arca.PairingInvitationsTest do
   defp server, do: Prima.Actor.system()
 
   # A person with their identity row (local, its first-method latch open)
-  # minted with them, seated in `athanor`, and the actor they act as there.
-  defp member!(athanor) do
+  # minted with them, their own athanor, and the actor they act as there.
+  defp member! do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
 
@@ -109,14 +106,11 @@ defmodule Arca.PairingInvitationsTest do
         end
       )
 
-    {:ok, membership} =
-      Members.seat(Prima.Actor.in_athanor(athanor), %{
-        user_id: person.id,
-        scope: "athanor",
-        status: "active"
-      })
+    athanor = "ath_pin_#{n}"
+    Arca.Test.Actor.ensure_athanor_row(athanor, owner_user_id: person.id)
+    {:ok, person} = Arca.Users.update(server(), person.id, %{personal_athanor_id: athanor})
 
-    {person, membership, %{Prima.Actor.in_athanor(athanor) | user_id: person.id}}
+    {person, %{Prima.Actor.in_athanor(athanor) | user_id: person.id}}
   end
 
   # An active passkey of the person: their first method, which sets the latch.
@@ -154,10 +148,9 @@ defmodule Arca.PairingInvitationsTest do
 
   defp key_digest!, do: Prima.Device.key_digest(:crypto.strong_rand_bytes(32))
 
-  defp attrs(person, membership, confirmation, secret) do
+  defp attrs(person, confirmation, secret) do
     %{
       user_id: person.id,
-      membership_id: membership.id,
       secret_hash: Prima.Digest.sha256(secret),
       key_digest: key_digest!(),
       confirmation_ref: confirmation.ref,
@@ -169,10 +162,10 @@ defmodule Arca.PairingInvitationsTest do
   # An invitation opened as the identity domain opens one: its
   # `pairing.begin` confirmation, proven by `proof`, consumed by the
   # verifier inside the opening's transaction.
-  defp open!(actor, person, membership, proof) do
+  defp open!(actor, person, proof) do
     secret = "secret-#{System.unique_integer()}"
     confirmation = Confirmations.confirmed!(actor, person.id, proof)
-    attrs = attrs(person, membership, confirmation, secret)
+    attrs = attrs(person, confirmation, secret)
 
     {:ok, invitation} =
       PairingInvitations.open(actor, attrs, Confirmations.consuming(actor, confirmation))
@@ -221,25 +214,27 @@ defmodule Arca.PairingInvitationsTest do
   test "opens under the verifier, storing the hash and key digest and reserving a client id", %{
     actor: actor,
     person: person,
-    membership: membership,
     passkey: passkey
   } do
     me = self()
     confirmation = Confirmations.confirmed!(actor, person.id, by_passkey(passkey))
-    attrs = attrs(person, membership, confirmation, "the secret")
+    attrs = attrs(person, confirmation, "the secret")
 
     {:ok, invitation} =
       PairingInvitations.open(
         actor,
         attrs,
         Confirmations.consuming(actor, confirmation, fn locked ->
-          send(me, {:locked, locked.user.id, locked.membership.id})
+          send(me, {:locked, locked.user.id, locked.athanor})
           :ok
         end)
       )
 
-    assert_received {:locked, user_id, membership_id}
-    assert {user_id, membership_id} == {person.id, membership.id}
+    assert_received {:locked, user_id, athanor}
+
+    assert {user_id, athanor.id, athanor.owner_user_id} ==
+             {person.id, actor.athanor_id, person.id}
+
     assert invitation.state == "pending"
     assert "pcl_" <> _ = invitation.prospective_client_id
     assert invitation.key_digest == attrs.key_digest
@@ -251,7 +246,7 @@ defmodule Arca.PairingInvitationsTest do
     assert {:error, :not_member} =
              PairingInvitations.open(
                actor,
-               attrs(person, membership, refused, "another"),
+               attrs(person, refused, "another"),
                fn _locked -> {:error, :not_member} end
              )
 
@@ -261,10 +256,9 @@ defmodule Arca.PairingInvitationsTest do
   test "lookup answers routing by hash alone", %{
     actor: actor,
     person: person,
-    membership: m,
     passkey: passkey
   } do
-    {invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+    {invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
 
     assert {:ok, routing} = PairingInvitations.lookup(hash)
     assert routing.athanor_id == actor.athanor_id
@@ -277,10 +271,9 @@ defmodule Arca.PairingInvitationsTest do
   test "redeems once: one client, one certificate, the invitation consumed", %{
     actor: actor,
     person: person,
-    membership: m,
     passkey: passkey
   } do
-    {invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+    {invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
 
     assert {:ok, %{client: client, certificate: cert}} =
              PairingInvitations.consume(actor, hash, digest, &admits/1, issue(actor))
@@ -298,7 +291,6 @@ defmodule Arca.PairingInvitationsTest do
   test "a device paired fresh ends its person's recovery from a restore and no one else's", %{
     actor: actor,
     person: person,
-    membership: m,
     passkey: passkey
   } do
     restore_id = Prima.UUID7.generate_id("rst")
@@ -331,7 +323,7 @@ defmodule Arca.PairingInvitationsTest do
         %{restore_id: restore_id, user_id: other, open: true}
       ])
 
-    {_invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+    {_invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
 
     assert {:ok, %{client: _client}} =
              PairingInvitations.consume(actor, hash, digest, &admits/1, issue(actor))
@@ -345,10 +337,9 @@ defmodule Arca.PairingInvitationsTest do
   test "a failed issuance rolls everything back and the invitation stays pending", %{
     actor: actor,
     person: person,
-    membership: m,
     passkey: passkey
   } do
-    {_invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+    {_invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
 
     failing = fn invitation ->
       {:ok, _client} =
@@ -373,10 +364,9 @@ defmodule Arca.PairingInvitationsTest do
   test "revoked, expired, refused by standing, or asked from another athanor: nothing issued", %{
     actor: actor,
     person: person,
-    membership: m,
     passkey: passkey
   } do
-    {revoked, revoked_hash, revoked_digest} = open!(actor, person, m, by_passkey(passkey))
+    {revoked, revoked_hash, revoked_digest} = open!(actor, person, by_passkey(passkey))
     {:ok, %{state: "revoked"}} = PairingInvitations.revoke(actor, revoked.id)
 
     assert {:error, :revoked} =
@@ -388,7 +378,7 @@ defmodule Arca.PairingInvitationsTest do
                issue(actor)
              )
 
-    {expired, expired_hash, expired_digest} = open!(actor, person, m, by_passkey(passkey))
+    {expired, expired_hash, expired_digest} = open!(actor, person, by_passkey(passkey))
 
     {1, _} =
       Arca.Repo.update_all(
@@ -405,7 +395,7 @@ defmodule Arca.PairingInvitationsTest do
                issue(actor)
              )
 
-    {_denied, denied_hash, denied_digest} = open!(actor, person, m, by_passkey(passkey))
+    {_denied, denied_hash, denied_digest} = open!(actor, person, by_passkey(passkey))
 
     assert {:error, :not_a_member} =
              PairingInvitations.consume(
@@ -433,10 +423,9 @@ defmodule Arca.PairingInvitationsTest do
   test "a standing transition revokes pending invitations, and an allow never resurrects them", %{
     actor: actor,
     person: person,
-    membership: m,
     passkey: passkey
   } do
-    {invitation, _hash, _digest} = open!(actor, person, m, by_passkey(passkey))
+    {invitation, _hash, _digest} = open!(actor, person, by_passkey(passkey))
 
     {:ok, change} =
       Arca.SecurityTransitions.deny_user(server(), person.id, verify: fn _ -> :ok end)
@@ -452,11 +441,10 @@ defmodule Arca.PairingInvitationsTest do
     test "a stale owner redeems nothing", %{
       actor: actor,
       person: person,
-      membership: m,
       passkey: passkey,
       slot: slot
     } do
-      {_invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+      {_invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
 
       {1, _} =
         Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
@@ -474,10 +462,9 @@ defmodule Arca.PairingInvitationsTest do
     test "only the key the invitation names redeems it: another is refused and writes nothing", %{
       actor: actor,
       person: person,
-      membership: m,
       passkey: passkey
     } do
-      {invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+      {invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
 
       assert {:error, :key_mismatch} =
                PairingInvitations.consume(actor, hash, key_digest!(), &admits/1, issue(actor))
@@ -494,7 +481,7 @@ defmodule Arca.PairingInvitationsTest do
 
   describe "the confirmer" do
     test "is the passkey the consumed confirmation names, before a client it also names, else the client, never the caller's",
-         %{actor: actor, person: person, membership: m, passkey: passkey} do
+         %{actor: actor, person: person, passkey: passkey} do
       client = client!(actor, person)
 
       both =
@@ -507,7 +494,7 @@ defmodule Arca.PairingInvitationsTest do
       {:ok, by_both} =
         PairingInvitations.open(
           actor,
-          attrs(person, m, both, "both")
+          attrs(person, both, "both")
           |> Map.merge(%{confirmer_kind: "device", confirmer_id: client.id}),
           Confirmations.consuming(actor, both)
         )
@@ -518,7 +505,7 @@ defmodule Arca.PairingInvitationsTest do
       {:ok, by_device} =
         PairingInvitations.open(
           actor,
-          attrs(person, m, device, "device")
+          attrs(person, device, "device")
           |> Map.merge(%{confirmer_kind: "passkey", confirmer_id: passkey.id}),
           Confirmations.consuming(actor, device)
         )
@@ -536,16 +523,15 @@ defmodule Arca.PairingInvitationsTest do
     test "a confirmation not consumed, another person's, or another operation's opens nothing", %{
       actor: actor,
       person: person,
-      membership: m,
       passkey: passkey
     } do
-      {other, _membership, _actor} = member!(actor.athanor_id)
+      {other, _actor} = member!()
 
       # Confirmed, never consumed.
       unconsumed = Confirmations.confirmed!(actor, person.id, by_passkey(passkey))
 
       assert {:error, :confirmation_unconsumed} =
-               PairingInvitations.open(actor, attrs(person, m, unconsumed, "a"), &admits/1)
+               PairingInvitations.open(actor, attrs(person, unconsumed, "a"), &admits/1)
 
       # Consumed by the verifier, but another person's, or another
       # operation's: the refusal rolls the consumption back with the rest.
@@ -558,7 +544,7 @@ defmodule Arca.PairingInvitationsTest do
         assert {:error, :confirmation_unconsumed} =
                  PairingInvitations.open(
                    actor,
-                   attrs(person, m, confirmation, secret),
+                   attrs(person, confirmation, secret),
                    Confirmations.consuming(actor, confirmation)
                  )
       end
@@ -573,10 +559,9 @@ defmodule Arca.PairingInvitationsTest do
     test "a passkey revoked before the redemption refuses it, and nothing is written", %{
       actor: actor,
       person: person,
-      membership: m,
       passkey: passkey
     } do
-      {_invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+      {_invitation, hash, digest} = open!(actor, person, by_passkey(passkey))
       {:ok, _} = Passkeys.revoke(%Prima.Actor{user_id: person.id}, passkey.id)
 
       assert {:error, :confirmer_revoked} =
@@ -588,13 +573,12 @@ defmodule Arca.PairingInvitationsTest do
 
     test "a paired client revoked before the redemption refuses it, and nothing is written", %{
       actor: actor,
-      person: person,
-      membership: m
+      person: person
     } do
       client = client!(actor, person)
 
       {invitation, hash, digest} =
-        open!(actor, person, m, %{proof: "email_code", client_id: client.id})
+        open!(actor, person, %{proof: "email_code", client_id: client.id})
 
       {:ok, %{standing: "revoked"}} = PairedClients.revoke(actor, client.id)
 
@@ -607,14 +591,14 @@ defmodule Arca.PairingInvitationsTest do
   end
 
   describe "the first-method latch" do
-    setup %{actor: actor} do
-      {newcomer, membership, newcomer_actor} = member!(actor.athanor_id)
-      {:ok, newcomer: newcomer, newcomer_membership: membership, newcomer_actor: newcomer_actor}
+    setup do
+      {newcomer, newcomer_actor} = member!()
+      {:ok, newcomer: newcomer, newcomer_actor: newcomer_actor}
     end
 
     test "an unattributed confirmation opens an invitation naming no confirmer only while it is open",
-         %{newcomer: person, newcomer_membership: m, newcomer_actor: actor} do
-      {invitation, hash, digest} = open!(actor, person, m, %{proof: "oidc_reauth"})
+         %{newcomer: person, newcomer_actor: actor} do
+      {invitation, hash, digest} = open!(actor, person, %{proof: "oidc_reauth"})
       assert {invitation.confirmer_kind, invitation.confirmer_id} == {nil, nil}
       assert {:ok, true} = latch_open?(person)
 
@@ -627,7 +611,7 @@ defmodule Arca.PairingInvitationsTest do
       assert {:error, :first_method_used} =
                PairingInvitations.open(
                  actor,
-                 attrs(person, m, late, "late"),
+                 attrs(person, late, "late"),
                  Confirmations.consuming(actor, late)
                )
 
@@ -653,9 +637,9 @@ defmodule Arca.PairingInvitationsTest do
     end
 
     test "of two unattributed invitations, the first redeemed sets it and the second is refused",
-         %{newcomer: person, newcomer_membership: m, newcomer_actor: actor} do
-      {first, first_hash, first_digest} = open!(actor, person, m, %{proof: "oidc_reauth"})
-      {second, second_hash, second_digest} = open!(actor, person, m, %{proof: "oidc_reauth"})
+         %{newcomer: person, newcomer_actor: actor} do
+      {first, first_hash, first_digest} = open!(actor, person, %{proof: "oidc_reauth"})
+      {second, second_hash, second_digest} = open!(actor, person, %{proof: "oidc_reauth"})
 
       assert {:ok, _} =
                PairingInvitations.consume(
@@ -682,10 +666,9 @@ defmodule Arca.PairingInvitationsTest do
 
     test "a failed issuance leaves it open", %{
       newcomer: person,
-      newcomer_membership: m,
       newcomer_actor: actor
     } do
-      {_invitation, hash, digest} = open!(actor, person, m, %{proof: "oidc_reauth"})
+      {_invitation, hash, digest} = open!(actor, person, %{proof: "oidc_reauth"})
 
       assert {:error, :certificate_refused} =
                PairingInvitations.consume(actor, hash, digest, &admits/1, fn _ ->
@@ -723,7 +706,6 @@ defmodule Arca.PairingInvitationsRaceTest do
   alias Arca.{
     ControlPlane,
     DeviceCertificates,
-    Members,
     PairedClients,
     PairingInvitations,
     PersonIdentities
@@ -736,7 +718,6 @@ defmodule Arca.PairingInvitationsRaceTest do
     CellLease,
     DeviceCertificate,
     ExternalIdentity,
-    Membership,
     PairedClient,
     PairingInvitation,
     PendingConfirmation,
@@ -772,7 +753,6 @@ defmodule Arca.PairingInvitationsRaceTest do
         Arca.Repo.delete_all(where(PendingConfirmation, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(PersonIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
@@ -780,47 +760,38 @@ defmodule Arca.PairingInvitationsRaceTest do
       end)
     end)
 
-    membership =
-      unboxed(fn ->
-        Arca.Test.Actor.ensure_athanor_row(athanor_id)
+    unboxed(fn ->
+      {:ok, _} =
+        Arca.Test.People.mint(
+          server(),
+          %{
+            id: user_id,
+            provider: "github",
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          %{
+            key: "github|https://github.com|pin-race#{n}",
+            provider: "github",
+            issuer: "https://github.com",
+            subject: "pin-race#{n}",
+            first_seen_at: now,
+            last_seen_at: now
+          },
+          also: fn person ->
+            {:ok, _} = PersonIdentities.create(server(), Confirmations.identity(person.id))
+            :ok
+          end
+        )
 
-        {:ok, _} =
-          Arca.Test.People.mint(
-            server(),
-            %{
-              id: user_id,
-              provider: "github",
-              first_seen_at: now,
-              last_seen_at: now,
-              created_at: now,
-              updated_at: now
-            },
-            %{
-              key: "github|https://github.com|pin-race#{n}",
-              provider: "github",
-              issuer: "https://github.com",
-              subject: "pin-race#{n}",
-              first_seen_at: now,
-              last_seen_at: now
-            },
-            also: fn person ->
-              {:ok, _} = PersonIdentities.create(server(), Confirmations.identity(person.id))
-              :ok
-            end
-          )
-
-        {:ok, membership} =
-          Members.seat(Prima.Actor.in_athanor(athanor_id), %{
-            user_id: user_id,
-            scope: "athanor",
-            status: "active"
-          })
-
-        membership
-      end)
+      Arca.Test.Actor.ensure_athanor_row(athanor_id, owner_user_id: user_id)
+      {:ok, _} = Arca.Users.update(server(), user_id, %{personal_athanor_id: athanor_id})
+    end)
 
     actor = %{Prima.Actor.in_athanor(athanor_id) | user_id: user_id}
-    {:ok, actor: actor, membership: membership}
+    {:ok, actor: actor}
   end
 
   # This member's slot, taken on a real connection so every connection
@@ -935,7 +906,7 @@ defmodule Arca.PairingInvitationsRaceTest do
   # client gave (the person holds neither), consumed by the verifier
   # inside the opening's transaction. Every one is opened before any is
   # redeemed, while the person's first-method latch is open.
-  defp open!(actor, membership, lifetime_ms \\ 300_000) do
+  defp open!(actor, lifetime_ms \\ 300_000) do
     secret = "secret-#{System.unique_integer()}"
     key_digest = Prima.Device.key_digest(:crypto.strong_rand_bytes(32))
 
@@ -948,7 +919,6 @@ defmodule Arca.PairingInvitationsRaceTest do
           actor,
           %{
             user_id: actor.user_id,
-            membership_id: membership.id,
             secret_hash: Prima.Digest.sha256(secret),
             key_digest: key_digest,
             confirmation_ref: confirmation.ref,
@@ -1037,10 +1007,9 @@ defmodule Arca.PairingInvitationsRaceTest do
   end
 
   test "a second redemption waits behind the first and reads it consumed", %{
-    actor: actor,
-    membership: membership
+    actor: actor
   } do
-    {invitation, hash, digest} = open!(actor, membership)
+    {invitation, hash, digest} = open!(actor)
     first = held_redemption(actor, hash, digest)
     {second, pid} = redemption(actor, hash, digest)
     assert_waits!(second, pid, [~s("users"), "FOR UPDATE"])
@@ -1053,9 +1022,9 @@ defmodule Arca.PairingInvitationsRaceTest do
   end
 
   test "of two invitations naming no confirmer, the redemption waiting behind the other finds the latch set",
-       %{actor: actor, membership: membership} do
-    {first_invitation, first_hash, first_digest} = open!(actor, membership)
-    {second_invitation, second_hash, second_digest} = open!(actor, membership)
+       %{actor: actor} do
+    {first_invitation, first_hash, first_digest} = open!(actor)
+    {second_invitation, second_hash, second_digest} = open!(actor)
     assert {nil, nil} == {first_invitation.confirmer_kind, second_invitation.confirmer_kind}
 
     first = held_redemption(actor, first_hash, first_digest)
@@ -1076,10 +1045,9 @@ defmodule Arca.PairingInvitationsRaceTest do
   end
 
   test "a revocation waits behind a redemption and finds it consumed", %{
-    actor: actor,
-    membership: membership
+    actor: actor
   } do
-    {invitation, hash, digest} = open!(actor, membership)
+    {invitation, hash, digest} = open!(actor)
     first = held_redemption(actor, hash, digest)
     test = self()
 
@@ -1103,10 +1071,9 @@ defmodule Arca.PairingInvitationsRaceTest do
   # The revocation has no pause point but a PostgreSQL trigger; SQLite's write lock orders it.
   @tag :postgres
   test "a redemption waiting behind a revocation reads it revoked", %{
-    actor: actor,
-    membership: membership
+    actor: actor
   } do
-    {invitation, hash, digest} = open!(actor, membership)
+    {invitation, hash, digest} = open!(actor)
     install_gate!("pairing_invitations")
     gate = close_gate!()
     test = self()
@@ -1131,11 +1098,10 @@ defmodule Arca.PairingInvitationsRaceTest do
   end
 
   test "an invitation that expires while its redemption waits is refused", %{
-    actor: actor,
-    membership: membership
+    actor: actor
   } do
-    {_other, holding, holding_digest} = open!(actor, membership)
-    {short, hash, digest} = open!(actor, membership, 2_000)
+    {_other, holding, holding_digest} = open!(actor)
+    {short, hash, digest} = open!(actor, 2_000)
 
     # Another redemption of the same person holds the person's lock.
     first = held_redemption(actor, holding, holding_digest)
@@ -1158,12 +1124,11 @@ defmodule Arca.PairingInvitationsRaceTest do
   @tag :postgres
   test "an invitation that expires while its redemption waits for its confirmer's lock is refused",
        %{
-         actor: actor,
-         membership: membership
+         actor: actor
        } do
     # Complete a real first pairing so the next invitation names a standing
     # device and the person's first-method latch has already been set.
-    {_first, first_hash, first_digest} = open!(actor, membership)
+    {_first, first_hash, first_digest} = open!(actor)
 
     {:ok, %{client: confirmer}} =
       unboxed(fn ->
@@ -1186,7 +1151,6 @@ defmodule Arca.PairingInvitationsRaceTest do
           actor,
           %{
             user_id: actor.user_id,
-            membership_id: membership.id,
             secret_hash: hash,
             key_digest: digest,
             confirmation_ref: confirmation.ref,
@@ -1283,8 +1247,8 @@ defmodule Arca.PairingInvitationsRaceTest do
 
   @tag :postgres
   test "a first pairing and a first passkey racing to the latch: one sets it, the other is refused",
-       %{actor: actor, membership: membership} do
-    {_invitation, hash, digest} = open!(actor, membership)
+       %{actor: actor} do
+    {_invitation, hash, digest} = open!(actor)
     test = self()
 
     on_exit(fn ->

@@ -49,7 +49,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Mint a person's own athanor, inside their admission's transaction
   (`Sanctum.Provisioning.mint_personal/1`): the row, with the first slug of
-  `slugs` no athanor holds, and its owner seated, in one
+  `slugs` no athanor holds, in one
   `Arca.Athanors.mint/2` under the census lock, so two admissions cannot
   take one slug. It counts no cap: the admission counted the server-wide
   cap before the person's row (`personal_place/0`), or is the
@@ -58,21 +58,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @spec create_personal(map(), [String.t()]) :: {:ok, athanor()} | {:error, term()}
   def create_personal(%{owner_user_id: user_id} = attrs, slugs)
       when is_binary(user_id) and is_list(slugs) do
-    Arca.Athanors.mint(server(),
-      hold: [user_id],
-      slugs: slugs,
-      attrs: attrs,
-      also: fn athanor ->
-        case Sanctum.Tenancy.Members.create(%{
-               user_id: user_id,
-               scope: "athanor",
-               athanor_id: athanor.id
-             }) do
-          {:ok, _seat} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
-      end
-    )
+    Arca.Athanors.mint(server(), hold: [user_id], slugs: slugs, attrs: attrs)
   end
 
   @doc """
@@ -120,14 +106,14 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Announce athanors a committed denial archived, from the data it
-  returned: each member's established-context memo is dropped, before
+  returned: its person's established-context memo is dropped, before
   this returns — the memo caches an AUTHORIZATION decision, so an archive
-  that only flipped the status would leave every member working inside
+  that only flipped the status would leave them working inside
   the shut furnace until their memo aged out — and the archival is
   announced, which is what stops in-flight work
   (`Opus.ArchiveWatch`) and the processes serving the athanor
   from outside any tenant topic; the status gates already refuse new work
-  either way. Athanors the transition actually moved tell their members'
+  either way. Athanors the transition actually moved tell their person's
   open views.
   """
   @spec announce_archived([String.t()], map()) :: :ok
@@ -182,8 +168,8 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec list_for_user(String.t()) :: [athanor()]
   def list_for_user(user_id) when is_binary(user_id) do
-    # Deliberate default: an outage shows none; entering one still resolves
-    # membership strictly.
+    # Deliberate default: an outage shows none; entering one still reads
+    # its owner strictly.
     case get_by_owner(user_id) do
       {:ok, %{status: "active"} = athanor} -> [athanor]
       _ -> []

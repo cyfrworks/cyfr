@@ -8,7 +8,7 @@ defmodule Sanctum.Tenancy.Users do
 
   A row is written only by an admission (`Sanctum.Newcomer`), together
   with the person's identity row, and touched on every later sign-in
-  (`seen/2`); the door, invited memberships and per-person preferences key
+  (`seen/2`); the door, invited shared-thread seats and per-person preferences key
   off it. The person's identifier is on that identity row,
   never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
@@ -16,8 +16,7 @@ defmodule Sanctum.Tenancy.Users do
   (nothing deleted), their seats in shared threads are removed and the
   invitations their identifier was still holding there are withdrawn;
   allowing them again reopens the
-  door and the athanor, re-seats them in it, and leaves the revoked
-  credentials revoked.
+  door and the athanor, and leaves the revoked credentials revoked.
 
   ## What is decided here, and what is stored below
 
@@ -30,7 +29,7 @@ defmodule Sanctum.Tenancy.Users do
   what `Arca.Users` requires and says why.
   """
 
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Athanors
 
   @typedoc "A person's row, as the plain map `Arca.Users` answers."
   @type user :: %{required(:id) => String.t(), optional(atom()) => term()}
@@ -157,16 +156,19 @@ defmodule Sanctum.Tenancy.Users do
   def personal_athanor_id(_), do: :none
 
   @doc """
-  Whether `athanor_id` is this person's own athanor.
+  Whether `athanor_id` is this person's own athanor: the athanor row's
+  `owner_user_id` names them.
 
   The one predicate behind "is the caller at home": a running chain reads
   notes across athanors only from there, and an assistant's line is the
-  person's to say aloud only when it was said there. Spelled once so the
-  domains that ask it cannot drift from the row that answers.
+  person's to say aloud only when it was said there. It reads the owner on
+  the athanor's row, as the focus does (`Sanctum.Context.focus/2`), so the
+  domains that ask it cannot drift from the row that answers. A store that
+  cannot answer is false.
   """
   @spec own_athanor?(String.t() | nil, String.t() | nil) :: boolean()
   def own_athanor?(user_id, athanor_id) when is_binary(user_id) and is_binary(athanor_id) do
-    personal_athanor_id(user_id) == {:ok, athanor_id}
+    match?({:ok, %{owner_user_id: ^user_id}}, Athanors.get(athanor_id))
   end
 
   def own_athanor?(_user_id, _athanor_id), do: false
@@ -252,7 +254,7 @@ defmodule Sanctum.Tenancy.Users do
   Eject a person from this server, as one transaction
   (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
   session and API key they created, archive their own athanor (revoking
-  its keys), remove their memberships, and remove their
+  its keys), clear their platform administrator's mark, and remove their
   seats and invitations in shared threads, archiving every pair they sit
   in and every shared thread they leave empty. Either all of it
   commits or none of it does, and a failure is answered, never reported
@@ -273,7 +275,6 @@ defmodule Sanctum.Tenancy.Users do
       Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
       Athanors.announce_archived(change.archived_athanor_ids, change)
       Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
-      Members.announce_removed(user_id, change)
       Sanctum.SharedThreads.announce_denied(user_id, change)
 
       :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
@@ -289,19 +290,15 @@ defmodule Sanctum.Tenancy.Users do
   Reverse `deny/1` at the door, as one transaction
   (`Arca.SecurityTransitions.allow_user/3`): the person may sign in again,
   their own athanor is reopened — subject to the server's athanor cap,
-  whose refusal leaves them denied — and they are seated in it again.
-  Revoked sessions and keys stay revoked, and the shared-thread seats and
-  invitations the deny removed are not restored — a thread's people add
-  them again. A context read before the deny
+  whose refusal leaves them denied. Revoked sessions and keys stay revoked,
+  their platform administrator's mark stays cleared, and the shared-thread
+  seats and invitations the deny removed are not restored — a thread's
+  people add them again. A context read before the deny
   cannot issue a credential after this: the person's generation moved
   twice.
   """
   @spec allow(user()) :: {:ok, user()} | {:error, term()}
   def allow(%{id: user_id} = user) do
-    # The deny swept every membership by user id, their own seat included;
-    # the transition re-seats them, because reopening the furnace without
-    # its owner would leave them locked out of it until their next sign-in
-    # re-provisioned the row.
     with {:ok, change} <-
            Arca.SecurityTransitions.allow_user(server(), user_id, verify: &restorable/1) do
       {:ok, standing(user, change.user)}

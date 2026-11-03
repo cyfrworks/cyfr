@@ -379,7 +379,6 @@ async function main(chromium) {
 
   await claim("setup:a.identity_attempts", "the attempt after the recovery code is saved: the transition from the attempt read before it", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
   await claim("setup:a.athanors", "A's one athanor, its person's", cyfrRows("a", "athanors"), cyfrIo("a", "athanors"));
-  await claim("setup:a.memberships", "A's seats: the person's in their athanor, and the first person's platform grant", cyfrRows("a", "memberships"), cyfrIo("a", "memberships"));
   await claim("setup:a.users", "A's one person, admitted by setup, holding @proof", cyfrRows("a", "users"), cyfrIo("a", "users"));
   await claim("setup:a.person_identities", "A's identity: the identifier the recovery code names, enrolled at registry.test, keys that open to the genesis's", cyfrRows("a", "person_identities"), {
     ...cyfrIo("a", "person_identities"),
@@ -413,7 +412,6 @@ async function main(chromium) {
   row("allow", true, "B's administrator, set up through /setup, allows @proof in Settings", { flash: await flash(admin) });
   await claim("allow:b.passkeys", "B's one passkey, the administrator's", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys"));
   await claim("allow:b.athanors", "B's one athanor, the administrator's", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
-  await claim("allow:b.memberships", "B's seats: the administrator's, and the platform grant", cyfrRows("b", "memberships"), cyfrIo("b", "memberships"));
   await claim("allow:b.users", "B's one person, its administrator", cyfrRows("b", "users"), cyfrIo("b", "users"));
   await claim("allow:b.server_allowlist", "B's allowlist: one entry, A's identifier, labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
 
@@ -430,18 +428,13 @@ async function main(chromium) {
   await person.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
   await connected(person);
   const confirmation = await confirmHere(person);
-  // Admitted with no seat at B yet, the person lands on B's sign-in page,
-  // which says they are signed in and have no athanor there.
-  await person.waitForURL((url) => url.origin === B && url.search === "?error=no_athanor", { timeout: 90_000 });
+  // Admitted with an athanor of their own at B, made in the admission, the
+  // person lands on its chat.
+  await person.waitForURL((url) => url.origin === B && url.pathname === "/chat", { timeout: 90_000 });
   await connected(person);
   windowed("signin", from, "the sign-in at B");
   const landedText = await person.locator("body").innerText();
-  record.sign_in = {
-    code, code_named_at_a: confirmation.includes(code), landed: person.url().replace(/#.*/, ""),
-    says_signed_in: landedText.includes("You're signed in, but you have no athanor here yet."),
-  };
-  row("sign_in", record.sign_in.code_named_at_a && record.sign_in.landed === `${B}/login?error=no_athanor` && record.sign_in.says_signed_in,
-    "at B, A's address leads to A, A's confirmation names B's code, and B admits the person, with no seat there", record.sign_in);
+  const landed = person.url().replace(/#.*/, "");
   S.cookies.remote = await cookieDigest(personContext, B, "b");
   await claim("sign_in:b.person_identities", "B's identities: its administrator's, and A's identifier as a remote person under A's genesis", cyfrRows("b", "person_identities"), {
     ...cyfrIo("b", "person_identities"),
@@ -451,12 +444,19 @@ async function main(chromium) {
       await opens("b", "b.identity", own, "operational_key_sealed", "operational");
     },
   });
+  // The athanors first: the person's row and session name their own.
+  await claim("sign_in:b.athanors", "B's athanors: its administrator's, and the person's own, made in the admission", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
   await claim("sign_in:b.users", "B's people: its administrator, and the person admitted remote", cyfrRows("b", "users"), cyfrIo("b", "users"));
   const remoteId = S.rows["sign_in:b.person_identities"]?.find((r) => r.identifier === id)?.user_id ?? "";
   await claim("sign_in:b.sessions[proof]", "the person's session at B: the browser's cookie's token, bound to the genesis's key epoch", cyfrRows("b", "sessions", "user_id", remoteId), cyfrIo("b", "sessions"));
   await claim("sign_in:b.sessions", "B's sessions: the administrator's, its cookie's token, and the person's", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
-  await claim("sign_in:b.athanors", "B's athanors are only its administrator's: the admission made none", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
-  await claim("sign_in:b.memberships", "B's seats are only its administrator's: the admission made none", cyfrRows("b", "memberships"), cyfrIo("b", "memberships"));
+  const ownRoute = `@${(S.rows["sign_in:b.athanors"] ?? []).find((r) => r.owner_user_id === remoteId)?.slug ?? ""}`;
+  record.sign_in = {
+    code, code_named_at_a: confirmation.includes(code), landed, own_route: ownRoute,
+    shows_chat: landedText.includes("No threads yet."),
+  };
+  row("sign_in", record.sign_in.code_named_at_a && landed === `${B}/chat?a=${encodeURIComponent(ownRoute)}` && record.sign_in.shows_chat,
+    "at B, A's address leads to A, A's confirmation names B's code, and B admits the person, who lands in their own athanor's chat there", record.sign_in);
 
   // 4. registry.sync at A under the passkey stores a push token; the
   // registry bans the identifier; the token is refused there, and A's
@@ -560,7 +560,6 @@ async function main(chromium) {
     ["a.users", cyfrRows("a", "users"), cyfrIo("a", "users")],
     ["a.person_identities", cyfrRows("a", "person_identities"), cyfrIo("a", "person_identities")],
     ["a.athanors", cyfrRows("a", "athanors"), cyfrIo("a", "athanors")],
-    ["a.memberships", cyfrRows("a", "memberships"), cyfrIo("a", "memberships")],
     ["a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
     ["a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
     ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries", "identifier", id), registryIo("directory.identity_log_entries", "id")],
@@ -575,7 +574,6 @@ async function main(chromium) {
     ["b.person_identities", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities")],
     ["b.sessions", cyfrRows("b", "sessions"), cyfrIo("b", "sessions")],
     ["b.athanors", cyfrRows("b", "athanors"), cyfrIo("b", "athanors")],
-    ["b.memberships", cyfrRows("b", "memberships"), cyfrIo("b", "memberships")],
     ["b.server_allowlist", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist")],
   ];
   // Each field's loop runs again unless the identical predicate already

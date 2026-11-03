@@ -732,7 +732,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
     # with Traders, Alice's thread and his, and his model key with
     # everyone. Alice grants her own component his share and runs it.
     terry = person!("Terry")
-    {:ok, _seat} = Sanctum.TestContext.ensure_platform(terry.user.id)
+    {:ok, _admin} = Sanctum.TestContext.ensure_platform(terry.user.id)
     alice = person!("Alice")
     traders = Cyfr.Test.ShareFixtures.thread!([terry.user.id, alice.user.id])
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, alice.athanor.id) end)

@@ -140,11 +140,16 @@ defmodule MultiTenantIsolationTest do
   end
 
   describe "Sanctum.ApiKey isolation" do
-    # A key is issued only by a person this server knows, against the
-    # standing their rows were read at.
-    defp issuers(ctx_a, ctx_b) do
-      {Sanctum.TestContext.issuer!(%{ctx_a | user_id: "github|https://github.com|u_a"}),
-       Sanctum.TestContext.issuer!(%{ctx_b | user_id: "github|https://github.com|u_b"})}
+    # A key is issued only by a person this server knows, in the athanor
+    # that is theirs, against the standing their rows were read at: each
+    # context is a person working in their own.
+    defp issuers(ctx_a, ctx_b), do: {issuer!(ctx_a, "u_a"), issuer!(ctx_b, "u_b")}
+
+    defp issuer!(ctx, key) do
+      {ctx, user} =
+        Sanctum.TestContext.person!(%{ctx | user_id: "github|https://github.com|" <> key})
+
+      Sanctum.TestContext.issuer!(%{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id})
     end
 
     test "list/1 from athanor A does not return athanor B's keys", %{a: ctx_a, b: ctx_b} do
