@@ -73,8 +73,9 @@ func (e *ChipRefusedError) Error() string {
 func (e *ChipRefusedError) Is(target error) bool { return target == ErrNoChip }
 
 // Record is a device's key holder as it is stored on disk: the protected
-// seed, its public key and what enrollment fills in later. Exactly one of
-// Chip and Software is set, the one Kind names.
+// seed, its public key and what enrollment fills in later. A chip record
+// sets Chip alone; a software record sets Software (a passphrase) or PIN
+// (a PIN its home evaluates), never both.
 type Record struct {
 	Version   int    `json:"version"`
 	Kind      Kind   `json:"kind"`
@@ -83,9 +84,12 @@ type Record struct {
 	Admission string `json:"admission"`
 	// PublicKey is the raw 32-byte Ed25519 public key; on disk it is an
 	// unpadded base64url string.
-	PublicKey   []byte          `json:"public_key"`
-	Chip        *ChipBlob       `json:"chip,omitempty"`
-	Software    *SoftwareBlob   `json:"software,omitempty"`
+	PublicKey []byte        `json:"public_key"`
+	Chip      *ChipBlob     `json:"chip,omitempty"`
+	Software  *SoftwareBlob `json:"software,omitempty"`
+	// PIN is a software record's seed under a six-digit PIN its home
+	// evaluates (pin.go), in place of Software.
+	PIN         *PINBlob        `json:"pin,omitempty"`
 	ClientID    string          `json:"client_id,omitempty"`
 	Athanor     string          `json:"athanor,omitempty"`
 	Certificate json.RawMessage `json:"certificate,omitempty"`
@@ -140,11 +144,11 @@ func (r *Record) check() error {
 	}
 	switch r.Kind {
 	case KindChip:
-		if r.Chip == nil || r.Software != nil || len(r.Chip.Parent) == 0 {
+		if r.Chip == nil || r.Software != nil || r.PIN != nil || len(r.Chip.Parent) == 0 {
 			return errors.New("a chip key record must carry the chip's blob and no other")
 		}
 	case KindSoftware:
-		if r.Software == nil || r.Chip != nil {
+		if (r.Software == nil) == (r.PIN == nil) || r.Chip != nil {
 			return errors.New("a software key record must carry its encrypted blob and no other")
 		}
 	default:
@@ -289,6 +293,7 @@ func newSeed() (seed, pub []byte, err error) {
 // Open unseals or decrypts the seed with secret, a PIN for a chip record and
 // a passphrase for a software record, and returns the key once its public
 // key matches the record's. Every call goes back to the chip or to Argon2id.
+// A record under a PIN its home evaluates opens through OpenPIN alone.
 func (r *Record) Open(secret []byte) (*Key, error) {
 	if err := r.check(); err != nil {
 		return nil, err
@@ -304,6 +309,9 @@ func (r *Record) Open(secret []byte) (*Key, error) {
 		}
 		seed, err = chip.unseal(r.Chip, secret)
 	} else {
+		if r.PIN != nil {
+			return nil, ErrNeedsHome
+		}
 		if err := CheckPassphrase(secret); err != nil {
 			return nil, err
 		}
@@ -313,6 +321,12 @@ func (r *Record) Open(secret []byte) (*Key, error) {
 		return nil, err
 	}
 	defer clear(seed)
+	return r.keyFrom(seed)
+}
+
+// keyFrom is the key of an opened seed, once its public key is the
+// record's. The caller erases seed.
+func (r *Record) keyFrom(seed []byte) (*Key, error) {
 	if len(seed) != ed25519.SeedSize {
 		return nil, fmt.Errorf("the opened seed is %d bytes, not %d", len(seed), ed25519.SeedSize)
 	}
