@@ -49,12 +49,20 @@ defmodule Prima.DeviceCertTest do
     assert v["proof_protocol"] == Challenge.protocol()
     assert v["lifetime_ms"] == Challenge.lifetime_ms()
     # The pairing purposes are this file's; the protected device's are
-    # device_unlock.json's (Prima.DeviceUnlockTest), and together they are
-    # every purpose there is.
-    unlock = "../../../../tests/fixtures/device_unlock.json" |> Path.expand(__DIR__)
-    unlock_purposes = unlock |> File.read!() |> Jason.decode!() |> Map.fetch!("purpose_fields")
+    # device_unlock.json's (Prima.DeviceUnlockTest) and device_pin.json's
+    # (Prima.DevicePinTest), and together they are every purpose there is.
+    device_purposes =
+      for file <- ~w(device_unlock.json device_pin.json),
+          name <-
+            "../../../../tests/fixtures/#{file}"
+            |> Path.expand(__DIR__)
+            |> File.read!()
+            |> Jason.decode!()
+            |> Map.fetch!("purpose_fields")
+            |> Map.keys(),
+          do: name
 
-    assert v["purposes"] ++ Enum.sort(Map.keys(unlock_purposes)) ==
+    assert v["purposes"] ++ Enum.sort(device_purposes) ==
              Enum.map(Challenge.purposes(), &Atom.to_string/1)
              |> then(fn all ->
                Enum.take(all, 3) ++ Enum.sort(Enum.drop(all, 3))
