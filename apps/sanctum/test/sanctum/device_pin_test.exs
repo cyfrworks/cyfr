@@ -307,6 +307,35 @@ defmodule Sanctum.DevicePinTest do
       refute match?({:ok, _}, DevicePin.enroll(%{ctx | confirmation_id: secret}))
     end
 
+    test "is an addition: a browser's session offers only a passkey to confirm it",
+         %{ctx: ctx} do
+      {:error, {:confirmation_required, %{id: secret}}} = DevicePin.enroll(ctx)
+
+      browser =
+        Context.build(
+          user_id: ctx.user_id,
+          provider: "github",
+          athanor_id: ctx.athanor_id,
+          permissions: Context.person_permissions(),
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, session} = Sanctum.TestContext.create_session(browser)
+      {:ok, signed_in} = Sanctum.Caller.establish(session.token)
+
+      {:ok, %{confirmations: [record]}} =
+        Sanctum.Providers.Confirmation.handle(signed_in, %{
+          "action" => "pending",
+          "request" => Prima.Confirmation.ref(secret)
+        })
+
+      # Restricted: neither a fresh sign-in nor an emailed code, only a
+      # passkey this person holds (they hold none) or a paired device.
+      assert record.restricted
+      assert record.methods -- ["passkey"] == []
+    end
+
     test "the unlocked session of the device enrolls its own client", %{device: device, ctx: ctx} do
       {:ok, %{challenge: challenge}} = DeviceUnlock.unlock(ctx, %{})
 
@@ -595,6 +624,11 @@ defmodule Sanctum.DevicePinTest do
       {:ok, _} = Arca.PairedClients.revoke(Context.actor(ctx), ctx.client_id)
       assert {:error, :not_found} = unlock(evaluator, "123456")
       assert Arca.Repo.all(DevicePinEvaluator) == []
+    end
+
+    test "a store that cannot read the count refuses and answers nothing", %{evaluator: evaluator} do
+      Arca.Repo.query!("ALTER TABLE device_pin_evaluators RENAME TO device_pin_evaluators_gone")
+      assert {:error, :unavailable} = unlock(evaluator, "123456")
     end
 
     test "the identifier opens no session and authenticates no call", %{evaluator: evaluator} do
