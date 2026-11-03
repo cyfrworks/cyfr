@@ -29,14 +29,12 @@ apps/cyfr/test/sanctum/gate/provider_contract_test.exs	2	pending
 apps/cyfr/test/sanctum/gate/provider_test.exs	1	pending
 apps/cyfr/test/sanctum/gate/request_log_athanor_test.exs	1	pending
 apps/cyfr/test/sanctum/gate/request_log_test.exs	2	pending
-apps/cyfr/test/sanctum/provider_test.exs	6	pending
+apps/cyfr/test/sanctum/provider_test.exs	3	pending
 apps/cyfr/test/sanctum/provider_vault_profile_test.exs	1	pending
 apps/cyfr/test/sanctum/providers/athanor_member_door_tools_test.exs	2	pending
-apps/cyfr/test/sanctum/providers/cli_sign_in_test.exs	1	pending
 apps/cyfr/test/sanctum/providers/confirmation_test.exs	11	pending
 apps/cyfr/test/sanctum/providers/person_test.exs	2	pending
 apps/cyfr/test/sanctum/providers/profile_grants_test.exs	1	pending
-apps/cyfr/test/sanctum/providers/session_setup_test.exs	2	pending
 apps/cyfr/test/sanctum/provisioning_closure_test.exs	4	pending
 apps/cyfr/test/sanctum/provisioning_remote_deps_test.exs	12	pending
 apps/cyfr/test/sanctum/provisioning_test.exs	5	pending

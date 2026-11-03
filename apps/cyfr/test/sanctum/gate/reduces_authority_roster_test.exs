@@ -30,8 +30,6 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     passkey.revoke
     person.unlink_door
     profile.revoke
-    session.cli_cancel
-    session.cli_revoke
     session.lock
     session.logout
     share.revoke

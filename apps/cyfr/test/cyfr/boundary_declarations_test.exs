@@ -100,11 +100,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Users VaultStorage WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
-      {~w(CarryActions CliSignIns CompanyAuthorizations CompanyLoginAttempts
+      {~w(CarryActions CompanyAuthorizations CompanyLoginAttempts
           DeviceCertificates DeviceCertifications DirectoryHeads IdentityAttempts IdentityLog
           Invitations PairingInvitations Passkeys PendingConfirmations PersonIdentities
           RequestRateWindows),
-       "the identity, device, passkey, confirmation, carry, command-line sign-in, " <>
+       "the identity, device, passkey, confirmation, carry, " <>
          "admission invitation, company sign-in and pre-authentication rate rows Sanctum " <>
          "reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
@@ -138,7 +138,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Sanctum => [
       {~w(ApiKey Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
           Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
-          Cipher.Rotation CliSignIn ClientIp CompanyLogin Consent.Loader Consent.Proof
+          Cipher.Rotation ClientIp CompanyLogin Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement PolicyLog Provisioning Session SignIn Tenancy Tenancy.Athanors

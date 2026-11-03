@@ -340,7 +340,7 @@ defmodule Cyfr.Boundaries do
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
-    Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
+    Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
@@ -597,7 +597,7 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
-        Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
+        Sanctum.Catalog Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
         Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations
         Sanctum.Newcomer Sanctum.Pairing
@@ -623,9 +623,6 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
           "control and never decides: the operation a confirmation dispatches decides. " <>
-          "`Sanctum.CliSignIn` is the `/cli` page's read of the command line's pending " <>
-          "sign-in its link names (`describe/1`), what it shows the person before they " <>
-          "approve; approving is an operation, decided there. " <>
           "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
           "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
           "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
@@ -1978,7 +1975,6 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
-    "Sanctum.CliSignIn" => [describe: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, ingress: 1, put_ingress: 2, resolve: 1],
     # A tincture version's frame opens, and its data routes answer, under
     # the grant held to that version by the decision a run is held to.
@@ -2063,7 +2059,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
-    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
+    "Sanctum.Pairing" => [actions: 0, approve_url: 1, can_confirm?: 1],
     "Sanctum.Passkeys" => [newcomer_options: 0, sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],

@@ -3,9 +3,9 @@
 
 defmodule Sanctum.DeviceFlowProvidersTest do
   @moduledoc """
-  `provider` on `session.device_init` comes straight from the caller, so
-  a name outside the device-flow roster is refused as `unknown_provider`
-  before any client id is read.
+  `provider` on a device flow's start comes straight from the sign-in page's
+  caller, so a name outside the device-flow roster is refused as
+  `unknown_provider` before any client id is read.
 
   Provider availability requires credentials sufficient for token exchange,
   including both a client id and secret for Google.

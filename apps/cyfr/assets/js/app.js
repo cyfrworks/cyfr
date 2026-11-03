@@ -16,7 +16,6 @@ import MarkdownContent from "./hooks/markdown_content"
 import Canvas from "./canvas/index"
 import SystemLayer from "./system_layer/index"
 import Carry, {resume as resumeCarry} from "./hooks/carry"
-import CommandLine from "./hooks/command_line"
 import DeviceAdd from "./hooks/device_add"
 import {completeUnlock} from "./device_unlock"
 
@@ -50,7 +49,6 @@ Hooks.MarkdownContent = MarkdownContent
 Hooks.Canvas = Canvas
 Hooks.SystemLayer = SystemLayer
 Hooks.Carry = Carry
-Hooks.CommandLine = CommandLine
 Hooks.DeviceAdd = DeviceAdd
 
 Hooks.FlashAutoHide = {

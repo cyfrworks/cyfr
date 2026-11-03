@@ -66,8 +66,8 @@ defmodule Sanctum.Newcomer do
   passkey at its RP ID (`Sanctum.Passkeys.rp_id/0`) that is active or
   that a restore suspended and no linked sign-in method,
   `{:setup, token}` answers that person again (`readmitted: true`), with
-  the credential it brings: the passkey written for them, or a new
-  command-line session. A passkey made at an address the home has left
+  the credential it brings: the passkey written for them, or the
+  protected device enrolled for them. A passkey made at an address the home has left
   signs no one in here, so after an address change the setup link lets
   the administrator register one at the new address; a pending one
   there, awaiting their own authorization, leaves it open. A suspended
@@ -83,7 +83,7 @@ defmodule Sanctum.Newcomer do
   A local admission brings its credential: its first proof, and the new
   person's identity (`t:identity/0`, parsed from a surface's fields by
   `identity/1`) — the name they take, a recovery secret the trusted form
-  or the command line drew, and the enrollment's request id.
+  or the device drew, and the enrollment's request id.
 
     * `{:passkey, registration, identity}`, for setup, an invitation and
       an open admission — the browser's answer to
@@ -93,9 +93,6 @@ defmodule Sanctum.Newcomer do
       so a failed admission leaves neither a person nor a passkey. The
       person's id is the one the registration was drawn for. A session
       with provider `passkey` follows the commit.
-    * `{:command_line, machine, identity}`, for setup alone — a
-      command-line session for `machine` (`Sanctum.CliSignIn.machine/1`),
-      provider `setup`, minted after the commit.
     * `{:device, enrollment, identity}`, for setup, an invitation and an
       open admission — a protected device's enrollment its proof verified
       (`Sanctum.DeviceUnlock`):
@@ -195,7 +192,6 @@ defmodule Sanctum.Newcomer do
 
   @type credential ::
           {:passkey, registration :: map(), identity()}
-          | {:command_line, machine :: String.t(), identity()}
           | {:device, Sanctum.DeviceUnlock.enrollment(), identity()}
           | :none
 
@@ -360,12 +356,6 @@ defmodule Sanctum.Newcomer do
   defp taken({:setup, token}, _credential) when not is_binary(token),
     do: {:error, :setup_closed}
 
-  defp taken({:setup, _token}, {:command_line, machine, identity}) do
-    with {:ok, machine} <- Sanctum.CliSignIn.machine(machine),
-         :ok <- identified(identity),
-         do: {:ok, {:command_line, machine, identity}}
-  end
-
   defp taken({:setup, _token}, {:device, %{client_id: client_id} = enrollment, identity})
        when is_binary(client_id) do
     with :ok <- identified(identity), do: {:ok, {:device, enrollment, identity}}
@@ -405,10 +395,9 @@ defmodule Sanctum.Newcomer do
     do:
       {:error,
        {:invalid_argument,
-        "This admission does not take that credential: setup takes a passkey or the command " <>
-          "line or a protected device, an invitation and an open admission a passkey or a " <>
-          "protected device, each " <>
-          "with the new person's identity"}}
+        "This admission does not take that credential: setup, an invitation and an open " <>
+          "admission take a passkey or a protected device, each with the new person's " <>
+          "identity"}}
 
   # The identity a local credential carries, as `identity/1` parses it.
   defp identified(%{name: name, recovery_secret: <<_::256>>, request_id: request_id}) do
@@ -770,15 +759,12 @@ defmodule Sanctum.Newcomer do
     end
   end
 
-  defp session(person, {:passkey, _registration, _identity}), do: minted(person, "passkey", [])
-
-  defp session(person, {:command_line, machine, _identity}),
-    do: minted(person, "setup", command_line: machine)
+  defp session(person, {:passkey, _registration, _identity}), do: minted(person, "passkey")
 
   defp session(_person, {:device, _enrollment, _identity}), do: :none
   defp session(_person, :none), do: :none
 
-  defp minted(person, provider, opts) do
+  defp minted(person, provider) do
     ctx =
       Context.build(
         user_id: person.id,
@@ -789,7 +775,7 @@ defmodule Sanctum.Newcomer do
       )
 
     with {:ok, ctx} <- Sanctum.Tenancy.resolve_status(ctx, force: true),
-         {:ok, session} <- Sanctum.Session.create(ctx, opts) do
+         {:ok, session} <- Sanctum.Session.create(ctx) do
       {:ok, session.token}
     else
       {:error, reason} ->

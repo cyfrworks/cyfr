@@ -322,10 +322,6 @@ defmodule Prism.Router do
           # and reads how it ended. Session-only, so a person not signed in
           # is sent through `/login`, which keeps the carry's fragment.
           live "/carry", CarryLive, :index, metadata: %{auth: :browser_authenticated}
-          # A command line's sign-in, approved by its person: session-only,
-          # so a person not signed in is sent through `/login`, whose script
-          # clears the approval secret's fragment.
-          live "/cli", CliLive, :index, metadata: %{auth: :browser_authenticated}
           # Adding a device: the page a new device's QR code opens, the key's
           # digest in its fragment. Session-only, so a person not signed in is
           # sent through `/login`, whose script clears the fragment.

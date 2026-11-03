@@ -650,7 +650,7 @@ defmodule Cyfr.BoundariesTest do
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
                  Arca.InstallationClaims Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
                  Arca.DecisionLog Arca.McpLog Arca.PolicyLog
-                 Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations
+                 Arca.Invitations Arca.CompanyAuthorizations
                  Arca.CompanyLoginAttempts Arca.SecurityTransitions
                  Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
                ))

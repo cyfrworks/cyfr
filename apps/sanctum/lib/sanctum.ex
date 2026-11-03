@@ -22,10 +22,10 @@ defmodule Sanctum do
     unlocks the person who linked the identity `Sanctum.Auth.OIDC` proves
     (`Sanctum.SignIn.unlock/1`, which asks the door about them);
   - the GitHub and Google device flows —
-    `Sanctum.Auth.DeviceFlow.poll_for_session/4` behind the `session` MCP
-    tool (`cyfr login`) and the sign-in page, which unlock the same way;
-  - a command line a signed-in person approves in Prism
-    (`Sanctum.CliSignIn`);
+    `Sanctum.Auth.DeviceFlow.poll_for_session/3` behind the sign-in page,
+    which unlock the same way;
+  - a protected device's unlock (`Sanctum.DeviceUnlock`), redeemed by its
+    browser or its command line;
   - the CYFR sign-in (`Sanctum.Auth.CyfrDoor`), which unlocks a person
     admitted before or admits a remote newcomer, and a passkey
     (`Sanctum.Passkeys`), which asks the door about the person;
@@ -63,7 +63,6 @@ defmodule Sanctum do
       Catalog.NotLoadedError,
       Cipher,
       Cipher.Rotation,
-      CliSignIn,
       ClientIp,
       CompanyLogin,
       Consent,

@@ -844,15 +844,6 @@
         },
         %{
           verb: "GET",
-          path: "/cli",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.CliLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
           path: "/company-login",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",

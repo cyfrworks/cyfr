@@ -46,21 +46,18 @@ defmodule Prima.Sanitizer do
     derived_key key_material keystore passphrase
   )
 
-  # Match code, state, key, fields, invitation_url, approve_url and
-  # fragment, and the `x-cyfr-invitation` header, only as whole keys after
-  # stripping separators. These can carry
-  # credentials — `fields` is a vault entry's material, name → value,
-  # whatever the names are; `invitation_url` is a pairing link whose
-  # fragment is the bearer invitation, and `approve_url` a command line's
-  # sign-in link whose fragment is its approval secret; and `fragment` is a
-  # sign-in carry's URL fragment as a page
-  # hands it to its LiveView or posts it (a carry, a challenge, an
-  # assertion); `x-cyfr-invitation` is the header an invitation's bearer
-  # code travels in to a protected device's enrollment; longer names such
-  # as error_code, keyboard,
+  # Match code, state, key, fields, invitation_url, fragment and the
+  # `x-cyfr-invitation` header only as whole keys after stripping
+  # separators. These can carry credentials — `fields` is a vault entry's
+  # material, name → value, whatever the names are; `invitation_url` is a
+  # pairing link whose fragment is the bearer invitation; `fragment` is a
+  # sign-in carry's URL fragment as a page hands it to its LiveView or
+  # posts it (a carry, a challenge, an assertion); and `x-cyfr-invitation`
+  # is the header an invitation's bearer code travels in to a protected
+  # device's enrollment. Longer names such as error_code, keyboard,
   # connection_state, field_names and fragment_id, and a plain `url`, must
   # remain readable.
-  @exact_sensitive_keys ~w(code state key fields invitation_url approve_url fragment x-cyfr-invitation)
+  @exact_sensitive_keys ~w(code state key fields invitation_url fragment x-cyfr-invitation)
   @exact_sensitive_normalized Enum.map(@exact_sensitive_keys, &String.replace(&1, ["-", "_"], ""))
 
   # Compared against the key as written, separators and all. `_t` and

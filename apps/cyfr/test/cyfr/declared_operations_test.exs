@@ -89,8 +89,8 @@ defmodule Cyfr.DeclaredOperationsTest do
       code =
         Prima.RecoveryCode.encode("per_" <> String.duplicate("c", 64), :binary.copy(<<7>>, 32))
 
-      # Every field `session.setup` and `person.recovery_code_add` take, and
-      # every answer's `code` (`session.setup`'s `recovery`,
+      # Every field `person.recovery_code_add` and a new person's enrollment
+      # take, and every answer's `code` (an enrollment's `recovery`,
       # `person.recovery_code`).
       sanitized =
         Prima.Sanitizer.sanitize(%{

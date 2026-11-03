@@ -510,12 +510,23 @@ defmodule Sanctum.DeviceUnlockTest do
 
   describe "after a restore" do
     # A local person who holds no first method, as a restore leaves them:
-    # made here by the command line's setup, which marks none.
+    # made here by a device's setup, the device, its certificate and the
+    # first-method mark then taken away.
     setup do
-      {:ok, %{person: person}} =
-        Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+      %{certificate: %{subject: %{user_id: user_id}}} = enrolled!()
 
-      %{user_id: person.id}
+      Arca.Repo.delete_all(
+        from(c in Arca.Schemas.DeviceCertificate, where: c.user_id == ^user_id)
+      )
+
+      Arca.Repo.delete_all(from(c in PairedClient, where: c.user_id == ^user_id))
+
+      {1, _} =
+        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^user_id),
+          set: [first_method_at: nil]
+        )
+
+      %{user_id: user_id}
     end
 
     # The restore's own session, as `Sanctum.Recovery` issues it for the

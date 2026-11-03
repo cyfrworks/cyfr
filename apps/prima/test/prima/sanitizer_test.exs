@@ -339,31 +339,6 @@ defmodule Prima.SanitizerTest do
       refute Prima.Sanitizer.sensitive_key?("invitation_url_label")
     end
 
-    # A command line's sign-in (`Sanctum.CliSignIn`): the link its begin
-    # answers carries the approval secret in its fragment, the token it
-    # holds is the session, and the approval names the secret again.
-    test "a command line's sign-in link, token and approval secret are redacted, and its code is not" do
-      link = "https://home.example/cli#code=q2mTb0yU7aKpXv1ZcR4n8w"
-
-      assert Prima.Sanitizer.sanitize(%{
-               "approve_url" => link,
-               "session_token" => "c2Vzc2lvbiB0b2tlbiBvZiB0aGlydHktdHdvIGJ5dGVz",
-               "user_code" => "K7QM-3XRD",
-               "machine" => "laptop"
-             }) == %{
-               "approve_url" => "[REDACTED]",
-               "session_token" => "[REDACTED]",
-               "user_code" => "K7QM-3XRD",
-               "machine" => "laptop"
-             }
-
-      assert Prima.Sanitizer.sanitize(%{"approval_secret" => "q2mTb0yU7aKpXv1ZcR4n8w"}) ==
-               %{"approval_secret" => "[REDACTED]"}
-
-      assert Prima.Sanitizer.sensitive_key?("approveUrl")
-      refute Prima.Sanitizer.sensitive_key?("approve_url_label")
-    end
-
     # A protected device's enrollment under an invitation carries the
     # invitation's bearer code in its own header.
     test "the invitation header a device's enrollment sends is redacted, and longer names are not" do

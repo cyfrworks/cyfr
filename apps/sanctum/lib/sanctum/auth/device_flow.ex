@@ -3,21 +3,21 @@
 
 defmodule Sanctum.Auth.DeviceFlow do
   @moduledoc """
-  OAuth 2.0 Device Authorization Grant for CLI authentication.
-
-  Implements the Device Flow (RFC 8628) for GitHub OAuth,
-  allowing CLI users to authenticate without exposing client secrets.
+  OAuth 2.0 Device Authorization Grant (RFC 8628) for GitHub and Google,
+  for a browser that signs in, or links a door, by a code the person
+  enters on another device, without exposing client secrets.
 
   ## Usage
 
-  This module is called through the MCP session tool's actions:
-  - `device_init` - Start device flow, returns codes for user
-  - `device_poll` - Poll for completion, returns session when authorized
+  Prism's sign-in page (`PrismWeb.LoginLive`, `poll_for_session/3`) and its
+  settings' door linking (`PrismWeb.SettingsLive`, `poll_for_link/4`) call
+  it. A command line never signs in through it: it signs in as a protected
+  device (`Sanctum.DeviceUnlock`).
 
   ## Flow
 
   1. Request device code from GitHub
-  2. Display verification URL and user code to user (CLI responsibility)
+  2. Display verification URL and user code to the person
   3. Poll for token while user authorizes in browser
   4. Fetch user info with access token
   5. Create Sanctum session
@@ -168,10 +168,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   Poll for the IdP token; once authorized, unlock the person the identity
   names (`Sanctum.SignIn.unlock/1`, which asks the door about them) and
   open the session. A device flow never makes a person: an identity no
-  person here has linked is refused `:no_person`. `command_line:`
-  names the machine a command line's sign-in runs on
-  (`Sanctum.CliSignIn.machine/1` checked it), which the session records
-  so its person lists and revokes it; the browser's sign-in names none.
+  person here has linked is refused `:no_person`.
 
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
@@ -191,9 +188,9 @@ defmodule Sanctum.Auth.DeviceFlow do
           # Need to restart flow
       end
   """
-  @spec poll_for_session(provider(), String.t(), String.t() | nil, keyword()) ::
+  @spec poll_for_session(provider(), String.t(), String.t() | nil) ::
           {:ok, map()} | {:error, term()}
-  def poll_for_session(provider, device_code, client_ip, opts \\ []) when is_list(opts) do
+  def poll_for_session(provider, device_code, client_ip) do
     with :ok <- check_poll_budget(device_code, client_ip),
          {:ok, provider, client_id} <- usable(provider) do
       case request_token(provider, client_id, device_code) do
@@ -203,7 +200,7 @@ defmodule Sanctum.Auth.DeviceFlow do
           # as it is, and `Sanctum.Providers.Session` renders it.
           with {:ok, user_info} <- fetch_user_info(provider, tokens),
                {:ok, user, ctx} <- unlock(user_info, provider) do
-            {:ok, complete(user, ctx, user_info, Keyword.get(opts, :command_line))}
+            {:ok, complete(user, ctx, user_info)}
           end
 
         {:error, :authorization_pending} ->
@@ -518,38 +515,19 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   # What follows the unlock: the session. The IdP token never travels:
   # nothing after the unlock needs it, and no sign-in speaks to the registry.
-  defp complete(user, ctx, user_info, machine) do
+  defp complete(user, ctx, user_info) do
     base = %{
       status: "complete",
       user: %{id: user_info.id, email: user_info.email, name: user_info.name}
     }
 
-    with_session(base, %{ctx | namespace: user.namespace}, machine)
+    with_session(base, %{ctx | namespace: user.namespace})
   end
 
-  @doc """
-  The CLI poll response, field for field: a signed-in result is its
-  `status`, `user` and `session_token`, and every other poll status passes
-  through as it is.
-
-  `cyfr login` reads these exact keys (`apps/codex/cmd/login.go`), so this
-  projection is a wire contract: one adapter, byte-stable, exercised by
-  its own test. The browser page consumes the result directly; only the
-  MCP session tool's `device_poll` projects through here.
-  """
-  @spec wire(map()) :: map()
-  def wire(%{status: "complete", user: user, session_token: token}),
-    do: %{status: "complete", user: user, session_token: token}
-
-  def wire(result), do: result
-
-  # A command line's sign-in names the machine it runs on, so its person
-  # lists and revokes its session (`Sanctum.CliSignIn`); the browser's
-  # sign-in page names none.
-  defp with_session(base, ctx, machine) do
+  defp with_session(base, ctx) do
     case Sanctum.Tenancy.resolve_status(ctx, force: true) do
       {:ok, ctx} ->
-        case Session.create(ctx, command_line: machine) do
+        case Session.create(ctx) do
           {:ok, session} ->
             Map.put(base, :session_token, session.token)
 
@@ -565,7 +543,7 @@ defmodule Sanctum.Auth.DeviceFlow do
               status: "error",
               message:
                 "What this sign-in came through no longer admits you here. " <>
-                  "Run `cyfr login` again."
+                  "Sign in again."
             }
 
           {:error, reason} ->
@@ -573,19 +551,19 @@ defmodule Sanctum.Auth.DeviceFlow do
 
             %{
               status: "error",
-              message: "The session could not be created. Run `cyfr login` again."
+              message: "The session could not be created. Sign in again."
             }
         end
 
       {:error, :unavailable} ->
         # A transient membership read, not a refusal: no session was minted,
         # and the person is told to retry rather than that they belong
-        # nowhere. The CLI treats "error" as terminal-with-message.
+        # nowhere. The sign-in page shows "error" as its message.
         %{
           status: "error",
           message:
             "The server could not read memberships just now. " <>
-              "Run `cyfr login` again in a moment."
+              "Sign in again in a moment."
         }
     end
   end
