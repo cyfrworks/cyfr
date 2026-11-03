@@ -10,8 +10,8 @@ defmodule PrismWeb.PairLiveTest do
   session cookie of another person the browser still holds never chooses
   the person: the invitation does. Its answer is the certificate the
   glass then connects the device channel under. A pairing whose answer
-  never reached the browser was issued once, and the same code then says
-  it was already used.
+  never reached the browser was issued once, and the same code with the
+  same key is answered that pairing again, never a second device.
 
   The page's script is the browser's half: it makes the device key before
   any invitation and sends its digest (`prepared`), which the page shows
@@ -195,7 +195,7 @@ defmodule PrismWeb.PairLiveTest do
     assert state.client.client_id == client_id
   end
 
-  test "a browser that closed before the answer was paired once, and the same code then says so",
+  test "a browser that closed before the answer was paired once, and the same code and key are answered it again",
        %{conn: conn} do
     %{ctx: ctx, code: code, keys: keys} = invited!()
 
@@ -223,12 +223,11 @@ defmodule PrismWeb.PairLiveTest do
 
     GenServer.stop(first.pid, :normal)
 
-    # Opened again from the same code: the explicit answer, and no second
-    # device.
+    # Opened again from the same code with the same key: the pairing it
+    # made, and no second device.
+    [%{client_id: client_id}] = paired_clients(ctx)
     {:ok, again, _html} = live(conn, "/pair")
-    assert %{error: sentence} = pair(again, code, keys)
-    assert sentence =~ "already used"
-    assert render(again) =~ ~s(data-test="pair-error")
+    assert %{client_id: ^client_id, certificate: _certificate} = pair(again, code, keys)
     assert [_one] = paired_clients(ctx)
   end
 

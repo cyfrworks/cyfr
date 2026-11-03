@@ -52,8 +52,10 @@ defmodule PrismWeb.PairLive do
   `confirmation.changes` stream read over the channel.
 
   A pairing whose answer never reached the glass — the browser closed
-  between the proof and the answer — was issued once; the same code then
-  answers that it was already used, and the person shows a new one.
+  between the proof and the answer — was issued once; the same code, with
+  the key the glass kept, is answered that pairing again within the
+  invitation's five minutes (`Sanctum.Pairing.complete/3`), and past them
+  the person shows a new one.
   """
 
   use PrismWeb, :live_view

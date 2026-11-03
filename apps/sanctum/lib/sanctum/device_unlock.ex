@@ -545,18 +545,25 @@ defmodule Sanctum.DeviceUnlock do
     with true <- params["admission"] == Atom.to_string(admission) or :invalid,
          {:ok, key} <- device_key(params["device_key"]),
          {:ok, request_id} <- request_id(params["request_id"]),
-         true <- params["holder_kind"] in @holder_kinds or :invalid,
-         true <- display_name?(params["display_name"]) or :invalid do
-      {:ok,
-       %{
-         device_key: key,
-         request_id: request_id,
-         holder_kind: params["holder_kind"],
-         display_name: params["display_name"]
-       }}
+         {:ok, holder} <- holder(params["holder_kind"], params["display_name"]) do
+      {:ok, Map.merge(holder, %{device_key: key, request_id: request_id})}
     else
       _invalid -> {:error, :invalid_request}
     end
+  end
+
+  @doc """
+  What a protected device reports of its holder, as an enrollment and a
+  pairing take it: `holder_kind` `"chip"` or `"software"`, and the
+  `display_name` it shows, text of at most 64 bytes. Reported
+  information, never an input to a decision. `:error` for anything else.
+  """
+  @spec holder(term(), term()) ::
+          {:ok, %{holder_kind: String.t(), display_name: String.t()}} | :error
+  def holder(kind, name) do
+    if kind in @holder_kinds and display_name?(name),
+      do: {:ok, %{holder_kind: kind, display_name: name}},
+      else: :error
   end
 
   defp device_key(value) do

@@ -139,6 +139,17 @@ defmodule Sanctum.Pairing do
 
   ## The pair challenge
 
+  A protected device (`Sanctum.DeviceUnlock`) completes with what it
+  reports of its holder, `holder_kind` and `display_name` together, which
+  the paired client records; a browser's glass reports neither, and its
+  client unlocks nothing. A completion whose answer was lost is asked
+  again with the same secret and a fresh proof of the same key: once the
+  invitation was consumed, and until the expiry it was opened with, a
+  proof over the `pair` challenge by the key it named answers the client
+  it paired, while that client stands, and its current certificate.
+  Nothing is recorded or issued again, and any other key is refused as
+  before. Past that expiry a used code names no one, as any unknown one.
+
   The glass completes through two stateless calls, so the challenge the
   first answers must be one the second can recognise without storing it.
   Its nonce is an HMAC-SHA256 keyed by the invitation's secret over this
@@ -277,7 +288,8 @@ defmodule Sanctum.Pairing do
   @type submission :: %{
           required(:device_key) => binary(),
           optional(:proof) => map() | nil,
-          optional(:certificate) => DeviceCert.t() | nil
+          optional(:certificate) => DeviceCert.t() | nil,
+          optional(:holder) => %{holder_kind: String.t(), display_name: String.t()} | nil
         }
 
   @typedoc """
@@ -489,7 +501,8 @@ defmodule Sanctum.Pairing do
   @doc """
   Complete a pairing from the new glass: `secret` is the invitation's raw
   16-byte bearer secret and `submission` its device key and, on the
-  second call, its proof (`t:submission/0`).
+  second call, its proof (`t:submission/0`), and a protected device's
+  holder (`Sanctum.DeviceUnlock.holder/2`).
 
   Without a proof, answers `%{challenge: challenge}`, the `pair`
   challenge for this invitation and device key, and for a remote person's
@@ -497,7 +510,10 @@ defmodule Sanctum.Pairing do
   client_id}`, what their own home is to certify. With the proof over it,
   locks and checks the person's standing and seat, records the paired
   client under the reserved id, issues its first certificate and consumes
-  the invitation, in one transaction, and answers `t:paired/0`.
+  the invitation, in one transaction, and answers `t:paired/0`. Once the
+  invitation was consumed, the same calls by the key it named answer the
+  challenge and then the client it paired with its current certificate
+  (the module doc).
 
   `ctx` is the caller's, and anonymous: its address is what a call that
   names no invitation is counted by, and nothing in it chooses the
@@ -519,14 +535,25 @@ defmodule Sanctum.Pairing do
          :ok <- DeviceCerts.claim_attributed({:person, invitation.user_id}),
          :ok <- this_home(invitation),
          :ok <- approved_key(invitation, device_key),
+         :ok <- pending(invitation, secret, device_key, Map.get(submission, :proof), now),
          {:ok, issuer} <-
            issuer(invitation, device_key, Map.get(submission, :certificate), now) do
       case {Map.get(submission, :proof), issuer} do
-        {nil, :certify} -> certify_first(secret, invitation, device_key, now)
-        {nil, _issuer} -> challenged(secret, invitation, device_key, now)
-        {_proof, :certify} -> {:error, :certificate_required}
-        {proof, issuer} -> redeem(secret, invitation, device_key, proof, issuer, now)
+        {nil, :certify} ->
+          certify_first(secret, invitation, device_key, now)
+
+        {nil, _issuer} ->
+          challenged(secret, invitation, device_key, now)
+
+        {_proof, :certify} ->
+          {:error, :certificate_required}
+
+        {proof, issuer} ->
+          redeem(secret, invitation, device_key, proof, issuer, Map.get(submission, :holder), now)
       end
+    else
+      {:halt, answer} -> {:ok, answer}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -545,10 +572,13 @@ defmodule Sanctum.Pairing do
   end
 
   # Routing only, before any lock: the redemption rechecks the state and
-  # expiry on the database's clock under the invitation's lock.
+  # expiry on the database's clock under the invitation's lock. A consumed
+  # invitation routes the repeat of a completion whose answer was lost,
+  # until the expiry it was opened with; past it, it is no one's.
   defp pending_invitation(secret, now) do
     case Arca.PairingInvitations.lookup(secret_hash(secret)) do
-      {:ok, %{state: "pending", expires_at: expires_at} = invitation} ->
+      {:ok, %{state: state, expires_at: expires_at} = invitation}
+      when state in ["pending", "consumed"] ->
         if DateTime.to_unix(expires_at, :millisecond) > now,
           do: {:ok, invitation},
           else: {:error, :invalid_invitation}
@@ -561,6 +591,60 @@ defmodule Sanctum.Pairing do
 
       {:error, _unanswered} ->
         {:error, :unavailable}
+    end
+  end
+
+  # A consumed invitation: the approved key's repeat is answered here,
+  # with the challenge or with the client it paired, and goes no further.
+  defp pending(%{state: "pending"}, _secret, _device_key, _proof, _now), do: :ok
+
+  defp pending(%{state: "consumed"} = invitation, secret, device_key, nil, now) do
+    with {:ok, answer} <- challenged(secret, invitation, device_key, now),
+         do: {:halt, answer}
+  end
+
+  defp pending(%{state: "consumed"} = invitation, secret, device_key, proof, now) do
+    with {:ok, proof} <- read_proof(proof),
+         :ok <- issued_window(proof, now),
+         {:ok, expected} <-
+           pair_challenge(secret, invitation, device_key, proof.challenge.expires_at),
+         :ok <- verified(Proof.verify(proof, expected, now)),
+         {:ok, client} <- committed_client(invitation, device_key),
+         {:ok, certificate} <- current_certificate(invitation.athanor_id, client.id) do
+      {:halt, %{client_id: client.id, certificate: certificate}}
+    end
+  end
+
+  # The client the consumed invitation paired, still standing on it with
+  # the key it named.
+  defp committed_client(invitation, device_key) do
+    actor = Prima.Actor.in_athanor(invitation.athanor_id)
+
+    case Arca.PairedClients.list(actor, user_id: invitation.user_id, standing: :active) do
+      {:ok, rows} ->
+        case Enum.find(rows, &(&1.id == invitation.prospective_client_id)) do
+          %{source_id: source_id, device_public_key: key} = client
+          when source_id == invitation.id and key == device_key ->
+            {:ok, client}
+
+          _gone ->
+            {:error, :invalid_invitation}
+        end
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp current_certificate(athanor_id, client_id) do
+    with {:ok, %{certificate: bytes}} <-
+           Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor_id), client_id),
+         {:ok, map} <- Jason.decode(bytes),
+         {:ok, certificate} <- DeviceCert.decode(map) do
+      {:ok, certificate}
+    else
+      {:error, :not_found} -> {:error, :invalid_invitation}
+      _damaged_or_unanswered -> {:error, :unavailable}
     end
   end
 
@@ -700,7 +784,7 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  defp redeem(secret, invitation, device_key, proof, issuer, now) do
+  defp redeem(secret, invitation, device_key, proof, issuer, holder, now) do
     with {:ok, proof} <- read_proof(proof),
          :ok <- issued_window(proof, now),
          {:ok, expected} <-
@@ -713,7 +797,7 @@ defmodule Sanctum.Pairing do
         secret_hash(secret),
         Prima.Device.key_digest(device_key),
         &redeemable(&1, invitation),
-        &paired(actor, &1, device_key, issuer)
+        &paired(actor, &1, device_key, issuer, holder)
       )
       |> redeemed()
     end
@@ -745,15 +829,18 @@ defmodule Sanctum.Pairing do
   # standing on the invitation that paired it, and its first certificate:
   # issued here for a local person, or their own home's, recorded bound to
   # the `key_epoch` the cached head still names under the person's lock.
-  defp paired(actor, invitation, device_key, issuer) do
+  defp paired(actor, invitation, device_key, issuer, holder) do
     with {:ok, client} <-
-           Arca.PairedClients.record(actor, %{
-             id: invitation.prospective_client_id,
-             user_id: invitation.user_id,
-             source_kind: "device_cert",
-             source_id: invitation.id,
-             device_public_key: device_key
-           }),
+           Arca.PairedClients.record(
+             actor,
+             Map.merge(holder || %{}, %{
+               id: invitation.prospective_client_id,
+               user_id: invitation.user_id,
+               source_kind: "device_cert",
+               source_id: invitation.id,
+               device_public_key: device_key
+             })
+           ),
          {:ok, certificate} <- first_certificate(client, issuer),
          {:ok, _row} <- record_certificate(actor, client, certificate) do
       {:ok, %{client_id: client.id, certificate: certificate}}
