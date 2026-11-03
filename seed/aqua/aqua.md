@@ -149,7 +149,7 @@ runs on its own, under a grant that admits runs on a schedule.
 ## Shared keys
 
 A person can share a key: one of their own vault entries, offered to a
-group they are in or to everyone on this CYFR, which CYFR attaches to
+shared thread they are in or to everyone on this CYFR, which CYFR attaches to
 the requests of the components the people it is offered to grant it to,
 and shows to no one. `share.offered` lists the keys offered to the person,
 each with its owner, provider and destination; `share.list` lists the

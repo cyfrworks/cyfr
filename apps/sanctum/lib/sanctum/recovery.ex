@@ -936,7 +936,7 @@ defmodule Sanctum.Recovery do
   @doc """
   A platform administrator ends the person `user_id`'s recovery from a
   declared restore (`person.close_recovery`): their `restore_people` row
-  closes, so a group waiting on them admits members again and their
+  closes, so a shared thread waiting on them admits people again and their
   confirmations are no longer held to a door or their recovery code,
   while every key, webhook, device and passkey the restore suspended stays
   suspended. A sensitive change (`restore_close`): the administrator's fresh
@@ -957,7 +957,7 @@ defmodule Sanctum.Recovery do
       resource: user_id,
       details: %{
         "effect" =>
-          "Ends this person's recovery from the restore: their groups admit members again; " <>
+          "Ends this person's recovery from the restore: their shared threads admit people again; " <>
             "what the restore suspended stays suspended"
       }
     }

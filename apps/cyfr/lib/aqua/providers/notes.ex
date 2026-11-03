@@ -22,9 +22,8 @@ defmodule Aqua.Providers.Notes do
 
   ## Where a note lands
 
-  Writes take no scope: `keep`, `pin` and `forget` act on the athanor in
-  focus. Reads take one: `athanor` (the default),
-  `mine`, or `everywhere` you hold a seat.
+  Reads and writes take no scope: every action acts on the athanor in
+  focus, the person's own.
 
   ## What a person may pre-answer
 
@@ -56,8 +55,6 @@ defmodule Aqua.Providers.Notes do
 
   alias Aqua.Notes
   alias Sanctum.Context
-
-  @writes ~w(keep pin forget endorse)
 
   @impl true
   def service, do: "aqua"
@@ -174,11 +171,6 @@ defmodule Aqua.Providers.Notes do
           "list",
           "List notes",
           [
-            Arg.new("scope", :string,
-              description:
-                "Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.",
-              enum: ["athanor", "mine", "everywhere"]
-            ),
             Arg.new("limit", :integer,
               description: "list, search: how many to answer at most (default 100).",
               min: 1,
@@ -202,15 +194,6 @@ defmodule Aqua.Providers.Notes do
             Arg.new("name", :string,
               required: true,
               description: "What the note is called (keep, pin, read, forget)"
-            ),
-            Arg.new("scope", :string,
-              description:
-                "Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.",
-              enum: ["athanor", "mine", "everywhere"]
-            ),
-            Arg.new("athanor_id", :string,
-              description:
-                "read: the athanor a search answered for the note — reads it there, under your own seat."
             )
           ],
           kind: :read,
@@ -242,11 +225,6 @@ defmodule Aqua.Providers.Notes do
             Arg.new("query", :string,
               required: true,
               description: "search: text to find in a note's name or body"
-            ),
-            Arg.new("scope", :string,
-              description:
-                "Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.",
-              enum: ["athanor", "mine", "everywhere"]
             ),
             Arg.new("limit", :integer,
               description: "list, search: how many to answer at most (default 100).",
@@ -286,15 +264,6 @@ defmodule Aqua.Providers.Notes do
 
   # ---------------------------------------------------------------------------
 
-  # A write that names an athanor is refused rather than obeyed or ignored:
-  # the caller believed the argument meant something, and the one thing it
-  # must never mean is "somewhere other than here".
-  defp dispatch(_ctx, %{"action" => action, "scope" => _}) when action in @writes do
-    {:error,
-     {:invalid_argument,
-      "#{action} takes no scope — a note lands in the athanor you are working in"}}
-  end
-
   defp dispatch(ctx, %{"action" => "keep", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
        do: Notes.keep(ctx, name, content, provenance(args, ctx))
@@ -312,31 +281,18 @@ defmodule Aqua.Providers.Notes do
        when is_binary(name) and is_list(sources),
        do: Notes.endorse(ctx, name, sources)
 
-  defp dispatch(ctx, %{"action" => "list"} = args) do
-    with {:ok, page} <- Notes.list(ctx, scope(args), page(args)) do
-      {:ok, Map.put(page, :scope, scope(args))}
-    end
-  end
+  defp dispatch(ctx, %{"action" => "list"} = args), do: Notes.list(ctx, page(args))
 
   defp dispatch(ctx, %{"action" => "read", "name" => name} = args) when is_binary(name) do
-    with {:ok, note} <-
-           Notes.read(ctx, name, scope(args),
-             athanor_id: args["athanor_id"],
-             root_execution_id: args["root_execution_id"]
-           ),
+    with {:ok, note} <- Notes.read(ctx, name, root_execution_id: args["root_execution_id"]),
          do: {:ok, wire_sources(note)}
   end
 
   defp dispatch(ctx, %{"action" => "search", "query" => query} = args) when is_binary(query) do
-    with {:ok, %{notes: matches} = page} <- Notes.search(ctx, query, scope(args), page(args)) do
-      {:ok,
-       page
-       |> Map.delete(:notes)
-       |> Map.merge(%{matches: Enum.map(matches, &wire_sources/1), scope: scope(args)})}
+    with {:ok, %{notes: matches} = page} <- Notes.search(ctx, query, page(args)) do
+      {:ok, page |> Map.delete(:notes) |> Map.put(:matches, Enum.map(matches, &wire_sources/1))}
     end
   end
-
-  defp scope(args), do: Map.get(args, "scope", "athanor")
 
   # A note's sources on the wire are their canonical JSON objects.
   defp wire_sources(%{sources: sources} = note),

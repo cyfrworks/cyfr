@@ -13,8 +13,9 @@ defmodule Sanctum.Tenancy.Users do
   never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
   person loses their sessions and API keys, their own athanor is archived
-  (nothing deleted), their group rows are removed and the invitations their
-  identifier was still holding are withdrawn; allowing them again reopens the
+  (nothing deleted), their seats in shared threads are removed and the
+  invitations their identifier was still holding there are withdrawn;
+  allowing them again reopens the
   door and the athanor, re-seats them in it, and leaves the revoked
   credentials revoked.
 
@@ -122,8 +123,8 @@ defmodule Sanctum.Tenancy.Users do
 
   Here rather than beside a caller because it is a fact about the `users`
   row, read by domains that must not depend on each other: the agent
-  harness prefixing a group turn's lines, tenancy naming a pair athanor
-  after the two people in it, and the console naming people.
+  harness prefixing a turn's lines by who said them, a pair named after
+  the other person, and the console naming people.
   """
   @spec display_name(String.t() | nil) :: String.t()
   def display_name(nil), do: "someone"
@@ -289,9 +290,9 @@ defmodule Sanctum.Tenancy.Users do
   (`Arca.SecurityTransitions.allow_user/3`): the person may sign in again,
   their own athanor is reopened — subject to the server's athanor cap,
   whose refusal leaves them denied — and they are seated in it again.
-  Revoked sessions and keys stay revoked, and the group seats and
-  invitations the deny removed are not restored — eject is permanent for
-  groups; a member adds them again. A context read before the deny
+  Revoked sessions and keys stay revoked, and the shared-thread seats and
+  invitations the deny removed are not restored — a thread's people add
+  them again. A context read before the deny
   cannot issue a credential after this: the person's generation moved
   twice.
   """

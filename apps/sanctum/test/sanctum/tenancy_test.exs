@@ -100,7 +100,7 @@ defmodule Sanctum.TenancyTest do
       assert {:ok, %{athanor_id: nil}} = Tenancy.resolve_status(ctx, force: true)
     end
 
-    test "an athanor membership resolves scope and athanor" do
+    test "the person's own athanor is the working athanor" do
       uid = "u-ath-#{System.unique_integer([:positive])}"
       athanor = athanor!("home-a", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
@@ -110,7 +110,7 @@ defmodule Sanctum.TenancyTest do
       assert result.athanor_id == athanor.id
     end
 
-    test "a platform admin keeps :athanor scope with the capability; works in the first athanor" do
+    test "a platform admin keeps :athanor scope with the capability; works in their own athanor" do
       uid = "u-multi-#{System.unique_integer([:positive])}"
       athanor = athanor!("home-b", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
@@ -144,7 +144,7 @@ defmodule Sanctum.TenancyTest do
       assert rows!(Members.list_by_user(uid)) == []
     end
 
-    test "an archived athanor is never chosen" do
+    test "an archived own athanor leaves none" do
       uid = "u-archived-#{System.unique_integer([:positive])}"
       a = athanor!("arch-a", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: a.id})
@@ -152,6 +152,29 @@ defmodule Sanctum.TenancyTest do
 
       {:ok, result} =
         Tenancy.resolve_status(%Context{user_id: uid, athanor_id: a.id}, force: true)
+
+      assert result.athanor_id == nil
+    end
+
+    test "a seat in another person's athanor is never chosen, even named by the context" do
+      uid = "u-seated-#{System.unique_integer([:positive])}"
+      own = athanor!("seated-own", uid)
+      theirs = athanor!("seated-theirs")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: own.id})
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: theirs.id})
+
+      for named <- [nil, theirs.id] do
+        {:ok, result} =
+          Tenancy.resolve_status(%Context{user_id: uid, athanor_id: named}, force: true)
+
+        assert result.athanor_id == own.id
+      end
+
+      # With their own athanor archived, the seat elsewhere still names none.
+      Sanctum.TestContext.archive!(own.id)
+
+      {:ok, result} =
+        Tenancy.resolve_status(%Context{user_id: uid, athanor_id: theirs.id}, force: true)
 
       assert result.athanor_id == nil
     end
@@ -266,7 +289,7 @@ defmodule Sanctum.TenancyTest do
       assert revalidated.athanor_id == athanor.id
     end
 
-    test "falls back to the broadest membership when the athanor is no longer granted" do
+    test "moves a session naming another athanor to the person's own" do
       uid = "u-reval-switch-#{System.unique_integer([:positive])}"
       athanor = athanor!("home-d", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
@@ -286,7 +309,7 @@ defmodule Sanctum.TenancyTest do
       :ok
     end
 
-    test "a member sees the athanor their membership grants" do
+    test "a person sees their own athanor" do
       uid = "u-list-#{System.unique_integer([:positive])}"
       a = athanor!("list-a", uid)
       _other = athanor!("list-b")
@@ -296,7 +319,7 @@ defmodule Sanctum.TenancyTest do
       assert ids == [a.id]
     end
 
-    test "a platform admin sees their own memberships only, not every athanor" do
+    test "a platform admin with no athanor of their own sees none" do
       uid = "u-list-plat-#{System.unique_integer([:positive])}"
       _other = athanor!("list-other")
       {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
@@ -305,7 +328,7 @@ defmodule Sanctum.TenancyTest do
                []
     end
 
-    test "a user with no membership sees no athanors" do
+    test "a person with no athanor sees none" do
       ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", scope: :athanor}
       assert Tenancy.list_athanors(ctx) == []
     end

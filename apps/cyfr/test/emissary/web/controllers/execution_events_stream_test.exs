@@ -14,7 +14,16 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
 
   setup %{conn: conn} do
     ctx = Sanctum.TestContext.local(:api)
+    execution = admit!(ctx)
 
+    # The stream's own deadline, short: a test that leaves it open ends.
+    Cyfr.Test.Settings.put("opus_events_max_ms", 3_000)
+
+    {:ok, conn: conn, ctx: ctx, exec: execution}
+  end
+
+  # An execution of `ctx`'s person admitted in their athanor.
+  defp admit!(ctx) do
     {:ok, %{execution: execution}} =
       Arca.Execution.admit(
         %{
@@ -28,10 +37,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
         Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
       )
 
-    # The stream's own deadline, short: a test that leaves it open ends.
-    Cyfr.Test.Settings.put("opus_events_max_ms", 3_000)
-
-    {:ok, conn: conn, ctx: ctx, exec: execution}
+    execution
   end
 
   defp durable!(exec, type, data) do
@@ -197,10 +203,14 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
   end
 
   describe "an open stream holds its credential to its standing" do
-    setup %{exec: exec} do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local(:api))
+    # The person signed in works in their own athanor, where their
+    # execution runs.
+    setup do
+      {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:api))
+      own = Sanctum.Test.People.athanor!(user)
+      ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
       {:ok, session} = Sanctum.Session.create(ctx)
-      {:ok, session: session, person: ctx, exec: exec}
+      {:ok, session: session, person: ctx, exec: admit!(ctx)}
     end
 
     defp bearer_stream(conn, exec, token) do

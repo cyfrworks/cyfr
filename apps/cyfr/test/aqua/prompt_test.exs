@@ -154,13 +154,12 @@ defmodule Aqua.PromptTest do
       assert composed.text =~ "- decided — Lisbon\n"
     end
 
-    test "a person's own athanor carries about-you and may look everywhere", %{home: home} do
+    test "a person's own athanor carries about-you", %{home: home} do
       {:ok, _} = Aqua.Notes.pin(home, "about-you", "Prefers mornings.")
 
       prompt = Prompt.compose(home, agent: agent(), authority: nil).text
 
       assert prompt =~ "### Pinned: about-you\n\nPrefers mornings."
-      assert prompt =~ "scope `everywhere`"
       assert prompt =~ "No notes filed yet."
     end
 

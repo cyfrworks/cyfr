@@ -174,9 +174,6 @@ defmodule Aqua.Prompt do
   # them. A turn started any other way is not told to read what it cannot.
   @read_rule " Read a filed note with `notes.read` before answering from your memory of it."
 
-  @home_rule " You may also search the notes of every athanor this person belongs to " <>
-               "(`notes.search` with scope `everywhere`)."
-
   # A filed note kept after its turn read outside material is shown
   # attributed: quoted, from outside, never instructions and never the
   # person's own words.
@@ -186,8 +183,6 @@ defmodule Aqua.Prompt do
   defp notes(ctx) do
     interactive? = ctx.auth_method == :oidc
     read_rule = if interactive?, do: @read_rule, else: ""
-
-    rule = if interactive?, do: @home_rule, else: ""
 
     {pinned, pinned_sources} =
       case Aqua.Notes.pinned(ctx) do
@@ -217,7 +212,7 @@ defmodule Aqua.Prompt do
           {[], []}
       end
 
-    {["\n\n---\n\n## Notes\n\n", @notes_rule, read_rule, rule, pinned, index],
+    {["\n\n---\n\n## Notes\n\n", @notes_rule, read_rule, pinned, index],
      pinned_sources ++ index_sources}
   end
 

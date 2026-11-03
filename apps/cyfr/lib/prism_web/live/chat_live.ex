@@ -755,8 +755,7 @@ defmodule PrismWeb.ChatLive do
     {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
   end
 
-  # This person's own seats changed — a group they were added to, a DM the
-  # other person minted, a seat withdrawn. The guard (`CyfrWeb.ContextGuard`)
+  # This person's own seat changed — a seat withdrawn. The guard (`CyfrWeb.ContextGuard`)
   # revalidates the page's context first and hands the message on: a seat
   # lost under the athanor this page has open ends the page there — nothing
   # else keeps anyone in it, an operator's capability included — so it goes
@@ -882,9 +881,9 @@ defmodule PrismWeb.ChatLive do
   def render(assigns) do
     ~H"""
     <div id="chat-root" class="flex h-full min-h-0">
-      <%!-- The rail: your own athanor, your DMs, your groups and their
-            threads, across every athanor you belong to — a column beside the
-            chat, a drawer over it on a phone. --%>
+      <%!-- The rail: your own athanor's threads, then your pairs and
+            shared threads — a column beside the chat, a drawer over it on a
+            phone. --%>
       <aside
         id="thread-list"
         aria-label="Chats"

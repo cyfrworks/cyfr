@@ -441,8 +441,7 @@ That is the whole list, and it does **not** widen on a server without an
 auth provider: a request with no credential is an unauthenticated context
 either way. In particular `component.search`/`inspect`/`categories`,
 `aqua.list`/`get`, and the `registry` identity actions all need a session
-or an API key, and `session.use` — switching which athanor you work in —
-needs one too, since there has to be a session to switch.
+or an API key.
 
 MCP resources follow the same rule. `resources/list` and
 `resources/templates/list` are open metadata, but a `resources/read` is

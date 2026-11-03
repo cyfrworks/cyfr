@@ -471,20 +471,12 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
                call(ctx, %{"action" => "create", "title" => "One too many"})
 
-      # Another athanor's count is its own.
+      # Another athanor's count is its own: another person's, in their own.
       n = System.unique_integer([:positive])
-      owner = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+      {other, user} = Sanctum.TestContext.person!(%{ctx | user_id: "local|idp|other-#{n}"})
+      other = %{other | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
-      {:ok, other} =
-        Sanctum.Tenancy.Athanors.create_personal(
-          %{name: "Other #{n}", owner_user_id: owner, created_by: owner},
-          ["other-#{n}"]
-        )
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: other.id)
-
-      assert {:ok, %{id: _}} = call(%{ctx | athanor_id: other.id}, %{"action" => "create"})
+      assert {:ok, %{id: _}} = call(other, %{"action" => "create"})
     end
   end
 
@@ -502,13 +494,11 @@ defmodule Aqua.Providers.ThreadTest do
           else: Application.delete_env(:arca, :base_path)
       end)
 
-      # A person of their own (`Sanctum.TestContext.person!/1`), seated in
-      # the source athanor, since aloud checks membership on the source
-      # too, and in a shared thread with someone else.
-      {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+      # A person of their own (`Sanctum.TestContext.person!/1`), working in
+      # their own athanor, since aloud checks membership on the source too,
+      # and in a shared thread with someone else.
+      {ctx, user} = Sanctum.TestContext.person!(ctx)
+      ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
       {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
       {:ok, shared} = Sanctum.SharedThreads.create(ctx.user_id, "Trip")
@@ -753,15 +743,13 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, "again"} = Arca.get(Sanctum.Context.actor(ctx), blob)
     end
 
-    test "a shared thread beside the thread is read for the send and never stored", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      # The sender is a person of their own, seated beside the others.
-      {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+    test "a shared thread beside the thread is read for the send and never stored", %{ctx: ctx} do
+      # The sender is a person of their own, working in their own athanor.
+      {ctx, user} = Sanctum.TestContext.person!(ctx)
+      athanor = Sanctum.Test.People.athanor!(user)
+      ctx = %{ctx | athanor_id: athanor.id}
+      Sanctum.TestContext.ready!(athanor.id)
+      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
 
       {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
       {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "shared talk")

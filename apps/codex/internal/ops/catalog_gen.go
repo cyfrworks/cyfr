@@ -2403,8 +2403,6 @@ func (args NotesKeepArgs) MarshalJSON() ([]byte, error) {
 
 // NotesListArgs carries arguments for notes.list.
 type NotesListArgs struct {
-	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
-	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
 	// list, search: the `next` cursor a previous page answered.
@@ -2445,10 +2443,6 @@ func (args NotesPinArgs) MarshalJSON() ([]byte, error) {
 type NotesReadArgs struct {
 	// What the note is called (keep, pin, read, forget)
 	Name string `json:"name"`
-	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
-	Scope Field[string] `json:"scope,omitzero"`
-	// read: the athanor a search answered for the note — reads it there, under your own seat.
-	AthanorId Field[string] `json:"athanor_id,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2464,8 +2458,6 @@ func (args NotesReadArgs) MarshalJSON() ([]byte, error) {
 type NotesSearchArgs struct {
 	// search: text to find in a note's name or body
 	Query string `json:"query"`
-	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
-	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
 	// list, search: the `next` cursor a previous page answered.

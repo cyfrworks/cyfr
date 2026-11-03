@@ -28,10 +28,9 @@ defmodule Emissary.Web.TinctureControllerTest do
   end
 
   # The same, with the row's manifest column stored as it is given: valid
-  # JSON, JSON that is no object, text that is not JSON, or none at all.
-  defp stored_version!(name, stored, files) do
-    ctx = Sanctum.TestContext.local()
-
+  # JSON, JSON that is no object, text that is not JSON, or none at all,
+  # in `ctx`'s athanor.
+  defp stored_version!(name, stored, files, ctx \\ Sanctum.TestContext.local()) do
     Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
       manifest: stored || "",
       files: files
@@ -100,8 +99,10 @@ defmodule Emissary.Web.TinctureControllerTest do
     {"style.css", "body { margin: 0; }"}
   ]
 
-  defp undecodable_versions! do
-    for {name, stored} <- @undecodable, do: stored_version!(name, stored, @undecodable_files)
+  defp undecodable_versions!(ctx \\ Sanctum.TestContext.local()) do
+    for {name, stored} <- @undecodable,
+        do: stored_version!(name, stored, @undecodable_files, ctx)
+
     Map.keys(@undecodable)
   end
 
@@ -120,11 +121,11 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
   end
 
-  setup do
-    base = Path.join(System.tmp_dir!(), "tincture_ctrl_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, base)
-
+  # The suite's versions, written into `ctx`'s athanor: a private
+  # tincture (auth-dash), public ones with their active public profiles
+  # (pub-dash, rl-dash, nl-dash, built-dash), registered as a commit
+  # would have registered them.
+  defp versions!(ctx) do
     # ── Private tincture (auth-dash) ─────────────────────────────────
     private_manifest = %{
       "name" => "auth-dash",
@@ -140,7 +141,7 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     private =
       Arca.Test.UnitFixtures.tenant_component!(
-        Sanctum.TestContext.local(),
+        ctx,
         "tincture",
         "local",
         "auth-dash",
@@ -172,7 +173,7 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     public =
       Arca.Test.UnitFixtures.tenant_component!(
-        Sanctum.TestContext.local(),
+        ctx,
         "tincture",
         "local",
         "pub-dash",
@@ -185,10 +186,6 @@ defmodule Emissary.Web.TinctureControllerTest do
       )
 
     # ── Register components ──────────────────────────────────────────
-    # The athanor behind the test context must exist as an active row: the
-    # `/t/<athanor>/…` route resolves it by slug ("test") before any lookup.
-    ctx = Sanctum.TestContext.local()
-    _athanor = Sanctum.TestContext.athanor!()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     rl_manifest = %{public_manifest | "name" => "rl-dash"}
@@ -277,6 +274,18 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     acknowledged!(ctx)
 
+    %{private: private, public: public}
+  end
+
+  setup do
+    base = Path.join(System.tmp_dir!(), "tincture_ctrl_#{:rand.uniform(1_000_000)}")
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
+
+    # The athanor behind the test context must exist as an active row: the
+    # `/t/<athanor>/…` route resolves it by slug ("test") before any lookup.
+    _athanor = Sanctum.TestContext.athanor!()
+
     on_exit(fn ->
       if original do
         Application.put_env(:arca, :base_path, original)
@@ -287,7 +296,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       File.rm_rf!(base)
     end)
 
-    %{private: private, public: public}
+    versions!(Sanctum.TestContext.local())
   end
 
   # ── A private tincture at its address: served to nobody ─────────
@@ -607,10 +616,14 @@ defmodule Emissary.Web.TinctureControllerTest do
     setup do
       # The credential is minted from the reader's own session: a private
       # app's files are theirs to read while that session and their seat
-      # stand, not anyone's who has the URL.
-      reader = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      # stand, not anyone's who has the URL. The versions are in the
+      # reader's own athanor, where they work.
+      {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+      own = Sanctum.Test.People.athanor!(user)
+      reader = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
       {:ok, session} = Sanctum.TestContext.create_session(reader)
       {:ok, ctx} = Sanctum.Caller.establish(session.token)
+      versions!(ctx)
 
       {:ok, reader: reader, session: session, ctx: ctx}
     end
@@ -645,7 +658,7 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     test "a version whose stored manifest does not decode is not found, its pages and files alike",
          %{conn: conn, ctx: ctx} do
-      for name <- undecodable_versions!(), {file, _bytes} <- @undecodable_files do
+      for name <- undecodable_versions!(ctx), {file, _bytes} <- @undecodable_files do
         answer = get(conn, served(credential(ctx, name), [file], name))
         assert {name, file, answer.status} == {name, file, 404}
       end
@@ -829,11 +842,10 @@ defmodule Emissary.Web.TinctureControllerTest do
       refute gone.resp_body =~ "auth app"
     end
 
-    test "a key's allowlist holds its credential: admitted address served, other refused" do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-
+    test "a key's allowlist holds its credential: admitted address served, other refused",
+         %{reader: reader} do
       {:ok, %{api_key: key}} =
-        Sanctum.TestContext.create_key(ctx, %{
+        Sanctum.TestContext.create_key(reader, %{
           name: "allowlisted-#{:rand.uniform(1_000_000)}",
           type: :service,
           scope: ["execute", "component_read", "storage_read"],

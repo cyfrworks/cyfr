@@ -200,7 +200,7 @@ defmodule Aqua.ScheduleNotesTest do
 
   # The run's read of its note, as the notes tool makes it in its chain.
   defp read_by_run(ctx, {_occurrence, execution_id}, name),
-    do: Aqua.Notes.read(ctx, name, "athanor", root_execution_id: execution_id)
+    do: Aqua.Notes.read(ctx, name, root_execution_id: execution_id)
 
   # The outcome record the occurrence's finish wrote, by its source.
   defp source({occurrence, _execution_id}, _schedule) do

@@ -549,7 +549,7 @@ defmodule Aqua.NotesRunReadTest do
   end
 
   defp read(ctx, run, name),
-    do: Notes.read(ctx, name, "athanor", root_execution_id: run.execution_id)
+    do: Notes.read(ctx, name, root_execution_id: run.execution_id)
 
   test "the first read records the revision it answered, and a later read leaves it", %{ctx: ctx} do
     run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
@@ -579,7 +579,7 @@ defmodule Aqua.NotesRunReadTest do
 
     assert {:ok, _} = read(ctx, run, "other")
     assert {:ok, _} = Notes.read(ctx, "nightly")
-    assert {:ok, _} = Notes.read(ctx, "nightly", "athanor", root_execution_id: "exec_elsewhere")
+    assert {:ok, _} = Notes.read(ctx, "nightly", root_execution_id: "exec_elsewhere")
     assert recorded(ctx, run) == nil
   end
 
@@ -623,8 +623,7 @@ defmodule Aqua.NotesRunReadTest do
         ["elsewhere-#{n}"]
       )
 
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: other.id)
-    elsewhere = %{ctx | athanor_id: other.id}
+    elsewhere = %{ctx | user_id: owner, athanor_id: other.id}
 
     assert {:error, {:not_found, "note", "nightly"}} = read(elsewhere, run, "nightly")
     assert recorded(ctx, run) == nil

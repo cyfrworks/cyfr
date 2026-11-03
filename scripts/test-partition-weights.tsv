@@ -155,7 +155,6 @@
 0.1	apps/cyfr/test/aqua/model_capabilities_test.exs
 0.2	apps/cyfr/test/aqua/models_test.exs
 0.7	apps/cyfr/test/aqua/notes_test.exs
-0.1	apps/cyfr/test/aqua/notes_unavailable_test.exs
 1.8	apps/cyfr/test/aqua/prompt_test.exs
 0.1	apps/cyfr/test/aqua/providers/approval_test.exs
 0.7	apps/cyfr/test/aqua/providers/notes_test.exs
@@ -201,7 +200,6 @@
 0.0	apps/cyfr/test/arca/subtree_read_revision_test.exs
 0.5	apps/cyfr/test/arca/tenant_isolation_test.exs
 0.4	apps/cyfr/test/arca/thread_storage_test.exs
-0.1	apps/cyfr/test/arca/thread_subscription_storage_test.exs
 0.1	apps/cyfr/test/arca/unit_holder_killed_test.exs
 0.0	apps/cyfr/test/arca/unit_successor_members_backends_test.exs
 0.1	apps/cyfr/test/arca/unit_successor_members_test.exs
@@ -596,7 +594,6 @@
 1.1	apps/cyfr/test/prism_web/live/invite_live_test.exs
 2.5	apps/cyfr/test/prism_web/live/login_live_test.exs
 1.2	apps/cyfr/test/prism_web/live/mcp_servers_live_test.exs
-3.0	apps/cyfr/test/prism_web/live/members_live_test.exs
 1.2	apps/cyfr/test/prism_web/live/modes_test.exs
 0.6	apps/cyfr/test/prism_web/live/pair_live_test.exs
 0.1	apps/cyfr/test/prism_web/live/redirect_live_test.exs
@@ -692,7 +689,6 @@
 0.3	apps/cyfr/test/sanctum/gate/visibility_test.exs
 0.0	apps/cyfr/test/sanctum/invitation_freeze_race_test.exs
 9.0	apps/cyfr/test/sanctum/launch_stamp_boundary_test.exs
-0.0	apps/cyfr/test/sanctum/member_freeze_race_test.exs
 0.2	apps/cyfr/test/sanctum/namespace_test.exs
 0.5	apps/cyfr/test/sanctum/permission_vocabulary_test.exs
 5.4	apps/cyfr/test/sanctum/person_permissions_test.exs
@@ -986,10 +982,7 @@
 0.0	apps/sanctum/test/sanctum/slug_test.exs
 0.0	apps/sanctum/test/sanctum/strict_authorize_tenant_test.exs
 0.1	apps/sanctum/test/sanctum/telemetry_test.exs
-0.2	apps/sanctum/test/sanctum/tenancy/athanors_destroy_test.exs
-0.1	apps/sanctum/test/sanctum/tenancy/athanors_purge_test.exs
 0.3	apps/sanctum/test/sanctum/tenancy/caps_test.exs
-0.5	apps/sanctum/test/sanctum/tenancy/pairs_test.exs
 0.1	apps/sanctum/test/sanctum/tenancy_continuation_test.exs
 0.2	apps/sanctum/test/sanctum/tenancy_mcp_test.exs
 0.3	apps/sanctum/test/sanctum/tenancy_test.exs

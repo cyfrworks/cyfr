@@ -22,9 +22,7 @@ defmodule PrismWeb.AquaApprovalCard do
     - for this thread until… — the same, ending 1, 8 or 24 hours from
       the click (`:thread`, `until` computed here in UTC);
     - always — a standing allow for the agent wherever it works (an
-      agent-scope row in its home athanor). The row belongs to the
-      athanor, not to whoever clicks: in a group the control says so,
-      because one member is deciding for everyone;
+      agent-scope row in its home athanor);
     - for this schedule — the same, ending with the schedule the card's
       run was started by (`:always`, lifecycle `:schedule`), offered only
       when that run's row names one (`scheduled`);
