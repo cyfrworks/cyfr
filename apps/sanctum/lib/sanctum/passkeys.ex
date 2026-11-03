@@ -567,8 +567,10 @@ defmodule Sanctum.Passkeys do
   Connect door this home can
   re-authenticate (`Sanctum.Auth.OIDC.reauth_available?/1`), a verified
   email a one-time code can reach
-  (`Sanctum.Auth.EmailVerification.code_available?/1`). The passkeys are
-  read as the context's own. A remote person needs no passkey here: their
+  (`Sanctum.Auth.EmailVerification.code_available?/1`), or a protected
+  device of theirs that stands, whose unlock proves a confirmation
+  (`Sanctum.DeviceUnlock`): a person a device's enrollment made registers
+  their passkey under it. The passkeys are read as the context's own. A remote person needs no passkey here: their
   own home certifies their confirmations
   (`Sanctum.RemoteCertification.verify_confirmation/3`), so a passkey they
   register here anyway is the administrator's to authorize while they hold
@@ -577,7 +579,8 @@ defmodule Sanctum.Passkeys do
   @spec fresh_method?(Context.t()) :: boolean()
   def fresh_method?(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
     active_here?(ctx, user_id) or Sanctum.Auth.OIDC.reauth_available?(user_id) or
-      Sanctum.Auth.EmailVerification.code_available?(user_id)
+      Sanctum.Auth.EmailVerification.code_available?(user_id) or
+      match?({:ok, [_ | _]}, protected_devices(user_id))
   end
 
   defp active_here?(ctx, user_id) do
@@ -1126,17 +1129,19 @@ defmodule Sanctum.Passkeys do
   end
 
   # Revoking `passkey`, which stood `was`, leaves the person a way to sign
-  # in here: a linked door, or another active passkey at this RP ID. Only
-  # an active passkey here was a way in, so revoking a pending one, or one
-  # pinned elsewhere, takes none away.
+  # in here: a linked door, another active passkey at this RP ID, or a
+  # protected device of theirs that stands, which unlocks a session of its
+  # own (`Sanctum.DeviceUnlock`). Only an active passkey here was a way in,
+  # so revoking a pending one, or one pinned elsewhere, takes none away.
   defp leaves_a_way_in(ctx, user_id, passkey, "active") do
     if passkey.rp_id == rp_id() do
       with {:ok, []} <- door_identities(user_id),
-           {:ok, []} <- other_active(ctx, user_id, passkey.id) do
+           {:ok, []} <- other_active(ctx, user_id, passkey.id),
+           {:ok, []} <- protected_devices(user_id) do
         {:error,
          {:conflict,
-          "This passkey is your only way to sign in here; link a sign-in method or register another " <>
-            "passkey before you revoke it"}}
+          "This passkey is your only way to sign in here; link a sign-in method, register another " <>
+            "passkey or pair a device before you revoke it"}}
       else
         {:ok, [_ | _]} -> :ok
         {:error, :unavailable} -> {:error, :unavailable}
@@ -1147,6 +1152,13 @@ defmodule Sanctum.Passkeys do
   end
 
   defp leaves_a_way_in(_ctx, _user_id, _passkey, _was), do: :ok
+
+  defp protected_devices(user_id) do
+    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
+      {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.holder_kind in ["chip", "software"]))}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
 
   defp other_active(ctx, user_id, passkey_id) do
     case Arca.Passkeys.list(Context.actor(ctx), user_id, state: :active) do
