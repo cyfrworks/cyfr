@@ -54,10 +54,12 @@ defmodule Sanctum.DeviceUnlock do
   setup, the recovery code while it is unsaved). It takes the
   installation capability the admission did (the setup token, or the
   restore token for a restore), and the proof of the committed key, never
-  the request id alone. An invitation's resume takes the code its person
-  redeemed; an open admission's takes the proof alone, counted against
-  its source address as its challenges are. Nothing is reopened or
-  minted again.
+  the request id alone. A resume is bound to the admission the enrollment
+  committed under, read from its person's row: an invitation's takes the
+  code its person redeemed, on the challenge and the completion alike; an
+  open admission's takes the proof alone, counted against its source
+  address as its challenges are; no other admission resumes it. Nothing
+  is reopened or minted again.
 
   ## Unlock and lock
 
@@ -276,8 +278,9 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
-  defp resumed({kind, _token}, proof) do
+  defp resumed({kind, _credential} = capability, proof) do
     with {:ok, held} <- take_proven({:device_enroll, {:resume, kind}}, proof),
+         :ok <- admitted_by(capability, %{user_id: held.user_id}),
          {:ok, certificate} <- certificate(held.challenge.athanor, held.challenge.client_id) do
       if kind in [:setup, :invitation, :open] do
         case Sanctum.Recovery.admission_recovery(held.user_id) do
@@ -469,10 +472,26 @@ defmodule Sanctum.DeviceUnlock do
 
   defp capable(_capability), do: {:error, :invalid_token}
 
-  # An invitation's resume: the code the client's person redeemed when the
-  # enrollment committed. Setup's and a restore's capability is the
-  # installation's, and an open admission's resume rests on its proof.
-  defp admitted_by({:invitation, code}, %{user_id: user_id}) do
+  # A resume is bound to the admission the enrollment committed under, read
+  # from its person's row, never to the one the caller names: setup's token,
+  # a restore's token, the open admission, or for an invitation the code
+  # that person redeemed, compared on the challenge and on the completion
+  # alike. Any other capability finds no enrollment to resume.
+  defp admitted_by(capability, %{user_id: user_id}) when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{admission: admission}} -> admitted_as(capability, admission, user_id)
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp admitted_by(_capability, _client), do: {:error, :not_found}
+
+  defp admitted_as({:setup, _token}, "setup", _user_id), do: :ok
+  defp admitted_as({:restore, _token}, "restore", _user_id), do: :ok
+  defp admitted_as({:open, _source}, "open", _user_id), do: :ok
+
+  defp admitted_as({:invitation, code}, "invitation", user_id) do
     with {:ok, hash} <- Sanctum.Invitations.code_hash(code) do
       case Arca.Invitations.by_code_hash(Prima.Actor.system(), hash) do
         {:ok, %{redeemed_by: ^user_id}} -> :ok
@@ -485,7 +504,7 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
-  defp admitted_by(_capability, _client), do: :ok
+  defp admitted_as(_capability, _admission, _user_id), do: {:error, :not_found}
 
   # An open admission names no credential, so its calls are counted against
   # their source address and the installation, this node's count and then

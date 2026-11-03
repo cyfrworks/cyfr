@@ -536,6 +536,54 @@ defmodule Sanctum.DeviceUnlockTest do
     end
   end
 
+  describe "review S2 admission binding" do
+    test "an invitation enrollment cannot resume as an open enrollment" do
+      admin = enrolled!()
+      admin_id = admin.certificate.subject.user_id
+      {_id, code} = invite!(admin_id)
+      {public, private} = device = key()
+      person = identity()
+      {:ok, %{challenge: challenge}} = new_challenge({:invitation, code}, device, person)
+      {:ok, _answer} = new_complete({:invitation, code}, challenge, device, person)
+
+      result =
+        with {:ok, %{challenge: resumed}} <-
+               DeviceUnlock.resume({:open, @source}, %{
+                 "admission" => "open",
+                 "device_key" => b64(public),
+                 "request_id" => person.request_id
+               }) do
+          DeviceUnlock.resume({:open, @source}, %{"proof" => signed(resumed, private)})
+        end
+
+      assert match?({:error, _}, result),
+             "invitation-free open resume returned the invitation enrollment"
+    end
+
+    test "an invitation resume proof cannot finish under another invitation code" do
+      admin = enrolled!()
+      admin_id = admin.certificate.subject.user_id
+      {_id, code} = invite!(admin_id)
+      {_other_id, other} = invite!(admin_id)
+      {public, private} = device = key()
+      person = identity()
+      {:ok, %{challenge: challenge}} = new_challenge({:invitation, code}, device, person)
+      {:ok, _answer} = new_complete({:invitation, code}, challenge, device, person)
+
+      {:ok, %{challenge: resumed}} =
+        DeviceUnlock.resume({:invitation, code}, %{
+          "admission" => "invitation",
+          "device_key" => b64(public),
+          "request_id" => person.request_id
+        })
+
+      result = DeviceUnlock.resume({:invitation, other}, %{"proof" => signed(resumed, private)})
+
+      assert match?({:error, _}, result),
+             "another invitation's header finished the first invitation's resume"
+    end
+  end
+
   describe "after a restore" do
     # A local person who holds no first method, as a restore leaves them:
     # made here by a device's setup, the device, its certificate and the
