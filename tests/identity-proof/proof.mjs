@@ -6,8 +6,10 @@
 // homes A, B, C, C2 and C3 and a directory, each a cell on its own `.test`
 // name, and the cyfr.run stand-in A registers names at. A's first person
 // comes through setup's two screens. Chromium alone, since a passkey is
-// made and used by its virtual authenticator; the glass's steps run once
-// more at the handheld's 720×720 touch viewport (../browser/handheld.mjs).
+// made and used by its virtual authenticator. The devices paired at A are
+// test devices (../browser/device.mjs), clients of the device channel this
+// process drives; a device's steps run once more from a Prism at the
+// handheld's 720×720 touch viewport (../browser/handheld.mjs).
 // Each step is one row of the record; the proof fails when a row does not
 // hold, and stops at the first row a later one rests on.
 //
@@ -22,9 +24,10 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { channel, connectDevice, newDevice, pair as pairDevice } from "../browser/device.mjs";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import {
-  admit, ask as askRunSh, instrumentDevice, launchBrowser, readCode, readHomes, redact as redactKnown,
+  admit, ask as askRunSh, launchBrowser, readCode, readHomes, redact as redactKnown,
   saveAdmissionCode, saveCode, sleep, startProxy, virtualAuthenticator, waitFor,
 } from "../browser/lib.mjs";
 
@@ -69,60 +72,19 @@ const redact = (text) => redactKnown(text, secrets);
 // removes the answer once read; run.sh has removed the ask.
 const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 300_000, refuseError: true, ...options });
 
-const storedDevice = (page) => page.evaluate(() => new Promise((resolve, reject) => {
-  const open = indexedDB.open("cyfr-glass", 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("glass");
-  open.onerror = () => reject(open.error);
-  open.onsuccess = () => {
-    const read = open.result.transaction("glass", "readonly").objectStore("glass").get("device");
-    read.onsuccess = () => {
-      window.__heldDevice = read.result || null;
-      resolve(read.result ? { clientId: read.result.clientId, certificate: read.result.certificate } : null);
-    };
-    read.onerror = () => reject(read.error);
-  };
-}));
+// The proxy every home is reached through, the browsers' and the test
+// devices' (`main`).
+let proxyPort = null;
 
-// A connection of its own, from the glass's page, under the certificate
-// `certificate` and the device key the glass holds: `connect`, the
-// challenge signed with the key, and how the home closed it.
-const connectWith = (page, certificate) => page.evaluate(async (cert) => {
-  const held = window.__heldDevice;
-  if (!held) return { error: "no device held" };
-  const b64url = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const jcs = (value) => value === null || typeof value !== "object"
-    ? JSON.stringify(value)
-    : Array.isArray(value)
-      ? `[${value.map(jcs).join(",")}]`
-      : `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${jcs(value[k])}`).join(",")}}`;
-  const Native = Object.getPrototypeOf(window.WebSocket.prototype).constructor;
-  return new Promise((resolve) => {
-    const seen = [];
-    const ws = new Native(`wss://${location.host}/device/websocket`);
-    const done = setTimeout(() => { ws.close(); resolve({ seen, code: null, timedOut: true }); }, 20_000);
-    ws.onopen = () => ws.send(JSON.stringify({ protocol: "cyfr-device/v1", type: "connect", client_id: held.clientId, certificate: cert }));
-    ws.onmessage = async (event) => {
-      const map = JSON.parse(event.data);
-      seen.push(map.type);
-      if (map.type === "challenge") {
-        const { sig: _sig, ...fields } = map.challenge;
-        const sig = await crypto.subtle.sign({ name: "Ed25519" }, held.privateKey, new TextEncoder().encode(jcs(fields)));
-        ws.send(JSON.stringify({ protocol: "cyfr-device/v1", type: "proof", proof: { ...fields, sig: b64url(sig) } }));
-      }
-    };
-    ws.onclose = (event) => { clearTimeout(done); resolve({ seen, code: event.code }); };
-  });
-}, certificate);
-
-const deviceLog = (page) => page.evaluate(() => window.__device.log.slice());
-
-const glassStateOf = (page) =>
-  page.locator('[data-test="glass-status"]').getAttribute("data-state", { timeout: 2_000 }).catch(() => null);
-
-// ---------------------------------------------------------------------------
-// Prism's side
-// ---------------------------------------------------------------------------
+// A connection of the test device's own under `certificate` (its current
+// one unless named): `connect`, the challenge signed with its key, and the
+// code the home closed it with, or "open" when it stood.
+async function connectWith(device, base, certificate = device.certificate) {
+  const ch = channel({ ...device, certificate }, { proxyPort, base, purpose: "connect" });
+  const outcome = await Promise.race([ch.opened.then(() => "open"), ch.closed, sleep(20_000).then(() => "timed out")]);
+  if (outcome === "open") ch.close();
+  return { code: outcome, seen: ch.log.filter((e) => e.dir === "in").map((e) => e.type) };
+}
 
 const connected = (page) => page.waitForSelector(".phx-connected", { timeout: 60_000 });
 const layer = "#system-layer-dialog";
@@ -186,27 +148,34 @@ async function firstPasskey(page, authenticator, base, segment, step) {
   return row(step, held >= 1 && registered === 1, "the first passkey is registered from the settings page through the system layer's ceremony", record[step]);
 }
 
-// A glass paired at A from the desktop's Devices: the glass makes its key
-// first on A's /pair page and shows its code, the desktop begins a pairing
-// for that code and confirms it, and the link opens on the same glass.
-// Answers the device it holds.
-async function pairAtA(desk, glass) {
-  await glass.goto(`${A}/pair`);
-  const shown = glass.locator('[data-test="pair-key-code"]');
-  await shown.waitFor({ timeout: 30_000 });
-  const code = (await shown.textContent()).trim();
-  await open(desk, shellOf(A, segmentA));
-  await desk.locator("#shell-devices").click();
-  await desk.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
-  await desk.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
-  await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
-  await confirmHere(desk);
-  await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
-  const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
-  await closePrompt(desk);
-  await glass.goto(link);
-  await glass.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  return storedDevice(glass);
+// A test device (../browser/device.mjs) paired at A from the desktop's
+// Devices: its key made in this process, its code typed there, the pairing
+// confirmed with the desktop's passkey, completed with the device's key,
+// and its channel standing under the certificate A answered. `page` is the
+// desktop's, or the handheld's, whose screens are measured when `measured`
+// is given. Answers the device.
+async function pairAtA(page, { name = "identity proof test device", measured = null } = {}) {
+  const device = newDevice({ name });
+  await open(page, shellOf(A, segmentA));
+  await page.locator("#shell-devices").click();
+  await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
+  await page.locator(`${layer} [data-test="pairing-key-input"]`).fill(device.code);
+  await page.locator(`${layer} [data-test="pairing-begin"]`).click();
+  if (measured) {
+    await page.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"] [data-test="confirm-passkey"]`, { timeout: 30_000 });
+    measured.consent_prompt = await measure(page, layer);
+  }
+  await confirmHere(page);
+  await page.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
+  const link = await page.locator(`${layer} [data-test="pairing-link"]`).inputValue();
+  if (measured) measured.pairing_link = await measure(page, layer);
+  await closePrompt(page);
+  const paired = await pairDevice(device, { proxyPort, base: A, secret: link.split("#code=")[1] });
+  if (paired.error) return null;
+  const opened = await connectDevice(device, { proxyPort, base: A });
+  if (!opened.channel) return null;
+  opened.channel.close();
+  return device;
 }
 
 // A's first person, made through setup's two screens at A's setup link,
@@ -282,43 +251,31 @@ async function secondCode(desk, proxy, first) {
     record.second_code), code];
 }
 
-async function rotate(desk, phone, paired) {
+async function rotate(desk, device) {
   const before = await ask({ op: "a_head" });
-  const mark = (await deviceLog(phone)).length;
+  const held = device.certificate;
   await open(desk, settingsOf(A, segmentA));
   await desk.locator('[data-test="identity-rotate"]').click();
   await confirmHere(desk);
   await flashed(desk, "Your live key was rotated.");
   const after = await ask({ op: "a_head" });
 
-  // The certificate signed under the replaced key opens nothing; the glass
-  // renews by its device key — on the connection it holds, or on its next
-  // one, whose stale connect is closed 4408 — and stands again.
-  const replaced = await connectWith(phone, paired.certificate);
-  const renewedHere = await waitFor(async () => {
-    const held = await storedDevice(phone);
-    return held && JSON.stringify(held.certificate) !== JSON.stringify(paired.certificate) ? held : null;
-  }, { timeoutMs: 20_000, what: "the glass's renewed certificate" }).catch(() => null);
-  const held = (await deviceLog(phone)).slice(mark);
-  await phone.goto(`${A}/pair`);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  const renewed = renewedHere || await waitFor(async () => {
-    const stored = await storedDevice(phone);
-    return stored && JSON.stringify(stored.certificate) !== JSON.stringify(paired.certificate) ? stored : null;
-  }, { timeoutMs: 60_000, what: "the glass's renewed certificate" }).catch(() => null);
-  const frames = [...held, ...(await deviceLog(phone))];
+  // The certificate signed under the replaced key opens nothing; the device
+  // renews by its device key on its next connection, whose stale connect
+  // is closed 4408, and stands again under a new certificate.
+  const replaced = await connectWith(device, A, held);
+  const renewed = await connectDevice(device, { proxyPort, base: A });
+  const sent = renewed.channel ? renewed.channel.log.filter((e) => e.dir === "out").map((e) => e.type) : [];
+  if (renewed.channel) renewed.channel.close();
   record.rotate = {
     head_moved: before.head !== after.head, live_key_moved: before.live_key !== after.live_key,
-    replaced_certificate: replaced,
-    sent: frames.filter((e) => e.dir === "out").map((e) => e.type),
-    closes: frames.filter((e) => e.event === "close").map((e) => e.code),
-    renewed_on: renewedHere ? "the connection it held" : "its next connection",
-    new_certificate: !!renewed,
+    replaced_certificate: replaced, renewed: !!renewed.channel, sent,
+    new_certificate: JSON.stringify(device.certificate) !== JSON.stringify(held),
   };
   return row("rotate",
     record.rotate.head_moved && record.rotate.live_key_moved && replaced.code === 4408 &&
-      record.rotate.sent.includes("renew") && record.rotate.new_certificate,
-    "the live key rotated under a fresh confirmation: a certificate signed under the replaced key opens nothing, and the paired glass renews by its device key",
+      record.rotate.renewed && sent[0] === "renew" && record.rotate.new_certificate,
+    "the live key rotated under a fresh confirmation: a certificate signed under the replaced key opens nothing, and the paired device renews by its device key",
     record.rotate);
 }
 
@@ -357,77 +314,73 @@ async function restoredHome(page, proxy, base, cell, token, code, step) {
 }
 
 // ---------------------------------------------------------------------------
-// The glass's steps once more on the handheld (HANDHELD)
+// A device's steps once more from the handheld (HANDHELD)
 // ---------------------------------------------------------------------------
 
-// A second glass, the handheld, follows the phone through the glass's
-// steps: paired locally at A, reconnected at A after the rotation under a
-// renewed certificate, and opened at C, a home that
-// holds no device of it. Each of those screens meets the handheld's
-// checks, which the `viewport` row holds.
-async function handheldPairs(browser, desk) {
+// The handheld follows the desktop through a device's steps: its Prism,
+// signed in at A as the desktop is and holding the desktop's passkey,
+// pairs a second test device there, its consent prompt and link measured;
+// after the rotation its Devices lists that device standing under a
+// renewed certificate; and that device's certificate opens nothing at C,
+// a home that holds no device of it. Each of those screens meets the
+// handheld's checks, which the `viewport` row holds.
+async function handheldPairs(browser, desk, deskAuthenticator) {
   const context = await browser.newContext(HANDHELD);
-  await context.addInitScript(instrumentDevice);
+  await context.addCookies(await desk.context().cookies(A));
   const page = await context.newPage();
-  const device = await pairAtA(desk, page);
-  const hand = { context, page, device, measured: {}, facts: {} };
-  hand.measured.paired = await measure(page, "#glass");
-  hand.facts.paired_subject = device && device.certificate.subject.kind;
+  const authenticator = await virtualAuthenticator(page);
+  for (const credential of await deskAuthenticator.credentials()) await authenticator.add(credential);
+  const hand = { context, page, measured: {}, facts: {} };
+  hand.device = await pairAtA(page, { name: "identity proof handheld device", measured: hand.measured });
+  hand.facts.paired_subject = hand.device && hand.device.certificate.subject.kind;
   return hand;
 }
 
-// `before` is the handheld's device as it stood just before the rotation.
-async function handheldReconnects(hand, before) {
-  await hand.page.goto(`${A}/pair`);
-  await hand.page.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  const renewed = await waitFor(async () => {
-    const held = await storedDevice(hand.page);
-    return held && before && JSON.stringify(held.certificate) !== JSON.stringify(before.certificate) ? held : null;
-  }, { timeoutMs: 60_000, what: "the handheld's renewed certificate" }).catch(() => null);
-  await hand.page.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  hand.measured.reconnected = await measure(hand.page, "#glass");
-  hand.facts.renewed_after_rotation = !!renewed;
+async function handheldReconnects(hand) {
+  const before = hand.device && hand.device.certificate;
+  const renewed = hand.device ? await connectDevice(hand.device, { proxyPort, base: A }) : {};
+  if (renewed.channel) renewed.channel.close();
+  hand.facts.renewed_after_rotation = !!renewed.channel && JSON.stringify(hand.device.certificate) !== JSON.stringify(before);
+  await open(hand.page, shellOf(A, segmentA));
+  await hand.page.locator("#shell-devices").click();
+  const listed = `${layer} [data-test="pairing-client"][data-client="${hand.device && hand.device.clientId}"]`;
+  hand.facts.listed_after_rotation = await hand.page.waitForSelector(listed, { timeout: 30_000 }).then(() => true).catch(() => false);
+  hand.measured.devices = await measure(hand.page, layer);
 }
 
 async function handheldElsewhere(hand) {
-  await hand.page.goto(`${C}/pair`);
-  hand.facts.at_c = await hand.page.waitForSelector('[data-test="glass-status"][data-state="unpaired"]', { timeout: 60_000 })
-    .then(() => "unpaired").catch(() => glassStateOf(hand.page));
-  hand.measured.other_home = await measure(hand.page, "#glass");
+  hand.facts.at_c = hand.device ? (await connectWith(hand.device, C)).code : null;
   await hand.context.close();
   const failures = unmet(hand.measured);
   record.viewport = { viewport: HANDHELD.viewport, ...hand.facts, measured: hand.measured, failures };
   return row("viewport",
-    hand.facts.paired_subject === "local" && hand.facts.renewed_after_rotation && hand.facts.at_c === "unpaired" &&
-      failures.length === 0,
-    "at 720×720: a glass paired locally, reconnected under a renewed certificate after the rotation, and opened at a home that holds no device of it, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
+    hand.facts.paired_subject === "local" && hand.facts.renewed_after_rotation && hand.facts.listed_after_rotation &&
+      hand.facts.at_c !== "open" && failures.length === 0,
+    "at 720×720: a device paired locally from the handheld's Prism, its consent and link read there, listed under its renewed certificate after the rotation, and refused at a home that holds no device of it, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);
 }
 
 async function main(browser, proxy) {
+  proxyPort = proxy.address().port;
   const deskContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const desk = await deskContext.newPage();
   const deskAuthenticator = await virtualAuthenticator(desk);
-  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await phoneContext.addInitScript(instrumentDevice);
-  const phone = await phoneContext.newPage();
 
   const [setUpHeld, code1] = await setUp(desk, deskAuthenticator, proxy);
   if (!setUpHeld) return;
   if (!(await named(code1))) return;
-  // The phone and the handheld, each a glass paired at A, which the
-  // rotation renews.
-  const device = await pairAtA(desk, phone);
+  // Two test devices paired at A, from the desktop and from the
+  // handheld, which the rotation renews.
+  const device = await pairAtA(desk);
   if (!device) {
-    row("rotate", false, "the phone paired at A holds a device", { device });
+    row("rotate", false, "a test device paired at A stands", { device });
     return;
   }
-  const hand = await handheldPairs(browser, desk);
+  const hand = await handheldPairs(browser, desk, deskAuthenticator);
   const [added, code2] = await secondCode(desk, proxy, code1);
   if (!added) return;
-  const handBefore = await storedDevice(hand.page);
-  if (!(await rotate(desk, phone, device))) return;
-  await handheldReconnects(hand, handBefore);
+  if (!(await rotate(desk, device))) return;
+  await handheldReconnects(hand);
   if (!(await cache())) return;
 
   // A thief takes a copy of A as it stands.
@@ -517,14 +470,13 @@ async function main(browser, proxy) {
   record.door = { doors };
   if (!row("door", doors === 1, "the restored person links a door, freshly confirmed with their new passkey", record.door)) return;
 
-  // The glass paired at A is not C's: C holds no paired client, and a
-  // glass opening C's page holds no device there.
+  // The device paired at A is not C's: C holds no paired client, and its
+  // certificate opens nothing at C.
   const people = await ask({ op: "people", cell: "c" });
-  await phone.goto(`${C}/pair`);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="unpaired"]', { timeout: 60_000 });
-  record.pair_again = { people: people.people };
-  if (!row("pair_again", people.people.length === 1 && people.people[0].paired_clients === 0,
-    "a restore without the old paired client's row: the glass pairs again", record.pair_again)) return;
+  const atC = await connectWith(device, C);
+  record.pair_again = { people: people.people, at_c: atC };
+  if (!row("pair_again", people.people.length === 1 && people.people[0].paired_clients === 0 && atC.code !== "open",
+    "a restore without the old paired client's row: the device paired at A opens nothing at C and pairs again", record.pair_again)) return;
   if (!(await handheldElsewhere(hand))) return;
 
   // A gone: recovery still completes, and a recovery accepted, its reply

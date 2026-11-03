@@ -6,8 +6,8 @@ name and a recovery code, adds a second code, rotates their live key, and
 brings their identity back with a recovery code onto a fresh installation,
 and that each home involved sees what it should and nothing more. Every
 home is a `cyfr` release on a SQLite cell of its own, on a `.test` name
-behind the harness's TLS front (`browser_home`), since passkeys and the
-glass's WebCrypto key need a secure origin:
+behind the harness's TLS front (`browser_home`), since passkeys need a
+secure origin:
 
 | Cell | Name | Configured |
 |---|---|---|
@@ -69,9 +69,9 @@ whether it succeeds or fails.
 
 The person's passkeys are made and used by Chromium's virtual WebAuthn
 authenticator over CDP (`virtualAuthenticator`); Firefox and WebKit offer
-Playwright none, so the proof runs in Chromium alone. The glass's steps run
-once more on a second glass at the handheld's 720×720 touch
-viewport (`tests/browser/handheld.mjs`).
+Playwright none, so the proof runs in Chromium alone. A device's steps run
+once more from a second Prism at the handheld's 720×720 touch viewport
+(`tests/browser/handheld.mjs`).
 
 ## Steps
 
@@ -80,16 +80,22 @@ part (`ask-N.json`, answered `answer-N.json`), and an ask or answer that
 carried a recovery code or a token is deleted once read. Each step is one row;
 the proof stops at the first row a later one rests on.
 
-The phone and the handheld glass are paired at A from the shell's Devices
-once the person is set up, under a local subject; the `rotate` and
-`viewport` rows hold what follows from that pairing.
+A browser holds no device key: its device is the person's passkey. Two
+test devices (`tests/browser/device.mjs`, a client of the device channel
+`proof.mjs` drives, its key made in that process) are paired at A from the
+shell's Devices once the person is set up, under a local subject, each
+pairing confirmed with the passkey: one from the desktop, one from the
+handheld's Prism; the `rotate`, `pair_again` and `viewport` rows hold what
+follows from those pairings. Until S4 of the devices plan the two were
+glasses, keys a browser's `/pair` page made; those rows held the same
+facts of the glasses.
 
 | Step | What holds |
 |---|---|
 | `setup` | A's first person comes through `/setup`, its token in the fragment: on the first screen `@identity-a` is typed and found free at the stand-in and a passkey is made, A's one passkey; on the second the identity is registered at `dir.test` and the name claimed, and the recovery code, naming A's identity, is drawn; "I saved it" erases it from the page and lands in CYFR signed in, under the sentence that offers another code; A holds one person, admitted by setup and enrolled, and Settings' identity card says "Your name is @identity-a."; neither the code, its secret nor the setup token reaches the browser's storage, an address or any request the proxy saw |
 | `name` | the stand-in answers `@identity-a` with A's identifier and `https://dir.test`, its state holds the name for that identifier, and A's genesis and enrollment attempt name the same directory |
 | `second_code` | another recovery code, approved by the first one typed into the prompt, its secret drawn in the browser, for the same identifier |
-| `rotate` | the live key rotated under a fresh confirmation: A's head and live key move; the glass's certificate signed under the replaced key, presented with a proof of its device key, is refused `4408`; the glass reconnects, renews by its device key and stands under a new certificate |
+| `rotate` | the live key rotated under a fresh confirmation: A's head and live key move; the test device's certificate signed under the replaced key, presented with a proof of its device key, is refused `4408`; the device's next connection's first frame is `renew`, and it stands under a new certificate |
 | `cache` | B, which holds nothing of the person's, reads the identity at its directory from its genesis and caches A's head |
 | `reserved` | C refuses its setup, the admission that makes any other installation's first person, before any recovery code is presented: `restore_reserved` |
 | `claims` | C's own token alone opens it: C2's token is refused `401`, a recovery code of an identity the directory never saw `422 unknown_identity`, a code of the identity whose secret holds no recovery key of it `422 not_a_holder`, and the person's own code with one symbol changed `422 typo`; `run.sh` composes the forged codes as `Prima.RecoveryCode` does, so a code composed wrongly is refused for another reason and fails the step; no attempt is opened |
@@ -101,8 +107,8 @@ once the person is set up, under a local subject; the `rotate` and
 | `window` | the restore session's first-method window does not slide with use: past it, with the settings page used throughout, no first passkey registers; the recovery code proven again under a new challenge (`/restore/challenge`, `/restore/reproof`) opens a new window |
 | `first_passkey` | the restored person's first passkey at C |
 | `door` | a GitHub door linked at C under a fresh confirmation with that passkey, its link ticket minted as a completed sign-in with the door leaves one (no identity provider is reachable) |
-| `pair_again` | C holds no paired client of the person; the glass opening C's page holds no device there |
-| `viewport` | the glass's steps once more at 720×720: a second glass paired locally at A beside the first, under a local subject; reconnected at A after the rotation under a renewed certificate; and opened at C, which holds no device of it; each of those screens has every control 24×24 CSS px or more, text 12 px or more and nothing overflowing (WCAG 2.2 AA) |
+| `pair_again` | C holds no paired client of the person; the device paired at A, presented at C's device channel, does not stand there |
+| `viewport` | a device's steps once more at 720×720, from a Prism signed in at A as the desktop is, holding the desktop's passkey: a second test device paired at A beside the first, under a local subject, its consent prompt and its pairing link read there; after the rotation it renews, standing under a new certificate, and that Prism's Devices lists it; presented at C, which holds no device of it, it does not stand; the consent prompt, the link and the Devices list each have every control 24×24 CSS px or more, text 12 px or more and nothing overflowing (WCAG 2.2 AA) |
 | `without_a` | with A and its copy stopped, the person restores on C3 with the second recovery code |
 | `without_a_reach` | that restore reached the directory alone: every request at the front is a directory path, and A answers nothing |
 | `superseded` | C2's recovery with the first recovery code, accepted with its head left unread, is replaced by C3's; C2 resumed ends `superseded`, its staged keys gone, no person minted |
