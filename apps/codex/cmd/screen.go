@@ -340,17 +340,10 @@ func runScreenShell(ctx context.Context) error {
 
 	keyboard := exec.Command("wvkbd-mobintl")
 	_ = keyboard.Start()
-	lockNow := strconv.Itoa(os.Getpid())
-	idle := exec.Command("swayidle", "-w",
-		"timeout", strconv.Itoa(screenIdle), "kill -USR1 "+lockNow,
-		"before-sleep", "kill -USR1 "+lockNow)
-	_ = idle.Start()
 	defer func() {
-		for _, c := range []*exec.Cmd{idle, keyboard} {
-			if c.Process != nil {
-				_ = c.Process.Kill()
-				_ = c.Wait()
-			}
+		if keyboard.Process != nil {
+			_ = keyboard.Process.Kill()
+			_ = keyboard.Wait()
 		}
 	}()
 
@@ -363,24 +356,53 @@ func runScreenShell(ctx context.Context) error {
 		}
 	}()
 
-	for ctx.Err() == nil {
-		if err := chrome.run(ctx); err != nil {
-			sh.Lock("")
-			return fmt.Errorf("Chrome did not start (%v)", err)
+	// The idle and suspend lock is swayidle's: a screen without it would
+	// stay unlocked unwatched, so its failure to start, or its exit, locks
+	// the screen and ends this shell, which the launcher starts again with
+	// a new watcher, locked.
+	lockNow := strconv.Itoa(os.Getpid())
+	idle := exec.Command("swayidle", "-w",
+		"timeout", strconv.Itoa(screenIdle), "kill -USR1 "+lockNow,
+		"before-sleep", "kill -USR1 "+lockNow)
+	if err := idle.Start(); err != nil {
+		sh.Lock("")
+		return fmt.Errorf("The screen's idle lock (swayidle) did not start (%v)", err)
+	}
+	watching := make(chan error, 1)
+	go func() { watching <- idle.Wait() }()
+	defer func() { _ = idle.Process.Kill() }()
+
+	browsing, stopBrowsing := context.WithCancel(ctx)
+	defer stopBrowsing()
+	browser := make(chan error, 1)
+	go func() {
+		for browsing.Err() == nil {
+			if err := chrome.run(browsing); err != nil {
+				browser <- err
+				return
+			}
+			if browsing.Err() == nil && sh.Unlocked() {
+				sh.Lock("Locked because the browser closed.")
+			}
+			select {
+			case <-browsing.Done():
+			case <-time.After(time.Second):
+			}
 		}
-		if ctx.Err() == nil && sh.Unlocked() {
-			sh.Lock("Locked because the browser closed.")
-		}
-		select {
-		case <-ctx.Done():
-		case err := <-served:
-			sh.Lock("")
-			return err
-		case <-time.After(time.Second):
-		}
+	}()
+
+	var ended error
+	select {
+	case <-ctx.Done():
+	case ended = <-served:
+	case err := <-watching:
+		ended = fmt.Errorf("The screen's idle lock (swayidle) stopped (%v): the screen locked and starts again", err)
+	case err := <-browser:
+		ended = fmt.Errorf("Chrome did not start (%v)", err)
 	}
 	sh.Lock("")
-	return nil
+	stopBrowsing()
+	return ended
 }
 
 // sigUSR1 is Linux's SIGUSR1, named by number so this file builds where
