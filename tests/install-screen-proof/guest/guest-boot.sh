@@ -3,7 +3,7 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The QEMU container's command (tests/install-screen-proof/Dockerfile):
-#   guest-boot.sh NAME MEMORY_MIB DISK_SIZE CPUS IMAGE
+#   guest-boot.sh NAME MEMORY_MIB DISK_SIZE CPUS IMAGE TPM
 # run.sh copies /seed/password and /seed/authorized_key in before the
 # container starts. From them this makes the guest's NoCloud seed, and the
 # seed does three things only: cloud-init creates the one account `proof`,
@@ -17,9 +17,13 @@
 # a USB tablet, the serial console in /case/serial.log, QMP at
 # /run/proof/qmp.sock (its pid in /run/proof/qemu.pid), and user
 # networking that forwards the container's loopback port 2222 to the
-# guest's SSH, which run.sh reaches through docker exec.
+# guest's SSH, which run.sh reaches through docker exec. TPM `swtpm` gives
+# the guest a TPM 2.0 (a TIS device) backed by a swtpm of its own, its
+# state in /disk/NAME.tpm, the run's own volume, so it is new with each
+# run and goes with the volume; `none` gives it none. No Secure Boot and
+# no encrypted disk either way.
 set -eu
-name=$1 memory=$2 disk_size=$3 cpus=$4 image=$5
+name=$1 memory=$2 disk_size=$3 cpus=$4 image=$5 tpm=$6
 run=/run/proof
 mkdir -p "$run" /case
 {
@@ -61,6 +65,19 @@ EOF
 cloud-localds --network-config="$run/network-config" "$run/seed.img" "$run/user-data" "$run/meta-data"
 qemu-img create -q -f qcow2 -F qcow2 -b "/base/$image" "/disk/$name.qcow2" "$disk_size"
 
+set --
+case $tpm in
+  swtpm)
+    mkdir -p "/disk/$name.tpm"
+    swtpm socket --tpm2 --tpmstate "dir=/disk/$name.tpm" \
+      --ctrl "type=unixio,path=$run/swtpm.sock" --log "file=/case/swtpm.log" --daemon
+    set -- -chardev "socket,id=chrtpm,path=$run/swtpm.sock" \
+      -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0
+    ;;
+  none) ;;
+  *) echo "guest-boot.sh: TPM is swtpm or none, not $tpm" >&2; exit 64 ;;
+esac
+
 umask 022
 # exec keeps this shell's pid, which is then QEMU's.
 echo "$$" >"$run/qemu.pid"
@@ -77,4 +94,5 @@ exec qemu-system-x86_64 \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
   -device virtio-net-pci,netdev=net0,romfile= \
   -serial file:/case/serial.log \
-  -qmp "unix:$run/qmp.sock,server=on,wait=off"
+  -qmp "unix:$run/qmp.sock,server=on,wait=off" \
+  "$@"

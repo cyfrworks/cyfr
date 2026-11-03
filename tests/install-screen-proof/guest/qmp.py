@@ -8,7 +8,8 @@
 #       runs one QMP command and prints its return value as JSON
 #   qmp.py SOCKET type
 #       types standard input's text on the guest's keyboard, one key
-#       (with shift where the character needs it) per character
+#       (with shift where the character needs it) per character, 0.1 s
+#       apart
 # It connects within QMP_WAIT seconds (default 30), retrying while QEMU
 # starts, negotiates capabilities and skips events. A QMP error, or a
 # character with no key, exits 1 with the reason on stderr.
@@ -101,7 +102,10 @@ def main(argv):
             for char in sys.stdin.read():
                 keys = [{"type": "qcode", "data": key} for key in keys_for(char)]
                 qmp.call("send-key", {"keys": keys, "hold-time": 40})
-                time.sleep(0.03)
+                # QEMU plays a key's events 10 ms apart around its 40 ms
+                # hold, some 80 ms with shift, and drops what arrives past
+                # its 50 queued events: each key waits for the last to play.
+                time.sleep(0.1)
             return 0
         arguments = json.loads(argv[3]) if len(argv) > 3 else None
         print(json.dumps(qmp.call(command, arguments)))
