@@ -310,6 +310,10 @@ func sentence(err error, noun string) string {
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
 		return "CYFR did not accept this " + noun + "'s proof. Nothing was signed for anything else."
+	case errors.Is(err, ErrRenew):
+		// A certificate another home issued ends its channel when it
+		// expires: the session it held is capped by it.
+		return "This " + noun + "'s certificate expired, and with it its session: unlock it again to renew it."
 	case errors.Is(err, ErrCertificationEnded):
 		return "The CYFR that keeps your identity ended this " + noun + "'s certification: pair it again."
 	case errors.As(err, &intent):

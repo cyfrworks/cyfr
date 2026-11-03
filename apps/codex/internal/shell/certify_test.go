@@ -360,3 +360,12 @@ func TestCertification_TheTerminalVectors(t *testing.T) {
 		}
 	}
 }
+
+// A channel the home ended because the certificate expired (4408) locks
+// the device with a sentence naming it and its noun, never the screen's.
+func TestSentence_AnExpiredCertificateSaysToUnlockAgain(t *testing.T) {
+	got := sentence(ErrRenew, "command line")
+	if !strings.Contains(got, "This command line's certificate expired") || strings.Contains(got, "screen") {
+		t.Errorf("said %q", got)
+	}
+}
