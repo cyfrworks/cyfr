@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"io/fs"
 	"net/url"
 	"os"
@@ -462,8 +463,8 @@ func enrollPIN(ctx context.Context, address, session string, c *console) (string
 
 // The PIN enrollment's operation, pin.enroll.
 const (
-	pinTool         = "pin"
-	pinEnrollAction = "enroll"
+	pinTool         = ops.Pin
+	pinEnrollAction = ops.PinEnroll
 )
 
 // unlock opens this command line with its secret. A home that refused its

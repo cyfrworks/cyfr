@@ -34,6 +34,7 @@ const (
 	Pairing            = "pairing"
 	Passkey            = "passkey"
 	Person             = "person"
+	Pin                = "pin"
 	PolicyLog          = "policy_log"
 	Profile            = "profile"
 	Record             = "record"
@@ -200,6 +201,7 @@ const (
 	PersonRotate            = "rotate"
 	PersonStatus            = "status"
 	PersonUnlinkDoor        = "unlink_door"
+	PinEnroll               = "enroll"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
@@ -340,6 +342,7 @@ var Actions = map[string][]string{
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
 	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "link_door", "recovery_code", "recovery_code_add", "recovery_code_saved", "renew_certificate", "rotate", "status", "unlink_door"},
+	"pin":                 {"enroll"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -2999,6 +3002,19 @@ func (args PersonUnlinkDoorArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonUnlinkDoor, fields: fields(args)})
+}
+
+// PinEnrollArgs carries arguments for pin.enroll.
+type PinEnrollArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PinEnrollArgs) MarshalJSON() ([]byte, error) {
+	type fields PinEnrollArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PinEnroll, fields: fields(args)})
 }
 
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.
