@@ -379,7 +379,8 @@ defmodule Arca.PairedClients do
   # transaction, after the credential's own write and under its person's
   # lock: one row per credential, in the person's own athanor, with
   # `holder_kind` `platform`, `source_kind` `passkey`, the credential's id
-  # as `source_id` and no key, so it is listed beside the person's devices
+  # as `source_id` and as `passkey_id`, a reference that takes the row
+  # with the credential, and no key, so it is listed beside the person's devices
   # and a passkey sign-in's session names it, and never signs as a device.
   # Its standing follows the credential's: written `active` when the
   # credential first stands, moved to `suspended` or `active` with it, and
@@ -435,6 +436,7 @@ defmodule Arca.PairedClients do
             user_id: user_id,
             source_kind: "passkey",
             source_id: passkey_id,
+            passkey_id: passkey_id,
             standing: "active",
             holder_kind: "platform",
             display_name: "Passkey",

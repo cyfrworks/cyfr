@@ -50,8 +50,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     provisioning()
     identity()
     frame_credentials()
-    paired_clients()
     people()
+    paired_clients()
     devices_and_confirmations()
     server()
     cell()
@@ -365,10 +365,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       # `remote`, whichever door admitted it, and null for a local person.
       # A fresh head that changes it retires the session.
       add :identity_key_epoch, :string
-      # The protected device whose unlock created the session: its expiry
-      # is the device channel's, slid only by that channel and never past
-      # its certificate (`Sanctum.DeviceUnlock`). Null for every other
-      # session.
+      # The client the session stands on: the protected device whose
+      # unlock created it, its expiry the device channel's, slid only by
+      # that channel and never past its certificate (`Sanctum.DeviceUnlock`),
+      # or the platform holder of the passkey a sign-in asserted, which
+      # slides as any session does (`Arca.PairedClients.project_passkey!/1`).
+      # Null for every other session.
       add :client_id, :string
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
@@ -513,12 +515,15 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "holder_kind IN ('chip', 'software', 'platform')"
     }
 
-    # A passkey's client is its platform holder, and only it is.
+    # A passkey's client is its platform holder, and only it is: it names
+    # the credential it projects, as its source and by reference, and
+    # holds no key.
     platform_is_passkey = %{
       name: "paired_clients_platform_is_passkey",
       expr:
         "(COALESCE(holder_kind, '') = 'platform') = (source_kind = 'passkey') AND " <>
-          "(source_kind <> 'passkey' OR device_public_key IS NULL)"
+          "(source_kind = 'passkey') = (passkey_id IS NOT NULL) AND " <>
+          "(passkey_id IS NULL OR (passkey_id = source_id AND device_public_key IS NULL))"
     }
 
     # One row per client a person holds in an athanor: the credential it
@@ -536,7 +541,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     # its platform holder (`holder_kind` `platform`, `source_kind`
     # `passkey`, the credential's id as `source_id`, no key), one row per
     # credential in its person's own athanor, standing as the credential
-    # stands (`Arca.PairedClients.project_passkey!/1`).
+    # stands (`Arca.PairedClients.project_passkey!/1`). Its `passkey_id`
+    # references the credential, so it goes with it: a credential goes with
+    # its person, and no client is left naming a person who is gone, which
+    # a declared restore's record of every holder's person would refuse.
     create table(:paired_clients, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -552,6 +560,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :holder_kind, :string, check: if(sqlite?, do: holder_kind_known)
       add :display_name, :string
+      add :passkey_id, references(:passkeys, type: :string, on_delete: :delete_all)
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -569,6 +578,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:paired_clients, [:athanor_id, :source_kind, :source_id])
     create index(:paired_clients, [:user_id, :standing])
     create index(:paired_clients, [:athanor_id, :standing])
+    create index(:paired_clients, [:passkey_id], where: "passkey_id IS NOT NULL")
   end
 
   # ==========================================================================
