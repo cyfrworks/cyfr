@@ -400,7 +400,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "identity_freshness_seconds" =>
       "How long this CYFR trusts a remote person's verified identity head before reading their directory again, in seconds: how long a retired key can still act here.",
     "device_cert_seconds" =>
-      "How long a device certificate this CYFR issues lives, in seconds; a paired device renews at half of it.",
+      "How long a device certificate this CYFR issues lives, in seconds; a paired device renews at half of it. A remote device's six-digit PIN (the devices guide) has no setting: CYFR counts every try, waits a second after a wrong one and doubles the wait to an hour, and the PIN opens nothing while this CYFR cannot be reached; a backup restore suspends the device until recovery re-enables it and counts its tries from where the backup left off.",
     "clock_skew_seconds" =>
       "How far a certificate's not-before or a signed message's time may sit from this CYFR's clock, in seconds; it never extends a certificate's expiry.",
     "confirmation_seconds" =>
