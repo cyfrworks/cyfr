@@ -62,7 +62,7 @@ async function fetchVia(proxyPort, base, path, { method = "GET", headers = {}, b
   const socket = await tunnel(proxyPort, host);
   return new Promise((resolve, reject) => {
     const req = httpsRequest({
-      host, path, method, agent: false, createConnection: () => socket,
+      host, path, method, createConnection: () => socket,
       headers: { host, "content-length": Buffer.byteLength(body), ...headers },
     }, (res) => {
       let text = "";
@@ -141,7 +141,7 @@ async function upgrade(proxyPort, base) {
   const socket = await tunnel(proxyPort, host);
   return new Promise((resolve, reject) => {
     const req = httpsRequest({
-      host, path: "/device/websocket", agent: false, createConnection: () => socket,
+      host, path: "/device/websocket", createConnection: () => socket,
       headers: {
         host, connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13",
         "sec-websocket-key": randomBytes(16).toString("base64"),
