@@ -147,6 +147,7 @@ answer_ask() {
   case "$op" in
     sign_in) ANSWER="$(sign_in "$(asked "$ask" email)" "share-proof-$(asked "$ask" name)")" ;;
     clock) ANSWER="$(share_fixture clock)" ;;
+    device_confirm) ANSWER="$(device_confirmed "$CELL" "$ask")" ;;
     admin)
       ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$admin")"
       ;;

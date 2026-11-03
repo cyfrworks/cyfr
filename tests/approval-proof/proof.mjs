@@ -50,8 +50,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ask as askRunSh, launchBrowser, MARKER, pageTokens, readHomes, recordText, redact, redactFrames, sleep, startProxy,
-  virtualAuthenticator, waitFor,
+  ask as askRunSh, firstPasskey, launchBrowser, MARKER, pageTokens, readHomes, recordText, redact, redactFrames, sleep, startProxy,
+  waitFor,
 } from "../browser/lib.mjs";
 
 const [homesFile, segment, cookie, outDir, viewportName] = process.argv.slice(2);
@@ -501,17 +501,15 @@ const told = (page, words, timeout = 30_000) =>
   page.getByText(words, { exact: false }).first().waitFor({ timeout }).then(() => true).catch(() => false);
 
 // The person's first passkey, made by the virtual authenticator and
-// registered from the Settings page through the system layer's ceremony,
-// within the first-method window of the sign-in: every entry she makes is
-// a sensitive change she confirms with it.
+// registered from the Settings page through the system layer's ceremony:
+// she was made by setup with a protected device, so the registration waits
+// on a fresh confirmation the setup device gives (`firstPasskey`), after
+// its proofs over another digest, another ref and by another key are each
+// refused. Every entry she makes after is a sensitive change she confirms
+// with the passkey.
 async function registerPasskey(page) {
-  const authenticator = await virtualAuthenticator(page);
   await open(page, pagePath("/settings"));
-  await page.locator('[data-test="passkey-register"]').click({ timeout: 30_000 });
-  const active = await page.waitForSelector('[data-test="passkey"][data-state="active"]', { timeout: 30_000 })
-    .then(() => true).catch(() => false);
-  const held = (await authenticator.credentials()).length;
-  return { active, held };
+  return firstPasskey(page, { ask, layer, refusals: true });
 }
 
 // The grant prompt for the component `ref`, the tincture unless named,
@@ -959,7 +957,7 @@ async function main() {
     };
     if (!row("provided_preview",
       published.name === NAME && published.version === MANIFEST.version && !!published.component &&
-        passkey.active && noKeyQuestion && destinationShown && providedRow && committed1 &&
+        passkey.ok && noKeyQuestion && destinationShown && providedRow && committed1 &&
         same(admitted1, admission(admitted1, made1)) && grokEdge && same(grokEdge[1].vault, providedVault) &&
         used(providedUses, providedAsked, [yes, { admitted: false, refusal: "destination_mismatch" }]) &&
         !holdsKey(firstHtml) && providedState.held,
