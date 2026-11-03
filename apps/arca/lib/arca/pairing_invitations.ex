@@ -5,7 +5,7 @@ defmodule Arca.PairingInvitations do
   @moduledoc """
   Pairing invitations (`Arca.Schemas.PairingInvitation`), athanor-scoped:
   one invitation to pair one device, stored by the hash of its secret and
-  never the secret, with the person and membership it was opened under,
+  never the secret, with the person it was opened under,
   the client id it reserves for the device that redeems it, its audience,
   its expiry, the digest of the one device key that may redeem it
   (`Prima.Device.key_digest/1`) and the passkey or paired client whose
@@ -14,8 +14,8 @@ defmodule Arca.PairingInvitations do
   ## Opening
 
   `open/3` runs in the issuance transaction
-  (`Arca.SecurityTransitions.Issuance`): the person, the athanor, the
-  membership and the credential the opener holds are locked in the
+  (`Arca.SecurityTransitions.Issuance`): the person, the athanor and the
+  credential the opener holds are locked in the
   standing order, the caller's `verify` closure is asked over them (the
   seam its fresh confirmation is consumed through, so the two commit
   together), and only then is the invitation written, its expiry set on
@@ -35,8 +35,8 @@ defmodule Arca.PairingInvitations do
 
   `lookup/1` takes the hash alone, before any actor exists, and answers
   routing metadata: where the invitation lives, never authority.
-  `consume/5` redeems it under the resolved actor: the person, athanor and
-  membership are locked first, the caller's standing verifier asked, the
+  `consume/5` redeems it under the resolved actor: the person and athanor
+  are locked first, the caller's standing verifier asked, the
   invitation locked last and its scope, state and expiry rechecked on the
   database's clock with the member's live ownership. Then, before the
   issuance closure runs, the presented key's digest must be the one the
@@ -70,12 +70,12 @@ defmodule Arca.PairingInvitations do
 
   @doc """
   Open an invitation in the actor's athanor: `attrs` names the `:user_id`
-  and `:membership_id` it is opened under, the `:secret_hash` of its
+  it is opened under, the `:secret_hash` of its
   secret (`sha256:<hex>`), the `:key_digest` of the device key it is for,
   the `:confirmation_ref` of the confirmation `verify` consumes, the
   `:audience_home` and its `:lifetime_ms`, and optionally the `:source`
   credential the opener holds (`t:Arca.SecurityTransitions.Issuance.source/0`),
-  locked after the membership. `verify` is handed the locked rows (and
+  locked after the athanor. `verify` is handed the locked rows (and
   the database's time) and answers `:ok` or a refusal that writes
   nothing; once it agreed, the confirmation must read consumed, for this
   person and `pairing.begin` (`:confirmation_unconsumed` otherwise), and
@@ -92,7 +92,6 @@ defmodule Arca.PairingInvitations do
           targets = %{
             user_id: fields.user_id,
             athanor_id: athanor_id,
-            membership_id: fields.membership_id,
             source: Map.get(attrs, :source)
           }
 
@@ -112,7 +111,7 @@ defmodule Arca.PairingInvitations do
 
   @doc """
   Where the invitation whose secret hashes to `secret_hash` lives:
-  `%{id, athanor_id, user_id, membership_id, prospective_client_id,
+  `%{id, athanor_id, user_id, prospective_client_id,
   audience_home, key_digest, state, expires_at}`. Routing metadata, never authority:
   redeeming it is `consume/4`'s decision.
   """
@@ -128,7 +127,6 @@ defmodule Arca.PairingInvitations do
           id: i.id,
           athanor_id: i.athanor_id,
           user_id: i.user_id,
-          membership_id: i.membership_id,
           prospective_client_id: i.prospective_client_id,
           audience_home: i.audience_home,
           key_digest: i.key_digest,
@@ -177,7 +175,6 @@ defmodule Arca.PairingInvitations do
         targets = %{
           user_id: invitation.user_id,
           athanor_id: athanor_id,
-          membership_id: invitation.membership_id,
           source: nil
         }
 
@@ -308,7 +305,7 @@ defmodule Arca.PairingInvitations do
   end
 
   # The invitation as it reads under its lock: still pending, unexpired on
-  # the database's clock, and still the person and membership the locks
+  # the database's clock, and still the person the locks
   # were taken for.
   defp redeemable(current, read, now) do
     cond do
@@ -321,7 +318,7 @@ defmodule Arca.PairingInvitations do
       DateTime.compare(current.expires_at, now) != :gt ->
         {:error, :expired}
 
-      current.user_id != read.user_id or current.membership_id != read.membership_id ->
+      current.user_id != read.user_id ->
         {:error, :not_found}
 
       true ->
@@ -449,7 +446,6 @@ defmodule Arca.PairingInvitations do
       athanor_id: athanor_id,
       secret_hash: fields.secret_hash,
       user_id: fields.user_id,
-      membership_id: fields.membership_id,
       prospective_client_id: Prima.UUID7.generate_id("pcl"),
       audience_home: fields.audience_home,
       key_digest: fields.key_digest,
@@ -482,7 +478,6 @@ defmodule Arca.PairingInvitations do
     errors =
       [
         {:user_id, is_binary(attrs[:user_id]) and attrs[:user_id] != ""},
-        {:membership_id, is_binary(attrs[:membership_id]) and attrs[:membership_id] != ""},
         {:secret_hash, Prima.Identity.Encoding.digest?(attrs[:secret_hash])},
         {:key_digest, Prima.Device.key_digest?(attrs[:key_digest])},
         {:confirmation_ref, Prima.Confirmation.ref?(attrs[:confirmation_ref])},
@@ -497,7 +492,6 @@ defmodule Arca.PairingInvitations do
         {:ok,
          Map.take(attrs, [
            :user_id,
-           :membership_id,
            :secret_hash,
            :key_digest,
            :confirmation_ref,

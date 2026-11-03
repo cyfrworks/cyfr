@@ -1270,7 +1270,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — | — |
 | cluster | several control-plane servers sharing one database | — | — | — | — | — | — | — |
 | sign-in method | a way a person signs in at CYFR: GitHub, Google, an OIDC provider, a passkey, or their CYFR identity when another CYFR holds their keys; the server allowlist decides who may come in by each | — | — | — | — | — | — | — |
-| person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every CYFR, their name at cyfr.run names it, and it grants no membership anywhere | — | — | — | — | — | — | — |
+| person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every CYFR, their name at cyfr.run names it, and it admits them nowhere by itself | — | — | — | — | — | — | — |
 | directory | the CYFR that orders an identifier's identity log and serves its current public keys, holding no private key and no address of a person's CYFR | — | — | — | — | — | — | — |
 | live key | the key a person's CYFR holds for them to sign their sign-ins at any other CYFR and their devices' certificates | — | — | — | — | — | — | — |
 | operational key | the key a person's CYFR holds for them to rotate the live key, and nothing else | — | — | — | — | — | — | — |

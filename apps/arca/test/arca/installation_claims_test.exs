@@ -6,10 +6,11 @@ defmodule Arca.InstallationClaimsTest do
   Who may mint the installation's first person: the installed mode, read
   inside every person mint, the mint's admission, and the claim a restore
   makes of an empty node, only by opening its attempt. Only setup and a
-  restore make the first person, who holds the platform grant from the
-  mint's own transaction; every other admission onto an empty node is
-  refused. Setup answers its person again while no sign-in method of
-  theirs works at the address it names, the home's current one, and opens
+  restore make the first person, who is written with the platform
+  administrator's mark (`users.platform_admin_at`) in the mint's own
+  transaction; every other admission onto an empty node is refused.
+  Setup answers its person again while no sign-in method of theirs works
+  at the address it names, the home's current one, and opens
   nothing after: a passkey at an RP ID the home has left, a device
   certified only for an address the home has left, a revoked device and
   the first-method mark leave it open, while a device of theirs, active
@@ -27,13 +28,12 @@ defmodule Arca.InstallationClaimsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Members, Passkeys, Users}
+  alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Passkeys, Users}
 
   alias Arca.Schemas.{
     CellLease,
     IdentityAttempt,
     InstallationClaim,
-    Membership,
     ServerMeta,
     User
   }
@@ -168,10 +168,14 @@ defmodule Arca.InstallationClaimsTest do
     row
   end
 
-  defp platform?(user_id), do: match?({:ok, _}, Members.find_platform(server(), user_id))
+  defp administrator?(user_id),
+    do:
+      Arca.Repo.exists?(
+        from(u in User, where: u.id == ^user_id and not is_nil(u.platform_admin_at))
+      )
 
-  defp grants,
-    do: Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
+  defp administrators,
+    do: Arca.Repo.aggregate(from(u in User, where: not is_nil(u.platform_admin_at)), :count)
 
   # A restore's submission under `token`: opening it claims the node.
   defp restore(token \\ digest("token")) do
@@ -228,22 +232,23 @@ defmodule Arca.InstallationClaimsTest do
   end
 
   describe "the first person" do
-    test "is made by setup, and holds the platform grant from the mint's transaction" do
+    test "is made by setup, and holds the administrator's mark from the mint's transaction" do
       me = self()
 
       assert {:ok, %{id: id, admission: "setup"}} =
                mint(
                  also: fn person ->
-                   send(me, {:granted, platform?(person.id)})
+                   send(me, {:marked, administrator?(person.id)})
                    :ok
                  end
                )
 
-      # The closure runs after the grant, inside the transaction.
-      assert_received {:granted, true}
+      # The closure runs after the row is written with its mark, inside
+      # the transaction.
+      assert_received {:marked, true}
       assert people() == 1
-      assert platform?(id)
-      assert grants() == 1
+      assert administrator?(id)
+      assert administrators() == 1
     end
 
     test "is refused to every other admission, and nothing is written" do
@@ -252,7 +257,7 @@ defmodule Arca.InstallationClaimsTest do
       end
 
       assert people() == 0
-      assert grants() == 0
+      assert administrators() == 0
     end
 
     test "is refused to setup under :restore_reserved, and nothing is written" do
@@ -271,24 +276,24 @@ defmodule Arca.InstallationClaimsTest do
       assert people() == 0
     end
 
-    test "is the only one granted: a later person holds no grant, under either mode" do
+    test "is the only one marked: a later person holds no mark, under either mode" do
       assert {:ok, %{id: first}} = mint()
       assert {:ok, %{id: second, admission: "open"}} = admitted("open")
       :ok = InstallationClaims.install_mode!(:restore_reserved)
       assert {:ok, %{id: third}} = admitted("remote")
 
-      assert platform?(first)
-      refute platform?(second)
-      refute platform?(third)
-      assert grants() == 1
+      assert administrator?(first)
+      refute administrator?(second)
+      refute administrator?(third)
+      assert administrators() == 1
     end
 
-    test "a refusal of the mint's closure takes the grant back with the person" do
+    test "a refusal of the mint's closure takes the mark back with the person" do
       assert {:error, :keys_unavailable} =
                mint(also: fn _person -> {:error, :keys_unavailable} end)
 
       assert people() == 0
-      assert grants() == 0
+      assert administrators() == 0
     end
   end
 
@@ -307,7 +312,7 @@ defmodule Arca.InstallationClaimsTest do
 
       refute_received :also
       assert people() == 1
-      assert grants() == 1
+      assert administrators() == 1
     end
 
     test "readmit/3 runs its closure for that person, decided again under the order row" do
@@ -328,7 +333,7 @@ defmodule Arca.InstallationClaimsTest do
                readmit(first, also: fn _ -> {:error, :closure_refused} end)
 
       assert people() == 1
-      assert grants() == 1
+      assert administrators() == 1
     end
 
     test "opens nothing from the commit that gives them an active passkey at the RP ID it names" do
@@ -544,7 +549,7 @@ defmodule Arca.InstallationClaimsTest do
                Users.mint(server(), user, nil, admission: "restore", restore: ref(attrs))
 
       assert {:ok, []} = Users.identities(server(), id)
-      assert platform?(id)
+      assert administrator?(id)
 
       {second, _} = person_attrs()
 
@@ -677,7 +682,7 @@ defmodule Arca.InstallationClaimsTest do
       assert {:error, :not_found} = InstallationClaims.get(server())
     end
 
-    test "a stale owner mints no first person and grants nothing", %{slot: slot} do
+    test "a stale owner mints no first person and marks no one", %{slot: slot} do
       {1, _} =
         Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
           set: [owner: "someone-else", generation: slot.generation + 1]
@@ -685,7 +690,7 @@ defmodule Arca.InstallationClaimsTest do
 
       assert {:error, :not_owner} = mint()
       assert people() == 0
-      assert grants() == 0
+      assert administrators() == 0
     end
   end
 
@@ -777,7 +782,6 @@ defmodule Arca.InstallationClaimsRaceTest do
     ExternalIdentity,
     IdentityAttempt,
     InstallationClaim,
-    Membership,
     User
   }
 
@@ -809,7 +813,6 @@ defmodule Arca.InstallationClaimsRaceTest do
         Arca.Repo.delete_all(where(InstallationClaim, token_digest: ^token))
 
         for id <- [door_id, second_id] do
-          Arca.Repo.delete_all(where(Membership, user_id: ^id))
           Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^id))
           Arca.Repo.delete_all(where(User, id: ^id))
         end
@@ -997,7 +1000,10 @@ defmodule Arca.InstallationClaimsRaceTest do
     assert {1, 1} ==
              unboxed(fn ->
                {Arca.Repo.aggregate(User, :count),
-                Arca.Repo.aggregate(where(Membership, scope: "platform", user_id: ^id), :count)}
+                Arca.Repo.aggregate(
+                  from(u in User, where: u.id == ^id and not is_nil(u.platform_admin_at)),
+                  :count
+                )}
              end)
   end
 

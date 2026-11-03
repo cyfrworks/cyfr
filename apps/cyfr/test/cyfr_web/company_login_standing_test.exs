@@ -88,9 +88,11 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
     :ok
   end
 
-  # A person seated in the test athanor, who stands, and their session.
+  # A person in their own athanor, who stands, and their session.
   defp standing_person! do
-    ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    own = Sanctum.Test.People.athanor!(user)
+    ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     stands!(ctx.user_id)
     {:ok, session} = Sanctum.Session.create(ctx)
     {ctx, session}

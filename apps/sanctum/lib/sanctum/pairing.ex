@@ -41,7 +41,7 @@ defmodule Sanctum.Pairing do
       The invitation names the person
       and athanor, and nothing about the caller does: a session cookie
       the browser still holds never chooses the person. The person's
-      standing and seat are locked and checked, the invitation rechecked
+      standing and athanor are locked and checked, the invitation rechecked
       and consumed, the client recorded and the certificate issued and
       recorded, in one transaction (`Arca.PairingInvitations.consume/5`),
       so a closed invitation never reopens and a person denied or gone
@@ -338,7 +338,7 @@ defmodule Sanctum.Pairing do
     * `:remote_identity_unavailable` — a renewal of a remote person's
       certificate, which their own home certifies again instead.
     * `:not_standing` — the person is denied, the athanor archived or the
-      person no longer seated in it.
+      athanor no longer theirs.
     * `:revoked` — the paired client was revoked.
     * `:renewal_exchange_only` — a renewal from anything but the renewal
       exchange of the client's own device channel: an ordinary device
@@ -380,7 +380,7 @@ defmodule Sanctum.Pairing do
   The `device_pairing` confirmation is asked first, for exactly that key
   digest (`Sanctum.Consent.Authz.check/3`), and consumed inside the
   transaction that opens the invitation (`Sanctum.Consent.Authz.consume/2`),
-  under the person, athanor and seat locked and checked at the
+  under the person and athanor locked and checked at the
   generations the context read, and the credential the context holds (its
   session, or a paired device's client and certificate) locked and checked
   after them (`Sanctum.Issuance`). The invitation records the passkey or
@@ -395,12 +395,11 @@ defmodule Sanctum.Pairing do
          change = invitation_change(key_digest),
          :ok <- Authz.check(ctx, :device_pairing, change),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []),
-         {:ok, membership_id} <- seated(expectation) do
+         :ok <- person_focus(expectation) do
       secret = :crypto.strong_rand_bytes(@secret_bytes)
 
       attrs = %{
         user_id: ctx.user_id,
-        membership_id: membership_id,
         secret_hash: secret_hash(secret),
         key_digest: key_digest,
         confirmation_ref: confirmation_ref(ctx),
@@ -495,7 +494,7 @@ defmodule Sanctum.Pairing do
   challenge for this invitation and device key, and for a remote person's
   invitation offered no certificate also `certify: %{audience, athanor,
   client_id}`, what their own home is to certify. With the proof over it,
-  locks and checks the person's standing and seat, records the paired
+  locks and checks the person's standing and athanor, records the paired
   client under the reserved id, issues its first certificate and consumes
   the invitation, in one transaction, and answers `t:paired/0`.
 
@@ -720,26 +719,23 @@ defmodule Sanctum.Pairing do
   end
 
   # The standing a redemption is held to, over the rows locked for it: the
-  # person the invitation names active, the athanor open, and their seat
-  # there still active. A platform row is no seat: an invitation resting on
-  # one, however it was opened, pairs nothing.
-  defp redeemable(%{user: user, athanor: athanor, membership: membership}, invitation) do
-    if active?(user, invitation.user_id) and match?(%{status: "active"}, athanor) and
-         seated?(membership, invitation),
-       do: :ok,
-       else: {:error, :not_standing}
+  # person the invitation names active, and the athanor open and theirs.
+  defp redeemable(%{user: user, athanor: athanor}, invitation) do
+    if active?(user, invitation.user_id) and owned?(athanor, invitation),
+      do: :ok,
+      else: {:error, :not_standing}
   end
 
   defp active?(%{status: "active", id: user_id}, user_id), do: true
   defp active?(_user, _user_id), do: false
 
-  defp seated?(
-         %{status: "active", user_id: user_id, scope: "athanor", athanor_id: athanor_id},
+  defp owned?(
+         %{status: "active", id: athanor_id, owner_user_id: user_id},
          %{user_id: user_id, athanor_id: athanor_id}
        ),
        do: true
 
-  defp seated?(_membership, _invitation), do: false
+  defp owned?(_athanor, _invitation), do: false
 
   # Inside the redemption's transaction: the client under the reserved id,
   # standing on the invitation that paired it, and its first certificate:
@@ -788,7 +784,7 @@ defmodule Sanctum.Pairing do
   The proof is held again here: a `renew` challenge for this home, the
   context's athanor and client and the device key the paired-client row
   stores, signed by that key and unexpired. The client must stand, and
-  its person keep their standing and seat and hold their keys here. Then
+  its person keep their standing and athanor and hold their keys here. Then
   the proof is consumed: its challenge's nonce is claimed once, durably,
   for the challenge's lifetime (`Arca.RequestRateWindows`, a bound of one
   per nonce), so of any number of renewals presenting one proof, on any
@@ -1198,12 +1194,17 @@ defmodule Sanctum.Pairing do
 
   defp person_focused(%Context{}), do: {:error, :unauthenticated}
 
-  # The membership the context's focus rests on: the one the invitation is
-  # opened under and redeemed against.
-  defp seated(%{membership_id: membership_id}) when is_binary(membership_id),
-    do: {:ok, membership_id}
+  # A person focused on their athanor opens an invitation; a key, whose
+  # context is the athanor's channel and no person's, opens none.
+  defp person_focus(%{athanor_id: athanor_id, source: source})
+       when is_binary(athanor_id) and not is_tuple(source),
+       do: :ok
 
-  defp seated(_expectation), do: {:error, :not_standing}
+  defp person_focus(%{athanor_id: athanor_id, source: source})
+       when is_binary(athanor_id) and elem(source, 0) != :api_key,
+       do: :ok
+
+  defp person_focus(_expectation), do: {:error, :not_standing}
 
   defp now_ms, do: System.os_time(:millisecond)
 

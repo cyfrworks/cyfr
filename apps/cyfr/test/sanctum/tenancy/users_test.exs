@@ -7,7 +7,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   import Ecto.Query, only: [from: 2]
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -212,11 +212,12 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    # allow reverses the standing, reopens the athanor and seats its owner in
-    # it again; the credentials stay revoked
+    # allow reverses the standing and reopens the athanor, which its person
+    # focuses again; the credentials stay revoked
     assert {:ok, %{status: "active"}} = Users.allow(denied)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
-    assert Members.member?(u.id, personal.id)
+    assert {:ok, %{athanor_id: focused}} = Context.focus(%{ctx | athanor_id: nil}, personal.id)
+    assert focused == personal.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
 

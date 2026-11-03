@@ -66,9 +66,9 @@ run's record.
 
 | Step | What holds |
 |---|---|
-| `setup` | A is set up through `/setup`'s two screens: `@proof` is typed on the first and found free at the registry, and a passkey is made, which admits the person and opens their enrollment; the second screen registers the identity at `registry.test` and claims `@proof` before it shows the recovery code. With the code shown and not yet saved, the directory holds A's genesis, the enrollment attempt is accepted, and the registry holds `@proof` owned by A's identifier, that identifier's acceptance of its policy, the nonces of its two signed requests and its read of A's log, and answers `@proof` with A's identifier and directory; "I saved it" completes the attempt (a transition from the attempt read before it) and lands in CYFR signed in, where Settings says "Your name is @proof.". A's person, passkey, identity, athanor and both seats (the athanor's and the first person's platform grant) are read whole |
-| `allow` | B, set up through `/setup`'s two screens by its administrator as `@proof-b`, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person, athanor and seats are its administrator's |
-| `sign_in` | a fresh profile at B's sign-in page, "Sign in from your CYFR" with A's address, reaches A, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, landing them on B's sign-in page as signed in with no athanor there; B's athanors and seats are still its administrator's alone, its sessions are its administrator's and the person's, and the person's session holds the token the browser's cookie carries |
+| `setup` | A is set up through `/setup`'s two screens: `@proof` is typed on the first and found free at the registry, and a passkey is made, which admits the person and opens their enrollment; the second screen registers the identity at `registry.test` and claims `@proof` before it shows the recovery code. With the code shown and not yet saved, the directory holds A's genesis, the enrollment attempt is accepted, and the registry holds `@proof` owned by A's identifier, that identifier's acceptance of its policy, the nonces of its two signed requests and its read of A's log, and answers `@proof` with A's identifier and directory; "I saved it" completes the attempt (a transition from the attempt read before it) and lands in CYFR signed in, where Settings says "Your name is @proof.". A's person (with the first person's platform administrator's mark), passkey, identity and athanor are read whole |
+| `allow` | B, set up through `/setup`'s two screens by its administrator as `@proof-b`, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person (with the platform administrator's mark) and athanor are its administrator's |
+| `sign_in` | a fresh profile at B's sign-in page, "Sign in from your CYFR" with A's address, reaches A, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, landing them on B's sign-in page as signed in with no athanor there; B's athanors are still its administrator's alone, its sessions are its administrator's and the person's, and the person's session holds the token the browser's cookie carries |
 | `sync` | Sync push tokens at A, confirmed with the passkey, stores one push token for `@proof`, whose digest is the registry's token for it, made by A's identifier |
 | `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync shows `banned`'s sentence and records no nonce; then every object read in the run is read again and held to what was read before |
 | `readme` | this file's field table holds exactly the rows the proof's models print |
@@ -105,7 +105,7 @@ the CYFR that sealed it, to the private half of the public key beside it or
 of the genesis's key. A field the model does not classify, or a classified
 field the object lacks, fails the comparison, and the proof keeps going so
 one run reports every mismatch. A list's rows are matched by what each
-holds (a seat by its scope, a nonce by its bytes, a log entry by its
+holds (a nonce by its bytes, a log entry by its
 identifier), so a missing or extra row fails it.
 
 Once a comparison holds, each stored field is shown failing: written behind
@@ -147,8 +147,8 @@ and so does a row a later step first read. The run prints how many tamper
 loops ran, how many controls were refused, and names each field with no
 loop and why.
 
-The table's rows of a list are labelled by what each row is (a seat by
-its scope, a nonce as read at a step or new, a session by whose it is),
+The table's rows of a list are labelled by what each row is (a nonce
+as read at a step or new, a session by whose it is),
 never by the order the run read them in, so the table is the same
 whatever that order.
 
@@ -296,22 +296,6 @@ row per field of each row of each step's objects:
 | setup:a.athanors[row] | security_generation | exact | `1` |
 | setup:a.athanors[row] | created_at | bound | a time inside setup at A |
 | setup:a.athanors[row] | updated_at | bound | a time inside setup at A up to setup:a.athanors's read |
-| setup:a.memberships[the athanor's seat] | id | captured | a new mem_ id |
-| setup:a.memberships[the athanor's seat] | user_id | derived | the person |
-| setup:a.memberships[the athanor's seat] | scope | exact | `"athanor"` |
-| setup:a.memberships[the athanor's seat] | status | exact | `"active"` |
-| setup:a.memberships[the athanor's seat] | added_by | exact | `null` |
-| setup:a.memberships[the athanor's seat] | athanor_id | derived | the person's one athanor |
-| setup:a.memberships[the athanor's seat] | created_at | bound | a time inside setup at A |
-| setup:a.memberships[the athanor's seat] | updated_at | bound | a time inside setup at A |
-| setup:a.memberships[the platform grant] | id | captured | a new mem_ id |
-| setup:a.memberships[the platform grant] | user_id | derived | the person |
-| setup:a.memberships[the platform grant] | scope | exact | `"platform"` |
-| setup:a.memberships[the platform grant] | status | exact | `"active"` |
-| setup:a.memberships[the platform grant] | added_by | exact | `null` |
-| setup:a.memberships[the platform grant] | athanor_id | exact | `null` |
-| setup:a.memberships[the platform grant] | created_at | bound | a time inside setup at A |
-| setup:a.memberships[the platform grant] | updated_at | bound | a time inside setup at A |
 | setup:a.users[row] | id | derived | the user A's passkey names |
 | setup:a.users[row] | email | exact | `null` |
 | setup:a.users[row] | email_verified | exact | `null` |
@@ -324,6 +308,7 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | first_seen_at | bound | a time inside setup at A |
 | setup:a.users[row] | last_seen_at | bound | a time inside setup at A up to setup:a.users's read |
 | setup:a.users[row] | denied_at | exact | `null` |
+| setup:a.users[row] | platform_admin_at | bound | a time inside setup at A |
 | setup:a.users[row] | security_generation | exact | `1` |
 | setup:a.users[row] | created_at | bound | a time inside setup at A |
 | setup:a.users[row] | updated_at | bound | a time inside setup at A up to setup:a.users's read |
@@ -374,22 +359,6 @@ row per field of each row of each step's objects:
 | allow:b.athanors[row] | security_generation | exact | `1` |
 | allow:b.athanors[row] | created_at | bound | a time inside setup at B |
 | allow:b.athanors[row] | updated_at | bound | a time inside setup at B up to allow:b.athanors's read |
-| allow:b.memberships[the athanor's seat] | id | captured | a new mem_ id |
-| allow:b.memberships[the athanor's seat] | user_id | derived | the person |
-| allow:b.memberships[the athanor's seat] | scope | exact | `"athanor"` |
-| allow:b.memberships[the athanor's seat] | status | exact | `"active"` |
-| allow:b.memberships[the athanor's seat] | added_by | exact | `null` |
-| allow:b.memberships[the athanor's seat] | athanor_id | derived | the person's one athanor |
-| allow:b.memberships[the athanor's seat] | created_at | bound | a time inside setup at B |
-| allow:b.memberships[the athanor's seat] | updated_at | bound | a time inside setup at B |
-| allow:b.memberships[the platform grant] | id | captured | a new mem_ id |
-| allow:b.memberships[the platform grant] | user_id | derived | the person |
-| allow:b.memberships[the platform grant] | scope | exact | `"platform"` |
-| allow:b.memberships[the platform grant] | status | exact | `"active"` |
-| allow:b.memberships[the platform grant] | added_by | exact | `null` |
-| allow:b.memberships[the platform grant] | athanor_id | exact | `null` |
-| allow:b.memberships[the platform grant] | created_at | bound | a time inside setup at B |
-| allow:b.memberships[the platform grant] | updated_at | bound | a time inside setup at B |
 | allow:b.users[row] | id | derived | the user B's administrator's passkey names |
 | allow:b.users[row] | email | exact | `null` |
 | allow:b.users[row] | email_verified | exact | `null` |
@@ -402,6 +371,7 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | first_seen_at | bound | a time inside setup at B |
 | allow:b.users[row] | last_seen_at | bound | a time inside setup at B up to allow:b.users's read |
 | allow:b.users[row] | denied_at | exact | `null` |
+| allow:b.users[row] | platform_admin_at | bound | a time inside setup at B |
 | allow:b.users[row] | security_generation | exact | `1` |
 | allow:b.users[row] | created_at | bound | a time inside setup at B |
 | allow:b.users[row] | updated_at | bound | a time inside setup at B up to allow:b.users's read |
@@ -459,6 +429,7 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the administrator's] | last_seen_at | bound | as read at allow, or a time inside the sign-in at B |
 | sign_in:b.users[the administrator's] | namespace | exact | as read at allow |
 | sign_in:b.users[the administrator's] | personal_athanor_id | exact | as read at allow |
+| sign_in:b.users[the administrator's] | platform_admin_at | exact | as read at allow |
 | sign_in:b.users[the administrator's] | prefs | exact | as read at allow |
 | sign_in:b.users[the administrator's] | security_generation | exact | as read at allow |
 | sign_in:b.users[the administrator's] | status | exact | as read at allow |
@@ -475,6 +446,7 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | first_seen_at | bound | a time inside the sign-in at B |
 | sign_in:b.users[the person's] | last_seen_at | bound | a time inside the sign-in at B up to sign_in:b.users's read |
 | sign_in:b.users[the person's] | denied_at | exact | `null` |
+| sign_in:b.users[the person's] | platform_admin_at | exact | `null` |
 | sign_in:b.users[the person's] | security_generation | exact | `1` |
 | sign_in:b.users[the person's] | created_at | bound | a time inside the sign-in at B |
 | sign_in:b.users[the person's] | updated_at | bound | a time inside the sign-in at B up to sign_in:b.users's read |
@@ -525,22 +497,6 @@ row per field of each row of each step's objects:
 | sign_in:b.athanors[row] | slug | exact | as read at allow |
 | sign_in:b.athanors[row] | status | exact | as read at allow |
 | sign_in:b.athanors[row] | updated_at | exact | as read at allow |
-| sign_in:b.memberships[row 1] | added_by | exact | as read at allow |
-| sign_in:b.memberships[row 1] | athanor_id | exact | as read at allow |
-| sign_in:b.memberships[row 1] | created_at | exact | as read at allow |
-| sign_in:b.memberships[row 1] | id | exact | as read at allow |
-| sign_in:b.memberships[row 1] | scope | exact | as read at allow |
-| sign_in:b.memberships[row 1] | status | exact | as read at allow |
-| sign_in:b.memberships[row 1] | updated_at | exact | as read at allow |
-| sign_in:b.memberships[row 1] | user_id | exact | as read at allow |
-| sign_in:b.memberships[row 2] | added_by | exact | as read at allow |
-| sign_in:b.memberships[row 2] | athanor_id | exact | as read at allow |
-| sign_in:b.memberships[row 2] | created_at | exact | as read at allow |
-| sign_in:b.memberships[row 2] | id | exact | as read at allow |
-| sign_in:b.memberships[row 2] | scope | exact | as read at allow |
-| sign_in:b.memberships[row 2] | status | exact | as read at allow |
-| sign_in:b.memberships[row 2] | updated_at | exact | as read at allow |
-| sign_in:b.memberships[row 2] | user_id | exact | as read at allow |
 | sync:registry.push_tokens[proof][row] | id | captured | a token id: a new UUID, not the nil UUID |
 | sync:registry.push_tokens[proof][row] | token_hash | derived | the digest of the token A sealed |
 | sync:registry.push_tokens[proof][row] | namespace_slug | exact | `"proof"` |
@@ -639,6 +595,7 @@ row per field of each row of each step's objects:
 | held:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the run from ack's end to the last read |
 | held:a.users[row] | namespace | exact | as read at setup |
 | held:a.users[row] | personal_athanor_id | exact | as read at setup |
+| held:a.users[row] | platform_admin_at | exact | as read at setup |
 | held:a.users[row] | prefs | exact | as read at setup |
 | held:a.users[row] | security_generation | exact | as read at setup |
 | held:a.users[row] | status | exact | as read at setup |
@@ -673,22 +630,6 @@ row per field of each row of each step's objects:
 | held:a.athanors[row] | slug | exact | as read at setup |
 | held:a.athanors[row] | status | exact | as read at setup |
 | held:a.athanors[row] | updated_at | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | added_by | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | athanor_id | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | created_at | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | id | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | scope | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | status | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | updated_at | exact | as read at setup |
-| held:a.memberships[the athanor's seat] | user_id | exact | as read at setup |
-| held:a.memberships[the platform grant] | added_by | exact | as read at setup |
-| held:a.memberships[the platform grant] | athanor_id | exact | as read at setup |
-| held:a.memberships[the platform grant] | created_at | exact | as read at setup |
-| held:a.memberships[the platform grant] | id | exact | as read at setup |
-| held:a.memberships[the platform grant] | scope | exact | as read at setup |
-| held:a.memberships[the platform grant] | status | exact | as read at setup |
-| held:a.memberships[the platform grant] | updated_at | exact | as read at setup |
-| held:a.memberships[the platform grant] | user_id | exact | as read at setup |
 | held:a.identity_attempts[row] | directory_url | exact | as read at setup |
 | held:a.identity_attempts[row] | entry | exact | as read at setup |
 | held:a.identity_attempts[row] | entry_hash | exact | as read at setup |
@@ -820,6 +761,7 @@ row per field of each row of each step's objects:
 | held:b.users[row 1] | last_seen_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
 | held:b.users[row 1] | namespace | exact | as read at sign_in |
 | held:b.users[row 1] | personal_athanor_id | exact | as read at sign_in |
+| held:b.users[row 1] | platform_admin_at | exact | as read at sign_in |
 | held:b.users[row 1] | prefs | exact | as read at sign_in |
 | held:b.users[row 1] | security_generation | exact | as read at sign_in |
 | held:b.users[row 1] | status | exact | as read at sign_in |
@@ -835,6 +777,7 @@ row per field of each row of each step's objects:
 | held:b.users[row 2] | last_seen_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
 | held:b.users[row 2] | namespace | exact | as read at sign_in |
 | held:b.users[row 2] | personal_athanor_id | exact | as read at sign_in |
+| held:b.users[row 2] | platform_admin_at | exact | as read at sign_in |
 | held:b.users[row 2] | prefs | exact | as read at sign_in |
 | held:b.users[row 2] | security_generation | exact | as read at sign_in |
 | held:b.users[row 2] | status | exact | as read at sign_in |
@@ -907,22 +850,6 @@ row per field of each row of each step's objects:
 | held:b.athanors[row] | slug | exact | as read at allow |
 | held:b.athanors[row] | status | exact | as read at allow |
 | held:b.athanors[row] | updated_at | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | added_by | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | athanor_id | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | created_at | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | id | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | scope | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | status | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | updated_at | exact | as read at allow |
-| held:b.memberships[the athanor's seat] | user_id | exact | as read at allow |
-| held:b.memberships[the platform grant] | added_by | exact | as read at allow |
-| held:b.memberships[the platform grant] | athanor_id | exact | as read at allow |
-| held:b.memberships[the platform grant] | created_at | exact | as read at allow |
-| held:b.memberships[the platform grant] | id | exact | as read at allow |
-| held:b.memberships[the platform grant] | scope | exact | as read at allow |
-| held:b.memberships[the platform grant] | status | exact | as read at allow |
-| held:b.memberships[the platform grant] | updated_at | exact | as read at allow |
-| held:b.memberships[the platform grant] | user_id | exact | as read at allow |
 | held:b.server_allowlist[row] | added_by | exact | as read at allow |
 | held:b.server_allowlist[row] | created_at | exact | as read at allow |
 | held:b.server_allowlist[row] | effect | exact | as read at allow |

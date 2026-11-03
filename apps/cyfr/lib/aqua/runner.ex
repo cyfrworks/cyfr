@@ -32,8 +32,8 @@ defmodule Aqua.Runner do
   One turn runs at a time. The loop ends the turn itself on every
   outcome but a pause; a turn paused on a card waits for the decision —
   the tape tells the runner — and continues as the person who sent it
-  (`Sanctum.Tenancy.continuation/3`), or ends uncertain when that person
-  is no longer seated. A loop that dies without an answer is aborted
+  (`Sanctum.Tenancy.continuation/3`), or ends uncertain when the athanor
+  is no longer that person's. A loop that dies without an answer is aborted
   from here (`Aqua.Loop.abort/4`) and its turn ended uncertain, or
   cancelled when a cancel asked for it.
 
@@ -94,7 +94,7 @@ defmodule Aqua.Runner do
   alias Aqua.Tape
   alias Cyfr.Bus.{Notify, ThreadEvent}
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   @registry Aqua.RunnerRegistry
   @supervisor Aqua.RunnerSupervisor
@@ -858,7 +858,7 @@ defmodule Aqua.Runner do
   defp unresumable(:no_origin),
     do: "the turn's stored origin is outside the vocabulary, nothing to resume under (no_origin)"
 
-  defp unresumable(reason), do: "the sender is no longer seated here (#{reason})"
+  defp unresumable(reason), do: "the athanor is no longer the sender's (#{reason})"
 
   # Viewers hear the turn start before the loop can announce anything of it.
   # The loop is a worker of this process: it, and every worker under it,
@@ -887,9 +887,9 @@ defmodule Aqua.Runner do
     broadcast(state, :queued, length(rest))
 
     cond do
-      not Members.member?(entry.user_id, state.athanor_id) ->
+      not Users.own_athanor?(entry.user_id, state.athanor_id) ->
         state
-        |> end_turn(entry.turn_id, "cancelled", "the sender is no longer a member")
+        |> end_turn(entry.turn_id, "cancelled", "the athanor is no longer the sender's")
         |> start_next()
 
       # Queued from its row by a recovery: it runs as its sender's continuation.

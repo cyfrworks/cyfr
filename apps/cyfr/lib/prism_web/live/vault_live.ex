@@ -442,9 +442,6 @@ defmodule PrismWeb.VaultLive do
 
   def handle_info(%Cyfr.Bus.SharedThreadChanged{}, socket), do: {:noreply, socket}
 
-  # The context guard's standing announcements reach every LiveView.
-  def handle_info(%Cyfr.Bus.Membership{}, socket), do: {:noreply, socket}
-
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}

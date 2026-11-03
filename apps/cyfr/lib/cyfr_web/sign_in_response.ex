@@ -7,7 +7,7 @@ defmodule CyfrWeb.SignInResponse do
 
   An admitted sign-in proceeds (`:proceed`); four surfaces render it —
   the Ueberauth callback, the device-flow ticket, the passkey ticket and
-  the `cyfr` door's callback — and one more answer, a membership read
+  the `cyfr` door's callback — and one more answer, an account read
   that failed while minting the session, is a page. This module owns the
   one mapping, and the differences that are real travel as options:
 
@@ -80,9 +80,9 @@ defmodule CyfrWeb.SignInResponse do
   end
 
   # The outage copy, per reason: `{title, message}`.
-  defp unavailable_copy(:membership_read) do
+  defp unavailable_copy(:account_read) do
     {"Temporarily unavailable",
-     "The server could not read memberships just now — a transient fault, " <>
+     "The server could not read your account just now — a transient fault, " <>
        "not a refusal. Try again in a moment."}
   end
 

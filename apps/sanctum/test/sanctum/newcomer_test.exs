@@ -8,8 +8,8 @@ defmodule Sanctum.NewcomerTest do
   (`Sanctum.SignIn.unlock/1`).
 
   Setup makes the installation's first person, their keys, their athanor,
-  their credential, their enrollment and the platform grant in one
-  transaction, and answers that person again while no sign-in method of
+  their credential, their enrollment and the platform administrator's
+  mark on their row in one transaction, and answers that person again while no sign-in method of
   theirs works at the home's address, with the enrollment that stands, so
   after the home moves its administrator registers a passkey at the new
   address; from the commit that gives them a working method, the token
@@ -48,7 +48,6 @@ defmodule Sanctum.NewcomerTest do
     ExternalIdentity,
     IdentityAttempt,
     Invitation,
-    Membership,
     Passkey,
     PersonIdentity,
     RestorePerson,
@@ -59,7 +58,7 @@ defmodule Sanctum.NewcomerTest do
 
   alias Sanctum.Door.Store
   alias Sanctum.{Newcomer, SharedThreads}
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Athanors
   alias Sanctum.Test.{DirectoryServer, Newcomers, Settings}
   alias Sanctum.TestContext.Authenticator
 
@@ -112,8 +111,9 @@ defmodule Sanctum.NewcomerTest do
   defp people, do: Arca.Repo.aggregate(User, :count)
   defp passkeys, do: Arca.Repo.aggregate(Passkey, :count)
 
-  defp grants,
-    do: Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
+  # The people who carry the platform administrator's mark.
+  defp administrators,
+    do: Arca.Repo.aggregate(from(u in User, where: not is_nil(u.platform_admin_at)), :count)
 
   defp athanors(user_id),
     do:
@@ -189,11 +189,10 @@ defmodule Sanctum.NewcomerTest do
                Arca.Repo.get_by(PersonIdentity, user_id: person.id)
 
       assert {:ok, athanor} = Athanors.get_by_owner(person.id)
-      assert Members.member?(person.id, athanor.id)
       assert person.personal_athanor_id == athanor.id
 
       assert Sanctum.Tenancy.platform_admin?(person.id)
-      assert grants() == 1
+      assert administrators() == 1
 
       assert [%Passkey{state: "active"}] =
                Arca.Repo.all(from(p in Passkey, where: p.user_id == ^person.id))
@@ -355,7 +354,7 @@ defmodule Sanctum.NewcomerTest do
       assert again.id == first.person.id
       refute second == token
       assert people() == 1
-      assert grants() == 1
+      assert administrators() == 1
       assert athanors(again.id) == 1
 
       assert [_, _] = both = sessions(again.id)
@@ -448,7 +447,7 @@ defmodule Sanctum.NewcomerTest do
                Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
 
       assert people() == 1
-      assert grants() == 1
+      assert administrators() == 1
     end
 
     test "after the home moves, an administrator who linked a sign-in method is not let in again" do
@@ -614,7 +613,7 @@ defmodule Sanctum.NewcomerTest do
                Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert people() == 0
-      assert grants() == 0
+      assert administrators() == 0
       assert passkeys() == 0
     end
   end
@@ -653,7 +652,7 @@ defmodule Sanctum.NewcomerTest do
       assert %{id: ^attempt_id, phase: "staged", name: "opened"} = enrollment(person.id)
       assert person.admission == "open"
       refute Sanctum.Tenancy.platform_admin?(person.id)
-      assert grants() == 1
+      assert administrators() == 1
       assert {:ok, _athanor} = Athanors.get_by_owner(person.id)
 
       assert %PersonIdentity{provenance: "local"} =
@@ -827,9 +826,7 @@ defmodule Sanctum.NewcomerTest do
       assert {:ok, %{person: person}} =
                Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
 
-      own = Sanctum.Test.People.athanor!(person)
-      assert {:ok, [%{athanor_id: athanor_id}]} = Members.list_by_user(person.id)
-      assert athanor_id == own.id
+      assert person.personal_athanor_id == Sanctum.Test.People.athanor!(person).id
       assert {:ok, []} = SharedThreads.list(person.id)
     end
 
@@ -1107,7 +1104,6 @@ defmodule Sanctum.NewcomerTest do
                Athanors.get_by_owner(person.id)
 
       assert owner == person.id
-      assert Members.member?(person.id, athanor_id)
       assert_received {:fill_asked, ^athanor_id, "sign_in"}
       refute Sanctum.Tenancy.platform_admin?(person.id)
 
@@ -1328,7 +1324,7 @@ defmodule Sanctum.NewcomerKilledTest do
   import Ecto.Query, only: [from: 2]
   import Sanctum.Test.Newcomers, only: [identity: 0]
 
-  alias Arca.Schemas.{IdentityAttempt, Membership, PersonIdentity, User}
+  alias Arca.Schemas.{IdentityAttempt, PersonIdentity, User}
   alias Ecto.Adapters.SQL.Sandbox
 
   @token String.duplicate("7a", 32)
@@ -1354,12 +1350,12 @@ defmodule Sanctum.NewcomerKilledTest do
     :ok
   end
 
-  test "an admission killed before its commit leaves no person, no keys, no grant and no enrollment" do
+  test "an admission killed before its commit leaves no person, no keys, no mark and no enrollment" do
     test = self()
     handler = "newcomer-killed-#{System.unique_integer([:positive])}"
 
     # Inside the admission's transaction, at its athanor's write: the
-    # person's row, their keys and their grant are written and uncommitted.
+    # person's row with its mark and their keys are written and uncommitted.
     :ok =
       :telemetry.attach(
         handler,
@@ -1393,10 +1389,12 @@ defmodule Sanctum.NewcomerKilledTest do
     Process.exit(admitting, :kill)
     assert_receive {:DOWN, ^ref, :process, ^admitting, :killed}, 5_000
 
+    administrators = from(u in User, where: not is_nil(u.platform_admin_at))
+
     assert {0, 0, 0, 0} ==
              unboxed(fn ->
                {Arca.Repo.aggregate(User, :count), Arca.Repo.aggregate(PersonIdentity, :count),
-                Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count),
+                Arca.Repo.aggregate(administrators, :count),
                 Arca.Repo.aggregate(IdentityAttempt, :count)}
              end)
   end
@@ -1434,7 +1432,6 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     ExternalIdentity,
     IdentityAttempt,
     Invitation,
-    Membership,
     Passkey,
     PersonIdentity,
     ServerMeta,
@@ -1709,10 +1706,6 @@ defmodule Sanctum.NewcomerInvitationUnboxedTest do
     Arca.Repo.delete_all(from(a in IdentityAttempt, where: a.user_id in ^people))
     Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id in ^people))
 
-    Arca.Repo.delete_all(
-      from(m in Membership, where: m.user_id in ^people or m.athanor_id in ^athanors)
-    )
-
     Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))
     Arca.Repo.delete_all(from(u in User, where: u.id in ^people))
     Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^athanors))
@@ -1737,7 +1730,6 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
     DirectoryHead,
     ExternalIdentity,
     Invitation,
-    Membership,
     PersonIdentity,
     SharedThread,
     SharedThreadMember,
@@ -1884,10 +1876,6 @@ defmodule Sanctum.NewcomerRemoteInvitationRaceTest do
     )
 
     Arca.Repo.delete_all(from(t in SharedThread, where: t.id in ^threads))
-
-    Arca.Repo.delete_all(
-      from(m in Membership, where: m.user_id in ^people or m.athanor_id in ^athanors)
-    )
 
     Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id in ^people))
     Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))

@@ -22,7 +22,7 @@ defmodule Sanctum.AdmissionCapacityTest do
 
   alias Arca.Schemas.User
   alias Sanctum.Newcomer
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Athanors
   alias Sanctum.Test.Settings
   alias Sanctum.TestContext.Authenticator
 
@@ -107,8 +107,7 @@ defmodule Sanctum.AdmissionCapacityTest do
       assert {:ok, %{person: admin}} =
                Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
 
-      assert {:ok, own} = Athanors.get_by_owner(admin.id)
-      assert Members.member?(admin.id, own.id)
+      assert {:ok, %{status: "active"}} = Athanors.get_by_owner(admin.id)
     end)
   end
 

@@ -1727,7 +1727,7 @@ defmodule Sanctum.PasskeysTest do
       assert {:ok, %{enrollment: "none", identifier: nil}} =
                Arca.PersonIdentities.get(system, user.id)
 
-      assert {:ok, %{scope: "platform"}} = Sanctum.Tenancy.Members.platform_seat(user.id)
+      assert Sanctum.Tenancy.platform_admin?(user.id)
 
       restore_id = restored!()
 

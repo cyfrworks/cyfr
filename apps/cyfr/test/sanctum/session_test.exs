@@ -231,8 +231,10 @@ defmodule Sanctum.SessionTest do
 
     test "establishing slides a session only when it is due, on Sanctum's own pool" do
       import Ecto.Query
-      # Seated in an athanor, so the session establishes.
-      {:ok, session} = Session.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()))
+      # Focused on the person's own athanor, so the session establishes.
+      {local, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+      own = Sanctum.Test.People.athanor!(user)
+      {:ok, session} = Session.create(Sanctum.TestContext.issuer!(%{local | athanor_id: own.id}))
       token_hash = :crypto.hash(:sha256, session.token)
       expiry = fn -> elem(Session.get(session.token), 1).expires_at end
       refresh = {Task.Supervisor, :start_child, 2}

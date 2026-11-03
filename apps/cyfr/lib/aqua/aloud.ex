@@ -20,7 +20,7 @@ defmodule Aqua.Aloud do
   ## What it refuses, and why
 
     * A source you cannot read, or a target you do not sit in. The source
-      is a thread of the athanor you are a member of; the target is a
+      is a thread of your own athanor; the target is a
       shared thread you hold a seat in (`Sanctum.SharedThreads`, which
       answers a thread you do not sit in as a missing one). There is **no
       operator bypass**: a platform administrator holds no seat by the
@@ -48,7 +48,7 @@ defmodule Aqua.Aloud do
   alias Aqua.Attachments
   alias Sanctum.Context
   alias Sanctum.SharedThreads
-  alias Sanctum.Tenancy.{Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @agent_author Prima.Author.agent()
 
@@ -83,7 +83,7 @@ defmodule Aqua.Aloud do
         {:error, :nothing_to_say}
 
       true ->
-        with :ok <- member_of(ctx, ctx.athanor_id),
+        with :ok <- owns(ctx, ctx.athanor_id),
              {:ok, _thread} <- seated(ctx, target_id),
              {:ok, rows} <- take(ctx, source_id, message_ids) do
           copy(ctx, source_id, target_id, rows)
@@ -101,16 +101,15 @@ defmodule Aqua.Aloud do
   # this refuses it by name instead of as a confusing miss.
   #
   # Deliberately NO `platform_admin` arm, here or on the target. The
-  # capability is over the instance and is no seat: letting it bypass
-  # membership would make the copy an export verb out of an athanor or
-  # into a thread. An operator who is not a member is refused like anyone
-  # else.
-  defp member_of(%Context{user_id: user_id}, athanor_id)
+  # capability is over the instance: letting it bypass the owner would
+  # make the copy an export verb out of an athanor or into a thread. An
+  # operator who is not the athanor's person is refused like anyone else.
+  defp owns(%Context{user_id: user_id}, athanor_id)
        when is_binary(user_id) and is_binary(athanor_id) do
-    if Members.member?(user_id, athanor_id), do: :ok, else: {:error, :not_a_member}
+    if Users.own_athanor?(user_id, athanor_id), do: :ok, else: {:error, :not_a_member}
   end
 
-  defp member_of(_ctx, _athanor_id), do: {:error, :not_a_member}
+  defp owns(_ctx, _athanor_id), do: {:error, :not_a_member}
 
   # In the order they were said, whatever order the caller listed them.
   # Fetched by id rather than by walking the thread: a person may say aloud

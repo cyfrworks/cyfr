@@ -883,8 +883,8 @@ defmodule Arca.FileOffers do
       |> Arca.QueryHelpers.for_share()
       |> Arca.Repo.one()
 
-    # A person with no row has nothing to hold (`Arca.Members`) and no
-    # standing to lose; their seats are what `shared/2` reads next. An
+    # A person with no row has nothing to hold and no standing to lose;
+    # their seats in shared threads are what `shared/2` reads next. An
     # athanor with no row is no athanor to offer from.
     cond do
       Map.get(people, sender, "active") != "active" -> {:error, :denied}

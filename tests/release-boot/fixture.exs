@@ -11,7 +11,7 @@
 #       time, then signed in with it as the device flow signs one in, from
 #       the unlock on (`Sanctum.SignIn.unlock/1`: the door asked about the
 #       person, the verified EMAIL and the name NAME, default "Release
-#       proof", recorded on their row, the membership read, the session):
+#       proof", recorded on their row, the athanor read, the session):
 #       everything but the identity provider, which the proofs cannot
 #       reach. An installation's first person is made by the setup
 #       admission (`Sanctum.Newcomer.admit/2`, with `{:command_line,
@@ -85,8 +85,8 @@
 fn args ->
   answer = fn map -> "FIXTURE=" <> Jason.encode!(map) end
 
-  # The person's context as a session reaches it: its athanor filled from
-  # the memberships the sign-in left.
+  # The person's context as a session reaches it: its athanor filled in as
+  # the person's own.
   person_ctx = fn user_id ->
     {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
 

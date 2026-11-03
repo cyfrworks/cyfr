@@ -40,8 +40,8 @@ defmodule Sanctum.CallerTest do
     %{user | user_id: row.id}
   end
 
-  # A signed-in person with no publisher namespace: the users row alone,
-  # no membership.
+  # A signed-in person with no publisher namespace: the users row and
+  # their own athanor alone.
   defp known!(user) do
     {:ok, row} =
       Sanctum.Test.People.linked(%{
@@ -75,8 +75,8 @@ defmodule Sanctum.CallerTest do
     session
   end
 
-  # The person's own athanor, which their admission made with their seat
-  # there: the one a session of theirs resolves to.
+  # The person's own athanor, which their admission made: the one a
+  # session of theirs resolves to.
   defp member!(user) do
     {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user.user_id)
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
@@ -107,8 +107,8 @@ defmodule Sanctum.CallerTest do
       other = new_user() |> claim!()
       other_session = session_for(Map.put(other, :namespace, other.slug))
 
-      # The other person holds no seat in `home`: an outsider is told what
-      # a missing athanor tells them.
+      # `home` is not the other person's: an outsider is told what a
+      # missing athanor tells them.
       assert {:error, :not_found} = Caller.establish(other_session.token, focus: home.id)
 
       assert {:error, :not_found} =

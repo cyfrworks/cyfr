@@ -16,8 +16,8 @@ defmodule Opus.Rates do
 
   ## Buckets
 
-  A bucket is one `{athanor, bucket}` pair, and members of an athanor
-  share it. The name is the caller's: a pinned component reference for an
+  A bucket is one `{athanor, bucket}` pair, and every credential of the
+  athanor shares it. The name is the caller's: a pinned component reference for an
   invocation, `http:`/`oauth:` for a running guest's egress and token
   dispense, `pub:` for a public profile's runs. Its cap and window come
   from the consent the caller passes on every claim and are never stored

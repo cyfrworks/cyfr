@@ -901,7 +901,8 @@ defmodule Cyfr.TransactionClosureScopeTest do
       {"Sanctum.Egress.pinned_request(:get, url)", "calls Sanctum.Egress.pinned_request"},
       {"Phoenix.PubSub.broadcast(Cyfr.PubSub, topic, row)", "calls Phoenix.PubSub.broadcast"},
       {"Cyfr.Bus.broadcast(actor, topic, row)", "calls Cyfr.Bus.broadcast"},
-      {"Sanctum.Notify.member_changed(athanor_id)", "calls Sanctum.Notify.member_changed"},
+      {"Sanctum.Notify.broadcast(athanor_id, :athanor_changed)",
+       "calls Sanctum.Notify.broadcast"},
       {"Sanctum.Network.resolve_and_validate(url, [])",
        "calls Sanctum.Network.resolve_and_validate"},
       {":gen_tcp.connect(host, 443, [])", "calls :gen_tcp.connect"},
@@ -936,12 +937,12 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
         def write(actor, row) do
           Arca.Users.mint(actor, row, verify: &check/1)
-          Arca.Members.seat(actor, row, also: &reserve(actor, &1))
+          Arca.Users.readmit(actor, row, also: &reserve(actor, &1))
           Arca.Users.link_identity(actor, row, also: fn row -> announce(row) end)
         end
 
         defp check(row), do: Egress.pinned_request(:get, row.url)
-        defp reserve(actor, row), do: Notify.broadcast(actor.athanor_id, :seat, row)
+        defp reserve(actor, row), do: Notify.broadcast(actor.athanor_id, :athanor_changed, row)
         defp announce(row), do: row |> tell()
         defp tell(row, topic \\\\ "rows"), do: Events.broadcast_global(topic, row)
       end
@@ -1107,14 +1108,14 @@ defmodule Cyfr.TransactionClosureScopeTest do
         alias Phoenix.PubSub, as: Bus, warn: false
 
         def write(actor, row) do
-          Arca.Users.mint(actor, row, also: fn row -> Notify.member_changed(row.athanor_id) end)
+          Arca.Users.mint(actor, row, also: fn row -> Notify.broadcast(row.athanor_id, :athanor_changed) end)
           Arca.Users.mint(actor, row, verify: fn row -> Bus.broadcast(Cyfr.PubSub, "rows", row) end)
         end
       end
       """
 
       assert [
-               {"planted.ex", 6, :also, "calls Sanctum.Notify.member_changed (Planted, line 6)"},
+               {"planted.ex", 6, :also, "calls Sanctum.Notify.broadcast (Planted, line 6)"},
                {"planted.ex", 7, :verify, "calls Phoenix.PubSub.broadcast (Planted, line 7)"}
              ] = scan([{"planted.ex", source}]).refused
     end

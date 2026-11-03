@@ -876,8 +876,8 @@ defmodule Opus.Record do
   @doc """
   List execution records for the context's athanor.
 
-  Members of an athanor are interchangeable, so this returns the athanor's
-  executions, not just the caller's own.
+  This returns the athanor's executions, whichever of its credentials
+  started them.
 
   Options:
   - `:limit` - Maximum number of records (default: 20)

@@ -180,34 +180,29 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   # Authenticate session tokens through the Authorization header.
   describe "call/2 — a session token as a bearer credential" do
     test "authenticates and resolves the stored context", %{conn: conn} do
-      user_id = "test|https://test.example|hydrate_user"
-
-      ctx =
-        Sanctum.Context.build(
-          user_id: user_id,
-          email: "hydrate@example.com",
-          provider: "test",
-          permissions: [:read],
-          athanor_id: "ath_test",
-          namespace: "testns",
-          authenticated: true
-        )
-
       {:ok, user} =
         Sanctum.Test.People.linked(%{
-          id: user_id,
+          id: "test|https://test.example|hydrate_user",
           provider: "test",
           email: "hydrate@example.com",
           verified: true
         })
 
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
-      # A restored session is re-validated against current memberships.
-      Sanctum.TestContext.athanor!()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: "ath_test")
 
-      # From admission on the person is named by their own id.
-      ctx = %{ctx | user_id: user.id}
+      # From admission on the person is named by their own id, and a
+      # restored session is revalidated against their own athanor.
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.id,
+          email: "hydrate@example.com",
+          provider: "test",
+          permissions: [:read],
+          athanor_id: Sanctum.Test.People.athanor!(user.id).id,
+          namespace: "testns",
+          authenticated: true
+        )
+
       {:ok, session} = Sanctum.TestContext.create_session(ctx)
 
       conn =
@@ -655,13 +650,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       # Stateless auth: the credential travels on the request itself, so no
       # server-side MCP session is created and nothing is cached.
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id,
-          scope: "athanor",
-          athanor_id: ctx.athanor_id
-        )
-
       {:ok, session} = Sanctum.Session.create(ctx)
 
       conn =
@@ -795,7 +783,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
   end
 
-  # Auth provider that returns a user with no athanor (triggers membership resolution)
+  # Auth provider that returns a user with no athanor (triggers tenant resolution)
   defmodule NoAthanorAuthProvider do
     @behaviour Sanctum.Auth
 
@@ -816,7 +804,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
   end
 
-  describe "membership resolution error handling" do
+  describe "tenant resolution error handling" do
     setup do
       original_auth = Application.get_env(:sanctum, :bearer_provider)
       original_resolver = Application.get_env(:sanctum, :tenancy_resolver_override)
@@ -843,12 +831,12 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       :ok
     end
 
-    # A membership read that FAILED is not a person who has no athanor.
+    # A tenant read that FAILED is not a person who has no athanor.
     # Both end with an athanor-less context, but 403 "contact your
     # administrator" is a permanent-sounding answer to a transient fault,
     # and sends the person to an operator who cannot see it. The session
     # path answers 503 for the same failure, and so does this one.
-    test "a failed membership read is 503, not 403", %{conn: conn} do
+    test "a failed tenant read is 503, not 403", %{conn: conn} do
       import ExUnit.CaptureLog
 
       log =
@@ -861,7 +849,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
           refute body["error"]["message"] =~ "no athanor"
         end)
 
-      # Sanctum.Tenancy resolves the membership and logs its failure.
+      # Sanctum.Tenancy resolves the athanor and logs its failure.
       assert log =~ "[Sanctum.Tenancy] resolve override failed"
       assert log =~ "resolve_failed"
     end

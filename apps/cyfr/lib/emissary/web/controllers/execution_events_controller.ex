@@ -95,9 +95,8 @@ defmodule Emissary.Web.ExecutionEventsController do
 
   # Single authorization chokepoint: `Sanctum.Context.authorize/3` with the
   # `{:execution, record}` resource requires `:storage_read` and verifies the
-  # record's tenant. There is no owner check: members of an athanor are
-  # interchangeable, so any member's credential that holds `:storage_read`
-  # reads the stream. The chokepoint returns `{:error, String.t()}`; collapse
+  # record's tenant, the caller's own athanor, so a credential of theirs
+  # that holds `:storage_read` reads the stream. The chokepoint returns `{:error, String.t()}`; collapse
   # it to the controller's `:forbidden` so both not-found and not-authorized
   # stay 404 (no execution-id existence disclosure).
   defp authorize_execution_read(%Sanctum.Context{} = ctx, %{id: _} = exec) do

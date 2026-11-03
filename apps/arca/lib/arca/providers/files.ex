@@ -41,10 +41,10 @@ defmodule Arca.Providers.Files do
   (`consent: :interactive`): no key reaches them. `withdraw` is the
   sender's own row in the athanor the call is in, behind `storage_write`.
   `offer` names its files by `paths`, a list, and so declares no
-  resource. An acceptance first reads the caller's seat in the focused
-  athanor and refuses `:not_member` without one. `offers` lists the
+  resource. An acceptance first reads the focused athanor's owner and
+  refuses `:not_member` unless it is the caller. `offers` lists the
   receipts of the focused athanor that are the caller's own, never
-  another member's: those still landing and those that failed to. Each
+  another person's: those still landing and those that failed to. Each
   incoming offer it lists names the `folder` an acceptance without one
   lands in, by the one rule the acceptance uses. A refusal names the
   caller's own path, folder or offer and never another person's tree.
@@ -330,7 +330,7 @@ defmodule Arca.Providers.Files do
     with :ok <- person(actor), do: listed(actor)
   end
 
-  # The store answers every receipt of the athanor; another member's are
+  # The store answers every receipt of the athanor; another person's are
   # not the caller's to see. A sender's default folder is read once per
   # sender in the listing.
   defp listed(%Prima.Actor{user_id: user_id} = actor) do
@@ -360,12 +360,12 @@ defmodule Arca.Providers.Files do
     end
   end
 
-  # The seat comes first: nothing of the offer, the sender or the storage
-  # is read for a caller who holds no seat in the athanor they would
+  # The owner comes first: nothing of the offer, the sender or the storage
+  # is read for a caller who is not the person of the athanor they would
   # accept into.
   defp accept(actor, offer_id, folder) do
     with :ok <- person(actor),
-         :ok <- seated(actor),
+         :ok <- owner(actor),
          {:ok, folder} <- destination(actor, offer_id, folder) do
       case FileOffers.accept(actor, offer_id, folder) do
         {:ok, %{offer_id: offer_id, folder: folder, receipts: receipts}} ->
@@ -382,12 +382,12 @@ defmodule Arca.Providers.Files do
     end
   end
 
-  defp seated(%Prima.Actor{user_id: user_id} = actor) do
-    case Arca.Members.find(actor, user_id) do
-      {:ok, %{status: "active"}} -> :ok
-      {:ok, _invited} -> {:error, :not_member}
+  defp owner(%Prima.Actor{user_id: user_id} = actor) do
+    case Arca.Athanors.current(actor) do
+      {:ok, %{owner_user_id: ^user_id}} -> :ok
+      {:ok, _another} -> {:error, :not_member}
       {:error, :not_found} -> {:error, :not_member}
-      {:error, reason} -> refusal("seat", reason)
+      {:error, reason} -> refusal("athanor", reason)
     end
   end
 
@@ -415,7 +415,7 @@ defmodule Arca.Providers.Files do
 
   # The sender's namespace when it is one storage path segment, their
   # person id otherwise. The person row is read under the platform's
-  # actor, as the store reads the membership that admits the offer.
+  # actor, as the store reads the shared thread that admits the offer.
   defp sender_slug(sender) do
     case Arca.Users.get(Prima.Actor.system(), sender) do
       {:ok, %{namespace: namespace}} when is_binary(namespace) ->

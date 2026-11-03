@@ -104,8 +104,8 @@ defmodule Arca.SessionStorage do
       email: attrs[:email],
       provider: attrs.provider,
       # A nil athanor is a real state: the session exists from sign-in on,
-      # before the caller's athanor is resolved. Membership re-resolution
-      # runs on the next load; nothing is coerced.
+      # before the caller's athanor is resolved. The athanor is resolved
+      # again on the next load; nothing is coerced.
       athanor_id: attrs[:athanor_id],
       identity_key_epoch: epoch,
       cli_machine: attrs[:cli_machine],
@@ -258,7 +258,7 @@ defmodule Arca.SessionStorage do
   Activate the reserved session `attrs.id` of the protected device
   `attrs.client_id` under the token whose hash is `token_hash`, in the
   issuance transaction (`create_session/3`'s `lock:` and `verify:`): after
-  the person, athanor, seat, client and certificates are locked and
+  the person, athanor, client and certificates are locked and
   reread, the reserved row is locked and, while it is still reserved and
   unexpired on the database's clock, takes the token, the provider
   `unlock`, `attrs.expires_at` and `attrs.identity_key_epoch` (bound as

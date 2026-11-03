@@ -502,6 +502,7 @@ function models(S) {
     first_seen_at: within(win(S, "setup")),
     last_seen_at: within(until(S, "setup", "setup:a.users")),
     denied_at: noTime(),
+    platform_admin_at: within(win(S, "setup")),
     security_generation: exact(1),
     created_at: within(win(S, "setup")),
     updated_at: within(until(S, "setup", "setup:a.users")),
@@ -522,23 +523,6 @@ function models(S) {
     created_at: within(win(S, "setup")),
     updated_at: within(until(S, "setup", "setup:a.athanors")),
   }];
-  const membership = (user, athanor, scope, window) => ({
-    id: anId("mem"),
-    user_id: derived(user, "the person"),
-    scope: exact(scope),
-    status: exact("active"),
-    added_by: nil(),
-    athanor_id: athanor,
-    created_at: within(window),
-    updated_at: within(window),
-  });
-  // A person's seat in their athanor and, for the first person, the
-  // platform grant: one row each, in the order the table reads them.
-  const seats = (name, user, athanor, window) => byKey(first(name), (r) => r.scope, [
-    ["athanor", membership(user, derived(athanor, "the person's one athanor"), "athanor", window), "the athanor's seat"],
-    ["platform", membership(user, nil(), "platform", window), "the platform grant"],
-  ]);
-  M["setup:a.memberships"] = () => seats("setup:a.memberships", aUser(), first("setup:a.athanors")[0]?.id, win(S, "setup"));
   M["setup:a.person_identities"] = () => {
     const row = first("setup:a.person_identities")[0];
     return [{
@@ -594,6 +578,7 @@ function models(S) {
     personal_athanor_id: derived(first("allow:b.athanors")[0]?.id, "B's one athanor"),
     first_seen_at: within(win(S, "admin")),
     last_seen_at: within(until(S, "admin", "allow:b.users")),
+    platform_admin_at: within(win(S, "admin")),
     created_at: within(win(S, "admin")),
     updated_at: within(until(S, "admin", "allow:b.users")),
   }];
@@ -605,7 +590,6 @@ function models(S) {
     created_at: within(win(S, "admin")),
     updated_at: within(until(S, "admin", "allow:b.athanors")),
   }];
-  M["allow:b.memberships"] = () => seats("allow:b.memberships", bAdmin(), first("allow:b.athanors")[0]?.id, win(S, "admin"));
   M["allow:b.server_allowlist"] = () => [{
     id: anId("door"),
     kind: exact("identifier"),
@@ -620,7 +604,7 @@ function models(S) {
     updated_at: within(win(S, "allow")),
   }];
 
-  // sign_in: B's people, identities, sessions, athanors and seats. The
+  // sign_in: B's people, identities, sessions and athanors. The
   // administrator's keys are minted at setup, which also registers them at
   // registry.test: each public key is the public half of its sealed key,
   // opened in B, and the identifier is the hash of the genesis over them.
@@ -687,6 +671,7 @@ function models(S) {
       first_seen_at: within(win(S, "signin")),
       last_seen_at: within(until(S, "signin", "sign_in:b.users")),
       denied_at: noTime(),
+      platform_admin_at: nil(),
       security_generation: exact(1),
       created_at: within(win(S, "signin")),
       updated_at: within(until(S, "signin", "sign_in:b.users")),
@@ -706,7 +691,6 @@ function models(S) {
     inserted_at: within(win(S, "signin")),
   }];
   M["sign_in:b.athanors"] = () => [held(first("allow:b.athanors")[0], {}, "as read at allow")];
-  M["sign_in:b.memberships"] = () => first("allow:b.memberships").map((r) => held(r, {}, "as read at allow"));
 
   // sign_in, B's sessions whole: the administrator's and the person's.
   M["sign_in:b.sessions"] = () => (() => {
@@ -797,12 +781,11 @@ function models(S) {
     last_seen_at: sameOrWithin(r.last_seen_at, since("a.users", "ack"), "as read at setup"),
     updated_at: sameOrWithin(r.updated_at, since("a.users", "ack"), "as read at setup"),
   }));
-  for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.athanors", "setup"], ["setup:a.memberships", "setup"],
+  for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.athanors", "setup"],
     ["setup:a.identity_attempts", "setup"], ["sync:a.registry_tokens", "sync"], ["setup:registry.directory.identity_log_entries", "setup"],
     ["setup:registry.namespaces[proof]", "setup"], ["setup:registry.policy_acceptances[a]", "setup"],
     ["ban:registry.banned_identities", "ban"], ["allow:b.passkeys", "allow"], ["allow:b.server_allowlist", "allow"],
-    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"], ["allow:b.athanors", "allow"],
-    ["allow:b.memberships", "allow"]]) {
+    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"], ["allow:b.athanors", "allow"]]) {
     M[`held:${name.split(":").pop()}`] = () => heldAll(name, step);
   }
   M["held:registry.identity_heads[a]"] = () => heldAll("setup:registry.identity_heads[a]", "setup", (r) => ({

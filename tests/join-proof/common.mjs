@@ -577,13 +577,13 @@ export async function signIn(browser, name, proxy, { home, identifier, glass, co
   record[`${step}_${name}`] = {
     landed: flow.landed.replace(/#.*/, ""), code: flow.code, code_named_at_home: codeShownThere, confirmed_on: flow.confirmed.on,
     fragment_kept_through_login: keptDestination, admissions: after.length - before,
-    provenance: person.provenance, memberships: person.memberships, cross_site: cross,
+    provenance: person.provenance, athanors: person.athanors, cross_site: cross,
     saved_homes_at_start: startStorage, storage: { h: storageH, a: storageA }, filled_from_memory: filled,
   };
   return {
     held: row(step, name,
       keptDestination && codeShownThere && after.length - before === 1 && person.provenance === "remote" &&
-        person.memberships.length >= 1 && cross.held && (step !== "second_profile" || filled === home),
+        person.athanors.length >= 1 && cross.held && (step !== "second_profile" || filled === home),
       step === "second_profile"
         ? "another fresh profile signs in the same way, importing nothing of the first, and H's sign-in page then fills its field with A from this browser's memory"
         : "a fresh profile opens H by its address, names A, the carry begins at A, the fragment survives A's sign-in, the codes match, and H admits once",

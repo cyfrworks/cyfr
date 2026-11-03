@@ -31,7 +31,7 @@ defmodule Sanctum.InvitationsTest do
 
   alias Arca.Schemas.{Invitation, RestorePerson, SharedThreadMember}
   alias Sanctum.{Invitations, SharedThreads}
-  alias Sanctum.Tenancy.{Members, Users}
+  alias Sanctum.Tenancy.Users
   alias Sanctum.TestContext
 
   setup tags do
@@ -448,8 +448,11 @@ defmodule Sanctum.InvitationsTest do
       {:ok, %{code: platform}} = Invitations.create(ctx(admin), nil)
 
       {:ok, _} = SharedThreads.archive(alice.id, thread.id)
-      {:ok, seat} = Members.platform_seat(admin.id)
-      {1, _} = Arca.Repo.delete_all(from(m in Arca.Schemas.Membership, where: m.id == ^seat.id))
+
+      {1, _} =
+        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^admin.id),
+          set: [platform_admin_at: nil]
+        )
 
       for code <- [archived, platform] do
         assert {:error, :invitation_invalid} = Invitations.lookup(code)
@@ -641,7 +644,6 @@ defmodule Sanctum.InvitationsRaceTest do
     Athanor,
     ExternalIdentity,
     Invitation,
-    Membership,
     PersonIdentity,
     SharedThread,
     SharedThreadMember,
@@ -810,10 +812,6 @@ defmodule Sanctum.InvitationsRaceTest do
     )
 
     Arca.Repo.delete_all(from(t in SharedThread, where: t.id in ^threads))
-
-    Arca.Repo.delete_all(
-      from(m in Membership, where: m.user_id in ^people or m.athanor_id in ^athanors)
-    )
 
     Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id in ^people))
     Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^people))

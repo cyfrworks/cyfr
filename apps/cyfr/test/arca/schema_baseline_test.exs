@@ -9,10 +9,10 @@ defmodule Arca.SchemaBaselineTest do
   so a table or column added there is checked without a second list here.
 
   The athanor is the only tenant column: the tables that carry `athanor_id`
-  are exactly `Arca.TenantTables`'s roster, only `memberships`,
-  `sessions` and `decision_logs` may leave it null, and the tables without it are the ones the
-  roster names as not athanor-scoped or reached through a parent, the
-  athanors themselves, and the server's people and door.
+  are exactly `Arca.TenantTables`'s roster, only `sessions` and
+  `decision_logs` may leave it null, and the tables without it are the
+  ones the roster names as not athanor-scoped or reached through a
+  parent, the athanors themselves, and the server's people and door.
 
   The cases that exercise a claim — the cell's member slots, its job
   claims, a thread's active turn — are about rows this case made, under
@@ -72,14 +72,14 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
-  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but three",
+  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but two",
        %{declared: declared} do
     scoped = for {table, %{"athanor_id" => column}} <- declared, into: %{}, do: {table, column}
 
     assert Enum.sort(Map.keys(scoped)) == Enum.sort(Arca.TenantTables.roster())
 
     nullable = for {table, %{not_null?: false}} <- scoped, do: table
-    assert Enum.sort(nullable) == ["decision_logs", "memberships", "sessions"]
+    assert Enum.sort(nullable) == ["decision_logs", "sessions"]
 
     for table <- Map.keys(scoped) do
       athanor = Enum.find(columns(table), &(&1.name == "athanor_id"))
@@ -105,7 +105,7 @@ defmodule Arca.SchemaBaselineTest do
     assert documented -- unscoped == []
   end
 
-  test "sessions carry no scope; the person's standing is a users + memberships fact" do
+  test "sessions carry no scope; the person's standing is a users fact" do
     refute "scope" in Enum.map(columns("sessions"), & &1.name)
     user_names = Enum.map(columns("users"), & &1.name)
 
@@ -116,12 +116,14 @@ defmodule Arca.SchemaBaselineTest do
     # names them.
     refute "provider" in user_names
 
-    # A seat names a person; no email and no identifier does.
-    membership_names = Enum.map(columns("memberships"), & &1.name)
-    for col <- ~w(status added_by), do: assert(col in membership_names)
-    refute "email" in membership_names
-    refute "person_identifier" in membership_names
-    assert Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
+    # The platform administrator is a mark on the person's row, absent on
+    # everyone else's.
+    admin = Enum.find(columns("users"), &(&1.name == "platform_admin_at"))
+    assert admin, "users.platform_admin_at is missing"
+    refute admin.not_null?, "users.platform_admin_at is nullable"
+
+    # A pairing is the person's, named by no seat.
+    refute "membership_id" in Enum.map(columns("pairing_invitations"), & &1.name)
   end
 
   test "a person and an athanor carry a positive standing generation, 1 at birth" do

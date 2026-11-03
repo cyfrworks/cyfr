@@ -49,7 +49,6 @@ defmodule Sanctum.Telemetry do
   @caller_invalidated_event [:cyfr, :sanctum, :caller, :invalidated]
   @session_created_event [:cyfr, :sanctum, :session, :created]
   @sessions_revoked_event [:cyfr, :sanctum, :sessions, :revoked]
-  @membership_event [:cyfr, :sanctum, :membership, :changed]
   @shared_thread_events %{
     changed: [:cyfr, :sanctum, :shared_thread, :changed],
     posted: [:cyfr, :sanctum, :shared_thread, :posted]
@@ -125,7 +124,7 @@ defmodule Sanctum.Telemetry do
   end
 
   @doc """
-  Something happened in an athanor that its members' trays show, or —
+  Something happened in an athanor that its person's tray shows, or —
   with `athanor_id: nil` — something server-level its operators do.
   `kind` and `payload` are `Sanctum.Notify`'s vocabulary.
   """
@@ -163,16 +162,6 @@ defmodule Sanctum.Telemetry do
   @spec sessions_revoked(String.t()) :: :ok
   def sessions_revoked(user_id),
     do: :telemetry.execute(@sessions_revoked_event, %{count: 1}, %{user_id: user_id})
-
-  @doc "One person's seat in one athanor changed — which athanors they may now reach."
-  @spec membership_changed(String.t(), String.t() | nil, term()) :: :ok
-  def membership_changed(user_id, athanor_id, change) when is_binary(user_id) do
-    :telemetry.execute(@membership_event, %{count: 1}, %{
-      user_id: user_id,
-      athanor_id: athanor_id,
-      change: change
-    })
-  end
 
   @doc """
   The shared thread `thread_id` changed (`:changed`: its title, status or

@@ -584,7 +584,7 @@ defmodule Prima.Refusal do
   defp row({:held_elsewhere, turn_id}) when is_binary(turn_id),
     do: {:conflict, "Another turn holds this thread — send again once it finishes"}
 
-  defp row(:not_member), do: {:forbidden, "Only a member of the athanor can act in its threads"}
+  defp row(:not_member), do: {:forbidden, "Only the athanor's person can act in its threads"}
   defp row(:archived), do: {:forbidden, "This athanor is archived — nothing runs in it"}
 
   defp row(:no_agent),

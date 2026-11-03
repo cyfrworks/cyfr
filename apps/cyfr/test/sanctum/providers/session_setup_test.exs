@@ -7,7 +7,7 @@ defmodule Sanctum.Providers.SessionSetupTest do
   (`cyfr login --setup`): anonymous, the installation's setup token, the
   new person's name, the recovery secret and the request id the command
   line drew its arguments. It makes the first person, their administrator
-  grant, their enrollment and a command-line session for the machine, and
+  mark, their enrollment and a command-line session for the machine, and
   answers their recovery code; it signs the same person in again while
   they hold no sign-in method, answering the enrollment that stands; from
   their first passkey on, and for any token that is not this CYFR's, it
@@ -19,7 +19,7 @@ defmodule Sanctum.Providers.SessionSetupTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{IdentityAttempt, Membership, User}
+  alias Arca.Schemas.{IdentityAttempt, User}
   alias Sanctum.Context
   alias Sanctum.Test.Newcomers
   alias Sanctum.TestContext.Authenticator
@@ -51,8 +51,8 @@ defmodule Sanctum.Providers.SessionSetupTest do
     Sanctum.Gate.call_external("session", command_line(), args)
   end
 
-  defp grants,
-    do: Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
+  defp admins,
+    do: Arca.Repo.aggregate(from(u in User, where: not is_nil(u.platform_admin_at)), :count)
 
   defp refused_reason({:error, %Prima.Refusal{reason: reason}}), do: reason
   defp refused_reason({:error, reason}) when is_atom(reason), do: reason
@@ -63,7 +63,7 @@ defmodule Sanctum.Providers.SessionSetupTest do
     assert %{readmitted: false, user_id: user_id, session_token: token} = first
     assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.load(token)
     assert [%{id: ^user_id, admission: "setup"}] = Arca.Repo.all(User)
-    assert grants() == 1
+    assert admins() == 1
 
     attempt = Arca.Repo.get_by!(IdentityAttempt, user_id: user_id, kind: "enrollment")
     assert %{phase: "staged", name: "mira"} = attempt
@@ -86,7 +86,7 @@ defmodule Sanctum.Providers.SessionSetupTest do
     assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.load(again)
     assert Arca.Repo.aggregate(User, :count) == 1
     assert Arca.Repo.aggregate(IdentityAttempt, :count) == 1
-    assert grants() == 1
+    assert admins() == 1
   end
 
   test "an identity that does not read is refused before any row" do

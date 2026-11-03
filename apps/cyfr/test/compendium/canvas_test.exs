@@ -45,7 +45,6 @@ defmodule Compendium.CanvasTest do
 
   @name "markets"
   @reference "tincture:local.markets"
-  @athanor "ath_test"
   @page ~S|<!DOCTYPE html><html><head><link rel="stylesheet" href="style.css"></head><body><ul id="runs"></ul><script src="app.js"></script></body></html>|
   @files %{
     "index.html" => @page,
@@ -720,7 +719,8 @@ defmodule Compendium.CanvasTest do
       rows =
         Arca.Repo.all(
           from(l in Arca.Schemas.McpLog,
-            where: l.athanor_id == ^@athanor and l.tool == "canvas" and l.action == "activate"
+            where:
+              l.athanor_id == ^ctx.athanor_id and l.tool == "canvas" and l.action == "activate"
           )
         )
 
@@ -730,7 +730,7 @@ defmodule Compendium.CanvasTest do
       decisions =
         Arca.Repo.all(
           from(d in Arca.Schemas.DecisionLog,
-            where: d.athanor_id == ^@athanor and d.tool == "canvas"
+            where: d.athanor_id == ^ctx.athanor_id and d.tool == "canvas"
           )
         )
 
@@ -772,7 +772,8 @@ defmodule Compendium.CanvasTest do
       rows =
         Arca.Repo.all(
           from(l in Arca.Schemas.McpLog,
-            where: l.athanor_id == ^@athanor and l.tool == "canvas" and l.action == "activate"
+            where:
+              l.athanor_id == ^ctx.athanor_id and l.tool == "canvas" and l.action == "activate"
           )
         )
 
@@ -1272,11 +1273,12 @@ defmodule Compendium.CanvasTest do
 
   # ---- the person, the settings and the slot -------------------------------
 
+  # The person, signed in to their own athanor, where the canvas is theirs.
   defp person_ctx! do
     {local, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: @athanor)
-    {:ok, session} = Sanctum.TestContext.create_session(local)
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: @athanor)
+    athanor_id = Sanctum.Test.People.athanor!(user).id
+    {:ok, session} = Sanctum.TestContext.create_session(%{local | athanor_id: athanor_id})
+    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
     %{established | client_ip: "127.0.0.1"}
   end
 

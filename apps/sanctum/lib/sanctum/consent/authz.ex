@@ -33,8 +33,8 @@ defmodule Sanctum.Consent.Authz do
   person's, the person not denied and the focused athanor open
   (`Sanctum.Caller.revalidate_session/1`); a key must still be unrevoked,
   its athanor's and its creator's; a paired device's certificate must be
-  unexpired, its paired client active and its person still seated in the
-  athanor, which revalidation reads as it does a session's. A grant needs
+  unexpired, its paired client active and the athanor still its person's,
+  which revalidation reads as it does a session's. A grant needs
   the session alone, never a fresh confirmation.
 
   ## Sensitive changes
@@ -256,7 +256,7 @@ defmodule Sanctum.Consent.Authz do
   consumption once its transaction committed (`consumed/1`).
 
   A paired device's context is held there through the caller's write:
-  its person, athanor, seat, paired client and certificates are locked in
+  its person, athanor, paired client and certificates are locked in
   the caller's transaction, in the standing order, before the record is,
   and the device must still stand on them as an issuance's must
   (`Sanctum.Issuance.device_held/1`). A revocation that committed after
@@ -618,7 +618,7 @@ defmodule Sanctum.Consent.Authz do
 
   # A paired device is held through the caller's write, in the caller's
   # transaction (`Sanctum.Issuance.device_held/1`): the person, the
-  # athanor, the seat, the paired client and its certificates locked in
+  # athanor, the paired client and its certificates locked in
   # the standing order, before the record is, and the device's standing
   # asked over them. So a revocation that committed after the standing
   # read above refuses the change, with one of the issuance's standing
@@ -952,11 +952,11 @@ defmodule Sanctum.Consent.Authz do
   # The caller's standing, read again as a grant or a sensitive change is
   # decided: whatever credential admitted it must still stand
   # (`Sanctum.Caller.revalidate_session/1`), a paired device's client and
-  # its person's seat among them. A context no stored credential backs
+  # its person's athanor among them. A context no stored credential backs
   # keeps its establishment contract. A session's and a key's rows are
   # locked in the standing order, inside a caller's transaction in it, so
   # a write that asks here commits only while they stand
-  # (`Sanctum.Passkeys`). A paired device's client and seat are read, not
+  # (`Sanctum.Passkeys`). A paired device's client and athanor are read, not
   # locked: a sensitive change's consumption holds the device in the
   # caller's transaction (`consume/2`), and a credential write holds it as
   # an issuance does (`Sanctum.Issuance.device_hold/1`).

@@ -27,9 +27,9 @@ defmodule Arca.TenantTables do
 
   # Every table carrying `athanor_id`, children first. `verify_roster!/1`
   # checks this against the live schema, so a new athanor-scoped table
-  # fails the boot until it is named. Three of them may hold rows with no
-  # athanor — `memberships`, `sessions` and `decision_logs`: a null-tenant
-  # decision is the host's, purged under its own retention.
+  # fails the boot until it is named. Two of them may hold rows with no
+  # athanor — `sessions` and `decision_logs`: a null-tenant decision is
+  # the host's, purged under its own retention.
   @roster [
     "execution_events",
     "rate_windows",
@@ -86,8 +86,7 @@ defmodule Arca.TenantTables do
     "schedule_occurrences",
     "cron_schedules",
     "build_records",
-    "provisioning_claims",
-    "memberships"
+    "provisioning_claims"
   ]
 
   # Reached through a parent instead of by `athanor_id`, deleted first.
@@ -118,7 +117,7 @@ defmodule Arca.TenantTables do
   # Carries no `athanor_id` and is deliberately NOT an athanor's to
   # delete: a registry token belongs to the person and their namespace,
   # keyed `(user_id, registry, namespace_slug)`. It outlives any one
-  # athanor, exactly as an API key outlives its creator's membership.
+  # athanor.
   #
   # `server_meta` is the server's own facts — the schema and keyring
   # fingerprints — one row per key and no tenant at all.

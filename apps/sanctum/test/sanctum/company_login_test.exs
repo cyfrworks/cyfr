@@ -259,7 +259,6 @@ defmodule Sanctum.CompanyLoginTest do
       client: client,
       user: standing.user,
       athanor: standing.athanor,
-      seat: standing.seat,
       platform_admin: standing.platform_admin
     }
   end

@@ -107,14 +107,14 @@ defmodule Sanctum.Session do
   (`Arca.SecurityTransitions.Issuance`): the person and the session's
   athanor are locked and reread, and must still be active at the
   generations the context read (`ctx.credential_binding`), and the
-  membership that granted the focus must still stand. A context that read
+  athanor must still be the person's own. A context that read
   its standing before a denial or an archive therefore cannot mint a
   session after the allow or the reopen: `{:error, :stale_generation}`.
   A context with no binding is `{:error, :missing_generation}` — except
   where `generation_snapshot:` supplies one read from the rows
   (`Sanctum.Tenancy.generation_snapshot/2`), which only a test fixture
   building a context by hand does. `{:error, :unauthenticated}` is a
-  person, athanor or membership that no longer stands, and
+  person or athanor that no longer stands, and
   `{:error, :unavailable}` an idle timeout the store cannot answer.
 
   The session's provider `restore` is reserved
@@ -215,7 +215,7 @@ defmodule Sanctum.Session do
   database's clock, never past the certificate: `session_ttl_hours` plays
   no part, so zero never lifts the bound. It is activated in the issuance
   transaction the expectation names, which locks and rereads the person,
-  athanor, seat, client and certificate, then the reserved row
+  athanor, client and certificate, then the reserved row
   (`Arca.SessionStorage.activate_client_session/3`): a row a lock retired
   is `{:error, :reservation_retired}`. Answers `%{token, expires_at}`, or
   the refusals `create/2` answers.
@@ -410,7 +410,7 @@ defmodule Sanctum.Session do
 
   defp insert(%Context{} = ctx, expectation, now, expires_at, epoch, minting) do
     # A session carries no permission list: it is a person's, and what
-    # they may do is decided by their memberships, the athanor's consents
+    # they may do is decided by their own athanor, its consents
     # and the policy on every request — never by a bag frozen at sign-in.
     attrs = %{
       token_prefix: minting.token_prefix,
@@ -418,9 +418,9 @@ defmodule Sanctum.Session do
       email: ctx.email,
       provider: ctx.provider,
       # A resolved context carries its athanor; a nil marks a not-yet-resolved
-      # session (user with no membership) and is re-resolved on load. No
+      # session (user with no athanor) and is re-resolved on load. No
       # scope is persisted: every session works inside its athanor, and the
-      # platform-admin capability is re-read from the membership row on load.
+      # platform-admin capability is re-read from the person's row on load.
       athanor_id: ctx.athanor_id,
       identity_key_epoch: epoch,
       cli_machine: minting.machine,
@@ -654,8 +654,8 @@ defmodule Sanctum.Session do
   Drop the established-context memo for every session the user holds,
   without revoking any of them.
 
-  For mutations that narrow what a LIVE session may reach — a plain
-  membership removal, not a door action: the next request re-derives
+  For mutations that narrow what a LIVE session may reach — an athanor
+  archived, not a door action: the next request re-derives
   through `Sanctum.Tenancy.revalidate/1` instead of serving the cached
   athanor for the memo TTL. The door's revocations go through
   `revoke_all_for_user/1`, which drops the memo as a side effect of
@@ -784,13 +784,13 @@ defmodule Sanctum.Session do
             provider: row.provider,
             namespace: ns,
             # A person holds every declared permission; the gates that
-            # matter are membership, consent and policy, applied on every
-            # request.
+            # matter are their own athanor, consent and policy, applied on
+            # every request.
             permissions: Context.person_permissions(),
             # The persisted athanor is a STARTING POINT, never trusted on its
-            # own: revalidate/1 re-checks it against current memberships. A nil
-            # means the session was never resolved (no membership at create
-            # time); revalidation re-reads memberships and the tenant gate still
+            # own: revalidate/1 re-checks it against the person's own athanor.
+            # A nil means the session was never resolved (no athanor at create
+            # time); revalidation reads it again and the tenant gate still
             # bounces a genuinely athanor-less user.
             athanor_id: row.athanor_id,
             scope: :athanor,
@@ -804,7 +804,7 @@ defmodule Sanctum.Session do
           )
 
         # Re-validated against the person's CURRENT standing, so a denial,
-        # a revoked membership or an archived athanor takes effect at once;
+        # a cleared mark or an archived athanor takes effect at once;
         # a store that cannot say is a 503, never yesterday's answer.
         with {:ok, revalidated} <- revalidated(ctx) do
           bound(revalidated, token_hash)
@@ -833,31 +833,17 @@ defmodule Sanctum.Session do
   defp bound(%Context{authenticated: false} = ctx, _token_hash), do: {:ok, ctx}
 
   defp bound(%Context{} = ctx, token_hash) do
-    with {:ok, memberships} <- seats_of(ctx.user_id),
-         {:ok, snapshot} <- snapshot_of(ctx) do
+    with {:ok, snapshot} <- snapshot_of(ctx) do
       binding =
         snapshot &&
           %{
             source_kind: :session,
             source_id: Base.url_encode64(token_hash, padding: false),
-            focus_basis:
-              Sanctum.Tenancy.focus_basis(
-                ctx,
-                ctx.athanor_id && %{id: ctx.athanor_id},
-                memberships
-              ),
             user_generation: snapshot.user_generation,
             athanor_generation: snapshot.athanor_generation
           }
 
       {:ok, %{ctx | credential_binding: binding}}
-    end
-  end
-
-  defp seats_of(user_id) do
-    case Sanctum.Tenancy.Members.list_by_user(user_id) do
-      {:ok, rows} -> {:ok, rows}
-      {:error, _reason} -> {:error, :database_error}
     end
   end
 

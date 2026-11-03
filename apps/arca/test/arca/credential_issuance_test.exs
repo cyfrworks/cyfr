@@ -16,7 +16,7 @@ defmodule Arca.CredentialIssuanceTest do
   the person's row; on SQLite at the lock its transaction takes at entry.
 
   A paired device's issuance holds its paired client the same way, after
-  the person, the athanor and the seat: a revocation of the client that
+  the person and the athanor: a revocation of the client that
   commits while the issuance holds those, before it reaches the client,
   is what the issuance reads; one that starts once the issuance holds the
   client waits for the credential.
@@ -33,7 +33,6 @@ defmodule Arca.CredentialIssuanceTest do
     CellLease,
     DeviceCertificate,
     ExternalIdentity,
-    Membership,
     OauthProviderCredential,
     PairedClient,
     PairingInvitation,
@@ -97,15 +96,12 @@ defmodule Arca.CredentialIssuanceTest do
           id: athanor_id,
           name: "CI #{n}",
           slug: "ci-#{n}",
-          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          owner_user_id: user_id,
           created_by: user_id
         })
-    end)
 
-    {:ok, seat} =
-      unboxed(fn ->
-        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
-      end)
+      {:ok, _} = Arca.Users.update(server(), user_id, %{personal_athanor_id: athanor_id})
+    end)
 
     on_exit(fn ->
       unboxed(fn ->
@@ -115,8 +111,6 @@ defmodule Arca.CredentialIssuanceTest do
         Arca.Repo.delete_all(where(VaultEntry, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, user_id: ^user_id))
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
         Arca.Repo.delete_all(where(ApiKey, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
@@ -125,11 +119,11 @@ defmodule Arca.CredentialIssuanceTest do
       end)
     end)
 
-    {:ok, user_id: user_id, athanor_id: athanor_id, seat_id: seat.id}
+    {:ok, user_id: user_id, athanor_id: athanor_id}
   end
 
   defp targets(user_id, athanor_id),
-    do: %{user_id: user_id, athanor_id: athanor_id, membership_id: nil, source: nil}
+    do: %{user_id: user_id, athanor_id: athanor_id, source: nil}
 
   # The identity domain's policy in miniature: the person and the athanor
   # active at the generations the issuing context read (1, at birth).
@@ -235,9 +229,6 @@ defmodule Arca.CredentialIssuanceTest do
       athanor_id: athanor_id
     } do
       test = self()
-
-      # The athanor stays open: it is not the person's own, so the denial
-      # leaves it standing and the refusal is the person's.
       denier = paused_denial(user_id)
       assert_receive :denial_holds, 5_000
       attrs = key_attrs(user_id, athanor_id)
@@ -548,11 +539,10 @@ defmodule Arca.CredentialIssuanceTest do
   # A paired device's issuance
   # ---------------------------------------------------------------------------
 
-  defp device_targets(user_id, athanor_id, seat_id, device) do
+  defp device_targets(user_id, athanor_id, device) do
     %{
       user_id: user_id,
       athanor_id: athanor_id,
-      membership_id: seat_id,
       source: {:device, device.client_id, device.expires_at}
     }
   end
@@ -596,9 +586,9 @@ defmodule Arca.CredentialIssuanceTest do
 
   # Inside the issuance's transaction, the last moment another writer can
   # still commit before the issuance reaches the client: on PostgreSQL once
-  # the seat is locked; on SQLite once the transaction has begun, before it
-  # takes the one write lock.
-  defp before_the_client(%{source: "memberships", query: query}),
+  # the athanor is locked; on SQLite once the transaction has begun, before
+  # it takes the one write lock.
+  defp before_the_client(%{source: "athanors", query: query}),
     do: postgres?() and query =~ "FOR UPDATE"
 
   defp before_the_client(%{query: "begin"}), do: not postgres?()
@@ -611,7 +601,7 @@ defmodule Arca.CredentialIssuanceTest do
 
   describe "a paired device's issuance" do
     test "reads a revocation of its client that commits before it reaches the client, and is refused",
-         %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} do
+         %{user_id: user_id, athanor_id: athanor_id} do
       test = self()
       hold_issuances!()
       device = unboxed(fn -> Arca.CredentialIssuanceTest.Device.record!(user_id, athanor_id) end)
@@ -623,7 +613,7 @@ defmodule Arca.CredentialIssuanceTest do
 
           unboxed(fn ->
             Arca.ApiKeyStorage.create_key(attrs,
-              lock: device_targets(user_id, athanor_id, seat_id, device),
+              lock: device_targets(user_id, athanor_id, device),
               verify: device_stands(test)
             )
           end)
@@ -632,8 +622,8 @@ defmodule Arca.CredentialIssuanceTest do
       assert_receive {:issuance_held, holder}, 5_000
 
       # The revocation commits inside the issuance's transaction: on
-      # PostgreSQL while the issuance holds the person, the athanor and the
-      # seat, which a client's revocation does not wait for.
+      # PostgreSQL while the issuance holds the person and the athanor,
+      # which a client's revocation does not wait for.
       assert {:ok, %{standing: "revoked"}} =
                unboxed(fn ->
                  Arca.PairedClients.revoke(Prima.Actor.in_athanor(athanor_id), device.client_id)
@@ -648,7 +638,7 @@ defmodule Arca.CredentialIssuanceTest do
     end
 
     test "holds its client: a revocation that starts once it holds the client waits for the credential",
-         %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} do
+         %{user_id: user_id, athanor_id: athanor_id} do
       test = self()
       device = unboxed(fn -> Arca.CredentialIssuanceTest.Device.record!(user_id, athanor_id) end)
       attrs = key_attrs(user_id, athanor_id)
@@ -657,7 +647,7 @@ defmodule Arca.CredentialIssuanceTest do
         Task.async(fn ->
           unboxed(fn ->
             Arca.ApiKeyStorage.create_key(attrs,
-              lock: device_targets(user_id, athanor_id, seat_id, device),
+              lock: device_targets(user_id, athanor_id, device),
               verify: paused(test, device_stands(test))
             )
           end)
@@ -696,14 +686,14 @@ defmodule Arca.CredentialIssuanceTest do
   # device's issuance (`Arca.SecurityTransitions.Issuance.held/2`, or
   # `open/3`'s source): its fixture laid first, the write as a function of
   # the issuance options, and whether it wrote.
-  defp other_write(:webhook_create, user_id, athanor_id, _seat_id) do
+  defp other_write(:webhook_create, user_id, athanor_id) do
     attrs = webhook_attrs(user_id, athanor_id)
 
     {&Arca.WebhookStorage.create_webhook(attrs, &1),
      fn -> Arca.Repo.exists?(where(Webhook, athanor_id: ^athanor_id, name: ^attrs.name)) end}
   end
 
-  defp other_write(:webhook_rotate, user_id, athanor_id, _seat_id) do
+  defp other_write(:webhook_rotate, user_id, athanor_id) do
     attrs = webhook_attrs(user_id, athanor_id)
     :ok = Arca.WebhookStorage.create_webhook(attrs)
     grace = DateTime.add(DateTime.utc_now(), 3600, :second)
@@ -725,7 +715,7 @@ defmodule Arca.CredentialIssuanceTest do
      end}
   end
 
-  defp other_write(:vault_put, _user_id, athanor_id, _seat_id) do
+  defp other_write(:vault_put, _user_id, athanor_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
     name = "glass-entry-#{System.unique_integer([:positive])}"
 
@@ -736,7 +726,7 @@ defmodule Arca.CredentialIssuanceTest do
      ), fn -> match?({:ok, _}, Arca.VaultStorage.get_by_name(actor, name)) end}
   end
 
-  defp other_write(:vault_commit, _user_id, athanor_id, _seat_id) do
+  defp other_write(:vault_commit, _user_id, athanor_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
     name = "glass-entry-#{System.unique_integer([:positive])}"
 
@@ -757,7 +747,7 @@ defmodule Arca.CredentialIssuanceTest do
   # The invitation is opened on the person's proven `pairing.begin`
   # confirmation, which its verifier consumes once the issuance's own
   # verifier agrees, as `Sanctum.Pairing.begin/2` consumes it.
-  defp other_write(:invitation_open, user_id, athanor_id, seat_id) do
+  defp other_write(:invitation_open, user_id, athanor_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
     secret_hash = Prima.Digest.sha256("glass-#{System.unique_integer([:positive])}")
     {secret, expected} = pairing_confirmation!(actor, user_id)
@@ -765,7 +755,6 @@ defmodule Arca.CredentialIssuanceTest do
     open = fn opts ->
       attrs = %{
         user_id: user_id,
-        membership_id: seat_id,
         secret_hash: secret_hash,
         key_digest: Prima.Device.key_digest(:crypto.strong_rand_bytes(32)),
         confirmation_ref: Prima.Confirmation.ref(secret),
@@ -887,7 +876,7 @@ defmodule Arca.CredentialIssuanceTest do
   describe "a paired device's other credential writes" do
     for kind <- [:webhook_create, :webhook_rotate, :vault_put, :vault_commit, :invitation_open] do
       test "#{kind}: a revocation of the client committing before the write reaches it writes nothing",
-           %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} do
+           %{user_id: user_id, athanor_id: athanor_id} do
         test = self()
         slot_for(unquote(kind))
         hold_issuances!()
@@ -896,10 +885,10 @@ defmodule Arca.CredentialIssuanceTest do
           unboxed(fn -> Arca.CredentialIssuanceTest.Device.record!(user_id, athanor_id) end)
 
         {write, written?} =
-          unboxed(fn -> other_write(unquote(kind), user_id, athanor_id, seat_id) end)
+          unboxed(fn -> other_write(unquote(kind), user_id, athanor_id) end)
 
         opts = [
-          lock: device_targets(user_id, athanor_id, seat_id, device),
+          lock: device_targets(user_id, athanor_id, device),
           verify: device_stands(test)
         ]
 
@@ -923,16 +912,16 @@ defmodule Arca.CredentialIssuanceTest do
     end
 
     test "an invitation holds its client: a revocation that starts once it holds the client waits",
-         %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} do
+         %{user_id: user_id, athanor_id: athanor_id} do
       test = self()
       slot_for(:invitation_open)
       device = unboxed(fn -> Arca.CredentialIssuanceTest.Device.record!(user_id, athanor_id) end)
 
       {open, written?} =
-        unboxed(fn -> other_write(:invitation_open, user_id, athanor_id, seat_id) end)
+        unboxed(fn -> other_write(:invitation_open, user_id, athanor_id) end)
 
       opts = [
-        lock: device_targets(user_id, athanor_id, seat_id, device),
+        lock: device_targets(user_id, athanor_id, device),
         verify: paused(test, device_stands(test))
       ]
 
@@ -1037,8 +1026,8 @@ end
 defmodule Arca.CredentialIssuanceSandboxTest do
   @moduledoc """
   The issuance transaction on one connection: the policy sees the locked
-  rows (nil where there is none), the membership as it is stored, and a
-  refusal from it or from the write leaves nothing behind. A paired device's source is locked in the
+  rows (nil where there is none), the athanor with its owner as stored, and
+  a refusal from it or from the write leaves nothing behind. A paired device's source is locked in the
   standing order and handed to the policy narrowed.
   """
 
@@ -1067,7 +1056,6 @@ defmodule Arca.CredentialIssuanceSandboxTest do
                lock: %{
                  user_id: "usr_nobody",
                  athanor_id: "ath_nowhere",
-                 membership_id: "mem_none",
                  source: {:api_key, "key_none"}
                },
                verify: fn rows ->
@@ -1076,72 +1064,72 @@ defmodule Arca.CredentialIssuanceSandboxTest do
                end
              )
 
-    assert_received {:rows, %{user: nil, athanor: nil, membership: nil, source: source, now: now}}
+    assert_received {:rows, %{user: nil, athanor: nil, source: source, now: now} = rows}
+    assert rows |> Map.keys() |> Enum.sort() == [:athanor, :now, :source, :user]
     assert source == %{kind: :api_key, row: nil}
     assert %DateTime{} = now
     assert {:error, :not_found} = Arca.SessionStorage.get_session(hash)
   end
 
-  test "the membership reaches the policy as stored: a platform row carries its scope and no athanor" do
-    %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} = standing!()
-
-    {:ok, :ok} = Arca.Repo.transaction(fn -> Arca.Members.grant_platform!(user_id) end)
-    {:ok, platform} = Arca.Members.find_platform(Prima.Actor.system(), user_id)
-
+  # An athanor is its owner's alone; the identity domain's policy
+  # (`Sanctum.Issuance`) refuses an issuance into another person's athanor
+  # `:unauthenticated` on the owner this hands it, as stored.
+  test "an athanor another person owns reaches the policy with its owner, and its refusal writes nothing" do
+    %{user_id: user_id, athanor_id: own_id} = standing!()
+    %{user_id: other_id, athanor_id: foreign_id} = standing!()
     test = self()
 
-    # The caller names the athanor and a membership id; the row is read by
-    # that id as it is stored, whatever the caller took it for, so a policy
-    # can tell the person's seat there from a platform row that seats
-    # nobody in any athanor.
-    for {membership_id, scope, row_athanor} <- [
-          {platform.id, "platform", nil},
-          {seat_id, "athanor", athanor_id}
-        ] do
-      assert {:error, :refused} =
-               Issuance.run(
-                 %{
-                   user_id: user_id,
-                   athanor_id: athanor_id,
-                   membership_id: membership_id,
-                   source: nil
-                 },
-                 fn rows ->
-                   send(test, {:rows, rows})
-                   {:error, :refused}
-                 end,
-                 fn _rows -> {:ok, :written} end
-               )
+    owners_only = fn rows ->
+      send(test, {:rows, rows})
 
-      assert_received {:rows, %{membership: membership, athanor: %{id: ^athanor_id}}}
-
-      assert Map.take(membership, [:id, :user_id, :scope, :athanor_id, :status]) == %{
-               id: membership_id,
-               user_id: user_id,
-               scope: scope,
-               athanor_id: row_athanor,
-               status: "active"
-             }
+      if rows.athanor.owner_user_id == rows.user.id,
+        do: :ok,
+        else: {:error, :unauthenticated}
     end
+
+    write = fn _rows ->
+      send(test, :written)
+      {:ok, :written}
+    end
+
+    assert {:error, :unauthenticated} =
+             Issuance.run(
+               %{user_id: user_id, athanor_id: foreign_id, source: nil},
+               owners_only,
+               write
+             )
+
+    assert_received {:rows, %{user: %{id: ^user_id}, athanor: athanor}}
+    assert {athanor.id, athanor.owner_user_id} == {foreign_id, other_id}
+    refute_received :written
+
+    assert {:ok, :written} =
+             Issuance.run(
+               %{user_id: user_id, athanor_id: own_id, source: nil},
+               owners_only,
+               write
+             )
+
+    assert_received :written
   end
 
   test "a refused write rolls the transaction back" do
     assert {:error, :not_this_time} =
              Issuance.run(
-               %{user_id: "usr_nobody", athanor_id: nil, membership_id: nil, source: nil},
+               %{user_id: "usr_nobody", athanor_id: nil, source: nil},
                fn _rows -> :ok end,
                fn _rows -> {:error, :not_this_time} end
              )
   end
 
   describe "a paired device's source" do
-    test "is locked after the person, the athanor and the seat: the client, then its certificate" do
-      %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} = standing!()
+    test "is locked after the person and the athanor: the client, then its certificate" do
+      %{user_id: user_id, athanor_id: athanor_id} = standing!()
       device = Device.record!(user_id, athanor_id)
       test = self()
 
       sources =
-        ~w(users athanors memberships paired_clients device_certificates person_identities)
+        ~w(users athanors paired_clients device_certificates person_identities)
 
       handler = "credential-issuance-order-#{System.unique_integer([:positive])}"
 
@@ -1160,7 +1148,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
 
       assert {:ok, :written} =
                Issuance.run(
-                 targets(user_id, athanor_id, seat_id, device),
+                 targets(user_id, athanor_id, device),
                  fn _rows -> :ok end,
                  fn _rows -> {:ok, :written} end
                )
@@ -1168,12 +1156,12 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       :telemetry.detach(handler)
       statements = statements()
 
-      # Person, athanor, seat, client, its certificate: the standing order,
-      # and the identity row read last, under the person's lock.
+      # Person, athanor, client, its certificate: the standing order, and
+      # the identity row read last, under the person's lock.
       assert Enum.map(statements, &elem(&1, 0)) == sources
 
       if Arca.Test.Adapter.postgres?() do
-        for {source, query} <- Enum.take(statements, 5) do
+        for {source, query} <- Enum.take(statements, 4) do
           assert query =~ "FOR UPDATE", "#{source} is not locked: #{query}"
         end
 
@@ -1183,7 +1171,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     end
 
     test "hands the policy the client, its certificate at the caller's expiry and the person's identity row, narrowed" do
-      %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} = standing!()
+      %{user_id: user_id, athanor_id: athanor_id} = standing!()
       renewed = DateTime.add(DateTime.utc_now(), 7200, :second)
       identifier = "per_" <> Prima.Digest.sha256_hex("remote-#{System.unique_integer()}")
 
@@ -1214,7 +1202,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
 
       assert {:ok, :written} =
                Issuance.run(
-                 targets(user_id, athanor_id, seat_id, device),
+                 targets(user_id, athanor_id, device),
                  fn rows ->
                    send(test, {:rows, rows})
                    :ok
@@ -1249,13 +1237,13 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     end
 
     test "names nothing that is not there: no client, no certificate, no identity row" do
-      %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} = standing!()
+      %{user_id: user_id, athanor_id: athanor_id} = standing!()
       test = self()
       missing = %{client_id: "pcl_none", expires_at: DateTime.utc_now()}
 
       assert {:error, :not_standing} =
                Issuance.run(
-                 targets(user_id, athanor_id, seat_id, missing),
+                 targets(user_id, athanor_id, missing),
                  fn rows ->
                    send(test, {:rows, rows})
                    {:error, :not_standing}
@@ -1268,7 +1256,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     end
 
     test "reads a remote person's cached head after their identity row, unlocked, and hands its key_epoch" do
-      %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} = standing!()
+      %{user_id: user_id, athanor_id: athanor_id} = standing!()
       identifier = "per_" <> Prima.Digest.sha256_hex("remote-#{System.unique_integer()}")
       key_epoch = Prima.Digest.sha256("epoch-#{identifier}")
       device = Device.record!(user_id, athanor_id, subject: {"identity", identifier})
@@ -1277,7 +1265,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       test = self()
 
       sources =
-        ~w(users athanors memberships paired_clients device_certificates person_identities directory_heads)
+        ~w(users athanors paired_clients device_certificates person_identities directory_heads)
 
       handler = "credential-issuance-head-#{System.unique_integer([:positive])}"
 
@@ -1296,7 +1284,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
 
       assert {:ok, :written} =
                Issuance.run(
-                 targets(user_id, athanor_id, seat_id, device),
+                 targets(user_id, athanor_id, device),
                  fn rows ->
                    send(test, {:rows, rows})
                    :ok
@@ -1312,11 +1300,11 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       assert Enum.map(statements, &elem(&1, 0)) == sources
 
       if Arca.Test.Adapter.postgres?() do
-        for {source, query} <- Enum.take(statements, 5) do
+        for {source, query} <- Enum.take(statements, 4) do
           assert query =~ "FOR UPDATE", "#{source} is not locked: #{query}"
         end
 
-        for {source, query} <- Enum.drop(statements, 5) do
+        for {source, query} <- Enum.drop(statements, 4) do
           refute query =~ "FOR UPDATE", "#{source} is locked: #{query}"
         end
       end
@@ -1366,16 +1354,15 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       ])
   end
 
-  defp targets(user_id, athanor_id, seat_id, device) do
+  defp targets(user_id, athanor_id, device) do
     %{
       user_id: user_id,
       athanor_id: athanor_id,
-      membership_id: seat_id,
       source: {:device, device.client_id, device.expires_at}
     }
   end
 
-  # A person seated in an athanor another person owns, in this case's sandbox.
+  # A person and their own athanor, in this case's sandbox.
   defp standing! do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
@@ -1410,14 +1397,14 @@ defmodule Arca.CredentialIssuanceSandboxTest do
         id: athanor_id,
         name: "Order #{n}",
         slug: "order-#{n}",
-        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+        owner_user_id: user_id,
         created_by: user_id
       })
 
-    {:ok, seat} =
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+    {:ok, _} =
+      Arca.Users.update(Prima.Actor.system(), user_id, %{personal_athanor_id: athanor_id})
 
-    %{user_id: user_id, athanor_id: athanor_id, seat_id: seat.id}
+    %{user_id: user_id, athanor_id: athanor_id}
   end
 
   defp statements(acc \\ []) do

@@ -41,8 +41,8 @@ defmodule Sanctum.ProviderTest do
       assert "session" in tool_names
       # The vault tool owns credential storage.
       refute "secret" in tool_names
-      # No "permission" tool: memberships are presence-only and there are
-      # no roles to store.
+      # No "permission" tool: an athanor is one person's and there are no
+      # roles to store.
       refute "permission" in tool_names
       assert "key" in tool_names
       assert "vault" in tool_names
@@ -195,7 +195,7 @@ defmodule Sanctum.ProviderTest do
 
     test "whoami names when the calling session ends: its row's expiry, as RFC 3339",
          %{ctx: ctx} do
-      ctx = Sanctum.TestContext.issuer!(ctx)
+      ctx = issuer!(ctx)
       {:ok, session} = Sanctum.Session.create(ctx)
       hash = Sanctum.Session.token_hash(session.token)
       session_ctx = %{ctx | session_token_hash: hash}
@@ -232,7 +232,7 @@ defmodule Sanctum.ProviderTest do
     end
 
     test "logout retires the session that called it", %{ctx: ctx} do
-      ctx = Sanctum.TestContext.issuer!(ctx)
+      ctx = issuer!(ctx)
       {:ok, session} = Sanctum.Session.create(ctx)
       assert {:ok, _} = Sanctum.Session.load(session.token)
 
@@ -270,7 +270,7 @@ defmodule Sanctum.ProviderTest do
   describe "key tool" do
     # A key is issued only by a person this server knows, against the
     # standing their rows were read at.
-    setup %{ctx: ctx}, do: {:ok, ctx: Sanctum.TestContext.issuer!(ctx)}
+    setup %{ctx: ctx}, do: {:ok, ctx: issuer!(ctx)}
 
     test "list returns empty initially", %{ctx: ctx} do
       {:ok, result} = key_tool(ctx, %{"action" => "list"})
@@ -849,13 +849,12 @@ defmodule Sanctum.ProviderTest do
         Context.build(
           user_id: "github|https://github.com|ext_user",
           namespace: "ext_ns",
-          athanor_id: "ath_acme",
           permissions: [:*],
           scope: :athanor,
           auth_method: :oidc,
           authenticated: true
         )
-        |> Sanctum.TestContext.issuer!()
+        |> issuer!()
 
       unresolved =
         Context.build(
@@ -905,6 +904,13 @@ defmodule Sanctum.ProviderTest do
   # every test after.
   defp restore_env(key, nil), do: Application.delete_env(:sanctum, key)
   defp restore_env(key, value), do: Application.put_env(:sanctum, key, value)
+
+  # `ctx`'s identity signed in as a person and focused on their own
+  # athanor, the only athanor a credential of theirs is issued into.
+  defp issuer!(ctx) do
+    {person, user} = Sanctum.TestContext.person!(ctx)
+    Sanctum.TestContext.issuer!(%{person | athanor_id: Sanctum.Test.People.athanor!(user).id})
+  end
 
   # Providers answer typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so assert through it.

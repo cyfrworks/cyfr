@@ -96,7 +96,6 @@ defmodule Cyfr.BusTest do
             Bus.athanor_archived_global(),
             Bus.caller_invalidated_global(),
             Bus.sessions(),
-            Bus.memberships("user_1"),
             Bus.platform_notify(),
             Bus.health_check(7),
             Bus.schedule_completions(),
@@ -116,7 +115,6 @@ defmodule Cyfr.BusTest do
                "sanctum:caller_invalidated",
                "sanctum:sessions",
                "sanctum:frame_credentials:<user_id>",
-               "sanctum:memberships:<user_id>",
                "sanctum:shared_threads:<user_id>",
                "platform:notify",
                "health_check:<nonce>",
@@ -147,26 +145,17 @@ defmodule Cyfr.BusTest do
     end
 
     test "the standing announcements are one subscription, and one undo" do
-      :ok = Bus.subscribe_standing("user_standing")
+      :ok = Bus.subscribe_standing()
 
-      subscribed = Registry.keys(Cyfr.PubSub, self())
+      assert Enum.sort(Registry.keys(Cyfr.PubSub, self())) ==
+               Enum.sort([
+                 Bus.sessions(),
+                 Bus.caller_invalidated_global(),
+                 Bus.athanor_archived_global()
+               ])
 
-      for topic <- [
-            Bus.sessions(),
-            Bus.caller_invalidated_global(),
-            Bus.athanor_archived_global(),
-            Bus.memberships("user_standing")
-          ] do
-        assert topic in subscribed
-      end
-
-      :ok = Bus.unsubscribe_standing("user_standing")
+      :ok = Bus.unsubscribe_standing()
       assert Registry.keys(Cyfr.PubSub, self()) == []
-
-      # A caller with no person hears the three that are not keyed by one.
-      :ok = Bus.subscribe_standing(nil)
-      assert length(Registry.keys(Cyfr.PubSub, self())) == 3
-      :ok = Bus.unsubscribe_standing(nil)
     end
   end
 
@@ -237,7 +226,7 @@ defmodule Cyfr.BusTest do
       a = actor("ath_a")
 
       assert {:error, :cross_tenant} =
-               Bus.broadcast(a, Bus.executions(a), Notify.new(a, :member_changed))
+               Bus.broadcast(a, Bus.executions(a), Notify.new(a, :athanor_changed))
 
       assert_receive {:refused, _, %{payload: Notify, topic_key: :executions}}
     end

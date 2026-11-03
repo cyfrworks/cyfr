@@ -8,7 +8,7 @@ defmodule PrismWeb.ThreadPaneLive do
   one focused context.
 
   Each nested LiveView has its own mailbox, authenticated session context,
-  and membership-checked athanor focus. Runner calls, row reads, and
+  and owner-checked athanor focus. Runner calls, row reads, and
   attachment writes use that context, independently of the host’s focus.
 
   One pane per athanor (`id: "pane-<athanor id>"`): the host names the
@@ -283,19 +283,12 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp apply_live(socket, _), do: socket
 
-  # Every member by name, once at mount, the one way a person is named on
-  # the console (`PrismWeb.People.label/2`) — the viewer as "You".
-  defp member_labels(ctx) do
-    case Sanctum.Tenancy.Members.list_by_athanor(ctx.athanor_id) do
-      {:ok, rows} ->
-        for m <- rows, is_binary(m.user_id), into: %{} do
-          {m.user_id, PrismWeb.People.label(m, ctx)}
-        end
+  # The athanor's person by name, once at mount, the one way a person is
+  # named on the console (`PrismWeb.People.label/2`) — the viewer as "You".
+  defp member_labels(%{user_id: user_id} = ctx) when is_binary(user_id),
+    do: %{user_id => PrismWeb.People.label(%{user_id: user_id}, ctx)}
 
-      {:error, _} ->
-        %{}
-    end
-  end
+  defp member_labels(_ctx), do: %{}
 
   # ---------------------------------------------------------------------------
   # Models (async, best-effort)
@@ -1038,7 +1031,7 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(socket, :error, "Another server is running this thread — try again shortly.")
 
       :not_member ->
-        put_flash(socket, :error, "You are no longer a member here.")
+        put_flash(socket, :error, "This athanor is not yours.")
 
       :archived ->
         put_flash(socket, :error, "This athanor has been archived.")

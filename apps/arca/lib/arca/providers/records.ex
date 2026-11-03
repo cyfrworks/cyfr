@@ -202,8 +202,8 @@ defmodule Arca.Providers.Records do
           {:error, {:unavailable, "Storage"}}
 
         record ->
-          # Members are interchangeable: get_tenant already scoped to the
-          # athanor, so any member of the athanor may read the record.
+          # get_tenant already scoped to the athanor, the caller's own, so
+          # the record is theirs to read.
           {:ok, execution_to_map(record)}
       end
     end
@@ -214,7 +214,7 @@ defmodule Arca.Providers.Records do
   end
 
   # A retained payload: the bytes an execution was given or answered,
-  # for a member of the athanor that ran it — or, in-chain, for the
+  # for the person of the athanor that ran it — or, in-chain, for the
   # execution itself: the host-stamped lineage must name it as the
   # caller and the stamped attempt must be its current one.
   def handle("record", %Prima.Actor{} = actor, %{"action" => "payload", "id" => id} = args) do
@@ -262,7 +262,7 @@ defmodule Arca.Providers.Records do
     with :ok <- tenant_ok(actor) do
       opts =
         [limit: min(args["limit"] || 20, 1000)]
-        # user_id is an optional attribution filter any member may pass; default
+        # user_id is an optional attribution filter; default
         # is athanor-wide (the athanor is the access boundary).
         |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])

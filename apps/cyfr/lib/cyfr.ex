@@ -33,7 +33,6 @@ defmodule Cyfr do
       Bus.FrameCredential,
       Bus.LayoutPublished,
       Bus.McpServers,
-      Bus.Membership,
       Bus.Notify,
       Bus.Ping,
       Bus.PolicyDecision,

@@ -60,7 +60,7 @@ defmodule Arca.Providers.FilesTest do
   refusals, reads behind `storage_read` and changes behind
   `storage_write`, external-plane only, and a handler given the caller's
   actor alone. Its offer actions are `Arca.FileOffers` on the wire: what
-  the handlers add over the store (the count, the sender, the seat, the
+  the handlers add over the store (the count, the sender, the owner, the
   default folder, the answers' shapes and the refusals' words), and a
   transfer finished once whatever point a crash leaves it at.
   """
@@ -729,7 +729,7 @@ defmodule Arca.Providers.FilesTest do
       assert content == :binary.copy("a", 40)
     end
 
-    test "an acceptance into an athanor the caller holds no seat in is refused before anything is read",
+    test "an acceptance into an athanor not the caller's own is refused before anything is read",
          %{sender: sender, recipient: recipient} do
       source!(sender, "a.txt", "alpha")
       assert {:ok, %{offer_id: offer_id}} = offer(sender, ["data/docs/a.txt"], recipient.id)
@@ -737,7 +737,7 @@ defmodule Arca.Providers.FilesTest do
       # The recipient's context focused on the sender's own athanor.
       elsewhere = %{recipient.actor | athanor_id: sender.home.id}
 
-      # The seat comes first: an offer that does not exist answers the same.
+      # The owner comes first: an offer that does not exist answers the same.
       for id <- [offer_id, "ofr_none"], folder <- [nil, "data/in"] do
         args = %{"action" => "accept", "offer_id" => id}
         args = if folder, do: Map.put(args, "folder", folder), else: args
@@ -794,10 +794,13 @@ defmodule Arca.Providers.FilesTest do
                })
     end
 
-    test "offers lists the caller's own receipts, never another member's",
+    test "offers lists the caller's own receipts, never another person's",
          %{sender: sender, recipient: recipient} do
-      # A second member of the recipient's athanor, in a session of theirs.
-      other = member!(recipient.home, "m", System.unique_integer([:positive]))
+      # Another person, in a session of theirs whose context names the
+      # recipient's athanor.
+      other = person!("m", System.unique_integer([:positive]))
+      ctx = %{other.ctx | athanor_id: recipient.home.id}
+      other = %{other | ctx: ctx, actor: Sanctum.Context.actor(ctx)}
 
       source!(sender, "secret-name.txt", "for the recipient alone")
 
@@ -805,7 +808,7 @@ defmodule Arca.Providers.FilesTest do
                offer(sender, ["data/docs/secret-name.txt"], recipient.id)
 
       # The acceptance commits and its publication waits: a receipt
-      # `received` in the athanor both members share.
+      # `received` in the recipient's athanor.
       Store.arm(%{probe: :fail})
 
       assert {:ok, %{receipts: [%{status: "received"}]}} =
@@ -940,13 +943,9 @@ defmodule Arca.Providers.FilesTest do
   # ---------------------------------------------------------------------------
 
   # A person working in an athanor of their own, as a session's context.
-  defp person!(label, n),
-    do: member!(athanor!("home-#{label}", n, "usr_f0#{label}#{n}"), label, n)
-
-  # A person seated in `home` and working in it, as a session's context.
-  defp member!(home, label, n) do
+  defp person!(label, n) do
     id = "usr_f0#{label}#{n}"
-    seat!(home, id)
+    home = athanor!("home-#{label}", n, id)
 
     ctx =
       Sanctum.Context.build(
@@ -972,19 +971,6 @@ defmodule Arca.Providers.FilesTest do
       })
 
     athanor
-  end
-
-  defp seat_actor(athanor), do: %{Prima.Actor.system() | athanor_id: athanor.id, scope: :athanor}
-
-  defp seat!(athanor, user_id) do
-    case Arca.Members.find(seat_actor(athanor), user_id) do
-      {:ok, _seated} ->
-        :ok
-
-      {:error, :not_found} ->
-        {:ok, _} = Arca.Members.seat(seat_actor(athanor), %{user_id: user_id, added_by: "test"})
-        :ok
-    end
   end
 
   # A person row carrying `namespace`.
@@ -1294,7 +1280,6 @@ defmodule Arca.Providers.FilesRaceTest do
   defp person!(label, n) do
     id = "usr_fr#{label}#{n}"
     home = athanor!("home-#{label}", n, id)
-    seat!(home.id, id)
 
     %{
       id: id,
@@ -1312,12 +1297,6 @@ defmodule Arca.Providers.FilesRaceTest do
       })
 
     athanor
-  end
-
-  defp seat!(athanor_id, user_id) do
-    seat = %{Prima.Actor.system() | athanor_id: athanor_id, scope: :athanor}
-    {:ok, _} = Arca.Members.seat(seat, %{user_id: user_id, added_by: "test"})
-    :ok
   end
 
   defp backend do

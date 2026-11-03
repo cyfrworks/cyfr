@@ -86,11 +86,15 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     athanor
   end
 
-  defp seat!(athanor_id, user_id) do
-    {:ok, row} =
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+  # The platform administrator's mark, set on the row as the installation's
+  # first admission writes it.
+  defp administrator!(user_id) do
+    {1, _} =
+      Arca.Repo.update_all(from(u in Schemas.User, where: u.id == ^user_id),
+        set: [platform_admin_at: now()]
+      )
 
-    row
+    :ok
   end
 
   defp insert!(schema, row) do
@@ -488,18 +492,17 @@ defmodule Arca.SecurityTransitionsRestoreTest do
   defp get(schema, id), do: Arca.Repo.get(schema, id)
 
   # A home as a backup holds it: two people, each with their own athanor,
-  # a shared thread they sit in, their pair and an invitation into the
-  # thread, and in every store the transition moves an active, a blocked
-  # and a terminal row.
+  # Alice the installation's administrator, a shared thread they sit in,
+  # their pair and an invitation into the thread, and in every store the
+  # transition moves an active, a blocked and a terminal row.
   defp home! do
     alice = person!()
+    :ok = administrator!(alice.id)
     bob = person!()
     # Carol signs in only through a door: no method for a restore to suspend.
     carol = person!()
     own = athanor!(alice.id)
-    seat!(own.id, alice.id)
     bob_own = athanor!(bob.id)
-    seat!(bob_own.id, bob.id)
 
     {:ok, shared_thread} =
       Arca.SharedThreads.create(server(), %{title: "R#{uniq()}", created_by: alice.id})
@@ -662,6 +665,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       threads = [fixture.shared_thread.id, fixture.pair.id]
       threads_before = Enum.map(threads, &get(Schemas.SharedThread, &1))
       invite_before = get(Schemas.SharedThreadMember, fixture.shared_invite.id)
+      assert %DateTime{} = admin_at = get(Schemas.User, fixture.alice.id).platform_admin_at
       restore_id = marked!()
 
       assert {:ok, change} = SecurityTransitions.restore(slot: :none)
@@ -670,6 +674,10 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       # Every standing is raised.
       assert get(Schemas.User, fixture.alice.id).security_generation == alice_generation + 1
       assert get(Schemas.Athanor, fixture.own.id).security_generation == own_generation + 1
+
+      # The administrator's mark stands: the restore raises her generation
+      # and suspends her methods, and takes no capability.
+      assert get(Schemas.User, fixture.alice.id).platform_admin_at == admin_at
 
       # Sessions are retired.
       for hash <- fixture.sessions,

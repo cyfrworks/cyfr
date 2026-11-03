@@ -35,7 +35,7 @@ defmodule Sanctum.DeviceUnlockTest do
   import Ecto.Query, only: [from: 2]
   import Sanctum.Test.Newcomers, only: [identity: 0]
 
-  alias Arca.Schemas.{Membership, PairedClient, PersonIdentity, Session, User}
+  alias Arca.Schemas.{PairedClient, PersonIdentity, Session, User}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, DeviceUnlock, Newcomer}
 
@@ -184,9 +184,7 @@ defmodule Sanctum.DeviceUnlockTest do
 
       assert %{first_method_at: %DateTime{}} = Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
 
-      assert Arca.Repo.exists?(
-               from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
-             )
+      assert %User{platform_admin_at: %DateTime{}} = Arca.Repo.get!(User, user_id)
 
       assert %{code: code, name: name} = device.recovery
       assert is_binary(code) and name == device.identity.name
@@ -826,7 +824,6 @@ defmodule Sanctum.DeviceUnlockKilledTest do
   alias Arca.Schemas.{
     DeviceCertificate,
     IdentityAttempt,
-    Membership,
     PairedClient,
     PersonIdentity,
     User
@@ -857,7 +854,7 @@ defmodule Sanctum.DeviceUnlockKilledTest do
     end) ++
       [
         unboxed(fn ->
-          Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
+          Arca.Repo.aggregate(from(u in User, where: not is_nil(u.platform_admin_at)), :count)
         end)
       ]
   end

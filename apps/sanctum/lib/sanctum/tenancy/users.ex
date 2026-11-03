@@ -8,7 +8,7 @@ defmodule Sanctum.Tenancy.Users do
 
   A row is written only by an admission (`Sanctum.Newcomer`), together
   with the person's identity row, and touched on every later sign-in
-  (`seen/2`); the door, invited memberships and per-person preferences key
+  (`seen/2`); the door, invited shared-thread seats and per-person preferences key
   off it. The person's identifier is on that identity row,
   never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
@@ -16,8 +16,7 @@ defmodule Sanctum.Tenancy.Users do
   (nothing deleted), their seats in shared threads are removed and the
   invitations their identifier was still holding there are withdrawn;
   allowing them again reopens the
-  door and the athanor, re-seats them in it, and leaves the revoked
-  credentials revoked.
+  door and the athanor, and leaves the revoked credentials revoked.
 
   ## What is decided here, and what is stored below
 
@@ -30,7 +29,7 @@ defmodule Sanctum.Tenancy.Users do
   what `Arca.Users` requires and says why.
   """
 
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Athanors
 
   @typedoc "A person's row, as the plain map `Arca.Users` answers."
   @type user :: %{required(:id) => String.t(), optional(atom()) => term()}
@@ -252,7 +251,7 @@ defmodule Sanctum.Tenancy.Users do
   Eject a person from this server, as one transaction
   (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
   session and API key they created, archive their own athanor (revoking
-  its keys), remove their memberships, and remove their
+  its keys), clear their platform administrator's mark, and remove their
   seats and invitations in shared threads, archiving every pair they sit
   in and every shared thread they leave empty. Either all of it
   commits or none of it does, and a failure is answered, never reported
@@ -273,7 +272,6 @@ defmodule Sanctum.Tenancy.Users do
       Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
       Athanors.announce_archived(change.archived_athanor_ids, change)
       Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
-      Members.announce_removed(user_id, change)
       Sanctum.SharedThreads.announce_denied(user_id, change)
 
       :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
@@ -289,19 +287,15 @@ defmodule Sanctum.Tenancy.Users do
   Reverse `deny/1` at the door, as one transaction
   (`Arca.SecurityTransitions.allow_user/3`): the person may sign in again,
   their own athanor is reopened — subject to the server's athanor cap,
-  whose refusal leaves them denied — and they are seated in it again.
-  Revoked sessions and keys stay revoked, and the shared-thread seats and
-  invitations the deny removed are not restored — a thread's people add
-  them again. A context read before the deny
+  whose refusal leaves them denied. Revoked sessions and keys stay revoked,
+  their platform administrator's mark stays cleared, and the shared-thread
+  seats and invitations the deny removed are not restored — a thread's
+  people add them again. A context read before the deny
   cannot issue a credential after this: the person's generation moved
   twice.
   """
   @spec allow(user()) :: {:ok, user()} | {:error, term()}
   def allow(%{id: user_id} = user) do
-    # The deny swept every membership by user id, their own seat included;
-    # the transition re-seats them, because reopening the furnace without
-    # its owner would leave them locked out of it until their next sign-in
-    # re-provisioned the row.
     with {:ok, change} <-
            Arca.SecurityTransitions.allow_user(server(), user_id, verify: &restorable/1) do
       {:ok, standing(user, change.user)}

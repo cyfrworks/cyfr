@@ -10,8 +10,8 @@ defmodule Sanctum.Providers.Athanor do
   else sits in it. Mutations are a person's act — an API-key context is
   refused, since a key belongs to one athanor and is nobody's identity.
 
-  Every verb acts in an athanor the caller holds a seat in, and anyone
-  without a current seat is answered as if the athanor did not exist
+  Every verb acts in the caller's own athanor, and anyone else is
+  answered as if the athanor did not exist
   (`{:not_found, "Athanor", named}`), whether it is open, archived or
   absent: only its person hears that an athanor is archived.
   """
@@ -146,11 +146,11 @@ defmodule Sanctum.Providers.Athanor do
   #
   # Returns the resolved athanor AND a context focused on it (`scope:
   # :athanor`, its id bound) — the shape every downstream act must run
-  # under. `Context.focus/2` is the narrowing: a seat, and nothing else —
-  # an operator with none is refused here like anyone else, and a platform
-  # context's wider scope stops here, not in the handler. A caller without
-  # a seat is refused as a missing athanor is, naming what they named, and
-  # only after the seat is found does an archived athanor say so.
+  # under. `Context.focus/2` is the narrowing: the athanor's owner, and
+  # nothing else — an operator is refused another's here like anyone else,
+  # and a platform context's wider scope stops here, not in the handler. A
+  # caller who is not the owner is refused as a missing athanor is, naming
+  # what they named, and only the owner hears that an athanor is archived.
   @doc false
   def resolve(%Context{} = ctx, args, opts \\ []) do
     named = Map.get(args, "athanor")
@@ -165,10 +165,10 @@ defmodule Sanctum.Providers.Athanor do
     end
   end
 
-  # `focus/2` answers `:archived` only once it has found the caller's
-  # current seat, so this is the caller's archived athanor. It stays refused
-  # unless the action asked for it (`get`); then the focused
-  # shape is built by hand, under the one admission focus granted: a seat.
+  # `focus/2` answers `:archived` only to the athanor's owner, so this is
+  # the caller's archived athanor. It stays refused unless the action asked
+  # for it (`get`); then the focused shape is built by hand, under the one
+  # admission focus granted: the owner.
   # The operator capability admits nothing here.
   defp open_archived(ctx, athanor, opts) do
     if Keyword.get(opts, :include_archived, false),
@@ -193,7 +193,7 @@ defmodule Sanctum.Providers.Athanor do
 
   # An archived row is found like any other: whether the caller may hear
   # that it is archived is `resolve/3`'s to decide once focus has read the
-  # seat, so an outsider's refusal for it is the missing athanor's.
+  # owner, so an outsider's refusal for it is the missing athanor's.
   defp get(id), do: or_not_found(Athanors.get(id), id)
 
   # The refusal names what the caller named — an id or a route slug — and
