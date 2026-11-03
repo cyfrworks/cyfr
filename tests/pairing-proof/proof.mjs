@@ -585,6 +585,9 @@ function terminal(args, cliHome) {
       HOME: cliHome,
       SHELL: "/bin/sh",
       PS1: "$ ",
+      // The shell finds the command line run.sh built, as a person's finds
+      // their installed cyfr.
+      PATH: `${join(outDir, "bin")}:${process.env.PATH}`,
       HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`,
       CYFR_NO_UPDATE_CHECK: "1",
     },
@@ -703,7 +706,12 @@ async function commandLine(desk, phone) {
     login.type("cyfr open --context proof; echo \"open=$?\"");
     await login.until(/open=\d+/, mark);
     const said = login.out.slice(mark);
-    browserContext = await desk.context().browser().newContext();
+    // The command line's page is on this machine's loopback, which the
+    // run's proxy does not answer: this context reaches it directly, and
+    // the home through the proxy as every other context does.
+    browserContext = await desk.context().browser().newContext({
+      proxy: { server: `http://127.0.0.1:${proxy.address().port}`, bypass: "127.0.0.1" },
+    });
     const page = await browserContext.newPage();
     await page.goto("http://127.0.0.1:7340/");
     await page.locator('form[action="/open"] button').click();
