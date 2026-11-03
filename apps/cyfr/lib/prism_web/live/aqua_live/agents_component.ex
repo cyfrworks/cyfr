@@ -113,7 +113,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
       # The role a new one starts from is read again NOW — its hands as
-      # another member may have edited them since this page loaded — the
+      # another page may have edited them since this one loaded — the
       # same rule every allowlist edit on this page follows.
       start = fresh_role(ctx, params["start_from"])
       policy = if start, do: start.tool_policy, else: %{}
@@ -331,7 +331,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # The editor opens on the prompt as it is now, with the digest `get`
-  # names for it, so a save over a prompt another member changed since is
+  # names for it, so a save over a prompt changed elsewhere since is
   # refused as a conflict.
   def handle_event("editor_edit_prompt", %{"name" => name}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -359,7 +359,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       name = socket.assigns.editor_editing_prompt
 
       # The digest names the version this editor opened: a save over a
-      # prompt another member changed since is refused as a conflict, and
+      # prompt changed elsewhere since is refused as a conflict, and
       # the editor stays open with the draft.
       case call_aqua(socket.assigns.context, %{
              "action" => "update",
@@ -534,7 +534,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # NOW — again, just before the write, never the copy this page loaded —
   # to decide the direction, and answers the one-key patch
   # (`%{key => "auto" | "ask" | nil}`) the `aqua` door applies under its
-  # lock, so a toggle another member makes at the same moment on another
+  # lock, so a toggle made elsewhere at the same moment on another
   # key is kept, not written over. Or `{:refused, sentence}` for the person.
   defp edit_tool_policy(ctx, name, change) do
     with {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => name}),

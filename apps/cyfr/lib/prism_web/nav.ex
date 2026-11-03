@@ -6,8 +6,8 @@ defmodule PrismWeb.Nav do
   The pages of an athanor, once: what the sidebar (dev), the drawer (both
   modes) and the command palette list, and in which mode.
 
-  `lite` is the chat and a drawer off it — AQUA, files, members, the
-  Vault, schedules, webhooks, MCP servers, settings, legal. `dev` adds the
+  `lite` is the chat and a drawer off it — AQUA, files, the Vault,
+  schedules, webhooks, MCP servers, settings, legal. `dev` adds the
   ops surfaces, sectioned. Keys are the pages' `active_nav` values; the
   DOM id a surface renders is `<prefix>-<key>` with underscores as hyphens.
   These are the Dashboard's pages; the Canvas (`canvas_path/0`) is no page
@@ -16,7 +16,7 @@ defmodule PrismWeb.Nav do
 
   Two scopes. An `:athanor` page lives under `/a/<athanor>` — the
   workbench, focused on one athanor. A `:global` page has no athanor in its
-  address — the chat, which spans every athanor the person belongs to.
+  address — the chat.
   Which is which is `global_pages/0`, the one list: an item's `scope` is
   derived from it, never written by hand, and `href/2` is the one place a
   path becomes a link, so no surface has to know. `page?/1` is where a
@@ -38,9 +38,8 @@ defmodule PrismWeb.Nav do
   @both ~w(lite dev)
   @dev ~w(dev)
 
-  # The pages with no athanor in their address. Every other page lives
-  # under `/a/<athanor>`; a global page spans every athanor the person
-  # belongs to — the chat is one.
+  # The pages with no athanor in their address, the chat alone; every
+  # other page lives under `/a/<athanor>`.
   @global_pages ~w(/chat)
 
   # The Canvas mode's page, under `/a/<athanor>`.
@@ -165,7 +164,7 @@ defmodule PrismWeb.Nav do
     }
   ]
 
-  @lite_order ~w(chat aqua files members vault schedules webhooks mcp_servers settings legal)
+  @lite_order ~w(chat aqua files vault schedules webhooks mcp_servers settings legal)
 
   @sections [
     {:top, nil},

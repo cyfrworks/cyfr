@@ -185,7 +185,7 @@ defmodule Compendium.AquaTemplateTest do
             ]} = AquaTemplate.status(ctx)
   end
 
-  test "reset restores edited copies, pulls what ships, and KEEPS member-created agents", %{
+  test "reset restores edited copies, pulls what ships, and KEEPS athanor-made agents", %{
     ctx: ctx,
     template: template
   } do
@@ -219,7 +219,7 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, _} = AquaAgent.get(ctx, "mine")
   end
 
-  test "reset all: true produces exactly the shipped set — member-created agents go too", %{
+  test "reset all: true produces exactly the shipped set — athanor-made agents go too", %{
     ctx: ctx
   } do
     fill!(ctx)

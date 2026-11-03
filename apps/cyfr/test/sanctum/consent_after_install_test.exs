@@ -8,7 +8,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
   A baseline consent is minted against the closure that exists when the
   athanor is filled. Installing a component a formula names as an optional
   dependency widens that closure, so the consent no longer answers for it
-  and a turn is refused until a member consents again. The athanor reports
+  and a turn is refused until its person consents again. The athanor reports
   that state rather than leaving it unexplained — and only for the
   formula the install touched: the bundled assistant's closure ships in
   the seed and stands.

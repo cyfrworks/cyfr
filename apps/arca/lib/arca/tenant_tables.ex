@@ -136,7 +136,7 @@ defmodule Arca.TenantTables do
   # `person_identities`, `identity_attempts`, `identity_log_entries`,
   # `directory_heads` and `carry_actions` are a person's identity and
   # their carries, which are not an athanor's to delete: a person's keys
-  # and identifier outlive every athanor they sit in, a directory orders
+  # and identifier outlive their athanor, a directory orders
   # identifiers, and a carry moves a person between homes.
   #
   # `passkeys` are a person's own credentials at this home, revoked with

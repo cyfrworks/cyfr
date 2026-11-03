@@ -557,7 +557,7 @@ defmodule Compendium.Providers.Aqua do
 
   # --- delete ---
   # A shipped role, edited or not, cannot be deleted (a reset restores
-  # it) — disabling is the closet-removal verb. A athanor-made role
+  # it) — disabling is the closet-removal verb. An athanor-made role
   # deletes outright. The soul takes the same verb and refuses with its
   # own sentence.
 

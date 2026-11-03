@@ -36,7 +36,7 @@ defmodule Aqua.ConsentStatus do
       these actions.
     * `:stale` — the consent no longer answers for the athanor's closure
       at all, which is what installing a dependency does to it: a turn is
-      refused `consent_required` until a member consents again.
+      refused `consent_required` until its person consents again.
     * `:absent` — there is no one consent to judge: no source row, no
       default profile, a profile that needs consent or is revoked, more
       than one candidate, or a closure whose dependencies are not all

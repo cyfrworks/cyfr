@@ -618,8 +618,8 @@ defmodule Arca.TurnStorage do
   leave `running` with it and its open running interval is added to
   `active_ms`, exactly as an approval pause does. What suspending adds to
   a pause is the release: an approval pause keeps `active_turn_id`
-  because the turn is still this member's work, while a suspended turn is
-  nobody's until a member recovers it. Event `turn.paused`, reason
+  because the turn is still its person's work, while a suspended turn is
+  nobody's until its person recovers it. Event `turn.paused`, reason
   `suspended`.
   """
   @spec suspend(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}

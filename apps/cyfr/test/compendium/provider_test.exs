@@ -2034,7 +2034,7 @@ defmodule Compendium.ProviderTest do
                Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
     end
 
-    test "reset keeps member-created agents and scrolls unless all=true", %{ctx: ctx} do
+    test "reset keeps athanor-made agents and scrolls unless all=true", %{ctx: ctx} do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
@@ -2305,7 +2305,7 @@ defmodule Compendium.ProviderTest do
                Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
     end
 
-    test "a member-created role deletes outright", %{ctx: ctx} do
+    test "an athanor-made role deletes outright", %{ctx: ctx} do
       {:ok, _} =
         Provider.handle("aqua", ctx, %{
           "action" => "create",

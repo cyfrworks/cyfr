@@ -29,8 +29,8 @@ defmodule Aqua do
     athanor consented to still covers its sources.
   - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
     schedule asked for it.
-  - `Aqua.Aloud` — the one deliberate copy: your own lines, said into an
-    athanor you belong to.
+  - `Aqua.Aloud` — the one deliberate copy: your own lines, said into a
+    shared thread you sit in.
   - `Aqua.Notes` — what somebody chose to keep out of a thread: the
     athanor's pinned page and its filed pile, surviving the tape.
   - `Aqua.RoomExcerpt` — what the person has open beside the thread, read

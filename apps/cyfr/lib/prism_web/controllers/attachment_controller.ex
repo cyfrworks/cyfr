@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AttachmentController do
   @moduledoc """
-  The bytes of a chat attachment, for the member reading the thread on
+  The bytes of a chat attachment, for the person reading the thread on
   another device: `GET /a/:athanor/attachments/:message_id/:filename`,
   where the last segment is the ref's STORED name (`<n>-<basename>` — the
   index makes two same-named uploads separately addressable).
@@ -12,8 +12,8 @@ defmodule PrismWeb.AttachmentController do
   URL's athanor is resolved: a visitor with no standing session is sent
   to sign in whether the athanor exists or not, so the route tells an
   outsider nothing of which athanors exist. The athanor is then focused
-  the way a LiveView mount focuses it (`Sanctum.Context.focus/2`, so a
-  non-member gets the 404 a missing athanor gets); the message is read tenant-scoped, the file
+  the way a LiveView mount focuses it (`Sanctum.Context.focus/2`, so
+  anyone but its person gets the 404 a missing athanor gets); the message is read tenant-scoped, the file
   must be one of the message's own refs, and the path served is rebuilt
   from the row's identity (`Aqua.attachment_blob_path/3`) — never taken
   from the URL or the stored payload. What comes back is a download with

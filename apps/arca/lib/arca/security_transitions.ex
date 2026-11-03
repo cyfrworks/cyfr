@@ -855,7 +855,7 @@ defmodule Arca.SecurityTransitions do
   restore ever found them (`restored`), and every API key and webhook
   they created, paired client and passkey of theirs held suspended; and
   every profile needing consent and every vault entry needing
-  re-authentication in the athanors they sit in. Each item is a plain map
+  re-authentication in their athanor. Each item is a plain map
   of the fields the checklist shows, never a hash, a secret or sealed
   bytes.
   """

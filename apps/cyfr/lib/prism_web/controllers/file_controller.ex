@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.FileController do
   @moduledoc """
-  The bytes of one of the athanor's files, for the member browsing them:
+  The bytes of one of the athanor's files, for the person browsing them:
   `GET /a/:athanor/files/download/*path`, where the path is the console's
   (`data/reports/q3.csv`).
 
@@ -11,7 +11,7 @@ defmodule PrismWeb.FileController do
   URL's athanor is resolved: a visitor with no standing session is sent
   to sign in whether the athanor exists or not, so the route tells an
   outsider nothing of which athanors exist. The athanor is then focused
-  the way a LiveView mount focuses it (so a non-member gets the 404 a
+  the way a LiveView mount focuses it (so anyone but its person gets the 404 a
   missing athanor gets); the
   path is resolved by `Arca.Files.locate/2`, so only a shown folder can
   be named and the server's own storage has no address. What comes back
