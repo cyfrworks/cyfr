@@ -157,8 +157,9 @@ func deviceShell(o deviceOptions) (*shell.Shell, error) {
 }
 
 // pairingComplete is pairing.complete's arguments: args with its action.
-// The generated catalog gains the holder's fields when it is regenerated
-// from the home's declarations, and this becomes ops.PairingCompleteArgs.
+// The shell builds the arguments as a map from the fixture's field list,
+// so the call stays a map beside the catalog's ops.PairingCompleteArgs,
+// which names the same fields.
 func pairingComplete(args map[string]any) map[string]any {
 	out := map[string]any{"action": ops.PairingComplete}
 	for k, v := range args {
