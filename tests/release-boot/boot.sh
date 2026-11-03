@@ -491,7 +491,9 @@ headless_state() {
     IO.puts("CYFR_HEADLESS=" <> JSON.encode!(%{
       people: Enum.map(people, &%{id: &1.id, admission: &1.admission, name: &1.namespace,
         admin: Sanctum.Tenancy.platform_admin?(&1.id)}),
-      setup_sessions: Enum.count(Arca.Repo.all(Arca.Schemas.Session), &(&1.provider == "setup")),
+      sessions: length(Arca.Repo.all(Arca.Schemas.Session)),
+      devices: Enum.map(Arca.Repo.all(Arca.Schemas.PairedClient),
+        &%{user_id: &1.user_id, holder_kind: &1.holder_kind, standing: &1.standing}),
       identities: Enum.map(Arca.Repo.all(Arca.Schemas.PersonIdentity),
         &%{user_id: &1.user_id, identifier: &1.identifier, enrollment: &1.enrollment}),
       attempts: Enum.map(Arca.Repo.all(Arca.Schemas.IdentityAttempt),
@@ -504,30 +506,49 @@ headless_state() {
 # `cyfr $3...` for cell `$1` as `cell_cli` runs it (release.sh), from a
 # directory of its own holding the cell's deployment file, with HOME the
 # cell's and nothing else of the caller's environment but PATH and how
-# Docker is reached; but with the text `$2` as its standard input, where a
-# person answers it, and its exit status left in CLI_STATUS rather than
-# failing the run. Its output is `$1/login.log`, written over, and is
-# appended to the cell's cli.log.
+# Docker is reached; but on a terminal of its own (a pseudo-terminal), as
+# a person at an ssh session runs it, answered as that person answers:
+# the passphrase it draws and shows once, typed back each time it is
+# asked, and Enter once the recovery code is shown. Its shell (SHELL) is
+# the program `$2`, which runs in the session cyfr login opened. Its exit
+# status is left in CLI_STATUS rather than failing the run; what the
+# terminal showed is `$1/login.log`, written over (with no carriage
+# returns), and appended to the cell's cli.log; the passphrase is kept in
+# `$1/passphrase` for the next run and among the log's secrets.
 CLI_STATUS=0
 headless_cli() {
-  local cell="$1" input="$2" dir
+  local cell="$1" shell="$2" dir
   shift 2
   cell_cli_build
   dir="$WORK/cyfr-cell-$(basename "$cell")-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
   mkdir -p "$dir" "$cell/home"
   cp "$ROOT/.env.example" "$dir/.env.example"
   cp "$cell/.env" "$dir/.env"
-  printf '%s' "$input" >"$dir/input"
   CLI_STATUS=0
   (
     cd "$dir" || exit 1
-    env -i HOME="$cell/home" PATH="$PATH" LANG="${LANG:-en_US.UTF-8}" TERM=dumb \
+    env -i HOME="$cell/home" PATH="$PATH" LANG="${LANG:-en_US.UTF-8}" TERM=dumb SHELL="$shell" \
       DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
       ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-      "$CELL_CLI" "$@" <input
-  ) >"$cell/login.log" 2>&1 || CLI_STATUS=$?
+      python3 -I "$ROOT/tests/release-boot/terminal.py" "$cell/passphrase" "$cell/login.log" "$CELL_CLI" "$@"
+  ) || CLI_STATUS=$?
+  if [ -s "$cell/passphrase" ]; then
+    LOG_SECRETS+=("$(cat "$cell/passphrase")")
+  fi
   { printf '\n$ cyfr %s\n' "$*"; cat "$cell/login.log"; } >>"$cell/cli.log"
   rm -rf "$dir"
+}
+
+# headless_shell CELL: the shell cyfr login starts for cell CELL, a program
+# that, in the session the unlock opened, records `cyfr whoami` and its
+# status in CELL/shell.log, then exits 0, which locks the command line.
+headless_shell() {
+  local cell="$1"
+  cell_cli_build
+  printf '#!/bin/sh\n"%s" --context headless whoami >"%s/shell.log" 2>&1\necho "whoami exit $?" >>"%s/shell.log"\nexit 0\n' \
+    "$CELL_CLI" "$cell" "$cell" >"$cell/shell"
+  chmod 700 "$cell/shell"
+  rm -f "$cell/shell.log"
 }
 
 # Fail the run with `$2`, after cell `$1`'s last command-line output
@@ -538,15 +559,27 @@ headless_failed() {
   fail "$2"
 }
 
-# What `cyfr login --setup` prints once the name is registered, before the
-# person presses Enter, and once the session is saved (the 4.3 texts).
+# What `cyfr login --setup` shows: the name registered and the recovery
+# code, before the person presses Enter; the unlock, once the session is
+# held in its shell; the lock, once that shell exits; and the end of a run
+# cyfr.run did not answer.
 SAY_NAME="Your name is @proof."
 SAY_CODE="Your recovery code:"
-SAY_SAVE="If this CYFR is ever lost, this is the one thing that brings you back. Save it in your password manager. Press Enter once you saved it."
-SAY_SIGNED_IN="Signed in as @proof. Add another recovery code in Settings."
+SAY_SAVE="If CYFR is ever lost, this is the one thing that brings you back. Save it off this machine: scan it, or put it in your password manager."
+SAY_ENTER="Press Enter once you saved it."
+SAY_UNLOCKED="Unlocked. This shell holds your CYFR session: exit it, or run cyfr logout, to lock."
+SAY_LOCKED="Locked: this command line's CYFR session ended."
 SAY_SILENT="cyfr.run did not answer. Run cyfr login --setup again to finish."
+CODE_SHAPE='CYFR(-[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{8}){14}'
 
-step "headless: a CYFR with no person names cyfr login --setup, which makes its first person, registers their name at the cyfr.run stand-in, prints their recovery code and, once it is saved, signs them in, and then signs them in again"
+step "headless: a CYFR with no person names cyfr login --setup, which on a terminal makes its first person with this command line as their device, registers their name at the cyfr.run stand-in, shows their recovery code and, once it is saved, unlocks into a shell whose session acts as them and ends with it; then unlocks again"
+# cyfr login keeps its key in this machine's TPM chip where it can open
+# one, and the chip's holder then sets the chip's wrong-PIN limits and
+# lockout for good: the case runs only where this user cannot open it, so
+# the key is kept under a passphrase and no chip is changed.
+if python3 -I -c 'import os, sys; fd = os.open("/dev/tpmrm0", os.O_RDWR); os.close(fd)' 2>/dev/null; then
+  fail "this user can open /dev/tpmrm0: cyfr login would keep the proof's key in this machine's chip and set its lockout; run the boot where the chip is not open to it"
+fi
 HEADLESS="$WORK/headless"
 HEADLESS_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -580,15 +613,18 @@ grep -q '\[Cyfr\] Not set up:.*`cyfr login --setup`' "$HEADLESS/boot.log" ||
 echo "the boot: $(grep -o '\[Cyfr\] Not set up:.*' "$HEADLESS/boot.log" | head -1)"
 
 cell_cli "$HEADLESS" context add headless "http://127.0.0.1:$PORT"
-# Enter, pressed once the code is printed.
-headless_cli "$HEADLESS" $'\n' --context headless login --setup --name proof
-CODE="$(sed -n "/^$SAY_CODE\$/{n;p;q;}" "$HEADLESS/login.log")"
+headless_shell "$HEADLESS"
+headless_cli "$HEADLESS" "$HEADLESS/shell" --context headless login --setup --name proof
+CODE="$(grep -oE "$CODE_SHAPE" "$HEADLESS/login.log" | head -n 1)" || CODE=""
 [ -z "$CODE" ] || LOG_SECRETS+=("$CODE")
 [ "$CLI_STATUS" = 0 ] || headless_failed "$HEADLESS" "cyfr login --setup --name proof exited $CLI_STATUS"
-for line in "$SAY_NAME" "$SAY_CODE" "$SAY_SAVE" "$SAY_SIGNED_IN"; do
-  grep -qxF "$line" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "cyfr login --setup did not say '$line'"
+for line in "$SAY_NAME" "$SAY_CODE" "$SAY_SAVE" "$SAY_ENTER" "$SAY_UNLOCKED" "$SAY_LOCKED"; do
+  grep -qF "$line" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "cyfr login --setup did not say '$line'"
 done
-[ -n "$CODE" ] || headless_failed "$HEADLESS" "cyfr login --setup printed no recovery code under '$SAY_CODE'"
+[ -n "$CODE" ] || headless_failed "$HEADLESS" "cyfr login --setup showed no recovery code under '$SAY_CODE'"
+[ -s "$HEADLESS/passphrase" ] || headless_failed "$HEADLESS" "cyfr login --setup showed no passphrase to keep the key under"
+! grep -qF "$(cat "$HEADLESS/passphrase")" <(sed -n "/$SAY_UNLOCKED/,\$p" "$HEADLESS/login.log") ||
+  headless_failed "$HEADLESS" "the terminal showed the passphrase again after the unlock"
 
 # CYFR holds one person, made by setup, the platform administrator, named
 # proof, with one setup session, their identity enrolled and their
@@ -610,7 +646,8 @@ if not state or len(state["people"]) != 1 or len(state["identities"]) != 1:
 person, identifier = state["people"][0]["id"], state["identities"][0]["identifier"]
 want = {
     "people": [{"id": person, "admission": "setup", "name": "proof", "admin": True}],
-    "setup_sessions": 1,
+    "sessions": 0,
+    "devices": [{"user_id": person, "holder_kind": "software", "standing": "active"}],
     "identities": [{"user_id": person, "identifier": identifier, "enrollment": "enrolled"}],
     "attempts": [{"user_id": person, "kind": "enrollment", "phase": "completed", "name": "proof",
                   "identifier": identifier, "directory": url}],
@@ -642,26 +679,32 @@ print(person, identifier)
 PY
 )" || fail "after cyfr login --setup --name proof: $first"
 read -r person identifier <<<"$first"
-echo "cyfr login --setup --name proof: $person, made by setup, the platform administrator, named proof at the stand-in as $identifier, its recovery code printed and saved"
+echo "cyfr login --setup --name proof: $person, made by setup, the platform administrator, its command line their device, named proof at the stand-in as $identifier, its recovery code shown and saved"
 
-cell_cli "$HEADLESS" --context headless whoami
-grep -qF "User ID: $person" "$HEADLESS/cli.log" || fail "cyfr whoami under the saved session did not name $person"
-grep -qx "Platform admin: yes" "$HEADLESS/cli.log" || fail "the first person set up from the command line is not the platform administrator"
+# In the shell the unlock started, cyfr whoami acted as them; once that
+# shell exited, the lock left no session at CYFR (sessions 0 above).
+grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell did not name $person"
+grep -qx "Platform admin: yes" "$HEADLESS/shell.log" || fail "the first person set up from the command line is not the platform administrator"
+grep -qx "whoami exit 0" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell failed"
 
-# Run again, the same person signs in again: their code is saved, so none
-# is printed and nothing waits for Enter.
-headless_cli "$HEADLESS" "" --context headless login --setup --name proof
+# Run again, the same person unlocks again with the passphrase: their code
+# is saved, so none is shown, nothing waits for Enter, and no person or
+# device is made.
+headless_shell "$HEADLESS"
+headless_cli "$HEADLESS" "$HEADLESS/shell" --context headless login --setup --name proof
 [ "$CLI_STATUS" = 0 ] || headless_failed "$HEADLESS" "the second cyfr login --setup --name proof exited $CLI_STATUS"
-grep -qxF "$SAY_SIGNED_IN" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "the second cyfr login --setup did not say '$SAY_SIGNED_IN'"
-! grep -qxF "$SAY_CODE" "$HEADLESS/login.log" && ! grep -qF "$CODE" "$HEADLESS/login.log" ||
-  headless_failed "$HEADLESS" "the second cyfr login --setup printed a recovery code that is saved"
+grep -qF "$SAY_UNLOCKED" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "the second cyfr login --setup did not say '$SAY_UNLOCKED'"
+! grep -qF "$SAY_CODE" "$HEADLESS/login.log" && ! grep -qF "$CODE" "$HEADLESS/login.log" ||
+  headless_failed "$HEADLESS" "the second cyfr login --setup showed a recovery code that is saved"
+grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in the second shell did not name $person"
 again="$(python3 -I - "$(headless_state "$HEADLESS")" "$person" "$identifier" "$STAND_IN_URL" 2>&1 <<'PY'
 import json, sys
 state = json.loads(sys.argv[1] or "null")
 person, identifier, url = sys.argv[2:5]
 want = {
     "people": [{"id": person, "admission": "setup", "name": "proof", "admin": True}],
-    "setup_sessions": 2,
+    "sessions": 0,
+    "devices": [{"user_id": person, "holder_kind": "software", "standing": "active"}],
     "identities": [{"user_id": person, "identifier": identifier, "enrollment": "enrolled"}],
     "attempts": [{"user_id": person, "kind": "enrollment", "phase": "completed", "name": "proof",
                   "identifier": identifier, "directory": url}],
@@ -670,11 +713,11 @@ if state != want:
     sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
 PY
 )" || fail "after the second cyfr login --setup: $again"
-echo "cyfr login --setup again: $person signed in a second time, no code printed, no other person made"
+echo "cyfr login --setup again: $person unlocked a second time with the passphrase, no code shown, no other person or device made"
 server_stop "$HEADLESS"
 stand_in_stop
 
-step "headless: with cyfr.run silent, cyfr login --setup makes the first person, the platform administrator, keeps their name and recovery code waiting, and exits 1"
+step "headless: with cyfr.run silent, cyfr login --setup makes the first person, the platform administrator, with this command line as their device, keeps their name and recovery code waiting, starts no shell, and exits 1"
 SILENT="$WORK/silent"
 SILENT_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -690,10 +733,13 @@ cell_set "$SILENT" CYFR_DIRECTORY_URL https://directory.invalid
 cell_set "$SILENT" CYFR_OCI_REGISTRY_URL none
 server_start "$SILENT"
 cell_cli "$SILENT" context add silent "http://127.0.0.1:$PORT"
-headless_cli "$SILENT" "" --context silent login --setup --name proof
+headless_shell "$SILENT"
+headless_cli "$SILENT" "$SILENT/shell" --context silent login --setup --name proof
 [ "$CLI_STATUS" = 1 ] || headless_failed "$SILENT" "cyfr login --setup with cyfr.run silent exited $CLI_STATUS, not 1"
 grep -qF "$SAY_SILENT" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup with cyfr.run silent did not say '$SAY_SILENT'"
-! grep -qxF "$SAY_CODE" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup printed a recovery code while cyfr.run was silent"
+! grep -qF "$SAY_CODE" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup showed a recovery code while cyfr.run was silent"
+! grep -qF "$SAY_UNLOCKED" "$SILENT/login.log" && [ ! -e "$SILENT/shell.log" ] ||
+  headless_failed "$SILENT" "cyfr login --setup started its shell while cyfr.run was silent"
 silent="$(python3 -I - "$(headless_state "$SILENT")" 2>&1 <<'PY'
 import json, re, sys
 state = json.loads(sys.argv[1] or "null")

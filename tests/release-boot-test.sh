@@ -14,8 +14,11 @@
 # (tests/identity-proof/front.sh) against a stranger answering on its
 # address, with `docker` a stand-in; and the proofs' redaction
 # (tests/browser/lib.mjs `redact`) against a case of every pattern it
-# hides, run by node; and the browser harness's socket lifetimes against
-# peer resets (tests/browser/lib-test.mjs), without launching a browser.
+# hides, run by node; the browser harness's socket lifetimes against
+# peer resets (tests/browser/lib-test.mjs), without launching a browser;
+# and the headless case's helper, which runs cyfr login on a terminal of
+# its own, against a stand-in that refuses any other input
+# (tests/release-boot/headless-setup-transport-test.py).
 # The old proof ports are held while release cells and browser homes bind
 # their own listeners. This check needs the verification host exclusively.
 set -euo pipefail
@@ -817,5 +820,9 @@ pass "the redaction hides every case's values, keeps JSON JSON and keeps what is
 
 node --test "$root/tests/browser/lib-test.mjs" || fail "the browser harness did not handle a peer reset"
 pass "the browser harness records idle resets and fails active transfers without ending the process"
+
+python3 -I "$root/tests/release-boot/headless-setup-transport-test.py" --root "$root" ||
+  fail "the headless case's helper does not run cyfr login on a terminal"
+pass "the headless case's helper runs cyfr login on a terminal of its own, as a person at an ssh session does"
 
 echo "release-boot-test: all checks passed"
