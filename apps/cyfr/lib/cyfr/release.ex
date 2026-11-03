@@ -42,9 +42,8 @@ defmodule Cyfr.Release do
   @doc """
   Run every pending migration, refuse a database built from a different
   schema, then assert the tenant roster still covers the schema — the
-  checks every boot runs, answered here before the server starts. A table
-  that carries `athanor_id` and is not in `Arca.TenantTables` would survive
-  `Arca.TenantTables.delete_all_for/1` silently.
+  checks every boot runs, answered here before the server starts: a table
+  that carries `athanor_id` and is not in `Arca.TenantTables` fails it.
   """
   @spec migrate() :: :ok
   def migrate do

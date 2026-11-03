@@ -581,7 +581,7 @@ defmodule Arca.SharesConcurrencyTest do
     end
 
     for %{athanor: athanor, user: user} <- made do
-      {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
+      {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
       Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
 
       Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id))

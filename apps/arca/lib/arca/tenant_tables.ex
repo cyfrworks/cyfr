@@ -3,18 +3,15 @@
 
 defmodule Arca.TenantTables do
   @moduledoc """
-  The closed roster of athanor-scoped tables, and the one verb that
-  deletes an athanor's rows from every one of them.
-
-  ## Scope
-
-  Purges athanor-owned database rows, including credentials, execution
-  records, messages, and logs. Blobs are not its: the storage tree is
-  `Arca.Storage`'s.
+  The closed roster of athanor-scoped tables, held to the live schema at
+  every boot (`verify_roster!/1`), so every table that carries
+  `athanor_id` is named here or in `not_athanor_scoped/0` with its reason.
+  Nothing in the product deletes an athanor; a test erases the rows it
+  made through this roster (`Arca.Test.TenantTables.delete_all_for/1`).
 
   ## Order
 
-  `@roster` is ordered children-first, so the deletes hold whether or not
+  `@roster` is ordered children-first, so a delete in its order holds whether or not
   the backend enforces `ON DELETE CASCADE` (SQLite only does with
   `PRAGMA foreign_keys=ON`). `consent_vault_refs` and `vault_defaults`
   before `consents` and `vault_entries`; `consents` before `profiles` (its
@@ -26,22 +23,13 @@ defmodule Arca.TenantTables do
   not yet accepted dies with it; an accepted transfer is the recipient's
   (`file_receipts`), and lives and completes there whatever happens to
   the sender.
-
-  ## What this does NOT promise
-
-  Row deletion does not guarantee erasure of bytes from database files
-  or backups. Physical reclamation depends on the database backend and
-  the operator’s storage lifecycle.
   """
 
-  import Ecto.Query
-
-  # Every table carrying `athanor_id`, children first. `verify_roster!/0`
+  # Every table carrying `athanor_id`, children first. `verify_roster!/1`
   # checks this against the live schema, so a new athanor-scoped table
-  # fails the boot rather than surviving erasure silently. Three of them
-  # may hold rows with no athanor — `memberships`, `sessions` and
-  # `decision_logs` — and erasure matches the athanor, so those rows stay:
-  # a null-tenant decision is the host's, purged under its own retention.
+  # fails the boot until it is named. Three of them may hold rows with no
+  # athanor — `memberships`, `sessions` and `decision_logs`: a null-tenant
+  # decision is the host's, purged under its own retention.
   @roster [
     "execution_events",
     "rate_windows",
@@ -143,7 +131,7 @@ defmodule Arca.TenantTables do
   #
   # `platform_settings` and `settings_pins` are the cell's settings and
   # each member's environment pins of them: node facts every member reads
-  # alike, which no athanor owns and no erasure of one may touch.
+  # alike, which no athanor owns.
   #
   # `person_identities`, `identity_attempts`, `identity_log_entries`,
   # `directory_heads` and `carry_actions` are a person's identity and
@@ -176,7 +164,7 @@ defmodule Arca.TenantTables do
   #
   # `shared_threads`, `shared_thread_members` and `shared_messages` are a
   # place several people talk in, its people and what they say: no athanor
-  # holds a shared thread, so no athanor's erasure takes one.
+  # holds a shared thread.
   #
   # `invitations` are invitations to this CYFR: the instance's admission,
   # naming at most a shared thread, which no athanor holds either.
@@ -219,47 +207,6 @@ defmodule Arca.TenantTables do
   def not_athanor_scoped, do: @not_athanor_scoped
 
   @doc """
-  Delete every row this athanor owns, in one transaction.
-
-  Returns `{:ok, %{table => count}}`. The ROWS are all-or-nothing: they go
-  in one transaction, because a half-deleted athanor leaves a caller
-  believing data is gone that is not.
-
-  The athanor's blobs are not touched: they are another store, with no
-  transaction shared with this one.
-  """
-  @spec delete_all_for(Prima.Actor.t()) ::
-          {:ok, %{String.t() => non_neg_integer()}} | {:error, term()}
-  def delete_all_for(%Prima.Actor{athanor_id: athanor_id})
-      when is_binary(athanor_id) and athanor_id != "" and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("Arca.TenantTables.delete_all_for", fn ->
-      Arca.Repo.transaction(fn ->
-        parent_counts =
-          Map.new(@by_parent, fn {table, fk, parent} ->
-            parent_ids =
-              from(p in parent, where: p.athanor_id == ^athanor_id, select: p.id)
-
-            {count, _} =
-              from(t in table, where: field(t, ^fk) in subquery(parent_ids))
-              |> Arca.Repo.delete_all()
-
-            {table, count}
-          end)
-
-        Enum.reduce(@roster, parent_counts, fn table, acc ->
-          {count, _} =
-            from(t in table, where: t.athanor_id == ^athanor_id)
-            |> Arca.Repo.delete_all()
-
-          Map.put(acc, table, count)
-        end)
-      end)
-    end)
-  end
-
-  def delete_all_for(%Prima.Actor{}), do: {:error, :no_athanor}
-
-  @doc """
   Every table the live schema says carries `athanor_id`.
 
   Asked of the database rather than derived from the schema modules: a
@@ -273,7 +220,7 @@ defmodule Arca.TenantTables do
   #
   # arca:db-raise-ok raising IS the contract. This backs `verify_roster!/1`,
   # whose entire job is to fail a boot rather than let an athanor-scoped
-  # table survive an erasure that reported success; answering
+  # table go unnamed; answering
   # `{:error, :database_error}` would turn that into a shrug.
   def athanor_scoped_tables do
     %{rows: rows} = Arca.Repo.query!(@athanor_column_sql, [])
@@ -284,10 +231,9 @@ defmodule Arca.TenantTables do
   @doc """
   Assert the roster still covers every athanor-scoped table.
 
-  A table that carries `athanor_id` and is not here is one `delete_all_for/1`
-  would leave behind — the exact shape of the gap this module closes, and
-  invisible until somebody looks. Raises, so it fails a boot rather than
-  a backup.
+  A table that carries `athanor_id` and is not here is one no reader of
+  the roster knows is an athanor's, invisible until somebody looks.
+  Raises, so it fails a boot.
   """
   # `roster` is a parameter so a test can drive BOTH directions against the
   # live schema. Asserting only that the shipped roster returns `:ok` proves
@@ -299,10 +245,8 @@ defmodule Arca.TenantTables do
     known = Enum.sort(roster ++ @not_athanor_scoped ++ ["athanors"])
 
     unrostered = live -- known
-    # The other direction. A roster entry whose table is gone makes
-    # `delete_all_for/1` raise on the next erasure, and nothing else would
-    # have said so — the failure this module exists to prevent, arriving
-    # from the opposite side.
+    # The other direction: a roster entry whose table is gone names a
+    # table no statement can reach, and nothing else would have said so.
     stale = roster -- live
 
     cond do
@@ -312,8 +256,6 @@ defmodule Arca.TenantTables do
 
           #{inspect(unrostered)}
 
-        `delete_all_for/1` would leave their rows behind,
-        so an athanor's data would survive an erasure that reported success.
         Add each to @roster (children first), or to @not_athanor_scoped with
         the reason it is not an athanor's to delete.
         """
@@ -325,8 +267,7 @@ defmodule Arca.TenantTables do
 
           #{inspect(stale)}
 
-        `delete_all_for/1` would raise on the next erasure. Drop each from
-        @roster, or restore the column.
+        Drop each from @roster, or restore the column.
         """
 
       true ->

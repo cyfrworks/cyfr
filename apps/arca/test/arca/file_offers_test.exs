@@ -720,7 +720,7 @@ defmodule Arca.FileOffersTest do
       offer_id = offered!(sender, recipient, "file.txt", bytes(9))
       receipt = stalled_accept!(recipient, offer_id, "data/inbox")
 
-      {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
+      {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
       :ok = Arca.delete_tree(sender, [])
 
       assert {:ok, %{status: "completed"}} = FileOffers.complete(recipient, receipt.id)
@@ -1578,7 +1578,7 @@ defmodule Arca.FileOffersRaceTest do
         ids = [sender.athanor_id, recipient.athanor_id]
 
         for id <- ids do
-          {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
+          {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
         end
 
         Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id in ^ids))
@@ -1710,7 +1710,8 @@ defmodule Arca.FileOffersSharedThreadRaceTest do
       Store.reset()
 
       unboxed(fn ->
-        {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
+        {:ok, _} =
+          Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
 
         Arca.Repo.delete_all(
           Ecto.Query.from(m in SharedThreadMember, where: m.thread_id == ^thread.id)
@@ -1869,7 +1870,7 @@ defmodule Arca.FileOffersLockOrderTest do
         ids = [home.id, recipient_home.id]
 
         for id <- ids do
-          {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
+          {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
         end
 
         Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id in ^ids))
@@ -2265,7 +2266,7 @@ defmodule Arca.FileOffersLockOrderTest do
   end
 
   defp purge!(athanor_id),
-    do: Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
+    do: Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
 
   defp offered_to(recipient_id) do
     unboxed(fn ->

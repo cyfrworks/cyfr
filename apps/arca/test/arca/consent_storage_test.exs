@@ -1626,7 +1626,7 @@ defmodule Arca.ConsentStorageRaceTest do
 
   setup do
     athanor = "ath_once_race_#{System.unique_integer([:positive])}"
-    on_exit(fn -> unboxed(fn -> Arca.TenantTables.delete_all_for(actor(athanor)) end) end)
+    on_exit(fn -> unboxed(fn -> Arca.Test.TenantTables.delete_all_for(actor(athanor)) end) end)
     {:ok, athanor: athanor}
   end
 

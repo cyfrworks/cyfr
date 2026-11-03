@@ -3,7 +3,8 @@
 
 defmodule Arca.TenantTablesTest do
   @moduledoc """
-  `Arca.TenantTables.delete_all_for/1` removes every row an athanor owns
+  `Arca.Test.TenantTables.delete_all_for/1`, over `Arca.TenantTables`'
+  roster, removes every row an athanor owns
   from the tables its writers fill, and no other athanor's. Each case
   writes its rows through the table's own writer, purges one athanor and
   reads both back; the outbox's rows and the guest objects' generation
@@ -75,7 +76,7 @@ defmodule Arca.TenantTablesTest do
       assert %{documents: 1, floor: [2]} = rows(actor)
     end
 
-    assert {:ok, counts} = Arca.TenantTables.delete_all_for(purged)
+    assert {:ok, counts} = Arca.Test.TenantTables.delete_all_for(purged)
     assert counts["fenced_documents"] == 1
     assert counts["fenced_document_floors"] == 1
     assert counts["storage_staging"] == 3
@@ -116,7 +117,7 @@ defmodule Arca.TenantTablesTest do
         ])
     end
 
-    assert {:ok, counts} = Arca.TenantTables.delete_all_for(purged)
+    assert {:ok, counts} = Arca.Test.TenantTables.delete_all_for(purged)
     assert counts["outbox_records"] == 1
     assert counts["consumer_receipts"] == 1
 
@@ -182,7 +183,7 @@ defmodule Arca.TenantTablesTest do
         ])
     end
 
-    assert {:ok, counts} = Arca.TenantTables.delete_all_for(purged)
+    assert {:ok, counts} = Arca.Test.TenantTables.delete_all_for(purged)
     assert counts["object_revisions"] == 2
     assert counts["object_generations"] == 3
 

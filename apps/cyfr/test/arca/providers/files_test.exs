@@ -1096,7 +1096,7 @@ defmodule Arca.Providers.FilesRaceTest do
         ids = [sender.actor.athanor_id, recipient.actor.athanor_id]
 
         for id <- ids do
-          {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
+          {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
         end
 
         Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^ids))

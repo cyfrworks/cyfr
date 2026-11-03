@@ -65,9 +65,7 @@ defmodule Arca.ConsentStorage do
   is locked. Every writer that holds more than one of these rows in a
   transaction takes them in it: this revision, `block_dependents/4`,
   `Arca.RecordSink`'s batch of last-used touches (`{athanor_id, id}`
-  order) and `Arca.TenantTables.delete_all_for/1`, which runs only on an
-  archived athanor, one no context can focus and no seed sync revises, so
-  no revision is written beside it. Every other writer of an entry row
+  order). Every other writer of an entry row
   holds that one row: a binding move, a status or payload write, a
   tombstone, a cipher rotation's compare-and-set, a last-used touch and
   `Arca.VaultDefaults.set/3`'s read of the entry it names.

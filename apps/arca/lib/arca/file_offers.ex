@@ -67,17 +67,6 @@ defmodule Arca.FileOffers do
   locks of its two people and its athanor (`offer/3`), so a deny in
   flight is waited for, and one that runs after sees them.
 
-  One other transaction holds more than one offer row:
-  `Arca.TenantTables.delete_all_for/1`, whose single statement erases an
-  archived athanor's rows in scan order. The denial that archived it withdrew every offer
-  the athanor held open, and every write that ends an offer takes only
-  rows still offered, so none waits on a row the purge holds. Ordering
-  the purge's offer rows would not do instead: a deny holds the person's
-  seat in that athanor before it takes their offers, and the purge erases
-  offers before seats, so a deny waiting on even a one-file offer the
-  purge held would hold the seat the purge waits on. The receipt writers
-  touch receipts alone.
-
   ## Ownership of a publication
 
   `complete/2` claims the receipt first (`completing_by`, the member's
