@@ -507,14 +507,18 @@ defmodule Sanctum.Passkeys do
     end
   end
 
+  @doc false
   # A local door's session, created within `reauth_seconds` on the
   # original creation time (never the sliding expiry), is the first-method
-  # exception's one ground. A CYFR sign-in never is.
-  defp first_method_session?(
-         %Context{auth_method: :oidc, session_token_hash: hash},
-         user_id
-       )
-       when is_binary(hash) do
+  # exception's one ground. A CYFR sign-in never is. A protected device's
+  # first enrollment after a restore stands on the same ground
+  # (`Sanctum.DeviceUnlock`).
+  @spec first_method_session?(Context.t(), String.t()) :: boolean()
+  def first_method_session?(
+        %Context{auth_method: :oidc, session_token_hash: hash},
+        user_id
+      )
+      when is_binary(hash) do
     with {:ok, %{user_id: ^user_id, provider: provider, inserted_at: %DateTime{} = at}} <-
            Arca.SessionStorage.get_session(hash),
          true <- local_door?(provider),
@@ -526,7 +530,7 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  defp first_method_session?(%Context{}, _user_id), do: false
+  def first_method_session?(%Context{}, _user_id), do: false
 
   # Run inside a write's transaction: the person's row locked first, the
   # head of the standing order, and read active; then the credential the

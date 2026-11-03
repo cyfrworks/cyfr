@@ -30,6 +30,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "cli_approve",
       "cli_list",
       "cli_revoke",
+      "unlock",
+      "lock",
       "read_resource"
     ],
     "athanor" => ["get", "settings", "provision"],

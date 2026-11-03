@@ -204,6 +204,68 @@ defmodule Sanctum.Session do
   end
 
   @doc """
+  Activate the session a protected device's unlock ticket was redeemed for
+  (`Sanctum.DeviceUnlock.redeem/1`): the explicit entry from a device's
+  standing to a person's session, never a relaxation of `create/2`.
+  `held` is what the ticket held: the session id the unlock reserved as a
+  row no token loads, the client, the person, athanor and email, the
+  issuance expectation the device channel's context read and that
+  context's credential deadline, its certificate's expiry. The row takes
+  a new token, the provider `unlock`, and an expiry 60 seconds after the
+  database's clock, never past the certificate: `session_ttl_hours` plays
+  no part, so zero never lifts the bound. It is activated in the issuance
+  transaction the expectation names, which locks and rereads the person,
+  athanor, seat, client and certificate, then the reserved row
+  (`Arca.SessionStorage.activate_client_session/3`): a row a lock retired
+  is `{:error, :reservation_retired}`. Answers `%{token, expires_at}`, or
+  the refusals `create/2` answers.
+  """
+  @spec create_unlocked(map()) ::
+          {:ok, %{token: String.t(), expires_at: DateTime.t()}} | {:error, term()}
+  def create_unlocked(
+        %{session_id: "ses_" <> _ = session_id, client_id: client_id, expectation: expectation} =
+          held
+      )
+      when is_binary(client_id) do
+    token = generate_token()
+
+    with {:ok, now} <- db_now() do
+      expires_at =
+        Enum.min(
+          [DateTime.add(now, Sanctum.DeviceUnlock.lifetime_ms(), :millisecond), held.deadline],
+          DateTime
+        )
+
+      attrs = %{
+        id: session_id,
+        client_id: client_id,
+        user_id: held.user_id,
+        token_prefix: String.slice(token, 0, 8),
+        identity_key_epoch: Map.get(expectation, :key_epoch),
+        expires_at: expires_at
+      }
+
+      case Arca.SessionStorage.activate_client_session(hash_token(token), attrs,
+             lock: Sanctum.Issuance.lock(expectation),
+             verify: Sanctum.Issuance.verify(expectation)
+           ) do
+        :ok ->
+          broadcast_session_created(%{})
+          {:ok, %{token: token, expires_at: expires_at}}
+
+        {:error, _reason} = refusal ->
+          refusal
+      end
+    end
+  end
+
+  defp db_now do
+    {:ok, Arca.ServerMetaStorage.now!()}
+  rescue
+    _unanswered -> {:error, :unavailable}
+  end
+
+  @doc """
   Mint the session a command line approved in Prism holds
   (`Sanctum.CliSignIn.approve/2`), under the person `ctx` is: the session
   the approver's context reads its standing from, issued as `create/2`
@@ -424,7 +486,7 @@ defmodule Sanctum.Session do
 
     with {:ok, row} <- stored(token_hash),
          {:ok, ctx} <- row_to_context(row, token_hash) do
-      {:ok, ctx, slide_due?(row.expires_at)}
+      {:ok, ctx, is_nil(row.client_id) and slide_due?(row.expires_at)}
     end
   end
 
@@ -441,13 +503,36 @@ defmodule Sanctum.Session do
     with {:ok, row} <- stored(token_hash), do: row_to_context(row, token_hash)
   end
 
+  # A protected device's session stands on its client too, read again at
+  # every load: the client still active. Its certificate's revocation and
+  # every other retirement end the session's row in their own transition
+  # (`Arca.DeviceCertificates`, `Arca.PairedClients`); a load reads that
+  # row and recomputes no retirement.
   defp stored(token_hash) do
     case Arca.SessionStorage.get_session(token_hash) do
-      {:ok, row} -> {:ok, row}
+      {:ok, %{client_id: nil} = row} -> {:ok, row}
+      {:ok, row} -> client_stands(row)
       {:error, :not_found} -> {:error, :invalid_session}
       {:error, :database_error} -> {:error, :database_error}
     end
   end
+
+  defp client_stands(%{client_id: client_id, athanor_id: athanor_id, user_id: user_id} = row)
+       when is_binary(athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    case Arca.PairedClients.list(actor, user_id: user_id, standing: :active) do
+      {:ok, clients} ->
+        if Enum.any?(clients, &(&1.id == client_id)),
+          do: {:ok, row},
+          else: {:error, :invalid_session}
+
+      {:error, _unanswered} ->
+        {:error, :database_error}
+    end
+  end
+
+  defp client_stands(_row), do: {:error, :invalid_session}
 
   @doc """
   Get session details from token.
@@ -525,6 +610,8 @@ defmodule Sanctum.Session do
 
   @doc """
   Extend a session's expiration, but only if it hasn't been extended recently.
+  Never a protected device's session, which only its device channel moves
+  (`Sanctum.DeviceUnlock.slide/2`); `refresh/1` does not find one either.
 
   This is the activity-based ("sliding window") refresh used on the hot path —
   calling `refresh/1` on every authenticated request would write the session
@@ -535,7 +622,7 @@ defmodule Sanctum.Session do
   """
   @spec refresh_if_stale(String.t()) :: :ok
   def refresh_if_stale(token) when is_binary(token) do
-    with {:ok, row} <- get_session_direct(token),
+    with {:ok, %{client_id: nil} = row} <- get_session_direct(token),
          true <- slide_due?(row.expires_at),
          {:ok, _session} <- refresh(token) do
       :ok
@@ -709,6 +796,10 @@ defmodule Sanctum.Session do
             scope: :athanor,
             auth_method: :oidc,
             session_token_hash: token_hash,
+            # A protected device's session ends at its row's expiry unless
+            # the device's channel slides it: a holder of this context, a
+            # mounted page or an open stream, is bounded by it.
+            credential_deadline: if(row.client_id, do: row.expires_at),
             authenticated: true
           )
 

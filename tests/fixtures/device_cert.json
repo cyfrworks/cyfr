@@ -117,7 +117,7 @@
         "home": "https://alice.example",
         "nonce": "g9tdrYsvfV_XpNBoC88FOGIfg7Zo6sCk5uBMlQwW7a0",
         "protocol": "cyfr-device-proof/v1",
-        "purpose": "enroll"
+        "purpose": "sign"
       },
       "error": "invalid_field",
       "name": "a purpose outside connect, renew and pair"

@@ -17,11 +17,16 @@ import Canvas from "./canvas/index"
 import SystemLayer from "./system_layer/index"
 import Carry, {resume as resumeCarry} from "./hooks/carry"
 import CommandLine from "./hooks/command_line"
+import {completeUnlock} from "./device_unlock"
 
 // A sign-in carry meant for this home's `/carry` that arrived while its
 // person was signed out here was kept through their sign-in: back to
 // `/carry` to finish it, before anything else on this page starts.
 resumeCarry(window)
+
+// A protected device's unlock page posts the ticket its fragment carries,
+// and nothing else on it starts.
+completeUnlock(window)
 
 // Optional-chained: this runs at module top level, so a page rendered without
 // the root layout (an error page, a minimal page) would otherwise throw here

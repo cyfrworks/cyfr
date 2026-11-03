@@ -1,6 +1,6 @@
 # Devices and Fresh Confirmation
 
-How a person pairs a phone or another browser with CYFR, how that device stays connected, how a command line is signed in by their approval, and how a sensitive change is confirmed from any device of theirs. A paired device shows CYFR's pages and prompts and holds a key of its own; it holds no store, vault or person key.
+How a CYFR box sets itself up and unlocks on its own screen, how a person pairs a phone or another browser with CYFR, how that device stays connected, how a command line is signed in by their approval, and how a sensitive change is confirmed from any device of theirs. A paired device shows CYFR's pages and prompts and holds a key of its own; it holds no store, vault or person key.
 
 ---
 
@@ -17,6 +17,23 @@ A remote person's device pairs at the CYFR they joined only under a certificate 
 - **Certifying.** Opened on a pairing code of the CYFR they joined, the device learns that the person's keys are at another CYFR and asks for that CYFR's address. It keeps the code and its key pair for the code's five minutes, and takes the person to their CYFR's `/carry` page, which shows the CYFR they joined, the athanor and the client it would certify the device for and does nothing until they press **Certify**. Certifying is a sensitive change there, confirmed with a fresh proof at their CYFR. Their CYFR then sends the browser back to the `/pair` page of the CYFR they joined with the certificate in the address's fragment, and the device completes its pairing with it. The device takes a certificate there only within five minutes of the person naming their CYFR, and only one that CYFR issued for this device's key, its client, the CYFR they joined and the athanor; any other link, crafted or stale, changes nothing.
 - **Renewing.** The CYFR they joined does not renew such a certificate. At half its life the device renews it at the person's own CYFR, by `fetch` from the `/pair` page of the CYFR they joined with no cookie or other credential (`POST <their CYFR>/certify/v1/renew`): the certificate only says which certification it renews, their CYFR answers a challenge, and the device's proof of its key over that challenge is answered with the replacement. No confirmation is asked. The device then connects to the CYFR they joined again under the replacement; the CYFR they joined records nothing for it. The device signs only their own CYFR's renewal challenge for its own key and client, and on its channel to the CYFR they joined only that CYFR's own challenge, so no relayed challenge buys a proof of its key. `/pair` is the one CYFR page allowed to connect to other HTTPS origins, for this.
 - **Certifying again.** A rotation or a recovery of their keys ends every certification their CYFR made under the old keys. The CYFR they joined then refuses the device's certificate, their CYFR refuses its renewal, and the device offers to certify it again at their CYFR, under a fresh confirmation there, with that CYFR's address filled in and editable, since after a restore their CYFR may be another one. When the CYFR they joined refuses the certificate and their CYFR cannot be reached to renew it three times in a row, as when it was lost and they restored elsewhere, the device makes the same offer and keeps trying their CYFR meanwhile. A certificate brought back from their CYFR replaces the device's own only once the CYFR they joined accepts it.
+
+---
+
+## The Box's Own Screen
+
+A CYFR box with its own screen (`cyfr screen on`) sets itself up and signs you in there, with no phone, Google account or security key. Its screen holds a key of its own, protected by a local unlock: on a box with a TPM, a six-digit PIN unlocks a key the TPM keeps sealed and counts wrong PINs for; on a box without one, a passphrase of six generated words unlocks a key encrypted on its disk. The PIN or passphrase never leaves the box.
+
+1. **Setup.** The screen shows whether the box's system and data disks are encrypted. Then type your name and your PIN or passphrase twice. The box makes its key, enrolls it as your first device under the setup token, and shows your recovery code as a QR code or prints it; keep it off the box. Press **I saved it**, and the screen opens Prism, signed in as you. If the answer to the enrollment is lost, the box finds its committed device again by proving the same key; it never makes a second you.
+2. **Unlocking.** The screen starts locked, whatever its browser kept. Unlocking proves your key to CYFR on the box's own channel, which answers a one-time ticket; the browser spends it once for a session (`/auth/device/complete`). The session lasts one minute at a time and only the box's channel extends it, never past its certificate, so a copied cookie, a reboot, a dead shell or a lost connection ends it within a minute.
+3. **Locking.** The **Lock** control, five minutes without local input, suspend, and the browser or the shell exiting lock the screen: the session ends at once and the screen asks for the PIN again. A lock is final for that session; unlocking makes a new one.
+4. **Confirming on this device.** A change that needs a fresh confirmation offers **Confirm on this device**. The screen's own page shows the change as CYFR stored it, not as the asking page described it, and asks for your PIN or passphrase again before it signs; cancelling, waiting it out or a changed preview signs nothing. The page that asked then completes the change and reports its result.
+
+**Devices** shows the box as one of your devices, with what holds its key and, from what it reported within the last minute, whether its disks are encrypted. A box that keeps its data unencrypted is named as one: whoever takes it reads everything. The box changes no disk or boot setting; an encrypted Ubuntu installation still asks for its passphrase at boot. Revoking the box from **Devices** ends its session at once.
+
+Restoring onto a replacement box enrolls its screen as your first device, from the restore's own session and within its window (`reauth_seconds`), with a new key; the old box's key is never moved. After a backup restore, the old box's screen stays suspended until your recovery code re-enables it.
+
+A key unlocked in memory is the limit of this protection: malware running on an unlocked box can copy it and sign until you revoke the box.
 
 ---
 
@@ -90,6 +107,7 @@ A proof covers that one request, is used once and expires with it.
 - **A passkey** registered at this CYFR, asserting over the request. Face ID, a fingerprint or a security key.
 - **A fresh sign-in** at the identity provider you signed in with, forced to ask you again. It opens in a new tab, so the asking page stays. The provider must report when you signed in. The page it returns to shows the change again, and confirms only when you approve it in a browser signed in as you.
 - **A code sent to your verified email** is not offered: CYFR has no mail transport.
+- **A box's own screen** signs the request's stored digest with its key, after you unlock it again on its own page (above).
 
 A paired device offers a passkey and a fresh sign-in it begins, which opens in a new tab and is approved there in a browser signed in to this CYFR; each counts as given on that device. A client with no person behind it, an app frame or an API key, shows no confirm control; where one asks, it offers to request confirmation, and you confirm on another of your devices.
 

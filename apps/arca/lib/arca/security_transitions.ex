@@ -331,7 +331,10 @@ defmodule Arca.SecurityTransitions do
           key_ids = revoke_keys(user_id, retire, now)
           frame_ids = revoke_frames(user_id, retire)
           paired_ids = revoke_paired(user_id, retire)
-          cert_ids = revoke_certificates(user_id, retire)
+
+          %{certificate_ids: cert_ids, session_hashes: cert_hashes} =
+            revoke_certificates(user_id, retire)
+
           invitation_ids = revoke_pairing_invitations(user_id, retire)
           passkey_ids = Passkeys.revoke_all(from(p in Passkey, where: p.user_id == ^user_id))
           # The confirmations are voided only after the passkeys are revoked:
@@ -359,7 +362,7 @@ defmodule Arca.SecurityTransitions do
                 athanor_generations: archived,
                 athanors: moved(athanors, archived, "archived", now),
                 archived_athanor_ids: Enum.sort(Map.keys(archived)),
-                revoked_session_hashes: hashes,
+                revoked_session_hashes: Enum.uniq(hashes ++ cert_hashes),
                 revoked_api_key_ids: key_ids,
                 revoked_frame_credential_ids: frame_ids,
                 revoked_paired_client_ids: paired_ids,
@@ -662,7 +665,10 @@ defmodule Arca.SecurityTransitions do
           frame_ids = revoke_frames(user_id, [])
           paired_ids = revoke_paired(user_id, [])
           dependents = PairedClients.retire_dependents!(paired_ids)
-          cert_ids = revoke_certificates(user_id, [])
+
+          %{certificate_ids: cert_ids, session_hashes: cert_hashes} =
+            revoke_certificates(user_id, [])
+
           invitation_ids = revoke_pairing_invitations(user_id, [])
 
           %{
@@ -678,6 +684,7 @@ defmodule Arca.SecurityTransitions do
               athanor_generations: reopened,
               athanors: moved(athanors, reopened, "active", now),
               reopened_athanor_ids: Enum.sort(Map.keys(reopened)),
+              revoked_session_hashes: Enum.uniq(dependents.session_hashes ++ cert_hashes),
               revoked_frame_credential_ids: frame_ids,
               revoked_paired_client_ids: paired_ids,
               revoked_device_certificate_ids: merged_ids(dependents.certificate_ids, cert_ids),

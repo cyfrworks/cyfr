@@ -759,6 +759,128 @@ defmodule Emissary.Web.DeviceChannelTest do
     end
   end
 
+  describe "a protected device's sessions" do
+    setup [:seated]
+
+    # A paired device made protected, as an enrollment records it.
+    defp protected!(session_ctx) do
+      device = pair!(session_ctx)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in Arca.Schemas.PairedClient, where: p.id == ^device.client_id),
+          set: [holder_kind: "chip", display_name: "Kitchen box"]
+        )
+
+      device
+    end
+
+    defp unlock!(state, device) do
+      {:reply, :ok, {:text, json}, state} =
+        send_frame(state, intent_message("u1", "session.unlock", %{}))
+
+      %{"result" => %{"challenge" => challenge}} = Jason.decode!(json)
+      {:ok, challenge} = Challenge.decode(challenge)
+      proof = Proof.encode(Proof.sign(challenge, device.private))
+
+      {:reply, :ok, {:text, json}, state} =
+        send_frame(state, intent_message("u2", "session.unlock", %{"proof" => proof}))
+
+      %{"result" => %{"ticket" => ticket, "session_id" => session_id}} = Jason.decode!(json)
+      {state, ticket, session_id}
+    end
+
+    defp standing_report,
+      do: Device.encode({:capabilities, %{capabilities: ["root_encrypted", "data_encrypted"]}})
+
+    test "an unlock reserves its session on the channel, which its standing report slides and its end ends",
+         %{session_ctx: session_ctx} do
+      device = protected!(session_ctx)
+      state = proven(device)
+      {state, ticket, session_id} = unlock!(state, device)
+      assert state.sessions == [session_id]
+
+      {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket)
+      before = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
+      Process.sleep(5)
+
+      assert {:ok, state} = send_frame(state, standing_report())
+
+      assert state.sessions == [session_id]
+      slid = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
+      assert DateTime.compare(slid, before) == :gt
+
+      DeviceChannel.terminate(:normal, state)
+      assert Arca.Repo.get(Arca.Schemas.Session, session_id) == nil
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+    end
+
+    test "a channel that stays open but stops reporting slides nothing, and its session ends at the bound",
+         %{session_ctx: session_ctx} do
+      device = protected!(session_ctx)
+      {state, ticket, session_id} = unlock!(proven(device), device)
+      {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket)
+
+      # The device was last heard now; its session ends a second later
+      # unless it reports again.
+      soon = DateTime.add(DateTime.utc_now(), 1, :second)
+
+      Arca.Repo.update_all(from(s in Arca.Schemas.Session, where: s.id == ^session_id),
+        set: [expires_at: soon]
+      )
+
+      # The server's own ping fires with no report: the connection is
+      # severed but still open until the mount's read timeout.
+      {keepalive, _timer} = state.keepalive
+
+      assert {:push, {:ping, ""}, state} =
+               DeviceChannel.handle_info({DeviceChannel, :keepalive, keepalive}, state)
+
+      refute state.closed
+      assert Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at == soon
+
+      Process.sleep(1_100)
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+    end
+
+    test "a ticket the channel's end leaves unspent redeems nothing", %{session_ctx: session_ctx} do
+      device = protected!(session_ctx)
+      {state, ticket, _session_id} = unlock!(proven(device), device)
+      DeviceChannel.terminate({:shutdown, :closed}, state)
+      assert {:error, :invalid_ticket} = Sanctum.DeviceUnlock.redeem(ticket)
+    end
+
+    test "a browser key with no holder unlocks nothing", %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+      state = proven(device)
+
+      {:reply, :ok, {:text, json}, state} =
+        send_frame(state, intent_message("u1", "session.unlock", %{}))
+
+      assert %{"error" => %{"class" => "forbidden"}} = Jason.decode!(json)
+      assert state.sessions == []
+    end
+
+    test "the storage report is held for the person's devices, and two states of one volume are refused",
+         %{session_ctx: session_ctx} do
+      device = protected!(session_ctx)
+      state = proven(device)
+
+      report =
+        Device.encode({:capabilities, %{capabilities: ["root_unencrypted", "data_encrypted"]}})
+
+      assert {:ok, state} = send_frame(state, report)
+
+      assert %{root: :unencrypted, data: :encrypted} =
+               Sanctum.DeviceUnlock.storage(state.client.athanor_id, device.client_id)
+
+      contradictory =
+        Device.encode({:capabilities, %{capabilities: ["root_encrypted", "root_unknown"]}})
+
+      assert_refused(send_frame(state, contradictory), 4400, "unauthenticated", :established)
+    end
+  end
+
   # ==========================================================================
   # The connect budget
   # ==========================================================================

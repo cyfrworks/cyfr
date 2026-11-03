@@ -25,9 +25,9 @@ CYFR is a home for a person's work with AI, and a place to talk with other peopl
 
 ### 1.3 What CYFR trusts
 
-- **Trusted:** the home's own code, the system layer and the command line among it (§7); the platform administrator; the home's store; a passkey or fresh sign-in, for fresh confirmation (§9.3); the identity directory, for consistently ordered state alone (§9.1).
+- **Trusted:** the home's own code, the system layer and the command line among it (§7); the platform administrator; the home's store; a passkey, a protected device's local unlock or a fresh sign-in, for fresh confirmation (§9.3); the identity directory, for consistently ordered state alone (§9.1).
 - **Not trusted:** models and their output, components and tinctures, untrusted processes, another person's session, another home's word, and anything a guest hands back.
-- **Stated limits.** Fresh confirmation protects against a stolen session, not a compromised administrator; no digest proves what a client displayed; a recovery code, a backup or a session is authority to whoever holds it.
+- **Stated limits.** Fresh confirmation protects against a stolen session, not a compromised administrator; no digest proves what a client displayed; a recovery code, a backup or a session is authority to whoever holds it. A protected device's PIN or passphrase never leaves it, but its key is unsealed into memory while it is unlocked: malware on an unlocked device can copy it and sign until the device is revoked, which is the remedy.
 - **The trusted computing base** is the control plane, which holds the decrypted credentials; Locus is the process boundary for untrusted code.
 - **Clock trust.** Expiry, leases and freshness are read on the deciding home's clock, and a cell's leases on its database's.
 
@@ -118,6 +118,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 - Two faces of the one program on the machine: the terminal, and the setup pages `cyfr setup` serves on the machine's loopback before the stack runs, for a device's own screen. The pages drive `cyfr init`'s sequence and `cyfr up`'s start, no second setup, and only the machine reaches them; Prism is never a setup surface.
 - The machine's own requirements: on Ubuntu 26.04, at a terminal, `cyfr init` installs Docker when this account cannot reach it, through one `sudo` of the commands it shows; `cyfr` itself never runs as root. `init` prepares and `up` starts, on every system.
 - The machine's own screen: `cyfr screen on` installs a service that runs a browser on tty1 at the access engine's address, through one `sudo` of the commands it shows. The launcher is embedded in `cyfr`, the system's package manager supplies the browser, compositor and keyboard, and it never starts or stops the stack.
+- The screen's shell holds the box's protected device key, sealed under a six-digit PIN in its TPM or wrapped under a passphrase, and is the one place it is unlocked: it enrolls the key at setup or after a restore, unlocks into a browser session through a one-time ticket, locks, and confirms a change after drawing the home's preview itself and asking for the PIN again (`Sanctum.DeviceUnlock`). It reports whether the system and data disks are encrypted, which setup and the devices list show and nothing decides; it changes no disk or boot setting.
 
 ### Locus: where untrusted things run
 
@@ -190,11 +191,11 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 ### 5.2 Identity and standing
 
-Identity and standing are established at the authentication boundary, and a long-lived context revalidates them before protected work within a bounded cache lifetime.
+Identity and standing are established at the authentication boundary, and a long-lived context revalidates them before protected work within a bounded cache lifetime. A session a protected device's unlock created stands on that device too: it is the person's session, never the device's context, it expires within a minute unless the device's own channel slides it, never past the device's certificate, and the device's lock, the channel's end and the device's revocation, suspension or certificate retirement end it.
 
 ### 5.3 One gate
 
-The screen, the command line, the wire and the assistant share one operation declaration and one gate, on two planes: external callers and calls inside a running chain.
+The screen, the command line, the wire and the assistant share one operation declaration and one gate, on two planes: external callers and calls inside a running chain. Entry paths that no person's session admits decide for themselves and record their own refusals: sign-in, restore, the directory, and a protected device's enrollment under the setup token or a restore's session.
 
 ### 5.4 Consent
 
@@ -242,7 +243,7 @@ Each admitted guest holds a durable attempt generation its effects are fenced ag
 
 ### 6.6 Revocation bounds
 
-A standing or credential change reaches a new admission at once on the member that committed it and within the caller-cache lifetime elsewhere; an open stream ends at its first revalidation after that, and admitted work runs to its recorded outcome under its fence. When the store cannot answer, admission refuses.
+A standing or credential change reaches a new admission at once on the member that committed it and within the caller-cache lifetime elsewhere; an open stream ends at its first revalidation after that, and admitted work runs to its recorded outcome under its fence. A protected device's session ends at its expiry once its channel stops sliding it, whatever announcement is missed, and an open page or stream under it revalidates by then. When the store cannot answer, admission refuses.
 
 ### 6.7 Schema
 
@@ -252,7 +253,7 @@ Until the first release one baseline migration is the schema; after it, dated mi
 
 Configuration is parsed explicitly, and an invalid security-relevant value is refused. A platform setting is read through one accessor, environment first, and an unreadable store refuses the boot.
 
-The access mode is a deployment setting: one value in the deployment file (`CYFR_ACCESS`: `local`, `tailnet` or `public`), from which the home's address, its listeners, its origins, proxy trust and the stack's profile selection follow (`Cyfr.RuntimeConfig.resolve_access/1`). Only the machine's own `cyfr` writes it, the boot refuses a setting that contradicts it, and a local home listens on the loopback alone. A passkey works only at the address it was made at, so after a change of address each person registers one again, and the setup token lets the person setup made back in while they hold no passkey there that is active or that a restore suspended, and no linked sign-in method (`Arca.InstallationClaims`).
+The access mode is a deployment setting: one value in the deployment file (`CYFR_ACCESS`: `local`, `tailnet` or `public`), from which the home's address, its listeners, its origins, proxy trust and the stack's profile selection follow (`Cyfr.RuntimeConfig.resolve_access/1`). Only the machine's own `cyfr` writes it, the boot refuses a setting that contradicts it, and a local home listens on the loopback alone. A passkey works only at the address it was made at, so after a change of address each person registers one again, and the setup token lets the person setup made back in while they hold no passkey there that is active or that a restore suspended, no device active or suspended that this home certified for its current address, whatever that certificate's expiry, and no linked sign-in method (`Arca.InstallationClaims`).
 
 ### 6.9 Backup, runtime and budgets
 
@@ -269,7 +270,7 @@ The access mode is a deployment setting: one value in the deployment file (`CYFR
 Prism is one screen: everything on it is a tincture, untrusted code in a frame, except the system layer, Prism's own controls, the assistant's thread and the frames themselves.
 
 - **Two modes.** The top bar switches between the Dashboard, the console's pages, and the Canvas, the person's canvases with their apps over them (`PrismWeb.TopbarLive`, `PrismWeb.ShellLive`); the bar stays in both. A switch is a page navigation: the shell's frames end with its page and open again from the layout on return.
-- **The system layer** draws every grant, confirmation and credential entry above every frame, and is the one place the screen presents a consent, from Sanctum's preview; the command line shows the same preview in the terminal. *Not built yet:* unlocking the vault, and an app's request for a consent (a canvas asks through `grant`, below).
+- **The system layer** draws every grant, confirmation and credential entry above every frame, and is the one place the screen presents a consent, from Sanctum's preview; the command line shows the same preview in the terminal, and a box's shell draws the preview of a change it confirms on its own page, fetched from the home, never from the page that asked. *Not built yet:* unlocking the vault, and an app's request for a consent (a canvas asks through `grant`, below).
 - **Frames.** Prism creates every frame under the sandbox the tincture rules derive, and a frame reaches data only under a per-open credential Sanctum mints and revokes (`Sanctum.TinctureAuth`).
 - **Apps over a canvas** stand as windows, tiles or full (`Prism.Frames`, `Prism.Arrangement`): a window at its position and size, a tile at an edge with its share of the width, which narrows the canvas, and a full app over the whole area between the top bar and the shelf. The shell draws every piece of chrome outside an app's frame (`PrismWeb.CanvasLive`), so an app can neither fake nor press it; a gesture that places an app raises it, and the shelf holds the canvases and their open apps. An app's manifest carries a size hint, never a placement it can demand, and in the hand every app is full. The assistant's panel stands over every app and under the system layer, and never narrows the canvas.
 - **The layout** is the person's (`Prima.Layout`, stored by `Arca.Layouts`): their canvases and, per posture, where each app stands. It changes only through the gate's `layout` tool, which the shell calls as the person once a gesture settles, as the assistant, the command line and the API do; every screen of the person reads it again when it is announced. No tincture declares the operation.
@@ -285,7 +286,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 - A home is the one installation that decides for an athanor. Home, glass, hub, cell, node and door are this document's words: what a person reads, the setup pages, the command line, Prism, the README and the guides, says CYFR for the installation and Aqua for the assistant, device or browser for the glass, the CYFR you join for a hub, cluster for a cell and server for a member of it, machine or server or CYFR for a node by its sense, and sign-in method for a door, and never these words.
 - Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and their journal, and home transfer; a node is the home of every athanor its store holds.
-- The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, a device's own first proof, the pairing of a key it holds with the setup token authorizing the first, for a home that a carried device with its own screen and no phone runs, and push delivery.
+- The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, and push delivery.
 - A hub is the always-on home of shared threads, where people, its platform administrator among them, share keys from their own vaults with a shared thread or with everyone (§5.5). Any home may require a company's sign-in of every person there: a standing condition, checked last wherever a person's standing is read, and never a door or the person's identity (`Sanctum.CompanyLogin`). *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every person in a shared thread a consent that exports their contributions and lets each withhold what they authored.
 - Every wire between homes names its version, and CYFR has no relay.
 
@@ -295,7 +296,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 ### 9.1 Identity
 
-A person is made only by an admission at the CYFR that holds them: its setup, an invitation, an open door, a verified CYFR sign-in, or a restore (`Sanctum.Newcomer`); a sign-in method unlocks a person and never creates or recovers one. An admission that makes a person whose keys the home holds also registers their identity and claims their name, under the admission's one first proof, a passkey's registration or the setup token, and the person is finished once both are done and their recovery code is saved. A person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`), cyfr.run's by default. A handle at the registry is the person's name for life, claimed by a request the person's live key signs and never released or renamed; a home resolves a handle to the identifier it names and reads its keys from the directory (`Sanctum.Handle`). A live key at their home signs for them, an operational key rotates it, and recovery keys replace both (`Sanctum.Recovery`); the person holds each recovery key as a recovery code, one string with their identifier (`Prima.RecoveryCode`), and only a code they hold adds another. A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
+A person is made only by an admission at the CYFR that holds them: its setup, an invitation, an open door, a verified CYFR sign-in, or a restore (`Sanctum.Newcomer`); a sign-in method unlocks a person and never creates or recovers one. An admission that makes a person whose keys the home holds also registers their identity and claims their name, under the admission's one first proof, a passkey's registration, a protected device's enrollment or the setup token, and the person is finished once both are done and their recovery code is saved. A person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`), cyfr.run's by default. A handle at the registry is the person's name for life, claimed by a request the person's live key signs and never released or renamed; a home resolves a handle to the identifier it names and reads its keys from the directory (`Sanctum.Handle`). A live key at their home signs for them, an operational key rotates it, and recovery keys replace both (`Sanctum.Recovery`); the person holds each recovery key as a recovery code, one string with their identifier (`Prima.RecoveryCode`), and only a code they hold adds another. A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
 
 ### 9.2 Joining a home that is not your own
 
@@ -303,7 +304,7 @@ A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`
 
 ### 9.3 Devices and fresh confirmation
 
-Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work needs only the session; changes to keys, devices, doors, passkeys, recovery material and credentials that outlive the session need a fresh confirmation at the deciding home (`Sanctum.Pairing`). *Not built yet:* the display and pointer-input contracts, athanor policies that add changes, and, against a copied home certifying devices, a survivor's countersignature verified at a relying home and a directory-published device anchor.
+Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work needs only the session; changes to keys, devices, doors, passkeys, recovery material and credentials that outlive the session need a fresh confirmation at the deciding home (`Sanctum.Pairing`): a passkey, a fresh sign-in or an emailed code, or a protected device's signature over the stored record's ref and digest after its person unlocked it again (`Sanctum.DeviceUnlock`). Only the client that asked repeats the change, with the exact operation, arguments and preview the record holds. *Not built yet:* the display and pointer-input contracts, athanor policies that add changes, and, against a copied home certifying devices, a survivor's countersignature verified at a relying home and a directory-published device anchor.
 
 ### 9.4 Communication
 

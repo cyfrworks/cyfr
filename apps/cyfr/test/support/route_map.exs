@@ -60,6 +60,14 @@
           ":fetch_session",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
+        "device_enrollment" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.FrameRequest",
+          ":fetch_session",
+          "CyfrWeb.Plugs.AuthRateLimit"
+        ],
         "tincture" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -244,6 +252,33 @@
           pipe_through: ["certificate_renewal"]
         },
         %{
+          verb: "POST",
+          path: "/device/enrollment/challenge",
+          plug: "Emissary.Web.DeviceEnrollmentController",
+          plug_opts: ":challenge",
+          auth: "device_enrollment",
+          live_view: nil,
+          pipe_through: ["device_enrollment"]
+        },
+        %{
+          verb: "POST",
+          path: "/device/enrollment/complete",
+          plug: "Emissary.Web.DeviceEnrollmentController",
+          plug_opts: ":complete",
+          auth: "device_enrollment",
+          live_view: nil,
+          pipe_through: ["device_enrollment"]
+        },
+        %{
+          verb: "POST",
+          path: "/device/enrollment/resume",
+          plug: "Emissary.Web.DeviceEnrollmentController",
+          plug_opts: ":resume",
+          auth: "device_enrollment",
+          live_view: nil,
+          pipe_through: ["device_enrollment"]
+        },
+        %{
           verb: "GET",
           path: "/directory/v1/:identifier",
           plug: "Emissary.Web.DirectoryController",
@@ -423,6 +458,7 @@
           "CyfrWeb.Plugs.BrowserCSP"
         ],
         "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "device_unlock_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "glass" => ["CyfrWeb.Plugs.BrowserCSP"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
@@ -690,6 +726,24 @@
           auth: "browser_oauth_flow",
           live_view: nil,
           pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/device/complete",
+          plug: "PrismWeb.DeviceUnlockController",
+          plug_opts: ":show",
+          auth: "device_unlock_ticket",
+          live_view: nil,
+          pipe_through: ["sign_in_identity", "auth_browser", "device_unlock_throttle"]
+        },
+        %{
+          verb: "POST",
+          path: "/auth/device/complete",
+          plug: "PrismWeb.DeviceUnlockController",
+          plug_opts: ":redeem",
+          auth: "device_unlock_ticket",
+          live_view: nil,
+          pipe_through: ["sign_in_identity", "auth_browser", "device_unlock_throttle"]
         },
         %{
           verb: "GET",

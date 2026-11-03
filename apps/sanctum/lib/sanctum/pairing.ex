@@ -60,7 +60,9 @@ defmodule Sanctum.Pairing do
       certificates and the confirmations it confirmed, in one transaction
       (`Arca.PairedClients.revoke/2`). A sensitive change
       (`pairing_revocation`).
-    * `list/1` — the person's paired clients in the athanor in focus.
+    * `list/1` — the person's paired clients in the athanor in focus, a
+      protected device's with its reported holder, name and storage
+      (`Sanctum.DeviceUnlock.storage/2`).
     * `reenable/3` — after a declared restore suspended every paired
       client, the person makes one active again (`:restore_reenable`):
       while their restore is open, on a confirmation a door this home
@@ -1085,13 +1087,31 @@ defmodule Sanctum.Pairing do
       source: row.source_kind,
       paired_at: row.inserted_at,
       certificate_expires_at: expires_at,
-      current: row.id == ctx.client_id
+      current: row.id == ctx.client_id,
+      holder_kind: row.holder_kind,
+      display_name: row.display_name,
+      storage: holder_storage(row)
     }
   end
+
+  # What a protected device last reported of its disks within the last
+  # minute (`Sanctum.DeviceUnlock.storage/2`), unknown when it reported
+  # nothing; a browser key reports nothing at all.
+  defp holder_storage(%{holder_kind: nil}), do: nil
+  defp holder_storage(row), do: Sanctum.DeviceUnlock.storage(row.athanor_id, row.id)
 
   # ---------------------------------------------------------------------------
   # Certificates
   # ---------------------------------------------------------------------------
+
+  @doc false
+  # Inside a protected device's enrollment (`Arca.PairedClients.enroll/3`,
+  # `Sanctum.DeviceUnlock`): its client's first certificate, issued here
+  # under the person's live key and recorded, as a local pairing's is.
+  @spec certify_first(Prima.Actor.t(), map()) :: {:ok, map()} | {:error, term()}
+  def certify_first(actor, client) do
+    with {:ok, certificate} <- certify(client), do: record_certificate(actor, client, certificate)
+  end
 
   # The person's live key vouching for the client's device key, here: a
   # `local` subject, whose issuer and audience are this home. A person with

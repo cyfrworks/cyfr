@@ -40,6 +40,7 @@ defmodule PrismWeb do
       CompanyLoginLive,
       ComponentDetailLive,
       ComponentsLive,
+      DeviceUnlockController,
       EnforcementsLive,
       ExecutionsLive,
       FileController,

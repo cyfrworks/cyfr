@@ -29,6 +29,7 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     profile.revoke
     session.cli_cancel
     session.cli_revoke
+    session.lock
     session.logout
     share.revoke
     shared_thread.archive

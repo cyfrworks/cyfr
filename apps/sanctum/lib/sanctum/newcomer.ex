@@ -96,6 +96,15 @@ defmodule Sanctum.Newcomer do
     * `{:command_line, machine, identity}`, for setup alone — a
       command-line session for `machine` (`Sanctum.CliSignIn.machine/1`),
       provider `setup`, minted after the commit.
+    * `{:device, enrollment, identity}`, for setup alone — a protected
+      device's enrollment its proof verified (`Sanctum.DeviceUnlock`):
+      the athanor and client id reserved for it, its key, request id and
+      reported holder. The person's athanor takes the reserved id, and
+      the paired client, its first certificate and the first-method mark
+      are written inside the admission's transaction
+      (`Sanctum.DeviceUnlock.enrolled/2`), so a failed admission leaves
+      neither a person nor a device. No session follows: the device
+      unlocks for one.
 
   A remote person and a restored person bring none (`:none`): the CYFR
   sign-in and the restore mint their own sessions. A session that cannot
@@ -186,6 +195,7 @@ defmodule Sanctum.Newcomer do
   @type credential ::
           {:passkey, registration :: map(), identity()}
           | {:command_line, machine :: String.t(), identity()}
+          | {:device, Sanctum.DeviceUnlock.enrollment(), identity()}
           | :none
 
   @typedoc """
@@ -273,18 +283,48 @@ defmodule Sanctum.Newcomer do
   @spec setup_open(term()) ::
           {:ok, :first | {:readmit, String.t()}}
           | {:error, :setup_closed | :unavailable}
-  def setup_open(token) when is_binary(token) do
+  def setup_open(token) do
+    case setup_admits(token) do
+      {:ok, :first} -> {:ok, :first}
+      {:ok, {:readmit, person}} -> readmitted_name(person)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  `setup_open/1`'s decision with the person setup would let in again
+  (`{:readmit, person}`) rather than their name: what a protected device's
+  enrollment reserves its athanor by (`Sanctum.DeviceUnlock`). Advice,
+  decided again in the admission's transaction.
+  """
+  @spec setup_admits(term()) ::
+          {:ok, :first | {:readmit, map()}} | {:error, :setup_closed | :unavailable}
+  def setup_admits(token) when is_binary(token) do
     with :ok <- admissible({:setup, token}) do
-      case Arca.InstallationClaims.setup(Prima.Actor.system(), Sanctum.Passkeys.rp_id()) do
+      case Arca.InstallationClaims.setup(Prima.Actor.system(), here()) do
         {:ok, :first} -> {:ok, :first}
-        {:ok, {:readmit, person}} -> readmitted_name(person)
+        {:ok, {:readmit, person}} -> {:ok, {:readmit, person}}
         {:ok, :closed} -> {:error, :setup_closed}
         {:error, _unanswered} -> {:error, :unavailable}
       end
     end
   end
 
-  def setup_open(_token), do: {:error, :setup_closed}
+  def setup_admits(_token), do: {:error, :setup_closed}
+
+  @doc """
+  Whether `token` is the configured setup token, compared in constant
+  time, whether or not setup is still open: the installation capability a
+  lost enrollment answer is resumed under (`Sanctum.DeviceUnlock.resume/2`),
+  which then needs the proof of the committed key.
+  """
+  @spec setup_token?(term()) :: boolean()
+  def setup_token?(token) when is_binary(token), do: admissible({:setup, token}) == :ok
+  def setup_token?(_token), do: false
+
+  # The home's current address a setup is decided at: its passkey RP ID
+  # and its home URL, the audience its devices' certificates name.
+  defp here, do: %{rp_id: Sanctum.Passkeys.rp_id(), home: Sanctum.Person.home()}
 
   # The name the person's enrollment holds, which follows the name their
   # row records once one is (`Sanctum.Recovery`). Every person setup made
@@ -306,6 +346,11 @@ defmodule Sanctum.Newcomer do
     with {:ok, machine} <- Sanctum.CliSignIn.machine(machine),
          :ok <- identified(identity),
          do: {:ok, {:command_line, machine, identity}}
+  end
+
+  defp taken({:setup, _token}, {:device, %{client_id: client_id} = enrollment, identity})
+       when is_binary(client_id) do
+    with :ok <- identified(identity), do: {:ok, {:device, enrollment, identity}}
   end
 
   defp taken({:invitation, code}, _credential) when not is_binary(code),
@@ -333,8 +378,8 @@ defmodule Sanctum.Newcomer do
       {:error,
        {:invalid_argument,
         "This admission does not take that credential: setup takes a passkey or the command " <>
-          "line, an invitation and an open admission a passkey, each with the new person's " <>
-          "identity"}}
+          "line or a protected device, an invitation and an open admission a passkey, each " <>
+          "with the new person's identity"}}
 
   # The identity a local credential carries, as `identity/1` parses it.
   defp identified(%{name: name, recovery_secret: <<_::256>>, request_id: request_id}) do
@@ -443,6 +488,7 @@ defmodule Sanctum.Newcomer do
 
     write = fn person -> written(person, credential, verified) end
     enroll = fn person -> enrolled(person, credential, directory) end
+    athanor = fn person -> athanor(person, reserved_athanor(credential)) end
 
     Arca.Users.mint(
       Prima.Actor.system(),
@@ -451,7 +497,8 @@ defmodule Sanctum.Newcomer do
       [
         admission: kind(admission),
         rp_id: Sanctum.Passkeys.rp_id(),
-        also: &also(admission, {write, enroll}, &1)
+        home: Sanctum.Person.home(),
+        also: &also(admission, {athanor, write, enroll}, &1)
       ] ++
         verify(admission) ++ restore_claim(admission)
     )
@@ -469,6 +516,7 @@ defmodule Sanctum.Newcomer do
   defp readmit(user_id, write) do
     case Arca.Users.readmit(Prima.Actor.system(), user_id,
            rp_id: Sanctum.Passkeys.rp_id(),
+           home: Sanctum.Person.home(),
            also: write
          ) do
       {:ok, person} -> {:ok, person}
@@ -575,25 +623,34 @@ defmodule Sanctum.Newcomer do
 
   defp invited(_remote, _user_id), do: :ok
 
-  # The person's keys, athanor and passkey, then their enrollment, last.
-  defp local(person, {write, enroll}) do
+  # The person's keys, athanor and passkey or device, then their
+  # enrollment, last.
+  defp local(person, {athanor, write, enroll}) do
     with :ok <- Sanctum.Person.mint_keys(person),
-         :ok <- athanor(person),
+         :ok <- athanor.(person),
          :ok <- write.(person),
          do: enroll.(person)
   end
 
-  defp athanor(person) do
-    case Sanctum.Provisioning.mint_personal(person) do
+  defp athanor(person, reserved \\ nil) do
+    case Sanctum.Provisioning.mint_personal(person, reserved) do
       {:ok, _athanor} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
 
+  # The athanor id a device's enrollment reserved, which its certificate
+  # and challenge already name.
+  defp reserved_athanor({:device, %{athanor_id: athanor_id}, _identity}), do: athanor_id
+  defp reserved_athanor(_credential), do: nil
+
   # The credential written in the transaction: a passkey. A session needs
   # the committed person, so it follows the commit.
   defp written(%{id: user_id}, {:passkey, _registration, _identity}, verified),
     do: Sanctum.Passkeys.write_newcomer(user_id, verified)
+
+  defp written(person, {:device, enrollment, _identity}, _verified),
+    do: Sanctum.DeviceUnlock.enrolled(person, enrollment)
 
   defp written(_person, _credential, _verified), do: :ok
 
@@ -687,6 +744,7 @@ defmodule Sanctum.Newcomer do
   defp session(person, {:command_line, machine, _identity}),
     do: minted(person, "setup", command_line: machine)
 
+  defp session(_person, {:device, _enrollment, _identity}), do: :none
   defp session(_person, :none), do: :none
 
   defp minted(person, provider, opts) do

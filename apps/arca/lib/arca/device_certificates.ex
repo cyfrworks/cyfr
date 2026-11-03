@@ -138,7 +138,12 @@ defmodule Arca.DeviceCertificates do
 
   def current(%Prima.Actor{}, _paired_client_id), do: {:error, :no_athanor}
 
-  @doc "Revoke the certificate `id` in the actor's athanor; a revoked one answers as it is."
+  @doc """
+  Revoke the certificate `id` in the actor's athanor, with the sessions of
+  its device it ends (`revoke_all/1`), whose token hashes the row answers
+  as `revoked_session_hashes` for the caller to drop from every memo; a
+  revoked one answers as it is, with none.
+  """
   @spec revoke(Prima.Actor.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :no_athanor | :database_error}
   def revoke(%Prima.Actor{athanor_id: athanor_id} = actor, id)
@@ -149,8 +154,12 @@ defmodule Arca.DeviceCertificates do
 
         case Arca.Repo.exists?(mine) do
           true ->
-            _ = revoke_all(mine)
-            with_status(Arca.Repo.one!(mine), Arca.ServerMetaStorage.now!())
+            %{session_hashes: hashes} = revoke_all(mine)
+
+            mine
+            |> Arca.Repo.one!()
+            |> with_status(Arca.ServerMetaStorage.now!())
+            |> Map.put(:revoked_session_hashes, hashes)
 
           false ->
             Arca.Repo.rollback(:not_found)
@@ -164,29 +173,60 @@ defmodule Arca.DeviceCertificates do
 
   @doc false
   # Revoke every active certificate `query` names, in the caller's
-  # transaction or its own statement, answering the ids it revoked, sorted.
+  # transaction or its own statement, answering the ids it revoked, sorted,
+  # and the token hashes of the sessions it deleted, which the caller hands
+  # its transition's `revoked_session_hashes` so every memo of them drops.
   # The one revocation statement: the standing transitions run it inside
-  # theirs (`Arca.SecurityTransitions`).
-  @spec revoke_all(Ecto.Queryable.t()) :: [String.t()]
+  # theirs (`Arca.SecurityTransitions`), and a head that retires an epoch
+  # through `revoke_key_epoch!/2`. A protected device's sessions stand on
+  # its certificate: the revocation of one still unexpired deletes every
+  # session of its client in the same statements
+  # (`Arca.SessionStorage.delete_clients!/1`), so a renewal, which revokes
+  # nothing, keeps them and nothing revives them. One already expired ends
+  # none: no session outlives the certificate it was slid under.
+  @spec revoke_all(Ecto.Queryable.t()) :: %{
+          certificate_ids: [String.t()],
+          session_hashes: [binary()]
+        }
   # arca:unscoped-ok the caller's query carries its own scope: an athanor, a person or an epoch.
   # arca:db-raise-ok a transaction step: its callers rescue around it.
   def revoke_all(query) do
     now = Arca.ServerMetaStorage.now!()
 
-    {_count, ids} =
+    {_count, revoked} =
       Arca.Repo.update_all(
-        from(c in query, where: c.state != "revoked", select: c.id),
+        from(c in query,
+          where: c.state != "revoked",
+          select: {c.id, c.paired_client_id, c.expires_at}
+        ),
         set: [state: "revoked", revoked_at: now, updated_at: now]
       )
 
-    Enum.sort(ids || [])
+    revoked = revoked || []
+
+    session_hashes =
+      revoked
+      |> Enum.filter(fn {_id, _client, expires_at} ->
+        DateTime.compare(expires_at, now) == :gt
+      end)
+      |> Enum.map(fn {_id, client_id, _expires_at} -> client_id end)
+      |> Enum.uniq()
+      |> Arca.SessionStorage.delete_clients!()
+
+    %{
+      certificate_ids: revoked |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
+      session_hashes: session_hashes
+    }
   end
 
   @doc false
   # The identity-subject certificates issued under `key_epoch` for
   # `identifier`, revoked when a fresh head retires it
   # (`Arca.DirectoryHeads.advance/4`).
-  @spec revoke_key_epoch!(String.t(), String.t()) :: [String.t()]
+  @spec revoke_key_epoch!(String.t(), String.t()) :: %{
+          certificate_ids: [String.t()],
+          session_hashes: [binary()]
+        }
   # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
   def revoke_key_epoch!(identifier, key_epoch)
       when is_binary(identifier) and is_binary(key_epoch) do

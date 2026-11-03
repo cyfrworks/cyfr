@@ -12,7 +12,14 @@
 # over SSH, so what a case types reaches the program under test through the
 # guest's terminal as a person's typing does; guest_ssh and guest_copy_in
 # for evidence and files apart from the terminal; guest_screenshot; and
-# proof_guest_stop (cleanup.sh). check records each verdict.
+# proof_guest_stop (cleanup.sh). check records each verdict. Around the
+# stack: candidate_build and candidate_server_use once per run, this
+# tree's cyfr and server image; per guest cyfr_run_guard, which keeps it
+# from cyfr.run, candidate_server_load, standin_settings and
+# standin_start, the cyfr.run stand-in. On the screen: guest_chord,
+# screen_find and screen_open drive its Chrome as a keyboard does, and
+# profile_cookie, screen_cookie and cookie_answer read the session cookie
+# Chrome holds and ask the home what it opens.
 #
 # They read PROOF_PREFIX, VOLUME, WORK, OUT, HERE and ROOT, which run.sh
 # sets, and set IMAGE, and GUEST and GUEST_DIR for the guest under way. A
@@ -235,7 +242,7 @@ guest_boot() {
   proof_own container "$GUEST" "$GUEST_DIR" || fail "the container $GUEST cannot be the run's"
   docker create --init --name "$GUEST" --device /dev/kvm --group-add "$(kvm_gid)" \
     --volume "$VOLUME:/disk" --volume "$BASE_DIR:/base:ro" "$IMAGE" \
-    /proof/guest-boot.sh "$part" "$memory" "$disk" 4 "$CLOUD_IMAGE" >/dev/null ||
+    /proof/guest-boot.sh "$part" "$memory" "$disk" 4 "$CLOUD_IMAGE" "${GUEST_TPM:-swtpm}" >/dev/null ||
     fail "the QEMU container $GUEST was not made"
   # docker cp makes them root's and keeps their mode, and names each so
   # that /seed itself stays the container user's.
@@ -511,10 +518,258 @@ candidate_build() {
   ok "built the candidate, $(sed -n 's/^sha256: //p' "$OUT/candidate.txt")"
 }
 
+# This tree's server image for the guests, which scripts/image.sh --undated
+# app builds outside any lane before the run, its use by this run recorded
+# so the janitor keeps it while the run lives; without it the run exits
+# 69, naming that command, and it never builds it. candidate_server_load
+# puts it in each guest in place of the release's cyfr image, a stand-in
+# for a signed candidate server, which candidate.txt and results.txt say,
+# with the tree's commit and the image's id; the release's locus images
+# run beside it.
+APP_IMAGE="" APP_IMAGE_ID=""
+candidate_server_use() {
+  local tag
+  step "this tree's server image, built by scripts/image.sh --undated app (stand-in for a signed candidate)"
+  tag=$("$ROOT/scripts/image.sh" --undated --tag-only app) || fail "scripts/image.sh named no server image for this tree"
+  if [ "$(docker image inspect -f '{{index .Config.Labels "works.cyfr.image-inputs"}}' "$tag" 2>/dev/null)" != "${tag#cyfr:in-}" ]; then
+    echo "install-screen proof: this tree's server image $tag is not built; run scripts/image.sh --undated app first, outside any lane" >&2
+    exit 69
+  fi
+  "$ROOT/scripts/image.sh" --undated --for "$$" app >/dev/null 2>>"$OUT/candidate-server.log" ||
+    fail "the run's use of $tag was not recorded ($OUT/candidate-server.log)"
+  APP_IMAGE=$tag
+  APP_IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$tag") || fail "$tag has no id"
+  STAND_IN="$STAND_IN; the cyfr service runs this tree's image $APP_IMAGE in place of the release's, beside the release's locus images"
+  {
+    echo "stand-in: the cyfr service runs $APP_IMAGE, image id $APP_IMAGE_ID, in place of the release's image"
+    echo "built by scripts/image.sh --undated app from $ROOT at $(git -C "$ROOT" rev-parse HEAD), with these changes:"
+    git -C "$ROOT" status --short
+  } >>"$OUT/candidate.txt"
+  ok "using $APP_IMAGE ($APP_IMAGE_ID)"
+}
+
+# Loads the server image into the guest under way, whose Docker cyfr init
+# installed, and points the release's docker-compose.yml at it: the one
+# line naming the release's cyfr image changes, and nothing else. cyfr up
+# starts what that file names and pulls nothing the host holds.
+candidate_server_load() {
+  local loaded
+  docker save "$APP_IMAGE" | GUEST_SSH_TIMEOUT=600 guest_ssh_in 'cat >cyfr-candidate.tar' ||
+    fail "the server image was not copied into the guest"
+  guest_root 'docker load -i /home/proof/cyfr-candidate.tar; status=$?; rm -f /home/proof/cyfr-candidate.tar; exit $status' ||
+    fail "the guest's Docker did not load the server image ($GUEST_DIR/root.txt)"
+  loaded=$(guest_root_out "docker image inspect -f '{{.Id}}' $APP_IMAGE")
+  check "the guest holds this tree's server image, id $APP_IMAGE_ID (it holds ${loaded:-none})" test "$loaded" = "$APP_IMAGE_ID"
+  guest_ssh "cd ~/cyfr && cp docker-compose.yml ~/docker-compose.release.yml &&
+    sed -i -E 's#^([[:space:]]*image:[[:space:]]*)ghcr\.io/cyfrworks/cyfr:[^[:space:]]+#\1$APP_IMAGE#' docker-compose.yml
+    diff ~/docker-compose.release.yml docker-compose.yml" >"$GUEST_DIR/compose-candidate.diff" 2>&1
+  check "docker-compose.yml names this tree's image for cyfr, its one changed line" \
+    sh -c '[ "$(grep -c "^>" "$1")" = 1 ] && grep -qx ">.*image: $2" "$1" && grep -q "^<.*image: ghcr.io/cyfrworks/cyfr:" "$1"' sh "$GUEST_DIR/compose-candidate.diff" "$APP_IMAGE"
+}
+
+# The cyfr.run stand-in (tests/registry-stand-in/standin.py) answers for
+# cyfr.run's registry and directory on the loopback of cyfr's own
+# container, the one place the server takes a directory over plain http
+# (CYFR_DIRECTORY_URL, configuration-guide.md).
+STANDIN_PORT=4790
+
+# standin_settings [RESTORE_TOKEN]: .env names the stand-in as the
+# registry and the directory, and lets the server's calls reach it, before
+# cyfr up, so the server never starts naming cyfr.run; for a replacement
+# box, the restore token too, passed on standard input. The stand-in's
+# script goes to ~/standin with them.
+standin_settings() {
+  guest_ssh 'mkdir -p ~/standin' && guest_copy_in "$ROOT/tests/registry-stand-in/standin.py" standin/standin.py ||
+    fail "the cyfr.run stand-in was not copied into the guest"
+  {
+    printf '%s\n' "CYFR_REGISTRY_URL=127.0.0.1:$STANDIN_PORT" "CYFR_DIRECTORY_URL=http://127.0.0.1:$STANDIN_PORT" \
+      "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1"
+    [ -z "${1:-}" ] || printf 'CYFR_RESTORE_TOKEN=%s\n' "$1"
+  } | guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_RESTORE_TOKEN)=/d" .env &&
+    { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not given the cyfr.run stand-in"
+  guest_ssh "grep -E '^(CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-standin.txt" 2>&1
+  check ".env names the stand-in as cyfr.run's registry and directory" \
+    grep -qx "CYFR_DIRECTORY_URL=http://127.0.0.1:$STANDIN_PORT" "$GUEST_DIR/env-standin.txt"
+}
+
+# standin_start WHEN: the stand-in, in cyfr's container's network
+# namespace, which is new at each start of the container: the guest's
+# python3 as the test account, in a transient unit of the harness's
+# (cyfr-proof-standin), its state ~/standin/state.json outliving each
+# start. A replacement box starts from the first box's state
+# (WORK/standin-state.json), as both name the one directory.
+standin_start() {
+  local closes
+  if [ -s "$WORK/standin-state.json" ] && ! guest_ssh 'test -e ~/standin/state.json'; then
+    guest_copy_in "$WORK/standin-state.json" standin/state.json || fail "the first box's stand-in state was not copied in"
+  fi
+  guest_root "pid=\$(docker inspect -f '{{.State.Pid}}' cyfr) && [ \"\$pid\" -gt 0 ] || exit 1
+    systemctl stop cyfr-proof-standin 2>/dev/null; systemctl reset-failed cyfr-proof-standin 2>/dev/null
+    rm -f /home/proof/standin/ready
+    systemd-run --unit=cyfr-proof-standin --collect nsenter -t \"\$pid\" -n \
+      setpriv --reuid=proof --regid=proof --init-groups -- python3 -I /home/proof/standin/standin.py \
+      --address 127.0.0.1 --port $STANDIN_PORT --state /home/proof/standin/state.json --ready-file /home/proof/standin/ready" ||
+    fail "the cyfr.run stand-in was not started ($GUEST_DIR/root.txt)"
+  budget 30 || fail "the case's deadline came before the stand-in started"
+  closes=$((SECONDS + BUDGET))
+  until guest_ssh 'test -s ~/standin/ready'; do
+    [ "$SECONDS" -lt "$closes" ] || break
+    sleep 1
+  done
+  guest_root_out "nsenter -t \$(docker inspect -f '{{.State.Pid}}' cyfr) -n curl -s --max-time 5 http://127.0.0.1:$STANDIN_PORT/v1/legal/version" \
+    >"$GUEST_DIR/standin-$1.txt"
+  check "the cyfr.run stand-in answers on the loopback of cyfr's container ($1)" grep -q policy_version "$GUEST_DIR/standin-$1.txt"
+}
+
+# Nothing in the run reaches cyfr.run: before the install script, the
+# guest's firewall drops every packet to cyfr.run's addresses, as this
+# host resolves them, whether a program on the guest or a container sends
+# it, and a unit of the harness's (cyfr-proof-guard) sets the rules again
+# at every boot. Their counters say whether anything tried.
+CYFR_RUN_ADDRESSES=""
+cyfr_run_guard() {
+  local exec="" a
+  [ -n "$CYFR_RUN_ADDRESSES" ] ||
+    CYFR_RUN_ADDRESSES=$(getent ahostsv4 cyfr.run registry.cyfr.run | awk '{print $1}' | sort -u | tr '\n' ' ')
+  [ -n "$CYFR_RUN_ADDRESSES" ] || fail "cyfr.run's addresses did not resolve on this host, so the guest cannot be kept from them"
+  for a in $CYFR_RUN_ADDRESSES; do
+    exec+="ExecStart=/usr/sbin/iptables -w -t raw -A OUTPUT -d $a -m comment --comment cyfr-proof-guard -j DROP
+ExecStart=/usr/sbin/iptables -w -t raw -A PREROUTING -d $a -m comment --comment cyfr-proof-guard -j DROP
+"
+  done
+  printf '[Unit]\nDescription=The install-screen proof keeps this guest from cyfr.run\nDefaultDependencies=no\nAfter=local-fs.target systemd-modules-load.service\nBefore=network-pre.target docker.service\nWants=network-pre.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\n%s\n[Install]\nWantedBy=multi-user.target\n' "$exec" |
+    guest_ssh_in 'cat >cyfr-proof-guard.service' || fail "the guard's unit was not copied into the guest"
+  guest_root 'install -m 0644 /home/proof/cyfr-proof-guard.service /etc/systemd/system/ && rm -f /home/proof/cyfr-proof-guard.service &&
+    systemctl daemon-reload && systemctl enable --now cyfr-proof-guard.service' || fail "the guard was not set ($GUEST_DIR/root.txt)"
+  cyfr_run_guarded start
+}
+
+# cyfr_run_guarded WHEN [final]: the guard's rules stand, each address's
+# two, in GUEST_DIR/cyfr-run-guard-WHEN.txt with their counters; with
+# final, their counters since the last boot say nothing tried.
+cyfr_run_guarded() {
+  local file="$GUEST_DIR/cyfr-run-guard-$1.txt" tried
+  guest_root_out 'iptables -w -t raw -L -v -n -x' >"$file"
+  check "the guest drops every packet to cyfr.run, $CYFR_RUN_ADDRESSES($1)" \
+    sh -c 'for a in $2; do [ "$(grep cyfr-proof-guard "$1" | grep -c " $a ")" = 2 ] || exit 1; done' sh "$file" "$CYFR_RUN_ADDRESSES"
+  [ "${2:-}" = final ] || return 0
+  tried=$(awk '/cyfr-proof-guard/ { n += $1 } END { print n + 0 }' "$file")
+  check "nothing on the guest sent a packet to cyfr.run since its last boot ($tried dropped)" test "$tried" = 0
+}
+
 # guest_root COMMAND: COMMAND as root over SSH, the harness's own setup, the
-# password on sudo's standard input.
+# password on sudo's standard input; guest_root_out answers its standard
+# output, its errors in GUEST_DIR/root.txt.
 guest_root() {
   { cat "$WORK/password"; printf '\n'; } | guest_ssh_in "sudo -S -k -p '' sh -c $(printf '%q' "$1")" >>"$GUEST_DIR/root.txt" 2>&1
+}
+guest_root_out() {
+  { cat "$WORK/password"; printf '\n'; } | guest_ssh_in "sudo -S -k -p '' sh -c $(printf '%q' "$1")" 2>>"$GUEST_DIR/root.txt"
+}
+
+# What the screen's Chrome holds, read by box.py in the guest
+# (tests/install-screen-proof/box.py), which box_helpers copies in.
+SCREEN_PROFILE='~/cyfr/.cyfr/screen/chrome'
+box_helpers() {
+  guest_copy_in "$HERE/box.py" box.py || fail "box.py was not copied into the guest"
+}
+
+# profile_cookie NAME: the session cookie the screen's Chrome profile holds
+# for the home now, kept in the guest's ~/proof-cookies/NAME.header, mode
+# 600, and never in the evidence, which records its digest in
+# GUEST_DIR/cookies.txt, as COOKIE_DIGEST[NAME] holds it.
+declare -A COOKIE_DIGEST=()
+profile_cookie() {
+  local digest
+  unset "COOKIE_DIGEST[$1]"
+  digest=$(guest_ssh "umask 077 && mkdir -p ~/proof-cookies && rm -f ~/proof-cookies/$1.header &&
+    value=\$(python3 -I ~/box.py cookie $SCREEN_PROFILE localhost _cyfr_key) &&
+    printf 'Cookie: _cyfr_key=%s\n' \"\$value\" >~/proof-cookies/$1.header &&
+    printf %s \"\$value\" | sha256sum | cut -c 1-16" 2>>"$GUEST_DIR/cookies.err") || return 1
+  [ -n "$digest" ] || return 1
+  COOKIE_DIGEST[$1]=$digest
+  printf '%s %s\n' "$1" "$digest" >>"$GUEST_DIR/cookies.txt"
+}
+
+# screen_cookie NAME: profile_cookie NAME once the profile holds a cookie
+# no earlier capture held, as Chrome writes its cookies to disk within
+# 30 s of a change; answers 1 within 90 s without one, holding none.
+COOKIE_SEEN=""
+screen_cookie() {
+  local closes
+  budget 90 || return 1
+  closes=$((SECONDS + BUDGET))
+  while :; do
+    if profile_cookie "$1"; then
+      case "$COOKIE_SEEN " in
+        *" ${COOKIE_DIGEST[$1]} "*) ;;
+        *) COOKIE_SEEN="$COOKIE_SEEN ${COOKIE_DIGEST[$1]}"; return 0 ;;
+      esac
+    fi
+    if [ "$SECONDS" -ge "$closes" ]; then
+      unset "COOKIE_DIGEST[$1]"
+      guest_ssh "rm -f ~/proof-cookies/$1.header" || true
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# cookie_answer NAME: how the home answers the cookie NAME on a page that
+# needs a session: "in" when it serves it (200, or a redirect elsewhere
+# than the sign-in page), "out" when it sends it to sign in, then the
+# status and the redirect, each answer a line of GUEST_DIR/cookie-NAME.txt
+# with this host's time.
+cookie_answer() {
+  local got
+  got=$(guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H @\$HOME/proof-cookies/$1.header http://localhost:4000/chat" 2>&1)
+  printf '%s %s\n' "$(date -u +%T)" "$got" >>"$GUEST_DIR/cookie-$1.txt"
+  case $got in
+    200* | 30[1237]\ *) case $got in *"/login"*) echo "out $got" ;; *) echo "in $got" ;; esac ;;
+    401* | 403*) echo "out $got" ;;
+    *) echo "unknown $got" ;;
+  esac
+}
+
+# cookie_out_within NAME SECONDS: the seconds until the home sends the
+# cookie NAME to sign in, read each 5 s, or nothing when it serves it
+# still after SECONDS.
+cookie_out_within() {
+  local start=$SECONDS closes
+  budget "$2" || return 0
+  closes=$((SECONDS + BUDGET))
+  while :; do
+    case $(cookie_answer "$1") in out*) echo $((SECONDS - start)); return 0 ;; esac
+    [ "$SECONDS" -lt "$closes" ] || return 0
+    sleep 5
+  done
+}
+
+# guest_chord KEY...: the keys, by QMP qcode, pressed together.
+guest_chord() {
+  local keys="" k
+  for k in "$@"; do keys+="${keys:+, }{\"type\": \"qcode\", \"data\": \"$k\"}"; done
+  guest_qmp send-key "{\"keys\": [$keys]}" >/dev/null
+}
+
+# screen_find TEXT [last]: Chrome's find bar on the page in front, at the
+# first match of TEXT (with last, its last), then closed, which gives the
+# keyboard's focus to the link or button holding that match, as a person
+# reaching it by the keyboard does. Enter then presses it.
+screen_find() {
+  guest_chord ctrl f && sleep 1 &&
+    printf '%s' "$1" | guest_keys && sleep 2 &&
+    { [ "${2:-}" != last ] || guest_chord shift ret; } && sleep 1 &&
+    guest_chord esc && sleep 1
+}
+
+# screen_open URL: the screen's running Chrome opens URL in a window of its
+# own, as a link opened there would: a second Chrome on the same profile
+# hands it over and exits.
+screen_open() {
+  printf '%s' "$1" | guest_ssh_in 'url=$(cat); run=/run/user/$(id -u); way=$(cd "$run" && ls -d wayland-? | head -n 1)
+    XDG_RUNTIME_DIR=$run WAYLAND_DISPLAY=$way timeout 30 google-chrome-stable --ozone-platform=wayland \
+      --user-data-dir="$HOME/cyfr/.cyfr/screen/chrome" "$url" >/dev/null 2>&1'
 }
 
 # The boot's journal and apt's history, read once nothing else is to be

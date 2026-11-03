@@ -2680,6 +2680,7 @@ defmodule PrismWeb.SystemLayer do
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
         proves: panel != nil and can_prove?(assigns[:context]),
+        shell: PrismWeb.DeviceUnlockController.shell?(assigns[:context]),
         panel: panel,
         focus: context_athanor(%{assigns: assigns})
       )
@@ -2723,7 +2724,14 @@ defmodule PrismWeb.SystemLayer do
             athanor_name={@athanor_name}
           />
 
-          <.panel :if={@panel} panel={@panel} may={@proves} myself={@myself} id={@id} />
+          <.panel
+            :if={@panel}
+            panel={@panel}
+            may={@proves}
+            shell={@shell}
+            myself={@myself}
+            id={@id}
+          />
 
           <p :if={@error} role="alert" class="rounded border border-red-500 p-2 text-sm">
             <span class="font-semibold">Not done:</span> {@error}
@@ -3045,12 +3053,16 @@ defmodule PrismWeb.SystemLayer do
 
   attr :panel, :map, required: true
   attr :may, :boolean, required: true
+  attr :shell, :boolean, default: false
   attr :myself, :any, required: true
   attr :id, :string, required: true
 
   # One pending confirmation: the home's preview and the client that asked,
   # before any proof; this client's own request's status; and the proofs
-  # the record's methods offer, to a client that can give one.
+  # the record's methods offer, to a client that can give one. On a box's
+  # own screen, unlocked by its shell, the shell confirms: Prism hands it
+  # the public ref alone, and the shell fetches the preview from the home,
+  # draws it on its own page and asks for the PIN again before it signs.
   defp panel(assigns) do
     assigns =
       assign(assigns,
@@ -3118,6 +3130,16 @@ defmodule PrismWeb.SystemLayer do
       </p>
 
       <div :if={@may and @open and @entry != nil} class="flex flex-wrap gap-2">
+        <a
+          :if={@shell}
+          href={PrismWeb.DeviceUnlockController.confirm_url(@panel.ref)}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-test="confirm-device"
+          class={button_class(true)}
+        >
+          Confirm on this device
+        </a>
         <button
           :if={"passkey" in @methods}
           type="button"

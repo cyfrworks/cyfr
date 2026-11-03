@@ -769,7 +769,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	// .env holds the new head now, CYFR started as it says or on this
 	// machine only: the screen follows it, and passkeys of a new address
 	// begin at its setup link.
-	screenErr := followScreen(p.New)
+	screenErr := followScreen()
 	if len(p.AddressChanges) > 0 {
 		if values, verr := access.ReadEnvValues(".env"); verr == nil && !headless(values) {
 			fmt.Fprintf(out, "Passkeys made at the old address no longer sign anyone in. Open %s to register the administrator's passkey there; everyone else registers one, which an administrator authorizes.\n", hyperlink(out, setupLink(p.NewWords.Address, values)))

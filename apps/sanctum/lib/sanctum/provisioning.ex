@@ -171,18 +171,20 @@ defmodule Sanctum.Provisioning do
 
   It counts no cap: the admission asked `personal_admissible/0` before
   the person's row, or made the installation's administrator.
+
+  `athanor_id`, when given, is the id the athanor takes: the one a
+  protected device's enrollment reserved, which its challenge and
+  certificate already name (`Sanctum.DeviceUnlock`).
   """
-  @spec mint_personal(Sanctum.Tenancy.Users.user()) ::
+  @spec mint_personal(Sanctum.Tenancy.Users.user(), String.t() | nil) ::
           {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
-  def mint_personal(%{id: user_id} = user) do
+  def mint_personal(%{id: user_id} = user, athanor_id \\ nil) do
     name = personal_name(user)
+    attrs = %{name: name, owner_user_id: user_id, created_by: user_id}
+    attrs = if is_binary(athanor_id), do: Map.put(attrs, :id, athanor_id), else: attrs
 
     with {:ok, slugs} <- Athanors.person_slugs(user[:namespace], name),
-         {:ok, athanor} <-
-           Athanors.create_personal(
-             %{name: name, owner_user_id: user_id, created_by: user_id},
-             slugs
-           ),
+         {:ok, athanor} <- Athanors.create_personal(attrs, slugs),
          {:ok, _user} <- Users.set_personal_athanor(user, athanor.id) do
       {:ok, athanor}
     end

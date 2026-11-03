@@ -141,7 +141,9 @@ defmodule Sanctum.Recovery do
   ## The first method after restore
 
   The restore session's original creation time bounds the local
-  first-method exception (`Sanctum.Passkeys.register/2`). If that window
+  first-method exception (`Sanctum.Passkeys.register/2`), which enrolls
+  a first passkey or a protected device's key (`Sanctum.DeviceUnlock`):
+  whichever commits first claims the person's first-method latch. If that window
   closes before any method is installed, `restore_challenge/1` (the
   capability again) answers a server challenge alive five minutes on the
   database's clock, the clock its use is checked against, and `reproof/3`
@@ -1382,6 +1384,15 @@ defmodule Sanctum.Recovery do
 
   # The installation capability, checked before anything else: the
   # configured token's digest, compared in constant time.
+  @doc """
+  Whether `presented` is this installation's restore token, compared in
+  constant time: the capability a protected device's lost enrollment
+  answer after a restore is resumed under (`Sanctum.DeviceUnlock.resume/2`),
+  which then needs the proof of the committed key.
+  """
+  @spec restore_token?(term()) :: boolean()
+  def restore_token?(presented), do: match?({:ok, _digest}, capability(presented))
+
   defp capability(presented) do
     case Application.get_env(:sanctum, :restore_token) do
       configured when is_binary(configured) and configured != "" ->

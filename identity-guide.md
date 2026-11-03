@@ -86,8 +86,8 @@ The token restores one identity, once. Another identity's code under the same to
 
 ### After a restore
 
-- **Register a passkey first.** The restore's session may register your first passkey within `reauth_seconds` of when the restore signed you in; keeping the page open does not extend that window. If it closes with no passkey registered, the restore page proves your recovery code again under a new challenge (**Check your recovery code again**) for a new window, without restoring anything twice.
-- **Then link your sign-in methods** (GitHub, Google or your organization's sign-in) from the settings page. Linking one needs your session, a sign-in with it, and a fresh confirmation: the new passkey.
+- **Register a passkey, or enroll the box's screen, first.** The restore's session may register your first passkey, or enroll a replacement box's screen with a PIN or passphrase of its own (`devices-guide.md`), within `reauth_seconds` of when the restore signed you in; keeping the page open does not extend that window, and the first of them to land is your first method. If it closes with none, the restore page proves your recovery code again under a new challenge (**Check your recovery code again**) for a new window, without restoring anything twice.
+- **Then link your sign-in methods** (GitHub, Google or your organization's sign-in) from the settings page. Linking one needs your session, a sign-in with it, and a fresh confirmation: the new passkey, or the box's screen.
 - **Pair your devices again.** A device paired with your old CYFR is not known here; its old certificate is refused, and it pairs anew.
 - **Add your saved addresses back.** See below.
 
