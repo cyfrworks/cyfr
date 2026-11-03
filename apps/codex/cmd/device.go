@@ -88,6 +88,9 @@ type deviceOptions struct {
 	// enrollPIN is pin.enroll through the unlocked device's session (cyfr
 	// login --pin); nil where no PIN is set up.
 	enrollPIN shell.PINEnroll
+	// certify obtains a certificate at the person's own home when their
+	// identity is kept there (certifyAtHome); nil where none is asked.
+	certify shell.CertifyCall
 }
 
 // device is this command line's device as cyfr login, a confirmation on
@@ -181,6 +184,7 @@ func deviceShell(o deviceOptions) (*shell.Shell, error) {
 		Invitation:  o.invitation,
 		HomeHere:    homeHere(o.address),
 		EnrollPIN:   o.enrollPIN,
+		Certify:     o.certify,
 		Tokens:      func() (string, string) { return o.setupToken, "" },
 		Restart:     o.locked,
 		Pair: func(ctx context.Context, args map[string]any) (map[string]any, error) {

@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect as tlsConnect } from "node:tls";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
+import { terminalStep } from "./terminal.mjs";
 import {
   A, A2, H, SETTINGS, addSession, admitted, assertions, ask, authenticatorWith, begin, captureAssertions, closePrompt,
   confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, deviceLog, flashed,
@@ -920,6 +921,7 @@ export async function rest(chromium, proxy, { home, hub, hubPage, hubContext }) 
     () => aPasskeyAtHub(chromium, state),
     () => phoneStep(chromium, state),
     () => renewal(chromium, proxy, state),
+    () => terminalStep(proxy, { ...state, hubAthanor }),
     () => thread(state),
     () => removal(state),
     () => rotate(chromium, state),

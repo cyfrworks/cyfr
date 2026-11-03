@@ -92,7 +92,7 @@ var registrySyncCmd = &cobra.Command{
 	Long: `Mints push tokens for your personal namespace and every publisher
 namespace you are a member of, with a request your identity signs, and stores
 them on the server for ` + "`cyfr push`" + `. It waits for a fresh confirmation,
-given in Prism, before minting.
+given on a device of yours, before minting.
 
 Prints your personal namespace and your memberships. No token is ever printed.
 Run it again after a token is revoked or a membership is added.`,
@@ -182,7 +182,7 @@ var registryPublisherVerifyCmd = &cobra.Command{
 	Use:   "verify <domain>",
 	Short: "Verify a publisher claim via DNS and store its first push token",
 	Long: `Polls the DNS TXT record installed for a prior ` + "`claim`" + `, with a
-request your identity signs, after a fresh confirmation given in Prism. On
+request your identity signs, after a fresh confirmation given on a device of yours. On
 success the caller becomes the sole admin of the publisher namespace and
 cyfr.run mints the founding member's push token, which the server stores so
 ` + "`cyfr push`" + ` can use it immediately; ` + "`token_stored`" + ` says whether
