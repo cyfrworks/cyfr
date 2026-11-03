@@ -393,6 +393,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/assets/test/sdk/wire.test.mjs", ~w(tincture_urls)},
       {"apps/prima/test/prima/tincture_wire_test.exs", ~w(tincture_urls)}
     ],
+    "confirmation_assertion.json" => [
+      {"apps/prima/test/prima/confirmation_assertion_test.exs",
+       ~w(assertions identity keys lifetime_ms protocol record refusals verify)}
+    ],
     "confirmation.json" => [
       {"apps/codex/cmd/consent_error_test.go", ~w(ref signal)},
       {"apps/codex/internal/confirmation/confirmation_test.go", ~w(protocol ref)},
