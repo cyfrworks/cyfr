@@ -2337,7 +2337,25 @@
         }
       ]
     },
+    "units": {
+      "expires_at": "unix_ms",
+      "ticket": "base64url_unpadded"
+    },
     "http": {
+      "refusals": {
+        "body": [
+          "error"
+        ],
+        "codes": {
+          "invalid_token": 401,
+          "setup_closed": 409,
+          "first_method_used": 409,
+          "not_found": 404,
+          "proof_refused": 422,
+          "invalid_request": 422,
+          "unavailable": 503
+        }
+      },
       "credentials": {
         "setup": {
           "header": "x-cyfr-setup-token"
@@ -2357,11 +2375,18 @@
         "request": [
           "admission",
           "device_key",
+          "display_name",
+          "holder_kind",
           "request_id"
         ],
         "response": [
           "challenge"
-        ]
+        ],
+        "holder_kinds": [
+          "chip",
+          "software"
+        ],
+        "display_name_max_bytes": 64
       },
       "enrollment_complete": {
         "method": "POST",
