@@ -31,6 +31,10 @@ const DeviceProtocol = "cyfr-device/v1"
 var (
 	reportEvery = 30 * time.Second
 	heardWithin = 10 * time.Second
+	// readerFirst is how long a failed report or ping waits for the
+	// reader to record a close the home sent (4403, 4408), which the
+	// failure may have raced, before it records the silence itself.
+	readerFirst = 2 * time.Second
 )
 
 // The reasons a channel ends, each a sentence the lock page can show.
@@ -296,7 +300,10 @@ func (c *Channel) read() {
 // reportLoop reports this box's capabilities every reportEvery and pings
 // the home after each report: a report the connection does not take or a
 // ping the home does not answer within heardWithin ends the channel as
-// unreachable, which locks the box (Shell.watch).
+// unreachable, which locks the box (Shell.watch). A close the home sent
+// is the reader's to record, so a failure here first waits readerFirst
+// for the reader to end the channel with the home's code; only a
+// connection that stays silent is ended here.
 func (c *Channel) reportLoop() {
 	t := time.NewTicker(reportEvery)
 	defer t.Stop()
@@ -312,8 +319,12 @@ func (c *Channel) reportLoop() {
 			}
 			cancel()
 			if err != nil {
-				c.end(closeReason(err))
-				c.conn.CloseNow()
+				select {
+				case <-c.done:
+				case <-time.After(readerFirst):
+					c.end(closeReason(err))
+					c.conn.CloseNow()
+				}
 				return
 			}
 		}
