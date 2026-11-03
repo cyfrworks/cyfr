@@ -26,9 +26,10 @@ defmodule Arca.DevicePinEvaluators do
       any answer: a refused wait writes nothing.
     * `reset/4` clears the count of the evaluator whose last charge drew
       the presented nonce, only once the caller's verifier admits the
-      proof, and marks that evaluator confirmed, deleting every other of
-      the client's: a replacement stands beside the old evaluator until
-      its first reset.
+      proof. An evaluator's first reset marks it confirmed and deletes
+      every other of the client's; a confirmed evaluator's later reset
+      deletes none, so a replacement stands beside the old evaluator,
+      whatever the old one does, until its own first reset.
     * `enroll/3` inserts a new evaluator for an active software client of
       the actor's athanor and deletes the client's evaluators no reset has
       confirmed, so a device holds its confirmed evaluator and at most one
@@ -179,9 +180,10 @@ defmodule Arca.DevicePinEvaluators do
   device proves its key over that evaluation's reset challenge, which
   `verify` decides, handed the evaluator, its client and the database's
   instant (`:ok` or a refusal, which rolls back). Then the count moves
-  through `Prima.DevicePin.reset/2` for the evaluator's own revision, the
-  reset challenge is spent, the evaluator is marked confirmed and every
-  other evaluator of the client is deleted.
+  through `Prima.DevicePin.reset/2` for the evaluator's own revision and
+  the reset challenge is spent. An evaluator's first reset marks it
+  confirmed and deletes every other evaluator of the client; a confirmed
+  evaluator's later reset deletes none.
 
   Refusals: `:not_found` (no evaluator holds that nonce, or its client is
   not active), `:no_athanor`, `:not_owner`, `:database_error`, or the
@@ -206,11 +208,16 @@ defmodule Arca.DevicePinEvaluators do
                Map.take(evaluator, [:attempts, :revision, :next_allowed_at]),
                evaluator.revision
              ) do
+        # A replacement's first reset retires the evaluator it replaces; a
+        # confirmed evaluator's later reset leaves a pending replacement
+        # standing until its own first reset.
         _others =
-          DevicePinEvaluator
-          |> QueryHelpers.where_tenant(actor)
-          |> where([e], e.paired_client_id == ^client_id and e.id != ^evaluator.id)
-          |> Arca.Repo.delete_all()
+          if is_nil(evaluator.confirmed_at) do
+            DevicePinEvaluator
+            |> QueryHelpers.where_tenant(actor)
+            |> where([e], e.paired_client_id == ^client_id and e.id != ^evaluator.id)
+            |> Arca.Repo.delete_all()
+          end
 
         evaluator
         |> Ecto.Changeset.change(
