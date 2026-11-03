@@ -235,6 +235,7 @@ defmodule Arca.SessionStorage do
   starts later waits and then retires the session.
   """
   @spec activate_client_session(binary(), map(), keyword()) :: :ok | {:error, term()}
+  # arca:unscoped-ok a reserved session is addressed by its own id and the client its unlock reserved it for.
   def activate_client_session(token_hash, %{id: id, client_id: client_id} = attrs, opts)
       when is_binary(token_hash) and is_binary(id) and is_binary(client_id) and is_list(opts) do
     lock = Keyword.fetch!(opts, :lock)
