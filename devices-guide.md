@@ -83,7 +83,7 @@ Revocation erases nothing already shown on the device. Until revocation or expir
 
 ### A six-digit PIN your CYFR counts
 
-A machine without a TPM can keep its key under a six-digit PIN instead of the passphrase, once it is one of your devices: `cyfr login --pin` asks for a fresh confirmation, on this device or another of yours, then for the new PIN twice. Running it again replaces the PIN; the old one keeps working until the new one has unlocked once.
+A machine without a TPM can keep its key under a six-digit PIN instead of the passphrase, once it is one of your devices: `cyfr login --pin` unlocks with the passphrase or current PIN, asks for the new PIN twice, then asks a fresh confirmation, given in the terminal with the passphrase or current PIN or on another device of yours. Running it again replaces the PIN. The old passphrase or PIN stops opening the key when the command finishes: it saves the key under the new PIN and unlocks with it once, and that first unlock retires the old one. If the command stops before saving, the old one still opens the key; if it saved but the first unlock did not reach your CYFR, the old PIN works until the new one first unlocks.
 
 The PIN never leaves the machine, and your CYFR never learns it. Each unlock sends your CYFR a blinded form of the PIN, and only your CYFR's answer, mixed with the PIN, opens the key. Your CYFR counts every attempt before it answers and makes the next one wait: one second after a wrong PIN, then two, doubling up to an hour, and an unlock that opens the key clears the count. It never locks you out for good. A copy of the machine's disk alone cannot guess the PIN: every guess goes through your CYFR, one counted attempt at a time.
 

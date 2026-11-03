@@ -314,4 +314,50 @@ defmodule Arca.DevicePinEvaluatorsTest do
   defp spin_until_open(gate) do
     if :atomics.get(gate, 1) == 0, do: spin_until_open(gate)
   end
+
+  test "a confirmed evaluator's later reset preserves its pending replacement",
+       %{actor: actor, user: user} do
+    client = client!(actor, user)
+    old = enrolled!(actor, client)
+    {:ok, %{evaluator: first}} = DevicePinEvaluators.charge(digest(old), a = nonce())
+    assert {:ok, _} = reset(first, a)
+    replacement = enrolled!(actor, client)
+    {:ok, %{evaluator: later}} = DevicePinEvaluators.charge(digest(old), b = nonce())
+    assert {:ok, _} = reset(later, b)
+    assert stored(replacement.id), "an old evaluator's reset deleted the pending replacement"
+
+    assert {:ok, %{evaluator: current}} =
+             DevicePinEvaluators.charge(digest(replacement), c = nonce())
+
+    assert {:ok, _} = reset(current, c)
+    refute stored(old.id)
+  end
+
+  test "reset lookup cannot cross its named athanor or admit a revoked client",
+       %{actor: actor, user: user} do
+    client = client!(actor, user)
+    evaluator = enrolled!(actor, client)
+    n = nonce()
+    assert {:ok, _} = DevicePinEvaluators.charge(digest(evaluator), n)
+    parent = self()
+
+    verify = fn _e, _c, _now ->
+      send(parent, :review_verified)
+      :ok
+    end
+
+    other = Prima.Actor.in_athanor(actor.athanor_id <> "_other")
+    assert {:error, :not_found} = DevicePinEvaluators.reset(other, client.id, n, verify)
+    refute_received :review_verified
+    assert stored(evaluator.id).attempts == 1
+
+    {1, _} =
+      Arca.Repo.update_all(from(p in PairedClient, where: p.id == ^client.id),
+        set: [standing: "revoked"]
+      )
+
+    assert {:error, :not_found} = DevicePinEvaluators.reset(actor, client.id, n, verify)
+    refute_received :review_verified
+    assert stored(evaluator.id).attempts == 1
+  end
 end
