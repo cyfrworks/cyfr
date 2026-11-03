@@ -33,7 +33,7 @@ defmodule Sanctum.DeviceUnlockTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Sanctum.Test.Newcomers, only: [identity: 0]
+  import Sanctum.Test.Newcomers, only: [identity: 0, identity: 1]
 
   alias Arca.Schemas.{Membership, PairedClient, PersonIdentity, Session, User}
   alias Prima.DeviceCert.{Challenge, Proof}
@@ -296,6 +296,215 @@ defmodule Sanctum.DeviceUnlockTest do
       assert recovery == device.recovery
       assert Arca.Repo.aggregate(User, :count) == 1
       assert Arca.Repo.aggregate(PairedClient, :count) == 1
+    end
+  end
+
+  describe "a new person by invitation or the open admission" do
+    setup do
+      admin = enrolled!()
+      %{admin: admin, admin_id: admin.certificate.subject.user_id}
+    end
+
+    defp invite!(admin_id) do
+      ctx = Sanctum.TestContext.session!(admin_id)
+      {:ok, %{invitation: invitation, code: code}} = Sanctum.Invitations.create(ctx, nil)
+      {invitation.id, code}
+    end
+
+    defp new_challenge(admission, key, identity) do
+      DeviceUnlock.enrollment_challenge(
+        admission,
+        reported(key, identity.request_id, admission_name(admission))
+      )
+    end
+
+    defp admission_name({kind, _credential}), do: Atom.to_string(kind)
+
+    defp new_complete(admission, challenge, {_public, private}, identity) do
+      DeviceUnlock.enroll(admission, %{
+        "proof" => signed(challenge, private),
+        "name" => identity.name,
+        "recovery_secret" => b64(identity.recovery_secret)
+      })
+    end
+
+    defp open! do
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
+      :ok
+    end
+
+    test "an invitation enrolls a new person with the device, certificate, first-method mark and recovery, redeemed by them, and mints no session",
+         %{admin_id: admin_id} do
+      {id, code} = invite!(admin_id)
+      device = key()
+      identity = identity("invited")
+      {:ok, %{challenge: challenge}} = new_challenge({:invitation, code}, device, identity)
+      assert challenge.admission == :invitation
+
+      assert {:ok, %{certificate: certificate, recovery: %{name: "invited", code: "CYFR-" <> _}}} =
+               new_complete({:invitation, code}, challenge, device, identity)
+
+      %{user_id: user_id} = certificate.subject
+      assert %User{admission: "invitation"} = Arca.Repo.get!(User, user_id)
+      assert {:ok, %{id: athanor_id}} = Arca.Athanors.get_by_owner(Prima.Actor.system(), user_id)
+      assert certificate.athanor == athanor_id
+
+      client = client_row(certificate.client_id)
+      assert {client.user_id, client.holder_kind, client.standing} == {user_id, "chip", "active"}
+      assert %{first_method_at: %DateTime{}} = Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
+      assert %{redeemed_by: ^user_id} = Arca.Repo.get!(Arca.Schemas.Invitation, id)
+      refute Sanctum.Tenancy.platform_admin?(user_id)
+      assert Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id)) == []
+
+      # The code is spent: it challenges no other device.
+      assert {:error, :invitation_invalid} = new_challenge({:invitation, code}, key(), identity())
+    end
+
+    test "an invitation's challenge completes under its own code alone, and a code spent or revoked meanwhile makes no one",
+         %{admin_id: admin_id} do
+      {_id, code} = invite!(admin_id)
+      {other_id, other} = invite!(admin_id)
+      people = Arca.Repo.aggregate(User, :count)
+
+      first = key()
+      second = key()
+      third = key()
+      first_identity = identity()
+      second_identity = identity()
+      third_identity = identity()
+      {:ok, %{challenge: a}} = new_challenge({:invitation, code}, first, first_identity)
+      {:ok, %{challenge: b}} = new_challenge({:invitation, code}, second, second_identity)
+      {:ok, %{challenge: c}} = new_challenge({:invitation, other}, third, third_identity)
+
+      # Another valid code does not complete this code's challenge.
+      assert {:error, :proof_refused} =
+               new_complete({:invitation, other}, a, first, first_identity)
+
+      {:ok, %{challenge: a}} = new_challenge({:invitation, code}, first, first_identity)
+
+      # Two devices challenged under one code: the first to commit spends it.
+      assert {:ok, _answer} = new_complete({:invitation, code}, a, first, first_identity)
+
+      assert {:error, :invitation_invalid} =
+               new_complete({:invitation, code}, b, second, second_identity)
+
+      # A code revoked between its challenge and its completion admits no one.
+      {:ok, _revoked} = Arca.Invitations.revoke(Prima.Actor.system(), other_id)
+
+      assert {:error, :invitation_invalid} =
+               new_complete({:invitation, other}, c, third, third_identity)
+
+      assert Arca.Repo.aggregate(User, :count) == people + 1
+      assert Arca.Repo.aggregate(PairedClient, :count) == 2
+
+      assert {:error, :invitation_invalid} =
+               new_challenge({:invitation, "nonsense"}, key(), identity())
+    end
+
+    test "the open admission needs the door's *, and enrolls a new person like an invitation" do
+      device = key()
+      identity = identity("opened")
+
+      assert {:error, {:door, :not_allowed}} = new_challenge({:open, @source}, device, identity)
+
+      open!()
+      {:ok, %{challenge: challenge}} = new_challenge({:open, @source}, device, identity)
+      assert challenge.admission == :open
+
+      # An open challenge is completed under no other admission.
+      assert {:error, :proof_refused} =
+               DeviceUnlock.enroll({:setup, @token}, %{
+                 "proof" => signed(challenge, elem(device, 1)),
+                 "name" => identity.name,
+                 "recovery_secret" => b64(identity.recovery_secret)
+               })
+
+      {:ok, %{challenge: challenge}} = new_challenge({:open, @source}, device, identity)
+
+      assert {:ok, %{certificate: certificate, recovery: %{name: "opened"}}} =
+               new_complete({:open, @source}, challenge, device, identity)
+
+      assert %User{admission: "open"} = Arca.Repo.get!(User, certificate.subject.user_id)
+    end
+
+    test "the open admission at a cap writes no person, athanor or device" do
+      open!()
+      Sanctum.Test.Settings.put("max_athanors", 1)
+      device = key()
+      identity = identity()
+      {:ok, %{challenge: challenge}} = new_challenge({:open, @source}, device, identity)
+      before = {Arca.Repo.aggregate(User, :count), Arca.Repo.aggregate(PairedClient, :count)}
+
+      assert {:error, {:limit_reached, :max_athanors, 1}} =
+               new_complete({:open, @source}, challenge, device, identity)
+
+      assert {Arca.Repo.aggregate(User, :count), Arca.Repo.aggregate(PairedClient, :count)} ==
+               before
+    end
+
+    test "the open admission's challenges are counted against their address, and another address keeps its own" do
+      open!()
+
+      for _ <- 1..20 do
+        assert {:ok, _challenge} = new_challenge({:open, @source}, key(), identity())
+      end
+
+      assert {:error, {:rate_limited, seconds}} =
+               new_challenge({:open, @source}, key(), identity())
+
+      assert seconds >= 1
+      assert {:ok, _challenge} = new_challenge({:open, "203.0.113.9"}, key(), identity())
+    end
+
+    test "a lost answer resumes under the redeemed code or, opened, by the committed key's proof alone",
+         %{admin_id: admin_id} do
+      {_id, code} = invite!(admin_id)
+      {_other_id, other} = invite!(admin_id)
+      {public, private} = device = key()
+      identity = identity()
+      {:ok, %{challenge: challenge}} = new_challenge({:invitation, code}, device, identity)
+      {:ok, answer} = new_complete({:invitation, code}, challenge, device, identity)
+
+      ask = %{
+        "admission" => "invitation",
+        "device_key" => b64(public),
+        "request_id" => identity.request_id
+      }
+
+      assert {:error, :invalid_token} = DeviceUnlock.resume({:invitation, "nonsense"}, ask)
+      assert {:error, :not_found} = DeviceUnlock.resume({:invitation, other}, ask)
+      assert {:error, :invalid_request} = DeviceUnlock.resume({:open, @source}, ask)
+      {:ok, %{challenge: resume}} = DeviceUnlock.resume({:invitation, code}, ask)
+
+      assert {:ok, %{certificate: certificate, recovery: recovery}} =
+               DeviceUnlock.resume({:invitation, code}, %{"proof" => signed(resume, private)})
+
+      assert {certificate, recovery} == {answer.certificate, answer.recovery}
+
+      open!()
+      {opened_public, opened_private} = opened = key()
+      opened_identity = identity()
+      {:ok, %{challenge: challenge}} = new_challenge({:open, @source}, opened, opened_identity)
+      {:ok, answer} = new_complete({:open, @source}, challenge, opened, opened_identity)
+
+      ask = %{
+        "admission" => "open",
+        "device_key" => b64(opened_public),
+        "request_id" => opened_identity.request_id
+      }
+
+      {:ok, %{challenge: resume}} = DeviceUnlock.resume({:open, @source}, ask)
+      {_wrong, wrong_private} = key()
+
+      assert {:error, :proof_refused} =
+               DeviceUnlock.resume({:open, @source}, %{"proof" => signed(resume, wrong_private)})
+
+      {:ok, %{challenge: resume}} = DeviceUnlock.resume({:open, @source}, ask)
+
+      assert {:ok, %{certificate: certificate}} =
+               DeviceUnlock.resume({:open, @source}, %{"proof" => signed(resume, opened_private)})
+
+      assert certificate == answer.certificate
     end
   end
 

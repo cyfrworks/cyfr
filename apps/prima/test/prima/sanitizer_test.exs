@@ -364,6 +364,18 @@ defmodule Prima.SanitizerTest do
       refute Prima.Sanitizer.sensitive_key?("approve_url_label")
     end
 
+    # A protected device's enrollment under an invitation carries the
+    # invitation's bearer code in its own header.
+    test "the invitation header a device's enrollment sends is redacted, and longer names are not" do
+      code = "q2mTb0yU7aKpXv1ZcR4n8wq2mTb0yU7aKpXv1ZcR4n8w"
+
+      assert Prima.Sanitizer.sanitize([{"x-cyfr-invitation", code}]) ==
+               [{"x-cyfr-invitation", "[REDACTED]"}]
+
+      assert Prima.Sanitizer.sensitive_key?("x_cyfr_invitation")
+      refute Prima.Sanitizer.sensitive_key?("x-cyfr-invitation-label")
+    end
+
     # A sign-in carry's fragment, as a page hands it to its LiveView
     # (`cyfr_carry`, `cyfr_assertion`, `carry_challenge`, `carry_return`) and
     # as the sign-in page posts an assertion to its callback.

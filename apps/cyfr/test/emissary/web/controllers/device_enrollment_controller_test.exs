@@ -12,7 +12,7 @@ defmodule Emissary.Web.DeviceEnrollmentControllerTest do
 
   use Emissary.Web.ConnCase, async: false
 
-  import Cyfr.Test.ProtectedDevice, only: [key: 0, b64: 1, signed: 2, reported: 2]
+  import Cyfr.Test.ProtectedDevice, only: [key: 0, b64: 1, signed: 2, reported: 2, reported: 3]
 
   alias Prima.DeviceCert
   alias Prima.DeviceCert.Challenge
@@ -107,6 +107,128 @@ defmodule Emissary.Web.DeviceEnrollmentControllerTest do
     # Restore's challenge without a restore's session.
     conn = post_json(http["enrollment_challenge"]["path"], %{request | "admission" => "restore"})
     assert json_response(conn, codes["not_restored"]) == %{"error" => "not_restored"}
+  end
+
+  defp post_with(path, body, headers) do
+    conn = put_req_header(build_conn(), "content-type", "application/json")
+
+    conn =
+      Enum.reduce(headers, conn, fn {name, value}, conn -> put_req_header(conn, name, value) end)
+
+    post(conn, path, Jason.encode!(body))
+  end
+
+  defp new_person(http, headers, admission) do
+    device = key()
+    identity = Sanctum.Test.Newcomers.identity()
+
+    conn =
+      post_with(
+        http["enrollment_challenge"]["path"],
+        reported(device, identity.request_id, admission),
+        headers
+      )
+
+    %{"challenge" => challenge} = json_response(conn, 200)
+    {:ok, challenge} = Challenge.decode(challenge)
+
+    complete = %{
+      "proof" => signed(challenge, elem(device, 1)),
+      "name" => identity.name,
+      "recovery_secret" => b64(identity.recovery_secret)
+    }
+
+    assert Enum.sort(Map.keys(complete)) == http["enrollment_complete"]["request"][admission]
+    {post_with(http["enrollment_complete"]["path"], complete, headers), device, identity}
+  end
+
+  describe "a new person under an invitation or the open admission" do
+    setup do
+      %{certificate: %{subject: %{user_id: admin_id}}} =
+        Cyfr.Test.ProtectedDevice.enrolled!(@token)
+
+      ctx = Sanctum.TestContext.session!(admin_id)
+      {:ok, %{code: code}} = Sanctum.Invitations.create(ctx, nil)
+      %{code: code}
+    end
+
+    test "an invitation's code travels in its header, enrolls, and resumes under the same header",
+         %{code: code} do
+      http = http()
+      header = http["credentials"]["invitation"]["challenge"]["header"]
+      assert http["credentials"]["invitation"]["resume"]["header"] == header
+
+      {conn, {public, private}, identity} = new_person(http, [{header, code}], "invitation")
+      assert %{"certificate" => certificate, "recovery" => _recovery} = json_response(conn, 200)
+
+      ask = %{
+        "admission" => "invitation",
+        "device_key" => b64(public),
+        "request_id" => identity.request_id
+      }
+
+      [first, second] = http["enrollment_resume"]
+
+      assert json_response(
+               post_with(first["path"], ask, []),
+               http["refusals"]["codes"]["invalid_token"]
+             ) ==
+               %{"error" => "invalid_token"}
+
+      conn = post_with(first["path"], ask, [{header, code}])
+      {:ok, resume} = Challenge.decode(json_response(conn, 200)["challenge"])
+
+      conn = post_with(second["path"], %{"proof" => signed(resume, private)}, [{header, code}])
+      assert %{"certificate" => ^certificate} = json_response(conn, 200)
+
+      # The code is spent.
+      codes = http["refusals"]["codes"]
+      {conn, _device, _identity} = new_person_refused(http, [{header, code}], "invitation")
+
+      assert json_response(conn, codes["invitation_invalid"]) == %{
+               "error" => "invitation_invalid"
+             }
+
+      assert Prima.Sanitizer.sanitize([{header, code}]) == [{header, "[REDACTED]"}]
+    end
+
+    test "the open admission takes no credential, and answers its refusals under the fixture's codes" do
+      http = http()
+      codes = http["refusals"]["codes"]
+      assert http["credentials"]["open"]["challenge"] == "none"
+
+      {conn, _device, _identity} = new_person_refused(http, [], "open")
+      assert json_response(conn, codes["not_admitted"]) == %{"error" => "not_admitted"}
+
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
+      {conn, _device, _identity} = new_person(http, [], "open")
+      assert %{"certificate" => _certificate} = json_response(conn, 200)
+
+      Sanctum.Test.Settings.put("max_athanors", 1)
+      {conn, _device, _identity} = new_person(http, [], "open")
+      assert json_response(conn, codes["limit_reached"]) == %{"error" => "limit_reached"}
+
+      for _ <- 1..20, do: new_person_refused(http, [], "open")
+      {conn, _device, _identity} = new_person_refused(http, [], "open")
+      assert json_response(conn, codes["rate_limited"]) == %{"error" => "rate_limited"}
+      assert "rate_limited" in http["refusals"]["retry_after"]
+      assert [_seconds] = get_resp_header(conn, "retry-after")
+    end
+  end
+
+  # A challenge alone, whatever it answers.
+  defp new_person_refused(http, headers, admission) do
+    device = key()
+    identity = Sanctum.Test.Newcomers.identity()
+
+    conn =
+      post_with(
+        http["enrollment_challenge"]["path"],
+        reported(device, identity.request_id, admission),
+        headers
+      )
+
+    {conn, device, identity}
   end
 
   test "the request log keeps no setup token" do

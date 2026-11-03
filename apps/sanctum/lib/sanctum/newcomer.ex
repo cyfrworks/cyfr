@@ -96,8 +96,9 @@ defmodule Sanctum.Newcomer do
     * `{:command_line, machine, identity}`, for setup alone — a
       command-line session for `machine` (`Sanctum.CliSignIn.machine/1`),
       provider `setup`, minted after the commit.
-    * `{:device, enrollment, identity}`, for setup alone — a protected
-      device's enrollment its proof verified (`Sanctum.DeviceUnlock`):
+    * `{:device, enrollment, identity}`, for setup, an invitation and an
+      open admission — a protected device's enrollment its proof verified
+      (`Sanctum.DeviceUnlock`):
       the athanor and client id reserved for it, its key, request id and
       reported holder. The person's athanor takes the reserved id, and
       the paired client, its first certificate and the first-method mark
@@ -313,6 +314,23 @@ defmodule Sanctum.Newcomer do
   def setup_admits(_token), do: {:error, :setup_closed}
 
   @doc """
+  Whether an invitation's `code` or the open admission would admit a new
+  local person now, before a protected device's enrollment is challenged
+  (`Sanctum.DeviceUnlock`): a directory is pinned, and the invitation is
+  redeemable or the door's `*` admits. Advice, decided again in the
+  admission's transaction. Refusals: `:no_directory`,
+  `:invitation_invalid`, `{:door, reason}` and `:unavailable`.
+  """
+  @spec admits({:invitation, term()} | :open) :: :ok | {:error, term()}
+  def admits({:invitation, code} = admission) when is_binary(code), do: local_admits(admission)
+  def admits({:invitation, _code}), do: {:error, :invitation_invalid}
+  def admits(:open), do: local_admits(:open)
+
+  defp local_admits(admission) do
+    with {:ok, _url} <- directory(:local), do: admissible(admission)
+  end
+
+  @doc """
   Whether `token` is the configured setup token, compared in constant
   time, whether or not setup is still open: the installation capability a
   lost enrollment answer is resumed under (`Sanctum.DeviceUnlock.resume/2`),
@@ -356,6 +374,16 @@ defmodule Sanctum.Newcomer do
   defp taken({:invitation, code}, _credential) when not is_binary(code),
     do: {:error, :invitation_invalid}
 
+  defp taken({:invitation, _code}, {:device, %{client_id: client_id}, identity} = credential)
+       when is_binary(client_id) do
+    with :ok <- identified(identity), do: {:ok, credential}
+  end
+
+  defp taken(:open, {:device, %{client_id: client_id}, identity} = credential)
+       when is_binary(client_id) do
+    with :ok <- identified(identity), do: {:ok, credential}
+  end
+
   defp taken(:open, {:passkey, registration, identity} = credential)
        when is_map(registration) do
     with :ok <- identified(identity), do: {:ok, credential}
@@ -378,7 +406,8 @@ defmodule Sanctum.Newcomer do
       {:error,
        {:invalid_argument,
         "This admission does not take that credential: setup takes a passkey or the command " <>
-          "line or a protected device, an invitation and an open admission a passkey, each " <>
+          "line or a protected device, an invitation and an open admission a passkey or a " <>
+          "protected device, each " <>
           "with the new person's identity"}}
 
   # The identity a local credential carries, as `identity/1` parses it.
