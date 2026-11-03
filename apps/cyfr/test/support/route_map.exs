@@ -834,6 +834,15 @@
           auth: "browser_public_login",
           live_view: "PrismWeb.SetupLive",
           pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/shared/:thread/attachments/:message_id/:filename",
+          plug: "PrismWeb.SharedAttachmentController",
+          plug_opts: ":show",
+          auth: "browser_session",
+          live_view: nil,
+          pipe_through: ["attachment", "attachment_throttle"]
         }
       ]
     }

@@ -35,10 +35,10 @@ defmodule PrismWeb.ThreadPaneLive do
   the turn ended when it has no such message to offer.
 
   In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
-  the pane sits beside a room: it hears what the host page shows
-  (`PrismWeb.RoomFeed`), reads that room into each send as the turn's
-  context (`Aqua.RoomExcerpt` — under the person's own membership, never
-  kept), and offers to paste a line onto it (`thread.aloud`). The panel's
+  the pane sits beside the shared thread the host page shows, when it
+  shows one (`PrismWeb.RoomFeed`): it reads that thread into each send as
+  the turn's context (`Aqua.RoomExcerpt` — under the person's own seat,
+  never kept), and offers to paste a line onto it (`thread.aloud`). The panel's
   own header names AQUA and the thread, so there the pane draws no name
   or thread label of its own, and its model override, soul or role and
   token counts sit in a menu (`<dom>-menu`, which the panel's header
@@ -81,7 +81,7 @@ defmodule PrismWeb.ThreadPaneLive do
     {:ok, socket, layout: false}
   end
 
-  # A pane in the person's own panel sits beside a room: it hears what the
+  # A pane in the person's own panel sits beside a shared thread: it hears what the
   # host page shows and reads it into each send.
   defp beside(socket, session) do
     room_feed = session["room_feed"]
@@ -444,12 +444,12 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, socket}
   end
 
-  # Beside a room: whether each send reads it.
+  # Beside a shared thread: whether each send reads it.
   def handle_event("toggle_read_room", _params, socket) do
     {:noreply, assign(socket, :read_room?, not socket.assigns.read_room?)}
   end
 
-  # A line from this thread onto the room beside it — the same
+  # A line from this thread onto the shared thread beside it — the same
   # `thread.aloud` verb as the picker, its target already known.
   # `Aqua.Aloud` decides what may be said and attributes the copy.
   def handle_event("paste", %{"id" => msg_id}, socket) do
@@ -459,8 +459,7 @@ defmodule PrismWeb.ThreadPaneLive do
           call_tool(socket.assigns.context, "thread/aloud", %{
             "thread" => thread.id,
             "message_ids" => [msg_id],
-            "target_athanor" => room["athanor_id"],
-            "target_thread" => room["thread_id"]
+            "target_thread" => room["shared_thread_id"]
           })
 
         case result do
@@ -556,7 +555,7 @@ defmodule PrismWeb.ThreadPaneLive do
       else: {:noreply, open_thread(socket, thread_of(socket.assigns.context, id))}
   end
 
-  # The host page opened another thread: the room this pane reads changed.
+  # The host page opened another thread: the shared thread this pane reads changed.
   def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
     do: {:noreply, assign(socket, :room, room)}
 
@@ -1062,7 +1061,7 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(
           socket,
           :error,
-          "What the room shows is too long to read into one message — untick reading it and send again."
+          "What the thread beside this shows is too long to read into one message — untick reading it and send again."
         )
 
       :too_many_attachments ->
@@ -1079,25 +1078,22 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # The room beside this pane, named for this send — the panel alone, and
-  # not a thread reading itself. The room's lines are read server-side,
-  # for this one turn.
+  # The shared thread beside this pane, named for this send — the panel
+  # alone. Its lines are read server-side, under the person's seat, for
+  # this one turn.
   defp room_context(
          %{assigns: %{panel?: true, read_room?: true, room: %{} = room}} = socket,
-         thread
+         _thread
        ) do
-    if reads_room?(room, thread), do: {[room: room], socket}, else: {[], socket}
+    if reads_room?(room), do: {[room: room], socket}, else: {[], socket}
   end
 
   defp room_context(socket, _thread), do: {[], socket}
 
-  # Beside a room, and not the room itself: a thread never reads itself,
-  # and nothing is pasted onto where it already is.
-  defp reads_room?(%{"thread_id" => room_id}, thread) do
-    is_nil(thread) or thread.id != room_id
-  end
-
-  defp reads_room?(_room, _thread), do: false
+  # Beside a shared thread: what the page shows is one, so there is
+  # something to read and to paste onto.
+  defp reads_room?(%{"shared_thread_id" => id}) when is_binary(id), do: true
+  defp reads_room?(_room), do: false
 
   defp current_or_new(%{assigns: %{thread: %{} = thread}}), do: {:ok, thread, false}
 
@@ -1762,7 +1758,7 @@ defmodule PrismWeb.ThreadPaneLive do
                       Say aloud…
                     </button>
                     <button
-                      :if={@panel? and reads_room?(@room, @thread)}
+                      :if={@panel? and reads_room?(@room)}
                       type="button"
                       phx-click="paste"
                       phx-value-id={msg.id}
@@ -1888,9 +1884,9 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
 
       <label
-        :if={@panel? and reads_room?(@room, @thread)}
+        :if={@panel? and reads_room?(@room)}
         id={@dom <> "-read-room"}
-        title="Each message you send here carries what the room shows — read for you, never kept"
+        title="Each message you send here carries what the thread beside it shows — read for you, never kept"
         class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-xs text-gray-500"
       >
         <input

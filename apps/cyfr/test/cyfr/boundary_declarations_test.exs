@@ -174,7 +174,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "which entry a name resolves to, never a value, never a write"},
       {~w(Invitations),
        "the invitation page's read of who invited and to which athanor, before any " <>
-         "ceremony, rostered for it in `Cyfr.Boundaries`' surface rows"}
+         "ceremony, rostered for it in `Cyfr.Boundaries`' surface rows"},
+      {~w(SharedThreads),
+       "a shared thread read under the person's own seat: the download's seat check, the " <>
+         "assistant's excerpt and say-aloud, and the people a person shares a thread with, " <>
+         "rostered for their callers in `Cyfr.Boundaries`' surface rows"}
     ],
     Compendium => [
       {~w(AquaPath ComponentPath ConsentFacts),

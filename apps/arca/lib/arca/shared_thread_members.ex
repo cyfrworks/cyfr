@@ -435,12 +435,53 @@ defmodule Arca.SharedThreadMembers do
 
   def together?(%Prima.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
 
+  @doc """
+  The people `user_id` sits with in an active thread: everyone holding an
+  active seat in an active thread where `user_id` holds one too, as
+  `%{user_id, display_name, email}` from their users row, each once and
+  never `user_id` themself, in no particular order. An invitation is no
+  seat and an archived thread is no place to share, on either side.
+  `together?/3` asks the same rule of one pair.
+  """
+  @spec people_with(Prima.Actor.t(), String.t()) ::
+          {:ok, [%{user_id: String.t(), display_name: String.t() | nil, email: String.t() | nil}]}
+          | {:error, :cross_tenant | :database_error}
+  # arca:unscoped-ok a shared thread is no athanor's; every row is reached through the
+  # person's own active seat, so nothing of a thread they do not sit in is read.
+  def people_with(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SharedThreadMembers.people_with", fn ->
+      {:ok,
+       Arca.Repo.all(
+         from(u in User,
+           where:
+             u.id != ^user_id and
+               u.id in subquery(
+                 from(mine in SharedThreadMember,
+                   join: t in SharedThread,
+                   on: t.id == mine.thread_id,
+                   join: m in SharedThreadMember,
+                   on: m.thread_id == t.id,
+                   where:
+                     mine.user_id == ^user_id and mine.status == "active" and
+                       t.status == "active" and m.status == "active",
+                   select: m.user_id
+                 )
+               ),
+           select: %{user_id: u.id, display_name: u.display_name, email: u.email}
+         )
+       )}
+    end)
+  end
+
+  def people_with(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
+
   @doc false
   # Every active thread `user_a` and `user_b` both sit in, locked in id
   # order inside the caller's transaction, after it locked the two people:
-  # the pair's, before `together!/2` reads their seats again, so a
-  # removal, a leave or a denial of either seat, each of which takes the
-  # thread's lock, waits for the pair or is read by it.
+  # a pair's and a file offer's (`Arca.FileOffers`), before their seats
+  # are read again, so a removal, a leave or a denial of either seat, each
+  # of which takes the thread's lock, waits for the pair or the offer or
+  # is read by it.
   @spec lock_shared!(String.t(), String.t()) :: [String.t()]
   # arca:unscoped-ok a shared thread is no athanor's; two people's threads are locked by their seats.
   # arca:db-raise-ok a step inside the caller's transaction.

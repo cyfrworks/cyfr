@@ -292,6 +292,40 @@ defmodule Sanctum.SharedThreadsTest do
     end
   end
 
+  describe "tail/3 and people_in_threads_with/1" do
+    test "tail reads the newest messages, oldest first, for a seated person alone",
+         %{alice: alice, bob: bob, carol: carol} do
+      thread = thread!(alice) |> seated!(alice, [bob])
+      id = thread.id
+      for n <- 1..4, do: {:ok, _} = SharedThreads.post(alice, id, "line #{n}")
+
+      assert {:ok, tail} = SharedThreads.tail(bob, id, 2)
+      assert Enum.map(tail, & &1.content) == ["line 3", "line 4"]
+      assert [%{seq: 3, author: ^alice}, %{seq: 4}] = tail
+
+      assert {:error, {:not_found, "Thread", ^id}} = SharedThreads.tail(carol, id, 2)
+    end
+
+    test "people_in_threads_with names everyone seated with the person in an active thread, by name",
+         %{alice: alice, bob: bob, carol: carol, dave: dave} do
+      # Made last, named first: the order is the name's, not the row's.
+      aaron = person!("aaron-#{System.unique_integer([:positive])}")
+      one = thread!(alice) |> seated!(alice, [dave, aaron])
+      thread!(alice, "Again") |> seated!(alice, [dave])
+      # An invitation is no seat, and an archived thread no place to share.
+      {:ok, :added} = SharedThreads.add(alice, one.id, identifier: identifier())
+      closed = thread!(alice, "Closed") |> seated!(alice, [carol])
+      {:ok, _} = SharedThreads.archive(alice, closed.id)
+      thread!(bob, "Theirs") |> seated!(bob, [carol])
+
+      assert {:ok, people} = SharedThreads.people_in_threads_with(alice)
+      assert Enum.map(people, & &1.user_id) == [aaron, dave]
+
+      assert [%{display_name: "aaron-" <> _, email: "aaron-" <> _} | _] = people
+      assert {:ok, [%{user_id: ^carol}]} = SharedThreads.people_in_threads_with(bob)
+    end
+  end
+
   describe "add/3" do
     test "by user id seats the person, and again answers added with one seat",
          %{alice: alice, bob: bob} do
@@ -525,6 +559,42 @@ defmodule Sanctum.SharedThreadsTest do
       assert {:ok, [%{seq: 2}]} = SharedThreads.messages(alice, thread.id, after_seq: 1)
 
       assert {:error, {:invalid_argument, _}} = SharedThreads.post(alice, thread.id, "")
+    end
+
+    test "a line said aloud keeps its provenance and nothing else of what it was given; a post keeps none",
+         %{alice: alice, bob: bob} do
+      thread = thread!(alice) |> seated!(alice, [bob])
+      from = %{"thread_id" => "thread_own", "message_id" => "msg_own"}
+
+      aloud = %{
+        "aloud_from" => from,
+        "shared_agent" => true,
+        "attachments" => [%{"stored_name" => "0-forged"}],
+        "author" => bob
+      }
+
+      assert {:ok, said} = SharedThreads.post(alice, thread.id, "my line", [], aloud)
+      assert said.attachments == []
+
+      assert {:ok, %{author: ^alice, payload: payload}} =
+               Arca.SharedMessages.get(Prima.Actor.system(), thread.id, said.id)
+
+      assert payload == %{"aloud_from" => from, "shared_agent" => true}
+
+      file = %{filename: "a.txt", media_type: "text/plain", bytes: "a"}
+      assert {:ok, posted} = SharedThreads.post(alice, thread.id, "plain", [file])
+
+      assert {:ok, %{payload: payload}} =
+               Arca.SharedMessages.get(Prima.Actor.system(), thread.id, posted.id)
+
+      assert Map.keys(payload) == ["attachments"]
+
+      assert {:ok, words} = SharedThreads.post(alice, thread.id, "words")
+
+      assert {:ok, %{payload: payload}} =
+               Arca.SharedMessages.get(Prima.Actor.system(), thread.id, words.id)
+
+      assert payload == %{}
     end
 
     test "a message's files are stored under it and read back by a member alone",

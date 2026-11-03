@@ -376,6 +376,28 @@ defmodule PrismWeb.FilesLiveTest do
       assert {:ok, []} = Members.people_sharing(stan.user_id)
     end
 
+    test "the picker lists someone who shares only a thread with the person, and a copy reaches them",
+         %{conn: conn, ctx: ctx} do
+      rita = test_user(name: "Thread Rita")
+      {:ok, thread} = Sanctum.SharedThreads.create(ctx.user_id, "Plans")
+      {:ok, :added} = Sanctum.SharedThreads.add(ctx.user_id, thread.id, user_id: rita.user_id)
+      {:ok, gone} = Sanctum.SharedThreads.create(ctx.user_id, "Gone")
+      ola = test_user(name: "Archived Ola")
+      {:ok, :added} = Sanctum.SharedThreads.add(ctx.user_id, gone.id, user_id: ola.user_id)
+      {:ok, _} = Sanctum.SharedThreads.archive(ctx.user_id, gone.id)
+      :ok = Arca.put(actor(ctx), ["data", "a.txt"], "alpha")
+
+      {view, _html} = mount_athanor(conn, "/files?p=data")
+      view |> element(~s(#files-entries input[phx-value-path="data/a.txt"])) |> render_click()
+      html = view |> element("#files-send-copy") |> render_click()
+      assert has_element?(view, "#send-copy-form", "Thread Rita")
+      refute html =~ "Archived Ola"
+
+      view |> form("#send-copy-form", %{"to" => rita.user_id}) |> render_submit()
+      assert {:ok, %{outbox: [%{recipient: recipient, filename: "a.txt"}]}} = call(ctx, "offers")
+      assert recipient == rita.user_id
+    end
+
     test "a refused read of the people sharing an athanor is told, never shown as no one",
          %{conn: conn, ctx: ctx} do
       # The page's context stays fresh across the click, so the event
@@ -404,9 +426,9 @@ defmodule PrismWeb.FilesLiveTest do
           Arca.Repo.query!("ALTER TABLE athanors_unavailable RENAME TO athanors")
         end
 
-      refute html =~ "You share no athanor with anyone yet."
+      refute html =~ "You share no athanor or thread with anyone yet."
       refute has_element?(view, "#send-copy-form")
-      assert html =~ "Who you share an athanor with could not be read."
+      assert html =~ "Who you share an athanor or a thread with could not be read."
     end
   end
 

@@ -11,8 +11,8 @@ defmodule Arca.SharedThreadMembersTest do
   a restore holds it; an invitation withdrawn and a seat removed,
   whatever the thread's status, and neither once an activation or another
   removal changed the row first (`Arca.SharedThreadMembersRaceTest`); a
-  person leaving, which ends a pair or a thread left empty; and whether
-  two people sit in one active thread. The people cap is
+  person leaving, which ends a pair or a thread left empty; whether two
+  people sit in one active thread, and whom a person sits with in one. The people cap is
   `Arca.SharedThreadMembersCapsTest`'s. Every function is the platform's
   and refuses an athanor's actor.
   """
@@ -438,6 +438,51 @@ defmodule Arca.SharedThreadMembersTest do
     end
   end
 
+  describe "people_with/2" do
+    test "names each person seated with the person in an active thread once, never themself" do
+      me = Arca.Test.Shares.person!()
+
+      [alice, bob, gone, archived, elsewhere, left_behind] =
+        for _ <- 1..6, do: Arca.Test.Shares.person!()
+
+      {:ok, one} = SharedThreads.create(server(), %{title: "One", created_by: me.id})
+      {:ok, two} = SharedThreads.create(server(), %{title: "Two", created_by: me.id})
+
+      for who <- [alice, bob, gone],
+          do: {:ok, _} = SharedThreadMembers.seat(server(), one.id, who.id, me.id)
+
+      {:ok, _} = SharedThreadMembers.seat(server(), two.id, alice.id, me.id)
+      {:ok, _} = SharedThreadMembers.invite(server(), one.id, identifier(), me.id)
+      {:ok, _} = SharedThreadMembers.leave(server(), one.id, gone.id)
+
+      # An archived thread is no place to share.
+      {:ok, closed} = SharedThreads.create(server(), %{title: "Closed", created_by: me.id})
+      {:ok, _} = SharedThreadMembers.seat(server(), closed.id, archived.id, me.id)
+      :ok = archived!(closed)
+
+      # A thread the person does not sit in, and one they left.
+      {:ok, theirs} = SharedThreads.create(server(), %{title: "Theirs", created_by: elsewhere.id})
+      {:ok, _} = SharedThreadMembers.seat(server(), theirs.id, left_behind.id, elsewhere.id)
+      {:ok, _} = SharedThreadMembers.seat(server(), theirs.id, me.id, elsewhere.id)
+      {:ok, _} = SharedThreadMembers.leave(server(), theirs.id, me.id)
+
+      assert {:ok, people} = SharedThreadMembers.people_with(server(), me.id)
+
+      assert Enum.sort_by(people, & &1.user_id) ==
+               Enum.sort_by(
+                 for(
+                   who <- [alice, bob],
+                   do: %{user_id: who.id, display_name: who.display_name, email: who.email}
+                 ),
+                 & &1.user_id
+               )
+
+      assert {:ok, [%{user_id: me_id}]} = SharedThreadMembers.people_with(server(), elsewhere.id)
+      assert me_id == left_behind.id
+      assert {:ok, []} = SharedThreadMembers.people_with(server(), person())
+    end
+  end
+
   describe "list/2" do
     test "names the thread's seats and invitations, oldest first", %{by: by, thread: thread} do
       who = person()
@@ -465,6 +510,7 @@ defmodule Arca.SharedThreadMembersTest do
           fn -> SharedThreadMembers.leave(actor, thread.id, by) end,
           fn -> SharedThreadMembers.find(actor, thread.id, by) end,
           fn -> SharedThreadMembers.together?(actor, by, by) end,
+          fn -> SharedThreadMembers.people_with(actor, by) end,
           fn -> SharedThreadMembers.list(actor, thread.id) end
         ] do
       assert {:error, :cross_tenant} = call.()

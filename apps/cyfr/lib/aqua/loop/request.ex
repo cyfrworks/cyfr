@@ -607,7 +607,7 @@ defmodule Aqua.Loop.Request do
     |> Enum.reverse()
   end
 
-  @excerpt_prefix "## Read from the room\n\n"
+  @excerpt_prefix "## Read from a shared thread\n\n"
 
   @doc """
   The request without the room excerpt `attach/3` placed last: the form

@@ -337,6 +337,40 @@ defmodule Arca.FileOffersTest do
       assert {:ok, []} = FileOffers.outbox(sender)
     end
 
+    test "an offer to a person the sender shares only an active shared thread with is made; " <>
+           "once the thread is archived, or one of them left it, it is refused",
+         %{sender: sender, stranger: stranger} do
+      server = Prima.Actor.system()
+      source!(sender, "a.txt", "x")
+
+      {:ok, thread} =
+        Arca.SharedThreads.create(server, %{title: "Offers", created_by: sender.user_id})
+
+      {:ok, _} =
+        Arca.SharedThreadMembers.seat(server, thread.id, stranger.user_id, sender.user_id)
+
+      assert {:ok, %{offer_id: offer_id}} =
+               FileOffers.offer(sender, stranger.user_id, ["data/docs/a.txt"])
+
+      assert {:ok, [%{offer_id: ^offer_id}]} = FileOffers.inbox(stranger)
+
+      {:ok, _} = Arca.SharedThreads.archive(server, thread.id, sender.user_id)
+
+      assert {:error, :not_shared} =
+               FileOffers.offer(sender, stranger.user_id, ["data/docs/a.txt"])
+
+      {:ok, other} =
+        Arca.SharedThreads.create(server, %{title: "Again", created_by: sender.user_id})
+
+      {:ok, _} = Arca.SharedThreadMembers.seat(server, other.id, stranger.user_id, sender.user_id)
+      {:ok, _} = Arca.SharedThreadMembers.leave(server, other.id, stranger.user_id)
+
+      assert {:error, :not_shared} =
+               FileOffers.offer(sender, stranger.user_id, ["data/docs/a.txt"])
+
+      assert {:ok, [%{offer_id: ^offer_id}]} = FileOffers.outbox(sender)
+    end
+
     test "an offer from an athanor archived since, or from one with no row, is refused under " <>
            "the lock, and nothing of it stands",
          %{sender: sender, recipient: recipient} do
@@ -1613,6 +1647,126 @@ defmodule Arca.FileOffersRaceTest do
       assert {:ok, "racing-bytes"} = Arca.get(recipient, ["data", "inbox", folder, "file.txt"])
     end)
   end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+end
+
+defmodule Arca.FileOffersSharedThreadRaceTest do
+  @moduledoc """
+  An offer between two people who share only a shared thread, racing the
+  recipient's removal from it, on connections of their own: the offer
+  locks the thread after the people and before it reads their seats
+  again, so a removal waits for the offer's commit and never lands
+  between its read and its write. PostgreSQL alone holds row locks.
+  """
+
+  use ExUnit.Case, async: false
+
+  require Ecto.Query
+
+  alias Arca.{FileOffers, SharedThreadMembers, SharedThreads}
+  alias Arca.FileOffersTest.Store
+  alias Arca.Schemas.{SharedThread, SharedThreadMember}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @moduletag :postgres
+
+  setup do
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, false)
+    Prima.Test.Env.put_app_env(:arca, :storage_adapter, Store)
+
+    n = System.unique_integer([:positive])
+    server = Prima.Actor.system()
+
+    {sender, recipient, thread} =
+      unboxed(fn ->
+        {:ok, home} =
+          Arca.Athanors.insert(server, %{
+            kind: "group",
+            name: "Thread race #{n}",
+            slug: "offers-thread-race-#{n}",
+            created_by: "system"
+          })
+
+        sender = %Prima.Actor{athanor_id: home.id, user_id: "usr_fot_s#{n}"}
+        recipient = "usr_fot_r#{n}"
+
+        {:ok, thread} =
+          SharedThreads.create(server, %{title: "Race #{n}", created_by: sender.user_id})
+
+        {:ok, _} = SharedThreadMembers.seat(server, thread.id, recipient, sender.user_id)
+        {sender, recipient, thread}
+      end)
+
+    on_exit(fn ->
+      Store.reset()
+
+      unboxed(fn ->
+        {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
+
+        Arca.Repo.delete_all(
+          Ecto.Query.from(m in SharedThreadMember, where: m.thread_id == ^thread.id)
+        )
+
+        Arca.Repo.delete_all(Ecto.Query.from(t in SharedThread, where: t.id == ^thread.id))
+
+        Arca.Repo.delete_all(
+          Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id == ^sender.athanor_id)
+        )
+      end)
+    end)
+
+    {:ok, sender: sender, recipient: recipient, thread: thread}
+  end
+
+  test "a removal from the thread the two share waits for an offer that read their seats",
+       %{sender: sender, recipient: recipient, thread: thread} do
+    unboxed(fn -> :ok = Arca.put(sender, ["data", "race.txt"], "race bytes") end)
+
+    # The offer is held once its rows are written, before it commits.
+    handler = {__MODULE__, make_ref()}
+    test = self()
+    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold/4, test)
+
+    offer =
+      Task.async(fn ->
+        Process.put(__MODULE__, :hold)
+        unboxed(fn -> FileOffers.offer(sender, recipient, ["data/race.txt"]) end)
+      end)
+
+    assert_receive {:held, offerer}, 10_000
+
+    removal =
+      Task.async(fn ->
+        unboxed(fn ->
+          SharedThreadMembers.remove(Prima.Actor.system(), thread.id, recipient, sender.user_id)
+        end)
+      end)
+
+    # The removal waits behind the offer's lock of the thread.
+    assert Task.yield(removal, 1_000) == nil
+
+    send(offerer, :continue)
+    assert {:ok, %{offer_id: _}} = Task.await(offer, 10_000)
+    assert {:ok, %{user_id: ^recipient}} = Task.await(removal, 10_000)
+  end
+
+  @doc false
+  def hold(_event, _measurements, %{query: query}, test) do
+    if Process.get(__MODULE__) == :hold and query =~ ~r/^INSERT INTO "file_offers"/ do
+      Process.delete(__MODULE__)
+      send(test, {:held, self()})
+
+      receive do
+        :continue -> :ok
+      after
+        15_000 -> raise "the offer was never let go"
+      end
+    end
+  end
+
+  def hold(_event, _measurements, _metadata, _test), do: :ok
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 end

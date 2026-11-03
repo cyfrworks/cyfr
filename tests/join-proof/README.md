@@ -76,10 +76,11 @@ recovery code or a confirmation's secret is deleted once read.
 | Step | What holds |
 |---|---|
 | `home` | the person is set up at A through `/setup`'s two screens: `@join-a` typed and found free at the stand-in, a passkey made, the identity registered at `dir.test` and the name claimed, the recovery code read and saved, and A holds that one person, admitted by setup and enrolled under the code's identifier; then they add a second recovery code (`person/recovery_code_add`), approved by the first, and pair a glass at A |
-| `hub` | H, enrolling its own people at `dir2.test`, allows the person's identifier at its door and invites it to a group athanor and a pair athanor |
-| `sign_in` | a fresh profile with no saved homes opens H by its address and names A in "Sign in from your CYFR"; A's `/carry` is reached through A's sign-in with the carry's fragment kept, the person begins there, both homes show the same code, A's confirmation names it, and H admits once, making them a member of both athanors; every cross-home request is `cross-site`; neither origin's storage holds a list of homes |
+| `hub` | H, enrolling its own people at `dir2.test`, allows the person's identifier at its door and invites it to a shared thread, Household, the operator makes through the `shared_thread` tool |
+| `sign_in` | a fresh profile with no saved homes opens H by its address and names A in "Sign in from your CYFR"; A's `/carry` is reached through A's sign-in with the carry's fragment kept, the person begins there, both homes show the same code, A's confirmation names it, and H admits once, with their own athanor there and their seat in Household; every cross-home request is `cross-site`; neither origin's storage holds a list of homes |
 | `resolution` | H read the person at `dir.test`, which their genesis names, and nothing of them at its own `dir2.test`; neither home's database has a table of visited homes |
 | `second_profile` | another fresh profile signs in by entered address the same way, importing nothing of the first; back at H's sign-in page, the field is filled with A from this browser's memory there (`cyfr:sign-in:your-cyfr`) |
+| `own_athanor` | the person admitted at H has their own athanor there, where the later steps open their pages and pair their phone |
 | `crafted` | a crafted carry link at A or H writes nothing: no action, confirmation, receipt or session |
 | `copied_session` | a copy of the person's session at A, in a browser holding none of their passkeys, obtains no assertion for H (A asks for a fresh proof it cannot give, which the person's own glass shows), and is no session at H |
 | `dropped_callback` | H's callback, committed, its answer never delivered: the browser's retry is answered with the session H made, never a second admission |
@@ -90,8 +91,8 @@ recovery code or a confirmation's secret is deleted once read.
 | `a_passkey_at_h` | a passkey scoped to A signs nobody in at H |
 | `phone` | a phone opens H's pairing code, keeps the code while the person certifies its key at A under a fresh confirmation there (`/carry#certify=`), comes back with A's certificate and pairs at H; A records the certification |
 | `renewal` | at half its life the phone renews its certificate at A by `fetch` from H's `/pair` (`POST /certify/v1/renew`), proving its device key, with no cookie and no confirmation, `cross-site`, and connects to H under the replacement |
-| `thread` | the person posts in the pair athanor's thread at H, and it reads there |
-| `removal` | removed from H's group athanor, the person can no longer act there, while the pair athanor, the phone paired there and A stay usable |
+| `thread` | the operator and the person, who share Household at H, have a pair thread there (`shared_thread.pair`); the person posts in it and it reads there |
+| `removal` | removed from Household, the person can no longer post there, while the pair thread, their own athanor at H, the phone paired there and A stay usable |
 | `rotate` | after A rotates the live key, H retires the person's sessions bound to the old `key_epoch` within its bound; their H passkey stays and signs them in; a new passkey from a CYFR-door session asks for a fresh proof |
 | `recertify` | H refuses the phone's certificate chained to the old key (`4408`), A refuses its renewal (the certification ended), and the phone, offering A's address, is certified there again under a fresh proof, naming A's new `key_epoch` |
 | `tabs` | a sign-in begun for H in one tab of A stays bound to H while other tabs work at H and A |

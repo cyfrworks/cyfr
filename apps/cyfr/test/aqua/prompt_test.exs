@@ -228,7 +228,7 @@ defmodule Aqua.PromptTest do
       [stable, volatile] = String.split(prompt, "Current date:", parts: 2)
       assert stable =~ "## Runtime Context"
       assert stable =~ "## Notes"
-      refute prompt =~ "## Read from the room"
+      refute prompt =~ "## Read from a shared thread"
       assert String.trim(volatile) =~ ~r/\d{2}:\d{2} UTC\z/
     end
 

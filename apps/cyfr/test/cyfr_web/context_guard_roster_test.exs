@@ -37,7 +37,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @public ~w(LoginLive PairLive RestoreLive SetupLive InviteLive CompanyLoginLive)
 
   # Rendered by the layout or a page with `live_render/3`; each mounts the guard itself.
-  @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive)
+  @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive SharedThreadLive)
 
   # Each `handle_event` and `update` that acts on the context runs inside `guard/2`.
   @components ~w(

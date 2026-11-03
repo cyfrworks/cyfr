@@ -20,7 +20,7 @@ defmodule Aqua.Providers.Thread do
   itself uses: `create`/`list` are `Arca.ThreadStorage` (how a
   headless client gets an id at all), `follow`/`unfollow` are
   `Arca.ThreadSubscriptionStorage` for the caller alone, and `aloud` is
-  `Aqua.Aloud.post/5` with every rule decided there.
+  `Aqua.Aloud.post/4` with every rule decided there.
 
   It lives beside the runner because the assistant owns its providers,
   as every domain does. `Aqua.ToolSeamTest` keeps the other arrow
@@ -62,7 +62,7 @@ defmodule Aqua.Providers.Thread do
   @behaviour Prima.Provider
 
   # The most lines one `aloud` may carry: each one copies bytes into the
-  # target athanor, so a call moves a slice, never a thread.
+  # shared thread, so a call moves a slice, never a thread.
   @aloud_max 50
 
   alias Aqua.{Approvals, Runner, Tape}
@@ -166,13 +166,11 @@ defmodule Aqua.Providers.Thread do
               "room",
               {:record,
                [
-                 Arg.new("athanor_id", :string, required: true),
-                 Arg.new("thread_id", :string, required: true),
-                 Arg.new("title", :string),
-                 Arg.new("athanor", :string)
+                 Arg.new("shared_thread_id", :string, required: true),
+                 Arg.new("title", :string)
                ]},
               description:
-                "send: the room the sender has open beside this thread (athanor_id, thread_id, title, athanor); its newest lines are read for this one turn, never stored"
+                "send: the shared thread the sender has open beside this thread (shared_thread_id, title); its newest lines are read under the sender's seat for this one turn, never stored"
             )
           ],
           kind: :write,
@@ -405,13 +403,9 @@ defmodule Aqua.Providers.Thread do
               description:
                 "aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor"
             ),
-            Arg.new("target_athanor", :string,
-              required: true,
-              description: "aloud: the athanor to post into (you must be a member)"
-            ),
             Arg.new("target_thread", :string,
               required: true,
-              description: "aloud: the thread in that athanor to post onto"
+              description: "aloud: the shared thread (sth_…) to say them in, which you sit in"
             )
           ],
           kind: :write,
@@ -434,7 +428,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, follow or unfollow a thread, and say one of your own private lines aloud into an athanor you belong to. Addressing: in an athanor with one person every send starts a turn; with more than one, a send starts a turn only when it names one — @aqua for the athanor's assistant, or @<role> for one of its roles. An unaddressed send is people talking: it persists and starts nothing (the result says running: false). A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the room open beside the thread. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, follow or unfollow a thread, and say one of your own private lines aloud into a shared thread you sit in. Addressing: in an athanor with one person every send starts a turn; with more than one, a send starts a turn only when it names one — @aqua for the athanor's assistant, or @<role> for one of its roles. An unaddressed send is people talking: it persists and starts nothing (the result says running: false). A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -595,8 +589,9 @@ defmodule Aqua.Providers.Thread do
 
   # The whole send envelope: the text, a pre-minted id and the refs
   # attached under it, the agent and model, the sender's client id, and
-  # the room beside the thread — read here, server-side, into the text
-  # the turn reads beside the task and never stored.
+  # the shared thread open beside it — read server-side under the
+  # sender's seat into the text the turn reads beside the task
+  # (`Aqua.Loop.Turn`), never stored.
   defp act("send", ctx, id, args) do
     text = args["message"]
     attachments = args["attachments"] || []
@@ -793,18 +788,14 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # Saying your own lines aloud into an athanor you belong to. Everything
-  # that matters is decided in `Aqua.Aloud.post/5` — membership on both
-  # sides, author-only, byte-copied attachments — this wraps it exactly as
-  # every other action wraps the runner.
-  defp act("aloud", ctx, id, %{
-         "message_ids" => ids,
-         "target_athanor" => target_athanor,
-         "target_thread" => target_thread
-       })
-       when is_list(ids) and is_binary(target_athanor) and is_binary(target_thread) do
+  # Saying your own lines aloud into a shared thread you sit in. Everything
+  # that matters is decided in `Aqua.Aloud.post/4` — the source athanor's
+  # membership, the target's seat, author-only, byte-copied attachments —
+  # this wraps it exactly as every other action wraps the runner.
+  defp act("aloud", ctx, id, %{"message_ids" => ids, "target_thread" => target_thread})
+       when is_list(ids) and is_binary(target_thread) do
     # Keep the direct domain entry bounded too: every selected message
-    # copies bytes into the target athanor.
+    # copies bytes into the shared thread.
     cond do
       not Enum.all?(ids, &is_binary/1) ->
         {:error, {:invalid_argument, "aloud takes a list of message ids"}}
@@ -813,17 +804,18 @@ defmodule Aqua.Providers.Thread do
         {:error, {:invalid_argument, "aloud takes at most #{@aloud_max} messages at a time"}}
 
       true ->
-        say_aloud(ctx, id, ids, target_athanor, target_thread)
+        say_aloud(ctx, id, ids, target_thread)
     end
   end
 
-  defp say_aloud(ctx, id, ids, target_athanor, target_thread) do
-    case Aqua.Aloud.post(ctx, id, ids, target_athanor, target_thread) do
+  defp say_aloud(ctx, id, ids, target_thread) do
+    case Aqua.Aloud.post(ctx, id, ids, target_thread) do
       {:ok, rows} ->
         {:ok, %{said_aloud: length(rows), target_thread: target_thread}}
 
       {:error, :not_a_member} ->
-        {:error, {:invalid_argument, "aloud reaches only athanors you are a member of"}}
+        {:error,
+         {:invalid_argument, "aloud reads only threads of an athanor you are a member of"}}
 
       {:error, :not_the_author} ->
         {:error,
@@ -837,8 +829,7 @@ defmodule Aqua.Providers.Thread do
         {:error, {:invalid_argument, "aloud requires at least one message id"}}
 
       {:error, :not_found} ->
-        {:error,
-         {:invalid_argument, "the selected messages or the target thread could not be found"}}
+        {:error, {:invalid_argument, "the selected messages could not be found"}}
 
       {:error, :attachment_missing} ->
         {:error,

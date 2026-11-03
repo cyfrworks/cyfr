@@ -230,13 +230,9 @@ defmodule Aqua.TurnSourcesTest do
 
     test "the room excerpt is sent once, marked excluded, and adds no source",
          %{ctx: ctx, thread: thread} do
-      {:ok, room_thread} = Threads.create(Sanctum.Context.actor(ctx))
-
-      {:ok, _} =
-        Threads.append(Sanctum.Context.actor(ctx), room_thread.id, %{
-          author: ctx.user_id,
-          content: "ROOM-ONLY-LINE"
-        })
+      # A shared thread the person sits in, beside their own thread.
+      {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
+      {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "ROOM-ONLY-LINE")
 
       {:ok, %{turn: turn}} =
         Tape.accept(ctx, thread.id, %{
@@ -245,7 +241,7 @@ defmodule Aqua.TurnSourcesTest do
             agent: "aqua",
             requested_by: ctx.user_id,
             model: @model_id,
-            options: %{"room" => %{"athanor_id" => ctx.athanor_id, "thread_id" => room_thread.id}}
+            options: %{"room" => %{"shared_thread_id" => beside.id, "title" => "Beside"}}
           }
         })
 

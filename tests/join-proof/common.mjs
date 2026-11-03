@@ -534,8 +534,8 @@ export async function setUpHub(identifier) {
   const hub = await ask({ op: "h_setup", identifier });
   record.hub = hub;
   return [row("hub", "chromium",
-    hub.allowed && hub.invited_group && hub.invited_pair && hub.directory === "https://dir2.test" && hub.a_directory === "https://dir.test",
-    "H, enrolling at its own directory dir2.test, allows the identifier at its door and invites it to a group athanor and a pair athanor",
+    hub.allowed && !!hub.household && hub.invited && hub.directory === "https://dir2.test" && hub.a_directory === "https://dir.test",
+    "H, enrolling at its own directory dir2.test, allows the identifier at its door and invites it to a shared thread, Household",
     hub), hub];
 }
 

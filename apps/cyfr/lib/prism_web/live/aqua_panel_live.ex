@@ -8,12 +8,13 @@ defmodule PrismWeb.AquaPanelLive do
   them open as `PrismWeb.ThreadPaneLive` focused on You, whatever
   athanor the page is on.
 
-  Opened beside a room (the chat page tells it what is in view through
-  `PrismWeb.RoomFeed`), a send from here carries a bounded excerpt of the
-  room's tape as context for the turn — read under the person's own
-  membership, into the private thread only, never kept — and an answer
-  can be pasted onto the room, attributed to the person. The pane does
-  both; the panel names the room and holds the list.
+  Opened beside a shared thread (the chat page tells it what is in view
+  through `PrismWeb.RoomFeed`), a send from here carries a bounded excerpt
+  of what was said there as context for the turn — read under the
+  person's own seat, into the private thread only, never kept — and an
+  answer can be pasted onto the shared thread, attributed to the person.
+  The pane does both; the panel names the shared thread and holds the
+  list.
 
   The panel is an overlay: it takes no room from the page. From the
   bottom, the page draws: the canvas's frames (the canvas z-0, column

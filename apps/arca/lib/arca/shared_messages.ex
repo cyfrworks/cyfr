@@ -152,6 +152,32 @@ defmodule Arca.SharedMessages do
 
   def list(%Prima.Actor{}, _thread_id, _opts), do: {:error, :cross_tenant}
 
+  @doc """
+  The thread's newest `count` messages, oldest first: its tail, however
+  long the thread, at most `max_page/0`.
+  """
+  @spec latest(Prima.Actor.t(), String.t(), pos_integer()) ::
+          {:ok, [row()]} | {:error, :cross_tenant | :database_error}
+  # arca:unscoped-ok a shared thread is no athanor's; its newest messages are read by its id.
+  def latest(%Prima.Actor{scope: :platform}, thread_id, count)
+      when is_binary(thread_id) and is_integer(count) and count > 0 do
+    count = min(count, @max_page)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.SharedMessages.latest", fn ->
+      {:ok,
+       from(m in SharedMessage,
+         where: m.thread_id == ^thread_id,
+         order_by: [desc: m.seq],
+         limit: ^count
+       )
+       |> Arca.Repo.all()
+       |> Enum.reverse()}
+    end)
+    |> decoded()
+  end
+
+  def latest(%Prima.Actor{}, _thread_id, _count), do: {:error, :cross_tenant}
+
   defp fields(attrs) do
     author = attrs[:author]
     id = attrs[:id]

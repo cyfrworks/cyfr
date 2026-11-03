@@ -522,33 +522,25 @@ defmodule Aqua.Providers.ThreadTest do
           else: Application.delete_env(:arca, :base_path)
       end)
 
-      n = System.unique_integer([:positive])
+      # A person of their own (`Sanctum.TestContext.person!/1`), seated in
+      # the source athanor, since aloud checks membership on the source
+      # too, and in a shared thread with someone else.
+      {ctx, _user} = Sanctum.TestContext.person!(ctx)
 
-      # Aloud checks membership on the SOURCE too; the fixture context's
-      # seat there is implicit elsewhere, explicit here.
       {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id,
-          scope: "athanor",
-          athanor_id: ctx.athanor_id
-        )
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-      {:ok, room} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Room #{n}")
-      {:ok, shared} = Threads.create(Sanctum.Context.actor(%{ctx | athanor_id: room.id}))
-      {:ok, room: room, shared: shared}
+      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+      {:ok, shared} = Sanctum.SharedThreads.create(ctx.user_id, "Trip")
+      {:ok, ctx: ctx, thread: thread, shared: shared}
     end
 
     test "the ids are checked in shape and in number before anything is read", %{
       ctx: ctx,
       thread: thread,
-      room: room,
       shared: shared
     } do
-      base = %{
-        "action" => "aloud",
-        "thread" => thread.id,
-        "target_athanor" => room.id,
-        "target_thread" => shared.id
-      }
+      base = %{"action" => "aloud", "thread" => thread.id, "target_thread" => shared.id}
 
       # The validator does not look inside arrays: a non-string element
       # is a typed refusal here, not a clause error in storage.
@@ -558,10 +550,20 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:error, {:invalid_argument, _}} = call(ctx, Map.put(base, "message_ids", too_many))
     end
 
-    test "your own line reaches the room; someone else's is refused", %{
+    test "the target is a shared thread, named alone", %{ctx: ctx, thread: thread} do
+      # The declaration takes the shared thread and nothing else: no
+      # target athanor, and no call without the thread.
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "thread", %{
+                 "action" => "aloud",
+                 "thread" => thread.id,
+                 "message_ids" => ["msg_x"]
+               })
+    end
+
+    test "your own line reaches the shared thread; someone else's is refused", %{
       ctx: ctx,
       thread: thread,
-      room: room,
       shared: shared
     } do
       {:ok, mine} =
@@ -578,17 +580,18 @@ defmodule Aqua.Providers.ThreadTest do
           content: "not yours"
         })
 
-      assert {:ok, %{said_aloud: 1}} =
+      shared_id = shared.id
+
+      assert {:ok, %{said_aloud: 1, target_thread: ^shared_id}} =
                call(ctx, %{
                  "action" => "aloud",
                  "thread" => thread.id,
                  "message_ids" => [mine.id],
-                 "target_athanor" => room.id,
                  "target_thread" => shared.id
                })
 
-      assert [%{content: "hi", author: author}] =
-               Threads.messages(Sanctum.Context.actor(%{ctx | athanor_id: room.id}), shared.id)
+      assert {:ok, [%{content: "hi", author: author}]} =
+               Sanctum.SharedThreads.messages(ctx.user_id, shared.id)
 
       assert author == ctx.user_id
 
@@ -597,11 +600,37 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "aloud",
                  "thread" => thread.id,
                  "message_ids" => [other.id],
-                 "target_athanor" => room.id,
                  "target_thread" => shared.id
                })
 
       assert msg =~ "your own lines"
+    end
+
+    test "a shared thread the caller does not sit in is a missing one", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      someone = Cyfr.Test.ShareFixtures.person!("Someone").user.id
+      {:ok, theirs} = Sanctum.SharedThreads.create(someone, "Theirs")
+
+      {:ok, mine} =
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          kind: "text",
+          content: "hi"
+        })
+
+      theirs_id = theirs.id
+
+      assert {:error, {:not_found, "Thread", ^theirs_id}} =
+               call(ctx, %{
+                 "action" => "aloud",
+                 "thread" => thread.id,
+                 "message_ids" => [mine.id],
+                 "target_thread" => theirs.id
+               })
+
+      assert {:ok, []} = Sanctum.SharedThreads.messages(someone, theirs.id)
     end
   end
 
@@ -745,41 +774,48 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, "again"} = Arca.get(Sanctum.Context.actor(ctx), blob)
     end
 
-    test "a room beside the thread is read for the send and never stored", %{
+    test "a shared thread beside the thread is read for the send and never stored", %{
       ctx: ctx,
       thread: thread
     } do
-      {:ok, room} = Threads.create(Sanctum.Context.actor(ctx), %{title: "the room"})
+      # The sender is a person of their own, seated beside the others.
+      {ctx, _user} = Sanctum.TestContext.person!(ctx)
 
       {:ok, _} =
-        Threads.append(Sanctum.Context.actor(ctx), room.id, %{
-          author: ctx.user_id,
-          content: "room talk"
-        })
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+      {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
+      {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "shared talk")
 
       assert {:ok, %{accepted: true, message_id: id}} =
                call(ctx, %{
                  "action" => "send",
                  "thread" => thread.id,
-                 "message" => "about the room",
-                 "room" => %{
-                   "athanor_id" => ctx.athanor_id,
-                   "thread_id" => room.id,
-                   "title" => "the room"
-                 }
+                 "message" => "about the shared thread",
+                 "room" => %{"shared_thread_id" => beside.id, "title" => "Beside"}
                })
 
       {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), id)
-      assert row.content == "about the room"
-      refute inspect(Threads.payload(row)) =~ "room talk"
+      assert row.content == "about the shared thread"
+      refute inspect(Threads.payload(row)) =~ "shared talk"
 
-      # A room the sender cannot read leaves the send as it is.
+      # A shared thread the sender does not sit in leaves the send as it is.
       assert {:ok, %{accepted: true}} =
                call(ctx, %{
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "still sent",
-                 "room" => %{"athanor_id" => "ath_elsewhere", "thread_id" => "thread_x"}
+                 "room" => %{"shared_thread_id" => "sth_elsewhere"}
+               })
+    end
+
+    test "the room a send names is a shared thread, by its id", %{ctx: ctx, thread: thread} do
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "thread", %{
+                 "action" => "send",
+                 "thread" => thread.id,
+                 "message" => "hello",
+                 "room" => %{"title" => "no id"}
                })
     end
 

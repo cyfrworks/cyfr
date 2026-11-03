@@ -2,9 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.AquaPanelLiveTest do
-  # The person's own AQUA beside a room: two panes on two athanors on one
-  # page, and nothing bleeds — the panel's send lands in You with the room
-  # read into the turn, and an answer pastes back onto the room, attributed.
+  # The person's own AQUA beside the chat: two panes on two athanors on one
+  # page, and nothing bleeds — beside a shared thread, the panel's send
+  # lands in You with that thread read into the turn, and an answer pastes
+  # back onto it, attributed.
   # The panel itself: what the assistant points at stays in the panel, a
   # halt reaches only its own turn, Escape and Ctrl+J close it, and it
   # keeps its thread, its place, its size and its docking from one page to
@@ -67,6 +68,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # The first line names the thread.
     {:ok, thread} = Threads.get(Sanctum.Context.actor(in_room), thread.id)
 
+    # A shared thread the two talk in, which the panel reads beside it.
+    {:ok, team} = Sanctum.SharedThreads.create(user.user_id, "Plans #{n}")
+    {:ok, :added} = Sanctum.SharedThreads.add(user.user_id, team.id, user_id: other.user_id)
+    {:ok, _} = Sanctum.SharedThreads.post(other.user_id, team.id, "ship friday")
+
     {:ok,
      conn: conn,
      user: user,
@@ -75,7 +81,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
      me: me,
      in_room: in_room,
      them: them,
-     thread: thread}
+     thread: thread,
+     team: team}
   end
 
   defp route(athanor), do: Athanors.route_slug(athanor)
@@ -138,28 +145,33 @@ defmodule PrismWeb.AquaPanelLiveTest do
     you_thread
   end
 
-  test "the panel opens onto You beside the room, and a send lands in You with the room read into the turn",
-       %{conn: conn, room: room, me: me, in_room: in_room, thread: thread} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+  test "the panel opens onto You beside a shared thread, and a send lands in You with that thread read into the turn",
+       %{conn: conn, me: me, team: team, user: user} do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
     settled_render(view)
 
     {panel, html} = open_panel(view)
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
-    assert html =~ "Reading #{room.name} · #{thread.title}"
+    assert html =~ "Reading #{team.title}"
 
     pane = child!(panel, "aqua-panel-pane")
     assert thread_of(pane) == nil
-    assert render(pane) =~ "Read #{room.name}"
+    assert render(pane) =~ "Read #{team.title}"
+
+    refute has_element?(pane, ~s(label[title*="room"])),
+           "the shared-thread read tooltip still says room"
+
+    assert has_element?(pane, ~s(label[title*="thread beside it"]))
 
     Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
-    # In You, and only there — with the room read into the turn's request
-    # beside the task, never into the system prompt.
+    # In You, and only there — with the shared thread read into the turn's
+    # request beside the task, never into the system prompt.
     you_thread = settled_you!(me)
     [request] = model_requests()
     text = request_text(request)
-    assert text =~ "## Read from the room"
+    assert text =~ "## Read from a shared thread"
     assert text =~ "ship friday"
     assert text =~ "what do they mean?"
     refute request["system"] =~ "ship friday"
@@ -169,10 +181,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
              &(&1.content == "what do they mean?")
            )
 
-    refute Enum.any?(
-             Threads.latest_messages(Sanctum.Context.actor(in_room), thread.id, 10),
-             &(&1.content == "what do they mean?")
-           )
+    {:ok, said} = Sanctum.SharedThreads.messages(user.user_id, team.id)
+    refute Enum.any?(said, &(&1.content == "what do they mean?"))
 
     # The pane is on the thread its first message created.
     on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
@@ -180,27 +190,27 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel reads what the page shows: open another thread and it says so",
-       %{conn: conn, room: room, in_room: in_room, thread: thread} do
-    {:ok, second} = Threads.create(Sanctum.Context.actor(in_room))
+  test "the panel reads what the page shows: another shared thread, and none beside an athanor's thread",
+       %{conn: conn, room: room, team: team, thread: thread, user: user} do
+    {:ok, second} = Sanctum.SharedThreads.create(user.user_id, "Second thread")
 
-    {:ok, _} =
-      Threads.update(Sanctum.Context.actor(in_room), second.id, %{title: "Second thread"})
-
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
     settled_render(view)
     {panel, html} = open_panel(view)
-    assert html =~ "Reading #{room.name} · #{thread.title}"
+    assert html =~ "Reading #{team.title}"
 
-    render_click(view, "open_thread", %{"route" => route(room), "id" => second.id})
-    assert render(panel) =~ "Reading #{room.name} · Second thread"
+    render_click(view, "open_shared", %{"id" => second.id})
+    assert render(panel) =~ "Reading Second thread"
+
+    render_patch(view, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+    refute has_element?(panel, "#aqua-panel-room")
 
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "an answer in the panel pastes onto the room, attributed, and the room's pane shows it",
-       %{conn: conn, user: user, room: room, me: me, in_room: in_room, thread: thread} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+  test "an answer in the panel pastes onto the shared thread, attributed, and that thread's pane shows it",
+       %{conn: conn, user: user, me: me, team: team} do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
     pane = child!(panel, "aqua-panel-pane")
@@ -225,20 +235,18 @@ defmodule PrismWeb.AquaPanelLiveTest do
       |> element(~s(button[phx-click="paste"][phx-value-id="#{answer.id}"]))
       |> render_click()
 
-    assert html =~ "Pasted onto #{room.name}"
+    assert html =~ "Pasted onto #{team.title}"
 
-    copy =
-      Enum.find(
-        Threads.latest_messages(Sanctum.Context.actor(in_room), thread.id, 10),
-        &(&1.content == "They mean Friday.")
-      )
-
+    {:ok, said} = Sanctum.SharedThreads.messages(user.user_id, team.id)
+    copy = Enum.find(said, &(&1.content == "They mean Friday."))
     assert copy.author == user.user_id
-    assert Threads.payload(copy)["shared_agent"] == true
 
-    # The room's own pane on the page heard of it.
-    room_pane = child!(view, "pane-" <> room.id)
-    assert render(room_pane) =~ "shared from AQUA by You"
+    {:ok, stored} = Arca.SharedMessages.get(Prima.Actor.system(), team.id, copy.id)
+    assert stored.payload["shared_agent"] == true
+
+    # The shared thread's own pane on the page heard of it.
+    shared_pane = child!(view, "shared-pane-" <> team.id)
+    assert render(shared_pane) =~ "They mean Friday."
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -259,7 +267,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     you_thread = settled_you!(me)
     assert you_thread.athanor_id == mine.id
     [request] = model_requests()
-    refute request_text(request) =~ "Read from the room"
+    refute request_text(request) =~ "Read from a shared thread"
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -356,9 +364,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute_push_event(pane, "aqua:intents", %{intents: _})
     on_thread!(child!(panel, "aqua-panel-pane"), second.id)
 
-    # The page is still the room's, and the room's pane is where it was.
+    # The page is still on the athanor's thread, and its pane is where it was.
     assert child!(view, "pane-" <> room.id)
-    assert render(panel) =~ "Reading #{room.name} · #{thread.title}"
+    assert on_thread!(child!(view, "pane-" <> room.id), thread.id)
 
     Cyfr.Test.Sandbox.end_views()
   end

@@ -3,23 +3,26 @@
 
 defmodule PrismWeb.RoomFeed do
   @moduledoc """
-  The room a page has open, told to the person's own AQUA beside it.
+  The shared thread a page has open, told to the person's own AQUA
+  beside it.
 
-  The chat page hosts the room; the panel (`PrismWeb.AquaPanelLive`) and
+  The chat page hosts the shared thread; the panel (`PrismWeb.AquaPanelLive`) and
   the pane inside it are nested LiveViews with mailboxes of their own. So
   the page announces what it shows on a topic of its own — one per page
   instance, named by the page's socket id — and whoever sits beside it
-  listens. The room travels as a plain map with string keys, because it
-  also rides the session a nested view mounts with: that is how the panel
-  knows the room the moment it opens, before any announcement.
+  listens. It travels as a plain map with string keys, `shared_thread_id`
+  and `title`, the shape the `thread` tool's `send` takes as its `room`,
+  because it also rides the session a nested view mounts with: that is
+  how the panel knows the thread the moment it opens, before any
+  announcement.
 
-  One direction only: the room is read into the person's own thread. The
-  feed carries a name and two ids, never a line of the tape — the excerpt
-  is read at send time, under the person's own membership
+  One direction only: the shared thread is read into the person's own
+  thread. The feed carries a title and an id, never a line of what was
+  said — the excerpt is read at send time, under the person's own seat
   (`Aqua.room_excerpt/2`).
   """
 
-  @typedoc "`athanor_id`, `thread_id`, and for display `title` and `athanor`."
+  @typedoc "`shared_thread_id`, and for display `title`."
   @type room :: %{optional(String.t()) => String.t() | nil}
 
   @doc """
@@ -38,24 +41,13 @@ defmodule PrismWeb.RoomFeed do
   def announce(topic, room) when is_binary(topic),
     do: Cyfr.Bus.broadcast_page(topic, Cyfr.Bus.RoomInView.new(room))
 
-  @doc "A room as the page names it, for the session and the feed."
-  @spec room(map(), map(), String.t() | nil) :: room()
-  def room(%{id: athanor_id}, %{id: thread_id, title: title}, athanor) do
-    %{
-      "athanor_id" => athanor_id,
-      "thread_id" => thread_id,
-      "title" => title,
-      "athanor" => athanor
-    }
-  end
+  @doc "A shared thread as the page names it (`title`), for the session and the feed."
+  @spec room(String.t(), String.t() | nil) :: room()
+  def room(thread_id, title) when is_binary(thread_id),
+    do: %{"shared_thread_id" => thread_id, "title" => title}
 
-  @doc "How a room is named to the person: the athanor, then the thread."
+  @doc "How the shared thread is named to the person."
   @spec label(room() | nil) :: String.t()
-  def label(%{} = room) do
-    [room["athanor"], room["title"]]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join(" · ")
-  end
-
+  def label(%{"title" => title}) when is_binary(title), do: title
   def label(_), do: ""
 end

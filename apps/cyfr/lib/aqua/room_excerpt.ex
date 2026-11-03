@@ -3,81 +3,78 @@
 
 defmodule Aqua.RoomExcerpt do
   @moduledoc """
-  What a room shows, read for the person's own AQUA.
+  What a shared thread says, read for the person's own AQUA.
 
-  The person has a room open beside their own thread and asks their own
-  assistant about it. That assistant is not in the room — a group's tape
-  is the group's — so the excerpt is read here, under the person's own
-  membership of the room (`Sanctum.Context.focus/2`), and handed to the
-  turn as context (`Aqua.Runner.send_message/4`'s `:room`):
-  it rides the prompt of that one turn and is never a row of the private
-  thread, never its history, never a note. Shared to private is the only
-  direction; nothing here writes.
+  The person has a shared thread open beside their own thread and asks
+  their own assistant about it. That assistant is not in the shared
+  thread — nothing runs there — so the excerpt is read here, under the
+  person's own seat in it (`Sanctum.SharedThreads.tail/3`, which answers a
+  thread they do not sit in as a missing one), and handed to the turn as
+  context (`Aqua.Runner.send_message/4`'s `:room`): it rides the prompt
+  of that one turn and is never a row of the private thread, never its
+  history, never a note. Shared to private is the only direction;
+  nothing here writes.
 
   Bounded: the newest lines that fit `max_bytes/0`, oldest first, headed
-  by one line naming the room, so the excerpt and the person's own
+  by one line naming the thread, so the excerpt and the person's own
   message together stay inside the runner's message cap.
   """
 
-  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Context
+  alias Sanctum.SharedThreads
 
   @max_bytes 16 * 1024
   @rows 40
-  @agent_author Prima.Author.agent()
 
-  @typedoc "Which room, and how the person sees it named."
+  @typedoc "Which shared thread, and how the person sees it named."
   @type room :: %{
-          required(:athanor_id) => String.t(),
-          required(:thread_id) => String.t(),
-          optional(:title) => String.t() | nil,
-          optional(:athanor) => String.t() | nil
+          required(:shared_thread_id) => String.t(),
+          optional(:title) => String.t() | nil
         }
 
   @doc """
-  The room's newest lines as one bounded text. `{:error, reason}` when the
-  person holds no seat in the room, the thread is gone, or nobody has said
-  anything there yet.
+  The thread's newest lines as one bounded text. `{:error, reason}` when the
+  person holds no seat in the thread, or nobody has said anything there yet.
   """
   @spec read(Context.t(), room()) :: {:ok, String.t()} | {:error, term()}
-  def read(%Context{} = ctx, %{athanor_id: athanor_id, thread_id: thread_id} = room) do
-    with {:ok, room_ctx} <- Context.focus(ctx, athanor_id),
-         {:ok, thread} <- Threads.get(Sanctum.Context.actor(room_ctx), thread_id),
-         rows when is_list(rows) <-
-           Threads.latest_messages(Sanctum.Context.actor(room_ctx), thread_id, @rows) do
-      case lines(rows) do
+  def read(%Context{user_id: user_id}, %{shared_thread_id: thread_id} = room)
+      when is_binary(user_id) and is_binary(thread_id) do
+    with {:ok, thread} <- SharedThreads.get(user_id, thread_id),
+         {:ok, messages} <- SharedThreads.tail(user_id, thread_id, @rows) do
+      case lines(messages) do
         [] -> {:error, :nothing_said}
         lines -> {:ok, header(room, thread) <> "\n" <> fit(lines)}
       end
     end
   end
 
-  defp header(room, thread) do
-    where =
-      [room[:athanor], room[:title] || thread.title]
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.join(" · ")
+  def read(%Context{}, _room), do: {:error, :no_seat}
 
-    ~s(Read from the room "#{where}" — for context only; nobody in this thread said it:)
+  defp header(room, thread) do
+    title = present(room[:title]) || present(thread.title) || pair_name(thread) || "a thread"
+
+    ~s(Read from the shared thread "#{title}" — for context only; nobody in this thread said it:)
   end
 
-  # People's lines and the room's own assistant's — cards, system lines and
-  # errors are the room's machinery, not what it said. Names are resolved
-  # once per author.
-  defp lines(rows) do
+  defp present(text) when is_binary(text) and text != "", do: text
+  defp present(_text), do: nil
+
+  defp pair_name(%{with: %{name: name}}), do: present(name)
+  defp pair_name(_thread), do: nil
+
+  # What people said, each named once per author; a message with no words
+  # (files alone) says nothing to read.
+  defp lines(messages) do
     {lines, _names} =
-      Enum.flat_map_reduce(rows, %{}, fn
-        %{kind: "text", content: content}, names when content in [nil, ""] ->
+      Enum.flat_map_reduce(messages, %{}, fn
+        %{content: content}, names when content in [nil, ""] ->
           {[], names}
 
-        %{kind: "text", author: @agent_author, content: content}, names ->
-          {["AQUA: " <> String.trim(content)], names}
-
-        %{kind: "text", author: author, content: content}, names when is_binary(author) ->
+        %{author: author, content: content}, names when is_binary(author) ->
           {name, names} = name_of(names, author)
           {[name <> ": " <> String.trim(content)], names}
 
-        _row, names ->
+        _message, names ->
           {[], names}
       end)
 

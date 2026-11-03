@@ -5286,9 +5286,7 @@ type ThreadAloudArgs struct {
 	Thread string `json:"thread"`
 	// aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor
 	MessageIds []string `json:"message_ids"`
-	// aloud: the athanor to post into (you must be a member)
-	TargetAthanor string `json:"target_athanor"`
-	// aloud: the thread in that athanor to post onto
+	// aloud: the shared thread (sth_…) to say them in, which you sit in
 	TargetThread string `json:"target_thread"`
 }
 
@@ -5542,7 +5540,7 @@ type ThreadSendArgs struct {
 	Id Field[string] `json:"id,omitzero"`
 	// send: a model override for this turn
 	Model Field[string] `json:"model,omitzero"`
-	// send: the room the sender has open beside this thread (athanor_id, thread_id, title, athanor); its newest lines are read for this one turn, never stored
+	// send: the shared thread the sender has open beside this thread (shared_thread_id, title); its newest lines are read under the sender's seat for this one turn, never stored
 	Room Field[ThreadSendArgsRoom] `json:"room,omitzero"`
 }
 
@@ -5574,10 +5572,8 @@ func (args *ThreadSendArgsAttachmentsItem) UnmarshalJSON(data []byte) error {
 }
 
 type ThreadSendArgsRoom struct {
-	AthanorId string        `json:"athanor_id"`
-	ThreadId  string        `json:"thread_id"`
-	Title     Field[string] `json:"title,omitzero"`
-	Athanor   Field[string] `json:"athanor,omitzero"`
+	SharedThreadId string        `json:"shared_thread_id"`
+	Title          Field[string] `json:"title,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
