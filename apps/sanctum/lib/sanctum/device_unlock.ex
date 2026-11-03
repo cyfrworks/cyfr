@@ -748,7 +748,7 @@ defmodule Sanctum.DeviceUnlock do
   record `ref` with the stored `digest`, consuming the challenge. Refusals:
   `:not_a_device`, `:no_holder`, `:proof_refused` and `:unavailable`.
   """
-  @spec confirm_proof(Context.t(), %{ref: String.t(), digest: String.t()}, term()) ::
+  @spec confirm_proof(Context.t(), map(), term()) ::
           :ok | {:error, atom()}
   def confirm_proof(%Context{} = ctx, %{ref: ref, digest: digest}, proof) do
     with {:ok, _client} <- holder(ctx),

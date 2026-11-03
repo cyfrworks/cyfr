@@ -46,18 +46,12 @@ defmodule Sanctum.DeviceUnlockTest do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
     Prima.Test.RateLimiter.reset!()
-    previous = Application.fetch_env(:sanctum, :setup_token)
 
     on_exit(fn ->
       Prima.Test.RateLimiter.reset!()
-
-      case previous do
-        {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
-        :error -> Application.delete_env(:sanctum, :setup_token)
-      end
     end)
 
-    Application.put_env(:sanctum, :setup_token, @token)
+    Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     Sanctum.Test.Newcomers.directory!()
     # The installation holds no person inside this test's transaction.
     Arca.Repo.delete_all(User)
@@ -806,5 +800,132 @@ defmodule Sanctum.DeviceUnlockTest do
                  change
                )
     end
+  end
+end
+
+defmodule Sanctum.DeviceUnlockKilledTest do
+  @moduledoc """
+  A device's setup enrollment killed mid-transaction, on a real connection
+  outside the sandbox: the process dies after the person's row and keys
+  are written and before the commit, and nothing of it remains, so a
+  resume of it finds nothing and the device enrolls again from the start.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.Schemas.{
+    DeviceCertificate,
+    IdentityAttempt,
+    Membership,
+    PairedClient,
+    PersonIdentity,
+    User
+  }
+
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Prima.DeviceCert.Proof
+  alias Sanctum.DeviceUnlock
+
+  @token String.duplicate("9c", 32)
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+  defp b64(bytes), do: Base.url_encode64(bytes, padding: false)
+
+  setup do
+    Arca.Cache.init()
+
+    Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
+    Sanctum.Test.Newcomers.directory!()
+    assert 0 == unboxed(fn -> Arca.Repo.aggregate(User, :count) end)
+    :ok
+  end
+
+  defp counts do
+    unboxed(fn ->
+      for schema <- [User, PersonIdentity, PairedClient, DeviceCertificate, IdentityAttempt],
+          do: Arca.Repo.aggregate(schema, :count)
+    end) ++
+      [
+        unboxed(fn ->
+          Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
+        end)
+      ]
+  end
+
+  defp enroll(key, identity) do
+    {public, private} = key
+
+    {:ok, %{challenge: challenge}} =
+      DeviceUnlock.enrollment_challenge({:setup, @token}, %{
+        "admission" => "setup",
+        "device_key" => b64(public),
+        "request_id" => identity.request_id,
+        "holder_kind" => "software",
+        "display_name" => "Box"
+      })
+
+    DeviceUnlock.enroll({:setup, @token}, %{
+      "proof" => Proof.encode(Proof.sign(challenge, private)),
+      "name" => identity.name,
+      "recovery_secret" => b64(identity.recovery_secret)
+    })
+  end
+
+  test "an enrollment killed before its commit leaves nothing to resume" do
+    test = self()
+    handler = "device-killed-#{System.unique_integer([:positive])}"
+    key = :crypto.generate_key(:eddsa, :ed25519)
+    identity = Sanctum.Test.Newcomers.identity()
+
+    # Inside the admission's transaction, at its paired client's write: the
+    # person's row, their keys and their athanor are written and
+    # uncommitted.
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:source] == "paired_clients" and Process.get(:device_enrolling) and
+               not Process.get(:device_paused, false) do
+            Process.put(:device_paused, true)
+            send(test, {:enrolling, self()})
+
+            receive do
+              :never -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    enrolling =
+      spawn(fn ->
+        unboxed(fn ->
+          Process.put(:device_enrolling, true)
+          enroll(key, identity)
+        end)
+      end)
+
+    assert_receive {:enrolling, ^enrolling}, 15_000
+    ref = Process.monitor(enrolling)
+    Process.exit(enrolling, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^enrolling, :killed}, 5_000
+    :telemetry.detach(handler)
+
+    assert counts() == [0, 0, 0, 0, 0, 0]
+
+    # Nothing committed, so nothing resumes.
+    assert {:error, :not_found} =
+             unboxed(fn ->
+               DeviceUnlock.resume({:setup, @token}, %{
+                 "admission" => "setup",
+                 "device_key" => b64(elem(key, 0)),
+                 "request_id" => identity.request_id
+               })
+             end)
   end
 end

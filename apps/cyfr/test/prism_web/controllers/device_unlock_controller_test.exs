@@ -20,18 +20,12 @@ defmodule PrismWeb.DeviceUnlockControllerTest do
   setup do
     Arca.Cache.init()
     Prima.Test.RateLimiter.reset!()
-    previous = Application.fetch_env(:sanctum, :setup_token)
 
     on_exit(fn ->
       Prima.Test.RateLimiter.reset!()
-
-      case previous do
-        {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
-        :error -> Application.delete_env(:sanctum, :setup_token)
-      end
     end)
 
-    Application.put_env(:sanctum, :setup_token, @token)
+    Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     Sanctum.Test.Newcomers.directory!()
     Arca.Repo.delete_all(Arca.Schemas.User)
     device = enrolled!(@token)

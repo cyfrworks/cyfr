@@ -96,7 +96,7 @@ defmodule Emissary.Web.DeviceEnrollmentController do
   defp admission(conn, %{"admission" => "restore"}) do
     case get_session(conn, CyfrWeb.SignInResponse.session_key()) do
       token when is_binary(token) ->
-        case Sanctum.Caller.establish({:session, token}) do
+        case Sanctum.Caller.establish({:session, token}, []) do
           {:ok, ctx} -> {:ok, {:restore, ctx}}
           {:error, :unavailable} -> {:error, :unavailable}
           {:error, _refused} -> {:error, :not_restored}
