@@ -36,6 +36,8 @@ func TestServer_AdmitsOnlyTheShellsOwnRequests(t *testing.T) {
 		{"another host name", "GET", "localhost:7340", "/", "", 421},
 		{"a rebinding name", "GET", "evil.example:7340", "/", "", 421},
 		{"no Origin", "POST", Listen, "/unlock", "", 403},
+		{"an opaque Origin", "POST", Listen, "/unlock", "null", 403},
+		{"an opaque Origin for Lock", "POST", Listen, "/lock", "null", 403},
 		{"another Origin", "POST", Listen, "/unlock", "https://evil.example", 403},
 		{"Prism's Origin for an unlock", "POST", Listen, "/unlock", prism, 403},
 		{"Prism's Origin for a setup", "POST", Listen, "/setup", prism, 403},
@@ -61,7 +63,7 @@ func TestServer_AdmitsOnlyTheShellsOwnRequests(t *testing.T) {
 		}
 		h := w.Header()
 		csp := h.Get("Content-Security-Policy")
-		if h.Get("Cache-Control") != "no-store" || h.Get("Referrer-Policy") != "no-referrer" || h.Get("X-Frame-Options") != "DENY" ||
+		if h.Get("Cache-Control") != "no-store" || h.Get("Referrer-Policy") != "same-origin" || h.Get("X-Frame-Options") != "DENY" ||
 			!strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "default-src 'none'") ||
 			!strings.Contains(csp, "form-action 'self' "+prism+";") || strings.Contains(csp, "unsafe") {
 			t.Errorf("%s: headers %v", c.name, h)

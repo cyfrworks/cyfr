@@ -37,13 +37,14 @@ const Origin = "http://" + Listen
 //
 // Every request must name the listener exactly as its Host (a DNS
 // rebinding names another), and every POST must come from the shell's own
-// pages' Origin, or for Lock and Confirm on this device from the home's
-// own Prism Origin, with a form body. A top-level navigation only opens a
-// page: no GET changes anything. Every page is no-store and no-referrer
-// under a policy that runs no script but the two fixed ones below, loads
-// nothing, submits forms only here and to the home, and is framed by
-// nothing. The shell signs nothing a page sends: it signs only the
-// challenges it fetched itself, after the PIN.
+// pages' Origin, or for Lock from the home's own Prism Origin, with a form
+// body. A top-level navigation only opens a page: GET /confirm?ref= reads
+// that confirmation from the home over the channel and draws it, which
+// authorizes nothing; no GET changes anything. Every page is no-store under
+// a policy that runs no script but the two fixed ones below, loads nothing,
+// submits forms only here and to the home, is framed by nothing and sends
+// no referrer to another origin. The shell signs nothing a page sends: it
+// signs only the challenges it fetched itself, after the PIN.
 type Server struct {
 	Shell *Shell
 	// Reachable is whether the home answers now; the pages wait while it
@@ -82,7 +83,11 @@ func (srv *Server) homeOrigin() string {
 func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
-	h.Set("Referrer-Policy", "no-referrer")
+	// same-origin, not no-referrer: under no-referrer Chrome sends the
+	// pages' own form POSTs with Origin: null, which the shell refuses; under
+	// same-origin no referrer reaches the home, the ticket's redirect
+	// included, and the pages' POSTs keep their Origin.
+	h.Set("Referrer-Policy", "same-origin")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Content-Security-Policy", srv.policy())
@@ -184,8 +189,8 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 		to, err := srv.Shell.Ticket(ctx)
 		if err == nil {
 			// The ticket travels in the fragment of a redirect: no request
-			// carries it, and no-referrer keeps this page's address out of
-			// the home's.
+			// carries it, and the same-origin policy keeps this page's
+			// address out of the home's.
 			w.Header().Set("Location", to)
 			w.WriteHeader(http.StatusSeeOther)
 			return

@@ -271,7 +271,7 @@ clean_install() {
     screen_signed_in
   else
     # A server without the device purposes (S1a) answers no enrollment.
-    record PENDING "enrollment, the recovery code, Prism, lock, unlock and confirmation need a candidate server with the device purposes; this one answered: $(sed -n 's/.*<p class="notice" role="status">\([^<]*\)<.*/\1/p' "$GUEST_DIR/shell-enrolled.html" | head -n 1)"
+    record PENDING "enrollment, the recovery code, Prism, lock, unlock and confirmation need a candidate server with the device purposes; what this one answered is on screen-enrolled.png"
   fi
 
   step "cyfr down, then a reboot: CYFR stays down and the screen says why"
