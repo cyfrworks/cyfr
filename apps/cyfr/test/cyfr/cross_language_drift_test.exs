@@ -394,6 +394,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/tincture_wire_test.exs", ~w(tincture_urls)}
     ],
     "confirmation_assertion.json" => [
+      {"apps/codex/cmd/pair_test.go", ~w(exchange)},
+      {"apps/codex/internal/shell/certify_test.go", ~w(exchange)},
       {"apps/cyfr/assets/test/home_confirm/home_confirm.test.mjs",
        ~w(exchange.deciding exchange.home)},
       {"apps/prima/test/prima/confirmation_assertion_test.exs",
