@@ -637,4 +637,42 @@ defmodule Sanctum.DevicePinTest do
       assert {:error, _} = DeviceUnlock.redeem(evaluator)
     end
   end
+
+  test "another row, client or athanor cannot unseal an evaluator key" do
+    device = enrolled!()
+    ctx = connected!(device)
+    evaluator = pin!(device, ctx)
+    stored = row(evaluator)
+
+    {:ok, scalar} =
+      Sanctum.Cipher.decrypt(
+        stored.sealed_key,
+        Sanctum.CipherAAD.device_pin_key(stored.athanor_id, stored.id, stored.paired_client_id)
+      )
+
+    for {a, e, c} <- [
+          {stored.athanor_id <> "_other", stored.id, stored.paired_client_id},
+          {stored.athanor_id, stored.id <> "_other", stored.paired_client_id},
+          {stored.athanor_id, stored.id, stored.paired_client_id <> "_other"}
+        ] do
+      assert {:error, _} =
+               Sanctum.Cipher.decrypt(
+                 stored.sealed_key,
+                 Sanctum.CipherAAD.device_pin_key(a, e, c)
+               )
+    end
+
+    assert byte_size(scalar) == 32
+  end
+
+  test "the cell source meter still refuses after this node's meter is cleared" do
+    source = "203.0.113.219"
+
+    for _ <- 1..30 do
+      assert {:error, :bad_request} = DevicePin.evaluate(%{}, source)
+      Prima.Test.RateLimiter.reset!()
+    end
+
+    assert {:error, {:rate_limited, _}} = DevicePin.evaluate(%{}, source)
+  end
 end
