@@ -61,27 +61,41 @@ type PINEnroll func(ctx context.Context) (evaluator string, err error)
 // open opens the record's key with secret: the chip or the passphrase
 // here, or a PIN its home evaluates, once, followed by the reset the
 // opened key signs (settle). A reset the home does not take leaves the key
-// open and says so: the attempt stays counted, and a pending evaluator
-// stays pending, until an open whose reset the home takes.
-func (s *Shell) open(ctx context.Context, secret []byte) (*holder.Key, error) {
+// open, and missed is the sentence that says so, which the caller's
+// notice carries beside its own: the attempt stays counted, and a pending
+// evaluator stays pending, until an open whose reset the home takes.
+func (s *Shell) open(ctx context.Context, secret []byte) (key *holder.Key, missed string, err error) {
 	if !s.rec.Hardened() {
-		return s.rec.Open(secret)
+		key, err = s.rec.Open(secret)
+		return key, "", err
 	}
 	if s.cfg.HomeHere {
-		return nil, ErrPINHere
+		return nil, "", ErrPINHere
 	}
 	var reset json.RawMessage
-	key, err := s.rec.OpenPIN(secret, s.evaluate(ctx, s.rec.PIN.Evaluator, &reset))
+	key, err = s.rec.OpenPIN(secret, s.evaluate(ctx, s.rec.PIN.Evaluator, &reset))
 	if errors.Is(err, holder.ErrWrongSecret) {
-		return nil, ErrPINWrong
+		return nil, "", ErrPINWrong
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := s.settle(ctx, reset, key); err != nil {
-		s.say("CYFR did not take this unlock's reset, so the tries it counted stay counted until an unlock it takes.")
+		missed = "CYFR did not take this unlock's reset, so the tries it counted stay counted until an unlock it takes."
 	}
-	return key, nil
+	return key, missed, nil
+}
+
+// alsoSay adds missed, the sentence of a reset the home did not take, to
+// the notice an action ended with.
+func (s *Shell) alsoSay(missed string) {
+	switch {
+	case missed == "":
+	case s.notice == "":
+		s.notice = missed
+	default:
+		s.notice += " " + missed
+	}
 }
 
 // settle posts the reset an evaluation answered and, once the home takes

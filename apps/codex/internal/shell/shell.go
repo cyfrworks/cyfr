@@ -824,7 +824,7 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
 		return
 	}
-	key, err := s.open(ctx, secret)
+	key, missed, err := s.open(ctx, secret)
 	if err != nil {
 		// A PIN evaluator the home does not know is one a restore may
 		// have suspended: the recovery code is offered, as for a
@@ -832,6 +832,9 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 		s.standingEnded = errors.Is(err, ErrPINUnknown)
 		s.say("%s", s.sentence(err))
 		return
+	}
+	if missed != "" {
+		s.say("%s", missed)
 	}
 	// An enrollment whose recovery code was never said saved (RequestID
 	// kept) unlocks only to show that code again, under the admission it
@@ -884,9 +887,10 @@ func (s *Shell) Reenable(ctx context.Context, code string, secret []byte) {
 	// recovery code brings both back. Any other key opens first, so a
 	// wrong PIN spends nothing at the home.
 	var key *holder.Key
+	var missed string
 	var err error
 	if !s.rec.Hardened() {
-		if key, err = s.open(ctx, secret); err != nil {
+		if key, missed, err = s.open(ctx, secret); err != nil {
 			s.say("%s", s.sentence(err))
 			return
 		}
@@ -899,11 +903,14 @@ func (s *Shell) Reenable(ctx context.Context, code string, secret []byte) {
 		return
 	}
 	if key == nil {
-		if key, err = s.open(ctx, secret); err != nil {
+		if key, missed, err = s.open(ctx, secret); err != nil {
 			s.standingEnded = false
 			s.say("%s", s.sentence(err))
 			return
 		}
+	}
+	if missed != "" {
+		s.say("%s", missed)
 	}
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
@@ -1140,11 +1147,14 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		s.say("The change CYFR holds is not the one shown, so nothing was signed.")
 		return
 	}
-	fresh, err := s.open(ctx, secret)
+	fresh, missed, err := s.open(ctx, secret)
 	if err != nil {
 		s.say("%s", s.sentence(err))
 		return
 	}
+	// Whatever the confirmation's outcome, a reset the home did not take
+	// is said beside it.
+	defer s.alsoSay(missed)
 	proof, err := Prove(challenge, fresh)
 	fresh.Erase()
 	if err != nil {
@@ -1175,7 +1185,7 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
 		return
 	}
-	key, err := s.open(ctx, secret)
+	key, missed, err := s.open(ctx, secret)
 	if err != nil {
 		s.say("%s Nothing was signed.", s.sentence(err))
 		return
@@ -1183,10 +1193,11 @@ func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret [
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
 		s.say("%s Nothing was signed.", s.sentence(err))
+		s.alsoSay(missed)
 		return
 	}
 	notice := ""
-	defer func() { s.lock(""); s.notice = notice }()
+	defer func() { s.lock(""); s.notice = notice; s.alsoSay(missed) }()
 	now, challenge, err := s.pending(ctx, drawn.Ref)
 	if err != nil {
 		notice = s.sentence(err) + " Nothing was signed."
