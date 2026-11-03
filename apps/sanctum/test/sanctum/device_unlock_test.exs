@@ -560,6 +560,35 @@ defmodule Sanctum.DeviceUnlockTest do
              "invitation-free open resume returned the invitation enrollment"
     end
 
+    test "the installation's tokens resume only the people they admitted: setup's its own person, a restore's one a restore brought back" do
+      admin = enrolled!()
+      {admin_public, _admin_private} = admin.key
+
+      ask = fn admission, public, request_id ->
+        %{"admission" => admission, "device_key" => b64(public), "request_id" => request_id}
+      end
+
+      # No restore brought the person setup made back: the restore token
+      # finds no enrollment of theirs.
+      Prima.Test.Env.put_app_env(:sanctum, :restore_token, String.duplicate("7e", 32))
+
+      assert {:error, :not_found} =
+               DeviceUnlock.resume(
+                 {:restore, String.duplicate("7e", 32)},
+                 ask.("restore", admin_public, admin.identity.request_id)
+               )
+
+      # Setup's token does not resume an invited person's enrollment.
+      {_id, code} = invite!(admin.certificate.subject.user_id)
+      {public, _private} = device = key()
+      person = identity()
+      {:ok, %{challenge: challenge}} = new_challenge({:invitation, code}, device, person)
+      {:ok, _answer} = new_complete({:invitation, code}, challenge, device, person)
+
+      assert {:error, :not_found} =
+               DeviceUnlock.resume({:setup, @token}, ask.("setup", public, person.request_id))
+    end
+
     test "an invitation resume proof cannot finish under another invitation code" do
       admin = enrolled!()
       admin_id = admin.certificate.subject.user_id
