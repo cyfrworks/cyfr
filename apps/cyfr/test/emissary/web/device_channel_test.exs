@@ -794,7 +794,10 @@ defmodule Emissary.Web.DeviceChannelTest do
       {state, ticket, session_id}
     end
 
-    test "an unlock reserves its session on the channel, which slides it and ends it with itself",
+    defp standing_report,
+      do: Device.encode({:capabilities, %{capabilities: ["root_encrypted", "data_encrypted"]}})
+
+    test "an unlock reserves its session on the channel, which its standing report slides and its end ends",
          %{session_ctx: session_ctx} do
       device = protected!(session_ctx)
       state = proven(device)
@@ -805,10 +808,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       before = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
       Process.sleep(5)
 
-      {keepalive, _timer} = state.keepalive
-
-      assert {:push, {:ping, ""}, state} =
-               DeviceChannel.handle_info({DeviceChannel, :keepalive, keepalive}, state)
+      assert {:ok, state} = send_frame(state, standing_report())
 
       assert state.sessions == [session_id]
       slid = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
@@ -816,6 +816,34 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       DeviceChannel.terminate(:normal, state)
       assert Arca.Repo.get(Arca.Schemas.Session, session_id) == nil
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+    end
+
+    test "a channel that stays open but stops reporting slides nothing, and its session ends at the bound",
+         %{session_ctx: session_ctx} do
+      device = protected!(session_ctx)
+      {state, ticket, session_id} = unlock!(proven(device), device)
+      {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket)
+
+      # The device was last heard now; its session ends a second later
+      # unless it reports again.
+      soon = DateTime.add(DateTime.utc_now(), 1, :second)
+
+      Arca.Repo.update_all(from(s in Arca.Schemas.Session, where: s.id == ^session_id),
+        set: [expires_at: soon]
+      )
+
+      # The server's own ping fires with no report: the connection is
+      # severed but still open until the mount's read timeout.
+      {keepalive, _timer} = state.keepalive
+
+      assert {:push, {:ping, ""}, state} =
+               DeviceChannel.handle_info({DeviceChannel, :keepalive, keepalive}, state)
+
+      refute state.closed
+      assert Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at == soon
+
+      Process.sleep(1_100)
       assert {:error, :invalid_session} = Sanctum.Session.load(token)
     end
 
