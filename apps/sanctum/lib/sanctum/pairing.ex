@@ -491,16 +491,6 @@ defmodule Sanctum.Pairing do
   defp confirmation_ref(%Context{}), do: nil
 
   @doc """
-  The address a new device's QR code opens on a client of the person's:
-  this home's `/devices/add` page with the digest of the device's key in
-  the fragment, which a browser never sends
-  (`tests/fixtures/device_unlock.json`, `exchange.pairing.approve_url`).
-  """
-  @spec approve_url(String.t()) :: String.t()
-  def approve_url(key_digest) when is_binary(key_digest),
-    do: Person.home() <> "/devices/add#key=" <> key_digest
-
-  @doc """
   What confirming a pairing approves (`t:Sanctum.Consent.Authz.change/0`),
   the change `begin/2` decides: an invitation for the device key whose
   digest is `key_digest`, which the preview names as the code the new

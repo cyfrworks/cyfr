@@ -2027,7 +2027,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
-    "Sanctum.Pairing" => [actions: 0, approve_url: 1, can_confirm?: 1],
+    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
     "Sanctum.Passkeys" => [newcomer_options: 0, sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],

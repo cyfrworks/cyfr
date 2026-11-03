@@ -564,27 +564,6 @@ defmodule Sanctum.PairingTest do
   # Completing
   # ---------------------------------------------------------------------------
 
-  describe "approve_url/1" do
-    @describetag database: false
-
-    test "is the fixture's address: this home's /devices/add with the key's digest in the fragment" do
-      template =
-        "../../../../tests/fixtures/device_unlock.json"
-        |> Path.expand(__DIR__)
-        |> File.read!()
-        |> Jason.decode!()
-        |> get_in(["exchange", "pairing", "approve_url"])
-
-      {device_key, _private} = device_key()
-      digest = Prima.Device.key_digest(device_key)
-
-      assert Pairing.approve_url(digest) ==
-               template
-               |> String.replace("{home}", Person.home())
-               |> String.replace("{key_digest}", digest)
-    end
-  end
-
   describe "complete/3" do
     test "a glass with neither cookie nor certificate is paired by the invitation and its key proof",
          %{session_ctx: session_ctx, user: user, athanor: athanor} do
