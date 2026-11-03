@@ -39,7 +39,7 @@ defmodule PrismWeb.AquaLiveConsentStatusTest do
 
     assert html =~ ~s(id="aqua-consent-drift-formula:local.uses-remote")
     assert html =~ ~s(id="aqua-consent-drift-agent:local.aqua")
-    assert html =~ "uses-remote cannot run until a member consents again"
+    assert html =~ "uses-remote cannot run until you consent again"
     assert html =~ "notes.keep"
     assert [_, _] = Regex.scan(~r/Re-consent/, html)
     refute html =~ "Consent status unavailable"

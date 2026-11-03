@@ -39,8 +39,8 @@ var adminCmd = &cobra.Command{
 		"person. An allow or a deny may give a name (@name) instead: cyfr.run is " +
 		"asked which identifier the name belongs to, and the entry keeps the identifier " +
 		"the name named when the entry was written, with the name shown beside it. " +
-		"Requests are invites members made for identifiers the allowlist does " +
-		"not know, and sign-ins it refused. Only platform admins may edit the list, and " +
+		"Requests are identifiers people invited into a thread that the allowlist " +
+		"does not know, and sign-ins it refused. Only platform admins may edit the list, and " +
 		"no deny names one.",
 }
 

@@ -87,7 +87,7 @@ defmodule Compendium.Providers.Aqua do
     # standing "Always" at any scope (`standing: false`). Deleting
     # stays a member's act alone: never proposable, never standing.
     # Reset restores shipped units — one role by name, else every
-    # edited copy. With all=true it also deletes member-created
+    # edited copy. With all=true it also deletes athanor-made
     # roles and scrolls.
     Operation.tool(
       [
@@ -149,7 +149,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("tool_policy", {:map, Arg.new(nil, :string, enum: ["ask", "auto"])},
               description:
-                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
+                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's."
             ),
             Arg.new("content", :string,
               bulk: true,
@@ -192,13 +192,13 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("tool_policy", {:map, Arg.new(nil, :string, enum: ["ask", "auto"])},
               nullable: true,
               description:
-                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
+                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's."
             ),
             Arg.new(
               "tool_policy_patch",
               {:map, Arg.new(nil, :string, nullable: true, enum: ["ask", "auto", nil])},
               description:
-                "update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two members editing different keys at once keep both. Not with tool_policy."
+                "update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two edits of different keys at once keep both. Not with tool_policy."
             ),
             Arg.new("content", :string,
               bulk: true,
@@ -212,7 +212,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("expected_digest", :string,
               description:
-                "update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one member's edit never writes over another's."
+                "update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another."
             )
           ],
           kind: :write,
@@ -247,7 +247,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("all", :boolean,
               description:
-                "For reset: also DELETE member-created roles and scrolls, so the tree becomes exactly the shipped set (default false keeps them)"
+                "For reset: also DELETE the roles and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)"
             )
           ],
           kind: :destructive,
@@ -372,7 +372,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; member-created roles and scrolls are kept unless all=true).",
+        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; roles and scrolls the athanor made are kept unless all=true).",
       title: "AQUA Agent System"
     )
   end
@@ -557,7 +557,7 @@ defmodule Compendium.Providers.Aqua do
 
   # --- delete ---
   # A shipped role, edited or not, cannot be deleted (a reset restores
-  # it) — disabling is the closet-removal verb. A member-created role
+  # it) — disabling is the closet-removal verb. A athanor-made role
   # deletes outright. The soul takes the same verb and refuses with its
   # own sentence.
 
@@ -896,7 +896,7 @@ defmodule Compendium.Providers.Aqua do
     # A role is a file unit: the one atomic put IS the unit commit — no
     # sentinel, no rollback needed, the overlay's file CoW applies. It
     # goes through the commit for `if_absent:` alone: the union answers
-    # for shipped and member-created roles alike, and asking it while the
+    # for shipped and athanor-made roles alike, and asking it while the
     # commit holds the unit's draft is what keeps two creators of one
     # name from both passing a probe.
     bytes = AquaAgent.serialize(role)

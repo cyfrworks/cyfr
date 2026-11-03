@@ -293,12 +293,12 @@ defmodule PrismWeb.AquaLive do
       end
 
     "This athanor consented to an older #{short_ref(ref)}: #{count} not in its consent " <>
-      "(#{shown}#{rest}), so a card for one is denied on Approve until a member re-consents."
+      "(#{shown}#{rest}), so a card for one is denied on Approve until you consent again."
   end
 
   defp consent_warning(ref, :stale) do
     "This athanor's components changed since it consented — installing one does that — " <>
-      "so #{short_ref(ref)} cannot run until a member consents again."
+      "so #{short_ref(ref)} cannot run until you consent again."
   end
 
   @doc """
