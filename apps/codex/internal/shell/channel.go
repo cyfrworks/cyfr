@@ -24,8 +24,14 @@ const DeviceProtocol = "cyfr-device/v1"
 
 // reportEvery is how often an open channel reports this box's
 // capabilities, as the home's standing check reads its client every 30
-// seconds.
-const reportEvery = 30 * time.Second
+// seconds; heardWithin bounds each report's write and the ping sent
+// after it, so a connection the network silently drops ends the channel
+// at the next report instead of standing until the kernel gives up on
+// its retransmissions. Both are variables for the tests.
+var (
+	reportEvery = 30 * time.Second
+	heardWithin = 10 * time.Second
+)
 
 // The reasons a channel ends, each a sentence the lock page can show.
 var (
@@ -287,6 +293,10 @@ func (c *Channel) read() {
 	}
 }
 
+// reportLoop reports this box's capabilities every reportEvery and pings
+// the home after each report: a report the connection does not take or a
+// ping the home does not answer within heardWithin ends the channel as
+// unreachable, which locks the box (Shell.watch).
 func (c *Channel) reportLoop() {
 	t := time.NewTicker(reportEvery)
 	defer t.Stop()
@@ -295,9 +305,17 @@ func (c *Channel) reportLoop() {
 		case <-c.done:
 			return
 		case <-t.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			_ = c.send(ctx, c.capabilities())
+			ctx, cancel := context.WithTimeout(context.Background(), heardWithin)
+			err := c.send(ctx, c.capabilities())
+			if err == nil {
+				err = c.conn.Ping(ctx)
+			}
 			cancel()
+			if err != nil {
+				c.end(closeReason(err))
+				c.conn.CloseNow()
+				return
+			}
 		}
 	}
 }

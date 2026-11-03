@@ -317,6 +317,28 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	_ = websocket.StatusNormalClosure
 }
 
+// A connection the network silently drops, the home still standing, locks
+// the box at the next report: the shell's ping goes unanswered within its
+// bound, the channel ends as unreachable, and the lock page says so, not
+// that the screen idled.
+func TestChannel_ASilentlyDroppedConnectionLocksTheBox(t *testing.T) {
+	oldEvery, oldWithin := reportEvery, heardWithin
+	reportEvery, heardWithin = 200*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { reportEvery, heardWithin = oldEvery, oldWithin })
+	home := newFakeHome(t)
+	b := newBox(t, home, t.TempDir())
+	setUpAndOpen(t, home, b)
+	home.stall(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for b.shell.Unlocked() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	page := b.page()
+	if b.shell.Unlocked() || !strings.Contains(page, "could not be reached") || strings.Contains(page, "five minutes") {
+		t.Fatalf("a dropped connection did not lock the box as unreachable (unlocked=%v):\n%s", b.shell.Unlocked(), page)
+	}
+}
+
 // confirmable sets a box up, opens Prism and gives the home one pending
 // confirmation.
 func confirmable(t *testing.T) (*fakeHome, *box, string) {

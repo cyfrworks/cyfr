@@ -53,6 +53,7 @@ type fakeHome struct {
 	unlockSeq                  int
 	conns                      []*websocket.Conn
 	closeWith                  websocket.StatusCode
+	stalled                    chan struct{}
 	fields                     httpFields
 	kitPublic                  []byte // the recovering person's recovery key
 	kitHeld                    map[string]string
@@ -387,6 +388,15 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 	binding := map[string]any{"athanor": cert["athanor"], "client_id": cert["client_id"], "device_key": cert["device_key"]}
 	send(map[string]any{"type": "standing", "client_id": cert["client_id"], "athanor": cert["athanor"], "expires_at": cert["expires_at"]})
 	for {
+		h.mu.Lock()
+		stalled := h.stalled
+		h.mu.Unlock()
+		if stalled != nil {
+			// A link the network silently drops: the connection stays open
+			// and nothing is read, so no pong answers the shell's ping.
+			<-stalled
+			return
+		}
 		m := read()
 		if m == nil {
 			return
@@ -492,6 +502,18 @@ func (h *fakeHome) intent(op string, args, binding map[string]any) (any, any) {
 
 // closeChannels closes every open channel with code, as the home ends a
 // client's standing.
+// stall makes every open channel stop reading without closing, as a link
+// the network drops does; the handlers return when the test ends.
+func (h *fakeHome) stall(t *testing.T) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stalled == nil {
+		h.stalled = make(chan struct{})
+		stalled := h.stalled
+		t.Cleanup(func() { close(stalled) })
+	}
+}
+
 func (h *fakeHome) closeChannels(code websocket.StatusCode) {
 	h.mu.Lock()
 	conns := h.conns
