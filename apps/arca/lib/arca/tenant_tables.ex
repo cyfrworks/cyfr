@@ -63,6 +63,7 @@ defmodule Arca.TenantTables do
     "device_certificates",
     "pending_confirmations",
     "pairing_invitations",
+    "device_pin_evaluators",
     "paired_clients",
     "storage_projection_changes",
     "storage_projection_roots",
