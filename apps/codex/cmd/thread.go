@@ -30,7 +30,7 @@ var threadCmd = &cobra.Command{
 	Use:     "thread",
 	Short:   "Threads you talk in with other people",
 	GroupID: "identity",
-	Long: "A thread is a conversation you share with other people; it is no athanor's. " +
+	Long: "A thread is where you and other people talk; it is no athanor's. " +
 		"Anyone in a thread may add someone, named by user id (usr_…) or person " +
 		"identifier (per_…), remove someone, or leave. Adding an identifier the server " +
 		"has not seen leaves an invitation that activates on that person's first sign-in " +
