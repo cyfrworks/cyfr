@@ -299,7 +299,8 @@ func formatConsentError(tag string, payload map[string]any) string {
 	case "confirmation_required":
 		// Never a success: nothing was changed. The payload's id is this
 		// request's secret: the CLI repeats the change under it and never
-		// shows it. The person confirms the record in Prism, which names it
+		// shows it. The person confirms the record on a device of theirs,
+		// which names it
 		// by its ref and names this key or client as the one asking.
 		operation, _ := payload["operation"].(string)
 		if operation == "" {
@@ -313,7 +314,7 @@ func formatConsentError(tag string, payload map[string]any) string {
 		if expiresAt, _ := payload["expires_at"].(string); expiresAt != "" {
 			expiry = fmt.Sprintf(" before %s", expiresAt)
 		}
-		return fmt.Sprintf("Confirmation required: %s needs a fresh confirmation; nothing was changed.\n  Confirm %s in Prism%s, where this key or client is named as the one asking.", operation, record, expiry)
+		return fmt.Sprintf("Confirmation required: %s needs a fresh confirmation; nothing was changed.\n  Confirm %s on a device of yours%s (a passkey in Prism, a CYFR screen, or a command line paired by cyfr login), where this key or client is named as the one asking.", operation, record, expiry)
 	}
 
 	return ""
