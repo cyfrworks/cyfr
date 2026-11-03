@@ -670,7 +670,7 @@ defmodule Sanctum.PairingTest do
       {other, other_private} = device_key()
 
       assert Pairing.complete(glass(), secret, %{device_key: other}) ==
-               {:error, :key_mismatch}
+               {:error, :invalid_invitation}
 
       {device_key, _private} = invitation.key
 

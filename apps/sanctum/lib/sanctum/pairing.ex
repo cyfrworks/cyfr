@@ -544,7 +544,7 @@ defmodule Sanctum.Pairing do
          {:ok, invitation} <- invitation(secret, now, source),
          :ok <- DeviceCerts.claim_attributed({:person, invitation.user_id}),
          :ok <- this_home(invitation),
-         :ok <- approved_key(invitation, device_key),
+         :ok <- approved(invitation, device_key),
          :ok <- pending(invitation, secret, device_key, Map.get(submission, :proof), now),
          {:ok, issuer} <-
            issuer(invitation, device_key, Map.get(submission, :certificate), now) do
@@ -679,6 +679,17 @@ defmodule Sanctum.Pairing do
   end
 
   defp approved_key(_invitation, _device_key), do: {:error, :key_mismatch}
+
+  # A consumed invitation answers only its approved key's repeat: any other
+  # key is told what a code no one holds is told.
+  defp approved(%{state: "consumed"} = invitation, device_key) do
+    case approved_key(invitation, device_key) do
+      :ok -> :ok
+      {:error, _mismatch} -> {:error, :invalid_invitation}
+    end
+  end
+
+  defp approved(invitation, device_key), do: approved_key(invitation, device_key)
 
   # Who certifies the device: this home, for a person whose keys are here,
   # with no certificate offered; or the person's own home, whose
