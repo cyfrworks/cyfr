@@ -110,6 +110,7 @@ type device interface {
 	Unlocked() bool
 	Lock(why string)
 	SetPIN(ctx context.Context, pin, again []byte)
+	Reenable(ctx context.Context, code string, secret []byte)
 }
 
 // openDevice is how a command opens this command line's device: its shell

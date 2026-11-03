@@ -101,6 +101,10 @@ func (d *fakeDevice) Unlocked() bool {
 	return d.view.Page == shell.PageUnlocked || d.view.Page == shell.PageConfirm
 }
 func (d *fakeDevice) Lock(string) { d.mu.Lock(); d.locks++; d.mu.Unlock() }
+func (d *fakeDevice) Reenable(_ context.Context, code string, secret []byte) {
+	d.did("reenable", secret, code)
+	clear(secret)
+}
 func (d *fakeDevice) SetPIN(_ context.Context, pin, again []byte) {
 	d.did("setpin", pin, string(again))
 	clear(pin)
@@ -674,5 +678,42 @@ func TestLoginDriver_AKeyUnderAPINAsksAPIN(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "its PIN: ") {
 		t.Fatalf("asked %q", out)
+	}
+}
+
+// A home that does not take this command line's PIN (or its standing)
+// offers the recovery code in the terminal: the code and the PIN, asked
+// again, re-enable it and it unlocks; an empty code leaves it locked with
+// the home's sentence, and nothing is re-enabled.
+func TestLoginDriver_ASuspendedPINOffersTheRecoveryCode(t *testing.T) {
+	const said = "CYFR does not take this command line's PIN: it was removed, or a restore from a backup suspended it. If it was suspended, your recovery code brings it back."
+	locked := shell.View{Page: shell.PageLocked, Kind: holder.KindSoftware, PIN: true}
+	next := func(call string, d *fakeDevice) {
+		switch call {
+		case "unlock":
+			v := locked
+			v.Kit, v.Notice = true, said
+			d.set(v)
+		case "reenable":
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	}
+	dev := newFakeDevice(locked, next)
+	c, out := typed("123456", "CYFR-RECOVERY-CODE", "123456")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"unlock", "reenable"}) || dev.given["reenable"] != "CYFR-RECOVERY-CODE" ||
+		string(dev.secrets["reenable"]) != "123456" || !strings.Contains(out.String(), said) ||
+		!strings.Contains(out.String(), "Then this command line's PIN: ") {
+		t.Fatalf("calls %v, code %q, secret %q\n%s", dev.calls, dev.given["reenable"], dev.secrets["reenable"], out)
+	}
+
+	left := newFakeDevice(locked, next)
+	c, _ = typed("123456", "")
+	d = &loginDriver{sh: left, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.run(t.Context()); err == nil || err.Error() != said || slices.Contains(left.calls, "reenable") {
+		t.Fatalf("an empty code: %v, calls %v", err, left.calls)
 	}
 }
