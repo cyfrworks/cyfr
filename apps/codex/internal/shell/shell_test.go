@@ -304,14 +304,14 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	for b.shell.Unlocked() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "removed from CYFR") {
+	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "your recovery code below brings it back") {
 		t.Fatal("a revoked pairing did not lock the box")
 	}
 	home.mu.Lock()
 	home.closeWith = 4403
 	home.mu.Unlock()
 	b.post("/unlock", url.Values{"secret": {p}})
-	if !strings.Contains(b.page(), "removed from CYFR") || b.shell.Unlocked() {
+	if !strings.Contains(b.page(), "your recovery code below brings it back") || b.shell.Unlocked() {
 		t.Fatal("a revoked box unlocked")
 	}
 	_ = websocket.StatusNormalClosure

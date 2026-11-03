@@ -149,7 +149,7 @@ var actions = map[string]action{
 		srv.onward(ctx, w, r)
 	}},
 	"/finish": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
-		srv.Shell.Finish(ctx, string(f.get("name")), f.get("secret"))
+		srv.Shell.Finish(ctx, string(f.get("name")), string(f.get("code")), f.get("secret"))
 		srv.onward(ctx, w, r)
 	}},
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {

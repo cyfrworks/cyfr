@@ -106,6 +106,15 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	// No request follows a redirect: the setup token, a restore's session
+	// and bearer and every proof are for the home they were read for, and
+	// a redirect elsewhere is refused as the home's answer.
+	client := http.Client{}
+	if cfg.Client != nil {
+		client = *cfg.Client
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	cfg.Client = &client
 	if cfg.DisplayName == "" {
 		cfg.DisplayName = "CYFR screen"
 	}
@@ -166,6 +175,9 @@ type View struct {
 	Confirm    *pendingConfirm
 	// Kit offers to re-enable this screen with the recovery code.
 	Kit bool
+	// Restore is a restore's enrollment to finish, which takes the
+	// recovery code again.
+	Restore bool
 }
 
 // View is the page the screen shows now, and the notice of the last action
@@ -186,7 +198,7 @@ func (s *Shell) View() View {
 			v.Passphrase = s.newPassphrase()
 		}
 	case s.key == nil && len(s.rec.Certificate) == 0:
-		v.Page, v.Kind = PageFinish, s.rec.Kind
+		v.Page, v.Kind, v.Restore = PageFinish, s.rec.Kind, s.rec.Admission == "restore"
 	case s.key == nil:
 		v.Page, v.Kind, v.Kit = PageLocked, s.rec.Kind, s.standingEnded
 	case s.confirm != nil:
@@ -238,7 +250,7 @@ func sentence(err error) string {
 	case errors.Is(err, holder.ErrLockedOut):
 		return "Too many wrong PINs: this screen's chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
-		return "This screen was removed from CYFR, so it cannot unlock. Set it up again with your recovery code."
+		return "CYFR does not take this screen any more: a restore from a backup suspended it, or it was removed. If it was suspended, your recovery code below brings it back."
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
@@ -368,7 +380,12 @@ func (s *Shell) newRecord(admission string, secret, again []byte) (*holder.Recor
 
 // Finish completes an enrollment a previous run began: the same key,
 // opened by its PIN, proven under the same request, through resume first.
-func (s *Shell) Finish(ctx context.Context, name string, secret []byte) {
+//
+// A restore's enrollment is admitted by the restore session, which no file
+// keeps: Finish asks for the recovery code again and proves it through the
+// restore ingress (a completed restore answers by its reproof) before
+// proving the same key.
+func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer erase(secret)
@@ -385,8 +402,11 @@ func (s *Shell) Finish(ctx context.Context, name string, secret []byte) {
 		// home recorded none, so the page asks for it with the PIN.
 		extra = map[string]any{"name": strings.TrimSpace(name), "recovery_secret": RecoverySecret()}
 	case s.rec.Admission == "restore" && restore != "":
-		a = Admission{Kind: "restore", Client: s.cfg.Client, header: http.Header{},
-			resume: http.Header{"Authorization": {"Bearer " + restore}}}
+		var err error
+		if a, err = Restore(ctx, s.cfg.Client, s.cfg.Address, restore, strings.TrimSpace(code)); err != nil {
+			s.say("%s", restoreSentence(err))
+			return
+		}
 	default:
 		s.say("This screen cannot finish setting up: .env holds no token for it.")
 		return
