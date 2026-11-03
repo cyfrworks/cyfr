@@ -109,7 +109,10 @@ defmodule Sanctum.DeviceUnlockReview398Test do
           device_public_key: elem(pair, 0),
           holder_kind: "chip",
           display_name: "Second"
-        }, first_method: :mark, also: &Sanctum.Pairing.certify_first(actor, &1))
+        },
+        first_method: :mark,
+        also: &Sanctum.Pairing.certify_first(actor, &1)
+      )
 
     {:ok, cert} = Arca.DeviceCertificates.current(actor, client.id)
     {:ok, certificate} = cert.certificate |> Jason.decode!() |> Prima.DeviceCert.decode()
