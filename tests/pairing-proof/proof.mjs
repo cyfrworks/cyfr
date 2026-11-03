@@ -29,6 +29,14 @@
 //   fresh        a second entry: a replayed assertion and the desktop's
 //                session repeating alone change nothing; the glass's fresh
 //                assertion confirms it and the desktop completes it
+//   command_line the real cyfr binary run.sh built, run on a terminal of
+//                its own beside the browsers and reaching the home through
+//                the same proxy, runs cyfr login: it makes its key under a
+//                passphrase it shows and shows the key's code and approve
+//                address; the code typed on the desktop and confirmed on
+//                the glass, the link pasted pairs it, and its shell acts as
+//                the person (and the renewal, open_ticket, exit and
+//                lost_answer steps after it: commandLine below)
 //   intent       the device-intent measurement: one discrete intent
 //                (`confirmation.pending`) admitted and dispatched over the
 //                device channel and answered, sequentially, timed in the
@@ -54,18 +62,25 @@
 // run.sh's, asked for through OUT_DIR (`ask-N.json`, answered
 // `answer-N.json`).
 //
-// Usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR
+// Usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR [CERT_SECONDS]
+// (OUT_DIR/bin/cyfr is the command line run.sh built for the run)
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { HANDHELD, measure as measureScreen, unmet } from "../browser/handheld.mjs";
 import {
   ask as askRunSh, launchBrowser, percentiles, readHomes, signedIn, sleep, startProxy, virtualAuthenticator, waitFor,
 } from "../browser/lib.mjs";
 
-const [homesFile, segment, desktopCookie, phoneCookie, outDir] = process.argv.slice(2);
+const [homesFile, segment, desktopCookie, phoneCookie, outDir, certArg] = process.argv.slice(2);
+// The life of a device certificate the run set (run.sh), restored after
+// the command line's steps set their own.
+const certSeconds = Number(certArg || 20);
 if (!homesFile || !segment || !desktopCookie || !phoneCookie || !outDir) {
-  console.error("usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR");
+  console.error("usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR [CERT_SECONDS]");
   process.exit(64);
 }
 mkdirSync(outDir, { recursive: true });
@@ -533,6 +548,265 @@ async function confirmEntry(desk, phone) {
     record.confirm), shown.ref];
 }
 
+// The command line run.sh built, run as a person runs it: a home of its own,
+// the home reached through the run's proxy as the browsers reach it, and
+// the run's authority trusted as the container's certificate bundle.
+function cyfr(args, cliHome, extra = {}) {
+  return spawn(join(outDir, "bin", "cyfr"), args, {
+    env: {
+      ...process.env,
+      HOME: cliHome,
+      HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`,
+      CYFR_NO_UPDATE_CHECK: "1",
+      ...extra,
+    },
+  });
+}
+
+// Run the command line to its end: its exit code and what it printed.
+function cyfrRun(args, cliHome, extra = {}) {
+  return new Promise((resolve) => {
+    const child = cyfr(args, cliHome, extra);
+    let out = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { out += chunk; });
+    child.on("close", (code) => resolve({ code, out }));
+  });
+}
+
+// The command line on a terminal of its own: cyfr login under script(1)'s
+// pseudo-terminal, as a person runs it, its shell /bin/sh. `type` sends a
+// line to whatever reads the terminal (cyfr login, then its shell);
+// `until` waits for output matching a pattern after `from`.
+function terminal(args, cliHome) {
+  const command = [join(outDir, "bin", "cyfr"), ...args].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+  const child = spawn("script", ["-qfec", command, "/dev/null"], {
+    env: {
+      ...process.env,
+      HOME: cliHome,
+      SHELL: "/bin/sh",
+      PS1: "$ ",
+      // The shell finds the command line run.sh built, as a person's finds
+      // their installed cyfr.
+      PATH: `${join(outDir, "bin")}:${process.env.PATH}`,
+      HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`,
+      CYFR_NO_UPDATE_CHECK: "1",
+    },
+  });
+  const t = { out: "", exit: null };
+  child.stdout.on("data", (chunk) => { t.out += chunk; });
+  child.stderr.on("data", (chunk) => { t.out += chunk; });
+  t.exited = new Promise((resolve) => child.on("close", (code) => { t.exit = code; resolve(code); }));
+  t.type = (line) => child.stdin.write(`${line}\n`);
+  t.until = (pattern, from = 0, timeoutMs = 60_000) => waitFor(() => {
+    const m = t.out.slice(from).match(pattern);
+    return m ? m : null;
+  }, { timeoutMs, what: `the terminal to show ${pattern} (${JSON.stringify(t.out.slice(from).slice(-600))})` });
+  t.kill = () => child.kill("SIGKILL");
+  return t;
+}
+
+// The device record cyfr login keeps for the home, as one file.
+const deviceRecords = (cliHome) => {
+  const dir = join(cliHome, ".cyfr", "devices");
+  try {
+    return readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => join(dir, f));
+  } catch {
+    return [];
+  }
+};
+
+// The command line, made a device of the person's (S2 of the devices
+// plan), in steps of its own:
+//   command_line  cyfr login on a machine without a chip draws a six-word
+//                 passphrase, writes its key before it shows anything, and
+//                 shows its key's code and the approve address as a QR
+//                 code; the desktop types the code under Devices (a
+//                 machine without a camera), the phone's glass confirms the
+//                 addition with its passkey, and the desktop's link, pasted
+//                 into the terminal, pairs the command line with the key it
+//                 made: unlocked, its shell's cyfr whoami names the person
+//   renewal       with certificates living 75 s, the command line's
+//                 certificate renews over its channel and its session stays
+//                 alive past its first certificate's expiry
+//   terminal_confirm  cyfr pair in that shell asks a change that needs a
+//                 fresh confirmation: the home's preview is drawn, then the
+//                 passphrase asked once, which confirms it on this command
+//                 line, and the pairing link is printed
+//   open_ticket   cyfr open in that shell opens the command line's own
+//                 loopback page, whose Open CYFR signs a browser with no
+//                 cookie in through the unlock's one-time ticket
+//   exit          exiting the shell locks: cyfr login exits 0, the shell's
+//                 session opens nothing and the browser's session ends
+//   lost_answer   a second machine holding the same key as it stood before
+//                 the pairing's answer (its record copied then) finishes
+//                 with the invitation's code typed and the passphrase: the
+//                 home answers the client it committed for that key
+async function commandLine(desk, phone) {
+  const cliHome = mkdtempSync(join(tmpdir(), "cyfr-command-line-"));
+  const lostHome = mkdtempSync(join(tmpdir(), "cyfr-command-line-lost-"));
+  const rec = {};
+  let login = null;
+  let browserContext = null;
+  try {
+    const set = await ask({ op: "cert_seconds", value: "75" });
+    const added = await cyfrRun(["context", "add", "proof", base], cliHome);
+    login = terminal(["login", "--context", "proof"], cliHome);
+
+    const drawn = await login.until(/Write it down:\s+([a-z]+(?: [a-z]+){5})\s/);
+    const passphrase = drawn[1];
+    await login.until(/The passphrase: /);
+    login.type(passphrase);
+    await login.until(/The passphrase again: /);
+    login.type(passphrase);
+    const shown = await login.until(/type:\s+((?:[A-Za-z0-9_-]{4} ){10}[A-Za-z0-9_-]{3})\s[\s\S]*Link or code: /);
+    const code = shown[1];
+    const approve = login.out.match(/open (https:\/\/\S+)\/devices\/add there/);
+    const records = deviceRecords(cliHome);
+    rec.key_written_before_code = records.length === 1;
+    rec.qr_drawn = /[▀▄█]{20,}/.test(login.out);
+    rec.approve_address = approve ? approve[1] === base : false;
+    // The machine whose pairing answer is lost: the same key, as it stood.
+    mkdirSync(join(lostHome, ".cyfr", "devices"), { recursive: true });
+    copyFileSync(join(cliHome, ".cyfr", "config.json"), join(lostHome, ".cyfr", "config.json"));
+    if (records.length === 1) copyFileSync(records[0], join(lostHome, ".cyfr", "devices", basename(records[0])));
+
+    // No camera: the code typed on the desktop; the phone's glass confirms.
+    await beginFor(desk, code);
+    const prompt = await glassPrompt(phone);
+    await glassButton(phone, prompt.ref, "glass-passkey").click();
+    await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
+    const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
+    const at = login.out.length;
+    login.type(link);
+    await login.until(/Unlocked\. This shell holds your CYFR session/, at, 60_000);
+    let mark = login.out.length;
+    login.type("cyfr whoami --context proof; echo \"whoami=$?\"");
+    const whoami = await login.until(/whoami=(\d+)/, mark);
+    const named = login.out.slice(mark).includes("operator@example.com");
+    const sessionFile = join(cliHome, "session");
+    login.type(`printf %s "$CYFR_SESSION" > '${sessionFile}'; echo stored=$?`);
+    await login.until(/stored=0/, mark);
+    rec.pair = { code, preview: prompt.preview, asker: prompt.asker, whoami_exit: Number(whoami[1]), names_person: named,
+      passphrase_echoed: login.out.split(passphrase).length - 1 };
+    row("command_line",
+      added.code === 0 && !!set.ok && rec.key_written_before_code && rec.qr_drawn && rec.approve_address &&
+        /pairing\.begin/.test(prompt.preview) && spaced(prompt.preview).includes(code) &&
+        rec.pair.whoami_exit === 0 && named && rec.pair.passphrase_echoed === 1,
+      "cyfr login writes its key under the passphrase it shows once, shows its code and approve address as a QR code; the code typed on the desktop and confirmed on the phone's glass, the link pasted pairs it, and its shell acts as the person",
+      rec.pair);
+
+    // Past its first certificate's life, on the channel's renewals.
+    await sleep(85_000);
+    mark = login.out.length;
+    login.type("cyfr whoami --context proof; echo \"whoami=$?\"");
+    const renewed = await login.until(/whoami=(\d+)/, mark);
+    rec.renewal = { whoami_exit: Number(renewed[1]), waited_s: 85, cert_seconds: 75 };
+    row("renewal", rec.renewal.whoami_exit === 0,
+      "the command line's certificate renews over its channel and its session outlives its first certificate",
+      rec.renewal);
+
+    // A sensitive change asked in the shell and confirmed on this command
+    // line: another device's addition, drawn before the passphrase.
+    const otherDigest = createHash("sha256").update(randomBytes(32)).digest("base64url");
+    mark = login.out.length;
+    login.type(`cyfr pair ${otherDigest} --context proof; echo "pair=$?"`);
+    const asked = await login.until(/PIN or passphrase; press Enter once you confirmed it elsewhere: /, mark);
+    const before = login.out.slice(mark, mark + asked.index);
+    login.type(passphrase);
+    const paired = await login.until(/pair=(\d+)/, mark);
+    const done = login.out.slice(mark);
+    rec.terminal_confirm = {
+      preview_before_secret: /pairing\.begin/.test(before) && spaced(before).includes(otherDigest.slice(0, 4)),
+      secret_asked_once: (done.match(/PIN or passphrase/g) || []).length === 1,
+      pair_exit: Number(paired[1]), link_printed: done.includes(`${base}/pair#code=`),
+      passphrase_echoed: done.split(passphrase).length - 1,
+    };
+    row("terminal_confirm",
+      rec.terminal_confirm.preview_before_secret && rec.terminal_confirm.secret_asked_once && rec.terminal_confirm.pair_exit === 0 &&
+        rec.terminal_confirm.link_printed && rec.terminal_confirm.passphrase_echoed === 0,
+      "a change asked in the shell (another device's addition) shows the home's preview, then asks the passphrase once, which confirms it on this command line",
+      rec.terminal_confirm);
+
+    // cyfr open in the shell: the command line's own page, then Open CYFR.
+    mark = login.out.length;
+    login.type("cyfr open --context proof; echo \"open=$?\"");
+    await login.until(/open=\d+/, mark);
+    const said = login.out.slice(mark);
+    // The command line's page is on this machine's loopback, which the
+    // run's proxy does not answer: this context reaches it directly, and
+    // the home through the proxy as every other context does.
+    browserContext = await desk.context().browser().newContext({
+      proxy: { server: `http://127.0.0.1:${proxy.address().port}`, bypass: "127.0.0.1" },
+    });
+    const page = await browserContext.newPage();
+    await page.goto("http://127.0.0.1:7340/");
+    await page.locator('form[action="/open"] button').click();
+    await page.waitForURL((url) => url.origin === base && !url.pathname.startsWith("/auth/device/complete"), { timeout: 30_000 });
+    await page.goto(shell);
+    await connected(page);
+    const opened = page.url();
+    const cookies = (await browserContext.cookies(base)).map((c) => c.name);
+    rec.open = { said_page: said.includes("http://127.0.0.1:7340/"), landed: opened.replace(base, ""),
+      ticket_in_address: /#|ticket/.test(opened), session_cookie: cookies.includes("_cyfr_key"), canvas: opened.startsWith(shell) };
+    row("open_ticket", rec.open.said_page && !rec.open.ticket_in_address && rec.open.session_cookie && rec.open.canvas,
+      "cyfr open in the shell opens the command line's own page, whose Open CYFR signs a browser with no cookie in through the unlock's one-time ticket",
+      rec.open);
+
+    // Exiting the shell locks the command line.
+    login.type("exit");
+    const exit = await Promise.race([login.exited, sleep(30_000).then(() => "still running")]);
+    const token = readFileSync(sessionFile, "utf8");
+    rmSync(sessionFile, { force: true });
+    const after = await cyfrRun(["whoami", "--context", "proof"], cliHome, { CYFR_TOKEN: token });
+    // The athanor's canvas, which only a session opens: the browser's is
+    // gone with the command line's lock.
+    await page.goto(shell);
+    await page.waitForLoadState("load");
+    const signedOut = !page.url().startsWith(shell);
+    rec.exit = { login_exit: exit, said_locked: /Locked: this command line's CYFR session ended/.test(login.out),
+      session_whoami_exit: after.code, browser_signed_out: signedOut, browser_at: page.url().replace(base, "") };
+    row("exit", exit === 0 && rec.exit.said_locked && after.code !== 0 && signedOut,
+      "exiting the shell locks the command line: cyfr login exits 0, its session opens nothing, and the browser it opened is signed out",
+      rec.exit);
+
+    // The machine whose answer was lost: the code typed, the same key.
+    const lost = terminal(["login", "--context", "proof"], lostHome);
+    login = lost;
+    await lost.until(/Link or code: /);
+    lost.type(link.split("#code=")[1]);
+    await lost.until(/This command line's passphrase: /);
+    lost.type(passphrase);
+    await lost.until(/Unlocked\. This shell holds your CYFR session/, 0, 60_000);
+    lost.type("exit");
+    await Promise.race([lost.exited, sleep(30_000)]);
+    const client = (path) => {
+      try {
+        return JSON.parse(readFileSync(path, "utf8")).client_id || null;
+      } catch {
+        return null;
+      }
+    };
+    const first = deviceRecords(cliHome).map(client)[0] || null;
+    const second = deviceRecords(lostHome).map(client)[0] || null;
+    rec.lost_answer = { first_client: first, second_client: second, exit: lost.exit };
+    row("lost_answer", first !== null && first === second && lost.exit === 0,
+      "a machine holding the key as it stood before the pairing's answer finishes with the invitation's code typed: the home answers the client it committed",
+      rec.lost_answer);
+    return true;
+  } catch (error) {
+    record.command_line = { ...rec, failure: String(error).slice(0, 2000) };
+    throw error;
+  } finally {
+    record.command_line = { ...rec, ...(record.command_line || {}) };
+    if (login && login.exit === null) login.kill();
+    if (browserContext) await browserContext.close().catch(() => {});
+    await ask({ op: "cert_seconds", value: String(certSeconds) }).catch(() => {});
+    rmSync(cliHome, { recursive: true, force: true });
+    rmSync(lostHome, { recursive: true, force: true });
+  }
+}
+
 async function fresh(desk, phone, firstRef) {
   const name = "pairing-entry-2";
   const [first] = await rawSent(phone, "confirmation.confirm");
@@ -858,6 +1132,7 @@ try {
     if (paired && await glass(phone, link, code, authenticator)) {
       const [confirmed, firstRef] = await confirmEntry(desk, phone);
       if (confirmed && await fresh(desk, phone, firstRef)) {
+        await commandLine(desk, phone);
         await measure(phone);
         await sleepBeyondExpiry(desk, phone);
         await revoke(desk, phone);
@@ -884,7 +1159,8 @@ try {
   proxy.close();
 }
 
-const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "intent", "sleep", "revoke", "viewport"];
+const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "command_line", "renewal", "terminal_confirm", "open_ticket", "exit", "lost_answer",
+  "intent", "sleep", "revoke", "viewport"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";

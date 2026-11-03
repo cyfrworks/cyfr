@@ -17,10 +17,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The CLI pairs other devices and is not one: it holds no device key and
-// speaks over its own transport, as every command does. Pairing and
-// revoking need a fresh confirmation, which they meet through the wait every
-// tool call goes through (mcp.Client.Confirm).
+// The CLI pairs other devices as their approver: a new device shows its
+// key's code (and the address that approves it), and cyfr pair opens the
+// pairing for exactly that key. Pairing and revoking need a fresh
+// confirmation, which they meet through the wait every tool call goes
+// through (mcp.Client.Confirm): in Prism on a device of the person's, or
+// on this command line when it is a paired device of theirs itself (cyfr
+// login).
 
 func init() {
 	rootCmd.AddCommand(pairCmd)
@@ -32,12 +35,14 @@ var pairCmd = &cobra.Command{
 	Use:     "pair <code>",
 	Short:   "Pair a new device",
 	GroupID: "security",
-	Long: `Pair a new device. Open this CYFR's /pair page on that device first: it makes
-its own key and shows that key's code. Give the code here, with or without its
-spaces, and this prints a pairing link for that device alone. Open the link on
-the device, in the same browser, before it expires, and it pairs as you in the
-athanor in focus. Pairing needs a fresh confirmation, which you give in Prism;
-once you hold a passkey or a paired device here, it is given with one of them.
+	Long: `Pair a new device. The device makes its own key first and shows that key's
+code: a browser on this CYFR's /pair page, or a command line running cyfr
+login, which also shows the address that approves it. Give the code here,
+with or without its spaces, or that address, and this prints a pairing link
+for that device alone. Open the link on the device, or paste it into its cyfr
+login, before it expires, and it pairs as you in the athanor in focus.
+Pairing needs a fresh confirmation, given with a passkey or a paired device
+of yours: in Prism, or here when this command line is one.
 
 The link pairs only the device whose code you gave: any other device that opens
 it is refused. Give a code that begins with - after --.`,
@@ -63,6 +68,11 @@ it is refused. Give a code that begins with - after --.`,
 // without the spaces between its groups: the digest of its key, unpadded
 // base64url of 32 bytes (Prima.Device.key_digest/1).
 func keyDigestFromCode(code string) (string, error) {
+	// The approve address a command line shows names the digest in its
+	// fragment (<home>/devices/add#key=<digest>).
+	if _, fragment, ok := strings.Cut(strings.TrimSpace(code), "/devices/add#key="); ok {
+		code = fragment
+	}
 	digest := strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
 			return -1

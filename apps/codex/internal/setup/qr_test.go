@@ -78,3 +78,43 @@ func abs(v int) int {
 	}
 	return v
 }
+
+// The terminal's QR code is the same modules as the image, two rows per
+// line, light as a block and dark as a space, inside a light quiet zone
+// on every side, the last odd row's lower half light.
+func TestQRText_DrawsTheModulesInsideTheQuietZone(t *testing.T) {
+	text := "https://alice.example/devices/add#key=sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
+	m, err := qrModules(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drawn, err := QRText(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := len(m) + 2*quietZone
+	lines := strings.Split(strings.TrimSuffix(drawn, "\n"), "\n")
+	if len(lines) != (size+1)/2 {
+		t.Fatalf("%d lines for %d rows", len(lines), size)
+	}
+	light := func(x, y int) bool {
+		x, y = x-quietZone, y-quietZone
+		return y < 0 || y >= len(m) || x < 0 || x >= len(m) || !m[y][x]
+	}
+	for i, line := range lines {
+		cells := []rune(line)
+		if len(cells) != size {
+			t.Fatalf("line %d is %d wide, not %d", i, len(cells), size)
+		}
+		for x, c := range cells {
+			top, bottom := light(x, 2*i), 2*i+1 >= size || light(x, 2*i+1)
+			want := map[[2]bool]rune{{true, true}: '█', {true, false}: '▀', {false, true}: '▄', {false, false}: ' '}[[2]bool{top, bottom}]
+			if c != want {
+				t.Fatalf("line %d column %d is %q, want %q", i, x, c, want)
+			}
+		}
+	}
+	if !strings.HasPrefix(lines[0], strings.Repeat("█", size)) || !strings.HasPrefix(lines[len(lines)-1], strings.Repeat("█", size)) {
+		t.Error("the quiet zone is not light above and below")
+	}
+}

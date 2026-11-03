@@ -217,19 +217,19 @@ func sameIDs(a, b []string) bool {
 // they type, fed through enter.
 type terminal struct {
 	interactive bool
-	lines       chan string
+	lines       chan []byte
 }
 
-func (term *terminal) enter() { term.lines <- "" }
+func (term *terminal) enter() { term.lines <- []byte{} }
 
 // onTerminal makes every client newClient builds in this test wait on term.
 func onTerminal(t *testing.T, interactive bool) *terminal {
 	t.Helper()
-	term := &terminal{interactive: interactive, lines: make(chan string, 8)}
+	term := &terminal{interactive: interactive, lines: make(chan []byte, 8)}
 
 	savedTerminal, savedInput := confirmationTerminal, confirmationInput
 	confirmationTerminal = func() bool { return term.interactive }
-	confirmationInput = func() <-chan string { return term.lines }
+	confirmationInput = func() <-chan []byte { return term.lines }
 	t.Cleanup(func() { confirmationTerminal, confirmationInput = savedTerminal, savedInput })
 	return term
 }
@@ -360,12 +360,12 @@ func TestFormatConsentError_ConfirmationRequired(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // A wait over a fake terminal: its output and the lines it reads.
-func newWait(interactive bool, lines chan string, now func() time.Time) (*confirmationWait, *bytes.Buffer) {
+func newWait(interactive bool, lines chan []byte, now func() time.Time) (*confirmationWait, *bytes.Buffer) {
 	out := &bytes.Buffer{}
 	return &confirmationWait{
 		out:         out,
 		interactive: func() bool { return interactive },
-		lines:       func() <-chan string { return lines },
+		lines:       func() <-chan []byte { return lines },
 		now:         now,
 	}, out
 }
@@ -384,7 +384,7 @@ func pendingAt(t *testing.T, id string, expiresAt time.Time) *mcp.ConsentError {
 // Off a terminal the wait ends at once with the signal, which the command
 // prints before exiting 1, and says nothing itself.
 func TestConfirmationWait_OffATerminalEndsAtOnce(t *testing.T) {
-	wait, out := newWait(false, make(chan string), time.Now)
+	wait, out := newWait(false, make(chan []byte), time.Now)
 	pending := pendingAt(t, pendingSecret, time.Now().Add(time.Minute))
 
 	if err := wait.wait(t.Context(), pending, false); err != pending {
@@ -397,7 +397,7 @@ func TestConfirmationWait_OffATerminalEndsAtOnce(t *testing.T) {
 
 // Past the record's expiry there is nothing left to wait for.
 func TestConfirmationWait_PastTheExpiryEndsAtOnce(t *testing.T) {
-	wait, out := newWait(true, make(chan string), time.Now)
+	wait, out := newWait(true, make(chan []byte), time.Now)
 	pending := pendingAt(t, pendingSecret, time.Now().Add(-time.Second))
 
 	if err := wait.wait(t.Context(), pending, false); err != pending {
@@ -411,14 +411,14 @@ func TestConfirmationWait_PastTheExpiryEndsAtOnce(t *testing.T) {
 // On a terminal the wait prints the sentence, naming the ref, and the
 // instruction, and an Enter repeats.
 func TestConfirmationWait_EnterRepeats(t *testing.T) {
-	lines := make(chan string)
+	lines := make(chan []byte)
 	wait, out := newWait(true, lines, time.Now)
 	pending := pendingAt(t, pendingSecret, time.Now().Add(time.Minute))
 
 	done := make(chan error, 1)
 	go func() { done <- wait.wait(t.Context(), pending, false) }()
 
-	lines <- ""
+	lines <- []byte{}
 	select {
 	case err := <-done:
 		if err != nil {
@@ -442,13 +442,13 @@ func TestConfirmationWait_EnterRepeats(t *testing.T) {
 // A repeat answered with the same id is still waiting: the wait says so, by
 // the ref, and waits again.
 func TestConfirmationWait_AgainSaysItIsStillWaiting(t *testing.T) {
-	lines := make(chan string)
+	lines := make(chan []byte)
 	wait, out := newWait(true, lines, time.Now)
 	pending := pendingAt(t, pendingSecret, time.Now().Add(time.Minute))
 
 	done := make(chan error, 1)
 	go func() { done <- wait.wait(t.Context(), pending, true) }()
-	lines <- ""
+	lines <- []byte{}
 
 	if err := <-done; err != nil {
 		t.Fatalf("an Enter must repeat, got %v", err)
@@ -464,7 +464,7 @@ func TestConfirmationWait_AgainSaysItIsStillWaiting(t *testing.T) {
 
 // The wait ends at the record's expiry, with the signal: nothing repeats.
 func TestConfirmationWait_EndsAtTheExpiry(t *testing.T) {
-	wait, _ := newWait(true, make(chan string), time.Now)
+	wait, _ := newWait(true, make(chan []byte), time.Now)
 	pending := pendingAt(t, pendingSecret, time.Now().Add(100*time.Millisecond))
 
 	start := time.Now()
@@ -478,7 +478,7 @@ func TestConfirmationWait_EndsAtTheExpiry(t *testing.T) {
 
 // Ctrl-C leaves it: the command exits 130 and prints nothing more.
 func TestConfirmationWait_CtrlCLeavesIt(t *testing.T) {
-	wait, _ := newWait(true, make(chan string), time.Now)
+	wait, _ := newWait(true, make(chan []byte), time.Now)
 	ctx, cancel := context.WithCancel(t.Context())
 	pending := pendingAt(t, pendingSecret, time.Now().Add(time.Minute))
 
@@ -497,7 +497,7 @@ func TestConfirmationWait_CtrlCLeavesIt(t *testing.T) {
 
 // At the end of input no Enter can come: the wait ends with the signal.
 func TestConfirmationWait_EndOfInputEndsIt(t *testing.T) {
-	lines := make(chan string)
+	lines := make(chan []byte)
 	close(lines)
 	wait, _ := newWait(true, lines, time.Now)
 	pending := pendingAt(t, pendingSecret, time.Now().Add(time.Minute))

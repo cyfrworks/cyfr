@@ -7,15 +7,20 @@
 # behind the harness's HTTPS front, its device certificates made short
 # through the settings operation, and one person signed in twice — a
 # desktop and a phone — driven in Chromium (proof.mjs) through pairing,
-# confirmation on the glass, a sleep beyond the certificate's expiry and
-# revocation, with the device-intent measurement.
+# confirmation on the glass, a command line paired as a device (its code
+# typed on the desktop and confirmed on the glass, its certificate renewed,
+# cyfr open's ticket, the shell's exit, a lost answer), a sleep
+# beyond the certificate's expiry and revocation, with the device-intent
+# measurement. The command line is the real cyfr binary, built here into
+# the output directory, where the proof runs it.
 #
 # The proof asks the server for its part through the output directory
 # (`ask-N.json`), and this script answers each (`answer-N.json`): the
 # phone's passkey registration, begun and completed through the console's
 # adapter under the phone's session (`passkey_options`,
 # `passkey_register`), and the names of the person's vault entries
-# (`vault_names`).
+# (`vault_names`), and the device certificates' life the command line's
+# steps set and restore (`cert_seconds`).
 #
 # Usage: tests/pairing-proof/run.sh
 # Writes pairing-proof.json and pairing-proof.md into PROOF_OUT (default:
@@ -46,6 +51,7 @@ cleanup() {
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
   rm -f "$OUT"/ask-* "$OUT"/answer-*
+  rm -rf "$OUT/bin"
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -96,6 +102,10 @@ answer_ask() {
       arguments="$(python3 -c "import json, sys; print(json.dumps({'credential': json.load(open(sys.argv[1]))['credential']}))" "$ask")"
       ANSWER="$(server_fixture "$CELL" console "$phone_token" passkey/register "$arguments")"
       ;;
+    cert_seconds)
+      ANSWER="$(server_fixture "$CELL" console "$desktop_token" settings/set \
+        "{\"key\":\"device_cert_seconds\",\"value\":\"$(asked "$ask" value)\"}")"
+      ;;
     vault_names)
       ANSWER="$(server_fixture "$CELL" console "$desktop_token" vault/list '{}' |
         python3 -c "import json, sys; a = json.load(sys.stdin); print(json.dumps({'names': sorted(e['name'] for e in a.get('ok', {}).get('entries', []))} if 'ok' in a else a))")"
@@ -104,10 +114,15 @@ answer_ask() {
   esac
 }
 
+step "the command line the proof runs"
+mkdir -p "$OUT/bin"
+( cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -trimpath -o "$OUT/bin/cyfr" . ) ||
+  fail "the cyfr command line did not build"
+
 step "the pairing proof in Chromium, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run pairing-proof proof.mjs /authority/homes.json "$segment" "$desktop_cookie" "$phone_cookie" /out &
+playwright_run pairing-proof proof.mjs /authority/homes.json "$segment" "$desktop_cookie" "$phone_cookie" /out "$CERT_SECONDS" &
 PROOF_PID=$!
 proof_await answer_ask
 

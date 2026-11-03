@@ -63,11 +63,20 @@ type Config struct {
 	// holder.ChipPresent unless a test replaces it, so no test reaches the
 	// machine's own TPM.
 	Chip func() bool
+	// Noun is what the person calls this device in a sentence: "screen"
+	// for a box's own screen (the default), "command line" for cyfr login.
+	Noun string
+	// Pair is pairing.complete at the home, for a device paired to a
+	// person who exists (Prepare, then Pair); nil where nothing pairs.
+	Pair PairCall
+	// Invitation is the invitation's code a new person joins by, asked
+	// again by a resume of that enrollment; empty for any other admission.
+	Invitation string
 }
 
-// pendingConfirm is a confirmation the shell drew: the home's record and
+// PendingConfirm is a confirmation the shell drew: the home's record and
 // challenge, as fetched over the channel, and when it was drawn.
-type pendingConfirm struct {
+type PendingConfirm struct {
 	Ref       string
 	Operation string
 	Preview   map[string]any
@@ -91,7 +100,7 @@ type Shell struct {
 	passphrase string
 	recovery   *Recovery
 	naming     string // a name cyfr.run refused or could not take yet
-	confirm    *pendingConfirm
+	confirm    *PendingConfirm
 	// standingEnded is a home that refused this screen's standing at its
 	// last unlock: revoked, or suspended by a declared backup restore,
 	// which the recovery code can re-enable.
@@ -126,6 +135,12 @@ func New(cfg Config) (*Shell, error) {
 	}
 	if cfg.Restart == nil {
 		cfg.Restart = func() {}
+	}
+	if cfg.Tokens == nil {
+		cfg.Tokens = func() (string, string) { return "", "" }
+	}
+	if cfg.Noun == "" {
+		cfg.Noun = "screen"
 	}
 	s := &Shell{cfg: cfg}
 	rec, err := holder.Load(cfg.Record)
@@ -172,12 +187,19 @@ type View struct {
 	Passphrase string
 	Recovery   *Recovery
 	Name       string
-	Confirm    *pendingConfirm
+	Confirm    *PendingConfirm
 	// Kit offers to re-enable this screen with the recovery code.
 	Kit bool
 	// Restore is a restore's enrollment to finish, which takes the
 	// recovery code again.
 	Restore bool
+	// Admission is how the key in hand was, or is being, admitted:
+	// setup, restore, invitation, open, or pair for a device paired to a
+	// person who exists.
+	Admission string
+	// Digest is the key's digest while it is not enrolled yet: the code a
+	// pairing shows.
+	Digest string
 }
 
 // View is the page the screen shows now, and the notice of the last action
@@ -210,8 +232,14 @@ func (s *Shell) View() View {
 	default:
 		v.Page = PageUnlocked
 	}
-	if v.Kind == "" && s.rec != nil {
-		v.Kind = s.rec.Kind
+	if s.rec != nil {
+		if v.Kind == "" {
+			v.Kind = s.rec.Kind
+		}
+		v.Admission = s.rec.Admission
+		if len(s.rec.Certificate) == 0 {
+			v.Digest = KeyDigest(s.rec.PublicKey)
+		}
 	}
 	return v
 }
@@ -228,8 +256,8 @@ func (s *Shell) newPassphrase() string {
 	return s.passphrase
 }
 
-// begin clears the last notice as an action starts.
-func (s *Shell) begin() {
+// Begin clears the last notice as an action starts.
+func (s *Shell) Begin() {
 	s.mu.Lock()
 	s.notice = ""
 	s.mu.Unlock()
@@ -238,27 +266,44 @@ func (s *Shell) begin() {
 // say sets the sentence the next page shows.
 func (s *Shell) say(format string, args ...any) { s.notice = fmt.Sprintf(format, args...) }
 
-// sentence is what the person reads for a failure.
-func sentence(err error) string {
+// sentence is what the person reads for a failure, naming this device as
+// the shell's Config does.
+func (s *Shell) sentence(err error) string { return sentence(err, s.cfg.Noun) }
+
+// sentence is what the person reads for a failure of the device noun
+// names ("screen", "command line").
+func sentence(err error, noun string) string {
 	var intent *IntentError
 	var home *HomeError
 	switch {
 	case errors.Is(err, holder.ErrWrongSecret):
-		return "That is not this screen's PIN or passphrase. Nothing was sent anywhere."
+		return "That is not this " + noun + "'s PIN or passphrase. Nothing was sent anywhere."
 	case errors.Is(err, holder.ErrSecretShape):
-		return "That is not this screen's PIN or passphrase. Nothing was sent anywhere."
+		return "That is not this " + noun + "'s PIN or passphrase. Nothing was sent anywhere."
 	case errors.Is(err, holder.ErrLockedOut):
-		return "Too many wrong PINs: this screen's chip takes one more try every ten minutes."
+		return "Too many wrong PINs: this " + noun + "'s chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
-		return "CYFR does not take this screen any more: a restore from a backup suspended it, or it was removed. If it was suspended, your recovery code below brings it back."
+		return "CYFR does not take this " + noun + " any more: a restore from a backup suspended it, or it was removed. If it was suspended, your recovery code below brings it back."
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
-		return "CYFR did not accept this screen's proof. Nothing was signed for anything else."
+		return "CYFR did not accept this " + noun + "'s proof. Nothing was signed for anything else."
+	case errors.Is(err, ErrCertificationEnded):
+		return "The CYFR that keeps your identity ended this " + noun + "'s certification: pair it again."
 	case errors.As(err, &intent):
 		return intent.Error() + "."
 	case errors.As(err, &home) && home.Code == "setup_closed":
 		return "CYFR is set up already: this box cannot set it up again."
+	case errors.As(err, &home) && home.Code == "invitation_invalid":
+		return "That invitation admits no one now: it was used, withdrawn or expired."
+	case errors.As(err, &home) && home.Code == "not_admitted":
+		return "This CYFR does not admit new people without an invitation."
+	case errors.As(err, &home) && home.Code == "limit_reached":
+		return "This CYFR takes no more people just now."
+	case errors.As(err, &home) && home.Code == "rate_limited":
+		return fmt.Sprintf("CYFR is taking too many requests from here. Try again in %d seconds.", max(home.RetryAfter, 1))
+	case errors.As(err, &home) && home.Code == "unavailable":
+		return fmt.Sprintf("CYFR could not answer just now. Try again in %d seconds.", max(home.RetryAfter, 1))
 	case errors.As(err, &home) && home.RetryAfter > 0:
 		return fmt.Sprintf("CYFR is still restoring. Try again in %d seconds.", home.RetryAfter)
 	case errors.As(err, &home):
@@ -335,7 +380,7 @@ func restoreSentence(err error) string {
 			return "This box is not set up for a restore."
 		}
 	}
-	return sentence(err)
+	return sentence(err, "screen")
 }
 
 // checkSecret checks the secret given twice before anything is made or
@@ -429,8 +474,17 @@ func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
 			reprove: func(ctx context.Context) (Admission, error) {
 				return Restore(ctx, s.cfg.Client, s.cfg.Address, restore, strings.TrimSpace(code))
 			}}
+	case s.rec.Admission == "invitation" || s.rec.Admission == "open":
+		// A new person's enrollment, under the same admission: the
+		// invitation's code, given again, or the open door.
+		var ok bool
+		if a, ok = s.admission(s.rec.Admission, strings.TrimSpace(code)); !ok {
+			s.say("Give the invitation's code again to finish with the same key.")
+			return
+		}
+		extra = map[string]any{"name": strings.TrimSpace(name), "recovery_secret": RecoverySecret()}
 	default:
-		s.say("This screen cannot finish setting up: .env holds no token for it.")
+		s.say("This %s cannot finish setting up: .env holds no token for it.", s.cfg.Noun)
 		return
 	}
 	s.enroll(ctx, s.rec, a, secret, extra, true)
@@ -441,7 +495,7 @@ func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
 func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, secret []byte, extra map[string]any, resumed bool) {
 	key, err := rec.Open(secret)
 	if err != nil {
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	b := Binding{Home: s.cfg.Address, DeviceKey: rec.PublicKey}
@@ -449,7 +503,7 @@ func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, sec
 	got, err := Enroll(ctx, s.cfg.Address, a, b, d, key, extra, resumed)
 	if err != nil {
 		key.Erase()
-		s.say("Setting up did not finish: %s Your key is kept, so trying again proves the same one.", sentence(err))
+		s.say("Setting up did not finish: %s Your key is kept, so trying again proves the same one.", s.sentence(err))
 		return
 	}
 	var cert struct {
@@ -473,7 +527,7 @@ func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, sec
 	s.recovery = got.Recovery
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	if s.recovery != nil {
@@ -484,6 +538,20 @@ func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, sec
 // connect opens the certified channel under key and holds both: the box is
 // unlocked from here until a lock.
 func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
+	if i := readIssued(s.rec.Certificate); i.elsewhere() && i.due(s.cfg.Now()) {
+		// This home does not renew a certificate another home issued: it
+		// is renewed there first, and kept before it is used.
+		cert, err := RenewAtIssuer(ctx, s.cfg.Client, s.binding(), s.rec.Certificate, key)
+		switch {
+		case err == nil:
+			s.rec.Certificate = cert
+			if err := s.rec.Save(s.cfg.Record); err != nil {
+				return err
+			}
+		case errors.Is(err, ErrCertificationEnded), s.cfg.Now().UnixMilli() >= i.ExpiresAt:
+			return err
+		}
+	}
 	device := Device{Binding: s.binding(), Certificate: s.rec.Certificate}
 	ch, err := Dialer{Address: s.cfg.Address, Client: s.cfg.Client}.Open(ctx, device, key, s.report, s.renewed)
 	if err != nil {
@@ -517,7 +585,10 @@ func (s *Shell) scheduleRenewal() {
 		NotBefore int64 `json:"not_before"`
 		ExpiresAt int64 `json:"expires_at"`
 	}
-	if json.Unmarshal(s.rec.Certificate, &cert) != nil || cert.ExpiresAt <= cert.NotBefore {
+	if json.Unmarshal(s.rec.Certificate, &cert) != nil || cert.ExpiresAt <= cert.NotBefore ||
+		readIssued(s.rec.Certificate).elsewhere() {
+		// Another home's certificate is renewed there, at the next unlock;
+		// the channel ends when it expires.
 		return
 	}
 	at := time.UnixMilli(cert.NotBefore + (cert.ExpiresAt-cert.NotBefore)/2)
@@ -544,7 +615,7 @@ func (s *Shell) watch(ch *Channel) {
 	if s.ch != ch {
 		return
 	}
-	s.lock(sentence(ch.Err()))
+	s.lock(s.sentence(ch.Err()))
 }
 
 // register takes the person's name at cyfr.run (registry.register), the
@@ -579,7 +650,7 @@ func (s *Shell) register(ctx context.Context, name string) {
 		s.say("cyfr.run did not answer. Try again in a moment; you are set up already.")
 	default:
 		s.naming = name
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 	}
 }
 
@@ -602,7 +673,7 @@ func (s *Shell) Saved(ctx context.Context) {
 		return
 	}
 	if _, err := s.ch.Call(ctx, "person.recovery_code_saved", map[string]any{"attempt_id": s.recovery.AttemptID}); err != nil {
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	s.recovery = nil
@@ -610,6 +681,119 @@ func (s *Shell) Saved(ctx context.Context) {
 	if err := s.rec.Save(s.cfg.Record); err != nil {
 		s.say("This screen could not save that setup finished (%v).", err)
 	}
+}
+
+// admission is the admission an enrollment of kind is proven under again
+// (a finish or a resume): the setup token as .env holds it, the
+// invitation's code given (none, and there is none), or the open door.
+func (s *Shell) admission(kind, code string) (Admission, bool) {
+	switch kind {
+	case "setup":
+		setup, _ := s.cfg.Tokens()
+		return SetupAdmission(s.cfg.Client, setup), true
+	case "invitation":
+		if code == "" {
+			return Admission{}, false
+		}
+		return InvitationAdmission(s.cfg.Client, code), true
+	case "open":
+		return OpenAdmission(s.cfg.Client), true
+	}
+	return Admission{}, false
+}
+
+// Join makes this device's key and enrolls it as a new person at the home,
+// named name, admitted by the invitation's code, or by the home's open door
+// when there is none: the record is written before anything is sent, as
+// Setup writes it, and the home answers the certificate and the person's
+// recovery code.
+func (s *Shell) Join(ctx context.Context, invitation, name string, secret, again []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret, again)
+	if s.rec != nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		s.say("Enter your name: it is yours for life.")
+		return
+	}
+	kind := "open"
+	if invitation = strings.TrimSpace(invitation); invitation != "" {
+		kind = "invitation"
+	}
+	a, _ := s.admission(kind, invitation)
+	rec, err := s.newRecord(kind, secret, again)
+	if err != nil {
+		return
+	}
+	extra := map[string]any{"name": name, "recovery_secret": RecoverySecret()}
+	s.enroll(ctx, rec, a, secret, extra, false)
+}
+
+// Prepare makes this device's key for a pairing to a person who exists,
+// under the PIN or passphrase given twice, and writes it before its code
+// is shown, so the code, a retry and a lost answer all name the same key.
+// It erases again; the caller keeps secret for Pair and erases it there.
+func (s *Shell) Prepare(secret, again []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(again)
+	if s.rec != nil {
+		return
+	}
+	_, _ = s.newRecord("pair", secret, again)
+}
+
+// Pair completes the pairing of the prepared key by the invitation a
+// device of the person answered once they confirmed its addition: the
+// link, pasted, or its code, typed. The PIN or passphrase opens the key;
+// the home's pair challenge is checked and signed (Pair), the certificate
+// kept before anything else, and the channel opened: this device is
+// unlocked. A completion whose answer was lost is completed again with the
+// same link and key, and the home answers the client it committed.
+func (s *Shell) Pair(ctx context.Context, link string, secret []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret)
+	if s.rec == nil || len(s.rec.Certificate) != 0 || s.rec.Admission != "pair" || s.cfg.Pair == nil {
+		return
+	}
+	code, err := InvitationSecret(s.cfg.Address, link)
+	if err != nil {
+		s.say("%s", strings.ToUpper(err.Error()[:1])+err.Error()[1:]+".")
+		return
+	}
+	key, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s", s.sentence(err))
+		return
+	}
+	got, err := Pair(ctx, s.cfg.Pair, Binding{Home: s.cfg.Address, DeviceKey: s.rec.PublicKey},
+		Holder{Kind: string(s.rec.Kind), DisplayName: s.cfg.DisplayName}, code, key)
+	if err != nil {
+		key.Erase()
+		s.say("Pairing did not finish: %s Your key is kept, so giving the link again finishes with the same one.", s.pairSentence(err))
+		return
+	}
+	s.rec.Certificate, s.rec.ClientID, s.rec.Athanor, s.rec.RequestID = got.Certificate, got.ClientID, got.Athanor, ""
+	if err := s.rec.Save(s.cfg.Record); err != nil {
+		key.Erase()
+		s.say("This %s could not save its certificate (%v). Give the link again: CYFR answers the same one.", s.cfg.Noun, err)
+		return
+	}
+	if err := s.connect(ctx, key); err != nil {
+		key.Erase()
+		s.say("%s", s.sentence(err))
+	}
+}
+
+func (s *Shell) pairSentence(err error) string {
+	if errors.Is(err, ErrCertifyElsewhere) {
+		return "Your identity is kept by another CYFR, which certifies a device there; pair this one from a browser."
+	}
+	return s.sentence(err)
 }
 
 // Unlock opens the key with the PIN (or passphrase), opens the channel
@@ -624,19 +808,28 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 	}
 	key, err := s.rec.Open(secret)
 	if err != nil {
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
+		return
+	}
+	// An enrollment whose recovery code was never said saved (RequestID
+	// kept) unlocks only to show that code again, under the admission it
+	// was made by; one whose admission is not at hand (an invitation's
+	// code not given again) does not unlock.
+	a, admitted := s.admission(s.rec.Admission, s.cfg.Invitation)
+	if s.rec.RequestID != "" && !admitted {
+		key.Erase()
+		s.say("This %s is not set up yet: your recovery code was never saved. Run cyfr login --join --invitation CODE with the invitation's code to see it again.", s.cfg.Noun)
 		return
 	}
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
 		s.standingEnded = errors.Is(err, ErrRevoked)
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	s.standingEnded = false
 	if s.rec.RequestID != "" {
-		setup, _ := s.cfg.Tokens()
-		got, err := resume(ctx, s.cfg.Address, SetupAdmission(s.cfg.Client, setup), s.binding(), s.rec.RequestID, key)
+		got, err := resume(ctx, s.cfg.Address, a, s.binding(), s.rec.RequestID, key)
 		switch {
 		case err == nil && got.Recovery != nil:
 			s.recovery = got.Recovery
@@ -645,7 +838,9 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 			s.rec.RequestID = ""
 			_ = s.rec.Save(s.cfg.Record)
 		default:
-			s.say("CYFR could not show your recovery code again: %s", sentence(err))
+			// No session opens before the code is said saved: the
+			// unlock ends here, and the next one asks again.
+			s.lock("CYFR could not show your recovery code again: " + s.sentence(err))
 		}
 	}
 }
@@ -664,7 +859,7 @@ func (s *Shell) Reenable(ctx context.Context, code string, secret []byte) {
 	}
 	key, err := s.rec.Open(secret)
 	if err != nil {
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	if err := reenable(ctx, s.cfg.Client, s.cfg.Address, strings.TrimSpace(code), s.rec.ClientID); err != nil {
@@ -674,7 +869,7 @@ func (s *Shell) Reenable(ctx context.Context, code string, secret []byte) {
 	}
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	s.standingEnded = false
@@ -690,17 +885,52 @@ func kitSentence(err error) string {
 	case errors.As(err, &home) && home.Code == "not_a_holder":
 		return "That recovery code is not yours here."
 	}
-	return "This screen could not be brought back: " + sentence(err)
+	return "This screen could not be brought back: " + sentence(err, "screen")
 }
 
-// Ticket reserves one session at the home (session.unlock), signs that
-// reservation, pre-signs the lock of exactly that session and keeps it,
-// and answers where Chrome goes: the home's completion page with the
-// ticket in its fragment, which no request carries.
+// Ticket reserves one session at the home (reserve) and answers where
+// Chrome goes: the home's completion page with the ticket in its fragment,
+// which no request carries.
 func (s *Shell) Ticket(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ch == nil || s.recovery != nil || s.naming != "" {
+	ticket, err := s.reserve(ctx)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(s.cfg.Address, "/") + "/auth/device/complete#" + ticket, nil
+}
+
+// Session reserves one session at the home for this device's own
+// requests (reserve) and spends its ticket for the session's bearer
+// token (POST /device/session), which only the device channel that
+// reserved it keeps alive and whose lock this shell holds. The token is
+// held by the caller in memory alone.
+func (s *Shell) Session(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ticket, err := s.reserve(ctx)
+	if err != nil {
+		return "", err
+	}
+	var got struct {
+		SessionToken string `json:"session_token"`
+	}
+	if err := post(ctx, s.cfg.Client, s.cfg.Address, "/device/session", nil, map[string]any{"ticket": ticket}, &got); err != nil {
+		return "", err
+	}
+	if got.SessionToken == "" {
+		return "", ErrRefused
+	}
+	return got.SessionToken, nil
+}
+
+// reserve asks the home for one session (session.unlock), signs that
+// reservation, pre-signs the lock of exactly that session and keeps it,
+// and answers the home's one-time ticket for it. The caller holds the
+// shell.
+func (s *Shell) reserve(ctx context.Context) (string, error) {
+	if s.ch == nil || s.recovery != nil || s.naming != "" || s.rec.RequestID != "" {
 		return "", errors.New("locked")
 	}
 	raw, err := s.ch.Call(ctx, "session.unlock", nil)
@@ -740,7 +970,7 @@ func (s *Shell) Ticket(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(raw, &got); err != nil || got.SessionID != session || got.Ticket == "" {
 		return "", ErrRefused
 	}
-	return strings.TrimRight(s.cfg.Address, "/") + "/auth/device/complete#" + got.Ticket, nil
+	return got.Ticket, nil
 }
 
 // Lock locks the box, why saying what the lock page tells the person.
@@ -803,7 +1033,7 @@ func (s *Shell) Draw(ctx context.Context, ref string) {
 	}
 	p, _, err := s.pending(ctx, ref)
 	if err != nil {
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	s.confirm = p
@@ -811,7 +1041,7 @@ func (s *Shell) Draw(ctx context.Context, ref string) {
 
 // pending reads ref's record and challenge from the home and checks the
 // challenge is for this ref, this device and this home.
-func (s *Shell) pending(ctx context.Context, ref string) (*pendingConfirm, map[string]any, error) {
+func (s *Shell) pending(ctx context.Context, ref string) (*PendingConfirm, map[string]any, error) {
 	raw, err := s.ch.Call(ctx, "confirmation.pending", map[string]any{"request": ref})
 	if err != nil {
 		return nil, nil, err
@@ -833,7 +1063,7 @@ func (s *Shell) pending(ctx context.Context, ref string) (*pendingConfirm, map[s
 	if err != nil {
 		return nil, nil, err
 	}
-	return &pendingConfirm{Ref: ref, Operation: r.Operation, Preview: r.Preview, Asker: r.Asker,
+	return &PendingConfirm{Ref: ref, Operation: r.Operation, Preview: r.Preview, Asker: r.Asker,
 		Digest: c["digest"].(string), drawn: s.cfg.Now()}, c, nil
 }
 
@@ -864,7 +1094,7 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 	now, challenge, err := s.pending(ctx, ref)
 	if err != nil {
 		s.confirm = nil
-		s.say("%s Nothing was signed.", sentence(err))
+		s.say("%s Nothing was signed.", s.sentence(err))
 		return
 	}
 	if !same(now, drawn) {
@@ -874,27 +1104,77 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 	}
 	fresh, err := s.rec.Open(secret)
 	if err != nil {
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	proof, err := Prove(challenge, fresh)
 	fresh.Erase()
 	if err != nil {
 		s.confirm = nil
-		s.say("%s", sentence(err))
+		s.say("%s", s.sentence(err))
 		return
 	}
 	s.confirm = nil
 	if _, err := s.ch.Call(ctx, "confirmation.confirm", map[string]any{"ref": ref, "device_proof": proof}); err != nil {
-		s.say("CYFR did not take the confirmation: %s", sentence(err))
+		s.say("CYFR did not take the confirmation: %s", s.sentence(err))
 		return
 	}
 	s.say("Confirmed on this screen. The page that asked finishes the change and shows its result.")
 }
 
+// ConfirmDrawn confirms the change drawn, read from the home through
+// another credential of this device's (the command line's session) and
+// shown before the secret was asked: the secret, asked after it, opens
+// the key afresh, which proves this device on a channel of its own; the
+// home's confirm challenge for that ref is read there, and only when the
+// record behind it is still the one drawn (its operation and preview) is
+// that challenge signed and presented (confirmation.confirm). The channel
+// is closed and the key erased whatever the outcome; the notice says it.
+func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret)
+	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
+		return
+	}
+	key, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s Nothing was signed.", s.sentence(err))
+		return
+	}
+	if err := s.connect(ctx, key); err != nil {
+		key.Erase()
+		s.say("%s Nothing was signed.", s.sentence(err))
+		return
+	}
+	notice := ""
+	defer func() { s.lock(""); s.notice = notice }()
+	now, challenge, err := s.pending(ctx, drawn.Ref)
+	if err != nil {
+		notice = s.sentence(err) + " Nothing was signed."
+		return
+	}
+	pa, _ := Canonical(now.Preview)
+	pb, _ := Canonical(drawn.Preview)
+	if now.Operation != drawn.Operation || string(pa) != string(pb) {
+		notice = "The change CYFR holds is not the one shown, so nothing was signed."
+		return
+	}
+	proof, err := Prove(challenge, s.key)
+	if err != nil {
+		notice = s.sentence(err)
+		return
+	}
+	if _, err := s.ch.Call(ctx, "confirmation.confirm", map[string]any{"ref": drawn.Ref, "device_proof": proof}); err != nil {
+		notice = "CYFR did not take the confirmation: " + s.sentence(err)
+		return
+	}
+	notice = "Confirmed on this " + s.cfg.Noun + "."
+}
+
 // same is whether the confirmation at the home is still the one drawn:
 // its operation, preview and the digest its challenge binds.
-func same(a, b *pendingConfirm) bool {
+func same(a, b *PendingConfirm) bool {
 	pa, _ := Canonical(a.Preview)
 	pb, _ := Canonical(b.Preview)
 	return a.Operation == b.Operation && a.Digest == b.Digest && string(pa) == string(pb)
