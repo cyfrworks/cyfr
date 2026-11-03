@@ -77,6 +77,7 @@ defmodule Sanctum do
       Context,
       Decisions,
       DeviceCerts,
+      DeviceUnlock,
       Directory,
       Directory.Client,
       Door,

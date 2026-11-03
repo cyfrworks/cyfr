@@ -17,6 +17,7 @@ defmodule Arca.Schemas.PairedClient do
 
   @standings ~w(active suspended revoked)
   @source_kinds ~w(session api_key device_cert)
+  @holder_kinds ~w(chip software)
 
   @doc """
   The standings a paired client may hold: `suspended` while a declared
@@ -32,6 +33,14 @@ defmodule Arca.Schemas.PairedClient do
   @spec source_kinds() :: [String.t()]
   def source_kinds, do: @source_kinds
 
+  @doc """
+  What may hold a protected device's key, as the device reports it: a TPM
+  `chip`, or a passphrase-wrapped `software` file. Information a person
+  reads, never an input to a decision; a browser key holds none.
+  """
+  @spec holder_kinds() :: [String.t()]
+  def holder_kinds, do: @holder_kinds
+
   schema "paired_clients" do
     field :athanor_id, :string
     field :user_id, :string
@@ -39,6 +48,8 @@ defmodule Arca.Schemas.PairedClient do
     field :source_id, :string
     field :device_public_key, :binary
     field :standing, :string, default: "active"
+    field :holder_kind, :string
+    field :display_name, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

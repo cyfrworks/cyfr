@@ -80,7 +80,7 @@ defmodule Arca.PendingConfirmations do
   import Ecto.Query
 
   alias Arca.QueryHelpers
-  alias Arca.Schemas.{PairedClient, Passkey, PendingConfirmation}
+  alias Arca.Schemas.{DeviceCertificate, PairedClient, Passkey, PendingConfirmation}
   alias Prima.Confirmation
   alias Prima.Confirmation.Preview
 
@@ -173,9 +173,10 @@ defmodule Arca.PendingConfirmations do
 
   @doc """
   Mark the pending record `ref` confirmed with `proof`: `:proof` is
-  `"passkey"`, `"oidc_reauth"` or `"email_code"`, and `:passkey_id` or
-  `:client_id` name the passkey or paired client that gave it, which must
-  still stand. Succeeds once, before the record's expiry. Refusals:
+  `"passkey"`, `"oidc_reauth"`, `"email_code"` or `"device"` (a protected
+  device's signature over the record's digest, which names the client),
+  and `:passkey_id` or `:client_id` name the passkey or paired client that
+  gave it, which must still stand. Succeeds once, before the record's expiry. Refusals:
   `:not_pending`, `:expired`, `:not_found`, `:revoked` (the passkey or
   client no longer stands), `{:invalid, errors}`, `:not_owner`,
   `:no_athanor`, `:database_error`.
@@ -534,6 +535,7 @@ defmodule Arca.PendingConfirmations do
          :ok <- confirmer_stands(person, proof),
          {:ok, record} <- locked(actor, ref),
          now = Arca.ServerMetaStorage.now!(),
+         :ok <- device_certified(proof.proof, person.athanor_id, proof.client_id, now),
          :ok <- state_is(record, "pending"),
          :ok <- unexpired(record, now) do
       {count, _} =
@@ -604,7 +606,8 @@ defmodule Arca.PendingConfirmations do
 
     with {:ok, record} <- locked(actor, ref),
          :ok <- matches(record, expected),
-         :ok <- consumable(record, now) do
+         :ok <- consumable(record, now),
+         :ok <- device_stands(record, now) do
       {count, _} =
         from(c in PendingConfirmation,
           where: c.athanor_id == ^record.athanor_id and c.ref == ^ref and c.state == "confirmed"
@@ -631,6 +634,37 @@ defmodule Arca.PendingConfirmations do
   defp consumable(%PendingConfirmation{state: "cancelled"}, _now), do: {:error, :cancelled}
   defp consumable(%PendingConfirmation{state: "voided"}, _now), do: {:error, :voided}
   defp consumable(%PendingConfirmation{state: "expired"}, _now), do: {:error, :expired}
+
+  # A protected device's confirmation stands on its device as it stands at
+  # consumption too: the client active and holding a certificate unexpired
+  # and unrevoked, read under the client's lock, so a revocation, a
+  # rotation or an expiry since the proof leaves the change unconsumed.
+  defp device_stands(%PendingConfirmation{proof: "device"} = record, now) do
+    with :ok <-
+           confirmer_stands(
+             %{athanor_id: record.athanor_id, user_id: record.user_id},
+             %{passkey_id: nil, client_id: record.confirmed_client_id}
+           ),
+         do: device_certified("device", record.athanor_id, record.confirmed_client_id, now)
+  end
+
+  defp device_stands(%PendingConfirmation{}, _now), do: :ok
+
+  # A device's proof stands only on a certificate of its client this home
+  # recorded, unrevoked and unexpired now.
+  defp device_certified("device", athanor_id, client_id, now) do
+    if Arca.Repo.exists?(
+         from(c in DeviceCertificate,
+           where:
+             c.athanor_id == ^athanor_id and c.paired_client_id == ^client_id and
+               c.state == "active" and c.expires_at > ^now
+         )
+       ),
+       do: :ok,
+       else: {:error, :revoked}
+  end
+
+  defp device_certified(_proof, _athanor_id, _client_id, _now), do: :ok
 
   # The same change, asked by the credential that opened the record: a
   # consumer naming no opener, or another, matches nothing.
@@ -685,7 +719,7 @@ defmodule Arca.PendingConfirmations do
     if DateTime.compare(expires_at, now) == :gt, do: :ok, else: {:error, :expired}
   end
 
-  defp proof(%{proof: kind} = proof) when kind in ~w(passkey oidc_reauth email_code) do
+  defp proof(%{proof: kind} = proof) when kind in ~w(passkey oidc_reauth email_code device) do
     passkey_id = Map.get(proof, :passkey_id)
     client_id = Map.get(proof, :client_id)
 
@@ -696,6 +730,9 @@ defmodule Arca.PendingConfirmations do
       kind != "passkey" and not is_nil(passkey_id) ->
         {:error, {:invalid, %{passkey_id: ["only a passkey proof names one"]}}}
 
+      kind == "device" and not (is_binary(client_id) and client_id != "") ->
+        {:error, {:invalid, %{client_id: ["names the device that signed"]}}}
+
       not (is_nil(client_id) or (is_binary(client_id) and client_id != "")) ->
         {:error, {:invalid, %{client_id: ["is malformed"]}}}
 
@@ -705,7 +742,7 @@ defmodule Arca.PendingConfirmations do
   end
 
   defp proof(_proof),
-    do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth or email_code"]}}}
+    do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth, email_code or device"]}}}
 
   defp opener?(opener),
     do: is_binary(opener) and byte_size(opener) > 0 and byte_size(opener) <= 255

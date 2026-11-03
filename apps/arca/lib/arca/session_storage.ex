@@ -22,6 +22,15 @@ defmodule Arca.SessionStorage do
   advance that retires the epoch either retires this session or refuses
   it). The advance ends every session carrying a `key_epoch` the fresh
   head retired.
+
+  A protected device's unlock creates a session that records its paired
+  `client_id`, under the id the unlock reserved. Its `expires_at` is the
+  device channel's: `slide_client_sessions/4` moves it, never past the
+  certificate's expiry and never for a session already expired, and
+  `refresh_session/2`, the browser's sliding refresh, never moves it. A
+  lock deletes exactly the session it names (`delete_client_session/2`),
+  and a revocation of the client deletes all of its sessions
+  (`delete_clients!/1`).
   """
 
   import Ecto.Query
@@ -45,7 +54,9 @@ defmodule Arca.SessionStorage do
   head's current `key_epoch` (`{:error, :stale_key_epoch}`), and is refused
   for any other person (`{:error, :unexpected_key_epoch}`).
   `attrs[:cli_machine]` names the machine a command line's session is
-  issued to, and is absent for a browser's. `also:`
+  issued to, and is absent for a browser's. `attrs[:client_id]` names the
+  protected device whose unlock created the session, which then takes the
+  `attrs[:id]` that unlock reserved (`ses_…`). `also:`
   (optional) is the higher owner's closure, run in the same transaction
   after the insert and handed the session's `%{id, user_id}`: it answers
   `:ok`, or `{:error, reason}` to roll the session back; any other answer
@@ -79,7 +90,7 @@ defmodule Arca.SessionStorage do
     epoch = attrs[:identity_key_epoch]
 
     row = %{
-      id: Prima.UUID7.generate_id("ses"),
+      id: session_id(attrs),
       token_hash: token_hash,
       token_prefix: attrs[:token_prefix],
       user_id: attrs.user_id,
@@ -91,6 +102,7 @@ defmodule Arca.SessionStorage do
       athanor_id: attrs[:athanor_id],
       identity_key_epoch: epoch,
       cli_machine: attrs[:cli_machine],
+      client_id: attrs[:client_id],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
@@ -100,6 +112,13 @@ defmodule Arca.SessionStorage do
       {:ok, %{id: row.id, user_id: row.user_id}}
     end
   end
+
+  # A protected device's session takes the id its unlock reserved, and the
+  # lock proof it holds names; every other session draws one.
+  defp session_id(%{client_id: client_id, id: "ses_" <> _ = id}) when is_binary(client_id),
+    do: id
+
+  defp session_id(_attrs), do: Prima.UUID7.generate_id("ses")
 
   defp also_ran(:ok), do: :ok
   defp also_ran({:error, _reason} = refusal), do: refusal
@@ -134,6 +153,7 @@ defmodule Arca.SessionStorage do
             :athanor_id,
             :identity_key_epoch,
             :cli_machine,
+            :client_id,
             :expires_at,
             :inserted_at
           ]
@@ -148,20 +168,106 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Update a session's expires_at.
+  Update a session's expires_at. A protected device's session is not
+  found here: only its device channel moves it (`slide_client_sessions/4`).
   """
   @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found | :database_error}
   # arca:unscoped-ok sessions are addressed by token hash — the credential is
   # the scope, and the athanor is a column on the row it finds.
   def refresh_session(token_hash, new_expires_at) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.refresh_session", fn ->
-      query = from(s in Session, where: s.token_hash == ^token_hash)
+      query = from(s in Session, where: s.token_hash == ^token_hash and is_nil(s.client_id))
 
       case Arca.Repo.update_all(query, set: [expires_at: new_expires_at]) do
         {0, _} -> {:error, :not_found}
         {_, _} -> :ok
       end
     end)
+  end
+
+  @doc """
+  Slide the living sessions `ids` of the protected device `client_id` to
+  `lifetime_ms` past the database's clock, capped at `cap`, the expiry of
+  the certificate the device's channel stands under. A session already
+  expired stays expired, and one of another client is not moved. Answers
+  the ids it moved.
+  """
+  @spec slide_client_sessions(String.t(), [String.t()], pos_integer(), DateTime.t()) ::
+          {:ok, [String.t()]} | {:error, :database_error}
+  # arca:unscoped-ok sessions are addressed by the client their unlock created them for, and their own ids.
+  def slide_client_sessions(client_id, ids, lifetime_ms, %DateTime{} = cap)
+      when is_binary(client_id) and is_list(ids) and is_integer(lifetime_ms) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.slide_client_sessions", fn ->
+      now = Arca.ServerMetaStorage.now!()
+      until = Enum.min([DateTime.add(now, lifetime_ms, :millisecond), cap], DateTime)
+
+      {_count, moved} =
+        Arca.Repo.update_all(
+          from(s in Session,
+            where: s.client_id == ^client_id and s.id in ^ids and s.expires_at > ^now,
+            select: s.id
+          ),
+          set: [expires_at: until]
+        )
+
+      {:ok, Enum.sort(moved || [])}
+    end)
+  end
+
+  @doc """
+  Delete the sessions `ids` of the protected device `client_id`, whatever
+  their expiry: a lock, or the end of the device's channel. The paired
+  client's row is locked first, the lock a session's issuance under that
+  client takes (`Arca.SecurityTransitions.Issuance`), so an issuance that
+  committed first is deleted here and one that starts later reads what
+  its caller marked before this ran. A session already gone, or one of
+  another client, is left as it is. Answers the token hashes it deleted.
+  """
+  @spec delete_client_sessions(String.t(), [String.t()]) ::
+          {:ok, [binary()]} | {:error, :database_error}
+  # arca:unscoped-ok a lock names its client and the sessions it retires.
+  def delete_client_sessions(client_id, ids) when is_binary(client_id) and is_list(ids) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_client_sessions", fn ->
+      fn ->
+        _client =
+          from(p in Arca.Schemas.PairedClient, where: p.id == ^client_id, select: p.id)
+          |> Arca.QueryHelpers.for_update()
+          |> Arca.Repo.one()
+
+        {_count, hashes} =
+          Arca.Repo.delete_all(
+            from(s in Session,
+              where: s.client_id == ^client_id and s.id in ^ids,
+              select: s.token_hash
+            )
+          )
+
+        hashes || []
+      end
+      |> Arca.Repo.locking_transaction()
+      |> case do
+        {:ok, hashes} -> {:ok, hashes}
+        {:error, _reason} -> {:error, :database_error}
+      end
+    end)
+  end
+
+  @doc false
+  @spec delete_clients!([String.t()]) :: [binary()]
+  # Delete every session the protected devices `client_ids` created, in
+  # the caller's transaction: their revocation (`Arca.PairedClients`).
+  # Answers the deleted rows' token hashes.
+  def delete_clients!([]), do: []
+
+  # arca:unscoped-ok sessions addressed by the clients the caller revokes.
+  # arca:db-raise-ok a transaction step: its callers rescue around it.
+  def delete_clients!(client_ids) when is_list(client_ids) do
+    {_count, hashes} =
+      Arca.Repo.delete_all(
+        from(s in Session, where: s.client_id in ^client_ids, select: s.token_hash)
+      )
+
+    hashes || []
   end
 
   @doc """

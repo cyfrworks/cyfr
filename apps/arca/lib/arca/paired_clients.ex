@@ -7,7 +7,10 @@ defmodule Arca.PairedClients do
   client a person holds in an athanor, carrying the credential it stands
   on (`source_kind`, `source_id`), a paired device's public key
   (`device_public_key`, for a `device_cert` client) and its `standing`,
-  which alone decides what the client may do.
+  which alone decides what the client may do. A protected device also
+  carries what it reports holds its key (`holder_kind`, `chip` or
+  `software`) and the name it shows (`display_name`): information a person
+  reads in their devices, never an input to a decision.
   Sanctum is the one caller above this layer (`Sanctum.Pairing`); the rows
   are security rows no domain or surface names.
 
@@ -18,8 +21,9 @@ defmodule Arca.PairedClients do
   and every row of an athanor it archives, in its own transaction
   (`Arca.SecurityTransitions`). Each revocation raises `updated_at`, which
   is when the row was retired, and revokes the client's device
-  certificates (`Arca.DeviceCertificates`) and voids the pending
-  confirmations it confirmed (`Arca.PendingConfirmations`) in the same
+  certificates (`Arca.DeviceCertificates`), voids the pending
+  confirmations it confirmed (`Arca.PendingConfirmations`) and deletes the
+  sessions its unlock created (`Arca.SessionStorage`) in the same
   transaction.
 
   A declared restore suspends every active row (`Arca.SecurityTransitions`):
@@ -48,7 +52,8 @@ defmodule Arca.PairedClients do
   alias Arca.Schemas.{DeviceCertificate, PairedClient}
 
   @required ~w(user_id source_kind source_id)a
-  @optional ~w(device_public_key)a
+  @optional ~w(device_public_key holder_kind display_name)a
+  @max_display_name 64
 
   @typedoc "A paired client row, as a plain map."
   @type row :: %{
@@ -59,6 +64,8 @@ defmodule Arca.PairedClients do
           source_id: String.t(),
           device_public_key: binary() | nil,
           standing: String.t(),
+          holder_kind: String.t() | nil,
+          display_name: String.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
         }
@@ -142,8 +149,9 @@ defmodule Arca.PairedClients do
   the credential it stands on (`source_kind`, `"session"`, `"api_key"` or
   `"device_cert"`, and `source_id`), each required, and for a
   `device_cert` client the device's 32-byte `device_public_key`
-  (required) and, optionally, the `id` a pairing invitation reserved for
-  it. The row starts `active`.
+  (required) and, optionally, the `id` a pairing invitation or an
+  enrollment reserved for it, the `holder_kind` a protected device reports
+  and the `display_name` it shows. The row starts `active`.
 
   Refused with `:no_athanor` for an actor that names none, `{:invalid,
   errors}` for a missing or malformed field, `:conflict` for a credential
@@ -181,9 +189,92 @@ defmodule Arca.PairedClients do
   def record(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Revoke the row `id` in the actor's athanor, with its device certificates
-  and the confirmations it confirmed; revoking a revoked row answers it as
-  it is.
+  Enroll a protected device's client in the actor's athanor: `record/2`'s
+  row, its `attrs` the same, written under the person's lock, the order
+  every first method takes (`Arca.DirectoryHeads.lock_person!/1`), with
+  the first-method mark (`Arca.PersonIdentities.first_method!/1`).
+  `first_method: :claim` enrolls only the person's first method, refused
+  `:first_method_used` once the mark is set; `:mark` sets it if unset and
+  enrolls either way. `also:` runs after the insert, handed the row, and
+  answers `{:ok, _}` or `{:error, reason}`, which rolls the enrollment
+  back: the certificate is issued and recorded in the same transaction.
+  Refused as `record/2` is.
+  """
+  @spec enroll(Prima.Actor.t(), map(), keyword()) ::
+          {:ok, row()}
+          | {:error,
+             :no_athanor
+             | :conflict
+             | :not_owner
+             | :first_method_used
+             | :database_error
+             | {:invalid, map()}
+             | term()}
+  # arca:db-raise-ok the insert runs inside `owned/2`, which rescues around its transaction.
+  def enroll(%Prima.Actor{athanor_id: athanor_id} = actor, %{user_id: user_id} = attrs, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_list(opts) do
+    first = Keyword.fetch!(opts, :first_method)
+    also = Keyword.fetch!(opts, :also)
+
+    changeset =
+      changeset(
+        Map.get(attrs, :id),
+        QueryHelpers.stamp_tenant!(actor, Map.take(attrs, @required ++ @optional))
+      )
+
+    if changeset.valid? do
+      Arca.Repo.owned("Arca.PairedClients.enroll", fn ->
+        _locked = Arca.DirectoryHeads.lock_person!(user_id)
+
+        with :ok <- first_method(user_id, first),
+             {:ok, row} <- inserted(changeset),
+             {:ok, _also} <- also.(Arca.Data.project(row)) do
+          {:ok, row}
+        end
+      end)
+    else
+      {:error, Arca.Data.invalid(changeset)}
+    end
+  end
+
+  def enroll(%Prima.Actor{}, _attrs, _opts), do: {:error, :no_athanor}
+
+  @doc """
+  The device client an enrollment committed under the request id
+  `request_id` (its `source_id`), in whichever athanor: for the platform's
+  own actor, which a lost enrollment answer is resumed under before any
+  context exists. `{:error, :not_found}` when none.
+  """
+  @spec enrolled(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+  # arca:unscoped-ok an enrollment is resumed by its request id and the proof of its key before any context exists; only the platform's own actor asks.
+  def enrolled(%Prima.Actor{scope: :platform, system: true}, request_id)
+      when is_binary(request_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.PairedClients.enrolled", fn ->
+      case Arca.Repo.one(
+             from(p in PairedClient,
+               where:
+                 p.source_kind == "device_cert" and p.source_id == ^request_id and
+                   not is_nil(p.holder_kind),
+               order_by: [asc: p.inserted_at],
+               limit: 1
+             )
+           ) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def enrolled(%Prima.Actor{}, _request_id), do: {:error, :cross_tenant}
+
+  @doc """
+  Revoke the row `id` in the actor's athanor, with its device
+  certificates, the confirmations it confirmed and the sessions its unlock
+  created, whose token hashes the row answers as `revoked_session_hashes`
+  for the caller to drop from every memo; revoking a revoked row answers
+  it as it is, with none.
   """
   @spec revoke(Prima.Actor.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :no_athanor | :database_error}
@@ -197,9 +288,14 @@ defmodule Arca.PairedClients do
         |> QueryHelpers.for_update()
         |> Arca.Repo.one()
         |> case do
-          nil -> {:error, :not_found}
-          %PairedClient{standing: "revoked"} = row -> {:ok, row}
-          row -> retire(row)
+          nil ->
+            {:error, :not_found}
+
+          %PairedClient{standing: "revoked"} = row ->
+            {:ok, Map.put(row, :revoked_session_hashes, [])}
+
+          row ->
+            retire(row)
         end
       end)
       |> case do
@@ -237,12 +333,14 @@ defmodule Arca.PairedClients do
   @doc false
   @spec retire_dependents!([String.t()]) :: %{
           certificate_ids: [String.t()],
-          confirmation_ids: [String.t()]
+          confirmation_ids: [String.t()],
+          session_hashes: [binary()]
         }
   # What a client's revocation takes with it, in the caller's transaction:
-  # the certificates issued to the revoked clients and the confirmations
-  # they confirmed.
-  def retire_dependents!([]), do: %{certificate_ids: [], confirmation_ids: []}
+  # the certificates issued to the revoked clients, the confirmations they
+  # confirmed and the sessions their unlock created, whose token hashes
+  # the caller drops from every memo once it commits.
+  def retire_dependents!([]), do: %{certificate_ids: [], confirmation_ids: [], session_hashes: []}
 
   # arca:db-raise-ok a transaction step: its callers rescue around it.
   def retire_dependents!(client_ids) do
@@ -251,7 +349,8 @@ defmodule Arca.PairedClients do
         DeviceCertificates.revoke_all(
           from(c in DeviceCertificate, where: c.paired_client_id in ^client_ids)
         ),
-      confirmation_ids: PendingConfirmations.void_confirmed_by!(:paired_client, client_ids)
+      confirmation_ids: PendingConfirmations.void_confirmed_by!(:paired_client, client_ids),
+      session_hashes: Arca.SessionStorage.delete_clients!(client_ids)
     }
   end
 
@@ -298,6 +397,25 @@ defmodule Arca.PairedClients do
 
   defp reenabled(%PairedClient{}, _verify), do: {:error, :not_suspended}
 
+  defp first_method(user_id, claim) when claim in [:claim, :mark] do
+    case {Arca.PersonIdentities.first_method!(user_id), claim} do
+      {:marked, _claim} -> :ok
+      {:already, :mark} -> :ok
+      {:already, :claim} -> {:error, :first_method_used}
+      {:no_identity, _claim} -> {:error, :no_identity}
+    end
+  end
+
+  defp inserted(changeset) do
+    case Arca.Repo.insert(changeset) do
+      {:ok, row} ->
+        {:ok, row}
+
+      {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+        conflict_or_invalid(errors, changeset)
+    end
+  end
+
   defp verified(:ok), do: :ok
   defp verified({:error, reason}), do: {:error, reason}
   defp verified(other), do: {:error, other}
@@ -310,6 +428,7 @@ defmodule Arca.PairedClients do
     |> Ecto.Changeset.validate_required([:athanor_id | @required])
     |> Ecto.Changeset.validate_inclusion(:source_kind, PairedClient.source_kinds())
     |> validate_device_key()
+    |> validate_holder()
     |> Ecto.Changeset.unique_constraint([:athanor_id, :source_kind, :source_id])
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_pkey)
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_id_index)
@@ -331,6 +450,22 @@ defmodule Arca.PairedClients do
           do: changeset,
           else: Ecto.Changeset.add_error(changeset, :device_public_key, "is a device client's")
     end
+  end
+
+  # What holds a protected device's key, and the name it shows, are a
+  # device client's alone, and only as reported.
+  defp validate_holder(changeset) do
+    changeset =
+      changeset
+      |> Ecto.Changeset.validate_inclusion(:holder_kind, PairedClient.holder_kinds())
+      |> Ecto.Changeset.validate_length(:display_name, min: 1, max: @max_display_name)
+      |> Ecto.Changeset.validate_format(:display_name, ~r/\A[^\p{Cc}]+\z/u)
+
+    reported? = Enum.any?([:holder_kind, :display_name], &Ecto.Changeset.get_field(changeset, &1))
+
+    if reported? and Ecto.Changeset.get_field(changeset, :source_kind) != "device_cert",
+      do: Ecto.Changeset.add_error(changeset, :holder_kind, "is a device client's"),
+      else: changeset
   end
 
   defp conflict_or_invalid(errors, changeset) do
@@ -358,8 +493,8 @@ defmodule Arca.PairedClients do
              updated_at: Arca.ServerMetaStorage.now!()
            )
            |> Arca.Repo.update() do
-      _ = retire_dependents!([revoked.id])
-      {:ok, revoked}
+      dependents = retire_dependents!([revoked.id])
+      {:ok, Map.put(revoked, :revoked_session_hashes, dependents.session_hashes)}
     end
   end
 end

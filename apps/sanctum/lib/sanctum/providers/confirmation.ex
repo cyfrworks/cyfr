@@ -18,9 +18,16 @@ defmodule Sanctum.Providers.Confirmation do
   keeps it, and a `ref` never repeats a change.
 
     * `confirm` proves one with a passkey assertion over its digest
-      (`Sanctum.Passkeys.assert/3`) or the one-time code emailed for it
-      (`Sanctum.Auth.EmailVerification.verify_code/3`), exactly one of the
-      two. A forced-fresh OpenID Connect login confirms the record on its
+      (`Sanctum.Passkeys.assert/3`), the one-time code emailed for it
+      (`Sanctum.Auth.EmailVerification.verify_code/3`) or a protected
+      device's `device_proof` over the `confirm` challenge `pending`
+      answered it (`Sanctum.DeviceUnlock.confirm_proof/3`), exactly one of
+      the three. A device proof is taken only on that device's own channel
+      (`auth_method: :device`, a client that reports a holder), for a
+      record of the device's person in the athanor it is certified for,
+      and records the device as the confirmer; the device's screen draws
+      the preview the home stored and asks its person to unlock again
+      before it signs. A forced-fresh OpenID Connect login confirms the record on its
       own page, once the person approves the preview it shows there
       (`Sanctum.Auth.OIDC.reauth_callback/1`, `reauth_decide/3`). A click
       or a tap alone proves nothing: only these proofs confirm a record.
@@ -41,7 +48,11 @@ defmodule Sanctum.Providers.Confirmation do
       device ever existed for the person, is marked `restricted` and
       offers only the proofs such an addition takes (`Sanctum.Pairing`):
       on a paired device, every proof, each recorded as given on it (a
-      fresh sign-in it begins included); anywhere else, a `passkey`.
+      fresh sign-in it begins included); anywhere else, a `passkey`. To a
+      protected device's channel, `pending` with a `request` also answers
+      that record's `challenge`, the `confirm` challenge its `device_proof`
+      signs (the record's ref and stored digest, expiring no later than the
+      record), and offers `device` among its `methods`.
     * `cancel` ends one.
 
   While the home's storage reserve is depleted (`Arca.StorageReserve`),
@@ -97,6 +108,10 @@ defmodule Sanctum.Providers.Confirmation do
             ),
             Arg.new("code", :string,
               description: "confirm: the one-time code sent to your verified email for it"
+            ),
+            Arg.new("device_proof", :json,
+              description:
+                "confirm: a protected device's proof over the confirm challenge pending answered it"
             )
           ],
           kind: :write,
@@ -141,7 +156,7 @@ defmodule Sanctum.Providers.Confirmation do
         )
       ],
       description:
-        "Your pending confirmations of sensitive changes: confirm one with a passkey, a fresh sign-in or an emailed code, list them with what each would change and which client asked, or cancel one.",
+        "Your pending confirmations of sensitive changes: confirm one with a passkey, a fresh sign-in, an emailed code or a protected device's unlock, list them with what each would change and which client asked, or cancel one.",
       title: "Confirmations"
     )
   end
@@ -172,16 +187,20 @@ defmodule Sanctum.Providers.Confirmation do
 
   def handle(%Context{} = ctx, %{"action" => "confirm", "ref" => ref} = args)
       when is_binary(ref) do
-    case {args["assertion"], args["code"]} do
-      {assertion, nil} when is_map(assertion) ->
+    case {args["assertion"], args["code"], args["device_proof"]} do
+      {assertion, nil, nil} when is_map(assertion) ->
         with :ok <- passkey_may_prove(ctx), do: answered(Passkeys.assert(ctx, ref, assertion))
 
-      {nil, code} when is_binary(code) and code != "" ->
+      {nil, code, nil} when is_binary(code) and code != "" ->
         answered(EmailVerification.verify_code(ctx, ref, code))
 
-      _neither_or_both ->
+      {nil, nil, proof} when is_map(proof) ->
+        answered(device_confirm(ctx, ref, proof))
+
+      _none_or_more ->
         {:error,
-         {:invalid_argument, "Give exactly one proof: a passkey assertion or the emailed code"}}
+         {:invalid_argument,
+          "Give exactly one proof: a passkey assertion, the emailed code or a device's proof"}}
     end
   end
 
@@ -203,14 +222,16 @@ defmodule Sanctum.Providers.Confirmation do
          {:ok, latched?} <- latched(user_id) do
       methods = methods(user_id, credentials)
 
-      {:ok,
-       %{
-         confirmations:
-           Enum.map(
-             rows,
-             &pending(&1, credentials, offered(ctx, &1, methods, latched?), restore?)
-           )
-       }}
+      methods = if device?(ctx, args["request"]), do: methods ++ ["device"], else: methods
+
+      with {:ok, confirmations} <-
+             all_pending(rows, fn row ->
+               with {:ok, record} <-
+                      {:ok,
+                       pending(row, credentials, offered(ctx, row, methods, latched?), restore?)},
+                    do: device_challenge(ctx, row, args["request"], record)
+             end),
+           do: {:ok, %{confirmations: confirmations}}
     else
       {:error, reason} -> {:error, refusal(reason)}
     end
@@ -244,6 +265,75 @@ defmodule Sanctum.Providers.Confirmation do
     do: {:error, {:unknown_action, "confirmation.#{action}"}}
 
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  # A protected device's proof over the `confirm` challenge it holds for
+  # this record of its own person, then the record confirmed as the
+  # device's, whose client and certificate the store reads again under
+  # lock (`Arca.PendingConfirmations.confirm/3`).
+  defp device_confirm(%Context{} = ctx, ref, proof) do
+    actor = Context.actor(ctx)
+
+    with {:ok, user_id} <- person(ctx),
+         {:ok, row} <- own(actor, ref, user_id),
+         :ok <- Sanctum.DeviceUnlock.confirm_proof(ctx, row, proof) do
+      case Arca.PendingConfirmations.confirm(actor, ref, %{
+             proof: "device",
+             client_id: ctx.client_id
+           }) do
+        {:ok, confirmed} ->
+          Sanctum.Consent.Authz.announce(:confirmed, confirmed)
+          {:ok, %{ref: confirmed.ref, state: confirmed.state, expires_at: confirmed.expires_at}}
+
+        {:error, :database_error} ->
+          {:error, :unavailable}
+
+        {:error, :not_owner} ->
+          {:error, :unavailable}
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "confirmation", ref}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  # A protected device's channel reading one record: the device offers its
+  # own proof.
+  defp device?(%Context{auth_method: :device}, request) when is_binary(request), do: true
+  defp device?(%Context{}, _request), do: false
+
+  defp all_pending(rows, fun) do
+    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
+      case fun.(row) do
+        {:ok, record} -> {:cont, {:ok, [record | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, records} -> {:ok, Enum.reverse(records)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The `confirm` challenge a protected device signs for the one record
+  # its `pending` read names; none for any other read or client.
+  defp device_challenge(%Context{auth_method: :device} = ctx, row, request, record)
+       when is_binary(request) do
+    case Sanctum.DeviceUnlock.confirm_challenge(ctx, row) do
+      {:ok, nil} ->
+        {:ok, %{record | methods: record.methods -- ["device"]}}
+
+      {:ok, challenge} ->
+        {:ok, Map.put(record, :challenge, Prima.DeviceCert.Challenge.encode(challenge))}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp device_challenge(_ctx, _row, _request, record), do: {:ok, record}
 
   defp answered({:ok, answer}), do: {:ok, answer}
   defp answered({:error, reason}), do: {:error, refusal(reason)}
@@ -418,6 +508,30 @@ defmodule Sanctum.Providers.Confirmation do
         :unauthenticated,
         :assertion_refused,
         "The passkey's answer does not prove this confirmation here"
+      )
+
+  defp refusal(:proof_refused),
+    do:
+      refused(
+        :unauthenticated,
+        :proof_refused,
+        "This device's proof does not confirm this change: unlock and confirm again"
+      )
+
+  defp refusal(:no_holder),
+    do:
+      refused(
+        :forbidden,
+        :no_holder,
+        "This device keeps no protected key, so it cannot confirm with its own proof"
+      )
+
+  defp refusal(:not_a_device),
+    do:
+      refused(
+        :forbidden,
+        :not_a_device,
+        "Only a protected device's own screen confirms with a device proof"
       )
 
   defp refusal(:code_refused),

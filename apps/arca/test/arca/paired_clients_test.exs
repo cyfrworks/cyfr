@@ -207,6 +207,162 @@ defmodule Arca.PairedClientsTest do
     end
   end
 
+  describe "a protected device" do
+    defp device_attrs(user_id, overrides \\ %{}) do
+      attrs(
+        Map.merge(
+          %{
+            user_id: user_id,
+            source_kind: "device_cert",
+            device_public_key: :crypto.strong_rand_bytes(32),
+            holder_kind: "chip",
+            display_name: "Kitchen box"
+          },
+          overrides
+        )
+      )
+    end
+
+    defp identity!(user_id) do
+      {:ok, _} =
+        Arca.PersonIdentities.create(Prima.Actor.system(), %{
+          user_id: user_id,
+          provenance: "local",
+          live_public_key: :crypto.strong_rand_bytes(32),
+          operational_public_key: :crypto.strong_rand_bytes(32),
+          live_key_sealed: "sealed-live",
+          operational_key_sealed: "sealed-op"
+        })
+    end
+
+    defp marked?(user_id),
+      do:
+        Arca.Repo.exists?(
+          from(p in Arca.Schemas.PersonIdentity,
+            where: p.user_id == ^user_id and not is_nil(p.first_method_at)
+          )
+        )
+
+    test "records what holds its key and the name it shows, and nothing a browser key reports",
+         %{actor: actor} do
+      row =
+        record!(actor, %{
+          source_kind: "device_cert",
+          device_public_key: :crypto.strong_rand_bytes(32),
+          holder_kind: "software",
+          display_name: "Desk"
+        })
+
+      assert %{holder_kind: "software", display_name: "Desk"} = row
+
+      for {field, value} <- [
+            {:holder_kind, "platform"},
+            {:display_name, "a\nb"},
+            {:display_name, String.duplicate("x", 65)}
+          ] do
+        assert {:error, {:invalid, _}} =
+                 PairedClients.record(
+                   actor,
+                   attrs(
+                     %{
+                       source_kind: "device_cert",
+                       device_public_key: :crypto.strong_rand_bytes(32)
+                     }
+                     |> Map.put(field, value)
+                   )
+                 ),
+               inspect({field, value})
+      end
+
+      assert {:error, {:invalid, _}} = PairedClients.record(actor, attrs(%{holder_kind: "chip"}))
+    end
+
+    test "a first-method enrollment claims the latch once; a marking one enrolls either way", %{
+      actor: actor
+    } do
+      user_id = person!()
+      identity!(user_id)
+      ok = fn _row -> {:ok, :certified} end
+
+      assert {:ok, first} =
+               PairedClients.enroll(actor, device_attrs(user_id), first_method: :claim, also: ok)
+
+      assert first.holder_kind == "chip"
+      assert marked?(user_id)
+
+      assert {:error, :first_method_used} =
+               PairedClients.enroll(actor, device_attrs(user_id), first_method: :claim, also: ok)
+
+      assert {:ok, _second} =
+               PairedClients.enroll(actor, device_attrs(user_id), first_method: :mark, also: ok)
+
+      assert Arca.Repo.aggregate(from(p in PairedClient, where: p.user_id == ^user_id), :count) ==
+               2
+    end
+
+    test "a refusal of its also: step rolls the enrollment and the latch back", %{actor: actor} do
+      user_id = person!()
+      identity!(user_id)
+
+      assert {:error, :not_certified} =
+               PairedClients.enroll(actor, device_attrs(user_id),
+                 first_method: :claim,
+                 also: fn _row -> {:error, :not_certified} end
+               )
+
+      refute marked?(user_id)
+
+      assert Arca.Repo.aggregate(from(p in PairedClient, where: p.user_id == ^user_id), :count) ==
+               0
+    end
+
+    test "is found by the request id its enrollment committed under, for the platform's actor alone",
+         %{actor: actor} do
+      user_id = person!()
+      identity!(user_id)
+      attrs = device_attrs(user_id, %{source_id: "req_found"})
+
+      {:ok, row} =
+        PairedClients.enroll(actor, attrs, first_method: :mark, also: fn _ -> {:ok, nil} end)
+
+      assert {:ok, %{id: id}} = PairedClients.enrolled(Prima.Actor.system(), "req_found")
+      assert id == row.id
+      assert {:error, :not_found} = PairedClients.enrolled(Prima.Actor.system(), "req_absent")
+      assert {:error, :cross_tenant} = PairedClients.enrolled(actor, "req_found")
+    end
+
+    test "its revocation deletes the sessions its unlock created and answers their hashes", %{
+      actor: actor
+    } do
+      row =
+        record!(actor, %{
+          source_kind: "device_cert",
+          device_public_key: :crypto.strong_rand_bytes(32),
+          holder_kind: "chip"
+        })
+
+      hash = :crypto.hash(:sha256, "device-session-#{row.id}")
+
+      :ok =
+        Arca.SessionStorage.create_session(
+          hash,
+          %{
+            id: Prima.UUID7.generate_id("ses"),
+            user_id: "usr_pcl",
+            provider: "unlock",
+            client_id: row.id,
+            expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
+          },
+          Arca.Test.Actor.issuance()
+        )
+
+      assert {:ok, %{standing: "revoked", revoked_session_hashes: [^hash]}} =
+               PairedClients.revoke(actor, row.id)
+
+      assert {:error, :not_found} = Arca.SessionStorage.get_session(hash)
+    end
+  end
+
   describe "list/2" do
     test "narrows by person and by standing, active by default", %{actor: actor} do
       mine = record!(actor)

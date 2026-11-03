@@ -1,0 +1,798 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Sanctum.DeviceUnlockTest do
+  @moduledoc """
+  A protected device (`Sanctum.DeviceUnlock`), through its public entries.
+
+  Setup enrolls the installation's first person with the device's key,
+  certificate, first-method mark and recovery in one admission, mints no
+  session, and closes setup for every later enrollment, a challenge drawn
+  before it committed among them. A lost answer is resumed only by the
+  committed key's proof under the setup token. A restored person's first
+  device enrolls from the restore's own session inside its window, once.
+
+  An unlock answers a 32-byte ticket that a browser redeems once, for a
+  session of the device's person that names the device, expires within 60
+  seconds and the certificate whatever `session_ttl_hours` says, which a
+  browser's refresh never moves and the device's channel slides without
+  reviving. A lock proof needs no freshness, retires exactly its session,
+  repeats as a success, never ends a successor, and spent before the
+  ticket leaves the ticket redeeming nothing. A revocation or a revoked
+  certificate before the redemption refuses it, and after it ends the
+  session. A browser's session, a browser key and another device's proof
+  unlock nothing.
+
+  A device confirms a pending change of its own person with a proof over
+  the record's ref and stored digest, recorded as the device's; the opener
+  alone consumes it. A modified digest, another person's record, a
+  cancelled one and a device revoked since its proof confirm or consume
+  nothing.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Sanctum.Test.Newcomers, only: [identity: 0]
+
+  alias Arca.Schemas.{DeviceCertificate, Membership, PairedClient, PersonIdentity, Session, User}
+  alias Prima.DeviceCert.{Challenge, Proof}
+  alias Sanctum.{Context, DeviceCerts, DeviceUnlock, Newcomer}
+
+  @token String.duplicate("6d", 32)
+  @source "198.51.100.30"
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    Arca.Cache.init()
+    Prima.Test.RateLimiter.reset!()
+    previous = Application.fetch_env(:sanctum, :setup_token)
+
+    on_exit(fn ->
+      Prima.Test.RateLimiter.reset!()
+
+      case previous do
+        {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
+        :error -> Application.delete_env(:sanctum, :setup_token)
+      end
+    end)
+
+    Application.put_env(:sanctum, :setup_token, @token)
+    Sanctum.Test.Newcomers.directory!()
+    # The installation holds no person inside this test's transaction.
+    Arca.Repo.delete_all(User)
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Fixtures
+  # ---------------------------------------------------------------------------
+
+  defp key, do: :crypto.generate_key(:eddsa, :ed25519)
+  defp b64(bytes), do: Base.url_encode64(bytes, padding: false)
+  defp signed(challenge, private), do: Proof.encode(Proof.sign(challenge, private))
+
+  defp reported({public, _private}, request_id, admission \\ "setup") do
+    %{
+      "admission" => admission,
+      "device_key" => b64(public),
+      "request_id" => request_id,
+      "holder_kind" => "chip",
+      "display_name" => "Kitchen box"
+    }
+  end
+
+  defp challenge!(key, identity) do
+    {:ok, %{challenge: challenge}} =
+      DeviceUnlock.enrollment_challenge({:setup, @token}, reported(key, identity.request_id))
+
+    challenge
+  end
+
+  defp complete(challenge, {_public, private}, identity) do
+    DeviceUnlock.enroll({:setup, @token}, %{
+      "proof" => signed(challenge, private),
+      "name" => identity.name,
+      "recovery_secret" => b64(identity.recovery_secret)
+    })
+  end
+
+  # The box's setup: its key enrolled as the first person's device.
+  defp enrolled!(key \\ key()) do
+    identity = identity()
+    {:ok, answer} = complete(challenge!(key, identity), key, identity)
+    Map.merge(answer, %{key: key, identity: identity})
+  end
+
+  # The device's channel context, as it is minted from a connect proof.
+  defp connected!(%{certificate: certificate, key: {_public, private}}) do
+    {:ok, challenge} =
+      Challenge.new(
+        purpose: :connect,
+        home: certificate.audience,
+        athanor: certificate.athanor,
+        client_id: certificate.client_id,
+        device_key: certificate.device_key,
+        nonce: :crypto.strong_rand_bytes(32),
+        now: System.system_time(:millisecond)
+      )
+
+    {:ok, ctx} =
+      DeviceCerts.verify_connect(
+        %{client_id: certificate.client_id, certificate: certificate, source: @source},
+        Proof.sign(challenge, private),
+        challenge
+      )
+
+    ctx
+  end
+
+  defp unlocked!(ctx, {_public, private}) do
+    {:ok, %{challenge: challenge}} = DeviceUnlock.unlock(ctx, %{})
+    {:ok, answer} = DeviceUnlock.unlock(ctx, %{"proof" => signed(challenge, private)})
+    answer
+  end
+
+  defp lock_proof(device, session_id, key \\ nil) do
+    {_public, private} = key || device.key
+    certificate = device.certificate
+
+    {:ok, challenge} =
+      Challenge.new(
+        purpose: :lock,
+        home: certificate.audience,
+        athanor: certificate.athanor,
+        client_id: certificate.client_id,
+        device_key: certificate.device_key,
+        session_id: session_id
+      )
+
+    signed(challenge, private)
+  end
+
+  defp session_row(session_id), do: Arca.Repo.get(Session, session_id)
+  defp client_row(client_id), do: Arca.Repo.get!(PairedClient, client_id)
+
+  defp revoke_client!(device) do
+    actor = Prima.Actor.in_athanor(device.certificate.athanor)
+    {:ok, _row} = Arca.PairedClients.revoke(actor, device.certificate.client_id)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Enrollment at setup
+  # ---------------------------------------------------------------------------
+
+  describe "setup" do
+    test "enrolls the first person with their device, certificate, first-method mark and recovery, and mints no session" do
+      device = enrolled!()
+      certificate = device.certificate
+
+      assert [%User{id: user_id, admission: "setup"}] = Arca.Repo.all(User)
+      assert certificate.subject == %{kind: :local, user_id: user_id}
+      assert certificate.audience == Sanctum.Person.home()
+      assert {:ok, %{id: athanor_id}} = Arca.Athanors.get_by_owner(Prima.Actor.system(), user_id)
+      assert certificate.athanor == athanor_id
+
+      client = client_row(certificate.client_id)
+      assert client.user_id == user_id
+      assert client.holder_kind == "chip"
+      assert client.display_name == "Kitchen box"
+      assert client.source_id == device.identity.request_id
+      assert client.device_public_key == elem(device.key, 0)
+
+      assert %{first_method_at: %DateTime{}} = Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
+
+      assert Arca.Repo.exists?(
+               from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
+             )
+
+      assert %{code: code, name: name} = device.recovery
+      assert is_binary(code) and name == device.identity.name
+      assert Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id)) == []
+    end
+
+    test "closes setup: an enrollment challenged before the first committed is refused, and a new challenge too" do
+      first = key()
+      second = key()
+      first_identity = identity()
+      second_identity = identity()
+      first_challenge = challenge!(first, first_identity)
+      second_challenge = challenge!(second, second_identity)
+
+      assert {:ok, _answer} = complete(first_challenge, first, first_identity)
+
+      assert {:error, :setup_closed} = complete(second_challenge, second, second_identity)
+      assert Arca.Repo.aggregate(User, :count) == 1
+      assert Arca.Repo.aggregate(PairedClient, :count) == 1
+
+      assert {:error, :setup_closed} =
+               DeviceUnlock.enrollment_challenge(
+                 {:setup, @token},
+                 reported(key(), identity().request_id)
+               )
+
+      assert {:error, :setup_closed} = Newcomer.setup_open(@token)
+    end
+
+    test "takes only the configured token, the device's own report and a proof by the reported key" do
+      assert {:error, :setup_closed} =
+               DeviceUnlock.enrollment_challenge(
+                 {:setup, String.duplicate("00", 32)},
+                 reported(key(), "req_a")
+               )
+
+      for {field, value} <- [
+            {"holder_kind", "platform"},
+            {"display_name", ""},
+            {"device_key", b64(:crypto.strong_rand_bytes(31))},
+            {"request_id", "not an id"},
+            {"admission", "restore"}
+          ] do
+        assert {:error, :invalid_request} =
+                 DeviceUnlock.enrollment_challenge(
+                   {:setup, @token},
+                   Map.put(reported(key(), "req_b"), field, value)
+                 ),
+               field
+      end
+
+      identity = identity()
+      device = key()
+      challenge = challenge!(device, identity)
+      assert {:error, :proof_refused} = complete(challenge, key(), identity)
+      # The challenge was taken by that refusal: the right key now finds none.
+      assert {:error, :proof_refused} = complete(challenge, device, identity)
+      assert Arca.Repo.aggregate(User, :count) == 0
+    end
+
+    test "a proof answers its held challenge once" do
+      device = key()
+      identity = identity()
+      challenge = challenge!(device, identity)
+      assert {:ok, _answer} = complete(challenge, device, identity)
+      assert {:error, :proof_refused} = complete(challenge, device, identity)
+      assert Arca.Repo.aggregate(PairedClient, :count) == 1
+    end
+  end
+
+  describe "a lost answer" do
+    test "is resumed by the committed key's proof under the setup token, and by nothing less" do
+      device = enrolled!()
+      {public, private} = device.key
+      request_id = device.identity.request_id
+
+      ask = %{"admission" => "setup", "device_key" => b64(public), "request_id" => request_id}
+
+      assert {:error, :invalid_token} = DeviceUnlock.resume({:setup, "wrong"}, ask)
+
+      {other, _other_private} = key()
+
+      assert {:error, :not_found} =
+               DeviceUnlock.resume({:setup, @token}, %{ask | "device_key" => b64(other)})
+
+      assert {:error, :not_found} =
+               DeviceUnlock.resume({:setup, @token}, %{ask | "request_id" => "req_unknown"})
+
+      assert {:ok, %{challenge: challenge}} = DeviceUnlock.resume({:setup, @token}, ask)
+      assert challenge.purpose == :enroll
+      assert challenge.client_id == device.certificate.client_id
+      assert challenge.request_id == request_id
+
+      {_wrong, wrong_private} = key()
+
+      assert {:error, :proof_refused} =
+               DeviceUnlock.resume({:setup, @token}, %{
+                 "proof" => signed(challenge, wrong_private)
+               })
+
+      {:ok, %{challenge: challenge}} = DeviceUnlock.resume({:setup, @token}, ask)
+
+      assert {:ok, %{certificate: certificate, recovery: recovery}} =
+               DeviceUnlock.resume({:setup, @token}, %{"proof" => signed(challenge, private)})
+
+      assert certificate == device.certificate
+      assert recovery == device.recovery
+      assert Arca.Repo.aggregate(User, :count) == 1
+      assert Arca.Repo.aggregate(PairedClient, :count) == 1
+    end
+  end
+
+  describe "after a restore" do
+    # A local person who holds no first method, as a restore leaves them:
+    # made here by the command line's setup, which marks none.
+    setup do
+      {:ok, %{person: person}} =
+        Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+
+      %{user_id: person.id}
+    end
+
+    # The restore's own session, as `Sanctum.Recovery` issues it for the
+    # attempt that minted this very person.
+    defp restore_session!(user_id) do
+      id = Prima.UUID7.generate_id("iat")
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.IdentityAttempt, [
+          %{
+            id: id,
+            kind: "restore",
+            request_id: Prima.UUID7.generate_id("rst"),
+            user_id: user_id,
+            identifier: "per_" <> String.duplicate("d", 64),
+            directory_url: "https://dir.example",
+            phase: "completed",
+            entry: "recover-request",
+            request_digest: Prima.Digest.sha256("recover-#{id}"),
+            expected_revision: 0,
+            token_digest: Prima.Digest.sha256("token-#{id}"),
+            staged_live_public_key: :crypto.strong_rand_bytes(32),
+            staged_operational_public_key: :crypto.strong_rand_bytes(32),
+            revision: 1,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      {:ok, %{id: athanor_id}} = Arca.Athanors.get_by_owner(Prima.Actor.system(), user_id)
+
+      built =
+        Context.build(
+          user_id: user_id,
+          provider: "restore",
+          athanor_id: athanor_id,
+          permissions: Context.person_permissions(),
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, session} =
+        Sanctum.Session.create(built,
+          generation_snapshot: Sanctum.TestContext.snapshot!(built),
+          restore: id
+        )
+
+      {:ok, ctx} = Sanctum.Caller.establish(session.token)
+      ctx
+    end
+
+    defp restore_enroll(ctx, {_public, private} = key, request_id) do
+      with {:ok, %{challenge: challenge}} <-
+             DeviceUnlock.enrollment_challenge(
+               {:restore, ctx},
+               reported(key, request_id, "restore")
+             ) do
+        DeviceUnlock.enroll({:restore, ctx}, %{"proof" => signed(challenge, private)})
+      end
+    end
+
+    defp aged!(ctx, seconds) do
+      at = DateTime.add(DateTime.utc_now(), -seconds, :second)
+
+      from(s in Session, where: s.token_hash == ^ctx.session_token_hash)
+      |> Arca.Repo.update_all(set: [inserted_at: at])
+    end
+
+    test "the restore's session enrolls the person's first device, once", %{user_id: user_id} do
+      ctx = restore_session!(user_id)
+      device = key()
+
+      assert {:ok, %{certificate: certificate}} = restore_enroll(ctx, device, "req_restore_a")
+      assert certificate.subject == %{kind: :local, user_id: user_id}
+      assert %{first_method_at: %DateTime{}} = Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
+      assert %{holder_kind: "chip"} = client_row(certificate.client_id)
+
+      assert {:error, :first_method_used} = restore_enroll(ctx, key(), "req_restore_b")
+
+      assert Arca.Repo.aggregate(from(p in PairedClient, where: p.user_id == ^user_id), :count) ==
+               1
+    end
+
+    test "past its window it enrolls nothing, and the reproof's new session opens it again", %{
+      user_id: user_id
+    } do
+      ctx = restore_session!(user_id)
+      aged!(ctx, 3600)
+      assert {:error, :not_restored} = restore_enroll(ctx, key(), "req_restore_c")
+
+      assert {:ok, %{certificate: _}} =
+               restore_enroll(restore_session!(user_id), key(), "req_restore_d")
+    end
+
+    test "a challenge drawn in the window expires with it, and no other session or admission enrolls",
+         %{user_id: user_id} do
+      ctx = restore_session!(user_id)
+      device = key()
+
+      {:ok, %{challenge: challenge}} =
+        DeviceUnlock.enrollment_challenge(
+          {:restore, ctx},
+          reported(device, "req_restore_e", "restore")
+        )
+
+      aged!(ctx, 3600)
+
+      assert {:error, :not_restored} =
+               DeviceUnlock.enroll({:restore, ctx}, %{
+                 "proof" => signed(challenge, elem(device, 1))
+               })
+
+      fresh = restore_session!(user_id)
+
+      assert {:error, :invalid_request} =
+               DeviceUnlock.enrollment_challenge(
+                 {:restore, fresh},
+                 reported(key(), "req_restore_f")
+               )
+
+      browser = %{fresh | provider: "github"}
+
+      assert {:error, :not_restored} =
+               DeviceUnlock.enrollment_challenge(
+                 {:restore, browser},
+                 reported(key(), "req_restore_g", "restore")
+               )
+
+      refute Arca.Repo.exists?(from(p in PairedClient, where: p.user_id == ^user_id))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Unlock, the ticket and the session
+  # ---------------------------------------------------------------------------
+
+  describe "unlock" do
+    setup do
+      device = enrolled!()
+      %{device: device, ctx: connected!(device)}
+    end
+
+    test "answers a ticket a browser redeems once for a session bound to the device", %{
+      device: device,
+      ctx: ctx
+    } do
+      answer = unlocked!(ctx, device.key)
+      assert byte_size(Base.url_decode64!(answer.ticket, padding: false)) == 32
+      assert "ses_" <> _ = answer.session_id
+      # The ticket's redemption creates the session, not the unlock.
+      assert session_row(answer.session_id) == nil
+
+      assert {:ok, %{token: token, expires_at: expires_at}} = DeviceUnlock.redeem(answer.ticket)
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket)
+
+      row = session_row(answer.session_id)
+      assert row.client_id == device.certificate.client_id
+      assert row.provider == "unlock"
+      assert row.user_id == ctx.user_id
+      assert DateTime.compare(expires_at, DateTime.add(DateTime.utc_now(), 61, :second)) == :lt
+
+      assert {:ok, %Context{} = session_ctx} = Sanctum.Session.load(token)
+      assert session_ctx.auth_method == :oidc
+      assert session_ctx.client_id == nil
+      assert session_ctx.credential_deadline == row.expires_at
+    end
+
+    test "a ticket that is not one, or another's, redeems nothing", %{device: device, ctx: ctx} do
+      _answer = unlocked!(ctx, device.key)
+
+      for ticket <- [nil, "", "short", b64(:crypto.strong_rand_bytes(32))] do
+        assert {:error, :invalid_ticket} = DeviceUnlock.redeem(ticket), inspect(ticket)
+      end
+    end
+
+    test "a proof answers its unlock challenge once, and a proof of another key or purpose none",
+         %{device: device, ctx: ctx} do
+      {_public, private} = device.key
+      {:ok, %{challenge: challenge}} = DeviceUnlock.unlock(ctx, %{})
+      {_other, other_private} = key()
+
+      assert {:error, :proof_refused} =
+               DeviceUnlock.unlock(ctx, %{"proof" => signed(challenge, other_private)})
+
+      # Taken by that refusal.
+      assert {:error, :proof_refused} =
+               DeviceUnlock.unlock(ctx, %{"proof" => signed(challenge, private)})
+
+      {:ok, %{challenge: challenge}} = DeviceUnlock.unlock(ctx, %{})
+      lock = lock_proof(device, challenge.session_id)
+      assert {:error, :proof_refused} = DeviceUnlock.unlock(ctx, %{"proof" => lock})
+      assert {:error, :invalid_request} = DeviceUnlock.unlock(ctx, %{"proof" => lock, "x" => 1})
+    end
+
+    test "session_ttl_hours zero lifts no bound off a device's session", %{
+      device: device,
+      ctx: ctx
+    } do
+      :ok = Sanctum.Test.Settings.put("session_ttl_hours", 0)
+      answer = unlocked!(ctx, device.key)
+      {:ok, %{expires_at: expires_at}} = DeviceUnlock.redeem(answer.ticket)
+      assert DateTime.compare(expires_at, DateTime.add(DateTime.utc_now(), 61, :second)) == :lt
+
+      assert DateTime.compare(session_row(answer.session_id).expires_at, ~U[9999-01-01 00:00:00Z]) ==
+               :lt
+    end
+
+    test "a browser's refresh never moves a device's session; its channel slides it, never past the certificate and never reviving",
+         %{device: device, ctx: ctx} do
+      answer = unlocked!(ctx, device.key)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+      before = session_row(answer.session_id).expires_at
+
+      assert {:error, :invalid_session} = Sanctum.Session.refresh(token)
+      assert :ok = Sanctum.Session.refresh_if_stale(token)
+      assert {:ok, _ctx} = Sanctum.Caller.establish(token)
+      assert session_row(answer.session_id).expires_at == before
+
+      Process.sleep(5)
+      assert {:ok, [_slid]} = DeviceUnlock.slide(ctx, [answer.session_id])
+      slid = session_row(answer.session_id).expires_at
+      assert DateTime.compare(slid, before) == :gt
+      assert DateTime.compare(slid, ctx.credential_deadline) != :gt
+
+      # Past its expiry, nothing revives it.
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+
+      from(s in Session, where: s.id == ^answer.session_id)
+      |> Arca.Repo.update_all(set: [expires_at: past])
+
+      assert {:ok, []} = DeviceUnlock.slide(ctx, [answer.session_id])
+      assert session_row(answer.session_id).expires_at == past
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+    end
+
+    test "a browser's session, a context of no device, and a browser key with no holder unlock nothing",
+         %{device: device, ctx: ctx} do
+      answer = unlocked!(ctx, device.key)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+      {:ok, browser} = Sanctum.Session.load(token)
+
+      assert {:error, :not_a_device} = DeviceUnlock.unlock(browser, %{})
+
+      assert {:error, :not_a_device} =
+               DeviceUnlock.lock(browser, %{"proof" => lock_proof(device, answer.session_id)})
+
+      assert {:error, :not_a_device} =
+               DeviceUnlock.unlock(Context.build(authenticated: false), %{})
+
+      from(p in PairedClient, where: p.id == ^device.certificate.client_id)
+      |> Arca.Repo.update_all(set: [holder_kind: nil])
+
+      assert {:error, :no_holder} = DeviceUnlock.unlock(ctx, %{})
+    end
+  end
+
+  describe "lock" do
+    setup do
+      device = enrolled!()
+      ctx = connected!(device)
+      answer = unlocked!(ctx, device.key)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+      %{device: device, ctx: ctx, session_id: answer.session_id, token: token}
+    end
+
+    test "retires exactly its session without freshness, repeats as a success and never ends a successor",
+         %{device: device, ctx: ctx, session_id: session_id, token: token} do
+      proof = lock_proof(device, session_id)
+      successor = unlocked!(ctx, device.key)
+      {:ok, %{token: successor_token}} = DeviceUnlock.redeem(successor.ticket)
+
+      assert {:ok, %{locked: true}} = DeviceUnlock.lock(ctx, %{"proof" => proof})
+      assert session_row(session_id) == nil
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+
+      assert {:ok, %{locked: true}} = DeviceUnlock.lock(ctx, %{"proof" => proof})
+      assert %Session{} = session_row(successor.session_id)
+      assert {:ok, _ctx} = Sanctum.Session.load(successor_token)
+    end
+
+    test "a proof of another key, another session's or another purpose's locks nothing",
+         %{device: device, ctx: ctx, session_id: session_id, token: token} do
+      assert {:error, :proof_refused} =
+               DeviceUnlock.lock(ctx, %{"proof" => lock_proof(device, session_id, key())})
+
+      {:ok, %{challenge: unlock}} = DeviceUnlock.unlock(ctx, %{})
+
+      assert {:error, :proof_refused} =
+               DeviceUnlock.lock(ctx, %{"proof" => signed(unlock, elem(device.key, 1))})
+
+      assert {:ok, _ctx} = Sanctum.Session.load(token)
+      assert %Session{} = session_row(session_id)
+    end
+
+    test "before the ticket's redemption leaves the ticket redeeming nothing", %{
+      device: device,
+      ctx: ctx
+    } do
+      answer = unlocked!(ctx, device.key)
+
+      assert {:ok, %{locked: true}} =
+               DeviceUnlock.lock(ctx, %{"proof" => lock_proof(device, answer.session_id)})
+
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket)
+      assert session_row(answer.session_id) == nil
+    end
+
+    test "the channel's end retires its sessions and its unspent tickets", %{
+      device: device,
+      ctx: ctx,
+      session_id: session_id,
+      token: token
+    } do
+      pending = unlocked!(ctx, device.key)
+      :ok = DeviceUnlock.closed(ctx.user_id, ctx.client_id, [session_id, pending.session_id])
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(pending.ticket)
+    end
+  end
+
+  describe "retirement" do
+    setup do
+      device = enrolled!()
+      %{device: device, ctx: connected!(device)}
+    end
+
+    test "a revocation before the redemption refuses it, and after it ends the session", %{
+      device: device,
+      ctx: ctx
+    } do
+      first = unlocked!(ctx, device.key)
+      second = unlocked!(ctx, device.key)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(first.ticket)
+
+      revoke_client!(device)
+
+      assert session_row(first.session_id) == nil
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+      assert {:error, :not_standing} = DeviceUnlock.redeem(second.ticket)
+      assert session_row(second.session_id) == nil
+    end
+
+    test "a certificate revoked before the redemption refuses it, and after it the session no longer loads",
+         %{device: device, ctx: ctx} do
+      first = unlocked!(ctx, device.key)
+      second = unlocked!(ctx, device.key)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(first.ticket)
+
+      from(c in DeviceCertificate, where: c.paired_client_id == ^device.certificate.client_id)
+      |> Arca.Repo.update_all(set: [state: "revoked", revoked_at: DateTime.utc_now()])
+
+      assert {:error, :invalid_session} = Sanctum.Session.load(token)
+      assert {:error, :not_standing} = DeviceUnlock.redeem(second.ticket)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Confirmation
+  # ---------------------------------------------------------------------------
+
+  describe "confirmation" do
+    setup do
+      device = enrolled!()
+      ctx = connected!(device)
+      answer = unlocked!(ctx, device.key)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+      {:ok, opener} = Sanctum.Caller.establish(token)
+
+      change = %{
+        operation: "pairing.revoke",
+        arguments: %{"client_id" => "pcl_x"},
+        resource: "pcl_x"
+      }
+
+      {:error, {:confirmation_required, %{id: secret}}} =
+        Sanctum.Consent.Authz.check(opener, :pairing_revocation, change)
+
+      ref = Prima.Confirmation.ref(secret)
+      %{device: device, ctx: ctx, opener: opener, change: change, secret: secret, ref: ref}
+    end
+
+    defp pending_challenge!(ctx, ref) do
+      {:ok, %{confirmations: [record]}} =
+        Sanctum.Providers.Confirmation.handle(ctx, %{"action" => "pending", "request" => ref})
+
+      assert "device" in record.methods
+      {:ok, challenge} = Challenge.decode(record.challenge)
+      {record, challenge}
+    end
+
+    defp confirm(ctx, ref, proof),
+      do:
+        Sanctum.Providers.Confirmation.handle(ctx, %{
+          "action" => "confirm",
+          "ref" => ref,
+          "device_proof" => proof
+        })
+
+    test "the device proves its person's record, recorded as its own, and the opener alone consumes it",
+         %{device: device, ctx: ctx, opener: opener, change: change, secret: secret, ref: ref} do
+      {record, challenge} = pending_challenge!(ctx, ref)
+      assert challenge.purpose == :confirm
+      assert challenge.ref == ref
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      assert challenge.digest == row.digest
+      assert record.preview == Jason.decode!(row.preview)
+
+      assert {:ok, %{state: "confirmed"}} =
+               confirm(ctx, ref, signed(challenge, elem(device.key, 1)))
+
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      assert row.proof == "device" and row.confirmed_client_id == ctx.client_id
+
+      # Only the opener repeats the change: the device, even holding the
+      # secret, is another credential and consumes nothing.
+      refute :ok ==
+               Sanctum.Consent.Authz.check(
+                 %{ctx | confirmation_id: secret},
+                 :pairing_revocation,
+                 change
+               )
+
+      assert :ok =
+               Sanctum.Consent.Authz.check(
+                 %{opener | confirmation_id: secret},
+                 :pairing_revocation,
+                 change
+               )
+    end
+
+    test "a proof over a modified digest, another key's or a replayed one confirms nothing",
+         %{device: device, ctx: ctx, ref: ref} do
+      {_record, challenge} = pending_challenge!(ctx, ref)
+      forged = %{challenge | digest: "sha256:" <> String.duplicate("0", 64)}
+
+      assert {:error, %Prima.Refusal{reason: :proof_refused}} =
+               confirm(ctx, ref, signed(forged, elem(device.key, 1)))
+
+      {_record, challenge} = pending_challenge!(ctx, ref)
+      {_other, other_private} = key()
+
+      assert {:error, %Prima.Refusal{reason: :proof_refused}} =
+               confirm(ctx, ref, signed(challenge, other_private))
+
+      # Taken by that refusal.
+      assert {:error, %Prima.Refusal{reason: :proof_refused}} =
+               confirm(ctx, ref, signed(challenge, elem(device.key, 1)))
+
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      assert row.state == "pending"
+    end
+
+    test "a cancelled record, a browser's device proof and a device proof beside another confirm nothing",
+         %{device: device, ctx: ctx, opener: opener, ref: ref} do
+      {_record, challenge} = pending_challenge!(ctx, ref)
+      proof = signed(challenge, elem(device.key, 1))
+
+      assert {:error, {:invalid_argument, _}} =
+               Sanctum.Providers.Confirmation.handle(ctx, %{
+                 "action" => "confirm",
+                 "ref" => ref,
+                 "device_proof" => proof,
+                 "code" => "123456"
+               })
+
+      assert {:error, %Prima.Refusal{reason: :not_a_device}} = confirm(opener, ref, proof)
+
+      {:ok, _} = Sanctum.Providers.Confirmation.handle(ctx, %{"action" => "cancel", "ref" => ref})
+      {:error, _refused} = confirm(ctx, ref, proof)
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      assert row.state == "cancelled"
+    end
+
+    test "a device revoked after its proof leaves the change unconsumed",
+         %{device: device, ctx: ctx, opener: opener, change: change, secret: secret, ref: ref} do
+      {_record, challenge} = pending_challenge!(ctx, ref)
+      {:ok, _} = confirm(ctx, ref, signed(challenge, elem(device.key, 1)))
+
+      from(c in DeviceCertificate, where: c.paired_client_id == ^ctx.client_id)
+      |> Arca.Repo.update_all(set: [state: "revoked", revoked_at: DateTime.utc_now()])
+
+      refute :ok ==
+               Sanctum.Consent.Authz.check(
+                 %{opener | confirmation_id: secret},
+                 :pairing_revocation,
+                 change
+               )
+    end
+  end
+end

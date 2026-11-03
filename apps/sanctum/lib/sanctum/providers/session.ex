@@ -28,6 +28,15 @@ defmodule Sanctum.Providers.Session do
   (`consent: :interactive`); approving is a sensitive change
   (`credential_issuance`, `Sanctum.Pairing`).
 
+  `unlock` and `lock` are a protected device's, through its device
+  channel alone (`auth_method: :device`, a client that reports a holder):
+  `unlock` with no arguments answers an `unlock` challenge, and with its
+  `proof` alone a single-use `ticket`, the `session_id` it reserved and
+  the ticket's `expires_at` (ms), which the device's browser redeems for
+  its session (`Sanctum.DeviceUnlock`); `lock` with the `lock` proof the
+  device signed for that session retires it, `locked: true` even when it
+  is already gone. A browser's session, or any other context, is refused.
+
   `read_resource` admits an MCP `resources/read` of `sanctum://identity`
   or `sanctum://permissions`. It is `auth: :anonymous` and needs no
   permission: it answers from the caller's established context alone and
@@ -216,6 +225,33 @@ defmodule Sanctum.Providers.Session do
           kind: :write,
           planes: [:external]
         ),
+        Operation.new(
+          "session",
+          "unlock",
+          "Unlock a protected device into a browser session",
+          [
+            Arg.new("proof", :json,
+              description:
+                "unlock: the device's proof over the unlock challenge an unlock with no arguments answered"
+            )
+          ],
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "session",
+          "lock",
+          "Lock a protected device's browser session",
+          [
+            Arg.new("proof", :json,
+              required: true,
+              description: "lock: the device's lock proof for the session its unlock reserved"
+            )
+          ],
+          reduces_authority: true,
+          kind: :write,
+          planes: [:external]
+        ),
         # The admission of an MCP `resources/read` of the caller's own
         # self-description (`Sanctum.Provider.resources/0`).
         Operation.new(
@@ -236,7 +272,7 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — logout, get local identity, focus another athanor, set this CYFR up from the command line with its setup token, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, focus another athanor, set this CYFR up from the command line with its setup token, run device-flow OAuth, sign a command line in by approving it in Prism and list or revoke command-line sessions, or unlock and lock a protected device's browser session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
   end
@@ -535,6 +571,26 @@ defmodule Sanctum.Providers.Session do
     {:error, {:invalid_argument, "Missing required argument: uri"}}
   end
 
+  def handle(%Context{} = ctx, %{"action" => "unlock"} = args) do
+    case Sanctum.DeviceUnlock.unlock(ctx, Map.delete(args, "action")) do
+      {:ok, %{challenge: challenge}} ->
+        {:ok, %{challenge: Prima.DeviceCert.Challenge.encode(challenge)}}
+
+      {:ok, answer} ->
+        {:ok, answer}
+
+      {:error, reason} ->
+        {:error, device_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "lock"} = args) do
+    case Sanctum.DeviceUnlock.lock(ctx, Map.delete(args, "action")) do
+      {:ok, answer} -> {:ok, answer}
+      {:error, reason} -> {:error, device_refusal(reason)}
+    end
+  end
+
   # The terminal clause answers both shapes the dispatcher already
   # distinguishes: no `action` at all, and one this tool does not know.
   def handle(_ctx, args) do
@@ -587,6 +643,45 @@ defmodule Sanctum.Providers.Session do
     }
 
   defp setup_refusal(reason), do: reason
+
+  # A protected device's unlock and lock refusals, each with the sentence
+  # its person reads; the stores' own reasons pass as they are.
+  defp device_refusal(:not_a_device),
+    do:
+      cli_refused(
+        :forbidden,
+        :not_a_device,
+        "Only a protected device's own screen unlocks or locks its session"
+      )
+
+  defp device_refusal(:no_holder),
+    do:
+      cli_refused(
+        :forbidden,
+        :no_holder,
+        "This device keeps no protected key, so it cannot unlock: set it up again with a PIN or passphrase"
+      )
+
+  defp device_refusal(:proof_refused),
+    do:
+      cli_refused(
+        :unauthenticated,
+        :proof_refused,
+        "The device's proof was refused: unlock again"
+      )
+
+  defp device_refusal(:invalid_request),
+    do: {:invalid_argument, "unlock takes no arguments or its proof alone; lock takes its proof"}
+
+  defp device_refusal(:not_standing),
+    do:
+      cli_refused(
+        :forbidden,
+        :not_standing,
+        "This device's pairing no longer stands here"
+      )
+
+  defp device_refusal(reason), do: reason
 
   defp cli_refusal(:not_found),
     do:

@@ -108,6 +108,90 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
+  describe "a protected device's session" do
+    defp client_session!(client_id, expires_in_ms) do
+      hash = make_token_hash("client")
+      id = Prima.UUID7.generate_id("ses")
+
+      :ok =
+        SessionStorage.create_session(
+          hash,
+          session_attrs(%{
+            id: id,
+            client_id: client_id,
+            provider: "unlock",
+            expires_at: DateTime.add(DateTime.utc_now(), expires_in_ms, :millisecond)
+          }),
+          Arca.Test.Actor.issuance()
+        )
+
+      {hash, id}
+    end
+
+    test "takes the id its unlock reserved and records its client; another session draws its own" do
+      {hash, id} = client_session!("pcl_one", 60_000)
+      assert {:ok, %{id: ^id, client_id: "pcl_one"}} = SessionStorage.get_session(hash)
+
+      other = make_token_hash("browser")
+
+      :ok =
+        SessionStorage.create_session(
+          other,
+          session_attrs(%{id: "ses_chosen"}),
+          Arca.Test.Actor.issuance()
+        )
+
+      assert {:ok, %{id: drawn, client_id: nil}} = SessionStorage.get_session(other)
+      refute drawn == "ses_chosen"
+    end
+
+    test "a browser's refresh never moves it" do
+      {hash, _id} = client_session!("pcl_two", 60_000)
+      {:ok, %{expires_at: before}} = SessionStorage.get_session(hash)
+      later = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      assert {:error, :not_found} = SessionStorage.refresh_session(hash, later)
+      assert {:ok, %{expires_at: ^before}} = SessionStorage.get_session(hash)
+    end
+
+    test "its channel slides it, never past the cap, never another client's and never an expired one" do
+      {hash, id} = client_session!("pcl_three", 1_000)
+      {expired_hash, expired} = client_session!("pcl_three", -1_000)
+      {_other_hash, other} = client_session!("pcl_four", 1_000)
+      cap = DateTime.add(DateTime.utc_now(), 30, :second)
+
+      assert {:ok, [^id]} =
+               SessionStorage.slide_client_sessions(
+                 "pcl_three",
+                 [id, expired, other],
+                 60_000,
+                 cap
+               )
+
+      assert {:ok, %{expires_at: slid}} = SessionStorage.get_session(hash)
+      assert DateTime.compare(slid, DateTime.truncate(cap, :microsecond)) == :eq
+      assert {:error, :not_found} = SessionStorage.get_session(expired_hash)
+
+      far = DateTime.add(DateTime.utc_now(), 3600, :second)
+      assert {:ok, [^id]} = SessionStorage.slide_client_sessions("pcl_three", [id], 60_000, far)
+      assert {:ok, %{expires_at: bounded}} = SessionStorage.get_session(hash)
+      assert DateTime.diff(bounded, DateTime.utc_now(), :second) <= 60
+    end
+
+    test "a lock deletes exactly the sessions it names of its own client" do
+      {hash, id} = client_session!("pcl_five", 60_000)
+      {kept_hash, kept} = client_session!("pcl_five", 60_000)
+      {other_hash, _other} = client_session!("pcl_six", 60_000)
+
+      assert {:ok, [^hash]} = SessionStorage.delete_client_sessions("pcl_five", [id])
+      assert {:ok, []} = SessionStorage.delete_client_sessions("pcl_five", [id])
+      assert {:ok, []} = SessionStorage.delete_client_sessions("pcl_six", [kept])
+      assert {:error, :not_found} = SessionStorage.get_session(hash)
+      assert {:ok, %{id: ^kept}} = SessionStorage.get_session(kept_hash)
+      assert {:ok, _} = SessionStorage.get_session(other_hash)
+    end
+  end
+
   describe "delete_session/1" do
     test "deletes a session" do
       hash = make_token_hash("delete")
