@@ -81,9 +81,39 @@ func InvitationSecret(home, text string) (string, error) {
 	return code, nil
 }
 
-// ErrCertifyElsewhere is an invitation of a person whose identity is at
-// another home, which must certify this device first.
-var ErrCertifyElsewhere = errors.New("your identity is kept by another CYFR, which certifies this command line there first; pair it from a browser instead")
+// Certification is what a person's own home is asked to certify for this
+// device when their identity is kept there and not at the home it pairs
+// with: the home it pairs with (Audience), the athanor and the client id
+// that home reserved, and this device's key. Issuer is the home that
+// certified this device before, when one did: a re-certification after the
+// person's keys changed.
+type Certification struct {
+	Audience  string
+	Athanor   string
+	ClientID  string
+	DeviceKey []byte
+	Issuer    string
+}
+
+// Certified is a certificate the person's own home issued for a
+// Certification, and that home's address.
+type Certified struct {
+	Issuer      string
+	Certificate json.RawMessage
+}
+
+// CertifyCall obtains, at the person's own home, the certificate a
+// Certification asks for: there the device is unlocked afresh and the
+// certification confirmed, never through a browser.
+type CertifyCall func(ctx context.Context, c Certification) (Certified, error)
+
+// ErrCertifiedOther is a certificate the person's own home answered that
+// does not certify exactly this device here: it is not used.
+var ErrCertifiedOther = errors.New("Your own CYFR's answer does not certify this device here, so it was not used.")
+
+// ErrNoCertifier is a pairing whose home asks for another home's
+// certificate where this device has no way to obtain one.
+var ErrNoCertifier = errors.New("Your identity is kept by another CYFR, which certifies this device, and this device cannot ask it.")
 
 // Paired is a completed pairing: the client the home recorded and its
 // first certificate.
@@ -99,48 +129,136 @@ type Paired struct {
 // whose answer was lost is made again under a new challenge with the same
 // secret and key, which the home answers with the client it committed;
 // any other key it refuses.
-func Pair(ctx context.Context, call PairCall, b Binding, d Holder, secret string, key Signer) (Paired, error) {
+//
+// A person whose identity is kept at another home is answered, beside the
+// challenge, what that home is to certify. certify obtains it there; the
+// certificate is used only when it certifies exactly this device for this
+// home (Elsewhere), and the pairing completes with it under a new
+// challenge. The certificate is not kept before this home committed it: a
+// completion whose answer is lost certifies again.
+func Pair(ctx context.Context, call PairCall, certify CertifyCall, b Binding, d Holder, secret string, key Signer) (Paired, error) {
 	args := map[string]any{"invitation_secret": secret, "device_key": b64(b.DeviceKey),
 		"key_digest": KeyDigest(b.DeviceKey), "holder_kind": d.Kind, "display_name": d.DisplayName}
-	got, err := pairOnce(ctx, call, b, args, key)
-	if errors.Is(err, ErrUnavailable) {
-		got, err = pairOnce(ctx, call, b, args, key)
+	got, asked, err := pairRetried(ctx, call, b, args, key)
+	if err != nil || asked == nil {
+		return got, err
 	}
-	return got, err
-}
-
-func pairOnce(ctx context.Context, call PairCall, b Binding, args map[string]any, key Signer) (Paired, error) {
-	delete(args, "proof")
-	asked, err := call(ctx, args)
+	if certify == nil {
+		return Paired{}, ErrNoCertifier
+	}
+	certified, err := certify(ctx, *asked)
 	if err != nil {
 		return Paired{}, err
 	}
-	if _, ok := asked["certify"]; ok {
-		return Paired{}, ErrCertifyElsewhere
+	if err := Elsewhere(certified, *asked); err != nil {
+		return Paired{}, err
+	}
+	args["certificate"] = certified.Certificate
+	got, again, err := pairRetried(ctx, call, b, args, key)
+	switch {
+	case err != nil:
+		return Paired{}, err
+	case again != nil:
+		return Paired{}, fmt.Errorf("%w: CYFR asked for a certificate again", ErrRefused)
+	case got.ClientID != asked.ClientID || got.Athanor != asked.Athanor:
+		return Paired{}, fmt.Errorf("%w: CYFR paired another client than the one it asked to certify", ErrRefused)
+	}
+	if err := Elsewhere(Certified{Issuer: certified.Issuer, Certificate: got.Certificate}, *asked); err != nil {
+		return Paired{}, err
+	}
+	return got, nil
+}
+
+func pairRetried(ctx context.Context, call PairCall, b Binding, args map[string]any, key Signer) (Paired, *Certification, error) {
+	got, asked, err := pairOnce(ctx, call, b, args, key)
+	if errors.Is(err, ErrUnavailable) {
+		got, asked, err = pairOnce(ctx, call, b, args, key)
+	}
+	return got, asked, err
+}
+
+// pairOnce asks the pair challenge and answers it. A home that answers,
+// beside the challenge, what the person's own home is to certify, and was
+// offered no certificate, is answered that request, and nothing is signed.
+func pairOnce(ctx context.Context, call PairCall, b Binding, args map[string]any, key Signer) (Paired, *Certification, error) {
+	delete(args, "proof")
+	asked, err := call(ctx, args)
+	if err != nil {
+		return Paired{}, nil, err
+	}
+	if raw, ok := asked["certify"]; ok {
+		if _, offered := args["certificate"]; offered {
+			return Paired{}, nil, fmt.Errorf("%w: CYFR asked for a certificate again", ErrRefused)
+		}
+		c, err := certification(raw, b)
+		return Paired{}, c, err
 	}
 	raw, _ := json.Marshal(asked["challenge"])
 	c, err := Challenge(raw, "pair", b, nil)
 	if err != nil {
-		return Paired{}, err
+		return Paired{}, nil, err
 	}
 	proof, err := Prove(c, key)
 	if err != nil {
-		return Paired{}, err
+		return Paired{}, nil, err
 	}
 	args["proof"] = proof
 	answer, err := call(ctx, args)
 	if err != nil {
-		return Paired{}, err
+		return Paired{}, nil, err
 	}
 	cert, _ := json.Marshal(answer["certificate"])
 	got := Paired{ClientID: c["client_id"].(string), Athanor: c["athanor"].(string), Certificate: cert}
 	if id, _ := answer["client_id"].(string); id != got.ClientID {
-		return Paired{}, fmt.Errorf("%w: the client CYFR answered is not the one its challenge named", ErrRefused)
+		return Paired{}, nil, fmt.Errorf("%w: the client CYFR answered is not the one its challenge named", ErrRefused)
 	}
 	if err := certifies(cert, b.Home, got.Athanor, got.ClientID, b.DeviceKey); err != nil {
-		return Paired{}, err
+		return Paired{}, nil, err
 	}
-	return got, nil
+	return got, nil, nil
+}
+
+// certification reads what this home asks the person's own home to
+// certify: exactly its audience, athanor and client id, the audience
+// being this home.
+func certification(raw any, b Binding) (*Certification, error) {
+	m, ok := raw.(map[string]any)
+	audience, _ := m["audience"].(string)
+	athanor, _ := m["athanor"].(string)
+	client, _ := m["client_id"].(string)
+	if !ok || len(m) != 3 || !sameOrigin(audience, b.Home) || !strings.HasPrefix(athanor, "ath_") || !strings.HasPrefix(client, "pcl_") {
+		return nil, fmt.Errorf("%w: CYFR asked to certify something other than this device here", ErrRefused)
+	}
+	return &Certification{Audience: b.Home, Athanor: athanor, ClientID: client, DeviceKey: b.DeviceKey}, nil
+}
+
+// Elsewhere checks that got certifies exactly what c asked: a v1
+// certificate for c's client, athanor and key at c's audience, issued by
+// the home got names, another than the audience, for an identity (its
+// identifier and key epoch named). Anything else is not used.
+func Elsewhere(got Certified, c Certification) error {
+	if certifies(got.Certificate, c.Audience, c.Athanor, c.ClientID, c.DeviceKey) != nil {
+		return ErrCertifiedOther
+	}
+	var s struct {
+		Subject struct {
+			Kind       string `json:"kind"`
+			Identifier string `json:"identifier"`
+			KeyEpoch   string `json:"key_epoch"`
+		} `json:"subject"`
+	}
+	i := readIssued(got.Certificate)
+	if json.Unmarshal(got.Certificate, &s) != nil || s.Subject.Kind != "identity" || s.Subject.Identifier == "" ||
+		s.Subject.KeyEpoch == "" || got.Issuer == "" || !sameOrigin(i.Issuer, got.Issuer) || sameOrigin(i.Issuer, c.Audience) {
+		return ErrCertifiedOther
+	}
+	return nil
+}
+
+// sameOrigin is whether two origins name one home, a trailing slash and
+// the case of the scheme and host aside.
+func sameOrigin(a, b string) bool {
+	return a != "" && strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
 }
 
 // certifies checks that cert is a certificate for exactly this device at

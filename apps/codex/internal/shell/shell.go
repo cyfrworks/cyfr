@@ -69,6 +69,10 @@ type Config struct {
 	// Pair is pairing.complete at the home, for a device paired to a
 	// person who exists (Prepare, then Pair); nil where nothing pairs.
 	Pair PairCall
+	// Certify obtains, at the person's own home, a certificate for this
+	// device when their identity is kept there: at a pairing, and again
+	// once that home ended the certification; nil where nothing pairs.
+	Certify CertifyCall
 	// Invitation is the invitation's code a new person joins by, asked
 	// again by a resume of that enrollment; empty for any other admission.
 	Invitation string
@@ -554,24 +558,25 @@ func (s *Shell) enroll(ctx context.Context, rec *holder.Record, a Admission, sec
 }
 
 // connect opens the certified channel under key and holds both: the box is
-// unlocked from here until a lock.
+// unlocked from here until a lock. A certificate another home issued is
+// renewed there, never here: first when it is past half its life, and
+// when this home will not take it (4408: expired, or chained to the
+// person's old keys). One that home ended is certified there again
+// (recertify), where this device can ask.
 func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
-	if i := readIssued(s.rec.Certificate); i.elsewhere() && i.due(s.cfg.Now()) {
-		// This home does not renew a certificate another home issued: it
-		// is renewed there first, and kept before it is used.
-		cert, err := RenewAtIssuer(ctx, s.cfg.Client, s.binding(), s.rec.Certificate, key)
-		switch {
-		case err == nil:
-			s.rec.Certificate = cert
-			if err := s.rec.Save(s.cfg.Record); err != nil {
-				return err
-			}
-		case errors.Is(err, ErrCertificationEnded), s.cfg.Now().UnixMilli() >= i.ExpiresAt:
+	elsewhere := readIssued(s.rec.Certificate).elsewhere()
+	if elsewhere && readIssued(s.rec.Certificate).due(s.cfg.Now()) {
+		if err := s.renewElsewhere(ctx, key, false); err != nil {
 			return err
 		}
 	}
-	device := Device{Binding: s.binding(), Certificate: s.rec.Certificate}
-	ch, err := Dialer{Address: s.cfg.Address, Client: s.cfg.Client}.Open(ctx, device, key, s.report, s.renewed)
+	ch, err := s.dial(ctx, key)
+	if elsewhere && errors.Is(err, ErrRenew) {
+		if err := s.renewElsewhere(ctx, key, true); err != nil {
+			return err
+		}
+		ch, err = s.dial(ctx, key)
+	}
 	if err != nil {
 		return err
 	}
@@ -579,6 +584,42 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	s.scheduleRenewal()
 	go s.watch(ch)
 	return nil
+}
+
+func (s *Shell) dial(ctx context.Context, key *holder.Key) (*Channel, error) {
+	device := Device{Binding: s.binding(), Certificate: s.rec.Certificate}
+	return Dialer{Address: s.cfg.Address, Client: s.cfg.Client}.Open(ctx, device, key, s.report, s.renewed)
+}
+
+// renewElsewhere renews the certificate another home issued at that home
+// and keeps the replacement before it is used. A certification that home
+// ended is certified there again by the person (cfg.Certify), the
+// replacement kept only when it certifies exactly this device here. An
+// issuer out of reach leaves an unexpired certificate in use, unless this
+// home refused it.
+func (s *Shell) renewElsewhere(ctx context.Context, key *holder.Key, refused bool) error {
+	i := readIssued(s.rec.Certificate)
+	cert, err := RenewAtIssuer(ctx, s.cfg.Client, s.binding(), s.rec.Certificate, key)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrCertificationEnded) && s.cfg.Certify != nil:
+		asked := Certification{Audience: s.cfg.Address, Athanor: s.rec.Athanor, ClientID: s.rec.ClientID,
+			DeviceKey: s.rec.PublicKey, Issuer: i.Issuer}
+		got, err := s.cfg.Certify(ctx, asked)
+		if err != nil {
+			return err
+		}
+		if err := Elsewhere(got, asked); err != nil {
+			return err
+		}
+		cert = got.Certificate
+	case errors.Is(err, ErrCertificationEnded), refused, s.cfg.Now().UnixMilli() >= i.ExpiresAt:
+		return err
+	default:
+		return nil
+	}
+	s.rec.Certificate = cert
+	return s.rec.Save(s.cfg.Record)
 }
 
 // renewed persists a certificate the home issued. It arrives on the
@@ -788,11 +829,11 @@ func (s *Shell) Pair(ctx context.Context, link string, secret []byte) {
 		s.say("%s", s.sentence(err))
 		return
 	}
-	got, err := Pair(ctx, s.cfg.Pair, Binding{Home: s.cfg.Address, DeviceKey: s.rec.PublicKey},
+	got, err := Pair(ctx, s.cfg.Pair, s.cfg.Certify, Binding{Home: s.cfg.Address, DeviceKey: s.rec.PublicKey},
 		Holder{Kind: string(s.rec.Kind), DisplayName: s.cfg.DisplayName}, code, key)
 	if err != nil {
 		key.Erase()
-		s.say("Pairing did not finish: %s Your key is kept, so giving the link again finishes with the same one.", s.pairSentence(err))
+		s.say("Pairing did not finish: %s Your key is kept, so giving the link again finishes with the same one.", s.sentence(err))
 		return
 	}
 	s.rec.Certificate, s.rec.ClientID, s.rec.Athanor, s.rec.RequestID = got.Certificate, got.ClientID, got.Athanor, ""
@@ -805,13 +846,6 @@ func (s *Shell) Pair(ctx context.Context, link string, secret []byte) {
 		key.Erase()
 		s.say("%s", s.sentence(err))
 	}
-}
-
-func (s *Shell) pairSentence(err error) string {
-	if errors.Is(err, ErrCertifyElsewhere) {
-		return "Your identity is kept by another CYFR, which certifies a device there; pair this one from a browser."
-	}
-	return s.sentence(err)
 }
 
 // Unlock opens the key with the PIN (or passphrase), opens the channel

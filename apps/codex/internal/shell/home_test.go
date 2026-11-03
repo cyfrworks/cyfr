@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,7 +68,10 @@ type fakeHome struct {
 	dropPair                   bool                // commits the next pairing and loses its answer
 	pairArgs                   []map[string]any
 	pairFields                 [][]string // pairing.complete's args, without and with the proof
-	pin                        *pinHome   // the PIN evaluators (pin_home_test.go)
+	pairOptional               [][]string // the args each may add (a remote person's certificate)
+	// stale is a certificate this home will not take any more (4408).
+	stale func(cert map[string]any) bool
+	pin   *pinHome // the PIN evaluators (pin_home_test.go)
 }
 
 // pairing is one invitation a confirmed addition opened: the key it names
@@ -78,6 +82,10 @@ type pairing struct {
 	athanor   string
 	client    string
 	committed []byte // the key it paired
+	// remote is a person whose identity is at another home: completed
+	// only with that home's certificate, which this home answers back.
+	remote    bool
+	certified map[string]any
 }
 
 type enrollment struct {
@@ -126,7 +134,8 @@ func newFakeHome(t *testing.T) *fakeHome {
 			HTTP       httpFields `json:"http"`
 			Operations struct {
 				PairingComplete []struct {
-					Args []string `json:"args"`
+					Args     []string `json:"args"`
+					Optional []string `json:"args_optional"`
 				} `json:"pairing.complete"`
 			} `json:"operations"`
 		} `json:"exchange"`
@@ -137,6 +146,7 @@ func newFakeHome(t *testing.T) *fakeHome {
 		sessions: map[string]string{}, pairings: map[string]*pairing{}}
 	for _, call := range v.Exchange.Operations.PairingComplete {
 		h.pairFields = append(h.pairFields, call.Args)
+		h.pairOptional = append(h.pairOptional, call.Optional)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /device/enrollment/challenge", h.challengeEntry(false))
@@ -406,6 +416,9 @@ func (h *fakeHome) channel(w http.ResponseWriter, r *http.Request) {
 	cert, _ := m["certificate"].(map[string]any)
 	h.mu.Lock()
 	code := h.closeWith
+	if h.stale != nil && h.stale(cert) {
+		code = 4408
+	}
 	c := h.issue(map[string]any{"purpose": "connect", "athanor": cert["athanor"], "client_id": cert["client_id"], "device_key": cert["device_key"]})
 	h.mu.Unlock()
 	if code != 0 {
@@ -662,9 +675,12 @@ func (h *fakeHome) pair(_ context.Context, args map[string]any) (map[string]any,
 	defer h.mu.Unlock()
 	h.pairArgs = append(h.pairArgs, args)
 	_, proven := args["proof"]
-	want := h.pairFields[0]
+	want, optional := h.pairFields[0], h.pairOptional[0]
 	if proven {
-		want = h.pairFields[1]
+		want, optional = h.pairFields[1], h.pairOptional[1]
+	}
+	if _, ok := args["certificate"]; ok {
+		want = append(slices.Clone(want), optional...)
 	}
 	if !exact(args, want) {
 		h.shapes = append(h.shapes, fmt.Sprintf("pairing.complete %v", args))
@@ -678,9 +694,24 @@ func (h *fakeHome) pair(_ context.Context, args map[string]any) (map[string]any,
 	if kind := stringOf(args, "holder_kind"); kind != "chip" && kind != "software" {
 		return nil, fmt.Errorf("A protected device names its holder")
 	}
+	offered, _ := args["certificate"].(json.RawMessage)
+	var cert map[string]any
+	if offered != nil {
+		_ = json.Unmarshal(offered, &cert)
+	}
+	if cert != nil && (!p.remote || cert["client_id"] != p.client || cert["device_key"] != stringOf(args, "device_key")) {
+		return nil, fmt.Errorf("That certificate does not pair this device")
+	}
 	if !proven {
-		return map[string]any{"challenge": h.issue(map[string]any{"purpose": "pair", "athanor": p.athanor,
-			"client_id": p.client, "device_key": stringOf(args, "device_key")})}, nil
+		answer := map[string]any{"challenge": h.issue(map[string]any{"purpose": "pair", "athanor": p.athanor,
+			"client_id": p.client, "device_key": stringOf(args, "device_key")})}
+		if p.remote && cert == nil {
+			answer["certify"] = map[string]any{"audience": h.address(), "athanor": p.athanor, "client_id": p.client}
+		}
+		return answer, nil
+	}
+	if p.remote && cert == nil {
+		return nil, fmt.Errorf("A remote person's device pairs under their home's certificate")
 	}
 	proof, _ := args["proof"].(map[string]any)
 	if _, ok := h.verify(proof, "pair"); !ok {
@@ -690,6 +721,10 @@ func (h *fakeHome) pair(_ context.Context, args map[string]any) (map[string]any,
 	if h.dropPair {
 		h.dropPair = false
 		return nil, fmt.Errorf("%w (the answer was lost)", ErrUnavailable)
+	}
+	if p.remote {
+		p.certified = cert
+		return map[string]any{"client_id": p.client, "certificate": cert}, nil
 	}
 	e := &enrollment{key: key, client: p.client, athanor: p.athanor}
 	return map[string]any{"client_id": p.client, "certificate": h.certificate(e)}, nil
