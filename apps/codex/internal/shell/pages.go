@@ -60,6 +60,14 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <form method="post" action="/unlock">
 <label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" autofocus required></label>
 <button>Unlock</button></form>
+{{if .Kit}}
+<h1>Restored from a backup?</h1>
+<p>A restore of CYFR from a backup suspends this screen. Your recovery code brings it back.</p>
+<form method="post" action="/kit">
+<label>Your recovery code<input name="code" autocomplete="off" required></label>
+<label>{{if .Digits}}PIN{{else}}Passphrase{{end}}<input name="secret" type="password" {{if .Digits}}inputmode="numeric" maxlength="6"{{end}} autocomplete="off" required></label>
+<button>Bring this screen back</button></form>
+{{end}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 {{else if eq .Page "name"}}
 <h1>Your name</h1>

@@ -156,6 +156,10 @@ var actions = map[string]action{
 		srv.Shell.Unlock(ctx, f.get("secret"))
 		srv.onward(ctx, w, r)
 	}},
+	"/kit": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
+		srv.Shell.Reenable(ctx, string(f.get("code")), f.get("secret"))
+		srv.onward(ctx, w, r)
+	}},
 	"/name": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.Rename(ctx, string(f.get("name")))
 		srv.onward(ctx, w, r)

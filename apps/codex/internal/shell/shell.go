@@ -92,6 +92,10 @@ type Shell struct {
 	recovery   *Recovery
 	naming     string // a name cyfr.run refused or could not take yet
 	confirm    *pendingConfirm
+	// standingEnded is a home that refused this screen's standing at its
+	// last unlock: revoked, or suspended by a declared backup restore,
+	// which the recovery code can re-enable.
+	standingEnded bool
 }
 
 // New is a shell over cfg's holder record, locked.
@@ -160,6 +164,8 @@ type View struct {
 	Recovery   *Recovery
 	Name       string
 	Confirm    *pendingConfirm
+	// Kit offers to re-enable this screen with the recovery code.
+	Kit bool
 }
 
 // View is the page the screen shows now, and the notice of the last action
@@ -182,7 +188,7 @@ func (s *Shell) View() View {
 	case s.key == nil && len(s.rec.Certificate) == 0:
 		v.Page, v.Kind = PageFinish, s.rec.Kind
 	case s.key == nil:
-		v.Page, v.Kind = PageLocked, s.rec.Kind
+		v.Page, v.Kind, v.Kit = PageLocked, s.rec.Kind, s.standingEnded
 	case s.confirm != nil:
 		v.Page, v.Kind, v.Confirm = PageConfirm, s.rec.Kind, s.confirm
 	case s.naming != "":
@@ -581,9 +587,11 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 	}
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
+		s.standingEnded = errors.Is(err, ErrRevoked)
 		s.say("%s", sentence(err))
 		return
 	}
+	s.standingEnded = false
 	if s.rec.RequestID != "" {
 		setup, _ := s.cfg.Tokens()
 		got, err := resume(ctx, s.cfg.Address, SetupAdmission(s.cfg.Client, setup), s.binding(), s.rec.RequestID, key)
@@ -598,6 +606,49 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 			s.say("CYFR could not show your recovery code again: %s", sentence(err))
 		}
 	}
+}
+
+// Reenable brings this screen back after a declared backup restore
+// suspended it: the PIN opens its key here first, then the recovery code's
+// own key proves the person to the home (POST /restore/kit) and
+// pairing.reenable restores this screen's client, and the screen unlocks.
+// A screen the home revoked stays revoked: the re-enable refuses it.
+func (s *Shell) Reenable(ctx context.Context, code string, secret []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret)
+	if s.rec == nil || s.rec.ClientID == "" || s.key != nil || !s.standingEnded {
+		return
+	}
+	key, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s", sentence(err))
+		return
+	}
+	if err := reenable(ctx, s.cfg.Client, s.cfg.Address, strings.TrimSpace(code), s.rec.ClientID); err != nil {
+		key.Erase()
+		s.say("%s", kitSentence(err))
+		return
+	}
+	if err := s.connect(ctx, key); err != nil {
+		key.Erase()
+		s.say("%s", sentence(err))
+		return
+	}
+	s.standingEnded = false
+}
+
+func kitSentence(err error) string {
+	var home *HomeError
+	switch {
+	case errors.Is(err, ErrNotACode), errors.Is(err, ErrTypo):
+		return "That is not a recovery code, or it has a typo. Check it and try again."
+	case errors.As(err, &home) && home.Code == "not_recovering":
+		return "CYFR is not recovering from a backup, so this screen was removed, not suspended: set it up again."
+	case errors.As(err, &home) && home.Code == "not_a_holder":
+		return "That recovery code is not yours here."
+	}
+	return "This screen could not be brought back: " + sentence(err)
 }
 
 // Ticket reserves one session at the home (session.unlock), signs that

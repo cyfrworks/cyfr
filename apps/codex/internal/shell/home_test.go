@@ -54,6 +54,9 @@ type fakeHome struct {
 	conns                      []*websocket.Conn
 	closeWith                  websocket.StatusCode
 	fields                     httpFields
+	kitPublic                  []byte // the recovering person's recovery key
+	kitHeld                    map[string]string
+	reenabled                  []string
 	shapes                     []string // entries whose fields were not the fixture's
 }
 
@@ -108,6 +111,9 @@ func newFakeHome(t *testing.T) *fakeHome {
 	mux.HandleFunc("POST /device/enrollment/complete", h.complete)
 	mux.HandleFunc("POST /device/enrollment/resume", h.resumeEntry)
 	mux.HandleFunc("POST /restore", h.restore)
+	mux.HandleFunc("POST /restore/kit/challenge", h.kitChallenge)
+	mux.HandleFunc("POST /restore/kit", h.kitProof)
+	mux.HandleFunc("POST /restore/kit/reenable", h.kitReenable)
 	mux.HandleFunc("/device/websocket", h.channel)
 	h.srv = httptest.NewServer(mux)
 	t.Cleanup(h.srv.Close)
@@ -504,4 +510,50 @@ func (h *fakeHome) opsSeen() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.ops...)
+}
+
+func (h *fakeHome) kitChallenge(w http.ResponseWriter, r *http.Request) {
+	m := h.body(r)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.kitPublic == nil {
+		reply(w, 404, map[string]any{"error": "not_recovering"})
+		return
+	}
+	c := b64(random(32))
+	if h.kitHeld == nil {
+		h.kitHeld = map[string]string{}
+	}
+	h.kitHeld[c] = stringOf(m, "identifier")
+	reply(w, 200, map[string]any{"challenge": c, "restore_id": "rst_1", "expires_at": 1})
+}
+
+func (h *fakeHome) kitProof(w http.ResponseWriter, r *http.Request) {
+	m := h.body(r)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	proof, _ := m["proof"].(map[string]any)
+	c := stringOf(proof, "challenge")
+	id, held := h.kitHeld[c]
+	delete(h.kitHeld, c)
+	msg, _ := Canonical(without(proof, "sig"))
+	sig, _ := unb64(stringOf(proof, "sig"))
+	if !held || id != stringOf(proof, "identifier") || proof["protocol"] != kitProtocol || !ed25519.Verify(h.kitPublic, msg, sig) {
+		reply(w, 409, map[string]any{"error": "not_a_holder"})
+		return
+	}
+	reply(w, 200, map[string]any{"credential": "cred_1", "expires_at": 1})
+}
+
+func (h *fakeHome) kitReenable(w http.ResponseWriter, r *http.Request) {
+	m := h.body(r)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r.Header.Get("Authorization") != "Bearer cred_1" || m["operation"] != "pairing.reenable" {
+		reply(w, 401, map[string]any{"error": "invalid_credential"})
+		return
+	}
+	h.reenabled = append(h.reenabled, stringOf(m, "client_id"))
+	h.closeWith = 0
+	reply(w, 200, map[string]any{"reenabled": m["client_id"]})
 }
