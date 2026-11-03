@@ -188,16 +188,17 @@ defmodule Arca.SessionStorage do
   @doc """
   Slide the living sessions `ids` of the protected device `client_id` to
   `lifetime_ms` past the database's clock, capped at `cap`, the expiry of
-  the certificate the device's channel stands under. A session already
-  expired stays expired, and one of another client is not moved. Answers
-  the ids it moved.
+  the certificate the device's channel stands under, under the member's
+  slot (`Arca.Repo.owned/2`): a member that lost it moves nothing. A
+  session already expired stays expired, and one of another client is not
+  moved. Answers the ids it moved.
   """
   @spec slide_client_sessions(String.t(), [String.t()], pos_integer(), DateTime.t()) ::
-          {:ok, [String.t()]} | {:error, :database_error}
+          {:ok, [String.t()]} | {:error, :not_owner | :database_error}
   # arca:unscoped-ok sessions are addressed by the client their unlock created them for, and their own ids.
   def slide_client_sessions(client_id, ids, lifetime_ms, %DateTime{} = cap)
       when is_binary(client_id) and is_list(ids) and is_integer(lifetime_ms) do
-    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.slide_client_sessions", fn ->
+    Arca.Repo.owned("Arca.SessionStorage.slide_client_sessions", fn ->
       now = Arca.ServerMetaStorage.now!()
       until = Enum.min([DateTime.add(now, lifetime_ms, :millisecond), cap], DateTime)
 
