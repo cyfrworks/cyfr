@@ -598,3 +598,33 @@ func TestLoginDriver_ASilentCyfrRunEndsTheRunToFinishLater(t *testing.T) {
 		}
 	}
 }
+
+// The local context cyfr init saves names the home by its loopback IP,
+// while the home names itself localhost in what its devices sign: the
+// command line's device is the home's own address, so its key record and
+// every challenge it checks say localhost; any other address is kept.
+func TestDeviceShell_ALoopbackContextIsTheHomesLocalhost(t *testing.T) {
+	withContexts(t, "local", map[string]*config.Context{"local": {URL: "http://127.0.0.1:4000"}})
+	saved := deviceChip
+	deviceChip = func() bool { return false }
+	t.Cleanup(func() { deviceChip = saved })
+	for address, want := range map[string]string{
+		"http://127.0.0.1:4000":     "http://localhost:4000",
+		"http://[::1]:4000":         "http://localhost:4000",
+		"https://home.example":      "https://home.example",
+		"https://home.example:8443": "https://home.example:8443",
+	} {
+		sh, err := deviceShell(deviceOptions{address: address})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := sh.View().Passphrase
+		sh.Prepare([]byte(p), []byte(p))
+		path, _ := deviceRecord(address)
+		rec, err := holder.Load(path)
+		if err != nil || rec.Home != want {
+			t.Errorf("%s: the key is for %v (%v), want %s", address, rec, err, want)
+		}
+		_ = os.Remove(path)
+	}
+}

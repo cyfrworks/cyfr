@@ -49,7 +49,7 @@ var confirmOnDevice = func(address string) deviceConfirmer {
 		return nil
 	}
 	rec, err := holder.Load(path)
-	if err != nil || len(rec.Certificate) == 0 || !sameAddress(rec.Home, address) {
+	if err != nil || len(rec.Certificate) == 0 || !sameAddress(rec.Home, deviceHome(address)) {
 		return nil
 	}
 	return func(ctx context.Context, ref string, c *console) (confirmOutcome, error) {
