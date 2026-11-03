@@ -510,7 +510,15 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     holder_kind_known = %{
       name: "paired_clients_holder_kind_known",
-      expr: "holder_kind IN ('chip', 'software')"
+      expr: "holder_kind IN ('chip', 'software', 'platform')"
+    }
+
+    # A passkey's client is its platform holder, and only it is.
+    platform_is_passkey = %{
+      name: "paired_clients_platform_is_passkey",
+      expr:
+        "(COALESCE(holder_kind, '') = 'platform') = (source_kind = 'passkey') AND " <>
+          "(source_kind <> 'passkey' OR device_public_key IS NULL)"
     }
 
     # One row per client a person holds in an athanor: the credential it
@@ -524,12 +532,16 @@ defmodule Arca.Repo.Migrations.Baseline do
     # protected device enrolled with a local unlock reports what holds its
     # key (`holder_kind`: a TPM `chip` or a passphrase-wrapped `software`
     # file) and the name it shows (`display_name`): information a person
-    # reads, never an input to a decision. A browser key holds neither.
+    # reads, never an input to a decision. A passkey is projected here as
+    # its platform holder (`holder_kind` `platform`, `source_kind`
+    # `passkey`, the credential's id as `source_id`, no key), one row per
+    # credential in its person's own athanor, standing as the credential
+    # stands (`Arca.PairedClients.project_passkey!/1`).
     create table(:paired_clients, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
-      add :source_kind, :string, null: false
+      add :source_kind, :string, null: false, check: if(sqlite?, do: platform_is_passkey)
       add :source_id, :string, null: false
       add :device_public_key, :binary
 
@@ -547,6 +559,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     unless sqlite? do
       create constraint(:paired_clients, standing_known.name, check: standing_known.expr)
       create constraint(:paired_clients, holder_kind_known.name, check: holder_kind_known.expr)
+
+      create constraint(:paired_clients, platform_is_passkey.name,
+               check: platform_is_passkey.expr
+             )
     end
 
     # A credential is one client in its athanor.
@@ -817,6 +833,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :state, :string, null: false, check: if(sqlite?, do: passkey_state)
       add :registration_digest, :string, null: false
       add :possession_verified, :boolean, null: false, default: false
+      # WebAuthn's backup-eligible flag at registration: the credential may
+      # sync to the person's other machines, so its revocation ends it on
+      # each of them.
+      add :backup_eligible, :boolean, null: false, default: false
       add :expires_at, :utc_datetime_usec
       add :admin_confirmation_id, :string
       add :activated_at, :utc_datetime_usec
@@ -1046,7 +1066,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       known(
         "pending_confirmations_proof_known",
         "proof",
-        ~w(passkey oidc_reauth email_code device)
+        ~w(passkey oidc_reauth email_code device home)
       )
     ]
 
@@ -1109,7 +1129,11 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     invitation_checks = [
       known("pairing_invitations_state_known", "state", ~w(pending consumed revoked)),
-      known("pairing_invitations_confirmer_kind_known", "confirmer_kind", ~w(passkey device)),
+      known(
+        "pairing_invitations_confirmer_kind_known",
+        "confirmer_kind",
+        ~w(passkey device home)
+      ),
       %{
         name: "pairing_invitations_confirmer_whole",
         expr: "(confirmer_kind IS NULL) = (confirmer_id IS NULL)"

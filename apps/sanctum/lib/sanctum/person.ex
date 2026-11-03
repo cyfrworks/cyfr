@@ -330,6 +330,43 @@ defmodule Sanctum.Person do
 
   defp current(_envelope, _row), do: {:error, :stale_key_epoch}
 
+  @doc """
+  Sign, with the person's live key, that they confirmed one pending
+  confirmation at another home (`Prima.ConfirmationAssertion`): `attrs`
+  names the `audience`, its `athanor`, the record's `ref` and `digest` and
+  the assertion's `expires_at`; the identifier and `key_epoch` are the
+  person's own, as their identity row holds them now. Writes nothing.
+
+  Refusals: `:not_found` (no key set here), `:not_enrolled`,
+  `{:invalid_argument, _}` (a field the assertion cannot carry),
+  `:unavailable` (the live key cannot be opened).
+  """
+  @spec sign_confirmation(String.t(), map()) ::
+          {:ok, Prima.ConfirmationAssertion.t()}
+          | {:error, :not_found | :not_enrolled | :unavailable | {:invalid_argument, String.t()}}
+  def sign_confirmation(user_id, %{} = attrs) when is_binary(user_id) do
+    with {:ok, row} <- key_set(user_id),
+         {:ok, row} <- enrolled(row),
+         {:ok, unsigned} <-
+           Prima.ConfirmationAssertion.new(
+             identifier: row.identifier,
+             key_epoch: row.head_hash,
+             audience: attrs.audience,
+             athanor: attrs.athanor,
+             ref: attrs.ref,
+             digest: attrs.digest,
+             expires_at: attrs.expires_at
+           )
+           |> unsigned() do
+      with_key(row, :live, fn live -> {:ok, Prima.ConfirmationAssertion.sign(unsigned, live)} end)
+    end
+  end
+
+  defp unsigned({:ok, assertion}), do: {:ok, assertion}
+
+  defp unsigned({:error, _malformed}),
+    do: {:error, {:invalid_argument, "The confirmation's bindings are not an assertion's"}}
+
   defp unenrolled(%{identifier: nil}), do: :ok
   defp unenrolled(_row), do: {:error, :already_enrolled}
 

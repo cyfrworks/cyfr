@@ -186,8 +186,8 @@
     "home": {
       "page": {
         "encoding": "base64url_unpadded_jcs",
-        "fragment": "request",
-        "path": "/confirm/elsewhere",
+        "fragment": "confirm",
+        "path": "/carry",
         "request": [
           "athanor",
           "audience",
@@ -203,7 +203,6 @@
           "audience",
           "digest",
           "expires_at",
-          "key_epoch",
           "preview",
           "ref"
         ],

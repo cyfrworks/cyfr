@@ -1506,8 +1506,11 @@ defmodule Arca.SecurityTransitions do
         ),
       paired_clients:
         Arca.Repo.all(
+          # A passkey's platform holder moves with its credential, listed
+          # below.
           from(p in PairedClient,
-            where: p.user_id == ^user_id and p.standing == "suspended",
+            where:
+              p.user_id == ^user_id and p.standing == "suspended" and p.source_kind != "passkey",
             order_by: [asc: p.id],
             select: %{id: p.id, athanor_id: p.athanor_id}
           )

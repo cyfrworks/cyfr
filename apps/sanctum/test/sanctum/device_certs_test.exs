@@ -29,6 +29,10 @@ defmodule Sanctum.DeviceCertsTest do
   # node's, and some cases change the home's name: one case at a time.
   use ExUnit.Case, async: false
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.{PairedClient, PersonIdentity, RequestRateWindow}
@@ -123,7 +127,7 @@ defmodule Sanctum.DeviceCertsTest do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
     {:ok, invitation} = begin!(session_ctx, device_key)
     glass = Context.build(%{authenticated: false, client_ip: source})
-    submission = %{device_key: device_key}
+    submission = %{holder: @holder, device_key: device_key}
 
     {:ok, %{challenge: challenge}} =
       Pairing.complete(glass, invitation.invitation_secret, submission)
@@ -1491,7 +1495,7 @@ defmodule Sanctum.DeviceCertsTest do
       :ok = DirectoryServer.remote_person!(user.id, identity)
       certificate = remote_certificate(identity, invitation.client_id, device_key, athanor)
       glass = Context.build(%{authenticated: false, client_ip: @source})
-      submission = %{device_key: device_key, certificate: certificate}
+      submission = %{holder: @holder, device_key: device_key, certificate: certificate}
 
       {:ok, %{challenge: challenge}} =
         Pairing.complete(glass, invitation.invitation_secret, submission)

@@ -41,6 +41,10 @@ defmodule Sanctum.CompanyLoginTest do
   # application's environment: one case at a time.
   use ExUnit.Case, async: false
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.{CompanyAuthorization, CompanyLoginAttempt}
@@ -235,7 +239,7 @@ defmodule Sanctum.CompanyLoginTest do
       |> Pairing.begin(%{"key_digest" => digest})
 
     glass = Context.build(%{authenticated: false, client_ip: @source})
-    submission = %{device_key: device_key}
+    submission = %{holder: @holder, device_key: device_key}
 
     {:ok, %{challenge: challenge}} =
       Pairing.complete(glass, invitation.invitation_secret, submission)

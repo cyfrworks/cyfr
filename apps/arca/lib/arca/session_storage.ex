@@ -60,7 +60,12 @@ defmodule Arca.SessionStorage do
   for any other person (`{:error, :unexpected_key_epoch}`).
   A protected device's session
   is never created here: its unlock reserves it and its redemption
-  activates it (`activate_client_session/3`). `also:`
+  activates it (`activate_client_session/3`). A passkey sign-in's names
+  `attrs[:client_id]`, the credential's platform holder
+  (`Arca.PairedClients.project_passkey!/1`), which must be that person's,
+  active and a passkey's, read locked in the transaction
+  (`{:error, :client_not_active}`), so a revocation that committed first
+  mints nothing and one that follows ends the session with the client. `also:`
   (optional) is the higher owner's closure, run in the same transaction
   after the insert and handed the session's `%{id, user_id}`: it answers
   `:ok`, or `{:error, reason}` to roll the session back; any other answer
@@ -77,7 +82,8 @@ defmodule Arca.SessionStorage do
 
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.create_session", fn ->
       Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
-        with {:ok, session} <- insert_session(token_hash, attrs),
+        with :ok <- platform_holder_stands(attrs),
+             {:ok, session} <- insert_session(token_hash, attrs),
              :ok <- also_ran(also.(session)) do
           {:ok, :inserted}
         end
@@ -105,6 +111,7 @@ defmodule Arca.SessionStorage do
       # runs on the next load; nothing is coerced.
       athanor_id: attrs[:athanor_id],
       identity_key_epoch: epoch,
+      client_id: attrs[:client_id],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
@@ -114,6 +121,24 @@ defmodule Arca.SessionStorage do
       {:ok, %{id: row.id, user_id: row.user_id}}
     end
   end
+
+  defp platform_holder_stands(%{client_id: client_id, user_id: user_id})
+       when is_binary(client_id) do
+    from(p in Arca.Schemas.PairedClient,
+      where:
+        p.id == ^client_id and p.user_id == ^user_id and p.source_kind == "passkey" and
+          p.standing == "active",
+      select: p.id
+    )
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> {:error, :client_not_active}
+      _id -> :ok
+    end
+  end
+
+  defp platform_holder_stands(_attrs), do: :ok
 
   defp also_ran(:ok), do: :ok
   defp also_ran({:error, _reason} = refusal), do: refusal
@@ -164,13 +189,23 @@ defmodule Arca.SessionStorage do
   @doc """
   Update a session's expires_at. A protected device's session is not
   found here: only its device channel moves it (`slide_client_sessions/4`).
+  A passkey sign-in's, whose client is the credential's platform holder,
+  slides as any session does.
   """
   @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found | :database_error}
   # arca:unscoped-ok sessions are addressed by token hash — the credential is
   # the scope, and the athanor is a column on the row it finds.
   def refresh_session(token_hash, new_expires_at) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.refresh_session", fn ->
-      query = from(s in Session, where: s.token_hash == ^token_hash and is_nil(s.client_id))
+      platform =
+        from(p in Arca.Schemas.PairedClient, where: p.source_kind == "passkey", select: p.id)
+
+      query =
+        from(s in Session,
+          where:
+            s.token_hash == ^token_hash and
+              (is_nil(s.client_id) or s.client_id in subquery(platform))
+        )
 
       case Arca.Repo.update_all(query, set: [expires_at: new_expires_at]) do
         {0, _} -> {:error, :not_found}

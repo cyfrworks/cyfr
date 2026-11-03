@@ -14,6 +14,14 @@ defmodule Sanctum.Auth.EmailVerification do
   name the record by its public ref (`Prima.Confirmation.ref/1`). The
   code is bound to that record's ref, used once, and expires with it.
 
+  A code proves the person reads a mailbox, not that they hold a key, so
+  it is sent for, and confirms, a record only inside the two windows
+  `Sanctum.Pairing.sign_in_may_confirm/2` names: while the person
+  recovers from a declared restore, and, before any passkey or device ever
+  existed for them, for their first one. Both `send_code/2` and
+  `verify_code/3` ask it, so a window that closed after the code was sent
+  confirms nothing.
+
     * At most five guesses per confirmation: each is counted in a durable
       window as long as the record lives (`Arca.RequestRateWindows`), and
       five wrong ones cancel the record. A sixth guess finds it cancelled.
@@ -69,6 +77,7 @@ defmodule Sanctum.Auth.EmailVerification do
          {:ok, transport} <- configured_transport(),
          {:ok, email} <- verified_email(user_id),
          {:ok, row} <- pending_record(actor, ref, user_id),
+         :ok <- Sanctum.Pairing.sign_in_may_confirm(user_id, row.operation),
          :ok <-
            claim(:confirmation_code_send, row.ref, @sends_per_confirmation, @record_window_ms),
          :ok <-
@@ -93,7 +102,7 @@ defmodule Sanctum.Auth.EmailVerification do
   @doc """
   Confirm the pending confirmation `ref` of the context's own person with
   `code`, the one `send_code/2` sent for it, with proof `email_code`,
-  naming the paired client `ctx.client_id` names, if any. Answers the
+  while a window `Sanctum.Pairing.sign_in_may_confirm/2` names is open. Answers the
   confirmed record's `%{ref:, state:, expires_at:}`.
 
   Refusals: `:code_refused` (no code sent, or another code; five of them
@@ -107,10 +116,11 @@ defmodule Sanctum.Auth.EmailVerification do
 
     with {:ok, user_id} <- confirming_person(ctx),
          {:ok, row} <- pending_record(actor, ref, user_id),
+         :ok <- Sanctum.Pairing.sign_in_may_confirm(user_id, row.operation),
          :ok <- guessed(actor, row) do
       if is_binary(row.email_code_hash) and
            Plug.Crypto.secure_compare(code_hash(row.ref, String.trim(code)), row.email_code_hash) do
-        confirmed(actor, row, ctx.client_id)
+        confirmed(actor, row)
       else
         wrong(actor, row)
       end
@@ -185,11 +195,8 @@ defmodule Sanctum.Auth.EmailVerification do
     end
   end
 
-  defp confirmed(actor, row, client_id) do
-    case Arca.PendingConfirmations.confirm(actor, row.ref, %{
-           proof: "email_code",
-           client_id: client_id
-         }) do
+  defp confirmed(actor, row) do
+    case Arca.PendingConfirmations.confirm(actor, row.ref, %{proof: "email_code"}) do
       {:ok, confirmed} ->
         Authz.announce(:confirmed, confirmed)
         {:ok, %{ref: confirmed.ref, state: confirmed.state, expires_at: confirmed.expires_at}}

@@ -49,8 +49,9 @@ defmodule Arca.PendingConfirmations do
       The count is read in the open's own transaction, so two opens racing
       on PostgreSQL may each find room: the bound is soft under concurrent
       opens, and the next open restores it.
-    * `confirm/3` records the proof (`passkey`, `oidc_reauth` or
-      `email_code`) and the paired client or passkey that gave it, only
+    * `confirm/3` records the proof (`passkey`, `oidc_reauth`,
+      `email_code`, `device` or `home`) and the paired client or passkey
+      that gave it, only
       while that client or passkey still stands, so a revocation that
       commits first leaves nothing to confirm with. It locks the client,
       then the passkey, then the record: the standing order
@@ -173,9 +174,11 @@ defmodule Arca.PendingConfirmations do
 
   @doc """
   Mark the pending record `ref` confirmed with `proof`: `:proof` is
-  `"passkey"`, `"oidc_reauth"`, `"email_code"` or `"device"` (a protected
-  device's signature over the record's digest, which names the client),
-  and `:passkey_id` or `:client_id` name the passkey or paired client that
+  `"passkey"`, `"oidc_reauth"`, `"email_code"`, `"device"` (a protected
+  device's signature over the record's digest, which names the client) or
+  `"home"` (a remote person's own home certifying their confirmation there,
+  `Prima.ConfirmationAssertion`, which names nothing here), and
+  `:passkey_id` or `:client_id` name the passkey or paired client that
   gave it, which must still stand. Succeeds once, before the record's expiry. Refusals:
   `:not_pending`, `:expired`, `:not_found`, `:revoked` (the passkey or
   client no longer stands), `{:invalid, errors}`, `:not_owner`,
@@ -720,7 +723,8 @@ defmodule Arca.PendingConfirmations do
     if DateTime.compare(expires_at, now) == :gt, do: :ok, else: {:error, :expired}
   end
 
-  defp proof(%{proof: kind} = proof) when kind in ~w(passkey oidc_reauth email_code device) do
+  defp proof(%{proof: kind} = proof)
+       when kind in ~w(passkey oidc_reauth email_code device home) do
     passkey_id = Map.get(proof, :passkey_id)
     client_id = Map.get(proof, :client_id)
 
@@ -734,6 +738,9 @@ defmodule Arca.PendingConfirmations do
       kind == "device" and not (is_binary(client_id) and client_id != "") ->
         {:error, {:invalid, %{client_id: ["names the device that signed"]}}}
 
+      kind == "home" and not is_nil(client_id) ->
+        {:error, {:invalid, %{client_id: ["a home's assertion names no client here"]}}}
+
       not (is_nil(client_id) or (is_binary(client_id) and client_id != "")) ->
         {:error, {:invalid, %{client_id: ["is malformed"]}}}
 
@@ -743,7 +750,7 @@ defmodule Arca.PendingConfirmations do
   end
 
   defp proof(_proof),
-    do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth, email_code or device"]}}}
+    do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth, email_code, device or home"]}}}
 
   defp opener?(opener),
     do: is_binary(opener) and byte_size(opener) > 0 and byte_size(opener) <= 255

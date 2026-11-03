@@ -189,6 +189,8 @@ defmodule Sanctum.Session do
         also: record_receipt(receipt)
       }
 
+      minting = Map.put(minting, :client_id, Keyword.get(opts, :client_id))
+
       with {:ok, session} <- insert(ctx, expectation, epoch, minting),
            do: {:ok, Map.put(session, :token, token)}
     end
@@ -372,6 +374,10 @@ defmodule Sanctum.Session do
       # platform-admin capability is re-read from the membership row on load.
       athanor_id: ctx.athanor_id,
       identity_key_epoch: epoch,
+      # A passkey sign-in's session names the credential's platform holder,
+      # so the passkey's revocation ends it; it keeps the ordinary idle
+      # expiry, since no device of this home's observes its lock.
+      client_id: Map.get(minting, :client_id),
       expires_at: expires_at,
       inserted_at: now
     }
@@ -434,7 +440,7 @@ defmodule Sanctum.Session do
 
     with {:ok, row} <- stored(token_hash),
          {:ok, ctx} <- row_to_context(row, token_hash) do
-      {:ok, ctx, is_nil(row.client_id) and slide_due?(row.expires_at)}
+      {:ok, ctx, row.slides and slide_due?(row.expires_at)}
     end
   end
 
@@ -451,29 +457,30 @@ defmodule Sanctum.Session do
     with {:ok, row} <- stored(token_hash), do: row_to_context(row, token_hash)
   end
 
-  # A protected device's session stands on its client too, read again at
-  # every load: the client still active. Its certificate's revocation and
+  # A session that names a client stands on it too, read again at every
+  # load: the client still active. Its revocation, its certificate's and
   # every other retirement end the session's row in their own transition
-  # (`Arca.DeviceCertificates`, `Arca.PairedClients`); a load reads that
-  # row and recomputes no retirement.
+  # (`Arca.DeviceCertificates`, `Arca.PairedClients`, `Arca.Passkeys`); a
+  # load reads that row and recomputes no retirement. Whether the session
+  # slides with use (`slides`) follows the client's verified source, never
+  # what it reports of its holder: a passkey sign-in's slides as any
+  # session does, and a protected device's only on its channel.
   defp stored(token_hash) do
     case Arca.SessionStorage.get_session(token_hash) do
-      {:ok, %{client_id: nil} = row} -> {:ok, row}
+      {:ok, %{client_id: nil} = row} -> {:ok, Map.put(row, :slides, true)}
       {:ok, row} -> client_stands(row)
       {:error, :not_found} -> {:error, :invalid_session}
       {:error, :database_error} -> {:error, :database_error}
     end
   end
 
-  defp client_stands(%{client_id: client_id, athanor_id: athanor_id, user_id: user_id} = row)
-       when is_binary(athanor_id) do
-    actor = Prima.Actor.in_athanor(athanor_id)
-
-    case Arca.PairedClients.list(actor, user_id: user_id, standing: :active) do
+  defp client_stands(%{client_id: client_id, user_id: user_id} = row) do
+    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
       {:ok, clients} ->
-        if Enum.any?(clients, &(&1.id == client_id)),
-          do: {:ok, row},
-          else: {:error, :invalid_session}
+        case Enum.find(clients, &(&1.id == client_id)) do
+          %{source_kind: source} -> {:ok, Map.put(row, :slides, source == "passkey")}
+          nil -> {:error, :invalid_session}
+        end
 
       {:error, _unanswered} ->
         {:error, :database_error}
@@ -560,6 +567,8 @@ defmodule Sanctum.Session do
   Extend a session's expiration, but only if it hasn't been extended recently.
   Never a protected device's session, which only its device channel moves
   (`Sanctum.DeviceUnlock.slide/2`); `refresh/1` does not find one either.
+  A passkey sign-in's slides as any session does: its client is the
+  credential's platform holder, decided by the client's source.
 
   This is the activity-based ("sliding window") refresh used on the hot path —
   calling `refresh/1` on every authenticated request would write the session
@@ -570,7 +579,7 @@ defmodule Sanctum.Session do
   """
   @spec refresh_if_stale(String.t()) :: :ok
   def refresh_if_stale(token) when is_binary(token) do
-    with {:ok, %{client_id: nil} = row} <- get_session_direct(token),
+    with {:ok, %{slides: true} = row} <- stored(hash_token(token)),
          true <- slide_due?(row.expires_at),
          {:ok, _session} <- refresh(token) do
       :ok
@@ -743,7 +752,7 @@ defmodule Sanctum.Session do
             # A protected device's session ends at its row's expiry unless
             # the device's channel slides it: a holder of this context, a
             # mounted page or an open stream, is bounded by it.
-            credential_deadline: if(row.client_id, do: row.expires_at),
+            credential_deadline: if(row.slides, do: nil, else: row.expires_at),
             authenticated: true
           )
 

@@ -17,6 +17,10 @@ defmodule Sanctum.SignInTest do
 
   use ExUnit.Case, async: false
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.{PersonIdentity, RestorePerson, SharedThreadMember}
@@ -333,7 +337,7 @@ defmodule Sanctum.SignInTest do
 
       source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
       glass = Sanctum.Context.build(%{authenticated: false, client_ip: source})
-      submission = %{device_key: device_key}
+      submission = %{holder: @holder, device_key: device_key}
 
       {:ok, %{challenge: challenge}} =
         Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)

@@ -470,6 +470,7 @@ defmodule Sanctum.Passkeys do
         sign_count: verified.sign_count,
         registration_digest: verified.registration_digest,
         possession_verified: true,
+        backup_eligible: Map.get(verified, :backup_eligible, false),
         state: state,
         expires_at: Keyword.get(opts, :expires_at),
         identity_recovery_epoch: Map.get(verified, :recovery_epoch)
@@ -564,15 +565,24 @@ defmodule Sanctum.Passkeys do
   Whether the context's person holds a fresh method at this home: an
   active passkey registered here (a suspended one is none), an OpenID
   Connect door this home can
-  re-authenticate (`Sanctum.Auth.OIDC.reauth_available?/1`), or a verified
+  re-authenticate (`Sanctum.Auth.OIDC.reauth_available?/1`), a verified
   email a one-time code can reach
-  (`Sanctum.Auth.EmailVerification.code_available?/1`). The passkeys are
-  read as the context's own.
+  (`Sanctum.Auth.EmailVerification.code_available?/1`), or, for a person
+  whose keys are at another home, that home, which certifies their
+  confirmations here (`Sanctum.RemoteCertification.verify_confirmation/3`).
+  The passkeys are read as the context's own.
   """
   @spec fresh_method?(Context.t()) :: boolean()
   def fresh_method?(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
     active_here?(ctx, user_id) or Sanctum.Auth.OIDC.reauth_available?(user_id) or
-      Sanctum.Auth.EmailVerification.code_available?(user_id)
+      Sanctum.Auth.EmailVerification.code_available?(user_id) or remote?(user_id)
+  end
+
+  defp remote?(user_id) do
+    match?(
+      {:ok, %{provenance: "remote"}},
+      Arca.PersonIdentities.get(Prima.Actor.system(), user_id)
+    )
   end
 
   defp active_here?(ctx, user_id) do
@@ -666,6 +676,7 @@ defmodule Sanctum.Passkeys do
          credential_id: credential_id,
          public_key: :erlang.term_to_binary(cose_key),
          sign_count: auth_data.sign_count,
+         backup_eligible: auth_data.flag_backup_eligible,
          nonce: nonce,
          expires_at: expires_at,
          registration_digest:
@@ -933,8 +944,9 @@ defmodule Sanctum.Passkeys do
   (`Sanctum.Door.sign_in/1`), so a deny closes this way in too. A remote person's head is read
   fresh first, and their passkey must be of its current `recovery_epoch`:
   one a recovery replaced is retired by that read and signs no one in.
-  Mints a session with provider `passkey` and answers its token, as the
-  device flow does; a remote person's session
+  Mints a session with provider `passkey`, naming the credential's
+  platform holder as its client, so revoking the passkey ends it, with the
+  ordinary idle expiry, and answers its token; a remote person's session
   records the `key_epoch` of the head their passkey was verified against,
   and is minted only while that head is still current.
 
@@ -957,7 +969,7 @@ defmodule Sanctum.Passkeys do
          {:ok, sign_count} <- verify_assertion(parsed, passkey, challenge),
          :ok <- counted(passkey, sign_count),
          :ok <- door(user) do
-      session(user, head)
+      session(user, head, passkey)
     end
   end
 
@@ -1014,7 +1026,11 @@ defmodule Sanctum.Passkeys do
   # is gone, and what the new one retired is not read again here, so the
   # sign-in pauses as a directory read does and the retry verifies against
   # the new head.
-  defp session(user, head) do
+  # The session names the credential's platform holder, its paired client
+  # (`Arca.PairedClients.project_passkey!/1`): revoking the passkey ends it
+  # wherever it synced. A person with no athanor of their own has none, and
+  # their session names no client.
+  defp session(user, head, passkey) do
     ctx =
       Context.build(
         user_id: user.id,
@@ -1026,13 +1042,29 @@ defmodule Sanctum.Passkeys do
 
     with {:ok, ctx} <-
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
-         {:ok, session} <- Sanctum.Session.create(ctx, key_epoch: head && head.key_epoch) do
+         {:ok, client_id} <- platform_holder(user.id, passkey.id),
+         {:ok, session} <-
+           Sanctum.Session.create(ctx, key_epoch: head && head.key_epoch, client_id: client_id) do
       {:ok, %{session_token: session.token}}
     else
       {:error, :identity_stale} -> {:error, :identity_stale}
       {:error, :stale_key_epoch} -> {:error, :identity_stale}
       {:error, :unavailable} -> {:error, :unavailable}
       {:error, _refused} -> {:error, :unavailable}
+    end
+  end
+
+  defp platform_holder(user_id, passkey_id) do
+    case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
+      {:ok, clients} ->
+        {:ok,
+         Enum.find_value(clients, fn
+           %{source_kind: "passkey", source_id: ^passkey_id, id: id} -> id
+           _other -> nil
+         end)}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 
@@ -1081,10 +1113,19 @@ defmodule Sanctum.Passkeys do
       also = fn %{passkey: revoked, was: was} -> leaves_a_way_in(ctx, user_id, revoked, was) end
 
       case Arca.Passkeys.revoke(Context.actor(ctx), passkey_id, also: also) do
-        {:ok, %{passkey: row}} -> {:ok, listed(row)}
-        {:error, {:conflict, _sentence} = refusal} -> {:error, refusal}
-        {:error, reason} when reason in [:database_error, :unavailable] -> {:error, :unavailable}
-        {:error, _gone} -> {:error, {:not_found, "passkey", passkey_id}}
+        {:ok, %{passkey: row, revoked_session_hashes: hashes}} ->
+          # The sessions its sign-ins made end with it, wherever it synced.
+          Sanctum.Session.announce_revoked(user_id, hashes)
+          {:ok, listed(row)}
+
+        {:error, {:conflict, _sentence} = refusal} ->
+          {:error, refusal}
+
+        {:error, reason} when reason in [:database_error, :unavailable] ->
+          {:error, :unavailable}
+
+        {:error, _gone} ->
+          {:error, {:not_found, "passkey", passkey_id}}
       end
     end
   end

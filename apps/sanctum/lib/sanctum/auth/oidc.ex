@@ -40,8 +40,7 @@ defmodule Sanctum.Auth.OIDC do
       `:cyfr_oidc` configuration worker, for a login forced fresh with
       `prompt=login` and `max_age=0`, carrying a nonce derived from the
       confirmation's ref and digest and held on the record, a state
-      naming the record's ref, the attempt's nonce, and the paired client a
-      caller on a paired device begins it from, under a keyed digest, and
+      naming the record's ref and the attempt's nonce under a keyed digest, and
       a PKCE verifier derived from the nonce. A state answers only the
       attempt the record's nonce names now. Its redirect URI is
       `<origin>/auth/oidcc/reauth`, which the issuer must list beside the
@@ -60,10 +59,15 @@ defmodule Sanctum.Auth.OIDC do
       only from a browser whose own session is the record's person; a
       decline, another person's session or none confirms nothing. So a
       fresh login someone else asked for never confirms a change its
-      person did not see. A re-authentication begun from a paired device
-      confirms the record as given on that device (`confirmed_client_id`),
-      while its client stands, as a passkey assertion or an email code
-      given there is (`Sanctum.Pairing`, adding a method or a device).
+      person did not see.
+
+  A re-authentication proves who signed in, not a key the person holds,
+  so it confirms a record only inside the two windows
+  `Sanctum.Pairing.sign_in_may_confirm/2` names: while the person
+  recovers from a declared restore, and, before any passkey or device ever
+  existed for them, for their first one. Both `reauth_url/2` and the
+  approval in `reauth_decide/3` ask it, so a window that closed after a
+  re-authentication began confirms nothing.
 
   ## A company's sign-in
 
@@ -355,15 +359,10 @@ defmodule Sanctum.Auth.OIDC do
 
     with {:ok, user_id} <- confirming_person(ctx),
          {:ok, _door} <- linked_door(user_id),
-         {:ok, row} <- pending_record(actor, ref, user_id) do
+         {:ok, row} <- pending_record(actor, ref, user_id),
+         :ok <- Sanctum.Pairing.sign_in_may_confirm(user_id, row.operation) do
       nonce = reauth_nonce(row)
-
-      begun = %{
-        athanor_id: ctx.athanor_id,
-        ref: row.ref,
-        nonce: nonce,
-        client_id: device_client(ctx)
-      }
+      begun = %{athanor_id: ctx.athanor_id, ref: row.ref, nonce: nonce}
 
       case Arca.PendingConfirmations.put_challenge(actor, row.ref, %{reauth_nonce: nonce}) do
         {:ok, _held} ->
@@ -417,8 +416,7 @@ defmodule Sanctum.Auth.OIDC do
           athanor_id: athanor_id,
           ref: row.ref,
           user_id: row.user_id,
-          nonce: nonce,
-          client_id: begun.client_id
+          nonce: nonce
         },
         ttl
       )
@@ -448,9 +446,9 @@ defmodule Sanctum.Auth.OIDC do
 
   An approval confirms the record with proof `oidc_reauth` only when that
   session is the record's person's, still standing (`Sanctum.Caller.establish/2`),
-  and the record still pending under the nonce the login answered; a
-  re-authentication a paired device began confirms it as given on that
-  device, while its client stands.
+  and the record still pending under the nonce the login answered, and
+  only while a window `Sanctum.Pairing.sign_in_may_confirm/2` names is
+  open.
   Answers `%{ref:, state: "confirmed", expires_at:}`, or `:declined` for a
   decline, which confirms nothing.
 
@@ -473,7 +471,7 @@ defmodule Sanctum.Auth.OIDC do
 
   defp take_held(ticket) when is_binary(ticket) and ticket != "" and byte_size(ticket) <= 64 do
     case Arca.Cache.take({:oidc_reauth_proof, ticket}) do
-      {:ok, %{athanor_id: _, ref: _, user_id: _, nonce: _, client_id: _} = held} -> {:ok, held}
+      {:ok, %{athanor_id: _, ref: _, user_id: _, nonce: _} = held} -> {:ok, held}
       _spent -> {:error, :reauth_refused}
     end
   end
@@ -486,11 +484,9 @@ defmodule Sanctum.Auth.OIDC do
     with :ok <- answering_person(session_token, held.user_id),
          {:ok, row} <- stored(actor, held.ref),
          {:ok, nonce} <- held_nonce(row),
-         true <- Plug.Crypto.secure_compare(nonce, held.nonce) or {:error, :reauth_refused} do
-      case Arca.PendingConfirmations.confirm(actor, row.ref, %{
-             proof: "oidc_reauth",
-             client_id: held.client_id
-           }) do
+         true <- Plug.Crypto.secure_compare(nonce, held.nonce) or {:error, :reauth_refused},
+         :ok <- Sanctum.Pairing.sign_in_may_confirm(row.user_id, row.operation) do
+      case Arca.PendingConfirmations.confirm(actor, row.ref, %{proof: "oidc_reauth"}) do
         {:ok, confirmed} ->
           Authz.announce(:confirmed, confirmed)
           {:ok, %{ref: confirmed.ref, state: confirmed.state, expires_at: confirmed.expires_at}}
@@ -525,14 +521,6 @@ defmodule Sanctum.Auth.OIDC do
   end
 
   defp client, do: Application.get_env(:sanctum, :oidc_reauth_client, __MODULE__.Oidcc)
-
-  # The paired client a re-authentication is begun from, when a paired
-  # device begins it; `can_confirm?/1` has held that its client stands.
-  defp device_client(%Context{auth_method: :device, client_id: client_id})
-       when is_binary(client_id) and client_id != "",
-       do: client_id
-
-  defp device_client(%Context{}), do: nil
 
   defp confirming_person(%Context{} = ctx) do
     if Sanctum.Pairing.can_confirm?(ctx) and is_binary(ctx.athanor_id) and ctx.athanor_id != "",
@@ -615,17 +603,14 @@ defmodule Sanctum.Auth.OIDC do
     if Plug.Crypto.secure_compare(nonce, held), do: :ok, else: {:error, :reauth_refused}
   end
 
-  # The state names the record by its public ref, the attempt by its nonce
-  # and the paired client a device began it from, under a keyed digest
-  # only this home can make: the callback reads nothing it did not write,
-  # and the state, which the issuer, the browser and the request log all
-  # see, carries nothing the asking request alone holds (the nonce rides
-  # the authorization URL beside it). A client id is no secret; the digest
-  # keeps anyone from naming a device that did not begin this attempt.
-  defp state(%{athanor_id: athanor_id, ref: ref, nonce: nonce, client_id: client_id}) do
+  # The state names the record by its public ref and the attempt by its
+  # nonce, under a keyed digest only this home can make: the callback reads
+  # nothing it did not write, and the state, which the issuer, the browser
+  # and the request log all see, carries nothing the asking request alone
+  # holds (the nonce rides the authorization URL beside it).
+  defp state(%{athanor_id: athanor_id, ref: ref, nonce: nonce}) do
     payload =
       %{"a" => athanor_id, "c" => ref, "n" => nonce}
-      |> Prima.MapUtil.put_present("d", client_id)
       |> Encoding.jcs!()
       |> Encoding.b64()
 
@@ -640,11 +625,10 @@ defmodule Sanctum.Auth.OIDC do
          {:ok, mac} <- Encoding.unb64(mac, 32),
          true <- Plug.Crypto.secure_compare(mac, state_mac(payload)),
          {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{"a" => athanor_id, "c" => ref, "n" => nonce} = read} <- Jason.decode(json),
-         client_id = Map.get(read, "d"),
-         true <- Encoding.id?(athanor_id) and Prima.Confirmation.ref?(ref) and is_binary(nonce),
-         true <- is_nil(client_id) or Encoding.id?(client_id) do
-      {:ok, %{athanor_id: athanor_id, ref: ref, nonce: nonce, client_id: client_id}}
+         {:ok, %{"a" => athanor_id, "c" => ref, "n" => nonce} = read} when map_size(read) == 3 <-
+           Jason.decode(json),
+         true <- Encoding.id?(athanor_id) and Prima.Confirmation.ref?(ref) and is_binary(nonce) do
+      {:ok, %{athanor_id: athanor_id, ref: ref, nonce: nonce}}
     else
       _forged -> {:error, :reauth_refused}
     end
