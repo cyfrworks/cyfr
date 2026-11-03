@@ -250,8 +250,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       # The link's code pairs the glass holding that key, as the person.
       client_id = complete!(url, key)
 
-      assert {:ok, %{clients: [%{client_id: ^client_id}]}} =
-               PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
+      assert client_id in listed(ctx)
 
       Cyfr.Test.Sandbox.end_views()
     end

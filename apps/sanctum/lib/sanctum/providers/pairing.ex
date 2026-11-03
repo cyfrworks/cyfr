@@ -63,7 +63,9 @@ defmodule Sanctum.Providers.Pairing do
       under its own, or renews it through its channel.
     * `list` answers the person's active paired clients; a protected
       device's carry what holds its key (`holder_kind`), the name it shows
-      (`display_name`) and what it last reported of its disks within the
+      (`display_name`), whether its key may sync (`synced`, a passkey's
+      platform holder WebAuthn registered backup eligible; the passkey
+      revoked wherever it synced) and what it last reported of its disks within the
       last minute (`storage`: `root` and `data`, each `encrypted`,
       `unencrypted` or `unknown`), information a person reads and never
       an input to a decision.
@@ -386,6 +388,7 @@ defmodule Sanctum.Providers.Pairing do
       current: client.current,
       holder_kind: client.holder_kind,
       display_name: client.display_name,
+      synced: client.synced,
       storage: storage(client.storage)
     }
   end

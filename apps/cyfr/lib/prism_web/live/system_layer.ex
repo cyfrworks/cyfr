@@ -2309,7 +2309,7 @@ defmodule PrismWeb.SystemLayer do
       not Prima.Identity.Encoding.home?(home) ->
         assign(socket, :error, "Type your CYFR's address, like https://cyfr.example.")
 
-      home == Sanctum.Person.home() ->
+      home == at_home[:audience] ->
         assign(socket, :error, "Your keys are held at another CYFR: type its address.")
 
       true ->

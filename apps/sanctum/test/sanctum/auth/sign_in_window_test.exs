@@ -28,16 +28,7 @@ defmodule Sanctum.Auth.SignInWindowTest do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
     Prima.Test.RateLimiter.reset!()
-    prior = Application.fetch_env(:sanctum, :confirmation_code_transport)
-
-    on_exit(fn ->
-      case prior do
-        {:ok, value} -> Application.put_env(:sanctum, :confirmation_code_transport, value)
-        :error -> Application.delete_env(:sanctum, :confirmation_code_transport)
-      end
-    end)
-
-    Application.put_env(:sanctum, :confirmation_code_transport, TestContext.MailSink)
+    Prima.Test.Env.put_app_env(:sanctum, :confirmation_code_transport, TestContext.MailSink)
 
     n = System.unique_integer([:positive])
 

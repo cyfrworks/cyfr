@@ -1027,7 +1027,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
-        CyfrWeb.Plugs.BrowserCSP CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.ConfiguredUeberauth
+        CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.ConfiguredUeberauth
         CyfrWeb.Plugs.FrameRequest
         CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
       ),
@@ -1041,8 +1041,7 @@ defmodule Cyfr.Boundaries do
           "`PrismWeb.verified_routes/0` " <>
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
-          "declares its pipelines from the shared browser definition and plugs " <>
-          "(`CyfrWeb.Plugs.BrowserCSP` among them). " <>
+          "declares its pipelines from the shared browser definition and plugs. " <>
           "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
           "this roster to every surface that lists it, so no declaration can say it."
     },

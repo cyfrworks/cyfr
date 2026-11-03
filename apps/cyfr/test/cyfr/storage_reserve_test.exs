@@ -585,7 +585,9 @@ defmodule Cyfr.StorageReserveTest do
     submission = %{
       "invitation_secret" => secret,
       "device_key" => Encoding.b64(key.public),
-      "key_digest" => key.digest
+      "key_digest" => key.digest,
+      "holder_kind" => "software",
+      "display_name" => "Test device"
     }
 
     {:ok, %{challenge: challenge}} = call(glass(), "pairing", "complete", submission)

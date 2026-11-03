@@ -357,11 +357,15 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
       assert decision.reason == Prima.Refusal.message(:company_login_required)
       assert decision.user_id == user.id
 
-      assert {:ok, [%{id: client_id, standing: "active"}]} =
+      # The device stands, beside the passkey's platform holder.
+      assert {:ok, clients} =
                Arca.PairedClients.list(Prima.Actor.in_athanor(athanor.id),
                  user_id: user.id,
                  standing: :all
                )
+
+      assert [%{id: client_id, standing: "active"}] =
+               Enum.filter(clients, &(&1.source_kind == "device_cert"))
 
       assert client_id == device.client_id
     end
