@@ -1241,7 +1241,9 @@ fn args ->
         "action" => "complete",
         "invitation_secret" => secret,
         "device_key" => Prima.Identity.Encoding.b64(public),
-        "key_digest" => digest
+        "key_digest" => digest,
+        "holder_kind" => "software",
+        "display_name" => "Reserve case"
       }
 
       {:ok, %{challenge: challenge}} = call.(glass, "pairing", submission)
