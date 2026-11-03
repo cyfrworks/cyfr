@@ -545,14 +545,32 @@ defmodule PrismWeb.SetupLiveTest do
       refute render(settings) =~ Base.url_encode64(identity.recovery_secret, padding: false)
     end
 
-    test "a person set up from the command line registers their passkey here, the same person and the same code",
+    test "a person set up on a device that no longer stands registers their passkey here, the same person and the same code",
          %{conn: conn} do
       directory!()
       registry!()
       first = Sanctum.Test.Newcomers.identity("mira")
 
+      device =
+        {:device,
+         %{
+           athanor_id: Prima.UUID7.generate_id("ath"),
+           client_id: Prima.UUID7.generate_id("pcl"),
+           device_key: :crypto.strong_rand_bytes(32),
+           request_id: first.request_id,
+           holder_kind: "chip",
+           display_name: "laptop",
+           user_id: nil
+         }, first}
+
       {:ok, %{person: %{id: person_id}, recovery: %{code: first_code}}} =
-        Sanctum.Newcomer.admit({:setup, @token}, {:command_line, "laptop", first})
+        Sanctum.Newcomer.admit({:setup, @token}, device)
+
+      # Its device revoked, the person holds no method at this address.
+      [client] = Arca.Repo.all(Arca.Schemas.PairedClient)
+
+      {:ok, _revoked} =
+        Arca.PairedClients.revoke(Prima.Actor.in_athanor(client.athanor_id), client.id)
 
       {_browser, view} = opened(conn)
 

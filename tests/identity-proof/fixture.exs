@@ -11,9 +11,10 @@
 #   setup
 #       The installation's setup admission (`Sanctum.Newcomer.admit/2`),
 #       the one admission besides a restore that makes a first person,
-#       under a setup token put for the call and taken away after, with
-#       the identity a command line draws, named `identity-proof`, which
-#       opens their registration: `{admitted: user_id}` or `{refused:
+#       under a setup token put for the call and taken away after, with a
+#       protected device's enrollment and the identity a device draws,
+#       named `identity-proof`, which opens their registration:
+#       `{admitted: user_id}` or `{refused:
 #       reason}`. On a restore-reserved installation it is refused.
 #
 #   genesis USER_ID
@@ -102,9 +103,23 @@ fn args ->
         request_id: "req_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
       }
 
+      # A protected device's enrollment as `Sanctum.DeviceUnlock` hands it
+      # to the admission once its proof verified.
+      device = fn identity ->
+        %{
+          athanor_id: Prima.UUID7.generate_id("ath"),
+          client_id: Prima.UUID7.generate_id("pcl"),
+          device_key: :crypto.strong_rand_bytes(32),
+          request_id: identity.request_id,
+          holder_kind: "software",
+          display_name: "identity-proof",
+          user_id: nil
+        }
+      end
+
       admitted =
         try do
-          Sanctum.Newcomer.admit({:setup, token}, {:command_line, "identity-proof", identity})
+          Sanctum.Newcomer.admit({:setup, token}, {:device, device.(identity), identity})
         after
           case configured do
             {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)

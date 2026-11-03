@@ -547,6 +547,27 @@ defmodule Sanctum.PairingTest do
   # Completing
   # ---------------------------------------------------------------------------
 
+  describe "approve_url/1" do
+    @describetag database: false
+
+    test "is the fixture's address: this home's /devices/add with the key's digest in the fragment" do
+      template =
+        "../../../../tests/fixtures/device_unlock.json"
+        |> Path.expand(__DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> get_in(["exchange", "pairing", "approve_url"])
+
+      {device_key, _private} = device_key()
+      digest = Prima.Device.key_digest(device_key)
+
+      assert Pairing.approve_url(digest) ==
+               template
+               |> String.replace("{home}", Person.home())
+               |> String.replace("{key_digest}", digest)
+    end
+  end
+
   describe "complete/3" do
     test "a glass with neither cookie nor certificate is paired by the invitation and its key proof",
          %{session_ctx: session_ctx, user: user, athanor: athanor} do
@@ -628,22 +649,164 @@ defmodule Sanctum.PairingTest do
       assert clients(stranger.user.id) == []
     end
 
-    test "a code presented twice: the second is refused, one client stands", %{
-      session_ctx: session_ctx,
-      user: user
-    } do
+    test "a code presented twice by its key answers the committed client again; another key, a revoked client or its expiry, nothing",
+         %{session_ctx: session_ctx, user: user} do
       {:ok, invitation} = begin!(session_ctx)
-      assert {:ok, _paired} = complete(invitation.invitation_secret, invitation.key)
+      secret = invitation.invitation_secret
+      assert {:ok, paired} = complete(secret, invitation.key)
 
-      assert complete(invitation.invitation_secret, invitation.key) ==
-               {:error, :invalid_invitation}
-
-      {device_key, _} = device_key()
-
-      assert Pairing.complete(glass(), invitation.invitation_secret, %{device_key: device_key}) ==
-               {:error, :invalid_invitation}
-
+      # The answer was lost: the same key's fresh proof is answered it again,
+      # and nothing is recorded or issued a second time.
+      assert complete(secret, invitation.key) == {:ok, paired}
       assert length(clients(user.id)) == 1
+
+      assert Arca.Repo.aggregate(
+               from(c in DeviceCertificate, where: c.paired_client_id == ^paired.client_id),
+               :count
+             ) == 1
+
+      # A challenge for the code with another key, or a proof by another key
+      # over the right key's challenge, answers nothing.
+      {other, other_private} = device_key()
+
+      assert Pairing.complete(glass(), secret, %{device_key: other}) ==
+               {:error, :invalid_invitation}
+
+      {device_key, _private} = invitation.key
+
+      {:ok, %{challenge: challenge}} =
+        Pairing.complete(glass(), secret, %{device_key: device_key})
+
+      assert Pairing.complete(glass(), secret, %{
+               device_key: device_key,
+               proof: signed(challenge, other_private)
+             }) == {:error, :proof_refused}
+
+      # A client revoked since answers nothing.
+      assert {:ok, _revoked} = revoke!(session_ctx, paired.client_id)
+      assert complete(secret, invitation.key) == {:error, :invalid_invitation}
+
+      # Past the invitation's expiry the code names no one.
+      Arca.Repo.update_all(
+        from(i in PairingInvitation, where: i.secret_hash == ^Prima.Digest.sha256(secret)),
+        set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
+      assert Pairing.complete(glass(), secret, %{device_key: device_key}) ==
+               {:error, :invalid_invitation}
+    end
+
+    test "concurrent completions of one invitation by its key pair one client, and each answer is that pairing",
+         %{session_ctx: session_ctx, user: user} do
+      {:ok, invitation} = begin!(session_ctx)
+      {device_key, private} = invitation.key
+      secret = invitation.invitation_secret
+
+      submissions =
+        for _ <- 1..4 do
+          {:ok, %{challenge: challenge}} =
+            Pairing.complete(glass(), secret, %{device_key: device_key})
+
+          %{device_key: device_key, proof: signed(challenge, private)}
+        end
+
+      results =
+        submissions
+        |> Enum.map(fn submission ->
+          Task.async(fn -> Pairing.complete(glass(), secret, submission) end)
+        end)
+        |> Task.await_many(30_000)
+
+      assert [%{id: client_id}] = clients(user.id)
+      assert Enum.all?(results, &match?({:ok, %{client_id: ^client_id}}, &1)), inspect(results)
+
+      assert results |> Enum.map(fn {:ok, %{certificate: c}} -> c end) |> Enum.uniq() |> length() ==
+               1
+    end
+
+    test "a revocation racing a repeated completion ends the client, and no answer outlives it",
+         %{session_ctx: session_ctx, user: user} do
+      {:ok, invitation} = begin!(session_ctx)
+      secret = invitation.invitation_secret
+      {:ok, paired} = complete(secret, invitation.key)
+
+      [revoked, repeated] =
+        [
+          Task.async(fn -> revoke!(session_ctx, paired.client_id) end),
+          Task.async(fn -> complete(secret, invitation.key) end)
+        ]
+        |> Task.await_many(30_000)
+
+      assert {:ok, %{standing: "revoked"}} = revoked
+      assert repeated in [{:ok, paired}, {:error, :invalid_invitation}]
+      assert [%{standing: "revoked"}] = clients(user.id)
+
+      # After the revocation the repeat answers nothing.
+      assert complete(secret, invitation.key) == {:error, :invalid_invitation}
+    end
+
+    test "a protected device records its holder, both fields together; a browser's glass records none",
+         %{session_ctx: session_ctx, user: user} do
+      {:ok, invitation} = begin!(session_ctx)
+      {device_key, private} = invitation.key
+      secret = invitation.invitation_secret
+
+      {:ok, %{challenge: challenge}} =
+        Pairing.complete(glass(), secret, %{device_key: device_key})
+
+      assert {:ok, %{client_id: client_id}} =
+               Pairing.complete(glass(), secret, %{
+                 device_key: device_key,
+                 proof: signed(challenge, private),
+                 holder: %{holder_kind: "software", display_name: "Pi in the hall"}
+               })
+
+      assert [%{id: ^client_id, holder_kind: "software", display_name: "Pi in the hall"}] =
+               clients(user.id)
+
+      browser = pair!(session_ctx)
+
+      assert %{holder_kind: nil, display_name: nil} =
+               Arca.Repo.get!(PairedClient, browser.client_id)
+    end
+
+    test "the tool takes holder_kind and display_name together, as an enrollment does, and pairs nothing on half of them",
+         %{session_ctx: session_ctx, user: user} do
+      {:ok, invitation} = begin!(session_ctx)
+      {device_key, private} = invitation.key
+
+      args = %{
+        "action" => "complete",
+        "invitation_secret" => Base.url_encode64(invitation.invitation_secret, padding: false),
+        "device_key" => Base.url_encode64(device_key, padding: false),
+        "key_digest" => Prima.Device.key_digest(device_key)
+      }
+
+      for holder <- [
+            %{"holder_kind" => "chip"},
+            %{"display_name" => "Laptop"},
+            %{"holder_kind" => "platform", "display_name" => "Laptop"},
+            %{"holder_kind" => "chip", "display_name" => String.duplicate("x", 65)}
+          ] do
+        assert {:error, {:invalid_argument, _sentence}} =
+                 Sanctum.Providers.Pairing.handle(glass(), Map.merge(args, holder)),
+               inspect(holder)
+      end
+
+      holder = %{"holder_kind" => "chip", "display_name" => "Laptop"}
+
+      assert {:ok, %{challenge: challenge}} =
+               Sanctum.Providers.Pairing.handle(glass(), Map.merge(args, holder))
+
+      {:ok, challenge} = Challenge.decode(challenge)
+
+      assert {:ok, %{client_id: client_id}} =
+               Sanctum.Providers.Pairing.handle(
+                 glass(),
+                 args |> Map.merge(holder) |> Map.put("proof", signed(challenge, private))
+               )
+
+      assert [%{id: ^client_id, holder_kind: "chip", display_name: "Laptop"}] = clients(user.id)
     end
 
     test "a correct code with no proof of the key submitted issues nothing", %{
@@ -879,13 +1042,20 @@ defmodule Sanctum.PairingTest do
       assert window(:device_verification_source, "10.3.0.3") == nil
     end
 
-    test "a code already used names no standing invitation: presenting it spends the address, never the person's budget",
+    test "a code used and expired names no standing invitation: presenting it spends the address, never the person's budget",
          %{session_ctx: session_ctx, user: user} do
       {:ok, invitation} = begin!(session_ctx)
       key = invitation.key
       {device_key, _} = key
       assert {:ok, %{client_id: _}} = complete(invitation.invitation_secret, key, "10.11.0.1")
       assert %{count: 2} = window(:device_verification_person, user.id)
+
+      Arca.Repo.update_all(
+        from(i in PairingInvitation,
+          where: i.secret_hash == ^Prima.Digest.sha256(invitation.invitation_secret)
+        ),
+        set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
 
       for n <- 1..20 do
         assert Pairing.complete(glass("10.11.1.#{n}"), invitation.invitation_secret, %{

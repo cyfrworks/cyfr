@@ -52,3 +52,36 @@ func qrModules(text string) ([][]bool, error) {
 	}
 	return m, nil
 }
+
+// QRText is text as a QR code drawn for a terminal: two module rows per
+// line in Unicode half blocks, light modules as the block and dark ones as
+// a space, so a dark-background terminal shows dark modules on light, with
+// the quiet zone around it.
+func QRText(text string) (string, error) {
+	m, err := qrModules(text)
+	if err != nil {
+		return "", err
+	}
+	size := len(m) + 2*quietZone
+	dark := func(x, y int) bool {
+		x, y = x-quietZone, y-quietZone
+		return y >= 0 && y < len(m) && x >= 0 && x < len(m) && m[y][x]
+	}
+	var out strings.Builder
+	for y := 0; y < size; y += 2 {
+		for x := range size {
+			switch top, bottom := !dark(x, y), y+1 >= size || !dark(x, y+1); {
+			case top && bottom:
+				out.WriteRune('█')
+			case top:
+				out.WriteRune('▀')
+			case bottom:
+				out.WriteRune('▄')
+			default:
+				out.WriteRune(' ')
+			}
+		}
+		out.WriteByte('\n')
+	}
+	return out.String(), nil
+}

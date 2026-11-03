@@ -49,6 +49,7 @@ defmodule Sanctum.NewcomerTest do
     IdentityAttempt,
     Invitation,
     Membership,
+    PairedClient,
     Passkey,
     PersonIdentity,
     RestorePerson,
@@ -129,9 +130,51 @@ defmodule Sanctum.NewcomerTest do
   defp enrollment(user_id),
     do: Arca.Repo.get_by!(IdentityAttempt, user_id: user_id, kind: "enrollment")
 
-  defp setup!(credential \\ {:command_line, "laptop", identity()}) do
+  # A protected device's enrollment for `identity`, as
+  # `Sanctum.DeviceUnlock` hands it to the admission once its proof
+  # verified: the athanor and client reserved for it (the person's own
+  # athanor `athanor_id` for a re-admission), its key and its holder.
+  defp device(identity, athanor_id \\ nil) do
+    {:device,
+     %{
+       athanor_id: athanor_id || Prima.UUID7.generate_id("ath"),
+       client_id: Prima.UUID7.generate_id("pcl"),
+       device_key: :crypto.strong_rand_bytes(32),
+       request_id: identity.request_id,
+       holder_kind: "chip",
+       display_name: "laptop",
+       user_id: nil
+     }, identity}
+  end
+
+  defp setup!(credential \\ device(identity())) do
     {:ok, admitted} = Newcomer.admit({:setup, @token}, credential)
     admitted
+  end
+
+  # The person setup made, who holds no method at this home's address: the
+  # device setup enrolled for them revoked since.
+  defp methodless!(identity \\ identity()) do
+    admitted = setup!(device(identity))
+    revoke_devices!(admitted.person.id)
+    admitted
+  end
+
+  defp revoke_devices!(user_id) do
+    for client <-
+          Arca.Repo.all(
+            from(c in PairedClient, where: c.user_id == ^user_id and c.standing == "active")
+          ) do
+      {:ok, _revoked} =
+        Arca.PairedClients.revoke(Prima.Actor.in_athanor(client.athanor_id), client.id)
+    end
+
+    :ok
+  end
+
+  defp own_athanor(user_id) do
+    {:ok, %{id: athanor_id}} = Athanors.get_by_owner(user_id)
+    athanor_id
   end
 
   defp identifier, do: "per_" <> Prima.Digest.sha256_hex("newcomer-#{System.unique_integer()}")
@@ -206,7 +249,7 @@ defmodule Sanctum.NewcomerTest do
       identity = identity("mira")
 
       assert {:ok, %{person: person, recovery: recovery}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity})
+               Newcomer.admit({:setup, @token}, device(identity))
 
       attempt = enrollment(person.id)
 
@@ -244,10 +287,13 @@ defmodule Sanctum.NewcomerTest do
 
     test "a re-admission with another secret answers the first attempt and its code" do
       first = identity("first")
-      %{person: person, recovery: recovery} = setup!({:command_line, "laptop", first})
+      %{person: person, recovery: recovery} = methodless!(first)
 
       assert {:ok, %{person: %{id: same}, readmitted: true, recovery: ^recovery}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity("second")})
+               Newcomer.admit(
+                 {:setup, @token},
+                 device(identity("second"), own_athanor(person.id))
+               )
 
       assert same == person.id
 
@@ -263,8 +309,10 @@ defmodule Sanctum.NewcomerTest do
           set: [phase: "completed", kit_seed_sealed: nil]
         )
 
+      revoke_devices!(person.id)
+
       assert {:ok, %{recovery: saved}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(person.id)))
 
       assert saved == Map.delete(recovery, :code)
     end
@@ -273,14 +321,18 @@ defmodule Sanctum.NewcomerTest do
       %{recovery_secret: secret} = valid = identity()
       registration = registration()
 
+      {:device, enrollment, _identity} = device(valid)
+
       for credential <- [
-            {:command_line, "laptop"},
+            {:device, enrollment},
             {:passkey, registration},
-            {:command_line, "laptop", nil},
+            {:device, enrollment, nil},
             {:passkey, registration, %{}},
-            {:command_line, "laptop", %{valid | name: "Not A Name"}},
-            {:command_line, "laptop", %{valid | recovery_secret: binary_part(secret, 0, 31)}},
-            {:command_line, "laptop", %{valid | request_id: "no spaces allowed"}}
+            {:device, enrollment, %{valid | name: "Not A Name"}},
+            {:device, enrollment, %{valid | recovery_secret: binary_part(secret, 0, 31)}},
+            {:device, enrollment, %{valid | request_id: "no spaces allowed"}},
+            # The command line's credential is gone: a shape no admission takes.
+            {:command_line, "laptop", valid}
           ] do
         assert {:error, {:invalid_argument, sentence}} =
                  Newcomer.admit({:setup, @token}, credential),
@@ -303,12 +355,12 @@ defmodule Sanctum.NewcomerTest do
                Newcomer.admit({:setup, @token}, {:passkey, %{"not" => "verified"}, identity()})
 
       assert {:error, :no_directory} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity()))
 
       Prima.Test.Env.put_app_env(:sanctum, :directory_url, "")
 
       assert {:error, :no_directory} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity()))
 
       refute_received :person_inserted
       assert people() == 0
@@ -345,25 +397,39 @@ defmodule Sanctum.NewcomerTest do
       assert attempts() == 2
     end
 
-    test "answers the same person again, with a new command-line session, while they hold no sign-in method" do
+    test "answers the same person again, with the device it brings and no session, while they hold no method" do
       first = setup!()
-      assert %{readmitted: false, session_token: token} = first
+      assert %{readmitted: false} = first
+      refute Map.has_key?(first, :session_token)
 
-      assert {:ok, %{person: again, readmitted: true, session_token: second}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+      # The device setup enrolled closes setup while it stands.
+      assert {:error, :setup_closed} =
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(first.person.id)))
 
+      revoke_devices!(first.person.id)
+
+      assert {:ok, %{person: again, readmitted: true} = admitted} =
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(first.person.id)))
+
+      refute Map.has_key?(admitted, :session_token)
       assert again.id == first.person.id
-      refute second == token
       assert people() == 1
       assert grants() == 1
       assert athanors(again.id) == 1
+      assert sessions(again.id) == []
 
-      assert [_, _] = both = sessions(again.id)
-      assert Enum.all?(both, &match?(%Session{cli_machine: "laptop", provider: "setup"}, &1))
+      assert ["active", "revoked"] =
+               Arca.Repo.all(
+                 from(c in PairedClient,
+                   where: c.user_id == ^again.id,
+                   order_by: c.standing,
+                   select: c.standing
+                 )
+               )
     end
 
     test "two setups: the second answers the first person, and once they hold a passkey the token opens nothing" do
-      %{person: first} = setup!()
+      %{person: first} = methodless!()
 
       assert {:ok, %{person: %{id: same}, readmitted: true}} =
                Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
@@ -374,18 +440,18 @@ defmodule Sanctum.NewcomerTest do
                Arca.Repo.all(from(p in Passkey, where: p.user_id == ^first.id))
 
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(first.id)))
 
       assert {:error, :setup_closed} =
                Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert people() == 1
       assert passkeys() == 1
-      assert length(sessions(first.id)) == 2
+      assert length(sessions(first.id)) == 1
     end
 
     test "opens nothing once the person links a sign-in method" do
-      %{person: first} = setup!()
+      %{person: first} = methodless!()
 
       {:ok, %{linked: true}} =
         Arca.Users.link_identity(Prima.Actor.system(), first.id, %{
@@ -396,21 +462,20 @@ defmodule Sanctum.NewcomerTest do
         })
 
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(first.id)))
 
-      assert length(sessions(first.id)) == 1
+      assert sessions(first.id) == []
     end
 
     test "the first-method mark alone, which a connected device sets, leaves it open" do
-      %{person: first} = setup!()
+      # The device setup enrolled set the mark; revoked, it is no method.
+      %{person: first} = methodless!()
 
-      # A pairing's completion sets the mark a first passkey sets
-      # (`Arca.PairingInvitations`), under the person's lock.
-      {:ok, :marked} =
-        Arca.Repo.transaction(fn -> Arca.PersonIdentities.first_method!(first.id) end)
+      assert %{first_method_at: %DateTime{}} =
+               Arca.Repo.get_by!(PersonIdentity, user_id: first.id)
 
       assert {:ok, %{person: %{id: same}, readmitted: true}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(first.id)))
 
       assert same == first.id
     end
@@ -445,7 +510,7 @@ defmodule Sanctum.NewcomerTest do
       assert {:error, :setup_closed} = Newcomer.setup_open(@token)
 
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(admin.id)))
 
       assert people() == 1
       assert grants() == 1
@@ -486,7 +551,7 @@ defmodule Sanctum.NewcomerTest do
       assert {:ok, {:readmit, "mira"}} = Newcomer.setup_open(@token)
 
       assert {:ok, %{person: %{id: same}, readmitted: true}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity(), own_athanor(admin.id)))
 
       assert same == admin.id
     end
@@ -495,14 +560,14 @@ defmodule Sanctum.NewcomerTest do
       assert {:error, :setup_closed} =
                Newcomer.admit(
                  {:setup, String.duplicate("0", 64)},
-                 {:command_line, "laptop", identity()}
+                 device(identity())
                )
 
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, "short"}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, "short"}, device(identity()))
 
       for credential <- [
-            {:command_line, "laptop", identity()},
+            device(identity()),
             {:passkey, registration(), identity()},
             :none
           ] do
@@ -512,7 +577,7 @@ defmodule Sanctum.NewcomerTest do
       Application.delete_env(:sanctum, :setup_token)
 
       assert {:error, :setup_closed} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity()))
 
       assert people() == 0
     end
@@ -524,8 +589,7 @@ defmodule Sanctum.NewcomerTest do
 
       # The person setup made, with no sign-in method yet, is answered
       # again, by the name their enrollment holds.
-      {:ok, _admitted} =
-        Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity("mira")})
+      _admitted = methodless!(identity("mira"))
 
       assert {:ok, {:readmit, "mira"}} = Newcomer.setup_open(@token)
 
@@ -559,7 +623,7 @@ defmodule Sanctum.NewcomerTest do
       {:ok, attempt} = Arca.IdentityAttempts.open(Prima.Actor.system(), restore)
 
       assert {:error, :restore_reserved} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, device(identity()))
 
       assert people() == 0
 
@@ -733,7 +797,7 @@ defmodule Sanctum.NewcomerTest do
       assert passkeys() == 1
     end
 
-    test "takes a passkey only" do
+    test "takes a passkey or a protected device, never another credential" do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
 
@@ -1007,10 +1071,11 @@ defmodule Sanctum.NewcomerTest do
       assert %{redeemed_by: nil} = invitation_row(id)
     end
 
-    test "takes a passkey only, and a code that is no code is :invitation_invalid", %{
-      issuer: issuer,
-      thread: thread
-    } do
+    test "takes a passkey or a protected device, never another credential, and a code that is no code is :invitation_invalid",
+         %{
+           issuer: issuer,
+           thread: thread
+         } do
       {_id, code} = invite!(issuer, thread.id)
 
       for credential <- [{:command_line, "laptop", identity()}, :none] do
@@ -1384,7 +1449,21 @@ defmodule Sanctum.NewcomerKilledTest do
       spawn(fn ->
         unboxed(fn ->
           Process.put(:newcomer_admitting, true)
-          Sanctum.Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+          identity = identity()
+
+          Sanctum.Newcomer.admit(
+            {:setup, @token},
+            {:device,
+             %{
+               athanor_id: Prima.UUID7.generate_id("ath"),
+               client_id: Prima.UUID7.generate_id("pcl"),
+               device_key: :crypto.strong_rand_bytes(32),
+               request_id: identity.request_id,
+               holder_kind: "chip",
+               display_name: "laptop",
+               user_id: nil
+             }, identity}
+          )
         end)
       end)
 

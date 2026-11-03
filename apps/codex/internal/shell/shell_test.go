@@ -322,9 +322,10 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 // bound, the channel ends as unreachable, and the lock page says so, not
 // that the screen idled.
 func TestChannel_ASilentlyDroppedConnectionLocksTheBox(t *testing.T) {
-	oldEvery, oldWithin := reportEvery, heardWithin
-	reportEvery, heardWithin = 200*time.Millisecond, 300*time.Millisecond
-	t.Cleanup(func() { reportEvery, heardWithin = oldEvery, oldWithin })
+	oldEvery, oldWithin := reportEvery.Get(), heardWithin.Get()
+	reportEvery.Set(200 * time.Millisecond)
+	heardWithin.Set(300 * time.Millisecond)
+	t.Cleanup(func() { reportEvery.Set(oldEvery); heardWithin.Set(oldWithin) })
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 	setUpAndOpen(t, home, b)

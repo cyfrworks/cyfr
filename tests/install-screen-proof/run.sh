@@ -17,8 +17,8 @@
 # guest's keyboard through QMP and reading what the box holds over SSH: the
 # recovery code, I saved it, Prism; the lock after five minutes without
 # input, a wrong PIN, the unlock; Prism's Lock; a change Prism confirms on
-# this device (a command line's sign-in, cyfr login), cancelled first, then
-# a wrong PIN, then the PIN again, and the command line signed in; the
+# this device (another device's addition, its approve address), cancelled
+# first, then a wrong PIN, then the PIN again, and the addition opened; the
 # shell killed; its connection to CYFR severed past 60 s while a Prism page
 # stays open; and Chrome's profile, copied while unlocked, put back before
 # a reboot. After each lock, kill, cut and reboot the session cookie
@@ -349,36 +349,37 @@ screen_signed_in() {
   screen_copied_profile
 }
 
-# A sensitive change confirmed on this screen: the sign-in of a command
-# line on this box (cyfr login), whose approval in Prism needs a fresh
-# confirmation. Prism's Confirm on this device opens the shell's own page,
-# which draws the change CYFR holds; its Cancel signs nothing, a wrong PIN
-# confirms nothing, and the PIN again confirms it, after which Prism
-# approves the change and the command line is signed in. The home's record
+# A sensitive change confirmed on this screen: the addition of another
+# device of the person's, the address a new device's QR code opens
+# (<home>/devices/add#key=<digest>, tests/fixtures/device_unlock.json
+# exchange.pairing.approve_url), for a key made here for it. Its pairing
+# fills the key's code in Devices, Pair a device asks for it, and it
+# needs a fresh confirmation: Prism's Confirm on this device opens the
+# shell's own page, which draws the change CYFR holds, with the key's
+# digest or its code; its Cancel signs nothing, a wrong PIN confirms nothing, and the
+# PIN again confirms it, after which the pairing opens. The home's record
 # of the confirmation (its database, read as root) says which client gave
 # it.
 screen_confirms() {
-  local link ref client closes
-  step "a sensitive change confirmed on this screen: cyfr login approved in Prism"
-  guest_ssh 'cd ~/cyfr && rm -f ~/login.log && setsid -f sh -c "~/.local/bin/cyfr login >~/login.log 2>&1; echo \"login exit status \$?\" >>~/login.log" </dev/null >/dev/null 2>&1' ||
-    fail "cyfr login did not start"
-  budget 30 || fail "the case's deadline came before cyfr login printed its link"
-  closes=$((SECONDS + BUDGET))
-  until guest_ssh 'grep -qE "https?://[^ ]+/cli#" ~/login.log' || [ "$SECONDS" -ge "$closes" ]; do sleep 1; done
-  guest_ssh 'cat ~/login.log' >"$GUEST_DIR/login-asked.txt" 2>&1
-  link=$(grep -oE 'https?://[^ ]+/cli#[^ ]+' "$GUEST_DIR/login-asked.txt" | head -n 1)
-  check "cyfr login prints the link that approves it in Prism" test -n "$link"
-  [ -n "$link" ] || return 0
-  screen_open "$link" || fail "the screen's Chrome did not take the link"
+  local address digest ref client
+  step "a sensitive change confirmed on this screen: another device added through Prism"
+  # The box is reached from this machine (local access), at the address
+  # its screen's Chrome holds Prism under.
+  address="http://localhost:4000"
+  digest=$(python3 -I -c 'import base64, hashlib, os; print(base64.urlsafe_b64encode(hashlib.sha256(os.urandom(32)).digest()).decode().rstrip("="))')
+  screen_open "$address/devices/add#key=$digest" || fail "the screen's Chrome did not take the approve address"
   sleep 8
-  check "screenshot screen-cli.png" guest_screenshot screen-cli.png
-  screen_find approve last && printf '\n' | guest_keys || fail "QMP did not press Approve"
+  check "screenshot screen-add.png" guest_screenshot screen-add.png
+  # The page fills the key's code in Devices; nothing begins until the
+  # person asks.
+  screen_find 'pair a device' last && printf '\n' | guest_keys || fail "QMP did not press Pair a device"
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   shell_page_until confirm-drawn 'Confirm on this screen' 20
-  check "Confirm on this device opened the screen's own page, which draws the command line's approval CYFR holds" \
-    sh -c 'grep -q "Confirm on this screen" "$1" && grep -q cli_approve "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
+  check "Confirm on this device opened the screen's own page, which draws the addition CYFR holds, for the key's digest" \
+    sh -c 'grep -q "Confirm on this screen" "$1" && grep -q pairing.begin "$1" && grep -qF -e "$2" -e "$3" "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html" \
+    "$digest" "$(printf '%s' "$digest" | sed 's/..../& /g; s/ $//')"
   check "screenshot screen-confirm-drawn.png" guest_screenshot screen-confirm-drawn.png
   ref=$(sed -n 's/.*name="ref" value="\([^"]*\)".*/\1/p' "$GUEST_DIR/shell-confirm-drawn.html" | head -n 1)
   [ -n "$ref" ] || return 0
@@ -392,7 +393,6 @@ screen_confirms() {
   confirmation_state cancelled "$ref"
   check "the home holds the change still pending, confirmed by no client" \
     json_is "$GUEST_DIR/confirmation-cancelled.json" '{"state": "pending", "confirmed_client_id": null, "proof": null}'
-  check "the command line still waits" guest_ssh '! grep -q "^Signed in" ~/login.log'
 
   step "a wrong PIN, then the PIN again, confirm it on this screen"
   # Back to Prism's tab, which still asks.
@@ -400,7 +400,7 @@ screen_confirms() {
   sleep 2
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   shell_page_until confirm-again 'Confirm on this screen' 20
-  check "Confirm on this device draws it again" grep -q cli_approve "$GUEST_DIR/shell-confirm-again.html"
+  check "Confirm on this device draws it again" grep -q pairing.begin "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
   sleep 6
   shell_page confirm-wrong
@@ -413,15 +413,11 @@ screen_confirms() {
   shell_page confirmed
   check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this screen' "$GUEST_DIR/shell-confirmed.html"
   check "screenshot screen-confirmed.png" guest_screenshot screen-confirmed.png
-  budget 60 || BUDGET=0
-  closes=$((SECONDS + BUDGET))
-  until guest_ssh 'grep -q "^login exit status" ~/login.log' || [ "$SECONDS" -ge "$closes" ]; do sleep 2; done
-  guest_ssh 'cat ~/login.log' >"$GUEST_DIR/login-done.txt" 2>&1
-  check "Prism approved it once confirmed: cyfr login signed in and exited 0" \
-    sh -c 'grep -q "^Signed in" "$1" && grep -qx "login exit status 0" "$1"' sh "$GUEST_DIR/login-done.txt"
+  sleep 6
+  check "screenshot screen-added.png" guest_screenshot screen-added.png
   confirmation_state confirmed "$ref"
   client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/cyfr/.cyfr/screen/holder.json")
-  check "the home records it confirmed by this screen's own client ($client) and consumed by the change" \
+  check "the home records it confirmed by this screen's own client ($client) and consumed by the addition" \
     json_is "$GUEST_DIR/confirmation-confirmed.json" "{\"state\": \"consumed\", \"confirmed_client_id\": \"$client\"}"
 }
 

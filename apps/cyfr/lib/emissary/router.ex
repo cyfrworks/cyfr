@@ -187,8 +187,8 @@ defmodule Emissary.Router do
       end
 
       # A protected device's enrollment (`Emissary.Web.DeviceEnrollmentController`):
-      # JSON, no CSRF token, since the setup token and the restore token
-      # travel in headers no cross-site form can set and no CORS answer
+      # JSON, no CSRF token, since the setup token, an invitation's code and
+      # the restore token travel in headers no cross-site form can set and no CORS answer
       # admits; the cookie session is fetched only to read a restore's own
       # session, whose first-method window enrolls the restored person's
       # first device. An entry path, so the routes record their own
@@ -202,6 +202,22 @@ defmodule Emissary.Router do
 
         plug CyfrWeb.Plugs.AuthRateLimit,
           bucket: :device_enrollment,
+          max_requests: 30,
+          window_ms: 60_000
+      end
+
+      # A protected command line's session (`Emissary.Web.DeviceSessionController`):
+      # JSON, no session fetched and no CSRF token, since no cookie is read
+      # or set; the one-time ticket the device's channel was answered is the
+      # whole credential. An entry path, metered per address.
+      pipeline :device_session do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "device"
+        plug :accepts, ["json"]
+        plug CyfrWeb.Plugs.ApiSecurityHeaders
+        plug CyfrWeb.Plugs.FrameRequest
+
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :device_session,
           max_requests: 30,
           window_ms: 60_000
       end
@@ -391,8 +407,9 @@ defmodule Emissary.Router do
       # restored from a backup, the proof a recovering person's recovery code
       # signs (the `/kit` routes keep their path) and the re-enables it admits. Its body is
       # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
-      # A protected device's enrollment at setup or after a restore, and
-      # the resume of one whose answer was lost.
+      # A protected device's enrollment at setup, under an invitation, by the
+      # open admission or after a restore, and the resume of one whose answer
+      # was lost.
       scope "/device/enrollment", Emissary.Web do
         pipe_through :device_enrollment
 
@@ -403,6 +420,14 @@ defmodule Emissary.Router do
           metadata: %{auth: :device_enrollment}
 
         post "/resume", DeviceEnrollmentController, :resume, metadata: %{auth: :device_enrollment}
+      end
+
+      # A protected command line spends its unlock's ticket for its session.
+      scope "/device", Emissary.Web do
+        pipe_through :device_session
+
+        post "/session", DeviceSessionController, :create,
+          metadata: %{auth: :device_unlock_ticket}
       end
 
       scope "/restore", Emissary.Web do

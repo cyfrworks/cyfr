@@ -435,15 +435,14 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert input["recovery_phase"] == "add"
     end
 
-    test "session.setup's input is stored with the recovery secret redacted", %{ctx: ctx} do
-      decision = decision(ctx, tool: "session", action: "setup")
+    test "a recovery secret a call's input carries is stored redacted", %{ctx: ctx} do
+      decision = decision(ctx, tool: "person", action: "recovery_code_add")
       secret = seed()
 
       :ok =
         Decisions.open(ctx, decision, %{
           input: %{
-            "action" => "setup",
-            "machine" => "laptop",
+            "action" => "recovery_code_add",
             "name" => "mira",
             "recovery_secret" => secret,
             "request_id" => "req_setup"
@@ -459,15 +458,14 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert input["request_id"] == "req_setup"
     end
 
-    test "the code session.setup answers is stored redacted, in the MCP text block and the structured content",
+    test "a recovery code an answer carries is stored redacted, in the MCP text block and the structured content",
          %{ctx: ctx} do
       identifier = "per_" <> String.duplicate("d", 64)
       code = recovery_code(identifier)
 
-      # What `session.setup` answers, as the MCP router encodes a result:
-      # the JSON text of the structured value, and the value itself.
+      # An answer naming a person's enrollment, as the MCP router encodes a
+      # result: the JSON text of the structured value, and the value itself.
       answer = %{
-        session_token: "cyfr_session_x",
         user_id: "per_x",
         readmitted: false,
         recovery: %{attempt_id: "iat_x", identifier: identifier, name: "mira", code: code}

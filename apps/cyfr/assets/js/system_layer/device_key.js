@@ -284,6 +284,16 @@ export function codeFromFragment(hash) {
   return code && /^[A-Za-z0-9_-]{22}$/.test(code) ? code : null
 }
 
+/**
+ * The key digest a new device's QR code carries in its fragment's `key`
+ * (`/devices/add#key=<digest>`): unpadded base64url of 32 bytes, or null.
+ */
+export function keyDigestFromFragment(hash) {
+  const fragment = (hash || "").replace(/^#/, "")
+  const digest = new URLSearchParams(fragment).get("key")
+  return digest && /^[A-Za-z0-9_-]{43}$/.test(digest) ? digest : null
+}
+
 // ---------------------------------------------------------------------------
 // A device certified at another home
 // ---------------------------------------------------------------------------
@@ -593,8 +603,6 @@ export function askerName(asker) {
       return "this CYFR"
     case "session":
       return `a browser signed in${asker.name ? ` with ${asker.name}` : ""}`
-    case "command_line":
-      return `the command line${asker.name ? ` on ${asker.name}` : ""}`
     default:
       return "a client of yours"
   }

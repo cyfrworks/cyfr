@@ -57,7 +57,7 @@ defmodule Sanctum.AdmissionCapacityTest do
   # The administrator, and the door open to anyone.
   defp set_up! do
     {:ok, %{person: admin}} =
-      Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+      Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
     {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
     admin
@@ -105,7 +105,7 @@ defmodule Sanctum.AdmissionCapacityTest do
 
     capture_log(fn ->
       assert {:ok, %{person: admin}} =
-               Newcomer.admit({:setup, @token}, {:command_line, "laptop", identity()})
+               Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert {:ok, own} = Athanors.get_by_owner(admin.id)
       assert Members.member?(admin.id, own.id)

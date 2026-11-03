@@ -253,7 +253,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_SESSION_SALT",
      "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_SETUP_TOKEN",
-     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and `cyfr setup` write into `.env` and nothing removes. It admits the installation's first person, its administrator, under the name they type, through the setup link (`/setup#<token>`), `cyfr login --setup` or the box's own screen, and signs that person in again until they hold a passkey or a device at this CYFR's current address, or a linked sign-in method; unset, setup opens nothing. It also lets the box's screen recover a lost enrollment answer by proving the key it enrolled. A malformed value refuses the boot, which never prints it."},
+     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and `cyfr setup` write into `.env` and nothing removes. It admits the installation's first person, its administrator, under the name they type, through the setup link (`/setup#<token>`), `cyfr login --setup` or the box's own screen, and signs that person in again until they hold a passkey or a device at this CYFR's current address, or a linked sign-in method; unset, setup opens nothing. It also lets the box's screen or the command line recover a lost enrollment answer by proving the key it enrolled. A malformed value refuses the boot, which never prints it."},
     {"CYFR_STORAGE",
      "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
     {"CYFR_STORAGE_RESERVE_BYTES",

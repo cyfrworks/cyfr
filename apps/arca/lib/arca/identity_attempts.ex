@@ -430,6 +430,31 @@ defmodule Arca.IdentityAttempts do
   end
 
   @doc """
+  Whether a restore brought the person `user_id` back here: a restore
+  attempt of theirs reached `minted` or `completed`. What a protected
+  device's enrollment under a restore's session is resumed by
+  (`Sanctum.DeviceUnlock`). Read-only.
+  """
+  @spec restored?(Prima.Actor.t(), String.t()) ::
+          {:ok, boolean()} | {:error, :cross_tenant | :database_error}
+  def restored?(%Prima.Actor{} = actor, user_id) when is_binary(user_id) do
+    if person?(actor, user_id) do
+      Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.restored?", fn ->
+        {:ok,
+         Arca.Repo.exists?(
+           from(a in IdentityAttempt,
+             where:
+               a.user_id == ^user_id and a.kind == "restore" and
+                 a.phase in ["minted", "completed"]
+           )
+         )}
+      end)
+    else
+      {:error, :cross_tenant}
+    end
+  end
+
+  @doc """
   Hold a single-use first-method reproof challenge on a completed restore:
   the digest of a fresh server challenge and its expiry, an instant on
   the database's clock (`Arca.ServerMetaStorage.now!/0`), which is the

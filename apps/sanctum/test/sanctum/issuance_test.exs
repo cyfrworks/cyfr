@@ -1374,15 +1374,24 @@ defmodule Sanctum.IssuanceTest do
 
       # The request is held once its certificate was verified against the
       # head (`remote_subject/3`) and as its paired client is read; the head
-      # moves there, through `Arca.DirectoryHeads.advance/4`.
-      first_client_read = fn
-        [:arca, :repo, :query], %{source: "paired_clients"} -> true
-        _event, _metadata -> false
+      # moves there, through `Arca.DirectoryHeads.advance/4`. The client's
+      # standing is read once before the certificate is checked
+      # (`Sanctum.DeviceCerts`), so the read after the verification is the
+      # second.
+      reads = :counters.new(1, [])
+
+      client_read_after_verification = fn
+        [:arca, :repo, :query], %{source: "paired_clients"} ->
+          :counters.add(reads, 1, 1)
+          :counters.get(reads, 1) == 2
+
+        _event, _metadata ->
+          false
       end
 
       result =
         in_window(
-          first_client_read,
+          client_read_after_verification,
           fn ->
             {:ok, verified} = DeviceCerts.verify_request(device.certificate, ctx)
             mint(verified)

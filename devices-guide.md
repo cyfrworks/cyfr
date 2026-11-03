@@ -1,6 +1,6 @@
 # Devices and Fresh Confirmation
 
-How a CYFR box sets itself up and unlocks on its own screen, how a person pairs a phone or another browser with CYFR, how that device stays connected, how a command line is signed in by their approval, and how a sensitive change is confirmed from any device of theirs. A paired device shows CYFR's pages and prompts and holds a key of its own; it holds no store, vault or person key.
+How a CYFR box sets itself up and unlocks on its own screen, how a person pairs a phone or another browser with CYFR, how that device stays connected, how a command line on a Linux machine or Pi becomes one of their devices, and how a sensitive change is confirmed from any device of theirs. A paired device shows CYFR's pages and prompts and holds a key of its own; it holds no store, vault or person key.
 
 ---
 
@@ -39,10 +39,10 @@ A key unlocked in memory is the limit of this protection: malware running on an 
 
 ## Pairing a Device
 
-1. On the new device, open `https://<host>/pair`. The page makes the device's key pair first, before anything is asked of CYFR. Its private key cannot be exported, and the browser keeps it across reloads. The page shows the key's code, its digest in groups of four characters, with a QR code of it.
-2. On a device of yours signed in to this CYFR, open **Devices** in the shell. The prompt lists the devices you paired in this athanor, each with when it was paired and when its certificate renews.
-3. Type the new device's code, with or without its spaces, and choose **Pair a device**. Pairing is a sensitive change, so it waits for a fresh confirmation (above), whose preview names the code: check it is the one the new device shows. Once confirmed, the prompt shows a QR code and the link `https://<host>/pair#code=<secret>`, the code it is for, and when it expires. `cyfr pair <code>` does the same from the command line and prints the link.
-4. Open the link on the new device, in the browser that showed the code, by scanning the QR code or typing the link. The secret is in the link's fragment, which a browser never sends to a server; the `/pair` page reads it and removes it from the address at once. The page sends this CYFR the secret, the device's public key and its digest, signs the challenge CYFR answers with, and receives the device's client id and first certificate. It then connects the device channel under that certificate.
+1. On the new device, open `https://<host>/pair` in a browser, or run `cyfr login` on a command line (below). It makes the device's key pair first, before anything is asked of CYFR; a browser's private key cannot be exported, and the browser keeps it across reloads. It shows the key's code, its digest in groups of four characters, and a QR code of `https://<host>/devices/add#key=<digest>`.
+2. Scan that QR code with the camera of a device of yours signed in to this CYFR: it opens **Add a device**, which opens **Devices** with the code filled in. On a device without a camera, open **Devices** in the shell and type or paste the code, with or without its spaces. The prompt lists the devices you paired in this athanor, each with when it was paired, what holds its key and when its certificate renews.
+3. Check that the code is the one the new device shows and choose **Pair a device**. Pairing is a sensitive change, so it waits for a fresh confirmation (above), whose preview names the code again. Once confirmed, the prompt shows a QR code and the link `https://<host>/pair#code=<secret>`, the code it is for, and when it expires. `cyfr pair <code>` does the same from the command line and prints the link.
+4. Give the link to the new device: a browser scans the QR code or opens the link, and a command line takes the link pasted. The secret is in the link's fragment, which a browser never sends to a server; the `/pair` page reads it and removes it from the address at once. The device sends this CYFR the secret, its public key and its digest, signs the challenge CYFR answers with, and receives its client id and first certificate; a command line also reports what holds its key and its name. It then connects the device channel under that certificate.
 
 The `/pair` page reads no session: a sign-in cookie the browser still holds, even another person's, does not choose who the device belongs to. The invitation does.
 
@@ -52,7 +52,7 @@ A browser that already holds a paired device asks before a pairing link replaces
 
 The link pairs only the device whose code you approved: the invitation names the digest of that device's key, and CYFR refuses every other key, even one that proves itself, before it issues anything. A link opened in another browser, or after the device made a new key, is refused with that reason; approve the code it shows now. The link's secret is 128 random bits, lives five minutes, is stored only as a hash, and is used once. The passkey or paired device that confirmed the pairing must still stand when the device completes it; one revoked meanwhile leaves the link unusable. A link that was already used, or has expired, is refused with that reason; show a new one.
 
-If the browser closes after CYFR paired the device but before the answer arrived, the device was paired once and holds no certificate. The same link then answers that the code was already used: show a new code, and revoke the unused device from the list.
+If the answer is lost after CYFR paired the device, the device was paired once. Within the link's five minutes the same device asks again with the same link and is answered that pairing; past them, show a new code and revoke the unused device from the list.
 
 ---
 
@@ -64,6 +64,7 @@ A device certificate names the device's key, its client, the CYFR and athanor, a
 - **Expiry is strict** on this CYFR's clock. `clock_skew_seconds` applies only to a certificate's not-before time and never extends its life. The channel closes at the instant the certificate expires unrenewed.
 - **Sleep.** A device that wakes, or reconnects, with an expired certificate renews before it sends anything else. Nothing else is sent until CYFR answers that the device stands.
 - **Streams.** A connected device listens for your confirmations. When this CYFR cannot check the device's standing in time to pass on a change, or the device falls behind, the stream ends and the device opens it again and reads what is waiting.
+- **A new address.** A certificate names this CYFR's address. After the CYFR moves to a new address, a device paired at the old one is not recognised there: pair it again at the current address, and revoke the old entry. The box's own screen enrolls again through the setup link.
 - **Rotation.** After your live key rotates, existing certificates no longer verify. The device reconnects and renews with the key it stored: CYFR challenges that key afresh, checks the paired device still stands, and issues a replacement. The old certificate only says which device is asking; it authorizes nothing. An installation restored without the device's record needs the device paired again.
 - **Revocation.** Revoking a device from **Devices** needs a fresh confirmation. The device's channel closes at its next request, or within 30 seconds; every stream it holds ends first, and it is told its pairing ended. A renewal never revives a revoked device.
 
@@ -71,28 +72,24 @@ Revocation erases nothing already shown on the device. Until revocation or expir
 
 ---
 
-## Signing In a Command Line
+## The Command Line
 
-`cyfr login` signs the command line in by your approval in Prism.
+`cyfr login` makes the command line on a Linux machine or a Pi one of your devices, as the box's own screen is. Nothing approves it from elsewhere.
 
-1. The command line asks this CYFR for a sign-in, prints a link, `https://<host>/cli#code=<secret>`, and a code of eight characters, and waits. The secret is in the link's fragment, which a browser never sends to a server; the `/cli` page reads it and removes it from the address at once.
-2. Open the link in a browser signed in to this CYFR, on the same machine or another device. Prism asks you to approve the command line on the machine it names and shows the code. Approve only if it is the code your terminal shows: a link someone else sent you shows theirs.
-3. Approving issues a session that outlives the one you approve from, so it is a sensitive change (above), confirmed with your passkey, a fresh sign-in or on a device you paired, and its preview names the machine and the code again.
-4. The command line receives its own session, saves it under the context it used (`--context`, or the current one), and says who signed in. It acts as you, in the athanor shown in the approval preview, until you revoke it or it has gone `session_ttl_hours` without use (30 days by default).
+1. On a machine this context has not paired, it makes the device's key and keeps it before it asks CYFR anything: sealed under a six-digit PIN in the machine's TPM where it has one, otherwise wrapped under a six-word passphrase it generates, entered twice. Six digits alone never protect a key on disk. It shows the key's code and its QR code.
+2. Pair it from a device of yours (above) and paste the pairing link that device shows. A person new to this CYFR brings an invitation link instead, or, where this CYFR admits everyone, joins by the open admission; a headless CYFR's first person runs `cyfr login --setup` (see the [identity guide](identity-guide.md)). The command line is then their first device.
+3. From then on `cyfr login` asks for the PIN or passphrase, unlocks the key and starts your shell with a session of its own, which it keeps in memory and never writes to disk. The session lasts while that shell runs: its device channel keeps it, and leaving the shell, closing the terminal or losing the connection ends it within a minute. Locking, or revoking the device under **Devices**, ends it at once.
+4. A change that needs a fresh confirmation can be confirmed in the terminal: it shows the change as CYFR stored it and asks for the PIN or passphrase again before it signs. You can confirm it on any other device of yours instead.
 
-The link signs in once and lives five minutes. A link already used, expired, or one the command line stopped waiting for is refused with that reason: run `cyfr login` again. Not signed in to Prism, you are sent to sign in first; then open the link again, while the command line still waits. Ctrl-C, or the link's expiry, withdraws the sign-in, so an approval after that signs nothing in and one that landed first is ended. A command line killed outright leaves its sign-in to expire, and a session an approval gave it meanwhile is held by no one: revoke it under **Devices**.
+`cyfr open` opens Prism in your browser through the shell's own one-time unlock ticket, as the box's screen does: no session is copied from the command line to the browser.
 
-**Devices** lists every command line signed in as you, by the machine it named and when it signed in, `cyfr login --provider` sign-ins included. Revoking one needs only your session and ends it; `cyfr logout` ends the command line's own. When the command line needs you to confirm something, it tells you to confirm on your screen, where the request names it as the command line on its machine.
-
-On a machine where no one can approve it in Prism, `cyfr login --provider github` (or `google`) signs in with the provider's device flow instead.
-
-`cyfr open` opens Aqua in your browser and nothing more. No session travels from the command line to a browser: a link that signed a browser in would be your session in the hands of whoever held it. Sign in there as you always do.
+`cyfr login` is the command line's only sign-in: GitHub and Google sign a browser in, never the command line, and a session token saved in an older context opens nothing, so run `cyfr login` again. Unattended work, a CI job or a container, uses an API key (`cyfr --token`, see the README).
 
 ---
 
 ## Fresh Confirmation
 
-Using what was granted, making a grant and answering an agent's approval need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person: entering or rotating a credential, widening where a credential may go or what a component may read of it (narrowing needs only your session), sharing a key or widening who it is shared with, issuing or rotating a credential that outlives the session (an API key, a webhook secret, registry push tokens, which `cyfr registry sync` and verifying a publisher namespace mint, or a command line's session), pairing a device, revoking one, recovery material, rotating your live key, a remote sign-in assertion, linking or unlinking a sign-in method, and registering or removing a passkey.
+Using what was granted, making a grant and answering an agent's approval need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person: entering or rotating a credential, widening where a credential may go or what a component may read of it (narrowing needs only your session), sharing a key or widening who it is shared with, issuing or rotating a credential that outlives the session (an API key, a webhook secret, registry push tokens, which `cyfr registry sync` and verifying a publisher namespace mint), pairing a device, revoking one, recovery material, rotating your live key, a remote sign-in assertion, linking or unlinking a sign-in method, and registering or removing a passkey.
 
 Asking for one opens a pending confirmation of that exact change, shown with a preview CYFR stores: the change, what it concerns, the athanor and the CYFR. It lives `confirmation_seconds` (five minutes by default). The client that asked holds a secret for it that no other client sees, and only that client completes the change; every other client names the request by its public ref.
 

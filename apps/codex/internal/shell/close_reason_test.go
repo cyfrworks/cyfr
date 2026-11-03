@@ -16,9 +16,10 @@ import (
 )
 
 func TestReview_LiveIdleChannelAnswersBothPeersPings(t *testing.T) {
-	oldEvery, oldWithin := reportEvery, heardWithin
-	reportEvery, heardWithin = 30*time.Millisecond, 300*time.Millisecond
-	t.Cleanup(func() { reportEvery, heardWithin = oldEvery, oldWithin })
+	oldEvery, oldWithin := reportEvery.Get(), heardWithin.Get()
+	reportEvery.Set(30 * time.Millisecond)
+	heardWithin.Set(300 * time.Millisecond)
+	t.Cleanup(func() { reportEvery.Set(oldEvery); heardWithin.Set(oldWithin) })
 	home := newFakeHome(t)
 	b := newBox(t, home, t.TempDir())
 	setUpAndOpen(t, home, b)
@@ -52,9 +53,10 @@ func TestReview_LiveIdleChannelAnswersBothPeersPings(t *testing.T) {
 }
 
 func TestReview_CloseDuringReportPreservesReason(t *testing.T) {
-	oldEvery, oldWithin := reportEvery, heardWithin
-	reportEvery, heardWithin = time.Millisecond, time.Second
-	t.Cleanup(func() { reportEvery, heardWithin = oldEvery, oldWithin })
+	oldEvery, oldWithin := reportEvery.Get(), heardWithin.Get()
+	reportEvery.Set(time.Millisecond)
+	heardWithin.Set(time.Second)
+	t.Cleanup(func() { reportEvery.Set(oldEvery); heardWithin.Set(oldWithin) })
 	for _, tc := range []struct {
 		name string
 		code websocket.StatusCode

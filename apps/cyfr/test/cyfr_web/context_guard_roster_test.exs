@@ -24,7 +24,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     RootRedirectLive ChatRedirectLive ChatLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
     MyReportsLive BuildsLive VaultLive ApiKeysLive WebhooksLive
-    SchedulesLive SettingsLive McpServersLive ShellLive LegalLive CarryLive CliLive
+    SchedulesLive SettingsLive McpServersLive ShellLive LegalLive CarryLive DeviceAddLive
   )
 
   # The sign-in page, the pairing page, the restore page and the

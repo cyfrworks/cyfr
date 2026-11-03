@@ -143,88 +143,9 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     end
   end
 
-  describe "wire/1 — the CLI poll contract" do
-    # `cyfr login` (apps/codex/cmd/login.go) reads these exact keys; every
-    # change here is a cross-language wire change and must be deliberate.
-    @user %{id: "u1", email: "u@example.com", name: "U"}
-
-    test "a signed-in result is its status, user and session token, and nothing else" do
-      assert DeviceFlow.wire(%{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               extra: :dropped
-             }) == %{status: "complete", user: @user, session_token: "tok"}
-    end
-
-    test "every other status passes through untouched" do
-      for passthrough <- [
-            %{status: "pending"},
-            %{status: "pending", slow_down: true},
-            %{status: "denied"},
-            %{status: "expired"},
-            %{status: "error", message: "m"}
-          ] do
-        assert DeviceFlow.wire(passthrough) == passthrough
-      end
-    end
-  end
-
-  defmodule IpRecordingDeviceFlow do
-    # Records the address it was handed, the way `PrismWeb.LoginLiveTest`'s
-    # fake does for the console surface.
-    def init_device_flow(_provider, client_ip) do
-      Application.put_env(:sanctum, :device_flow_last_ip, client_ip)
-
-      {:ok,
-       %{
-         device_code: "dev-code",
-         user_code: "WXYZ-1234",
-         verification_uri: "https://github.com/login/device",
-         expires_in: 900,
-         interval: 60
-       }}
-    end
-  end
-
-  describe "the MCP surface charges an address too" do
-    # Device initialization needs its own per-address budget on every surface.
-    test "session.device_init charges the context's client_ip" do
-      ctx = %{Sanctum.TestContext.local() | client_ip: "203.0.113.9", authenticated: false}
-
-      prev_flow = Application.get_env(:sanctum, :device_flow)
-      prev_client = Application.fetch_env(:sanctum, :github_client_id)
-
-      on_exit(fn ->
-        if prev_flow,
-          do: Application.put_env(:sanctum, :device_flow, prev_flow),
-          else: Application.delete_env(:sanctum, :device_flow)
-
-        case prev_client do
-          {:ok, id} -> Application.put_env(:sanctum, :github_client_id, id)
-          :error -> Application.delete_env(:sanctum, :github_client_id)
-        end
-
-        Application.delete_env(:sanctum, :device_flow_last_ip)
-      end)
-
-      Application.put_env(:sanctum, :device_flow, IpRecordingDeviceFlow)
-      # The device flow is offered once GitHub is configured.
-      Application.put_env(:sanctum, :github_client_id, "charged-client")
-      Application.delete_env(:sanctum, :device_flow_last_ip)
-
-      Sanctum.Providers.Session.handle(ctx, %{"action" => "device_init", "provider" => "github"})
-
-      assert Application.get_env(:sanctum, :device_flow_last_ip) == "203.0.113.9",
-             "the MCP device flow was charged no address"
-    end
-  end
-
   describe "a device sign-in over its init budget" do
-    test "is told to wait, as a typed rate limit, on the MCP surface too" do
+    test "is told to wait, as a typed rate limit" do
       ip = "198.51.100.77"
-      ctx = %{Sanctum.TestContext.local() | client_ip: ip, authenticated: false}
-      prev_flow = Application.get_env(:sanctum, :device_flow)
       prev_client = Application.fetch_env(:sanctum, :github_client_id)
 
       on_exit(fn ->
@@ -234,35 +155,17 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           {:ok, id} -> Application.put_env(:sanctum, :github_client_id, id)
           :error -> Application.delete_env(:sanctum, :github_client_id)
         end
-
-        if prev_flow,
-          do: Application.put_env(:sanctum, :device_flow, prev_flow),
-          else: Application.delete_env(:sanctum, :device_flow)
       end)
 
       Prima.Test.RateLimiter.reset!()
-      Application.delete_env(:sanctum, :device_flow)
       # No client id, so an admitted init stops at the configuration and
       # never reaches a provider.
       Application.delete_env(:sanctum, :github_client_id)
 
       # Spend this address's init budget, whatever its number is.
       outcomes = for _ <- 1..200, do: DeviceFlow.init_device_flow("github", ip)
-      assert {:error, {:rate_limited, retry_after_s}} = List.last(outcomes)
+      assert {:error, {:rate_limited, retry_after_s} = limited} = List.last(outcomes)
       assert retry_after_s > 0
-
-      # GitHub configured, so the session tool offers the device flow; the
-      # spent budget answers before any provider is reached.
-      Application.put_env(:sanctum, :github_client_id, "budget-client")
-
-      # The wait is read again, so it may have ticked down a second.
-      assert {:error, {:rate_limited, wait_s} = limited} =
-               Sanctum.Providers.Session.handle(ctx, %{
-                 "action" => "device_init",
-                 "provider" => "github"
-               })
-
-      assert wait_s > 0 and wait_s <= retry_after_s
       assert %Prima.Refusal{class: :rate_limited} = Prima.Refusal.classify(limited)
     end
   end
@@ -545,7 +448,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
         end)
 
       assert {:ok, %{status: "error", message: message} = refused} = answer
-      assert message =~ "cyfr login"
+      assert message =~ "Sign in again"
       refute Map.has_key?(refused, :session_token)
       refute log =~ "session create failed"
       refute log =~ "[error]"
@@ -553,7 +456,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     end
   end
 
-  describe "poll_for_session/4 — a command line names its machine" do
+  describe "poll_for_session/3 — the unlock" do
     setup tags do
       Arca.Test.Sandbox.setup!(tags)
       Arca.Cache.init()
@@ -570,7 +473,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
         Prima.Test.RateLimiter.reset!()
       end)
 
-      Application.put_env(:sanctum, :github_client_id, "command-line-client")
+      Application.put_env(:sanctum, :github_client_id, "device-flow-client")
       :ok
     end
 
@@ -585,8 +488,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       assert Sanctum.Door.Store.requests() == []
     end
 
-    test "the session a command line signs in is listed by its machine, and the browser's names none" do
-      n = idp!(%{"access_token" => "gho_command_line", "token_type" => "bearer"})
+    test "a linked identity signs in with a session of its person, bound to no device" do
+      n = idp!(%{"access_token" => "gho_browser", "token_type" => "bearer"})
 
       {:ok, _person} =
         Sanctum.Test.People.linked(%{
@@ -595,22 +498,10 @@ defmodule Sanctum.Auth.DeviceFlowTest do
         })
 
       assert {:ok, %{status: "complete", session_token: token}} =
-               DeviceFlow.poll_for_session(:github, "dc_cli_#{n}", "203.0.113.30",
-                 command_line: "laptop"
-               )
-
-      {:ok, row} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
-      assert row.cli_machine == "laptop"
-
-      assert {:ok, [%{cli_machine: "laptop"}]} =
-               Arca.SessionStorage.list_command_lines(row.user_id)
-
-      assert {:ok, %{status: "complete", session_token: browser}} =
                DeviceFlow.poll_for_session(:github, "dc_browser_#{n}", "203.0.113.31")
 
-      {:ok, browser_row} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(browser))
-      assert browser_row.cli_machine == nil
-      assert {:ok, [_command_line_alone]} = Arca.SessionStorage.list_command_lines(row.user_id)
+      {:ok, row} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
+      assert row.client_id == nil
     end
   end
 end

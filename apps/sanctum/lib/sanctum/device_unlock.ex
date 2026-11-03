@@ -29,6 +29,16 @@ defmodule Sanctum.DeviceUnlock do
       (`{:device, enrollment, identity}`), and the admission answers the
       certificate and the recovery code. No session is minted: the device
       unlocks for one.
+    * `{:invitation, code}` and `{:open, source}` admit a new person under
+      an invitation's code or the door's open admission
+      (`Sanctum.Newcomer`), as setup admits its first: their keys,
+      athanor, the paired client, its first certificate, the first-method
+      latch and the recovery enrollment commit together, or none of them,
+      and the admission answers the certificate and the recovery code. An
+      invitation's challenge is held for that code alone, so a proof over
+      it completes under no other. An open admission's challenges are
+      counted against their source address (20 a minute) and the
+      installation (200 a minute) before anything is held.
     * `{:restore, ctx}` enrolls the first method of a person a restore
       brought back, from the `restore` session that restore issued and
       within its first-method window (`Sanctum.Passkeys.first_method_session?/2`).
@@ -44,7 +54,13 @@ defmodule Sanctum.DeviceUnlock do
   setup, the recovery code while it is unsaved). It takes the
   installation capability the admission did (the setup token, or the
   restore token for a restore), and the proof of the committed key, never
-  the request id alone. Nothing is reopened or minted again.
+  the request id alone. A resume is bound to the admission the enrollment
+  committed under, read from the store: setup's token for the person setup
+  made; an invitation's code that person redeemed, on the challenge and
+  the completion alike; an open admission's proof alone, counted against
+  its source address as its challenges are; a restore's token for a person
+  a restore brought back. No other capability resumes it. Nothing
+  is reopened or minted again.
 
   ## Unlock and lock
 
@@ -96,11 +112,29 @@ defmodule Sanctum.DeviceUnlock do
   @max_display_name 64
   @holder_kinds ~w(chip software)
 
-  @typedoc "What admits an enrollment: the setup token, or a restore's session."
-  @type admission :: {:setup, String.t()} | {:restore, Context.t()}
+  # An open admission's challenges and resumes, per source address and for
+  # the installation, in a minute.
+  @window_ms 60_000
+  @open_source_cap 20
+  @open_installation_cap 200
 
-  @typedoc "The installation capability a resume takes."
-  @type capability :: {:setup, String.t()} | {:restore, String.t()}
+  @typedoc """
+  What admits an enrollment: the setup token, a restore's session, an
+  invitation's code, or the door's open admission from a source address
+  (nil where the ingress knew none).
+  """
+  @type admission ::
+          {:setup, String.t()}
+          | {:restore, Context.t()}
+          | {:invitation, String.t()}
+          | {:open, String.t() | nil}
+
+  @typedoc "The capability a resume takes: the admission's own, or an open one's address."
+  @type capability ::
+          {:setup, String.t()}
+          | {:restore, String.t()}
+          | {:invitation, String.t()}
+          | {:open, String.t() | nil}
 
   @typedoc "An enrollment the device proved, as `Sanctum.Newcomer` writes it."
   @type enrollment :: %{
@@ -123,10 +157,11 @@ defmodule Sanctum.DeviceUnlock do
 
   @doc """
   An `enroll` challenge (the module doc). `params`: `"admission"`
-  (`"setup"` or `"restore"`, the credential's), `"device_key"`,
-  `"request_id"`, `"holder_kind"` and `"display_name"`. Refusals:
-  `:setup_closed`, `:invalid_request`, `:first_method_used`,
-  `:not_restored` and `:unavailable`.
+  (`"setup"`, `"restore"`, `"invitation"` or `"open"`, the credential's),
+  `"device_key"`, `"request_id"`, `"holder_kind"` and `"display_name"`.
+  Refusals: `:setup_closed`, `:invalid_request`, `:first_method_used`,
+  `:not_restored`, `:invitation_invalid`, `{:door, reason}`,
+  `:no_directory`, `{:rate_limited, seconds}` and `:unavailable`.
   """
   @spec enrollment_challenge(admission(), map()) ::
           {:ok, %{challenge: Challenge.t()}} | {:error, atom()}
@@ -142,7 +177,11 @@ defmodule Sanctum.DeviceUnlock do
           request_id: reported.request_id,
           device_key: reported.device_key
         },
-        Map.merge(reported, %{user_id: binding.user_id, kind: kind(admission)}),
+        Map.merge(reported, %{
+          user_id: binding.user_id,
+          kind: kind(admission),
+          admitter: admitter(admission)
+        }),
         now
       )
     end
@@ -154,11 +193,12 @@ defmodule Sanctum.DeviceUnlock do
   Enroll the device whose proof answers a held `enroll` challenge (the
   module doc). `params`: `"proof"`, and for setup the new person's
   `"name"` and `"recovery_secret"` (`Sanctum.Newcomer.identity/1`; the
-  request id is the challenge's). Answers `%{certificate, recovery}`, the
-  recovery absent for a restore. Refusals: `:proof_refused`,
-  `:setup_closed`, `:first_method_used`, `:not_restored`,
-  `{:invalid_argument, sentence}`, `:invalid_request`, `:unavailable` and
-  the admission's own.
+  request id is the challenge's), as for an invitation and an open
+  admission. Answers `%{certificate, recovery}`, the recovery absent for a
+  restore. Refusals: `:proof_refused`, `:setup_closed`,
+  `:first_method_used`, `:not_restored`, `{:invalid_argument, sentence}`,
+  `:invalid_request`, `:unavailable` and the admission's own
+  (`Sanctum.Newcomer`).
   """
   @spec enroll(admission(), map()) :: {:ok, map()} | {:error, term()}
   def enroll(admission, %{"proof" => proof} = params) do
@@ -170,7 +210,8 @@ defmodule Sanctum.DeviceUnlock do
 
   def enroll(_admission, _params), do: {:error, :invalid_request}
 
-  defp enrolled_by({:setup, token}, held, params) do
+  defp enrolled_by({kind, _credential} = admission, held, params)
+       when kind in [:setup, :invitation, :open] do
     with {:ok, identity} <-
            Sanctum.Newcomer.identity(%{
              "name" => params["name"],
@@ -178,7 +219,7 @@ defmodule Sanctum.DeviceUnlock do
              "request_id" => held.challenge.request_id
            }),
          {:ok, admitted} <-
-           Sanctum.Newcomer.admit({:setup, token}, {:device, enrollment(held), identity}),
+           Sanctum.Newcomer.admit(newcomer(admission), {:device, enrollment(held), identity}),
          {:ok, certificate} <- certificate(held.challenge.athanor, held.challenge.client_id) do
       {:ok, Map.merge(%{certificate: certificate}, Map.take(admitted, [:recovery]))}
     end
@@ -219,6 +260,7 @@ defmodule Sanctum.DeviceUnlock do
          {:ok, request_id} <- request_id(params["request_id"]),
          true <- params["admission"] == Atom.to_string(elem(capability, 0)) or :invalid,
          {:ok, client} <- enrolled_client(request_id, key),
+         :ok <- admitted_by(capability, client),
          {:ok, now} <- db_now_ms() do
       issue_enroll(
         %{
@@ -237,10 +279,11 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
-  defp resumed({kind, _token}, proof) do
+  defp resumed({kind, _credential} = capability, proof) do
     with {:ok, held} <- take_proven({:device_enroll, {:resume, kind}}, proof),
+         :ok <- admitted_by(capability, %{user_id: held.user_id}),
          {:ok, certificate} <- certificate(held.challenge.athanor, held.challenge.client_id) do
-      if kind == :setup do
+      if kind in [:setup, :invitation, :open] do
         case Sanctum.Recovery.admission_recovery(held.user_id) do
           {:ok, nil} -> {:ok, %{certificate: certificate}}
           {:ok, recovery} -> {:ok, %{certificate: certificate, recovery: recovery}}
@@ -329,6 +372,17 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
+  defp enrollment_binding({:invitation, code}) do
+    with :ok <- Sanctum.Newcomer.admits({:invitation, code}),
+         do: {:ok, %{user_id: nil, athanor_id: Prima.UUID7.generate_id("ath")}}
+  end
+
+  defp enrollment_binding({:open, source}) do
+    with :ok <- open_room(source),
+         :ok <- Sanctum.Newcomer.admits(:open),
+         do: {:ok, %{user_id: nil, athanor_id: Prima.UUID7.generate_id("ath")}}
+  end
+
   defp enrollment_binding({:restore, %Context{} = ctx}) do
     with :ok <- restore_window(ctx), do: own_binding(ctx.user_id)
   end
@@ -363,13 +417,42 @@ defmodule Sanctum.DeviceUnlock do
   defp restore_window(_ctx), do: {:error, :not_restored}
 
   defp same_admitter({:setup, _token}, %{user_id: _any}), do: :ok
+  defp same_admitter({:open, _source}, %{user_id: nil}), do: :ok
+
+  # An invitation's challenge completes under the code it was issued for.
+  defp same_admitter({:invitation, code}, %{user_id: nil, admitter: held}) when is_binary(held) do
+    case Sanctum.Invitations.code_hash(code) do
+      {:ok, hash} ->
+        if Plug.Crypto.secure_compare(hash, held), do: :ok, else: {:error, :proof_refused}
+
+      {:error, _invalid} ->
+        {:error, :proof_refused}
+    end
+  end
 
   defp same_admitter({:restore, %Context{user_id: user_id}}, %{user_id: user_id}), do: :ok
   defp same_admitter(_admission, _held), do: {:error, :proof_refused}
 
   defp kind({:setup, _token}), do: :setup
   defp kind({:restore, _ctx}), do: :restore
+  defp kind({:invitation, _code}), do: :invitation
+  defp kind({:open, _source}), do: :open
   defp kind(_admission), do: :none
+
+  # What a held challenge remembers of its admitter: an invitation's code
+  # hash, which its completion must name again.
+  defp admitter({:invitation, code}) do
+    case Sanctum.Invitations.code_hash(code) do
+      {:ok, hash} -> hash
+      {:error, _invalid} -> nil
+    end
+  end
+
+  defp admitter(_admission), do: nil
+
+  # The admission a new person's enrollment is admitted under.
+  defp newcomer({:open, _source}), do: :open
+  defp newcomer(admission), do: admission
 
   defp capable({:setup, token}) do
     if Sanctum.Newcomer.setup_token?(token), do: :ok, else: {:error, :invalid_token}
@@ -379,7 +462,94 @@ defmodule Sanctum.DeviceUnlock do
     if Sanctum.Recovery.restore_token?(token), do: :ok, else: {:error, :invalid_token}
   end
 
+  defp capable({:invitation, code}) do
+    case Sanctum.Invitations.code_hash(code) do
+      {:ok, _hash} -> :ok
+      {:error, _invalid} -> {:error, :invalid_token}
+    end
+  end
+
+  defp capable({:open, source}), do: open_room(source)
+
   defp capable(_capability), do: {:error, :invalid_token}
+
+  # A resume is bound to how the enrollment's person came to be here, read
+  # from the store, never to the admission the caller names: setup's token
+  # for the person setup made, the open admission for one it made, the code
+  # an invited person redeemed, compared on the challenge and on the
+  # completion alike, and a restore's token for a person a restore brought
+  # back, whatever admission first made them. Any other capability finds no
+  # enrollment to resume.
+  defp admitted_by(capability, %{user_id: user_id}) when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{admission: admission}} -> admitted_as(capability, admission, user_id)
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp admitted_by(_capability, _client), do: {:error, :not_found}
+
+  defp admitted_as({:setup, _token}, "setup", _user_id), do: :ok
+  defp admitted_as({:open, _source}, "open", _user_id), do: :ok
+
+  defp admitted_as({:restore, _token}, _admission, user_id) do
+    case Arca.IdentityAttempts.restored?(Prima.Actor.system(), user_id) do
+      {:ok, true} -> :ok
+      {:ok, false} -> {:error, :not_found}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp admitted_as({:invitation, code}, "invitation", user_id) do
+    with {:ok, hash} <- Sanctum.Invitations.code_hash(code) do
+      case Arca.Invitations.by_code_hash(Prima.Actor.system(), hash) do
+        {:ok, %{redeemed_by: ^user_id}} -> :ok
+        {:ok, _another} -> {:error, :not_found}
+        {:error, :not_found} -> {:error, :not_found}
+        {:error, _unanswered} -> {:error, :unavailable}
+      end
+    else
+      {:error, _invalid} -> {:error, :invalid_token}
+    end
+  end
+
+  defp admitted_as(_capability, _admission, _user_id), do: {:error, :not_found}
+
+  # An open admission names no credential, so its calls are counted against
+  # their source address and the installation, this node's count and then
+  # the cell's (`Arca.RequestRateWindows`), before anything is held.
+  defp open_room(source) do
+    key = if is_binary(source) and source != "", do: source, else: "unknown"
+
+    with :ok <- on_node({:device_open, :source, key}, @open_source_cap),
+         :ok <- on_node({:device_open, :installation}, @open_installation_cap),
+         :ok <- in_cell(:device_open_source, key, @open_source_cap) do
+      in_cell(:device_open_installation, "installation", @open_installation_cap)
+    end
+  end
+
+  defp on_node(key, cap) do
+    case Prima.RateLimiter.check(key, cap, @window_ms) do
+      :ok -> :ok
+      {:deny, retry_after_s} -> {:error, {:rate_limited, retry_after_s}}
+    end
+  end
+
+  defp in_cell(bucket, key, cap) do
+    case Arca.RequestRateWindows.claim(Prima.Actor.system(), bucket, key, cap, @window_ms) do
+      :ok ->
+        :ok
+
+      {:error, {:rate_limited, retry_after_ms}} ->
+        {:error, {:rate_limited, seconds(retry_after_ms)}}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp seconds(ms), do: max(div(ms + 999, 1_000), 1)
 
   defp enrolled_client(request_id, key) do
     case Arca.PairedClients.enrolled(Prima.Actor.system(), request_id) do
@@ -404,18 +574,25 @@ defmodule Sanctum.DeviceUnlock do
     with true <- params["admission"] == Atom.to_string(admission) or :invalid,
          {:ok, key} <- device_key(params["device_key"]),
          {:ok, request_id} <- request_id(params["request_id"]),
-         true <- params["holder_kind"] in @holder_kinds or :invalid,
-         true <- display_name?(params["display_name"]) or :invalid do
-      {:ok,
-       %{
-         device_key: key,
-         request_id: request_id,
-         holder_kind: params["holder_kind"],
-         display_name: params["display_name"]
-       }}
+         {:ok, holder} <- holder(params["holder_kind"], params["display_name"]) do
+      {:ok, Map.merge(holder, %{device_key: key, request_id: request_id})}
     else
       _invalid -> {:error, :invalid_request}
     end
+  end
+
+  @doc """
+  What a protected device reports of its holder, as an enrollment and a
+  pairing take it: `holder_kind` `"chip"` or `"software"`, and the
+  `display_name` it shows, text of at most 64 bytes. Reported
+  information, never an input to a decision. `:error` for anything else.
+  """
+  @spec holder(term(), term()) ::
+          {:ok, %{holder_kind: String.t(), display_name: String.t()}} | :error
+  def holder(kind, name) do
+    if kind in @holder_kinds and display_name?(name),
+      do: {:ok, %{holder_kind: kind, display_name: name}},
+      else: :error
   end
 
   defp device_key(value) do

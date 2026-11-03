@@ -487,7 +487,7 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[proof][row] | expires_at | derived | inserted_at plus session_ttl_hours (Sanctum.Session) |
 | sign_in:b.sessions[proof][row] | athanor_id | exact | `null` |
 | sign_in:b.sessions[proof][row] | identity_key_epoch | derived | a genesis's key epoch, its own hash |
-| sign_in:b.sessions[proof][row] | cli_machine | exact | `null` |
+| sign_in:b.sessions[proof][row] | client_id | exact | `null` |
 | sign_in:b.sessions[proof][row] | inserted_at | bound | a time inside the sign-in at B |
 | sign_in:b.sessions[the administrator's] | id | captured | a new ses_ id |
 | sign_in:b.sessions[the administrator's] | token_hash | derived | the SHA-256 of the session token the administrator's cookie carries |
@@ -498,10 +498,10 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[the administrator's] | expires_at | derived | inserted_at plus session_ttl_hours (Sanctum.Session) |
 | sign_in:b.sessions[the administrator's] | athanor_id | derived | B's one athanor |
 | sign_in:b.sessions[the administrator's] | identity_key_epoch | exact | `null` |
-| sign_in:b.sessions[the administrator's] | cli_machine | exact | `null` |
+| sign_in:b.sessions[the administrator's] | client_id | exact | `null` |
 | sign_in:b.sessions[the administrator's] | inserted_at | bound | a time inside setup at B |
 | sign_in:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
-| sign_in:b.sessions[the person's] | cli_machine | exact | as read at sign_in |
+| sign_in:b.sessions[the person's] | client_id | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | email | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | expires_at | exact | as read at sign_in |
 | sign_in:b.sessions[the person's] | id | exact | as read at sign_in |
@@ -872,7 +872,7 @@ row per field of each row of each step's objects:
 | held:b.person_identities[the person's] | updated_at | exact | as read at sign_in |
 | held:b.person_identities[the person's] | user_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | athanor_id | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | cli_machine | exact | as read at sign_in |
+| held:b.sessions[the administrator's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | email | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | expires_at | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | id | exact | as read at sign_in |
@@ -883,7 +883,7 @@ row per field of each row of each step's objects:
 | held:b.sessions[the administrator's] | token_prefix | exact | as read at sign_in |
 | held:b.sessions[the administrator's] | user_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
-| held:b.sessions[the person's] | cli_machine | exact | as read at sign_in |
+| held:b.sessions[the person's] | client_id | exact | as read at sign_in |
 | held:b.sessions[the person's] | email | exact | as read at sign_in |
 | held:b.sessions[the person's] | expires_at | exact | as read at sign_in |
 | held:b.sessions[the person's] | id | exact | as read at sign_in |

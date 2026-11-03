@@ -23,7 +23,6 @@
 0.1	apps/arca/test/arca/canvas_versions_test.exs
 0.5	apps/arca/test/arca/carry_actions_test.exs
 0.0	apps/arca/test/arca/cipher_rotation_test.exs
-0.0	apps/arca/test/arca/cli_sign_ins_test.exs
 0.7	apps/arca/test/arca/company_authorizations_test.exs
 0.1	apps/arca/test/arca/company_login_attempts_test.exs
 0.2	apps/arca/test/arca/consent_storage_test.exs
@@ -584,7 +583,6 @@
 4.6	apps/cyfr/test/prism_web/live/canvas_live_test.exs
 3.5	apps/cyfr/test/prism_web/live/carry_live_test.exs
 52.6	apps/cyfr/test/prism_web/live/chat_live_test.exs
-1.3	apps/cyfr/test/prism_web/live/cli_live_test.exs
 0.5	apps/cyfr/test/prism_web/live/command_palette_test.exs
 0.6	apps/cyfr/test/prism_web/live/company_login_live_test.exs
 2.1	apps/cyfr/test/prism_web/live/components_live_test.exs
@@ -701,7 +699,6 @@
 0.1	apps/cyfr/test/sanctum/provider_vault_status_test.exs
 0.4	apps/cyfr/test/sanctum/providers/assertion_test.exs
 1.2	apps/cyfr/test/sanctum/providers/athanor_member_door_tools_test.exs
-0.7	apps/cyfr/test/sanctum/providers/cli_sign_in_test.exs
 1.0	apps/cyfr/test/sanctum/providers/confirmation_test.exs
 0.4	apps/cyfr/test/sanctum/providers/decision_test.exs
 0.1	apps/cyfr/test/sanctum/providers/invitation_test.exs

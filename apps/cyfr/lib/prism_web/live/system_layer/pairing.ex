@@ -7,12 +7,16 @@ defmodule PrismWeb.SystemLayer.Pairing do
   person's paired clients in the athanor in focus, each with its revoke
   control and, for a protected device, what holds its key and what it
   last reported of its disks (`Sanctum.Pairing.list/1`), a report a
-  person reads and never a decision; the pairing code, and the person's command-line sessions
-  (`Sanctum.CliSignIn`), each with its revoke control.
+  person reads and never a decision; and the pairing code. A command line
+  is a protected device like any other, listed with its holder.
 
-  Pairing a device begins on the new device: this home's `/pair` page
-  makes its key and shows the key's code (`Prima.Device.key_code/1`). The
-  person types that code here, and `pairing.begin` asks for it, a
+  Pairing a device begins on the new device: a command line's `cyfr
+  login`, or this home's `/pair` page in a browser, makes its key and shows
+  the key's code (`Prima.Device.key_code/1`) and a QR code of this home's
+  `/devices/add` page with the key's digest in the fragment
+  (`PrismWeb.DeviceAddLive`), which a phone's camera opens here with the
+  code filled in. A device without a camera types the code, or pastes it,
+  and `pairing.begin` asks for it, a
   sensitive change the layer confirms like any other, whose preview names
   the same code. Its answer's `invitation_url` (this home's `/pair` page,
   the secret in the fragment) is drawn here as a QR code (`PrismWeb.QR`),
@@ -29,6 +33,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
   use Phoenix.Component
 
   attr :prompt_id, :string, required: true
+  attr :key_code, :string, default: nil
   attr :pairing, :map, default: nil
   attr :may, :boolean, required: true
   attr :myself, :any, required: true
@@ -40,7 +45,6 @@ defmodule PrismWeb.SystemLayer.Pairing do
     assigns =
       assign(assigns,
         clients: clients(assigns.pairing),
-        command_lines: command_lines(assigns.pairing),
         invitation: assigns.pairing && assigns.pairing.invitation
       )
 
@@ -129,11 +133,12 @@ defmodule PrismWeb.SystemLayer.Pairing do
       >
         <input type="hidden" name="prompt_id" value={@prompt_id} />
         <label class="block text-sm" for={"#{@prompt_id}-pairing-key-code"}>
-          Open this CYFR's /pair page on the new device and type the code it shows
+          Type or paste the code the new device shows: cyfr login on a command line, or this CYFR's /pair page in a browser. Check it matches before you pair.
         </label>
         <input
           id={"#{@prompt_id}-pairing-key-code"}
           name="key_code"
+          value={@key_code}
           type="text"
           autocomplete="off"
           spellcheck="false"
@@ -146,57 +151,11 @@ defmodule PrismWeb.SystemLayer.Pairing do
         </button>
       </form>
     </section>
-
-    <section class="mt-4 space-y-2" aria-label="Command lines" data-test="command-lines">
-      <h3 class="text-sm font-medium">Command lines</h3>
-      <%= case @command_lines do %>
-        <% {:ok, []} -> %>
-          <p class="text-sm text-gray-300" data-test="command-lines-none">
-            No command line is signed in. Run cyfr login on a machine to sign one in.
-          </p>
-        <% {:ok, sessions} -> %>
-          <ul class="divide-y divide-gray-800 text-sm" data-test="command-lines-list">
-            <li
-              :for={session <- sessions}
-              class="flex items-center justify-between gap-2 py-2"
-              data-test="command-line"
-              data-session={session.session_id}
-            >
-              <div>
-                <p class="font-medium">Command line on {session.machine}</p>
-                <p class="text-xs text-gray-400">
-                  Signed in {session.signed_in_at}{if session.current, do: " (this one)", else: ""}
-                </p>
-              </div>
-              <button
-                type="button"
-                phx-click="cli_revoke"
-                phx-target={@myself}
-                phx-value-id={@prompt_id}
-                phx-value-session={session.session_id}
-                data-test="command-line-revoke"
-                class={@button_class}
-              >
-                Revoke
-              </button>
-            </li>
-          </ul>
-        <% {:error, sentence} -> %>
-          <p class="text-sm" role="alert" data-test="command-lines-unread">{sentence}</p>
-        <% :unread -> %>
-          <p class="text-sm text-gray-300" data-test="command-lines-reading">
-            Reading your command lines.
-          </p>
-      <% end %>
-    </section>
     """
   end
 
   defp clients(%{clients: clients}), do: clients
   defp clients(_pairing), do: {:ok, []}
-
-  defp command_lines(%{command_lines: command_lines}), do: command_lines
-  defp command_lines(_pairing), do: {:ok, []}
 
   defp expiry(%{certificate_expires_at: at}) when is_binary(at),
     do: "; its certificate renews before #{at}"

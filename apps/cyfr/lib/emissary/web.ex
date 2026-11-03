@@ -28,6 +28,7 @@ defmodule Emissary.Web do
       CanvasController,
       CertificateRenewalController,
       DeviceEnrollmentController,
+      DeviceSessionController,
       DeviceChannel,
       DirectoryController,
       ExecutionEventsController,

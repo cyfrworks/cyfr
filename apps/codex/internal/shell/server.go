@@ -137,7 +137,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer form.erase()
-	srv.Shell.begin()
+	srv.Shell.Begin()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	action.run(ctx, srv, w, r, form)
@@ -212,7 +212,7 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 			return
 		}
 		srv.Shell.mu.Lock()
-		srv.Shell.say("%s", sentence(err))
+		srv.Shell.say("%s", srv.Shell.sentence(err))
 		srv.Shell.mu.Unlock()
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -243,9 +243,7 @@ func (srv *Server) page(w http.ResponseWriter, v View, answer string) {
 		}
 	}
 	if v.Confirm != nil {
-		for _, k := range slices.Sorted(maps.Keys(v.Confirm.Preview)) {
-			d.Fields = append(d.Fields, [2]string{k, display(v.Confirm.Preview[k])})
-		}
+		d.Fields = PreviewFields(v.Confirm.Preview)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = pages.Execute(w, d)
@@ -268,6 +266,16 @@ func warnings(r disk.Report) []string {
 		}
 	}
 	return out
+}
+
+// PreviewFields is a confirmation's preview as the shell draws it: each
+// field and its value as text, in the fields' order.
+func PreviewFields(preview map[string]any) [][2]string {
+	var fields [][2]string
+	for _, k := range slices.Sorted(maps.Keys(preview)) {
+		fields = append(fields, [2]string{k, display(preview[k])})
+	}
+	return fields
 }
 
 func display(v any) string {
@@ -360,10 +368,18 @@ func unescape(s []byte) ([]byte, error) {
 
 // Serve serves the pages on Listen until ctx ends.
 func (srv *Server) Serve(ctx context.Context) error {
-	ln, err := net.Listen("tcp4", Listen)
+	ln, err := ListenLoopback()
 	if err != nil {
 		return err
 	}
+	return srv.ServeOn(ctx, ln)
+}
+
+// ListenLoopback takes the shell's one listener, Listen.
+func ListenLoopback() (net.Listener, error) { return net.Listen("tcp4", Listen) }
+
+// ServeOn serves the pages on ln, the shell's listener, until ctx ends.
+func (srv *Server) ServeOn(ctx context.Context, ln net.Listener) error {
 	hs := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()

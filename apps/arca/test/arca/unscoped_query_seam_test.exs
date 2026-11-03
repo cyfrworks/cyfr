@@ -496,10 +496,6 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.CompanyLoginAttempt" =>
       "a company sign-in in flight, keyed by its id and the hash of its state, owned by " <>
         "the person and the session that opened it; deleted with the person",
-    "Arca.Schemas.CliSignIn" =>
-      "a command line's pending sign-in, keyed by the hashes of its approval secret and " <>
-        "its session token; no person or athanor owns it until its approval mints a " <>
-        "session, which carries both",
     "Arca.Schemas.SharedThread" =>
       "a place several people talk in, keyed by its id, or a pair by its two people; " <>
         "no athanor holds it",

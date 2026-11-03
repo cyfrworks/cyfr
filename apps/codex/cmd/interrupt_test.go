@@ -130,7 +130,7 @@ func TestAnInterruptedQuestionPrintsItsSentence(t *testing.T) {
 	var out string
 	err := interruptAt(t, asked, func(ctx context.Context) error {
 		var err error
-		out, err = runLogin(t, ctx, "init", "--no-pull")
+		out, err = runCommand(t, ctx, "init", "--no-pull")
 		return err
 	})
 	if ExitStatus(err) != exitInterrupted {
