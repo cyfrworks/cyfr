@@ -192,6 +192,72 @@ defmodule Emissary.Web.DeviceEnrollmentControllerTest do
       assert Prima.Sanitizer.sanitize([{header, code}]) == [{header, "[REDACTED]"}]
     end
 
+    test "an invitation enrollment cannot return its recovery through a header-free open resume",
+         %{code: code} do
+      entries = http()
+
+      {conn, {public, private}, identity} =
+        new_person(entries, [{"x-cyfr-invitation", code}], "invitation")
+
+      assert %{"recovery" => %{"code" => _code}} = json_response(conn, 200)
+      [first, second] = entries["enrollment_resume"]
+
+      conn =
+        post_with(
+          first["path"],
+          %{
+            "admission" => "open",
+            "device_key" => b64(public),
+            "request_id" => identity.request_id
+          },
+          []
+        )
+
+      conn =
+        if conn.status == 200 do
+          {:ok, challenge} = Challenge.decode(json_response(conn, 200)["challenge"])
+          post_with(second["path"], %{"proof" => signed(challenge, private)}, [])
+        else
+          conn
+        end
+
+      assert conn.status in 400..499,
+             "header-free open resume returned HTTP #{conn.status} for an invitation enrollment"
+    end
+
+    test "the second resume request needs the redeemed invitation header too", %{code: code} do
+      entries = http()
+
+      {conn, {public, private}, identity} =
+        new_person(entries, [{"x-cyfr-invitation", code}], "invitation")
+
+      assert %{"certificate" => _certificate} = json_response(conn, 200)
+      [first, second] = entries["enrollment_resume"]
+
+      conn =
+        post_with(
+          first["path"],
+          %{
+            "admission" => "invitation",
+            "device_key" => b64(public),
+            "request_id" => identity.request_id
+          },
+          [{"x-cyfr-invitation", code}]
+        )
+
+      {:ok, challenge} = Challenge.decode(json_response(conn, 200)["challenge"])
+      other = b64(:crypto.strong_rand_bytes(32))
+      assert {:ok, _hash} = Sanctum.Invitations.code_hash(other)
+
+      conn =
+        post_with(second["path"], %{"proof" => signed(challenge, private)}, [
+          {"x-cyfr-invitation", other}
+        ])
+
+      assert conn.status in 400..499,
+             "another invitation header completed the resume with HTTP #{conn.status}"
+    end
+
     test "the open admission takes no credential, and answers its refusals under the fixture's codes" do
       http = http()
       codes = http["refusals"]["codes"]
