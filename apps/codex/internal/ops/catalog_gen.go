@@ -266,9 +266,11 @@ const (
 	SessionCliRevoke        = "cli_revoke"
 	SessionDeviceInit       = "device_init"
 	SessionDevicePoll       = "device_poll"
+	SessionLock             = "lock"
 	SessionLogout           = "logout"
 	SessionReadResource     = "read_resource"
 	SessionSetup            = "setup"
+	SessionUnlock           = "unlock"
 	SessionUse              = "use"
 	SessionWhoami           = "whoami"
 	SettingsList            = "list"
@@ -371,7 +373,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "setup", "use", "whoami"},
+	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "lock", "logout", "read_resource", "setup", "unlock", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
@@ -1352,6 +1354,8 @@ type ConfirmationConfirmArgs struct {
 	Assertion Field[any] `json:"assertion,omitzero"`
 	// confirm: the one-time code sent to your verified email for it
 	Code Field[string] `json:"code,omitzero"`
+	// confirm: a protected device's proof over the confirm challenge pending answered it
+	DeviceProof Field[any] `json:"device_proof,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4715,6 +4719,21 @@ func (args SessionDevicePollArgs) MarshalJSON() ([]byte, error) {
 	}{Action: SessionDevicePoll, fields: fields(args)})
 }
 
+// SessionLockArgs carries arguments for session.lock.
+type SessionLockArgs struct {
+	// lock: the device's lock proof for the session its unlock reserved
+	Proof any `json:"proof"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionLockArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionLockArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionLock, fields: fields(args)})
+}
+
 // SessionLogoutArgs carries arguments for session.logout.
 type SessionLogoutArgs struct {
 }
@@ -4764,6 +4783,21 @@ func (args SessionSetupArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionSetup, fields: fields(args)})
+}
+
+// SessionUnlockArgs carries arguments for session.unlock.
+type SessionUnlockArgs struct {
+	// unlock: the device's proof over the unlock challenge an unlock with no arguments answered
+	Proof Field[any] `json:"proof,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionUnlockArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionUnlockArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionUnlock, fields: fields(args)})
 }
 
 // SessionUseArgs carries arguments for session.use.
