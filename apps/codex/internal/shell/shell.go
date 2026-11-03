@@ -651,7 +651,7 @@ func (s *Shell) register(ctx context.Context, name string) {
 	case errors.As(err, &intent) && intent.says("name_taken", "name_reserved"):
 		s.naming, s.nameWaits = name, false
 		s.say("Someone holds the name %s, or cyfr.run keeps it. Choose another.", name)
-	case errors.As(err, &intent) && intent.says("directory_unavailable", "registry_unavailable"):
+	case errors.As(err, &intent) && (intent.says("directory_unavailable", "registry_unavailable") || intent.class() == "unavailable"):
 		s.naming, s.nameWaits = name, true
 		s.say("cyfr.run did not answer. Try again in a moment; you are set up already.")
 	default:
