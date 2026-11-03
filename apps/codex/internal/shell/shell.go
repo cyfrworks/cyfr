@@ -811,6 +811,16 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 		s.say("%s", s.sentence(err))
 		return
 	}
+	// An enrollment whose recovery code was never said saved (RequestID
+	// kept) unlocks only to show that code again, under the admission it
+	// was made by; one whose admission is not at hand (an invitation's
+	// code not given again) does not unlock.
+	a, admitted := s.admission(s.rec.Admission, s.cfg.Invitation)
+	if s.rec.RequestID != "" && !admitted {
+		key.Erase()
+		s.say("This %s is not set up yet: your recovery code was never saved. Run cyfr login --join --invitation CODE with the invitation's code to see it again.", s.cfg.Noun)
+		return
+	}
 	if err := s.connect(ctx, key); err != nil {
 		key.Erase()
 		s.standingEnded = errors.Is(err, ErrRevoked)
@@ -818,7 +828,7 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 		return
 	}
 	s.standingEnded = false
-	if a, ok := s.admission(s.rec.Admission, s.cfg.Invitation); ok && s.rec.RequestID != "" {
+	if s.rec.RequestID != "" {
 		got, err := resume(ctx, s.cfg.Address, a, s.binding(), s.rec.RequestID, key)
 		switch {
 		case err == nil && got.Recovery != nil:
@@ -828,7 +838,9 @@ func (s *Shell) Unlock(ctx context.Context, secret []byte) {
 			s.rec.RequestID = ""
 			_ = s.rec.Save(s.cfg.Record)
 		default:
-			s.say("CYFR could not show your recovery code again: %s", s.sentence(err))
+			// No session opens before the code is said saved: the
+			// unlock ends here, and the next one asks again.
+			s.lock("CYFR could not show your recovery code again: " + s.sentence(err))
 		}
 	}
 }
@@ -918,7 +930,7 @@ func (s *Shell) Session(ctx context.Context) (string, error) {
 // and answers the home's one-time ticket for it. The caller holds the
 // shell.
 func (s *Shell) reserve(ctx context.Context) (string, error) {
-	if s.ch == nil || s.recovery != nil || s.naming != "" {
+	if s.ch == nil || s.recovery != nil || s.naming != "" || s.rec.RequestID != "" {
 		return "", errors.New("locked")
 	}
 	raw, err := s.ch.Call(ctx, "session.unlock", nil)

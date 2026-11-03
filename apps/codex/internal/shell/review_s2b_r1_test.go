@@ -6,10 +6,35 @@ package shell
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cyfr/codex/internal/holder"
 )
+
+func TestReviewInvitationRecoveryCannotBeSkippedByPlainLogin(t *testing.T) {
+	home := newFakeHome(t)
+	home.invitationCode = "INVITE-1"
+	dir := t.TempDir()
+	first := commandLine(t, home, dir, "INVITE-1")
+	p := newSecret(t, first)
+	first.Join(t.Context(), "INVITE-1", "mira", []byte(string(p)), []byte(string(p)))
+	if v := first.View(); v.Page != PageRecovery || v.Recovery == nil {
+		t.Fatalf("join did not reach recovery acknowledgment: %+v", v)
+	}
+	first.Lock("")
+	rec, err := holder.Load(filepath.Join(dir, "device.json"))
+	if err != nil || rec.RequestID == "" {
+		t.Fatalf("unfinished enrollment not persisted: %v", err)
+	}
+	later := commandLine(t, home, dir, "")
+	later.Unlock(t.Context(), []byte(string(p)))
+	if token, err := later.Session(t.Context()); err == nil && token != "" {
+		t.Fatalf("plain login opened a working session while recovery was never acknowledged; page=%s, notice=%q", later.View().Page, later.View().Notice)
+	}
+}
 
 func TestReviewRemoteRenewalRejectsAnotherPerson(t *testing.T) {
 	issuer := newIssuerHome(t)

@@ -437,3 +437,29 @@ func testKey(t *testing.T) fixedKey {
 	priv := ed25519.NewKeyFromSeed(make([]byte, 32))
 	return fixedKey{pub: []byte(priv.Public().(ed25519.PublicKey)), priv: priv}
 }
+
+// A new person's enrollment whose recovery code was never said saved
+// unlocks, with the invitation's code given again, to that code alone:
+// no session opens until it is said saved, and then one does.
+func TestUnlock_AnUnsavedJoinShowsTheRecoveryCodeBeforeAnySession(t *testing.T) {
+	home := newFakeHome(t)
+	home.invitationCode = "INVITE-1"
+	dir := t.TempDir()
+	first := commandLine(t, home, dir, "INVITE-1")
+	p := newSecret(t, first)
+	first.Join(t.Context(), "INVITE-1", "mira", []byte(string(p)), []byte(string(p)))
+	first.Lock("")
+
+	again := commandLine(t, home, dir, "INVITE-1")
+	again.Unlock(t.Context(), []byte(string(p)))
+	if v := again.View(); v.Page != PageRecovery || v.Recovery == nil || v.Recovery.Code != "CYFR-TEST-RECOVERY-CODE" {
+		t.Fatalf("the unsaved join unlocked to page %s, notice %q", v.Page, v.Notice)
+	}
+	if token, err := again.Session(t.Context()); err == nil || token != "" {
+		t.Fatalf("a session opened before the code was saved: %q", token)
+	}
+	again.Saved(t.Context())
+	if token, err := again.Session(t.Context()); err != nil || token == "" {
+		t.Fatalf("no session once the code was saved: %q, %v", token, err)
+	}
+}
