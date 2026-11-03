@@ -504,9 +504,10 @@ defmodule Sanctum.Session do
   end
 
   # A protected device's session stands on its client too, read again at
-  # every load: the client active and holding a certificate unexpired and
-  # unrevoked. A revocation, a suspension or a rotation that a missed
-  # announcement did not reach grants nothing here.
+  # every load: the client still active. Its certificate's revocation and
+  # every other retirement end the session's row in their own transition
+  # (`Arca.DeviceCertificates`, `Arca.PairedClients`); a load reads that
+  # row and recomputes no retirement.
   defp stored(token_hash) do
     case Arca.SessionStorage.get_session(token_hash) do
       {:ok, %{client_id: nil} = row} -> {:ok, row}
@@ -520,15 +521,14 @@ defmodule Sanctum.Session do
        when is_binary(athanor_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
 
-    with {:ok, clients} <- Arca.PairedClients.list(actor, user_id: user_id, standing: :active),
-         true <- Enum.any?(clients, &(&1.id == client_id)) || :gone,
-         {:ok, %{state: "active", expires_at: expires_at}} <-
-           Arca.DeviceCertificates.current(actor, client_id),
-         :gt <- DateTime.compare(expires_at, DateTime.utc_now()) do
-      {:ok, row}
-    else
-      {:error, :database_error} -> {:error, :database_error}
-      _gone -> {:error, :invalid_session}
+    case Arca.PairedClients.list(actor, user_id: user_id, standing: :active) do
+      {:ok, clients} ->
+        if Enum.any?(clients, &(&1.id == client_id)),
+          do: {:ok, row},
+          else: {:error, :invalid_session}
+
+      {:error, _unanswered} ->
+        {:error, :database_error}
     end
   end
 

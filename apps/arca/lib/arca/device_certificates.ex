@@ -166,20 +166,40 @@ defmodule Arca.DeviceCertificates do
   # Revoke every active certificate `query` names, in the caller's
   # transaction or its own statement, answering the ids it revoked, sorted.
   # The one revocation statement: the standing transitions run it inside
-  # theirs (`Arca.SecurityTransitions`).
+  # theirs (`Arca.SecurityTransitions`), and a head that retires an epoch
+  # through `revoke_key_epoch!/2`. A protected device's sessions stand on
+  # its certificate: the revocation of one still unexpired deletes every
+  # session of its client in the same statements
+  # (`Arca.SessionStorage.delete_clients!/1`), so a renewal, which revokes
+  # nothing, keeps them and nothing revives them. One already expired ends
+  # none: no session outlives the certificate it was slid under.
   @spec revoke_all(Ecto.Queryable.t()) :: [String.t()]
   # arca:unscoped-ok the caller's query carries its own scope: an athanor, a person or an epoch.
   # arca:db-raise-ok a transaction step: its callers rescue around it.
   def revoke_all(query) do
     now = Arca.ServerMetaStorage.now!()
 
-    {_count, ids} =
+    {_count, revoked} =
       Arca.Repo.update_all(
-        from(c in query, where: c.state != "revoked", select: c.id),
+        from(c in query,
+          where: c.state != "revoked",
+          select: {c.id, c.paired_client_id, c.expires_at}
+        ),
         set: [state: "revoked", revoked_at: now, updated_at: now]
       )
 
-    Enum.sort(ids || [])
+    revoked = revoked || []
+
+    _hashes =
+      revoked
+      |> Enum.filter(fn {_id, _client, expires_at} ->
+        DateTime.compare(expires_at, now) == :gt
+      end)
+      |> Enum.map(fn {_id, client_id, _expires_at} -> client_id end)
+      |> Enum.uniq()
+      |> Arca.SessionStorage.delete_clients!()
+
+    revoked |> Enum.map(&elem(&1, 0)) |> Enum.sort()
   end
 
   @doc false
