@@ -623,8 +623,10 @@ for line in "$SAY_NAME" "$SAY_CODE" "$SAY_SAVE" "$SAY_ENTER" "$SAY_UNLOCKED" "$S
 done
 [ -n "$CODE" ] || headless_failed "$HEADLESS" "cyfr login --setup showed no recovery code under '$SAY_CODE'"
 [ -s "$HEADLESS/passphrase" ] || headless_failed "$HEADLESS" "cyfr login --setup showed no passphrase to keep the key under"
-! grep -qF "$(cat "$HEADLESS/passphrase")" <(sed -n "/$SAY_UNLOCKED/,\$p" "$HEADLESS/login.log") ||
-  headless_failed "$HEADLESS" "the terminal showed the passphrase again after the unlock"
+# The passphrase is shown once, where it is drawn, and echoed nowhere: not
+# at either prompt that asks for it, nor after the unlock.
+[ "$(grep -oF "$(cat "$HEADLESS/passphrase")" "$HEADLESS/login.log" | wc -l)" -eq 1 ] ||
+  headless_failed "$HEADLESS" "the terminal showed the passphrase other than once, where it was drawn"
 
 # CYFR holds one person, made by setup, the platform administrator, named
 # proof, with one setup session, their identity enrolled and their
@@ -697,6 +699,8 @@ grep -qF "$SAY_UNLOCKED" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "t
 ! grep -qF "$SAY_CODE" "$HEADLESS/login.log" && ! grep -qF "$CODE" "$HEADLESS/login.log" ||
   headless_failed "$HEADLESS" "the second cyfr login --setup showed a recovery code that is saved"
 grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in the second shell did not name $person"
+! grep -qF "$(cat "$HEADLESS/passphrase")" "$HEADLESS/login.log" ||
+  headless_failed "$HEADLESS" "the second unlock's terminal showed the passphrase typed at it"
 again="$(python3 -I - "$(headless_state "$HEADLESS")" "$person" "$identifier" "$STAND_IN_URL" 2>&1 <<'PY'
 import json, sys
 state = json.loads(sys.argv[1] or "null")
@@ -751,8 +755,12 @@ person = state["people"][0]["id"]
 identifier = (state.get("attempts") or [{}])[0].get("identifier")
 if not isinstance(identifier, str) or not re.fullmatch(r"per_[0-9a-f]{64}", identifier):
     sys.exit("the waiting attempt names %s, not an identifier" % json.dumps(identifier))
+# The command line is the person's device, and no session acts for them
+# while their name waits: none opens before the recovery code is saved.
 want = {
     "people": [{"id": person, "admission": "setup", "name": None, "admin": True}],
+    "sessions": 0,
+    "devices": [{"user_id": person, "holder_kind": "software", "standing": "active"}],
     "identities": [{"user_id": person, "identifier": None, "enrollment": "pending"}],
     "attempts": [{"user_id": person, "kind": "enrollment", "phase": "submitted", "name": "proof",
                   "identifier": identifier, "directory": "https://directory.invalid"}],
