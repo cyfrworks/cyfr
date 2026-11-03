@@ -233,6 +233,12 @@ func (d *loginDriver) run(ctx context.Context) error {
 			return err
 		}
 		after := d.sh.View()
+		if after.Page == shell.PageName && after.NameWaits {
+			// The person is made; cyfr.run takes their name, and shows
+			// their recovery code after it, at the next run.
+			d.sh.Lock("")
+			return fmt.Errorf("cyfr.run did not answer. Run %s again to finish.", d.again())
+		}
 		if after.Notice == "" {
 			continue
 		}
@@ -242,6 +248,19 @@ func (d *loginDriver) run(ctx context.Context) error {
 		}
 		fmt.Fprintln(d.c.out, after.Notice)
 	}
+}
+
+// again is the command that finishes what this run began.
+func (d *loginDriver) again() string {
+	switch {
+	case d.mode == "setup":
+		return "cyfr login --setup"
+	case d.mode == "join" && d.invitation != "":
+		return "cyfr login --join --invitation CODE"
+	case d.mode == "join":
+		return "cyfr login --join"
+	}
+	return "cyfr login"
 }
 
 // begin makes this device's key: for a pairing, before its code is shown;

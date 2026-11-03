@@ -578,3 +578,23 @@ func TestSessionDevice_DrawsTheChangeThroughTheSession(t *testing.T) {
 		t.Errorf("outside the shell: %+v, %q", outside.drawn, outside.notice)
 	}
 }
+
+// A person made while cyfr.run does not answer has their name waiting for
+// it, not for another: cyfr login ends, locked, saying which command
+// finishes it, and asks for no other name.
+func TestLoginDriver_ASilentCyfrRunEndsTheRunToFinishLater(t *testing.T) {
+	for mode, again := range map[string]string{"setup": "cyfr login --setup", "join": "cyfr login --join --invitation CODE"} {
+		dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, func(call string, d *fakeDevice) {
+			if call == mode {
+				d.set(shell.View{Page: shell.PageName, Name: "proof", NameWaits: true,
+					Notice: "cyfr.run did not answer. Try again in a moment; you are set up already."})
+			}
+		})
+		c, out := typed(passphrase, passphrase)
+		err := (&loginDriver{sh: dev, c: c, mode: mode, name: "proof", invitation: "INVITE", home: "https://alice.example"}).run(t.Context())
+		if err == nil || err.Error() != "cyfr.run did not answer. Run "+again+" again to finish." || dev.locks != 1 ||
+			slices.Contains(dev.calls, "rename") || strings.Contains(out.String(), "Your name, yours for life") {
+			t.Fatalf("%s: %v, calls %v, locks %d\n%s", mode, err, dev.calls, dev.locks, out)
+		}
+	}
+}
