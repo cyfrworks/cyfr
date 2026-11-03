@@ -71,6 +71,7 @@ cleanup() {
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   standin_stop
   rm -f "$OUT"/ask-* "$OUT"/answer-* 2>/dev/null || true
+  rm -rf "$OUT/bin"
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
@@ -399,6 +400,11 @@ cell_tails() {
       echo "(the log could not be redacted, so it is not printed)" >&2
   done
 }
+
+step "the command line the terminal step runs"
+mkdir -p "$OUT/bin"
+( cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -trimpath -o "$OUT/bin/cyfr" . ) ||
+  fail "the cyfr command line did not build"
 
 step "the join proof in $JOIN_PROOF_BROWSERS, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
