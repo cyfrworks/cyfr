@@ -266,7 +266,10 @@ func TestUnlock_ARefusedRemoteCertificateRenewsAtItsIssuer(t *testing.T) {
 	if !again.Unlocked() {
 		t.Fatalf("unlock: %q", again.View().Notice)
 	}
-	if strings.Contains(home.received.String(), `"type":"renew"`) {
+	home.mu.Lock()
+	renewedHere := strings.Contains(home.received.String(), `"type":"renew"`)
+	home.mu.Unlock()
+	if renewedHere {
 		t.Error("another home's certificate was renewed here")
 	}
 	if after, _ := holder.Load(path); readIssued(after.Certificate).ExpiresAt == old {
