@@ -838,12 +838,6 @@ defmodule Sanctum.ProviderTest do
     end
   end
 
-  # The sign-in methods' credentials are the identity domain's keys:
-  # restoring them under the host's application would leave them set for
-  # every test after.
-  defp restore_env(key, nil), do: Application.delete_env(:sanctum, key)
-  defp restore_env(key, value), do: Application.put_env(:sanctum, key, value)
-
   # Providers answer typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
