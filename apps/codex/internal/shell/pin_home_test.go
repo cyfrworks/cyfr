@@ -34,8 +34,9 @@ type pinHome struct {
 	dropEvaluate bool
 	// down refuses to reach the evaluation at all, charging nothing.
 	down bool
-	// tamper edits the next reset challenge before it is sent.
-	tamper func(map[string]any)
+	// tamper edits the next reset challenge before it is sent; answer
+	// edits the next evaluation's answer.
+	tamper, answer func(map[string]any)
 }
 
 type pinEvaluator struct {
@@ -175,6 +176,10 @@ func (p *pinHome) evaluate(w http.ResponseWriter, r *http.Request) {
 	answer := map[string]any{"evaluated": b64(out), "reset": c}
 	if !exact(answer, p.exchange.Evaluate.Answer) {
 		p.h.shapes = append(p.h.shapes, fmt.Sprintf("the evaluate answer %v", answer))
+	}
+	if p.answer != nil {
+		p.answer(answer)
+		p.answer = nil
 	}
 	reply(w, 200, answer)
 }

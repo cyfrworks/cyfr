@@ -352,3 +352,21 @@ func TestSetPIN_AnEvaluatorTheHomeNeverIssuedChangesNothing(t *testing.T) {
 		t.Fatalf("PIN %v, charged %d, notice %q", record(t, dir).PIN, home.pin.charged, sh.View().Notice)
 	}
 }
+
+// An evaluation's answer is exactly one evaluated element and its reset
+// challenge: a batch of elements, or a field beside them, opens nothing.
+func TestPIN_AnAnswerOtherThanOneElementOpensNothing(t *testing.T) {
+	home := newFakeHome(t)
+	sh, _ := pinned(t, home, t.TempDir())
+	for name, edit := range map[string]func(map[string]any){
+		"a batch":       func(a map[string]any) { a["evaluated"] = []any{a["evaluated"], a["evaluated"]} },
+		"another field": func(a map[string]any) { a["proof"] = "x" },
+	} {
+		home.pin.allow()
+		home.pin.set(func(p *pinHome) { p.answer = edit })
+		sh.Unlock(t.Context(), []byte("123456"))
+		if v := sh.View(); sh.Unlocked() || !strings.Contains(v.Notice, "was not one it can use") {
+			t.Fatalf("%s: unlocked %v, notice %q", name, sh.Unlocked(), v.Notice)
+		}
+	}
+}

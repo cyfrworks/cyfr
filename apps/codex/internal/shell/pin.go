@@ -85,10 +85,7 @@ func (s *Shell) open(ctx context.Context, secret []byte) (*holder.Key, error) {
 // challenge the answer carried in reset.
 func (s *Shell) evaluate(ctx context.Context, evaluator string, reset *json.RawMessage) holder.Evaluate {
 	return func(blinded []byte) ([]byte, error) {
-		var got struct {
-			Evaluated string          `json:"evaluated"`
-			Reset     json.RawMessage `json:"reset"`
-		}
+		var got map[string]json.RawMessage
 		err := post(ctx, s.cfg.Client, s.cfg.Address, "/device/pin/evaluate", nil,
 			map[string]any{"evaluator": evaluator, "blinded": b64(blinded)}, &got)
 		var home *HomeError
@@ -100,11 +97,17 @@ func (s *Shell) evaluate(ctx context.Context, evaluator string, reset *json.RawM
 		case err != nil:
 			return nil, err
 		}
-		element, err := unb64(got.Evaluated)
+		// Exactly one evaluated element and its reset challenge: no batch,
+		// no other field.
+		var evaluated string
+		if len(got) != 2 || got["reset"] == nil || json.Unmarshal(got["evaluated"], &evaluated) != nil {
+			return nil, holder.ErrBadElement
+		}
+		element, err := unb64(evaluated)
 		if err != nil {
 			return nil, holder.ErrBadElement
 		}
-		*reset = got.Reset
+		*reset = got["reset"]
 		return element, nil
 	}
 }
