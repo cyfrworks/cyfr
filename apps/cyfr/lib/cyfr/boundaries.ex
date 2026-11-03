@@ -2393,7 +2393,10 @@ defmodule Cyfr.Boundaries do
           "the POST, under the browser pipeline's CSRF token, spends a 32-byte ticket the " <>
           "device's own channel was answered once its proof of an unlock challenge " <>
           "verified, held 60 seconds and taken once, and creates the session in the " <>
-          "issuance transaction that rereads the device's standing"
+          "issuance transaction that rereads the device's standing; a command line's " <>
+          "`POST /device/session` spends the same ticket the same way and answers the " <>
+          "session's token in its body, reading and setting no cookie, so no CSRF token " <>
+          "is asked"
     },
     device_enrollment: %{
       admits: :credential,
@@ -2994,6 +2997,13 @@ defmodule Cyfr.Boundaries do
     %{
       module: Emissary.Web.DeviceEnrollmentController,
       site: :resume,
+      plane: :external,
+      origin: :none
+    },
+    # A protected command line's session: the unlock's one-time ticket.
+    %{
+      module: Emissary.Web.DeviceSessionController,
+      site: :create,
       plane: :external,
       origin: :none
     },

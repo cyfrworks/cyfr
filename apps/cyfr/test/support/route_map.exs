@@ -60,6 +60,13 @@
           ":fetch_session",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
+        "device_session" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.FrameRequest",
+          "CyfrWeb.Plugs.AuthRateLimit"
+        ],
         "device_enrollment" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -277,6 +284,15 @@
           auth: "device_enrollment",
           live_view: nil,
           pipe_through: ["device_enrollment"]
+        },
+        %{
+          verb: "POST",
+          path: "/device/session",
+          plug: "Emissary.Web.DeviceSessionController",
+          plug_opts: ":create",
+          auth: "device_unlock_ticket",
+          live_view: nil,
+          pipe_through: ["device_session"]
         },
         %{
           verb: "GET",
