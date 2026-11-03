@@ -279,7 +279,7 @@ defmodule Sanctum.DevicePin do
       verify = fn evaluator, client, now -> proven(proof, evaluator, client, now) end
 
       case Arca.DevicePinEvaluators.reset(
-             presented.athanor,
+             Prima.Actor.in_athanor(presented.athanor),
              presented.client_id,
              presented.nonce,
              verify

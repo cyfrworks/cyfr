@@ -518,8 +518,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
-        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.DeviceUnlock
-        Sanctum.Directory Sanctum.Egress
+        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.DevicePin
+        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
         Sanctum.RunningTasks Sanctum.TinctureAccess
@@ -550,7 +550,8 @@ defmodule Cyfr.Boundaries do
           "damaged head), for the flows the tincture's ingress declares to the origins " <>
           "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
           "decisions, the restore ingress `Sanctum.Recovery`'s, a protected device's " <>
-          "enrollment `Sanctum.DeviceUnlock`'s, and the device channel checks each " <>
+          "enrollment `Sanctum.DeviceUnlock`'s, a locked device's PIN evaluation and " <>
+          "reset `Sanctum.DevicePin`'s, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts` and slides, and at its end " <>
           "retires, the sessions its unlocks reserved and holds its device's storage report " <>
           "through `Sanctum.DeviceUnlock`. " <>
@@ -1999,6 +2000,7 @@ defmodule Cyfr.Boundaries do
       refused: 3
     ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
+    "Sanctum.DevicePin" => [evaluate: 2, reset: 2],
     "Sanctum.DeviceUnlock" => [
       closed: 3,
       enroll: 2,

@@ -103,11 +103,10 @@ defmodule Arca.DevicePinEvaluators do
       with %PairedClient{} <- client || {:error, :not_found},
            :ok <- verify.() do
         _unconfirmed =
-          Arca.Repo.delete_all(
-            from(e in DevicePinEvaluator,
-              where: e.paired_client_id == ^client_id and is_nil(e.confirmed_at)
-            )
-          )
+          DevicePinEvaluator
+          |> QueryHelpers.where_tenant(actor)
+          |> where([e], e.paired_client_id == ^client_id and is_nil(e.confirmed_at))
+          |> Arca.Repo.delete_all()
 
         %DevicePinEvaluator{
           id: id,
@@ -176,7 +175,7 @@ defmodule Arca.DevicePinEvaluators do
 
   @doc """
   Clear the count of the evaluator of the client `client_id` in the
-  athanor `athanor_id` whose last charge drew `nonce`, whoever asks: the
+  actor's athanor whose last charge drew `nonce`, whoever asks: the
   device proves its key over that evaluation's reset challenge, which
   `verify` decides, handed the evaluator, its client and the database's
   instant (`:ok` or a refusal, which rolls back). Then the count moves
@@ -185,20 +184,21 @@ defmodule Arca.DevicePinEvaluators do
   other evaluator of the client is deleted.
 
   Refusals: `:not_found` (no evaluator holds that nonce, or its client is
-  not active), `:not_owner`, `:database_error`, or the verifier's.
+  not active), `:no_athanor`, `:not_owner`, `:database_error`, or the
+  verifier's.
   """
   @spec reset(
-          String.t(),
+          Prima.Actor.t(),
           String.t(),
           binary(),
           (row(), map(), non_neg_integer() -> :ok | {:error, term()})
         ) :: {:ok, row()} | {:error, term()}
   # arca:db-raise-ok the reads and the writes run inside `Arca.Repo.owned/2`, which rescues around its transaction.
-  def reset(athanor_id, client_id, nonce, verify)
-      when is_binary(athanor_id) and is_binary(client_id) and is_binary(nonce) and
-             is_function(verify, 3) do
+  def reset(%Prima.Actor{athanor_id: athanor_id} = actor, client_id, nonce, verify)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) and
+             is_binary(nonce) and is_function(verify, 3) do
     Arca.Repo.owned("Arca.DevicePinEvaluators.reset", fn ->
-      with {:ok, evaluator, client} <- held(by_nonce(athanor_id, client_id, nonce)),
+      with {:ok, evaluator, client} <- held(by_nonce(actor, client_id, nonce)),
            now = now_ms(),
            :ok <- verify.(Arca.Data.project(evaluator), Arca.Data.project(client), now),
            {:reset, cleared} <-
@@ -207,11 +207,10 @@ defmodule Arca.DevicePinEvaluators do
                evaluator.revision
              ) do
         _others =
-          Arca.Repo.delete_all(
-            from(e in DevicePinEvaluator,
-              where: e.paired_client_id == ^client_id and e.id != ^evaluator.id
-            )
-          )
+          DevicePinEvaluator
+          |> QueryHelpers.where_tenant(actor)
+          |> where([e], e.paired_client_id == ^client_id and e.id != ^evaluator.id)
+          |> Arca.Repo.delete_all()
 
         evaluator
         |> Ecto.Changeset.change(
@@ -226,6 +225,8 @@ defmodule Arca.DevicePinEvaluators do
       end
     end)
   end
+
+  def reset(%Prima.Actor{}, _client_id, _nonce, _verify), do: {:error, :no_athanor}
 
   @doc """
   The evaluators of the actor's athanor's client `client_id`, oldest
@@ -252,10 +253,10 @@ defmodule Arca.DevicePinEvaluators do
   @spec delete_clients!([String.t()]) :: non_neg_integer()
   # A revocation's dependents (`Arca.PairedClients.retire_dependents!/1`):
   # every evaluator of the revoked clients, in the caller's transaction.
-  # arca:unscoped-ok the caller names the clients it revoked under its own scope.
-  # arca:db-raise-ok a transaction step: its callers rescue around it.
   def delete_clients!([]), do: 0
 
+  # arca:unscoped-ok the caller names the clients it revoked under its own scope.
+  # arca:db-raise-ok a transaction step: its callers rescue around it.
   def delete_clients!(client_ids) when is_list(client_ids) do
     {count, _} =
       Arca.Repo.delete_all(
@@ -267,23 +268,22 @@ defmodule Arca.DevicePinEvaluators do
 
   # ---- internals -------------------------------------------------------------
 
-  # arca:unscoped-ok a locked device names its evaluator by the identifier's digest alone, before any context exists.
+  # A locked device names its evaluator by the identifier's digest alone,
+  # before any context exists.
   defp by_digest(digest), do: where(DevicePinEvaluator, [e], e.identifier_digest == ^digest)
 
-  # arca:unscoped-ok a reset is named by the athanor and client its proof binds, before any context exists; the proof is verified over the row.
-  defp by_nonce(athanor_id, client_id, nonce) do
-    where(
-      DevicePinEvaluator,
-      [e],
-      e.athanor_id == ^athanor_id and e.paired_client_id == ^client_id and
-        e.reset_nonce == ^nonce
-    )
+  # A reset names the athanor and client its proof binds; the proof is
+  # verified over the row it finds.
+  defp by_nonce(actor, client_id, nonce) do
+    DevicePinEvaluator
+    |> QueryHelpers.where_tenant(actor)
+    |> where([e], e.paired_client_id == ^client_id and e.reset_nonce == ^nonce)
   end
 
   # The evaluator `query` names and its client, the client's row held
   # first, as a revocation takes it, then the evaluator's, read again under
   # its lock: a client that is not active locates nothing.
-  # arca:unscoped-ok the client is read under the athanor its evaluator's row names.
+  # arca:unscoped-ok a locked device's evaluator is found by its identifier's digest before any context exists, and its client under the athanor that row names.
   defp held(query) do
     with %DevicePinEvaluator{} = found <- Arca.Repo.one(query) || {:error, :not_found},
          %PairedClient{} = client <-

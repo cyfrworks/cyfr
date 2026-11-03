@@ -66,7 +66,13 @@ defmodule Arca.DevicePinEvaluatorsTest do
   defp stored(id), do: Arca.Repo.get(DevicePinEvaluator, id)
 
   defp reset(evaluator, nonce, verify \\ fn _e, _c, _now -> :ok end),
-    do: DevicePinEvaluators.reset(evaluator.athanor_id, evaluator.paired_client_id, nonce, verify)
+    do:
+      DevicePinEvaluators.reset(
+        Prima.Actor.in_athanor(evaluator.athanor_id),
+        evaluator.paired_client_id,
+        nonce,
+        verify
+      )
 
   # The next evaluation allowed now: the stored wait moved into the past,
   # as the clock reaching it would.
