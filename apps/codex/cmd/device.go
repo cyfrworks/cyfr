@@ -122,6 +122,23 @@ var openDevice = func(o deviceOptions) (device, error) {
 	return d, nil
 }
 
+// deviceChip is whether this machine offers a chip to hold the command
+// line's key (holder.ChipPresent); a test stands in for it, so none
+// reaches the machine's own TPM.
+var deviceChip = holder.ChipPresent
+
+// deviceHome is the home at address as it names itself in what its
+// device signs: a loopback IP spelled localhost (browserAddress), the
+// address CYFR on this computer serves itself under, which the local
+// context cyfr init saves (http://127.0.0.1:<port>) reaches.
+func deviceHome(address string) string {
+	u, err := url.Parse(strings.TrimRight(address, "/"))
+	if err != nil {
+		return address
+	}
+	return browserAddress(u)
+}
+
 // deviceShell is this command line's device for the home at o.address:
 // its key record, a holder made on this machine (the chip, else a
 // passphrase), named by this machine's name, which pairs through the
@@ -135,17 +152,19 @@ func deviceShell(o deviceOptions) (*shell.Shell, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("could not make the directory for this command line's key: %w", err)
 	}
-	if rec, err := holder.Load(path); err == nil && !sameAddress(rec.Home, o.address) {
-		return nil, fmt.Errorf("the key record %s is for %s, not %s: remove it, then run cyfr login again", path, rec.Home, o.address)
+	home := deviceHome(o.address)
+	if rec, err := holder.Load(path); err == nil && !sameAddress(rec.Home, home) {
+		return nil, fmt.Errorf("the key record %s is for %s, not %s: remove it, then run cyfr login again", path, rec.Home, home)
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("this command line's key record %s cannot be read (%v)", path, err)
 	}
 	anonymous := mcp.NewClient(o.address)
 	return shell.New(shell.Config{
-		Address:     o.address,
+		Address:     home,
 		Record:      path,
 		DataDir:     filepath.Dir(path),
 		Noun:        "command line",
+		Chip:        deviceChip,
 		DisplayName: deviceName(),
 		Invitation:  o.invitation,
 		Tokens:      func() (string, string) { return o.setupToken, "" },

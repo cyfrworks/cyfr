@@ -493,7 +493,9 @@ func (h *fakeHome) intent(op string, args, binding map[string]any) (any, any) {
 	case "registry.register":
 		if h.registryDown > 0 {
 			h.registryDown--
-			return nil, map[string]any{"class": "unavailable", "reason": "registry_unavailable"}
+			// As the device channel answers a refusal: its class and
+			// sentence, no reason.
+			return nil, map[string]any{"class": "unavailable", "message": "cyfr.run did not answer. Try again."}
 		}
 		name, _ := args["name"].(string)
 		if name == "" {

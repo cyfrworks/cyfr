@@ -495,3 +495,27 @@ func TestConfirmDrawn_SignsOnlyTheChangeDrawn(t *testing.T) {
 		t.Fatalf("confirmed %v, notice %q, unlocked %v", home.confirmed, v.Notice, sh.Unlocked())
 	}
 }
+
+// A name cyfr.run could not take because it did not answer waits for it
+// (NameWaits); a name it refused waits for another, and one it took
+// waits for nothing.
+func TestJoin_ANameWaitsForASilentCyfrRun(t *testing.T) {
+	home := newFakeHome(t)
+	home.openDoor = true
+	home.registryDown = 1
+	sh := commandLine(t, home, t.TempDir(), "")
+	p := newSecret(t, sh)
+	sh.Join(t.Context(), "", "ada", []byte(string(p)), []byte(string(p)))
+	if v := sh.View(); v.Page != PageName || !v.NameWaits {
+		t.Fatalf("a silent cyfr.run: page %s, waits %v", v.Page, v.NameWaits)
+	}
+	home.taken["ada"] = true
+	sh.Rename(t.Context(), "ada")
+	if v := sh.View(); v.Page != PageName || v.NameWaits {
+		t.Fatalf("a name taken: page %s, waits %v", v.Page, v.NameWaits)
+	}
+	sh.Rename(t.Context(), "ada2")
+	if v := sh.View(); v.Page != PageRecovery || v.NameWaits {
+		t.Fatalf("a name taken at last: page %s, waits %v", v.Page, v.NameWaits)
+	}
+}

@@ -100,7 +100,10 @@ type Shell struct {
 	passphrase string
 	recovery   *Recovery
 	naming     string // a name cyfr.run refused or could not take yet
-	confirm    *PendingConfirm
+	// nameWaits is a name that waits for cyfr.run to answer, not for
+	// another name.
+	nameWaits bool
+	confirm   *PendingConfirm
 	// standingEnded is a home that refused this screen's standing at its
 	// last unlock: revoked, or suspended by a declared backup restore,
 	// which the recovery code can re-enable.
@@ -200,6 +203,9 @@ type View struct {
 	// Digest is the key's digest while it is not enrolled yet: the code a
 	// pairing shows.
 	Digest string
+	// NameWaits is a name page whose name waits for cyfr.run to answer,
+	// not for another name.
+	NameWaits bool
 }
 
 // View is the page the screen shows now, and the notice of the last action
@@ -226,7 +232,7 @@ func (s *Shell) View() View {
 	case s.confirm != nil:
 		v.Page, v.Kind, v.Confirm = PageConfirm, s.rec.Kind, s.confirm
 	case s.naming != "":
-		v.Page, v.Name = PageName, s.naming
+		v.Page, v.Name, v.NameWaits = PageName, s.naming, s.nameWaits
 	case s.recovery != nil:
 		v.Page, v.Recovery = PageRecovery, s.recovery
 	default:
@@ -638,18 +644,18 @@ func (s *Shell) register(ctx context.Context, name string) {
 		if answer.Name == "" {
 			answer.Name = name
 		}
-		s.naming = ""
+		s.naming, s.nameWaits = "", false
 		if s.recovery != nil {
 			s.recovery.Name = answer.Name
 		}
 	case errors.As(err, &intent) && intent.says("name_taken", "name_reserved"):
-		s.naming = name
+		s.naming, s.nameWaits = name, false
 		s.say("Someone holds the name %s, or cyfr.run keeps it. Choose another.", name)
-	case errors.As(err, &intent) && intent.says("directory_unavailable", "registry_unavailable"):
-		s.naming = name
+	case errors.As(err, &intent) && (intent.says("directory_unavailable", "registry_unavailable") || intent.class() == "unavailable"):
+		s.naming, s.nameWaits = name, true
 		s.say("cyfr.run did not answer. Try again in a moment; you are set up already.")
 	default:
-		s.naming = name
+		s.naming, s.nameWaits = name, false
 		s.say("%s", s.sentence(err))
 	}
 }
@@ -1001,7 +1007,7 @@ func (s *Shell) lock(why string) {
 		s.key.Erase()
 	}
 	wasOpen := s.ch != nil
-	s.ch, s.key, s.locks, s.recovery, s.naming, s.confirm, s.passphrase = nil, nil, nil, nil, "", nil, ""
+	s.ch, s.key, s.locks, s.recovery, s.naming, s.nameWaits, s.confirm, s.passphrase = nil, nil, nil, nil, "", false, nil, ""
 	if wasOpen {
 		if why != "" {
 			s.notice = why
