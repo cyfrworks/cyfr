@@ -187,8 +187,8 @@ defmodule Emissary.Router do
       end
 
       # A protected device's enrollment (`Emissary.Web.DeviceEnrollmentController`):
-      # JSON, no CSRF token, since the setup token and the restore token
-      # travel in headers no cross-site form can set and no CORS answer
+      # JSON, no CSRF token, since the setup token, an invitation's code and
+      # the restore token travel in headers no cross-site form can set and no CORS answer
       # admits; the cookie session is fetched only to read a restore's own
       # session, whose first-method window enrolls the restored person's
       # first device. An entry path, so the routes record their own
@@ -407,8 +407,9 @@ defmodule Emissary.Router do
       # restored from a backup, the proof a recovering person's recovery code
       # signs (the `/kit` routes keep their path) and the re-enables it admits. Its body is
       # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
-      # A protected device's enrollment at setup or after a restore, and
-      # the resume of one whose answer was lost.
+      # A protected device's enrollment at setup, under an invitation, by the
+      # open admission or after a restore, and the resume of one whose answer
+      # was lost.
       scope "/device/enrollment", Emissary.Web do
         pipe_through :device_enrollment
 

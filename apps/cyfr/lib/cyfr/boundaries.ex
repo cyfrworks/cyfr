@@ -2402,12 +2402,14 @@ defmodule Cyfr.Boundaries do
       admits: :credential,
       why:
         "a protected device's enrollment (`Sanctum.DeviceUnlock`): the setup token in the " <>
-          "`x-cyfr-setup-token` header, checked in constant time, or a restore's own " <>
-          "session within its first-method window, or for a resume the restore token as " <>
-          "the authorization header; then the device key's proof over an `enroll` " <>
-          "challenge this CYFR holds and consumes once. No CSRF token, since no cross-site " <>
-          "form sets either header and no CORS answer admits one, and a restore's cookie " <>
-          "alone enrolls nothing without the proof over a challenge only its answer carries"
+          "`x-cyfr-setup-token` header, checked in constant time, an invitation's code in " <>
+          "the `x-cyfr-invitation` header, the door's open admission counted against the " <>
+          "caller's address, or a restore's own session within its first-method window, " <>
+          "or for a resume the restore token as the authorization header; then the device " <>
+          "key's proof over an `enroll` challenge this CYFR holds and consumes once. No CSRF " <>
+          "token, since no cross-site form sets these headers and no CORS answer admits " <>
+          "one, and a restore's cookie or an open admission alone enrolls nothing without " <>
+          "the proof over a challenge only its answer carries"
     },
     restore_kit_proof: %{
       admits: :credential,
