@@ -49,7 +49,8 @@ var ErrCertificationEnded = errors.New("the CYFR that certified this device ende
 // key: the stored certificate locates its certification, the issuer
 // answers a renew challenge, which is signed only when it names that
 // issuer, this device's key and its client; the replacement is kept only
-// when it certifies the same client, athanor and key for the same home.
+// when it certifies the same person, client, athanor and key for the same
+// home, from the same issuer.
 func RenewAtIssuer(ctx context.Context, client *http.Client, b Binding, cert json.RawMessage, key Signer) (json.RawMessage, error) {
 	i := readIssued(cert)
 	if !i.elsewhere() {
@@ -81,10 +82,27 @@ func RenewAtIssuer(ctx context.Context, client *http.Client, b Binding, cert jso
 	if err := certifies(got.Certificate, b.Home, b.Athanor, b.ClientID, b.DeviceKey); err != nil {
 		return nil, err
 	}
-	if readIssued(got.Certificate).Issuer != i.Issuer {
+	if readIssued(got.Certificate).Issuer != i.Issuer || !samePerson(cert, got.Certificate) {
 		return nil, ErrRefused
 	}
 	return got.Certificate, nil
+}
+
+// samePerson is whether two certificates certify one person: the same
+// subject kind and the same person in it, an identity's identifier or a
+// local person's id.
+func samePerson(a, b json.RawMessage) bool {
+	var x, y struct {
+		Subject struct {
+			Kind       string `json:"kind"`
+			Identifier string `json:"identifier"`
+			UserID     string `json:"user_id"`
+		} `json:"subject"`
+	}
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return x.Subject.Kind != "" && x.Subject == y.Subject
 }
 
 func issuerFailure(err error) error {

@@ -272,7 +272,8 @@ func (h *fakeHome) challengeEntry(resume bool) http.HandlerFunc {
 func (h *fakeHome) certificate(e *enrollment) map[string]any {
 	now := time.Now().UnixMilli()
 	return map[string]any{"protocol": "cyfr-device-cert/v1", "athanor": e.athanor, "client_id": e.client,
-		"device_key": b64(e.key), "audience": h.address(), "issuer": h.address(), "not_before": now, "expires_at": now + 3_600_000}
+		"device_key": b64(e.key), "audience": h.address(), "issuer": h.address(), "not_before": now, "expires_at": now + 3_600_000,
+		"subject": map[string]any{"kind": "local", "user_id": "usr_1"}}
 }
 
 func (h *fakeHome) complete(w http.ResponseWriter, r *http.Request) {
