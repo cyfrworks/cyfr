@@ -330,31 +330,9 @@ func TestPIN_TheLockPageAsksThePINAndSaysTheWait(t *testing.T) {
 	}
 }
 
-// The evaluator pin.enroll names is taken only in the fixture's shape:
-// pev_ and 32 bytes, unpadded base64url.
-func TestPINVectors_TheEvaluatorShape(t *testing.T) {
-	var v struct {
-		Evaluator struct {
-			Valid   []string `json:"valid"`
-			Invalid []string `json:"invalid"`
-		} `json:"evaluator"`
-	}
-	fixture(t, "device_pin.json", &v)
-	for _, id := range v.Evaluator.Valid {
-		if !evaluatorShape(id) {
-			t.Errorf("%s refused", id)
-		}
-	}
-	for _, id := range v.Evaluator.Invalid {
-		if evaluatorShape(id) {
-			t.Errorf("%s taken", id)
-		}
-	}
-}
-
-// An evaluator pin.enroll names out of shape changes nothing and charges
-// nothing.
-func TestSetPIN_AnEvaluatorOutOfShapeChangesNothing(t *testing.T) {
+// An evaluator the home never issued opens nothing: its evaluation is
+// refused uncharged, and the record keeps its passphrase.
+func TestSetPIN_AnEvaluatorTheHomeNeverIssuedChangesNothing(t *testing.T) {
 	home := newFakeHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "device.json")

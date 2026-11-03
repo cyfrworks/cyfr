@@ -196,8 +196,9 @@ func oprfRound(c oprf.Client, input []byte, eval Evaluate, blind []byte) ([]byte
 	if len(answer) != ElementSize {
 		return nil, ErrBadElement
 	}
+	// Finalize refuses the identity, which UnmarshalBinary decodes.
 	e := pinSuite.Group().NewElement()
-	if err := e.UnmarshalBinary(answer); err != nil || e.IsIdentity() {
+	if err := e.UnmarshalBinary(answer); err != nil {
 		return nil, ErrBadElement
 	}
 	out, err := c.Finalize(fin, &oprf.Evaluation{Elements: []oprf.Evaluated{e}})

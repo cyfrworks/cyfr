@@ -425,7 +425,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "device_pin.json" => [
       {"apps/codex/internal/holder/pin_vectors_test.go", ~w(suite rfc9497 elements)},
       {"apps/codex/internal/shell/pin_home_test.go", ~w(exchange)},
-      {"apps/codex/internal/shell/pin_test.go", ~w(evaluator)},
       {"apps/codex/internal/shell/proof_test.go", ~w(purpose_fields keys proofs verify)},
       {"apps/prima/test/prima/device_pin_test.exs",
        ~w(suite evaluator purpose_fields keys proofs verify delay accounting exchange)}

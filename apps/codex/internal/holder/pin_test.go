@@ -300,7 +300,7 @@ func TestHardenPINRefusesAnotherKey(t *testing.T) {
 
 // The elements the fixture says a home refuses (the identity, a
 // non-canonical encoding, bytes no element has) are refused as an
-// answer here too: circl decodes the identity, so the holder checks it.
+// answer here too: circl decodes the identity and Finalize refuses it.
 func TestPINRefusesTheFixturesElements(t *testing.T) {
 	rec := pinRecord(t, newTestEvaluator(t), "123456")
 	for _, e := range readPINVectors(t).Elements.Refused {
