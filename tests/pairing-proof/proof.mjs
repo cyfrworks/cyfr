@@ -898,6 +898,19 @@ async function pinStep(cliHome, passphrase) {
       r.unlock.confirm_exit === 0 && r.unlock.link_printed &&
       r.home_away.exit !== 0 && r.home_away.unreachable && !r.home_away.unlocked;
     return r;
+  } catch (error) {
+    // A command line that waits where it should not: Go's goroutine dump,
+    // written to its terminal by SIGQUIT, says where (the record keeps it).
+    for (const pid of readdirSync("/proc").filter((d) => /^\d+$/.test(d))) {
+      try {
+        const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+        if (argv[0] === join(outDir, "bin", "cyfr")) process.kill(Number(pid), "SIGQUIT");
+      } catch {}
+    }
+    await sleep(2_000);
+    r.terminal = t ? t.out.slice(-20_000) : null;
+    record.pin = r;
+    throw error;
   } finally {
     if (t && t.exit === null) t.kill();
   }
