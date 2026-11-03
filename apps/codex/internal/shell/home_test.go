@@ -59,7 +59,24 @@ type fakeHome struct {
 	kitHeld                    map[string]string
 	reenabled                  []string
 	restores                   int
-	shapes                     []string // entries whose fields were not the fixture's
+	shapes                     []string            // entries whose fields were not the fixture's
+	invitationCode             string              // the invitation a new person joins by
+	openDoor                   bool                // whether the open door admits
+	sessions                   map[string]string   // spent ticket -> the session's bearer
+	pairings                   map[string]*pairing // by invitation secret
+	dropPair                   bool                // commits the next pairing and loses its answer
+	pairArgs                   []map[string]any
+	pairFields                 [][]string // pairing.complete's args, without and with the proof
+}
+
+// pairing is one invitation a confirmed addition opened: the key it names
+// and the client it reserves; committed once a proof of that key
+// completes it.
+type pairing struct {
+	digest    string
+	athanor   string
+	client    string
+	committed []byte // the key it paired
 }
 
 type enrollment struct {
@@ -84,6 +101,9 @@ type httpFields struct {
 	Resume []struct {
 		Request []string `json:"request"`
 	} `json:"enrollment_resume"`
+	DeviceSession struct {
+		Request []string `json:"request"`
+	} `json:"device_session"`
 }
 
 // exact is whether m names exactly fields.
@@ -102,12 +122,21 @@ func exact(m map[string]any, fields []string) bool {
 func newFakeHome(t *testing.T) *fakeHome {
 	var v struct {
 		Exchange struct {
-			HTTP httpFields `json:"http"`
+			HTTP       httpFields `json:"http"`
+			Operations struct {
+				PairingComplete []struct {
+					Args []string `json:"args"`
+				} `json:"pairing.complete"`
+			} `json:"operations"`
 		} `json:"exchange"`
 	}
 	fixture(t, "device_unlock.json", &v)
 	h := &fakeHome{t: t, fields: v.Exchange.HTTP, setupToken: "setup-token-1", held: map[string]map[string]any{},
-		enrolled: map[string]*enrollment{}, taken: map[string]bool{}, pending: map[string]map[string]any{}}
+		enrolled: map[string]*enrollment{}, taken: map[string]bool{}, pending: map[string]map[string]any{},
+		sessions: map[string]string{}, pairings: map[string]*pairing{}}
+	for _, call := range v.Exchange.Operations.PairingComplete {
+		h.pairFields = append(h.pairFields, call.Args)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /device/enrollment/challenge", h.challengeEntry(false))
 	mux.HandleFunc("POST /device/enrollment/complete", h.complete)
@@ -117,6 +146,7 @@ func newFakeHome(t *testing.T) *fakeHome {
 	mux.HandleFunc("POST /restore/kit", h.kitProof)
 	mux.HandleFunc("POST /restore/kit/reenable", h.kitReenable)
 	mux.HandleFunc("/device/websocket", h.channel)
+	mux.HandleFunc("POST /device/session", h.deviceSession)
 	h.srv = httptest.NewServer(mux)
 	t.Cleanup(h.srv.Close)
 	t.Cleanup(func() {
@@ -154,6 +184,10 @@ func (h *fakeHome) admitted(r *http.Request, admission string, resume bool) bool
 		}
 		c, err := r.Cookie("restore_session")
 		return err == nil && c.Value == "restored"
+	case "invitation":
+		return h.invitationCode != "" && r.Header.Get("X-Cyfr-Invitation") == h.invitationCode
+	case "open":
+		return h.openDoor && r.Header.Get("X-Cyfr-Invitation") == "" && r.Header.Get("X-Cyfr-Setup-Token") == ""
 	}
 	return false
 }
@@ -263,7 +297,7 @@ func (h *fakeHome) complete(w http.ResponseWriter, r *http.Request) {
 	h.completes++
 	e := &enrollment{key: mustKey(stringOf(held, "device_key")), admission: stringOf(held, "admission"),
 		client: stringOf(held, "client_id"), athanor: stringOf(held, "athanor"), name: m["name"]}
-	if e.admission == "setup" {
+	if e.admission != "restore" {
 		e.recovery = &Recovery{AttemptID: "att_1", Code: "CYFR-TEST-RECOVERY-CODE", Identifier: "per_1", Name: stringOf(m, "name")}
 	}
 	h.enrolled[stringOf(held, "request_id")] = e
@@ -582,4 +616,75 @@ func (h *fakeHome) kitReenable(w http.ResponseWriter, r *http.Request) {
 	h.reenabled = append(h.reenabled, stringOf(m, "client_id"))
 	h.closeWith = 0
 	reply(w, 200, map[string]any{"reenabled": m["client_id"]})
+}
+
+// deviceSession is POST /device/session: the unlock's ticket spent once
+// for the session's bearer, with no cookie and no CSRF.
+func (h *fakeHome) deviceSession(w http.ResponseWriter, r *http.Request) {
+	m := h.body(r)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !exact(m, h.fields.DeviceSession.Request) {
+		h.shapes = append(h.shapes, fmt.Sprintf("%s %v", r.URL.Path, m))
+	}
+	ticket := stringOf(m, "ticket")
+	if _, spent := h.sessions[ticket]; spent || !strings.HasPrefix(ticket, "TICKET-") || r.Header.Get("Cookie") != "" {
+		reply(w, 403, map[string]any{"error": "ticket_refused"})
+		return
+	}
+	h.sessions[ticket] = "TOKEN-" + strings.TrimPrefix(ticket, "TICKET-")
+	reply(w, 200, map[string]any{"session_token": h.sessions[ticket], "expires_at": time.Now().Add(time.Minute).UnixMilli()})
+}
+
+// invite opens a pairing for key digest, as a confirmed addition does,
+// and answers its secret.
+func (h *fakeHome) invite(digest string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	secret := b64(random(16))
+	h.pairings[secret] = &pairing{digest: digest, athanor: "ath_01a09fee-045b-770b-b745-a62792bb8798",
+		client: fmt.Sprintf("pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f80%02d", len(h.pairings)+50)}
+	return secret
+}
+
+// pair is pairing.complete, as the command line's anonymous client asks
+// it: the pair challenge for the invitation's key, then the proof, which
+// commits the client; a repeat with the same secret and key after it
+// committed answers that client again, any other key is refused.
+func (h *fakeHome) pair(_ context.Context, args map[string]any) (map[string]any, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pairArgs = append(h.pairArgs, args)
+	_, proven := args["proof"]
+	want := h.pairFields[0]
+	if proven {
+		want = h.pairFields[1]
+	}
+	if !exact(args, want) {
+		h.shapes = append(h.shapes, fmt.Sprintf("pairing.complete %v", args))
+	}
+	p := h.pairings[stringOf(args, "invitation_secret")]
+	key := mustKey(stringOf(args, "device_key"))
+	if p == nil || KeyDigest(key) != p.digest || stringOf(args, "key_digest") != p.digest ||
+		(p.committed != nil && !bytes.Equal(p.committed, key)) {
+		return nil, fmt.Errorf("That pairing code is not valid")
+	}
+	if kind := stringOf(args, "holder_kind"); kind != "chip" && kind != "software" {
+		return nil, fmt.Errorf("A protected device names its holder")
+	}
+	if !proven {
+		return map[string]any{"challenge": h.issue(map[string]any{"purpose": "pair", "athanor": p.athanor,
+			"client_id": p.client, "device_key": stringOf(args, "device_key")})}, nil
+	}
+	proof, _ := args["proof"].(map[string]any)
+	if _, ok := h.verify(proof, "pair"); !ok {
+		return nil, fmt.Errorf("That proof does not pair this device")
+	}
+	p.committed = key
+	if h.dropPair {
+		h.dropPair = false
+		return nil, fmt.Errorf("%w (the answer was lost)", ErrUnavailable)
+	}
+	e := &enrollment{key: key, client: p.client, athanor: p.athanor}
+	return map[string]any{"client_id": p.client, "certificate": h.certificate(e)}, nil
 }

@@ -59,11 +59,12 @@ type Holder struct {
 }
 
 // Admission is how an enrollment is admitted: the setup token for the
-// installation's first person, or a restore session for a restored one.
-// Its credentials travel in headers alone (and a restore's session in its
-// cookie), never in a URL or a body.
+// installation's first person, a restore session for a restored one, an
+// invitation's code or the open door for a new person. Its credentials
+// travel in headers alone (and a restore's session in its cookie), never
+// in a URL or a body.
 type Admission struct {
-	Kind   string // "setup" or "restore"
+	Kind   string // "setup", "restore", "invitation" or "open"
 	Client *http.Client
 	// header is the credential of the enrollment's entries; resume is the
 	// one its resume takes.
@@ -80,6 +81,19 @@ type Admission struct {
 func SetupAdmission(client *http.Client, token string) Admission {
 	h := http.Header{"X-Cyfr-Setup-Token": {token}}
 	return Admission{Kind: "setup", Client: client, header: h, resume: h}
+}
+
+// InvitationAdmission admits a new person by an invitation's code, in
+// X-Cyfr-Invitation on every entry, resume included.
+func InvitationAdmission(client *http.Client, code string) Admission {
+	h := http.Header{"X-Cyfr-Invitation": {code}}
+	return Admission{Kind: "invitation", Client: client, header: h, resume: h}
+}
+
+// OpenAdmission admits a new person through the home's open door: no
+// credential but the device key's proof, the home counting each source.
+func OpenAdmission(client *http.Client) Admission {
+	return Admission{Kind: "open", Client: client, header: http.Header{}, resume: http.Header{}}
 }
 
 // Restore restores the person whose recovery code this is onto this empty
@@ -213,6 +227,10 @@ func post(ctx context.Context, client *http.Client, address, path string, h http
 			RetryAfter int    `json:"retry_after"`
 		}
 		_ = json.Unmarshal(answer, &m)
+		if m.RetryAfter == 0 {
+			// rate_limited and unavailable say when in Retry-After.
+			m.RetryAfter, _ = strconv.Atoi(resp.Header.Get("Retry-After"))
+		}
 		return &HomeError{Status: resp.StatusCode, Code: m.Error, RetryAfter: m.RetryAfter}
 	}
 	if out == nil {
