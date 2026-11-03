@@ -78,9 +78,14 @@ defmodule Prima.DevicePin do
   @spec max_attempts() :: pos_integer()
   def max_attempts, do: @max_attempts
 
-  @doc "A fresh evaluator identifier."
-  @spec new_evaluator() :: String.t()
-  def new_evaluator, do: "pev_" <> Encoding.b64(:crypto.strong_rand_bytes(@evaluator_bytes))
+  @doc "The length of the random bytes an evaluator identifier spells."
+  @spec evaluator_bytes() :: pos_integer()
+  def evaluator_bytes, do: @evaluator_bytes
+
+  @doc "The evaluator identifier `bytes` spell; the enrolling home draws them."
+  @spec evaluator(binary()) :: String.t()
+  def evaluator(bytes) when byte_size(bytes) == @evaluator_bytes,
+    do: "pev_" <> Encoding.b64(bytes)
 
   @doc "Whether a value is an evaluator identifier."
   @spec evaluator?(term()) :: boolean()

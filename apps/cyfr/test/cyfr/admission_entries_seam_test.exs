@@ -603,7 +603,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
       |> post(
         "/device/pin/evaluate",
         Jason.encode!(%{
-          "evaluator" => Prima.DevicePin.new_evaluator(),
+          "evaluator" => Prima.DevicePin.evaluator(:crypto.strong_rand_bytes(32)),
           "blinded" => Base.url_encode64(blinded, padding: false)
         })
       )

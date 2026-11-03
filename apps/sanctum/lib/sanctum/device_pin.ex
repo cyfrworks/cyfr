@@ -99,7 +99,10 @@ defmodule Sanctum.DevicePin do
          change = enroll_change(client),
          :ok <- Authz.check(ctx, :device_pin, change) do
       id = Prima.UUID7.generate_id("dpe")
-      evaluator = Prima.DevicePin.new_evaluator()
+
+      evaluator =
+        Prima.DevicePin.evaluator(:crypto.strong_rand_bytes(Prima.DevicePin.evaluator_bytes()))
+
       key = :libsodium_crypto_core_ristretto255.scalar_random()
 
       {:ok, sealed} =

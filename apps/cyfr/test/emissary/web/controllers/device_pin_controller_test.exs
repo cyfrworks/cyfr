@@ -127,7 +127,7 @@ defmodule Emissary.Web.DevicePinControllerTest do
       {conn.status, conn.resp_body, get_resp_header(conn, "retry-after")}
     end
 
-    unknown = answers.(Prima.DevicePin.new_evaluator())
+    unknown = answers.(Prima.DevicePin.evaluator(:crypto.strong_rand_bytes(32)))
     assert {404, _, []} = unknown
     assert Jason.decode!(elem(unknown, 1)) == %{"error" => "not_found"}
     assert code("not_found") == 404

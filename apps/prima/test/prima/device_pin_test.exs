@@ -51,11 +51,10 @@ defmodule Prima.DevicePinTest do
     for id <- v["valid"], do: assert(DevicePin.evaluator?(id), id)
     for id <- v["invalid"], do: refute(DevicePin.evaluator?(id), id)
 
-    drawn = DevicePin.new_evaluator()
-    assert DevicePin.evaluator?(drawn)
-    assert String.starts_with?(drawn, v["prefix"])
-    assert byte_size(unb64(String.trim_leading(drawn, v["prefix"]))) == v["bytes"]
-    refute DevicePin.new_evaluator() == drawn
+    assert DevicePin.evaluator_bytes() == v["bytes"]
+    spelled = DevicePin.evaluator(:binary.copy(<<5>>, v["bytes"]))
+    assert spelled in v["valid"]
+    assert String.starts_with?(spelled, v["prefix"])
   end
 
   test "pin_reset takes exactly the binding, the freshness and the revision" do

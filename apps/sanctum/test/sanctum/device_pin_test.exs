@@ -606,7 +606,7 @@ defmodule Sanctum.DevicePinTest do
 
     test "unknown, suspended and revoked are one refusal, and a re-enabled device evaluates again",
          %{device: device, ctx: ctx, evaluator: evaluator} do
-      unknown = Prima.DevicePin.new_evaluator()
+      unknown = Prima.DevicePin.evaluator(:crypto.strong_rand_bytes(32))
       assert {:error, :not_found} = unlock(unknown, "123456")
 
       standing!(device, "suspended")
