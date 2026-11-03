@@ -41,7 +41,9 @@
       ],
       "admissions": [
         "setup",
-        "restore"
+        "restore",
+        "invitation",
+        "open"
       ]
     },
     "unlock": {
@@ -2335,6 +2337,44 @@
             "code"
           ]
         }
+      ],
+      "pairing.complete": [
+        {
+          "args": [
+            "device_key",
+            "display_name",
+            "holder_kind",
+            "invitation_secret",
+            "key_digest"
+          ],
+          "args_optional": [
+            "certificate"
+          ],
+          "result": [
+            "challenge"
+          ],
+          "result_optional": [
+            "certify"
+          ]
+        },
+        {
+          "args": [
+            "device_key",
+            "display_name",
+            "holder_kind",
+            "invitation_secret",
+            "key_digest",
+            "proof"
+          ],
+          "args_optional": [
+            "certificate"
+          ],
+          "result": [
+            "certificate",
+            "client_id"
+          ],
+          "repeat": "committed"
+        }
       ]
     },
     "units": {
@@ -2354,8 +2394,17 @@
           "not_found": 404,
           "proof_refused": 422,
           "invalid_request": 422,
-          "unavailable": 503
-        }
+          "unavailable": 503,
+          "invitation_invalid": 409,
+          "limit_reached": 409,
+          "not_admitted": 403,
+          "ticket_refused": 403,
+          "rate_limited": 429
+        },
+        "retry_after": [
+          "rate_limited",
+          "unavailable"
+        ]
       },
       "credentials": {
         "setup": {
@@ -2368,7 +2417,11 @@
             "header": "authorization",
             "scheme": "Bearer"
           }
-        }
+        },
+        "invitation": {
+          "header": "x-cyfr-invitation"
+        },
+        "open": {}
       },
       "enrollment_challenge": {
         "method": "POST",
@@ -2400,6 +2453,16 @@
           ],
           "restore": [
             "proof"
+          ],
+          "invitation": [
+            "name",
+            "proof",
+            "recovery_secret"
+          ],
+          "open": [
+            "name",
+            "proof",
+            "recovery_secret"
           ]
         },
         "response": [
@@ -2450,6 +2513,18 @@
           "_csrf_token",
           "ticket"
         ]
+      },
+      "device_session": {
+        "method": "POST",
+        "path": "/device/session",
+        "request": [
+          "ticket"
+        ],
+        "response": [
+          "expires_at",
+          "session_token"
+        ],
+        "credential": "none"
       }
     },
     "shell": {
@@ -2534,6 +2609,20 @@
           "error": "contradictory"
         }
       ]
+    },
+    "pairing": {
+      "approve_url": "{home}/devices/add#key={key_digest}",
+      "invitation_url": "{home}/pair#code={invitation_secret}",
+      "invitation_secret_bytes": 16,
+      "together": [
+        "display_name",
+        "holder_kind"
+      ],
+      "holder_kinds": [
+        "chip",
+        "software"
+      ],
+      "display_name_max_bytes": 64
     }
   }
 }

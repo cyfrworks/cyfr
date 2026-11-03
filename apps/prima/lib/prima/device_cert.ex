@@ -292,7 +292,7 @@ defmodule Prima.DeviceCert.Challenge do
     * `pair` — pairing completion proving the key it submits, bound to
       the prospective client id the invitation reserved.
     * `enroll` — a protected device enrolling its key at an admission:
-      `admission` (`setup` or `restore`) and the enrollment's
+      `admission` (`setup`, `restore`, `invitation` or `open`) and the enrollment's
       `request_id`, with the athanor and client id the home reserved.
     * `unlock` — a protected device unlocking: `session_id`, the one
       session the ticket exchange will create.
@@ -334,10 +334,15 @@ defmodule Prima.DeviceCert.Challenge do
               {Atom.to_string(purpose), purpose}
             end)
   @fresh [:connect, :renew, :pair, :enroll, :unlock, :confirm]
-  @admissions %{"setup" => :setup, "restore" => :restore}
+  @admissions %{
+    "setup" => :setup,
+    "restore" => :restore,
+    "invitation" => :invitation,
+    "open" => :open
+  }
 
   @type purpose :: :connect | :renew | :pair | :enroll | :unlock | :confirm | :lock
-  @type admission :: :setup | :restore
+  @type admission :: :setup | :restore | :invitation | :open
   @type t :: %__MODULE__{
           purpose: purpose(),
           home: String.t(),

@@ -62,7 +62,7 @@ defmodule Prima.DeviceUnlockTest do
              name
     end
 
-    assert v["purpose_fields"]["enroll"]["admissions"] == ["setup", "restore"]
+    assert v["purpose_fields"]["enroll"]["admissions"] == ["setup", "restore", "invitation", "open"]
   end
 
   test "every public key derives from its seed" do
