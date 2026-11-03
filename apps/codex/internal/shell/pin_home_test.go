@@ -20,8 +20,10 @@ import (
 // the next evaluation is taken, as the plan's S3 describes the home.
 type pinHome struct {
 	h          *fakeHome
+	exchange   pinExchange
 	evaluators map[string]*pinEvaluator
 	byNonce    map[string]string // a reset challenge's nonce -> its evaluator
+	ids        []string          // the evaluators, in the order enrolled
 	// evaluations counts every evaluation request that reached a known
 	// evaluator, charged or refused; charged only those charged.
 	evaluations, charged int
@@ -44,20 +46,43 @@ type pinEvaluator struct {
 	revision        int
 	next            time.Time
 	suspended       bool
-	replaces        string
+	everReset       bool
 	destroyed       bool
 }
 
+// pinExchange is tests/fixtures/device_pin.json's exchange: each entry's
+// exact request and answer fields, and the refusals' codes.
+type pinExchange struct {
+	Evaluate struct {
+		Path    string   `json:"path"`
+		Request []string `json:"request"`
+		Answer  []string `json:"answer"`
+	} `json:"evaluate"`
+	Reset struct {
+		Path    string   `json:"path"`
+		Request []string `json:"request"`
+		Answer  []string `json:"answer"`
+	} `json:"reset"`
+	Refusals struct {
+		Codes   map[string]int `json:"codes"`
+		PINWait []string       `json:"pin_wait"`
+	} `json:"refusals"`
+}
+
 func newPINHome(h *fakeHome, mux *http.ServeMux) *pinHome {
-	p := &pinHome{h: h, evaluators: map[string]*pinEvaluator{}, byNonce: map[string]string{}}
-	mux.HandleFunc("POST /device/pin/evaluate", p.evaluate)
-	mux.HandleFunc("POST /device/pin/reset", p.reset)
+	var v struct {
+		Exchange pinExchange `json:"exchange"`
+	}
+	fixture(h.t, "device_pin.json", &v)
+	p := &pinHome{h: h, exchange: v.Exchange, evaluators: map[string]*pinEvaluator{}, byNonce: map[string]string{}}
+	mux.HandleFunc("POST "+p.exchange.Evaluate.Path, p.evaluate)
+	mux.HandleFunc("POST "+p.exchange.Reset.Path, p.reset)
 	return p
 }
 
 // enroll is pin.enroll for the device whose record is at path: a new
-// evaluator, replacing (once its first reset arrives) the one the device
-// held.
+// evaluator beside the device's others until its first reset, which
+// destroys them; an earlier one never reset is removed now.
 func (p *pinHome) enroll(path string) (string, error) {
 	rec, err := holder.Load(path)
 	if err != nil {
@@ -70,13 +95,15 @@ func (p *pinHome) enroll(path string) (string, error) {
 	p.h.mu.Lock()
 	defer p.h.mu.Unlock()
 	p.enrolls++
-	id := fmt.Sprintf("dpe_%d", p.enrolls)
-	ev := &pinEvaluator{server: oprf.NewServer(oprf.SuiteRistretto255, k), client: rec.ClientID,
-		athanor: rec.Athanor, key: b64(rec.PublicKey)}
-	if rec.PIN != nil {
-		ev.replaces = rec.PIN.Evaluator
+	id := "pev_" + b64(random(32))
+	for _, other := range p.evaluators {
+		if other.client == rec.ClientID && !other.everReset {
+			other.destroyed = true
+		}
 	}
-	p.evaluators[id] = ev
+	p.evaluators[id] = &pinEvaluator{server: oprf.NewServer(oprf.SuiteRistretto255, k), client: rec.ClientID,
+		athanor: rec.Athanor, key: b64(rec.PublicKey)}
+	p.ids = append(p.ids, id)
 	return id, nil
 }
 
@@ -98,28 +125,28 @@ func (p *pinHome) evaluate(w http.ResponseWriter, r *http.Request) {
 		hijackClose(w)
 		return
 	}
-	if !exact(m, []string{"evaluator", "blinded"}) {
+	if !exact(m, p.exchange.Evaluate.Request) {
 		p.h.shapes = append(p.h.shapes, fmt.Sprintf("%s %v", r.URL.Path, m))
-		reply(w, 400, map[string]any{"error": "bad_request"})
+		reply(w, p.exchange.Refusals.Codes["bad_request"], map[string]any{"error": "bad_request"})
 		return
 	}
 	id := stringOf(m, "evaluator")
 	ev := p.evaluators[id]
 	if ev == nil || ev.suspended || ev.destroyed {
-		reply(w, 404, map[string]any{"error": "not_found"})
+		reply(w, p.exchange.Refusals.Codes["not_found"], map[string]any{"error": "not_found"})
 		return
 	}
 	p.evaluations++
 	now := time.Now()
 	if now.Before(ev.next) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(ev.next.Sub(now).Seconds())+1))
-		reply(w, 429, map[string]any{"error": "pin_wait", "next_allowed_at": ev.next.UnixMilli()})
+		reply(w, p.exchange.Refusals.Codes["pin_wait"], map[string]any{"error": "pin_wait", "next_allowed_at": ev.next.UnixMilli()})
 		return
 	}
 	raw, err := unb64(stringOf(m, "blinded"))
 	el := oprf.SuiteRistretto255.Group().NewElement()
-	if err != nil || len(raw) != holder.ElementSize || el.UnmarshalBinary(raw) != nil {
-		reply(w, 400, map[string]any{"error": "bad_request"})
+	if err != nil || len(raw) != holder.ElementSize || el.UnmarshalBinary(raw) != nil || el.IsIdentity() {
+		reply(w, p.exchange.Refusals.Codes["bad_request"], map[string]any{"error": "bad_request"})
 		return
 	}
 	// Charged before the answer: a lost answer stays charged.
@@ -145,7 +172,11 @@ func (p *pinHome) evaluate(w http.ResponseWriter, r *http.Request) {
 		p.tamper(c)
 		p.tamper = nil
 	}
-	reply(w, 200, map[string]any{"evaluated": b64(out), "reset": c})
+	answer := map[string]any{"evaluated": b64(out), "reset": c}
+	if !exact(answer, p.exchange.Evaluate.Answer) {
+		p.h.shapes = append(p.h.shapes, fmt.Sprintf("the evaluate answer %v", answer))
+	}
+	reply(w, 200, answer)
 }
 
 // reset consumes a reset proof once: bound to its evaluation's nonce and
@@ -156,7 +187,7 @@ func (p *pinHome) reset(w http.ResponseWriter, r *http.Request) {
 	p.h.mu.Lock()
 	defer p.h.mu.Unlock()
 	proof, _ := m["proof"].(map[string]any)
-	if !exact(m, []string{"proof"}) {
+	if !exact(m, p.exchange.Reset.Request) {
 		p.h.shapes = append(p.h.shapes, fmt.Sprintf("%s %v", r.URL.Path, m))
 	}
 	nonce := stringOf(proof, "nonce")
@@ -166,15 +197,17 @@ func (p *pinHome) reset(w http.ResponseWriter, r *http.Request) {
 	ev := p.evaluators[id]
 	if !ok || ev == nil || fmt.Sprint(held["revision"]) != strconv.Itoa(ev.revision) {
 		p.staleResets++
-		reply(w, 409, map[string]any{"error": "stale"})
+		reply(w, p.exchange.Refusals.Codes["proof_refused"], map[string]any{"error": "proof_refused"})
 		return
 	}
-	ev.attempts, ev.next = 0, time.Time{}
+	ev.attempts, ev.next, ev.everReset = 0, time.Time{}, true
 	p.resets = append(p.resets, ev.revision)
-	if old := p.evaluators[ev.replaces]; old != nil {
-		old.destroyed = true
+	ev.revision++
+	for _, other := range p.evaluators {
+		if other != ev && other.client == ev.client {
+			other.destroyed = true
+		}
 	}
-	ev.replaces = ""
 	reply(w, 200, map[string]any{"reset": true})
 }
 
@@ -184,6 +217,13 @@ func (p *pinHome) state(id string) (attempts, revision int, live bool) {
 	defer p.h.mu.Unlock()
 	ev := p.evaluators[id]
 	return ev.attempts, ev.revision, !ev.suspended && !ev.destroyed
+}
+
+// id is the nth evaluator enrolled.
+func (p *pinHome) id(n int) string {
+	p.h.mu.Lock()
+	defer p.h.mu.Unlock()
+	return p.ids[n]
 }
 
 // set changes the fake's settings under its lock.

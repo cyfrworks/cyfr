@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cyfr/codex/internal/holder"
@@ -155,14 +156,17 @@ func (s *Shell) SetPIN(ctx context.Context, pin, again []byte) {
 		return
 	}
 	evaluator, err := s.cfg.EnrollPIN(ctx)
+	if err == nil && !evaluatorShape(evaluator) {
+		err = errors.New("CYFR named an evaluator this device does not take")
+	}
 	if err != nil {
-		s.say("CYFR did not set up the PIN: %s Nothing changed on this %s.", s.sentence(err), s.cfg.Noun)
+		s.say("CYFR did not set up the PIN: %s. Nothing changed on this %s.", strings.TrimSuffix(s.sentence(err), "."), s.cfg.Noun)
 		return
 	}
 	var reset json.RawMessage
 	hard, err := s.rec.HardenPIN(s.key, evaluator, pin, s.evaluate(ctx, evaluator, &reset))
 	if err != nil {
-		s.say("CYFR did not set up the PIN: %s Nothing changed on this %s.", s.sentence(err), s.cfg.Noun)
+		s.say("CYFR did not set up the PIN: %s. Nothing changed on this %s.", strings.TrimSuffix(s.sentence(err), "."), s.cfg.Noun)
 		return
 	}
 	if err := hard.Save(s.cfg.Record); err != nil {
@@ -197,4 +201,12 @@ func pinSentence(err error, noun string) string {
 // where the home is this same machine.
 func PINHereSentence(noun string) string {
 	return "CYFR runs on this machine, so a six-digit PIN cannot protect this " + noun + "'s key: CYFR's data and the key would share one disk. A self-contained box keeps its key under its chip's PIN or a passphrase."
+}
+
+// evaluatorShape is an evaluator's identifier as the home issues it
+// (tests/fixtures/device_pin.json's evaluator): pev_ and 32 random bytes,
+// unpadded base64url.
+func evaluatorShape(id string) bool {
+	raw, err := unb64(strings.TrimPrefix(id, "pev_"))
+	return strings.HasPrefix(id, "pev_") && err == nil && len(raw) == 32
 }

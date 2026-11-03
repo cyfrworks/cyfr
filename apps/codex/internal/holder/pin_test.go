@@ -6,6 +6,7 @@ package holder
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -294,5 +295,21 @@ func TestHardenPINRefusesAnotherKey(t *testing.T) {
 	defer k.Erase()
 	if _, err := rec.HardenPIN(k, "dpe_test", []byte("123456"), newTestEvaluator(t).eval); err == nil {
 		t.Fatal("another record's key was sealed under this record")
+	}
+}
+
+// The elements the fixture says a home refuses (the identity, a
+// non-canonical encoding, bytes no element has) are refused as an
+// answer here too: circl decodes the identity, so the holder checks it.
+func TestPINRefusesTheFixturesElements(t *testing.T) {
+	rec := pinRecord(t, newTestEvaluator(t), "123456")
+	for _, e := range readPINVectors(t).Elements.Refused {
+		raw, err := base64.RawURLEncoding.DecodeString(e.Blinded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rec.OpenPIN([]byte("123456"), func([]byte) ([]byte, error) { return raw, nil }); !errors.Is(err, ErrBadElement) {
+			t.Errorf("%s: %v, want ErrBadElement", e.Name, err)
+		}
 	}
 }

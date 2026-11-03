@@ -71,7 +71,7 @@ func TestSetPIN_KeepsTheKeyUnderAPINTheHomeCounts(t *testing.T) {
 	dir := t.TempDir()
 	sh, pass := pinned(t, home, dir)
 	rec := record(t, dir)
-	if rec.PIN == nil || rec.Software != nil || rec.PIN.Evaluator != "dpe_1" || rec.Kind != holder.KindSoftware {
+	if rec.PIN == nil || rec.Software != nil || rec.PIN.Evaluator != home.pin.id(0) || rec.Kind != holder.KindSoftware {
 		t.Fatalf("record after SetPIN: %+v", rec)
 	}
 	if home.pin.charged != 1 || len(home.pin.resets) != 1 {
@@ -82,7 +82,7 @@ func TestSetPIN_KeepsTheKeyUnderAPINTheHomeCounts(t *testing.T) {
 	if !sh.Unlocked() || home.pin.charged != 2 || len(home.pin.resets) != 2 {
 		t.Fatalf("unlock: %v, charged %d, resets %v, notice %q", sh.Unlocked(), home.pin.charged, home.pin.resets, sh.View().Notice)
 	}
-	if attempts, _, _ := home.pin.state("dpe_1"); attempts != 0 {
+	if attempts, _, _ := home.pin.state(home.pin.id(0)); attempts != 0 {
 		t.Fatalf("a successful unlock left %d attempts counted", attempts)
 	}
 	sh.Lock("")
@@ -110,8 +110,9 @@ func TestPIN_AWrongPINIsChargedAndTheWaitIsSaid(t *testing.T) {
 		t.Fatalf("wrong PIN: charged %d, resets %v", home.pin.charged-before, home.pin.resets)
 	}
 	sh.Unlock(t.Context(), []byte("123456"))
+	id := home.pin.id(0)
 	home.mu.Lock()
-	next := home.pin.evaluators["dpe_1"].next
+	next := home.pin.evaluators[id].next
 	home.mu.Unlock()
 	want := "Too many wrong PINs: CYFR takes this command line's next try at " + next.Local().Format("15:04:05") + "."
 	if v := sh.View(); sh.Unlocked() || v.Notice != want || home.pin.charged != before+1 {
@@ -119,7 +120,7 @@ func TestPIN_AWrongPINIsChargedAndTheWaitIsSaid(t *testing.T) {
 	}
 	home.pin.allow()
 	sh.Unlock(t.Context(), []byte("123456"))
-	if attempts, _, _ := home.pin.state("dpe_1"); !sh.Unlocked() || attempts != 0 {
+	if attempts, _, _ := home.pin.state(home.pin.id(0)); !sh.Unlocked() || attempts != 0 {
 		t.Fatalf("after the wait: unlocked %v, attempts %d", sh.Unlocked(), attempts)
 	}
 }
@@ -136,12 +137,12 @@ func TestPIN_ADroppedAnswerIsChargedAndNeverRetried(t *testing.T) {
 	if v := sh.View(); sh.Unlocked() || !strings.Contains(v.Notice, "could not be reached") {
 		t.Fatalf("dropped answer: unlocked %v, notice %q", sh.Unlocked(), v.Notice)
 	}
-	if attempts, _, _ := home.pin.state("dpe_1"); home.pin.charged != before+1 || home.pin.evaluations != before+1 || attempts != 1 {
+	if attempts, _, _ := home.pin.state(home.pin.id(0)); home.pin.charged != before+1 || home.pin.evaluations != before+1 || attempts != 1 {
 		t.Fatalf("dropped answer: charged %d, asked %d, attempts %d", home.pin.charged-before, home.pin.evaluations-before, attempts)
 	}
 	home.pin.allow()
 	sh.Unlock(t.Context(), []byte("123456"))
-	if attempts, _, _ := home.pin.state("dpe_1"); !sh.Unlocked() || home.pin.charged != before+2 || attempts != 0 {
+	if attempts, _, _ := home.pin.state(home.pin.id(0)); !sh.Unlocked() || home.pin.charged != before+2 || attempts != 0 {
 		t.Fatalf("next try: unlocked %v, charged %d, attempts %d", sh.Unlocked(), home.pin.charged-before, attempts)
 	}
 }
@@ -233,7 +234,7 @@ func TestPIN_AResetNamingAnotherDeviceIsNotSigned(t *testing.T) {
 	sh, _ := pinned(t, home, t.TempDir())
 	home.pin.set(func(p *pinHome) { p.tamper = func(c map[string]any) { c["client_id"] = "pcl_someone_else" } })
 	sh.Unlock(t.Context(), []byte("123456"))
-	if attempts, _, _ := home.pin.state("dpe_1"); !sh.Unlocked() || attempts != 1 || len(home.pin.resets) != 1 || home.pin.staleResets != 0 {
+	if attempts, _, _ := home.pin.state(home.pin.id(0)); !sh.Unlocked() || attempts != 1 || len(home.pin.resets) != 1 || home.pin.staleResets != 0 {
 		t.Fatalf("unlocked %v, attempts %d, resets %v, stale %d", sh.Unlocked(), attempts, home.pin.resets, home.pin.staleResets)
 	}
 }
@@ -252,10 +253,10 @@ func TestSetPIN_AReplacementNotWrittenKeepsTheOldEvaluator(t *testing.T) {
 	}
 	sh.SetPIN(t.Context(), []byte("222222"), []byte("222222"))
 	_ = os.Chmod(dir, 0o700)
-	if rec := record(t, dir); rec.PIN.Evaluator != "dpe_1" || !strings.Contains(sh.View().Notice, "could not save") {
+	if rec := record(t, dir); rec.PIN.Evaluator != home.pin.id(0) || !strings.Contains(sh.View().Notice, "could not save") {
 		t.Fatalf("record %s, notice %q", rec.PIN.Evaluator, sh.View().Notice)
 	}
-	if _, _, live := home.pin.state("dpe_1"); !live {
+	if _, _, live := home.pin.state(home.pin.id(0)); !live {
 		t.Fatal("the old evaluator was retired before the new record was written")
 	}
 	sh.Lock("")
@@ -265,10 +266,10 @@ func TestSetPIN_AReplacementNotWrittenKeepsTheOldEvaluator(t *testing.T) {
 	}
 
 	sh.SetPIN(t.Context(), []byte("222222"), []byte("222222"))
-	if rec := record(t, dir); rec.PIN.Evaluator != "dpe_3" {
+	if rec := record(t, dir); rec.PIN.Evaluator != home.pin.id(2) {
 		t.Fatalf("replaced under %s", rec.PIN.Evaluator)
 	}
-	if _, _, live := home.pin.state("dpe_1"); live {
+	if _, _, live := home.pin.state(home.pin.id(0)); live {
 		t.Fatal("the old evaluator outlived the new one's reset")
 	}
 	sh.Lock("")
@@ -284,8 +285,9 @@ func TestSetPIN_AReplacementNotWrittenKeepsTheOldEvaluator(t *testing.T) {
 func TestPIN_ASuspendedEvaluatorComesBackWithTheRecoveryCode(t *testing.T) {
 	home := newFakeHome(t)
 	sh, _ := pinned(t, home, t.TempDir())
+	id := home.pin.id(0)
 	home.mu.Lock()
-	home.pin.evaluators["dpe_1"].suspended = true
+	home.pin.evaluators[id].suspended = true
 	home.mu.Unlock()
 	sh.Unlock(t.Context(), []byte("123456"))
 	v := sh.View()
@@ -318,11 +320,57 @@ func TestPIN_TheLockPageAsksThePINAndSaysTheWait(t *testing.T) {
 	}
 	b.post("/unlock", url.Values{"secret": {"654321"}})
 	b.post("/unlock", url.Values{"secret": {"123456"}})
+	id := home.pin.id(0)
 	home.mu.Lock()
-	next := home.pin.evaluators["dpe_1"].next
+	next := home.pin.evaluators[id].next
 	home.mu.Unlock()
 	want := "Too many wrong PINs: CYFR takes this command line's next try at " + next.Local().Format("15:04:05") + "."
 	if page := b.page(); !strings.Contains(page, want) || sh.Unlocked() {
 		t.Fatalf("the lock page does not say %q:\n%s", want, page)
+	}
+}
+
+// The evaluator pin.enroll names is taken only in the fixture's shape:
+// pev_ and 32 bytes, unpadded base64url.
+func TestPINVectors_TheEvaluatorShape(t *testing.T) {
+	var v struct {
+		Evaluator struct {
+			Valid   []string `json:"valid"`
+			Invalid []string `json:"invalid"`
+		} `json:"evaluator"`
+	}
+	fixture(t, "device_pin.json", &v)
+	for _, id := range v.Evaluator.Valid {
+		if !evaluatorShape(id) {
+			t.Errorf("%s refused", id)
+		}
+	}
+	for _, id := range v.Evaluator.Invalid {
+		if evaluatorShape(id) {
+			t.Errorf("%s taken", id)
+		}
+	}
+}
+
+// An evaluator pin.enroll names out of shape changes nothing and charges
+// nothing.
+func TestSetPIN_AnEvaluatorOutOfShapeChangesNothing(t *testing.T) {
+	home := newFakeHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "device.json")
+	sh, err := New(Config{
+		Address: home.address(), Client: home.srv.Client(), Record: path, DataDir: dir,
+		Detect: func(string) disk.Report { return disk.Report{} }, Chip: func() bool { return false },
+		Noun: "command line", Pair: home.pair,
+		EnrollPIN: func(context.Context) (string, error) { return "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sh.Lock("") })
+	pairOnBox(t, home, sh)
+	sh.SetPIN(t.Context(), []byte("123456"), []byte("123456"))
+	if record(t, dir).PIN != nil || home.pin.charged != 0 || !strings.Contains(sh.View().Notice, "Nothing changed") {
+		t.Fatalf("PIN %v, charged %d, notice %q", record(t, dir).PIN, home.pin.charged, sh.View().Notice)
 	}
 }

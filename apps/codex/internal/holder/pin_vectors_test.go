@@ -3,26 +3,71 @@
 
 package holder
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// pinVectors is tests/fixtures/device_pin.json as the holder reads it:
+// the suite, RFC 9497 Appendix A.1.1's OPRF-mode vectors and the elements
+// a home refuses.
+type pinVectors struct {
+	Suite struct {
+		Name         string `json:"name"`
+		Mode         int    `json:"mode"`
+		ElementBytes int    `json:"element_bytes"`
+		OutputBytes  int    `json:"output_bytes"`
+	} `json:"suite"`
+	RFC9497 struct {
+		SkS     string `json:"sk_s"`
+		Vectors []struct {
+			Blind, Input, Output string
+			Blinded              string `json:"blinded_element"`
+			Evaluated            string `json:"evaluation_element"`
+		} `json:"vectors"`
+	} `json:"rfc9497"`
+	Elements struct {
+		Refused []struct {
+			Name    string `json:"name"`
+			Blinded string `json:"blinded"`
+		} `json:"refused"`
+	} `json:"elements"`
+}
+
+func readPINVectors(t *testing.T) pinVectors {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "device_pin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v pinVectors
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
 
 type rfcVector struct {
 	key, input, blind, blinded, evaluated, output []byte
 }
 
-// rfc9497Vectors is RFC 9497 Appendix A.1.1, OPRF(ristretto255, SHA-512)
-// in mode 0.
+// rfc9497Vectors is the fixture's RFC 9497 section, decoded.
 func rfc9497Vectors(t *testing.T) []rfcVector {
 	t.Helper()
-	key := hexBytes(t, "5ebcea5ee37023ccb9fc2d2019f9d7737be85591ae8652ffa9ef0f4d37063b0e")
-	blind := hexBytes(t, "64d37aed22a27f5191de1c1d69fadb899d8862b58eb4220029e036ec4c1f6706")
-	return []rfcVector{
-		{key: key, blind: blind, input: hexBytes(t, "00"),
-			blinded:   hexBytes(t, "609a0ae68c15a3cf6903766461307e5c8bb2f95e7e6550e1ffa2dc99e412803c"),
-			evaluated: hexBytes(t, "7ec6578ae5120958eb2db1745758ff379e77cb64fe77b0b2d8cc917ea0869c7e"),
-			output:    hexBytes(t, "527759c3d9366f277d8c6020418d96bb393ba2afb20ff90df23fb7708264e2f3ab9135e3bd69955851de4b1f9fe8a0973396719b7912ba9ee8aa7d0b5e24bcf6")},
-		{key: key, blind: blind, input: hexBytes(t, "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"),
-			blinded:   hexBytes(t, "da27ef466870f5f15296299850aa088629945a17d1f5b7f5ff043f76b3c06418"),
-			evaluated: hexBytes(t, "b4cbf5a4f1eeda5a63ce7b77c7d23f461db3fcab0dd28e4e17cecb5c90d02c25"),
-			output:    hexBytes(t, "f4a74c9c592497375e796aa837e907b1a045d34306a749db9f34221f7e750cb4f2a6413a6bf6fa5e19ba6348eb673934a722a7ede2e7621306d18951e7cf2c73")},
+	v := readPINVectors(t)
+	if v.Suite.Name != pinSuite.Identifier() || v.Suite.Mode != 0 || v.Suite.ElementBytes != ElementSize || v.Suite.OutputBytes != 64 {
+		t.Fatalf("the fixture's suite %+v is not the holder's %s", v.Suite, pinSuite.Identifier())
 	}
+	if len(v.RFC9497.Vectors) == 0 {
+		t.Fatal("the fixture holds no RFC 9497 vectors")
+	}
+	key := hexBytes(t, v.RFC9497.SkS)
+	var out []rfcVector
+	for _, c := range v.RFC9497.Vectors {
+		out = append(out, rfcVector{key: key, input: hexBytes(t, c.Input), blind: hexBytes(t, c.Blind),
+			blinded: hexBytes(t, c.Blinded), evaluated: hexBytes(t, c.Evaluated), output: hexBytes(t, c.Output)})
+	}
+	return out
 }
