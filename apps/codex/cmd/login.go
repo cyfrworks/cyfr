@@ -156,8 +156,8 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("Unlocked, but CYFR opened no session for this command line, so it locked again: %s", strings.TrimSuffix(shellSentence(err), "."))
 	}
 	var pages *shell.Server
-	if s, ok := sh.(*shell.Shell); ok {
-		pages = &shell.Server{Shell: s}
+	if s, ok := sh.(*sessionDevice); ok {
+		pages = &shell.Server{Shell: s.Shell}
 	}
 	return holdShell(sh, pages, address, session, locked)
 }

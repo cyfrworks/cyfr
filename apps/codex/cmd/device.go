@@ -106,13 +106,20 @@ type device interface {
 }
 
 // openDevice is how a command opens this command line's device: its shell
-// (deviceShell), unless a test stands in for it.
+// (deviceShell), reading a change to confirm through cyfr login's session
+// when the command runs in that shell (sessionDevice), unless a test
+// stands in for it.
 var openDevice = func(o deviceOptions) (device, error) {
 	sh, err := deviceShell(o)
 	if err != nil {
 		return nil, err
 	}
-	return sh, nil
+	d := &sessionDevice{Shell: sh}
+	if token, ok := shellSession(o.address); ok {
+		d.session = mcp.NewClient(o.address)
+		d.session.SessionID = token
+	}
+	return d, nil
 }
 
 // deviceShell is this command line's device for the home at o.address:

@@ -463,3 +463,35 @@ func TestUnlock_AnUnsavedJoinShowsTheRecoveryCodeBeforeAnySession(t *testing.T) 
 		t.Fatalf("no session once the code was saved: %q, %v", token, err)
 	}
 }
+
+// A change drawn before the secret was asked (read through the command
+// line's session) is confirmed by that secret alone: it opens the key
+// afresh, a channel of its own reads the home's challenge for the ref,
+// and the challenge is signed only while the record is the one drawn; the
+// device is locked again whatever the outcome. A wrong secret and a change
+// that moved since it was drawn sign nothing.
+func TestConfirmDrawn_SignsOnlyTheChangeDrawn(t *testing.T) {
+	home := newFakeHome(t)
+	sh := commandLine(t, home, t.TempDir(), "")
+	p := pairOnBox(t, home, sh)
+	sh.Lock("")
+	home.pending["cnr_1"] = map[string]any{"ref": "cnr_1", "operation": "pairing.begin", "preview": map[string]any{"key_digest": "D1"}}
+	drawn := PendingConfirm{Ref: "cnr_1", Operation: "pairing.begin", Preview: map[string]any{"key_digest": "D1"}}
+
+	sh.ConfirmDrawn(t.Context(), drawn, []byte(otherPassphrase(t, string(p))))
+	if v := sh.View(); len(home.confirmed) != 0 || !strings.Contains(v.Notice, "Nothing was signed") || sh.Unlocked() {
+		t.Fatalf("a wrong secret: confirmed %d, notice %q, unlocked %v", len(home.confirmed), v.Notice, sh.Unlocked())
+	}
+
+	moved := drawn
+	moved.Preview = map[string]any{"key_digest": "D2"}
+	sh.ConfirmDrawn(t.Context(), moved, []byte(string(p)))
+	if v := sh.View(); len(home.confirmed) != 0 || !strings.Contains(v.Notice, "not the one shown") || sh.Unlocked() {
+		t.Fatalf("a moved change: confirmed %d, notice %q", len(home.confirmed), v.Notice)
+	}
+
+	sh.ConfirmDrawn(t.Context(), drawn, []byte(string(p)))
+	if v := sh.View(); len(home.confirmed) != 1 || home.confirmed[0]["ref"] != "cnr_1" || v.Notice != "Confirmed on this command line." || sh.Unlocked() {
+		t.Fatalf("confirmed %v, notice %q, unlocked %v", home.confirmed, v.Notice, sh.Unlocked())
+	}
+}

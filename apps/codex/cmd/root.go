@@ -332,12 +332,13 @@ var (
 // sentence, which names the record by its ref, and waits: each Enter repeats
 // the call once, a repeat answered with the same id waits again, and the
 // wait ends at the record's expiry. Where this command line holds a
-// paired device for the home (device), the PIN or passphrase typed instead
-// confirms the change here (confirmOnDevice), and the call is repeated;
-// declined there, the wait ends with the signal. Off a terminal, or past
-// the expiry, it ends at once with the signal itself, which the command
-// prints before exiting 1: nothing was changed, and the id is dropped with
-// the process. Ctrl-C leaves it (exit 130).
+// paired device for the home (device), it first offers to confirm the
+// change here: the home's preview is drawn, then the PIN or passphrase
+// typed after it confirms it (confirmOnDevice) and the call is repeated,
+// or Enter alone repeats it once confirmed elsewhere. Off a terminal, or
+// past the expiry, it ends at once with the signal itself, which the
+// command prints before exiting 1: nothing was changed, and the id is
+// dropped with the process. Ctrl-C leaves it (exit 130).
 type confirmationWait struct {
 	out         io.Writer
 	interactive func() bool
@@ -359,26 +360,49 @@ func (w *confirmationWait) wait(ctx context.Context, pending *mcp.ConsentError, 
 	} else {
 		fmt.Fprintln(w.out, formatConsentError(pending.Tag, pending.Payload))
 	}
-	var here deviceConfirmer
-	if w.device != nil && id != "" {
-		here = w.device(w.address)
-	}
-	c := &console{out: w.out, lines: w.lines, quiet: echoOff}
-	restore := func() {}
-	if here != nil {
-		fmt.Fprintln(w.out, "  Type this command line's PIN or passphrase to confirm it here, or press Enter once confirmed elsewhere. Ctrl-C leaves it.")
-		restore = c.quiet()
-	} else {
-		fmt.Fprintln(w.out, "  Press Enter once confirmed, Ctrl-C to leave it.")
-	}
-	defer func() { restore() }()
-
 	var expired <-chan time.Time
 	if expires {
 		timer := time.NewTimer(expiresAt.Sub(w.now()))
 		defer timer.Stop()
 		expired = timer.C
 	}
+
+	if w.device != nil && id != "" {
+		if here := w.device(w.address); here != nil {
+			// The record's expiry ends the offer as it ends the wait.
+			dctx, cancel := context.WithCancel(ctx)
+			lapsed := make(chan bool, 1)
+			go func() {
+				select {
+				case <-expired:
+					lapsed <- true
+					cancel()
+				case <-dctx.Done():
+					lapsed <- false
+				}
+			}()
+			outcome, err := here(dctx, confirmation.Ref(id), &console{out: w.out, lines: w.lines, quiet: echoOff})
+			cancel()
+			switch {
+			case <-lapsed:
+				return pending
+			case ctx.Err() != nil:
+				return prompt.ErrAborted
+			case errors.Is(err, errInputEnded):
+				return pending
+			case outcome == failedHere:
+				fmt.Fprintln(w.out, err)
+				return nil
+			case outcome == notHere:
+				if err != nil && err.Error() != "" {
+					fmt.Fprintln(w.out, err)
+				}
+			default:
+				return nil
+			}
+		}
+	}
+	fmt.Fprintln(w.out, "  Press Enter once confirmed, Ctrl-C to leave it.")
 
 	select {
 	case <-ctx.Done():
@@ -389,26 +413,7 @@ func (w *confirmationWait) wait(ctx context.Context, pending *mcp.ConsentError, 
 		if !open {
 			return pending
 		}
-		if here == nil || len(line) == 0 {
-			clear(line)
-			return nil
-		}
-		restore()
-		restore = func() {}
-		fmt.Fprintln(w.out)
-		confirmed, err := here(ctx, confirmation.Ref(id), line, c)
-		switch {
-		case errors.Is(err, prompt.ErrAborted):
-			return prompt.ErrAborted
-		case errors.Is(err, errInputEnded):
-			return pending
-		case err != nil:
-			fmt.Fprintln(w.out, err)
-			return nil
-		case !confirmed:
-			fmt.Fprintln(w.out, "Nothing was confirmed.")
-			return pending
-		}
+		clear(line)
 		return nil
 	}
 }

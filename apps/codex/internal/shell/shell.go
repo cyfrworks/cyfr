@@ -1122,6 +1122,56 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 	s.say("Confirmed on this screen. The page that asked finishes the change and shows its result.")
 }
 
+// ConfirmDrawn confirms the change drawn, read from the home through
+// another credential of this device's (the command line's session) and
+// shown before the secret was asked: the secret, asked after it, opens
+// the key afresh, which proves this device on a channel of its own; the
+// home's confirm challenge for that ref is read there, and only when the
+// record behind it is still the one drawn (its operation and preview) is
+// that challenge signed and presented (confirmation.confirm). The channel
+// is closed and the key erased whatever the outcome; the notice says it.
+func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer erase(secret)
+	if s.rec == nil || len(s.rec.Certificate) == 0 || s.key != nil {
+		return
+	}
+	key, err := s.rec.Open(secret)
+	if err != nil {
+		s.say("%s Nothing was signed.", s.sentence(err))
+		return
+	}
+	if err := s.connect(ctx, key); err != nil {
+		key.Erase()
+		s.say("%s Nothing was signed.", s.sentence(err))
+		return
+	}
+	notice := ""
+	defer func() { s.lock(""); s.notice = notice }()
+	now, challenge, err := s.pending(ctx, drawn.Ref)
+	if err != nil {
+		notice = s.sentence(err) + " Nothing was signed."
+		return
+	}
+	pa, _ := Canonical(now.Preview)
+	pb, _ := Canonical(drawn.Preview)
+	if now.Operation != drawn.Operation || string(pa) != string(pb) {
+		notice = "The change CYFR holds is not the one shown, so nothing was signed."
+		return
+	}
+	proof, err := Prove(challenge, s.key)
+	if err != nil {
+		notice = s.sentence(err)
+		return
+	}
+	if _, err := s.ch.Call(ctx, "confirmation.confirm", map[string]any{"ref": drawn.Ref, "device_proof": proof}); err != nil {
+		notice = "CYFR did not take the confirmation: " + s.sentence(err)
+		return
+	}
+	notice = "Confirmed on this " + s.cfg.Noun + "."
+}
+
 // same is whether the confirmation at the home is still the one drawn:
 // its operation, preview and the digest its challenge binds.
 func same(a, b *PendingConfirm) bool {

@@ -394,11 +394,13 @@ func pairedRecord(t *testing.T, address string) {
 }
 
 // A change answered confirmation_required on a command line paired with
-// the home is confirmed here: the passphrase typed opens the device on a
-// channel of its own, the home's preview for exactly the pending ref is
-// drawn, and on yes the same secret opens the key afresh to sign; the
-// device is locked again. No answer declines it, and Enter alone waits
-// for a confirmation elsewhere, as without a device.
+// the home is offered for confirmation here, in C4's order: the home's
+// preview for exactly the pending ref is drawn first, then the PIN or
+// passphrase is asked once, after it, and that secret confirms the drawn
+// change; the device is locked again. Enter alone repeats the call once
+// confirmed elsewhere, signing nothing; a wrong secret is said and the
+// call repeats; a device that cannot draw the change leaves the plain
+// wait.
 func TestConfirmationWait_ConfirmsOnThisDevice(t *testing.T) {
 	withContexts(t, "home", map[string]*config.Context{"home": {URL: "https://alice.example"}})
 	pairedRecord(t, "https://alice.example")
@@ -413,15 +415,16 @@ func TestConfirmationWait_ConfirmsOnThisDevice(t *testing.T) {
 	t.Cleanup(func() { openDevice = previous })
 	const id = "cfm_secret-id"
 	pending := &mcp.ConsentError{Tag: "confirmation_required", Payload: map[string]any{"id": id, "operation": "pairing.begin"}}
-	device := func(confirm bool, notice string) *fakeDevice {
+	device := func(drawn bool, notice string) *fakeDevice {
 		return newFakeDevice(shell.View{Page: shell.PageLocked}, func(call string, d *fakeDevice) {
-			switch call {
-			case "unlock":
-				d.set(shell.View{Page: shell.PageUnlocked})
-			case "draw":
-				d.set(shell.View{Page: shell.PageConfirm, Confirm: &shell.PendingConfirm{Ref: confirmation.Ref(id), Operation: "pairing.begin", Preview: map[string]any{"key_digest": "DIGEST"}}})
-			case "decide":
-				d.set(shell.View{Page: shell.PageUnlocked, Notice: notice})
+			switch {
+			case call == "draw" && drawn:
+				d.set(shell.View{Page: shell.PageConfirm, Confirm: &shell.PendingConfirm{Ref: confirmation.Ref(id),
+					Operation: "pairing.begin", Preview: map[string]any{"key_digest": "THE-DIGEST"}}})
+			case call == "draw":
+				d.set(shell.View{Page: shell.PageLocked, Notice: "This command line confirms a change in the shell cyfr login started."})
+			case call == "decide":
+				d.set(shell.View{Page: shell.PageLocked, Notice: notice})
 			}
 		})
 	}
@@ -436,23 +439,30 @@ func TestConfirmationWait_ConfirmsOnThisDevice(t *testing.T) {
 		return w.wait(t.Context(), pending, false), out.String()
 	}
 
-	dev = device(true, "Confirmed on this command line. The page that asked finishes the change and shows its result.")
-	if err, out := run(passphrase, "y"); err != nil || !strings.Contains(out, "PIN or passphrase to confirm it here") {
+	dev = device(true, "Confirmed on this command line.")
+	err, out := run(passphrase)
+	if err != nil || strings.Index(out, "THE-DIGEST") > strings.Index(out, "PIN or passphrase") || strings.Index(out, "THE-DIGEST") < 0 {
 		t.Fatalf("confirmed: %v\n%s", err, out)
 	}
-	if !slices.Equal(dev.calls, []string{"unlock", "draw", "decide"}) || dev.given["draw"] != confirmation.Ref(id) ||
+	if !slices.Equal(dev.calls, []string{"draw", "decide"}) || dev.given["draw"] != confirmation.Ref(id) ||
 		dev.given["decide"] != confirmation.Ref(id)+"|true" || string(dev.secrets["decide"]) != passphrase || dev.locks != 1 {
 		t.Fatalf("calls %v, given %v, locks %d", dev.calls, dev.given, dev.locks)
 	}
 
-	dev = device(false, "")
-	if err, _ := run(passphrase, "n"); !errors.Is(err, pending) || dev.given["decide"] != confirmation.Ref(id)+"|false" {
-		t.Fatalf("declined: %v, %v", err, dev.given)
+	dev = device(true, "")
+	if err, _ := run(""); err != nil || dev.given["decide"] != confirmation.Ref(id)+"|false" {
+		t.Fatalf("Enter alone: %v, %v", err, dev.given)
+	}
+
+	dev = device(true, "That is not this command line's PIN or passphrase. Nothing was sent anywhere. Nothing was signed.")
+	if err, out := run("000000"); err != nil || !strings.Contains(out, "not this command line's PIN") {
+		t.Fatalf("a wrong secret: %v\n%s", err, out)
 	}
 
 	dev = device(false, "")
-	if err, _ := run(""); err != nil || len(dev.calls) != 0 {
-		t.Fatalf("Enter alone: %v, calls %v", err, dev.calls)
+	if err, out := run(""); err != nil || !slices.Equal(dev.calls, []string{"draw"}) || !strings.Contains(out, "Press Enter once confirmed") ||
+		!strings.Contains(out, "in the shell cyfr login started") {
+		t.Fatalf("no drawing: %v, calls %v\n%s", err, dev.calls, out)
 	}
 }
 
@@ -536,5 +546,35 @@ func TestLoginConsole_LeavesTheNextLineToTheShell(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("the shell's first line was taken")
+	}
+}
+
+// In cyfr login's shell the change to confirm is read through the shell's
+// session, the ref alone asked for, and drawn as the home answered it;
+// outside that shell nothing is drawn and the sentence says where it is.
+func TestSessionDevice_DrawsTheChangeThroughTheSession(t *testing.T) {
+	var auth string
+	srv := newCLIServer(t, "", `{"confirmations":[{"ref":"cnr_1","operation":"pairing.begin","preview":{"key_digest":"D1"},"asker":{"name":"cyfr on box"}}]}`)
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		inner.ServeHTTP(w, r)
+	})
+	session := mcp.NewClient(srv.URL)
+	session.SessionID = "TOKEN-1"
+	d := &sessionDevice{session: session}
+	d.Draw(t.Context(), "cnr_1")
+	v := d.View()
+	if v.Page != shell.PageConfirm || v.Confirm.Operation != "pairing.begin" || v.Confirm.Preview["key_digest"] != "D1" || auth != "Bearer TOKEN-1" {
+		t.Fatalf("drawn %+v, auth %q", v, auth)
+	}
+	if name, args := srv.call(0); name != "confirmation" || args["action"] != "pending" || args["request"] != "cnr_1" {
+		t.Errorf("asked %s %v", name, args)
+	}
+
+	outside := &sessionDevice{}
+	outside.Draw(t.Context(), "cnr_1")
+	if outside.drawn != nil || !strings.Contains(outside.notice, "in the shell cyfr login started") {
+		t.Errorf("outside the shell: %+v, %q", outside.drawn, outside.notice)
 	}
 }
