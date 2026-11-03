@@ -273,3 +273,90 @@ func TestUnlock_ARefusedRemoteCertificateRenewsAtItsIssuer(t *testing.T) {
 		t.Errorf("the replacement was not kept: %s", after.Certificate)
 	}
 }
+
+// terminalVectors is tests/fixtures/confirmation_assertion.json's
+// exchange.terminal: what a CYFR keeping none of the person's keys asks
+// their own CYFR to certify, and what the certificate binds.
+type terminalVectors struct {
+	Exchange struct {
+		Terminal struct {
+			Certificate struct {
+				Binds    []string `json:"binds"`
+				Protocol string   `json:"protocol"`
+				Subject  string   `json:"subject"`
+			} `json:"certificate"`
+			PairingComplete struct {
+				Certify []string `json:"certify"`
+			} `json:"pairing.complete"`
+		} `json:"terminal"`
+	} `json:"exchange"`
+}
+
+// The certify answer is read with exactly the vector's fields, and any
+// one missing or one more refuses it; a certificate substituted in any
+// field the vector says it binds, another protocol or another subject is
+// not used.
+func TestCertification_TheTerminalVectors(t *testing.T) {
+	var v terminalVectors
+	fixture(t, "confirmation_assertion.json", &v)
+	tv := v.Exchange.Terminal
+	b := Binding{Home: "https://hub.example", DeviceKey: testKey(t).pub}
+	values := map[string]any{"audience": b.Home, "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+		"client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091"}
+	answer := map[string]any{}
+	for _, f := range tv.PairingComplete.Certify {
+		value, ok := values[f]
+		if !ok {
+			t.Fatalf("the vector's certify names %q, which this device does not read", f)
+		}
+		answer[f] = value
+	}
+	asked, err := certification(answer, b)
+	if err != nil || len(answer) != len(values) {
+		t.Fatalf("the vector's certify %v: %v", tv.PairingComplete.Certify, err)
+	}
+	for _, f := range tv.PairingComplete.Certify {
+		short := map[string]any{}
+		for k, v := range answer {
+			if k != f {
+				short[k] = v
+			}
+		}
+		if _, err := certification(short, b); err == nil {
+			t.Errorf("a certify without %s was read", f)
+		}
+	}
+	extra := map[string]any{"device_key": b64(b.DeviceKey)}
+	for k, v := range answer {
+		extra[k] = v
+	}
+	if _, err := certification(extra, b); err == nil {
+		t.Error("a certify with a field more was read")
+	}
+
+	good := ownCertificate(*asked)
+	good["protocol"] = tv.Certificate.Protocol
+	good["subject"].(map[string]any)["kind"] = tv.Certificate.Subject
+	use := func(cert map[string]any) error {
+		raw, _ := json.Marshal(cert)
+		return Elsewhere(Certified{Issuer: ownHome, Certificate: raw}, *asked)
+	}
+	if err := use(good); err != nil {
+		t.Fatalf("the vector's certificate was refused: %v", err)
+	}
+	for _, f := range tv.Certificate.Binds {
+		bad := map[string]any{}
+		for k, v := range good {
+			bad[k] = v
+		}
+		bad[f] = map[string]any{"athanor": "ath_01a09fee-045b-770b-b745-a62792bb8799", "audience": "https://mallory.example",
+			"client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8099", "device_key": b64(make([]byte, 32)),
+			"issuer": "https://mallory.example"}[f]
+		if bad[f] == nil {
+			t.Fatalf("the vector binds %q, which this test does not substitute", f)
+		}
+		if err := use(bad); err == nil {
+			t.Errorf("a certificate with another %s was used", f)
+		}
+	}
+}
