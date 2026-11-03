@@ -5,7 +5,9 @@ defmodule PrismWeb.SystemLayer.Pairing do
   @moduledoc """
   The pairing prompt's body, which only the system layer draws: the
   person's paired clients in the athanor in focus, each with its revoke
-  control, the pairing code, and the person's command-line sessions
+  control and, for a protected device, what holds its key and what it
+  last reported of its disks (`Sanctum.Pairing.list/1`), a report a
+  person reads and never a decision; the pairing code, and the person's command-line sessions
   (`Sanctum.CliSignIn`), each with its revoke control.
 
   Pairing a device begins on the new device: this home's `/pair` page
@@ -56,7 +58,20 @@ defmodule PrismWeb.SystemLayer.Pairing do
               data-client={client.client_id}
             >
               <div>
-                <p class="font-medium">Paired device</p>
+                <p class="font-medium" data-test="pairing-client-name">
+                  {client[:display_name] || "Paired device"}
+                </p>
+                <p :if={holder(client)} class="text-xs text-gray-300" data-test="pairing-holder">
+                  {holder(client)}
+                </p>
+                <p
+                  :if={storage(client)}
+                  class="text-xs text-gray-300"
+                  data-test="pairing-storage"
+                  data-storage={storage_state(client)}
+                >
+                  {storage(client)}
+                </p>
                 <p class="text-xs text-gray-400">
                   Paired {client.paired_at}{expiry(client)}
                 </p>
@@ -187,4 +202,36 @@ defmodule PrismWeb.SystemLayer.Pairing do
     do: "; its certificate renews before #{at}"
 
   defp expiry(_client), do: ""
+
+  # What holds a protected device's key, as the device reports it.
+  defp holder(%{holder_kind: "chip"}),
+    do: "Unlocks with a PIN; its key is sealed in this device's security chip."
+
+  defp holder(%{holder_kind: "software"}),
+    do: "Unlocks with a passphrase; its key is encrypted on this device's disk."
+
+  defp holder(_client), do: nil
+
+  # What a protected device last reported of its disks: any volume it
+  # keeps unencrypted is named, and a volume it could not determine is
+  # never called encrypted.
+  defp storage(%{storage: %{root: root, data: data}}) do
+    unencrypted = for {name, "unencrypted"} <- [{"system", root}, {"data", data}], do: name
+
+    cond do
+      unencrypted != [] ->
+        "This box keeps its data unencrypted, whoever takes it reads everything " <>
+          "(#{Enum.join(unencrypted, " and ")} disk)."
+
+      "unknown" in [root, data] ->
+        "Whether this box's disks are encrypted could not be determined."
+
+      true ->
+        "This box's system and data disks are encrypted."
+    end
+  end
+
+  defp storage(_client), do: nil
+
+  defp storage_state(%{storage: %{root: root, data: data}}), do: "#{root} #{data}"
 end

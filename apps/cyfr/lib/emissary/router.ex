@@ -186,6 +186,26 @@ defmodule Emissary.Router do
           window_ms: 60_000
       end
 
+      # A protected device's enrollment (`Emissary.Web.DeviceEnrollmentController`):
+      # JSON, no CSRF token, since the setup token and the restore token
+      # travel in headers no cross-site form can set and no CORS answer
+      # admits; the cookie session is fetched only to read a restore's own
+      # session, whose first-method window enrolls the restored person's
+      # first device. An entry path, so the routes record their own
+      # refusals, metered per address before Sanctum reads anything.
+      pipeline :device_enrollment do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "device"
+        plug :accepts, ["json"]
+        plug CyfrWeb.Plugs.ApiSecurityHeaders
+        plug CyfrWeb.Plugs.FrameRequest
+        plug :fetch_session
+
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :device_enrollment,
+          max_requests: 30,
+          window_ms: 60_000
+      end
+
       # The identity directory's routes (`Sanctum.Directory`), which decide
       # every request and record their own refusals: a directory request is
       # admitted by the identifier's own chain, never by a person of this
@@ -371,6 +391,20 @@ defmodule Emissary.Router do
       # restored from a backup, the proof a recovering person's recovery code
       # signs (the `/kit` routes keep their path) and the re-enables it admits. Its body is
       # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
+      # A protected device's enrollment at setup or after a restore, and
+      # the resume of one whose answer was lost.
+      scope "/device/enrollment", Emissary.Web do
+        pipe_through :device_enrollment
+
+        post "/challenge", DeviceEnrollmentController, :challenge,
+          metadata: %{auth: :device_enrollment}
+
+        post "/complete", DeviceEnrollmentController, :complete,
+          metadata: %{auth: :device_enrollment}
+
+        post "/resume", DeviceEnrollmentController, :resume, metadata: %{auth: :device_enrollment}
+      end
+
       scope "/restore", Emissary.Web do
         pipe_through :restore
 

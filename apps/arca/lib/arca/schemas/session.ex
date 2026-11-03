@@ -6,7 +6,8 @@ defmodule Arca.Schemas.Session do
   Ecto schema for the `sessions` table (backs `Arca.SessionStorage`).
   A remote person's session records the `identity_key_epoch` of the
   identity head verified when it was minted, and a command line's the
-  `cli_machine` it was issued to.
+  `cli_machine` it was issued to. A protected device's unlock records
+  its paired `client_id`: that session's expiry is the device channel's.
   """
 
   use Ecto.Schema
@@ -29,6 +30,9 @@ defmodule Arca.Schemas.Session do
     # The machine a command line's session was issued to; nil for a
     # browser's.
     field :cli_machine, :string
+    # The protected device whose unlock created the session; nil for
+    # every other session.
+    field :client_id, :string
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 end

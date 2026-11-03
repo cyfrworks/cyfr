@@ -64,6 +64,10 @@ defmodule Arca.SchemaVocabularyTest do
       # (`Arca.SecurityTransitions.restore/1`) until its person re-enables it.
       {"paired_clients", "paired_clients_standing_known", "standing",
        Arca.Schemas.PairedClient.standings()},
+      # What a protected device reports holds its key; a browser key holds
+      # none (NULL).
+      {"paired_clients", "paired_clients_holder_kind_known", "holder_kind",
+       Arca.Schemas.PairedClient.holder_kinds()},
       {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()},
       # `Arca.CliSignIns` approves or cancels a command line's pending
       # sign-in, and nothing leaves either.

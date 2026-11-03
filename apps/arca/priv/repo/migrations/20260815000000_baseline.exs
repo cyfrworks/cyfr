@@ -385,11 +385,17 @@ defmodule Arca.Repo.Migrations.Baseline do
       # line named it; null for a browser's. Its person lists and revokes
       # the command lines by it.
       add :cli_machine, :string
+      # The protected device whose unlock created the session: its expiry
+      # is the device channel's, slid only by that channel and never past
+      # its certificate (`Sanctum.DeviceUnlock`). Null for every other
+      # session.
+      add :client_id, :string
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
     end
 
     create unique_index(:sessions, [:token_hash])
+    create index(:sessions, [:client_id], where: "client_id IS NOT NULL")
     create index(:sessions, [:user_id])
     create index(:sessions, [:expires_at])
     create index(:sessions, [:identity_key_epoch], where: "identity_key_epoch IS NOT NULL")
@@ -553,6 +559,11 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "standing IN ('active', 'suspended', 'revoked')"
     }
 
+    holder_kind_known = %{
+      name: "paired_clients_holder_kind_known",
+      expr: "holder_kind IN ('chip', 'software')"
+    }
+
     # One row per client a person holds in an athanor: the credential it
     # stands on (`source_kind`/`source_id`, a lookup identifier and never a
     # bearer credential), a paired device's public key
@@ -560,7 +571,11 @@ defmodule Arca.Repo.Migrations.Baseline do
     # which alone decides what the client may do. A revoked row is
     # terminal; a standing transition revokes a person's rows in its own
     # transaction (`Arca.SecurityTransitions`). A declared restore
-    # suspends every standing row until the person re-enables it.
+    # suspends every standing row until the person re-enables it. A
+    # protected device enrolled with a local unlock reports what holds its
+    # key (`holder_kind`: a TPM `chip` or a passphrase-wrapped `software`
+    # file) and the name it shows (`display_name`): information a person
+    # reads, never an input to a decision. A browser key holds neither.
     create table(:paired_clients, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -574,11 +589,15 @@ defmodule Arca.Repo.Migrations.Baseline do
         default: "active",
         check: if(sqlite?, do: standing_known)
 
+      add :holder_kind, :string, check: if(sqlite?, do: holder_kind_known)
+      add :display_name, :string
+
       timestamps(type: :utc_datetime_usec)
     end
 
     unless sqlite? do
       create constraint(:paired_clients, standing_known.name, check: standing_known.expr)
+      create constraint(:paired_clients, holder_kind_known.name, check: holder_kind_known.expr)
     end
 
     # A credential is one client in its athanor.
@@ -1078,7 +1097,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       known(
         "pending_confirmations_proof_known",
         "proof",
-        ~w(passkey oidc_reauth email_code)
+        ~w(passkey oidc_reauth email_code device)
       )
     ]
 

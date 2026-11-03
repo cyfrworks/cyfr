@@ -9,9 +9,12 @@ defmodule Arca.InstallationClaimsTest do
   restore make the first person, who holds the platform grant from the
   mint's own transaction; every other admission onto an empty node is
   refused. Setup answers its person again while no sign-in method of
-  theirs works at the RP ID it names, the home's current one, and opens
-  nothing after: a passkey at an RP ID the home has left, and the
-  first-method mark, leave it open. An uninstalled mode refuses;
+  theirs works at the address it names, the home's current one, and opens
+  nothing after: a passkey at an RP ID the home has left, a device
+  certified only for an address the home has left, a revoked device and
+  the first-method mark leave it open, while a device of theirs, active
+  or suspended by a restore, certified for the current home closes it
+  whatever its certificate's expiry or revocation. An uninstalled mode refuses;
   `:restore_reserved` refuses setup on an empty node; a pending claim
   reserves the node whatever the mode; a restore's own mint is admitted
   only under its exact claim, on an empty node; a claim exists only with
@@ -41,9 +44,12 @@ defmodule Arca.InstallationClaimsTest do
     {Arca.ControlPlane, :slot}
   ]
 
-  # The home's RP ID now, and one it has left.
+  # The home's RP ID now, and one it has left, and the same two addresses
+  # as a device certificate's audience names them.
   @here "b.example"
   @left "a.example"
+  @home "https://b.example"
+  @left_home "https://a.example"
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -121,7 +127,13 @@ defmodule Arca.InstallationClaimsTest do
   # linked one closes setup.
   defp mint(opts \\ []) do
     {user, _identity} = person_attrs()
-    Users.mint(server(), user, nil, Keyword.merge([admission: "setup", rp_id: @here], opts))
+
+    Users.mint(
+      server(),
+      user,
+      nil,
+      Keyword.merge([admission: "setup", rp_id: @here, home: @home], opts)
+    )
   end
 
   # A mint under `admission`, linking a sign-in method.
@@ -131,7 +143,12 @@ defmodule Arca.InstallationClaimsTest do
   end
 
   defp readmit(user_id, opts),
-    do: Users.readmit(server(), user_id, Keyword.put_new(opts, :rp_id, @here))
+    do:
+      Users.readmit(
+        server(),
+        user_id,
+        opts |> Keyword.put_new(:rp_id, @here) |> Keyword.put_new(:home, @home)
+      )
 
   # A passkey of `user_id` registered at `rp_id`, in `state`.
   defp passkey!(user_id, rp_id, state \\ "active") do
@@ -184,7 +201,7 @@ defmodule Arca.InstallationClaimsTest do
   end
 
   defp people, do: Arca.Repo.aggregate(User, :count)
-  defp open?, do: InstallationClaims.setup(server(), @here)
+  defp open?, do: InstallationClaims.setup(server(), %{rp_id: @here, home: @home})
   defp claims, do: Arca.Repo.aggregate(InstallationClaim, :count)
 
   describe "the installed mode" do
@@ -378,6 +395,60 @@ defmodule Arca.InstallationClaimsTest do
       assert {:ok, %{id: ^first}} = readmit(first, also: fn _ -> :ok end)
     end
 
+    test "a device of theirs certified for the home's address closes it, whatever its certificate's expiry or revocation" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+
+      for {state, expires_at} <- [
+            {"active", nil},
+            {"active", DateTime.add(DateTime.utc_now(), -60, :second)},
+            {"revoked", nil}
+          ] do
+        client = device!(first, @home, "active", state, expires_at)
+
+        assert {:error, :setup_closed} = mint(), state
+        assert {:error, :setup_closed} = readmit(first, also: fn _ -> :ok end)
+        assert {:ok, :closed} = open?()
+
+        {1, _} =
+          Arca.Repo.delete_all(
+            from(c in Arca.Schemas.DeviceCertificate, where: c.paired_client_id == ^client)
+          )
+
+        {1, _} =
+          Arca.Repo.delete_all(from(p in Arca.Schemas.PairedClient, where: p.id == ^client))
+
+        assert {:error, {:readmit, %{id: ^first}}} = mint()
+      end
+    end
+
+    test "a device a restore suspended closes it; one revoked, or certified only for an address the home has left, does not" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+
+      device!(first, @left_home, "active")
+      device!(first, @home, "revoked")
+      assert {:error, {:readmit, %{id: ^first}}} = mint()
+      assert {:ok, %{id: ^first}} = readmit(first, also: fn _ -> :ok end)
+      assert {:ok, {:readmit, %{id: ^first}}} = open?()
+
+      # The same device seen from the address it was certified for.
+      assert {:error, :setup_closed} = mint(home: @left_home)
+
+      device!(first, @home, "suspended")
+      assert {:error, :setup_closed} = mint()
+      assert {:error, :setup_closed} = readmit(first, also: fn _ -> :ok end)
+    end
+
+    test "another person's device at the home's address changes nothing" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+      {:ok, %{id: other}} = admitted("open")
+      device!(other, @home, "active")
+
+      assert {:error, {:readmit, %{id: ^first}}} = mint()
+    end
+
     test "opens nothing once a sign-in method is linked to them, with no passkey at the RP ID it names" do
       {:ok, %{id: first}} = mint()
       identity_row!(first)
@@ -435,7 +506,9 @@ defmodule Arca.InstallationClaimsTest do
       passkey!(first, @here)
       assert {:ok, :closed} = open?()
       assert {:error, :setup_closed} = mint()
-      assert {:ok, {:readmit, %{id: ^first}}} = InstallationClaims.setup(server(), "c.example")
+
+      assert {:ok, {:readmit, %{id: ^first}}} =
+               InstallationClaims.setup(server(), %{rp_id: "c.example", home: @home})
     end
 
     test "is closed under :restore_reserved, while a claim is pending, and to any actor but the platform's" do
@@ -617,6 +690,56 @@ defmodule Arca.InstallationClaimsTest do
   end
 
   # The person's local identity row, with no sign-in method marked yet.
+  # A paired client of `user_id` in `standing`, certified once by a
+  # certificate this home recorded for `audience`, in `state`, expiring at
+  # `expires_at`.
+  defp device!(user_id, audience, standing, state \\ "active", expires_at \\ nil) do
+    now = DateTime.utc_now()
+    client_id = Prima.UUID7.generate_id("pcl")
+    athanor_id = "ath_claims_" <> Integer.to_string(System.unique_integer([:positive]))
+    key = :crypto.strong_rand_bytes(32)
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.PairedClient, [
+        %{
+          id: client_id,
+          athanor_id: athanor_id,
+          user_id: user_id,
+          source_kind: "device_cert",
+          source_id: "req_" <> client_id,
+          device_public_key: key,
+          standing: standing,
+          holder_kind: "chip",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.DeviceCertificate, [
+        %{
+          id: Prima.UUID7.generate_id("dcr"),
+          athanor_id: athanor_id,
+          paired_client_id: client_id,
+          user_id: user_id,
+          subject_kind: "local",
+          device_public_key: key,
+          issuing_home: audience,
+          audience_home: audience,
+          not_before: DateTime.add(now, -3600, :second),
+          expires_at: expires_at || DateTime.add(now, 3600, :second),
+          certificate: "{}",
+          digest: Prima.Digest.sha256(client_id),
+          state: state,
+          revoked_at: if(state == "revoked", do: now),
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    client_id
+  end
+
   defp identity_row!(user_id) do
     {:ok, _} =
       Arca.PersonIdentities.create(server(), %{
@@ -788,7 +911,7 @@ defmodule Arca.InstallationClaimsRaceTest do
         updated_at: now
       },
       nil,
-      [admission: "setup", rp_id: "home.example"] ++ opts
+      [admission: "setup", rp_id: "home.example", home: "https://home.example"] ++ opts
     )
   end
 
