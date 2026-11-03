@@ -1,0 +1,2496 @@
+{
+  "protocol": "cyfr-device-proof/v1",
+  "common_fields": {
+    "binding": [
+      "protocol",
+      "purpose",
+      "home",
+      "athanor",
+      "client_id",
+      "device_key"
+    ],
+    "freshness": [
+      "nonce",
+      "expires_at"
+    ],
+    "compared": [
+      "purpose",
+      "home",
+      "athanor",
+      "client_id",
+      "device_key",
+      "nonce",
+      "expires_at",
+      "admission",
+      "request_id",
+      "session_id",
+      "ref",
+      "digest"
+    ],
+    "nonce_bytes": 32,
+    "lifetime_ms": 60000,
+    "signature_bytes": 64,
+    "key_bytes": 32
+  },
+  "purpose_fields": {
+    "enroll": {
+      "fresh": true,
+      "fields": [
+        "admission",
+        "request_id"
+      ],
+      "admissions": [
+        "setup",
+        "restore"
+      ]
+    },
+    "unlock": {
+      "fresh": true,
+      "fields": [
+        "session_id"
+      ]
+    },
+    "confirm": {
+      "fresh": true,
+      "fields": [
+        "ref",
+        "digest"
+      ]
+    },
+    "lock": {
+      "fresh": false,
+      "fields": [
+        "session_id"
+      ]
+    }
+  },
+  "keys": {
+    "device_1": {
+      "seed": "hPjHx49w0ykVOYcQZ0iVPlNO6POWt7R3sjJ1djlv06k",
+      "public": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c"
+    },
+    "device_2": {
+      "seed": "jiHD0hBTUGG5liI3JSLyZr2fisbC1VWd3gvdAis810o",
+      "public": "ERYi_2ivPb6jqhJmiHCFlZd0rCVlgdb42fGAfUdEr1A"
+    }
+  },
+  "proofs": {
+    "enroll": {
+      "protocol": "cyfr-device-proof/v1",
+      "home": "https://alice.example",
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+      "purpose": "enroll",
+      "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "expires_at": 1790000060000,
+      "admission": "setup",
+      "request_id": "enroll_001",
+      "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+    },
+    "unlock": {
+      "protocol": "cyfr-device-proof/v1",
+      "home": "https://alice.example",
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+      "purpose": "unlock",
+      "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+      "expires_at": 1790000060000,
+      "session_id": "ses_001",
+      "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+    },
+    "confirm": {
+      "protocol": "cyfr-device-proof/v1",
+      "home": "https://alice.example",
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+      "purpose": "confirm",
+      "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+      "expires_at": 1790000060000,
+      "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+      "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+      "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+    },
+    "lock": {
+      "protocol": "cyfr-device-proof/v1",
+      "home": "https://alice.example",
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+      "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+      "purpose": "lock",
+      "session_id": "ses_001",
+      "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+    }
+  },
+  "verify": [
+    {
+      "name": "an enroll proof for the held challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "result": "ok"
+    },
+    {
+      "name": "an enroll proof a millisecond before its expiry",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000059999,
+      "result": "ok"
+    },
+    {
+      "name": "an enroll proof at its expiry",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000060000,
+      "error": "expired"
+    },
+    {
+      "name": "an enroll proof replayed after its challenge was consumed",
+      "held": null,
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "no_challenge"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another home",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://hub.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "home"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another athanor",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-0000-7000-8000-00000000beef",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "athanor"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another client_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "client_id"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another device_key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "ERYi_2ivPb6jqhJmiHCFlZd0rCVlgdb42fGAfUdEr1A",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "device_key"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another nonce",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "nonce"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another expires_at",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000061000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "expires_at"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another admission",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "restore",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "admission"
+    },
+    {
+      "name": "an enroll proof held to a challenge for another request_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_002"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "request_id"
+    },
+    {
+      "name": "an enroll proof signed by another key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "4u5Rynx4NBn-dZN0EqF3q7rJwpqrLM6LsEbzDLaDG0wgla-tCrD8AMZn7ZzM8uz1Zqv4G3U7vXV25Gp0EjwxCg"
+      },
+      "now": 1790000001000,
+      "error": "bad_signature"
+    },
+    {
+      "name": "an enroll proof whose signature is 63 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2w"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an enroll proof with a field its purpose lacks",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA",
+        "browser_nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+      },
+      "now": 1790000001000,
+      "error": "unknown_field"
+    },
+    {
+      "name": "an enroll proof whose nonce is 31 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an enroll proof whose device key is 31 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZgw",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an unlock proof for the held challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "result": "ok"
+    },
+    {
+      "name": "an unlock proof a millisecond before its expiry",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000059999,
+      "result": "ok"
+    },
+    {
+      "name": "an unlock proof at its expiry",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000060000,
+      "error": "expired"
+    },
+    {
+      "name": "an unlock proof replayed after its challenge was consumed",
+      "held": null,
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "no_challenge"
+    },
+    {
+      "name": "an unlock proof held to a challenge for another home",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://hub.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "home"
+    },
+    {
+      "name": "an unlock proof held to a challenge for another athanor",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-0000-7000-8000-00000000beef",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "athanor"
+    },
+    {
+      "name": "an unlock proof held to a challenge for another client_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "client_id"
+    },
+    {
+      "name": "an unlock proof held to a challenge for another device_key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "ERYi_2ivPb6jqhJmiHCFlZd0rCVlgdb42fGAfUdEr1A",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "device_key"
+    },
+    {
+      "name": "an unlock proof held to a challenge for another nonce",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "nonce"
+    },
+    {
+      "name": "an unlock proof held to a challenge for another expires_at",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000061000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "expires_at"
+    },
+    {
+      "name": "an unlock proof held to a challenge for another session_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_002"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "session_id"
+    },
+    {
+      "name": "an unlock proof signed by another key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "U-OYFUupT3TsiPD7GgqXReizxZy7OvvlATFX2OLEJ--5-r3PFDvS-a7d9-7hgRmi1gj9oDWHK-jkmN75IDQRDg"
+      },
+      "now": 1790000001000,
+      "error": "bad_signature"
+    },
+    {
+      "name": "an unlock proof whose signature is 63 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an unlock proof with a field its purpose lacks",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA",
+        "browser_nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+      },
+      "now": 1790000001000,
+      "error": "unknown_field"
+    },
+    {
+      "name": "an unlock proof whose nonce is 31 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an unlock proof whose device key is 31 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZgw",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an confirm proof for the held challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "result": "ok"
+    },
+    {
+      "name": "an confirm proof a millisecond before its expiry",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000059999,
+      "result": "ok"
+    },
+    {
+      "name": "an confirm proof at its expiry",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000060000,
+      "error": "expired"
+    },
+    {
+      "name": "an confirm proof replayed after its challenge was consumed",
+      "held": null,
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "no_challenge"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another home",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://hub.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "home"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another athanor",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-0000-7000-8000-00000000beef",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "athanor"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another client_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "client_id"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another device_key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "ERYi_2ivPb6jqhJmiHCFlZd0rCVlgdb42fGAfUdEr1A",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "device_key"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another nonce",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "nonce"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another expires_at",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000061000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "expires_at"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another ref",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "ref"
+    },
+    {
+      "name": "an confirm proof held to a challenge for another digest",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "challenge_mismatch",
+      "field": "digest"
+    },
+    {
+      "name": "an confirm proof signed by another key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "dJ2g86tafubkEZ4CcdsHiz2bX7a0ZRFOuaC2oezgrMf44NcIgHrPmJIOoikBBqKxVrKfePSGyQxsyYQ5SotzBA"
+      },
+      "now": 1790000001000,
+      "error": "bad_signature"
+    },
+    {
+      "name": "an confirm proof whose signature is 63 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6x"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an confirm proof with a field its purpose lacks",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ",
+        "browser_nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+      },
+      "now": 1790000001000,
+      "error": "unknown_field"
+    },
+    {
+      "name": "an confirm proof whose nonce is 31 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an confirm proof whose device key is 31 bytes",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZgw",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an enroll proof without its request_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "now": 1790000001000,
+      "error": "missing_field"
+    },
+    {
+      "name": "an unlock proof without its session_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "missing_field"
+    },
+    {
+      "name": "an confirm proof without its digest",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "now": 1790000001000,
+      "error": "missing_field"
+    },
+    {
+      "name": "an unlock proof without its nonce",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "now": 1790000001000,
+      "error": "missing_field"
+    },
+    {
+      "name": "an enroll proof whose admission is malformed",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "invitation",
+        "request_id": "enroll_001",
+        "sig": "IUgO9zjomrIH6unVlR6qmZEFGWR3jvr8KYBU6f9ML_HbmYbL_fC9QOw_fv8Rmc1t0H_E6JJ4UsnrPlX4qmRuDg"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an enroll proof whose request_id is malformed",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll 001",
+        "sig": "CKj7qJA5BL_ZeCPuBEaqCWqpqD-PoHwDJBbAitLhBwVaIoYsEwr_gbe3Zej76BTRGuzduZMFhkNc-dYnblUJAQ"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an unlock proof whose session_id is malformed",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "",
+        "sig": "DU6nljV2tKu1-pRoTxHFXCS90lhtPon-1ADSPyyItLSwxR_ebvtnO0drCP33WxahOpBFFGpVesHXfkqBVVF1CA"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an confirm proof whose ref is malformed",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_short",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "B7bFnYOuhiLYYy8bHZAS-KtFFySN3FkBkz7z2ULQApmfNxjL7ZcoSYeg4NIQbJ0Tm8x0pyZ7oqmI-vc8vn88AA"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an confirm proof whose digest is malformed",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:D846",
+        "sig": "_qqBhTwjUwl9USk5Bw7lfmfI05UmXMaMRHA4wP9qrPL4aA98ykerWncyb3dTT3sxQ-SYsL0lurzbNaaNA-ANCw"
+      },
+      "now": 1790000001000,
+      "error": "invalid_field"
+    },
+    {
+      "name": "an unlock proof offered for a held enroll challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "error": "challenge_mismatch",
+      "field": "purpose",
+      "now": 1790000001000
+    },
+    {
+      "name": "an enroll proof offered for a held unlock challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "enroll",
+        "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "expires_at": 1790000060000,
+        "admission": "setup",
+        "request_id": "enroll_001",
+        "sig": "WDHe9TuM_UkC3tNc_U4pOYAITC4Zl3Gix0ztvJdsiLpg1brre24V75oL-z029shnsHG3-mfmet8seRjWCJ2wDA"
+      },
+      "error": "challenge_mismatch",
+      "field": "purpose",
+      "now": 1790000001000
+    },
+    {
+      "name": "an confirm proof offered for a held unlock challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611",
+        "sig": "R3wUDBMC09SQbi1JlPECNTKGDac7MOiSGKMFTVWZQyhBNnxncxi1PX0-mvr-8OvVMi-X_JONUhnRIfAD4_6xDQ"
+      },
+      "error": "challenge_mismatch",
+      "field": "purpose",
+      "now": 1790000001000
+    },
+    {
+      "name": "an unlock proof offered for a held confirm challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "confirm",
+        "nonce": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+        "expires_at": 1790000060000,
+        "ref": "cnr_BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "digest": "sha256:d846e6a366adf5b7ab37b95ba8b6b7b90d8cf04d43180d0af8dbe8fba38f0611"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "error": "challenge_mismatch",
+      "field": "purpose",
+      "now": 1790000001000
+    },
+    {
+      "name": "an lock proof offered for a held unlock challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "error": "challenge_mismatch",
+      "field": "purpose",
+      "now": 1790000001000
+    },
+    {
+      "name": "an unlock proof offered for a held lock challenge",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "unlock",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "expires_at": 1790000060000,
+        "session_id": "ses_001",
+        "sig": "m30f33GB7dVn5vzVAB6Ork9nPQKO-Vly3JdYWQmdExA1rspcYHDl76i9v1G_elTazvZmJLCaDTaKqwYRg2L0AA"
+      },
+      "error": "challenge_mismatch",
+      "field": "purpose"
+    },
+    {
+      "name": "a lock proof for its session, long after the unlock challenge expired",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "result": "ok"
+    },
+    {
+      "name": "a lock proof repeated for the same session",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "result": "ok"
+    },
+    {
+      "name": "a lock proof held to the successor session",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_002"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "error": "challenge_mismatch",
+      "field": "session_id"
+    },
+    {
+      "name": "a lock proof held to a session of another home",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://hub.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "error": "challenge_mismatch",
+      "field": "home"
+    },
+    {
+      "name": "a lock proof held to a session of another athanor",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-0000-7000-8000-00000000beef",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "error": "challenge_mismatch",
+      "field": "athanor"
+    },
+    {
+      "name": "a lock proof held to a session of another client_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8093",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "error": "challenge_mismatch",
+      "field": "client_id"
+    },
+    {
+      "name": "a lock proof held to a session of another device_key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "ERYi_2ivPb6jqhJmiHCFlZd0rCVlgdb42fGAfUdEr1A",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "error": "challenge_mismatch",
+      "field": "device_key"
+    },
+    {
+      "name": "a lock proof signed by another key",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "sig": "hrR-Fe0kdhgePbDus2eRgB8UPr2H62aaPD7m1mRXpWWeKMrJUvLZkBnndIQ-RkE3BPyZM-g1HJ3oLExGdYIHCA"
+      },
+      "error": "bad_signature"
+    },
+    {
+      "name": "a lock proof carrying nonce",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "nonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "sig": "S_mr0meK8BCyXfHBtxOva-ZWLD2Ox4pbbifc5s99cwh2735a5_lEF9J3bKORCSm9xL4rfKv_i2asKorpRhy-CA"
+      },
+      "error": "unknown_field"
+    },
+    {
+      "name": "a lock proof carrying expires_at",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001",
+        "expires_at": 1790000060000,
+        "sig": "42llY-VAHxTBspvL__aclOsoODwoavSWdSedNU_mVeQdk5kGT_GQH_fLfnRY2qb_P34sGhvtmz_8BuosBraNAA"
+      },
+      "error": "unknown_field"
+    },
+    {
+      "name": "a lock proof without its session_id",
+      "held": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "session_id": "ses_001"
+      },
+      "proof": {
+        "protocol": "cyfr-device-proof/v1",
+        "home": "https://alice.example",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "purpose": "lock",
+        "sig": "928N29cfbDHEEzyEu7Ttlp2eA_xYRoeq3SfwR2-EE49Y3zWW993QsQ5ZH_s-peT-mpnqnwL6wv7bxR2gadvUDw"
+      },
+      "error": "missing_field"
+    }
+  ],
+  "exchange": {
+    "ticket_bytes": 32,
+    "ticket_lifetime_ms": 60000,
+    "session_lifetime_ms": 60000,
+    "refresh_interval_ms": 30000,
+    "operations": {
+      "session.unlock": [
+        {
+          "args": [],
+          "result": [
+            "challenge"
+          ]
+        },
+        {
+          "args": [
+            "proof"
+          ],
+          "result": [
+            "expires_at",
+            "session_id",
+            "ticket"
+          ]
+        }
+      ],
+      "session.lock": [
+        {
+          "args": [
+            "proof"
+          ],
+          "result": [
+            "locked"
+          ]
+        }
+      ],
+      "confirmation.pending": [
+        {
+          "args": [
+            "request"
+          ],
+          "record_adds": [
+            "challenge"
+          ]
+        }
+      ],
+      "confirmation.confirm": [
+        {
+          "args": [
+            "device_proof",
+            "ref"
+          ],
+          "excludes": [
+            "assertion",
+            "code"
+          ]
+        }
+      ]
+    },
+    "http": {
+      "credentials": {
+        "setup": {
+          "header": "x-cyfr-setup-token"
+        },
+        "restore": {
+          "challenge": "session_cookie",
+          "complete": "session_cookie",
+          "resume": {
+            "header": "authorization",
+            "scheme": "Bearer"
+          }
+        }
+      },
+      "enrollment_challenge": {
+        "method": "POST",
+        "path": "/device/enrollment/challenge",
+        "request": [
+          "admission",
+          "device_key",
+          "request_id"
+        ],
+        "response": [
+          "challenge"
+        ]
+      },
+      "enrollment_complete": {
+        "method": "POST",
+        "path": "/device/enrollment/complete",
+        "request": {
+          "setup": [
+            "name",
+            "proof",
+            "recovery_secret"
+          ],
+          "restore": [
+            "proof"
+          ]
+        },
+        "response": [
+          "certificate"
+        ],
+        "response_optional": [
+          "recovery"
+        ],
+        "recovery": [
+          "attempt_id",
+          "code",
+          "identifier",
+          "name"
+        ]
+      },
+      "enrollment_resume": [
+        {
+          "method": "POST",
+          "path": "/device/enrollment/resume",
+          "request": [
+            "admission",
+            "device_key",
+            "request_id"
+          ],
+          "response": [
+            "challenge"
+          ]
+        },
+        {
+          "method": "POST",
+          "path": "/device/enrollment/resume",
+          "request": [
+            "proof"
+          ],
+          "response": [
+            "certificate"
+          ],
+          "response_optional": [
+            "recovery"
+          ]
+        }
+      ],
+      "unlock_complete": {
+        "get": "/auth/device/complete",
+        "fragment": "ticket",
+        "post": "/auth/device/complete",
+        "form": [
+          "_csrf_token",
+          "ticket"
+        ]
+      }
+    },
+    "capabilities": {
+      "root": [
+        "root_encrypted",
+        "root_unencrypted",
+        "root_unknown"
+      ],
+      "data": [
+        "data_encrypted",
+        "data_unencrypted",
+        "data_unknown"
+      ],
+      "cases": [
+        {
+          "capabilities": [
+            "root_encrypted",
+            "data_unencrypted"
+          ],
+          "storage": {
+            "root": "encrypted",
+            "data": "unencrypted"
+          }
+        },
+        {
+          "capabilities": [
+            "streams",
+            "root_unknown",
+            "data_encrypted"
+          ],
+          "storage": {
+            "root": "unknown",
+            "data": "encrypted"
+          }
+        },
+        {
+          "capabilities": [
+            "root_encrypted"
+          ],
+          "storage": {
+            "root": "encrypted",
+            "data": "unknown"
+          }
+        },
+        {
+          "capabilities": [],
+          "storage": {
+            "root": "unknown",
+            "data": "unknown"
+          }
+        },
+        {
+          "capabilities": [
+            "root_encrypted",
+            "root_unencrypted"
+          ],
+          "error": "contradictory"
+        },
+        {
+          "capabilities": [
+            "data_unknown",
+            "data_encrypted",
+            "root_unknown"
+          ],
+          "error": "contradictory"
+        }
+      ]
+    }
+  }
+}
