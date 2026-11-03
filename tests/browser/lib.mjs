@@ -585,9 +585,10 @@ export async function virtualAuthenticator(page, options = {}) {
 // asked with `ask`); the system layer then repeats the registration. With
 // `refusals`, the device's proof is first made over another digest, over
 // another ref and by another key, each of which the home must refuse with
-// the passkey still waiting. Answers what each step saw.
-export async function firstPasskey(page, { ask, layer = "#system-layer-dialog", refusals = false }) {
-  const authenticator = await virtualAuthenticator(page);
+// the passkey still waiting. `authenticator` is the page's virtual one when
+// the proof made it already. Answers what each step saw.
+export async function firstPasskey(page, { ask, layer = "#system-layer-dialog", refusals = false, authenticator = null }) {
+  authenticator = authenticator || (await virtualAuthenticator(page));
   const active = '[data-test="passkey"][data-state="active"]';
   const own = `${layer} [data-test="confirmation"][data-own="true"]`;
   await page.locator('[data-test="passkey-register"]').click({ timeout: 30_000 });

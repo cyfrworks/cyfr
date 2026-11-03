@@ -3,64 +3,60 @@
 //
 // The pairing proof, run in the official Playwright image by run.sh against
 // a `cyfr` release behind the harness's HTTPS front (README.md). One
-// person, two Chromium contexts: the desktop, signed in to Prism, and the
-// phone, signed in to Prism in a context of its own until it becomes the
-// glass. Each step is one row of the record; the proof fails when a row
-// does not hold.
+// person, made by setup with a protected device, two Chromium contexts: the
+// desktop and the phone, each signed in to Prism, the phone holding the
+// person's passkey. A browser holds no device key: its device is its
+// passkey. The devices that pair are a command line, the real `cyfr`
+// binary run.sh built, and a test device (../browser/device.mjs), a client
+// of the device channel this process drives frame by frame. Each step is
+// one row of the record; the proof fails when a row does not hold.
 //
-//   passkey      the phone registers its passkey, made by Chromium's
-//                virtual authenticator, as the person's first method
-//   pair         the phone opens this home's /pair page, which makes its
-//                device key and shows the key's code; the desktop types that
-//                code under Devices and begins a pairing for it; the phone's
+//   passkey      the phone's first passkey, made by Chromium's virtual
+//                authenticator and registered from its Settings page,
+//                waits on the page's own confirmation, which the setup
+//                device confirms (`device_confirm`)
+//   pair         cyfr login shows its key's code; the desktop types it
+//                under Devices and begins a pairing for it; the phone's
 //                Prism, reading the preview (the code among it) and the
-//                asker, confirms it with that passkey; the desktop shows the
+//                asker, confirms it with the passkey; the desktop shows the
 //                pairing link and its QR beside the code
-//   other_key    a browser context of its own, which made its own key on
-//                /pair, opens the desktop's link: refused, it holds no
-//                device, and the link still pairs the phone
-//   glass        the phone, the browser that showed the code, opens the
-//                desktop's link and becomes the glass with the key it made:
-//                the code leaves the address, and the device channel stands
-//   confirm      the desktop asks for a credential entry; the glass shows
-//                the home's preview and the asker before the proof, confirms
-//                it with the passkey and says so, and the desktop completes
-//                it
-//   fresh        a second entry: a replayed assertion and the desktop's
-//                session repeating alone change nothing; the glass's fresh
-//                assertion confirms it and the desktop completes it
-//   command_line the real cyfr binary run.sh built, run on a terminal of
-//                its own beside the browsers and reaching the home through
-//                the same proxy, runs cyfr login: it makes its key under a
-//                passphrase it shows and shows the key's code and approve
-//                address; the code typed on the desktop and confirmed on
-//                the glass, the link pasted pairs it, and its shell acts as
-//                the person (and the renewal, open_ticket, exit, pin and
-//                lost_answer steps after it: commandLine below)
+//   other_key    a command line on another machine, with a key of its own,
+//                given the link: refused, it keeps no certificate, and the
+//                link still pairs the first
+//   command_line the link pasted pairs the command line that showed the
+//                code, with the key it made, and its shell acts as the
+//                person (and the renewal, terminal_confirm, open_ticket,
+//                exit, pin and lost_answer steps after it: commandLine)
+//   confirm      the desktop asks for a credential entry; the phone's
+//                Prism shows the home's preview and the asker before the
+//                proof, never the typed value, confirms it with the passkey,
+//                and the desktop completes it
+//   fresh        a second entry: the first assertion replayed and the
+//                desktop's session repeating alone change nothing; the
+//                phone's fresh assertion confirms it
 //   intent       the device-intent measurement: one discrete intent
 //                (`confirmation.pending`) admitted and dispatched over the
-//                device channel and answered, sequentially, timed in the
-//                glass's own page
-//   sleep        the glass sleeps past its certificate's expiry: the home
-//                ends the stream and closes the channel at the expiry; on
-//                waking the glass renews before it sends anything, the
-//                stream is granted anew, a request made while it slept is
-//                shown, and the expired certificate opens nothing
-//   revoke       the desktop revokes the glass under Devices, confirmed on
-//                the glass: the home ends its stream, revokes it and closes
-//                the channel; the glass forgets its key and certificate, and
-//                its last certificate opens nothing
-//   viewport     the glass's steps once more at the handheld's
-//                720×720 touch viewport (../browser/handheld.mjs): its key's
-//                code typed on the desktop, a pairing's consent in the
-//                Prism's system layer, the glass,
-//                a confirmation on it, its reconnection and its revocation,
+//                test device's channel and answered, sequentially, timed
+//                from the frame it sends to the answer naming its id
+//   sleep        the test device sleeps past its certificate's expiry: the
+//                home ends its stream and closes its channel at the
+//                expiry, its expired certificate opens nothing, it renews
+//                on a new connection, its stream is granted anew, and a
+//                request made while it slept is read
+//   revoke       the desktop revokes the test device under Devices,
+//                confirmed in the phone's Prism: the home ends its stream,
+//                revokes it and closes the channel, Devices no longer lists
+//                it, and its last certificate opens nothing
+//   viewport     the phone's steps once more at the handheld's 720×720
+//                touch viewport (../browser/handheld.mjs): a pairing's
+//                consent, a credential entry's and a revocation's, each read
+//                and confirmed in its Prism's system layer with the passkey,
 //                each screen meeting the handheld's checks
 //
-// The home's part of a step — the passkey's registration through the
-// console's adapter, and the names of the person's vault entries — is
-// run.sh's, asked for through OUT_DIR (`ask-N.json`, answered
-// `answer-N.json`).
+// The home's part of a step — the setup device's confirmation, a replayed
+// assertion through the console's adapter, the certificates' life and the
+// names of the person's vault entries — is run.sh's, asked for through
+// OUT_DIR (`ask-N.json`, answered `answer-N.json`).
 //
 // Usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR [CERT_SECONDS]
 // (OUT_DIR/bin/cyfr is the command line run.sh built for the run)
@@ -70,9 +66,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { channel, connectDevice, keyDigest, newDevice, pair as pairDevice } from "../browser/device.mjs";
 import { HANDHELD, measure as measureScreen, unmet } from "../browser/handheld.mjs";
 import {
-  ask as askRunSh, launchBrowser, percentiles, readHomes, signedIn, sleep, startProxy, virtualAuthenticator, waitFor,
+  ask as askRunSh, firstPasskey, launchBrowser, percentiles, readHomes, signedIn, sleep, startProxy, virtualAuthenticator,
+  waitFor,
 } from "../browser/lib.mjs";
 
 const [homesFile, segment, desktopCookie, phoneCookie, outDir, certArg] = process.argv.slice(2);
@@ -84,15 +82,16 @@ if (!homesFile || !segment || !desktopCookie || !phoneCookie || !outDir) {
   process.exit(64);
 }
 mkdirSync(outDir, { recursive: true });
-
 const { homes } = readHomes(homesFile);
 const home = homes[0];
 const base = home.origin;
 const shell = `${base}/a/${encodeURIComponent(segment)}/canvas`;
 const vault = `${base}/a/${encodeURIComponent(segment)}/vault`;
+const settings = `${base}/a/${encodeURIComponent(segment)}/settings`;
 const MEASURED = 100;
 const rows = [];
 const record = {};
+let proxy;
 
 function row(step, held, what, detail) {
   rows.push({ step, held: !!held, what, detail });
@@ -103,190 +102,25 @@ function row(step, held, what, detail) {
 // The home's part of a step, asked of run.sh (lib.mjs `ask`).
 const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 90_000, ...options });
 
-// ---------------------------------------------------------------------------
-// The glass's device channel, watched from inside its own page
-// ---------------------------------------------------------------------------
-
-// Before any script of the phone's pages: every device-channel socket is
-// one this records — each frame either way, by type, id and grant, with
-// the page's own clock, and each close with its code — and through which
-// the proof can speak as the glass (`window.__device.send`). Asleep
-// (`window.__device.sleep()`), the glass sends nothing and hears nothing:
-// what it sends is dropped, and what reaches it waits until it wakes
-// (`wake()`), as a device's suspended page does.
-//
-// Every outcome the glass draws under a prompt is recorded as it is drawn
-// (`window.__device.outcomes`): a confirmed record leaves the pending list
-// at the glass's next read, taking its prompt and outcome with it, often
-// within the frame that drew them, so the outcome is read as the page
-// draws it rather than waited for.
-function instrumentDevice() {
-  const Native = window.WebSocket;
-  const device = {
-    log: [], sockets: 0, socket: null, asleep: false, held: [], outcomes: [], standing: null,
-    sleep() { this.asleep = true; this.log.push({ at: performance.now(), event: "sleep" }); },
-    wake() {
-      this.asleep = false;
-      this.log.push({ at: performance.now(), event: "wake" });
-      const held = this.held.splice(0);
-      for (const deliver of held) deliver();
-      window.dispatchEvent(new Event("online"));
-    },
-    send(map) {
-      if (!this.socket) return;
-      const raw = JSON.stringify(map);
-      this.log.push({ at: performance.now(), socket: this.socket.__serial, dir: "out", ...describe(raw), raw });
-      Native.prototype.send.call(this.socket, raw);
-    },
+// Before any script of the phone's pages: each WebAuthn result its system
+// layer sends to the home for a confirmation (`webauthn_result`), as sent,
+// kept in the page (`window.__assertions`), so the proof can replay one.
+function instrumentAssertions() {
+  window.__assertions = [];
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    if (typeof data === "string" && data.includes('"webauthn_result"')) {
+      try {
+        const message = JSON.parse(data);
+        const payload = message[4] || {};
+        const value = payload.value || {};
+        if (value.purpose === "confirmation") window.__assertions.push({ ref: value.id, credential: value.credential });
+      } catch {}
+    }
+    return send.call(this, data);
   };
-  window.__device = device;
-  const outcome = '[data-test="glass-outcome"]';
-  new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        for (const drawn of node.matches(outcome) ? [node] : node.querySelectorAll(outcome)) {
-          const prompt = drawn.closest('[data-test="glass-prompt"]');
-          device.outcomes.push({
-            at: performance.now(), ref: prompt && prompt.getAttribute("data-ref"), ok: drawn.getAttribute("data-ok"),
-            text: drawn.textContent,
-          });
-        }
-      }
-    }
-  }).observe(document, { childList: true, subtree: true });
-  const describe = (data) => {
-    try {
-      const map = JSON.parse(data);
-      return {
-        type: map.type, id: map.id, operation: map.operation, grant_id: map.grant_id, stream: map.stream,
-        certificate: map.certificate, expires_at: map.expires_at, client_id: map.client_id, athanor: map.athanor,
-        error: map.error ? (map.error.class || map.error.message || "error") : undefined,
-        ok: map.type === "answer" ? !map.error : undefined,
-      };
-    } catch {
-      return { type: "unreadable" };
-    }
-  };
-  class Watched extends Native {
-    constructor(url, protocols) {
-      super(url, protocols);
-      this.__device = /\/device\/websocket/.test(String(url));
-      if (!this.__device) return;
-      this.__serial = ++device.sockets;
-      device.socket = this;
-      device.log.push({ at: performance.now(), socket: this.__serial, event: "socket" });
-      super.addEventListener("message", (event) =>
-        device.log.push({ at: performance.now(), socket: this.__serial, dir: "in", asleep: device.asleep, ...describe(event.data), raw: event.data }));
-      super.addEventListener("close", (event) =>
-        device.log.push({ at: performance.now(), socket: this.__serial, event: "close", code: event.code, reason: event.reason }));
-    }
-    send(data) {
-      if (!this.__device) return super.send(data);
-      const described = describe(data);
-      if (device.asleep) {
-        device.log.push({ at: performance.now(), socket: this.__serial, dir: "dropped", ...described });
-        return undefined;
-      }
-      device.log.push({ at: performance.now(), socket: this.__serial, dir: "out", ...described, raw: data });
-      return super.send(data);
-    }
-    set onmessage(handler) { super.onmessage = this.__gate(handler, true); }
-    get onmessage() { return super.onmessage; }
-    set onclose(handler) { super.onclose = this.__gate(handler); }
-    get onclose() { return super.onclose; }
-    __gate(handler, message = false) {
-      if (!this.__device || typeof handler !== "function") return handler;
-      const socket = this;
-      return function (event) {
-        const deliver = () => {
-          if (message) {
-            const frame = describe(event.data);
-            // Received standing may be held asleep; keep what the glass heard.
-            if (frame.type === "standing") device.standing = frame;
-          }
-          handler.call(socket, event);
-        };
-        if (device.asleep) device.held.push(deliver);
-        else deliver();
-      };
-    }
-  }
-  window.WebSocket = Watched;
 }
-
-// The glass's stored device, read from its own store in the page: its key
-// (usable, never exportable), client id and certificate. `hold = false`
-// reads without replacing the device connectAsHeld will prove.
-const storedDevice = (page, hold = true) => page.evaluate((remember) => new Promise((resolve, reject) => {
-  const open = indexedDB.open("cyfr-glass", 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("glass");
-  open.onerror = () => reject(open.error);
-  open.onsuccess = () => {
-    const tx = open.result.transaction("glass", "readonly");
-    const read = tx.objectStore("glass").get("device");
-    read.onsuccess = () => {
-      if (remember) window.__heldDevice = read.result || null;
-      resolve(read.result ? { clientId: read.result.clientId, certificate: read.result.certificate } : null);
-    };
-    read.onerror = () => reject(read.error);
-  };
-}), hold);
-
-// A connection of its own, from the glass's page, under the device it held
-// last (`storedDevice`): `connect`, the challenge signed with the device
-// key, and how the home closed it.
-const connectAsHeld = (page) => page.evaluate(async () => {
-  const held = window.__heldDevice;
-  if (!held) return { error: "no device held" };
-  const b64url = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const jcs = (value) => value === null || typeof value !== "object"
-    ? JSON.stringify(value)
-    : Array.isArray(value)
-      ? `[${value.map(jcs).join(",")}]`
-      : `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${jcs(value[k])}`).join(",")}}`;
-  const url = `wss://${location.host}/device/websocket`;
-  const Native = Object.getPrototypeOf(window.WebSocket.prototype).constructor;
-  return new Promise((resolve) => {
-    const seen = [];
-    const ws = new Native(url);
-    const done = setTimeout(() => { ws.close(); resolve({ seen, code: null, timedOut: true }); }, 20_000);
-    ws.onopen = () => ws.send(JSON.stringify({
-      protocol: "cyfr-device/v1", type: "connect", client_id: held.clientId, certificate: held.certificate,
-    }));
-    ws.onmessage = async (event) => {
-      const map = JSON.parse(event.data);
-      seen.push(map.type);
-      if (map.type === "challenge") {
-        const { sig: _sig, ...fields } = map.challenge;
-        const sig = await crypto.subtle.sign({ name: "Ed25519" }, held.privateKey, new TextEncoder().encode(jcs(fields)));
-        ws.send(JSON.stringify({ protocol: "cyfr-device/v1", type: "proof", proof: { ...fields, sig: b64url(sig) } }));
-      }
-    };
-    ws.onclose = (event) => { clearTimeout(done); resolve({ seen, code: event.code, reason: event.reason }); };
-  });
-});
-
-const deviceLog = (page) => page.evaluate(() => window.__device.log.map(({ raw: _raw, ...entry }) => entry));
-const rawSent = (page, operation) => page.evaluate((op) => window.__device.log
-  .filter((e) => e.dir === "out" && e.operation === op).map((e) => JSON.parse(e.raw)), operation);
-
-// One intent spoken as the glass, and its answer: the time between them in
-// the glass's page.
-const intent = (page, id, operation, args) => page.evaluate(async ([intentId, op, intentArgs]) => {
-  const device = window.__device;
-  const from = device.log.length;
-  const started = performance.now();
-  device.send({ protocol: "cyfr-device/v1", type: "intent", id: intentId, operation: op, args: intentArgs });
-  const deadline = started + 20_000;
-  while (performance.now() < deadline) {
-    const answer = device.log.slice(from).find((e) => e.dir === "in" && e.type === "answer" && e.id === intentId);
-    if (answer) return { ok: answer.ok, error: answer.error, ms: answer.at - started };
-    await new Promise((r) => setTimeout(r, 1));
-  }
-  return { ok: false, error: "no answer" };
-}, [id, operation, args]);
+const assertionsSent = (page) => page.evaluate(() => window.__assertions.slice());
 
 // ---------------------------------------------------------------------------
 // Prism's side
@@ -345,41 +179,38 @@ async function askForEntry(desk, name, value) {
   }
 }
 
-// The glass's prompt for the one record it shows that `skip` does not
-// name: its ref, preview and asker as the glass drew them.
-async function glassPrompt(phone, skip = []) {
-  const handle = await waitFor(async () => {
-    const prompts = await phone.$$('[data-test="glass-prompt"]');
-    for (const prompt of prompts) {
-      const ref = await prompt.getAttribute("data-ref");
-      if (!skip.includes(ref)) return { prompt, ref };
+// The phone's Prism, opened afresh, showing another client's request from
+// the home's record: the one whose ref `skip` does not name, with its
+// preview, asker, whether it is restricted, and its text, before any proof.
+async function phonePrompt(phone, skip = []) {
+  await phone.goto(shell);
+  await connected(phone);
+  const other = `${layer} [data-test="confirmation"][data-own="false"]`;
+  const ref = await waitFor(async () => {
+    for (const panel of await phone.$$(other)) {
+      const found = await panel.getAttribute("data-ref");
+      if (found && !skip.includes(found)) return found;
     }
     return null;
-  }, { timeoutMs: 30_000, what: "the glass's prompt" });
-  const preview = await handle.prompt.$eval('[data-test="glass-preview"]', (e) => e.textContent);
-  const asker = await handle.prompt.$eval('[data-test="glass-asker"]', (e) => e.textContent);
-  return { ref: handle.ref, preview, asker, text: await handle.prompt.textContent() };
+  }, { timeoutMs: 30_000, what: "another client's request in the phone's Prism" });
+  const panel = `${other}[data-ref="${ref}"]`;
+  const preview = (await phone.locator(`${panel} [data-test="confirmation-preview"]`).first().textContent()).trim();
+  const asker = (await phone.locator(`${panel} [data-test="confirmation-asker"]`).textContent().catch(() => "")).trim();
+  const restricted = await phone.locator(`${panel} [data-test="confirmation-restricted"]`).count();
+  const text = await phone.locator(panel).innerText();
+  return { ref, preview, asker, restricted, text };
 }
 
-const glassButton = (phone, ref, test) => phone.locator(`[data-test="glass-prompt"][data-ref="${ref}"] [data-test="${test}"]`);
-
-// The first outcome the glass drew under its prompt for `ref`, as
-// `instrumentDevice` recorded it, or null when it drew none.
-const glassOutcome = (phone, ref) => waitFor(
-  () => phone.evaluate((shown) => window.__device.outcomes.find((o) => o.ref === shown) || null, ref),
-  { timeoutMs: 30_000, stepMs: 100, what: `the glass's outcome for ${ref}` },
-).then(({ ok, text }) => ({ ok, text })).catch(() => null);
+// The request `ref` confirmed in the phone's Prism with its passkey, and
+// whether its panel then leaves the phone's layer: the record confirmed.
+async function confirmOnPhone(phone, ref) {
+  const panel = `${layer} [data-test="confirmation"][data-ref="${ref}"]`;
+  await phone.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 });
+  return phone.waitForFunction((selector) => !document.querySelector(selector), panel, { timeout: 30_000 })
+    .then(() => true).catch(() => false);
+}
 
 const vaultNames = async () => (await ask({ op: "vault_names" })).names || [];
-
-// The glass's page opened with no device and no link: it makes its device
-// key and shows the key's code. Answers the code as the page shows it.
-async function shownCode(page) {
-  await page.goto(`${base}/pair`);
-  const code = page.locator('[data-test="pair-key-code"]');
-  await code.waitFor({ timeout: 30_000 });
-  return (await code.textContent()).trim();
-}
 
 // The code typed into the desktop's pairing prompt, and the pairing begun
 // for it: its request waits on its confirmation.
@@ -390,15 +221,16 @@ async function beginFor(desk, code) {
   await desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 });
 }
 
-// The key digest the paired device's certificate names, as its code: the
-// SHA-256 of the key's raw bytes, unpadded base64url, in groups of four.
-const certifiedCode = (page, certificate) => page.evaluate(async (deviceKey) => {
-  const base64 = deviceKey.replace(/-/g, "+").replace(/_/g, "/");
-  const raw = Uint8Array.from(atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)), (c) => c.charCodeAt(0));
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", raw));
-  const b64url = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return b64url.match(/.{1,4}/g).join(" ");
-}, certificate.device_key);
+// The pairing link the desktop shows once its pairing for `code` is
+// confirmed on the phone: its invitation's secret.
+async function pairingFor(desk, phone, code) {
+  await beginFor(desk, code);
+  const prompt = await phonePrompt(phone);
+  await confirmOnPhone(phone, prompt.ref);
+  await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
+  const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
+  return { link, secret: link.split("#code=")[1], prompt };
+}
 
 const spaced = (text) => text.replace(/\s+/g, " ");
 
@@ -407,144 +239,29 @@ const spaced = (text) => text.replace(/\s+/g, " ");
 // ---------------------------------------------------------------------------
 
 async function passkey(phone, authenticator) {
-  await phone.goto(shell);
+  await phone.goto(settings);
   await connected(phone);
-  const options = await ask({ op: "passkey_options" });
-  const begun = options.ok;
-  const credential = await phone.evaluate(async ({ public_key: json, registration }) => {
-    const toBytes = (text) => {
-      const base64 = text.replace(/-/g, "+").replace(/_/g, "/");
-      const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-      return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)).buffer;
-    };
-    const b64url = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer)))
-      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    const created = await navigator.credentials.create({
-      publicKey: {
-        ...json,
-        challenge: toBytes(json.challenge),
-        user: { ...json.user, id: toBytes(json.user.id) },
-        excludeCredentials: (json.excludeCredentials || []).map((d) => ({ ...d, id: toBytes(d.id) })),
-      },
-    });
-    return {
-      id: created.id, rawId: b64url(created.rawId), type: created.type, registration,
-      response: {
-        clientDataJSON: b64url(created.response.clientDataJSON),
-        attestationObject: b64url(created.response.attestationObject),
-        transports: created.response.getTransports ? created.response.getTransports() : [],
-      },
-    };
-  }, begun);
-  const registered = await ask({ op: "passkey_register", credential });
+  const registered = await firstPasskey(phone, { ask, layer, authenticator });
   const held = (await authenticator.credentials()).filter((c) => c.rpId === home.host).length;
-  record.passkey = { registered: registered.ok ? Object.keys(registered.ok) : registered, credentials_for_rp: held };
-  return row("passkey", !!registered.ok && held === 1,
-    "the phone's passkey, made by the virtual authenticator, is registered as the person's first method",
+  record.passkey = { ...registered, credentials_for_rp: held };
+  return row("passkey", registered.ok && held === 1,
+    "the phone's passkey, made by the virtual authenticator, waits on the page's own confirmation, which the setup device confirms, and is registered",
     record.passkey);
-}
-
-async function pair(desk, phone) {
-  // The phone makes its key first, on this home's /pair page, and shows
-  // its code; the desktop begins a pairing for that code.
-  const code = await shownCode(phone);
-  const unpaired = await phone.locator('[data-test="glass-status"]').getAttribute("data-state");
-  await beginFor(desk, code);
-
-  // The phone's Prism shows the request from the home's record, before
-  // any proof, and confirms it with the passkey.
-  await phone.goto(shell);
-  await connected(phone);
-  const prompt = `${layer} [data-test="confirmation"][data-own="false"]`;
-  await phone.waitForSelector(prompt, { timeout: 30_000 });
-  const preview = await phone.locator(`${prompt} [data-test="confirmation-preview"]`).first().textContent();
-  const asker = await phone.locator(`${prompt} [data-test="confirmation-asker"]`).textContent();
-  const restricted = await phone.locator(`${prompt} [data-test="confirmation-restricted"]`).count();
-  await phone.locator(`${prompt} [data-test="confirm-passkey"]`).click();
-
-  // Confirmed there, the desktop's pairing goes on: its link appears.
-  try {
-    await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
-  } catch (error) {
-    throw new Error(`the desktop showed no pairing link once the phone confirmed: phone ${
-      JSON.stringify(await layerText(phone))}; desktop ${JSON.stringify(await layerText(desk))}`);
-  }
-  const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
-  const qr = await desk.locator(`${layer} [data-test="pairing-qr"] svg`).count();
-  const deskCode = (await desk.locator(`${layer} [data-test="pairing-key-code"]`).textContent()).trim();
-  const bearer = (await layerText(desk)).includes("Whoever opens it");
-  record.pair = {
-    code, phone_before: unpaired, preview: preview.trim(), asker: asker.trim(), restricted,
-    link_shape: link.replace(/#code=.*/, "#code=…"), qr, desktop_code: deskCode, bearer_sentence: bearer,
-  };
-  return [row("pair", /pairing\.begin/.test(preview) && spaced(preview).includes(code) && /a browser signed in/.test(asker) &&
-    link.startsWith(`${base}/pair#code=`) && qr === 1 && deskCode === code && !bearer,
-    "the phone's /pair page shows its key's code; the desktop's pairing for that code, confirmed on the phone's Prism after its preview (the code among it) and asker, shows its link and QR beside the code",
-    record.pair), link, code];
-}
-
-// A browser of its own, holding no session: it makes its own key on /pair,
-// then opens the link the desktop's pairing gave for the phone's code. The
-// home refuses its key, it is paired nothing, and the link still pairs the
-// phone (the glass step, after this one).
-async function otherKey(browser, link, code) {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  try {
-    const other = await context.newPage();
-    const own = await shownCode(other);
-    await other.goto(link);
-    // A pairing that went through draws no error: what the page shows then
-    // is recorded, and the row fails.
-    const error = other.locator('[data-test="glass-error"]');
-    const refused = await error.waitFor({ timeout: 30_000 }).then(() => error.textContent(), () => null);
-    const status = await other.locator('[data-test="glass-status"]').getAttribute("data-state").catch(() => null);
-    const address = await other.evaluate(() => location.href);
-    const held = await storedDevice(other);
-    record.other_key = {
-      own_code_differs: own !== code, refused: refused && refused.trim(), status, address, holds_device: held !== null,
-    };
-    return row("other_key",
-      own.length > 0 && own !== code && /not the one the pairing was approved for/.test(refused || "") &&
-        address === `${base}/pair` && held === null,
-      "a browser context that made its own key opens the link: refused, and it holds no device",
-      record.other_key);
-  } finally {
-    await context.close();
-  }
-}
-
-async function glass(phone, link, code, authenticator) {
-  await phone.goto(link);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  const address = await phone.evaluate(() => location.href);
-  const log = await deviceLog(phone);
-  const opened = log.filter((e) => e.dir === "out").map((e) => e.type);
-  const credentials = (await authenticator.credentials()).length;
-  // The key that paired is the one whose code the phone showed.
-  const held = await storedDevice(phone);
-  const pairedCode = held ? await certifiedCode(phone, held.certificate) : null;
-  record.glass = { address, sent: opened.slice(0, 4), credentials, paired_code_is_shown_code: pairedCode === code };
-  return row("glass", address === `${base}/pair` && opened[0] === "connect" && opened.includes("proof") && credentials === 1 &&
-    pairedCode === code,
-    "the desktop's link opens the glass on the phone that showed the code, with the key it made: the code leaves the address and the device channel stands",
-    record.glass);
 }
 
 async function confirmEntry(desk, phone) {
   const name = "pairing-entry-1";
   await askForEntry(desk, name, "sk-pairing-1-not-shown");
-  const shown = await glassPrompt(phone);
-  await glassButton(phone, shown.ref, "glass-passkey").click();
-  const outcome = await glassOutcome(phone, shown.ref);
+  const shown = await phonePrompt(phone);
+  const confirmed = await confirmOnPhone(phone, shown.ref);
   const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
   record.confirm = {
     ref: shown.ref, preview: shown.preview, asker: shown.asker,
-    secret_shown: shown.text.includes("sk-pairing-1"), outcome, completed,
+    secret_shown: shown.text.includes("sk-pairing-1"), confirmed, completed,
   };
   return [row("confirm", /vault\.create/.test(shown.preview) && shown.preview.includes(name) &&
-    /a browser signed in/.test(shown.asker) && !record.confirm.secret_shown && outcome !== null && outcome.ok === "true" &&
-    completed,
-    "the glass shows the home's preview and the asker before the proof, confirms with the passkey and says so, and the desktop completes the entry",
+    /a browser signed in/.test(shown.asker) && !record.confirm.secret_shown && confirmed && completed,
+    "the phone's Prism shows the desktop's request from the home's record, its preview and asker before the proof and never the typed value, confirms it with the passkey, and the desktop completes the entry",
     record.confirm), shown.ref];
 }
 
@@ -618,14 +335,17 @@ const deviceRecords = (cliHome) => {
 
 // The command line, made a device of the person's (S2 of the devices
 // plan), in steps of its own:
-//   command_line  cyfr login on a machine without a chip draws a six-word
+//   pair          cyfr login on a machine without a chip draws a six-word
 //                 passphrase, writes its key before it shows anything, and
 //                 shows its key's code and the approve address as a QR
 //                 code; the desktop types the code under Devices (a
-//                 machine without a camera), the phone's glass confirms the
-//                 addition with its passkey, and the desktop's link, pasted
-//                 into the terminal, pairs the command line with the key it
-//                 made: unlocked, its shell's cyfr whoami names the person
+//                 machine without a camera), and the phone's Prism confirms
+//                 the addition with its passkey
+//   other_key     another machine's command line, given that link, is
+//                 refused
+//   command_line  the desktop's link, pasted into the terminal, pairs the
+//                 command line with the key it made: unlocked, its shell's
+//                 cyfr whoami names the person
 //   renewal       with certificates living 75 s, the command line's
 //                 certificate renews over its channel and its session stays
 //                 alive past its first certificate's expiry
@@ -680,12 +400,40 @@ async function commandLine(desk, phone) {
     copyFileSync(join(cliHome, ".cyfr", "config.json"), join(lostHome, ".cyfr", "config.json"));
     if (records.length === 1) copyFileSync(records[0], join(lostHome, ".cyfr", "devices", basename(records[0])));
 
-    // No camera: the code typed on the desktop; the phone's glass confirms.
+    // No camera: the code typed on the desktop; the phone's Prism, a
+    // passkey of the person's, reads the request from the home's record
+    // and confirms it.
     await beginFor(desk, code);
-    const prompt = await glassPrompt(phone);
-    await glassButton(phone, prompt.ref, "glass-passkey").click();
-    await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
+    const prompt = await phonePrompt(phone);
+    await confirmOnPhone(phone, prompt.ref);
+    try {
+      await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
+    } catch (error) {
+      throw new Error(`the desktop showed no pairing link once the phone confirmed: phone ${
+        JSON.stringify(await layerText(phone))}; desktop ${JSON.stringify(await layerText(desk))}`);
+    }
     const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
+    const qr = await desk.locator(`${layer} [data-test="pairing-qr"] svg`).count();
+    const deskCode = (await desk.locator(`${layer} [data-test="pairing-key-code"]`).textContent()).trim();
+    const bearer = (await layerText(desk)).includes("Whoever opens it");
+    rec.pair_link = {
+      code, preview: prompt.preview, asker: prompt.asker, restricted: prompt.restricted,
+      link_shape: link.replace(/#code=.*/, "#code=…"), qr, desktop_code: deskCode, bearer_sentence: bearer,
+    };
+    row("pair", /pairing\.begin/.test(prompt.preview) && spaced(prompt.preview).includes(code) &&
+      /a browser signed in/.test(prompt.asker) && prompt.restricted === 1 &&
+      link.startsWith(`${base}/pair#code=`) && qr === 1 && deskCode === code && !bearer,
+      "the command line shows its key's code; the desktop's pairing for that code, confirmed in the phone's Prism with its passkey after the home's preview (the code among it) and the asker, shows its link and QR beside the code",
+      rec.pair_link);
+
+    // Another machine, with a key of its own, given the same link: the
+    // home refuses its key, it keeps no certificate, and the link still
+    // pairs the command line that showed the code.
+    rec.other_key = await otherMachine(link, code);
+    row("other_key", rec.other_key.ok,
+      "a command line on another machine, with its own key, given the link: refused as not the key the pairing was approved for, and it holds no certificate",
+      rec.other_key);
+
     const at = login.out.length;
     login.type(link);
     await login.until(/Unlocked\. This shell holds your CYFR session/, at, 60_000);
@@ -696,13 +444,16 @@ async function commandLine(desk, phone) {
     const sessionFile = join(cliHome, "session");
     login.type(`printf %s "$CYFR_SESSION" > '${sessionFile}'; echo stored=$?`);
     await login.until(/stored=0/, mark);
-    rec.pair = { code, preview: prompt.preview, asker: prompt.asker, whoami_exit: Number(whoami[1]), names_person: named,
+    // The key that paired is the one whose code the command line showed.
+    const held = deviceRecords(cliHome).map((f) => JSON.parse(readFileSync(f, "utf8")))[0] || {};
+    const certified = held.certificate && held.certificate.device_key
+      ? keyDigest(Buffer.from(held.certificate.device_key, "base64url")).match(/.{1,4}/g).join(" ") : null;
+    rec.pair = { code, whoami_exit: Number(whoami[1]), names_person: named, certified_code_is_shown_code: certified === code,
       passphrase_echoed: login.out.split(passphrase).length - 1 };
     row("command_line",
       added.code === 0 && !!set.ok && rec.key_written_before_code && rec.qr_drawn && rec.approve_address &&
-        /pairing\.begin/.test(prompt.preview) && spaced(prompt.preview).includes(code) &&
-        rec.pair.whoami_exit === 0 && named && rec.pair.passphrase_echoed === 1,
-      "cyfr login writes its key under the passphrase it shows once, shows its code and approve address as a QR code; the code typed on the desktop and confirmed on the phone's glass, the link pasted pairs it, and its shell acts as the person",
+        rec.pair.whoami_exit === 0 && named && rec.pair.certified_code_is_shown_code && rec.pair.passphrase_echoed === 1,
+      "cyfr login writes its key under the passphrase it shows once, shows its code and approve address as a QR code; the link pasted pairs it with the key whose code it showed, and its shell acts as the person",
       rec.pair);
 
     // Past its first certificate's life, on the channel's renewals.
@@ -916,14 +667,49 @@ async function pinStep(cliHome, passphrase) {
   }
 }
 
+// A command line on another machine, a home directory of its own and a key
+// of its own, given the desktop's link for the first command line's code:
+// the home refuses its key, the pairing does not finish, and its record
+// keeps no certificate. Answers what it saw.
+async function otherMachine(link, code) {
+  const otherHome = mkdtempSync(join(tmpdir(), "cyfr-command-line-other-"));
+  let t = null;
+  try {
+    await cyfrRun(["context", "add", "proof", base], otherHome);
+    t = terminal(["login", "--context", "proof"], otherHome);
+    const drawn = await t.until(/Write it down:\s+([a-z]+(?: [a-z]+){5})\s/);
+    await t.until(/The passphrase: /);
+    t.type(drawn[1]);
+    await t.until(/The passphrase again: /);
+    t.type(drawn[1]);
+    const own = (await t.until(/type:\s+((?:[A-Za-z0-9_-]{4} ){10}[A-Za-z0-9_-]{3})\s[\s\S]*Link or code: /))[1];
+    const at = t.out.length;
+    t.type(link);
+    await Promise.race([t.exited, sleep(60_000)]);
+    const said = t.out.slice(at);
+    const records = deviceRecords(otherHome).map((f) => JSON.parse(readFileSync(f, "utf8")));
+    const r = {
+      own_code_differs: own !== code, exit: t.exit,
+      refused: /Pairing did not finish/.test(said), sentence: said.replace(/\s+/g, " ").trim().slice(0, 400),
+      certified: records.some((rec) => !!rec.certificate), unlocked: /Unlocked\./.test(said),
+    };
+    r.ok = r.own_code_differs && r.refused && !r.certified && !r.unlocked && r.exit !== 0;
+    return r;
+  } finally {
+    if (t && t.exit === null) t.kill();
+    rmSync(otherHome, { recursive: true, force: true });
+  }
+}
+
 async function fresh(desk, phone, firstRef) {
   const name = "pairing-entry-2";
-  const [first] = await rawSent(phone, "confirmation.confirm");
+  const [first] = (await assertionsSent(phone)).filter((a) => a.ref === firstRef);
   await askForEntry(desk, name, "sk-pairing-2-not-shown");
-  const shown = await glassPrompt(phone, [firstRef]);
+  const shown = await phonePrompt(phone, [firstRef]);
 
-  // The first assertion, replayed against this record: refused.
-  const replay = await intent(phone, "replay_1", "confirmation.confirm", { ref: shown.ref, assertion: first.args.assertion });
+  // The first assertion, replayed against this record through the
+  // console's adapter under the phone's session: refused.
+  const replay = first ? await ask({ op: "replay_assertion", ref: shown.ref, credential: first.credential }) : { error: "none captured" };
   // The desktop's session alone, asking again: still waiting, nothing made.
   // (submitted behind the open prompt, which takes every click)
   await desk.locator("#vault-create-form").evaluate((form) => form.requestSubmit());
@@ -931,287 +717,197 @@ async function fresh(desk, phone, firstRef) {
   const waiting = await desk.locator(`${layer} [data-test="confirmation"][data-own="true"] [data-status="waiting"]`).count();
   const before = (await vaultNames()).includes(name);
 
-  // A fresh assertion on the glass alone.
-  await glassButton(phone, shown.ref, "glass-passkey").click();
+  // A fresh assertion on the phone alone.
+  const confirmed = await confirmOnPhone(phone, shown.ref);
   const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
-  const second = (await rawSent(phone, "confirmation.confirm")).find((m) => m.args.ref === shown.ref && m.id !== "replay_1");
-  const freshAssertion = !!second && second.args.assertion.response.signature !== first.args.assertion.response.signature &&
-    second.args.assertion.response.clientDataJSON !== first.args.assertion.response.clientDataJSON;
-  record.fresh = { replay, waiting_after_session_repeat: waiting, made_before_proof: before, fresh_assertion: freshAssertion, completed };
-  return row("fresh", replay.ok === false && waiting === 1 && !before && freshAssertion && completed,
-    "a second request: a replayed assertion and the desktop's session alone change nothing; the glass's fresh assertion confirms it",
+  const second = (await assertionsSent(phone)).find((a) => a.ref === shown.ref);
+  const freshAssertion = !!first && !!second &&
+    second.credential.response.signature !== first.credential.response.signature &&
+    second.credential.response.clientDataJSON !== first.credential.response.clientDataJSON;
+  record.fresh = {
+    replay: { refused: !replay.ok && !!replay.error, error: replay.error || null },
+    waiting_after_session_repeat: waiting, made_before_proof: before, confirmed, fresh_assertion: freshAssertion, completed,
+  };
+  return row("fresh", record.fresh.replay.refused && waiting === 1 && !before && freshAssertion && confirmed && completed,
+    "a second request: the first assertion replayed and the desktop's session alone change nothing; the phone's fresh assertion confirms it",
     record.fresh);
 }
 
-async function measure(phone) {
+// The test device (../browser/device.mjs): its key made in this process,
+// its code typed on the desktop, the pairing confirmed in the phone's
+// Prism, the pairing completed with its key, and its channel connected
+// under the certificate the home answered, its confirmations stream open.
+async function testDevice(desk, phone) {
+  const device = newDevice({ name: "pairing proof test device" });
+  const { secret } = await pairingFor(desk, phone, device.code);
+  const paired = await pairDevice(device, { proxyPort: proxy.address().port, base, secret });
+  if (paired.error) throw new Error(`the test device did not pair: ${JSON.stringify(paired.error)}`);
+  const opened = await connectDevice(device, { proxyPort: proxy.address().port, base });
+  if (!opened.channel) throw new Error(`the test device's channel closed ${opened.code}`);
+  const stream = await opened.channel.intent("streams.open", { stream: "confirmation.changes" });
+  return { device, ch: opened.channel, stream };
+}
+
+async function measure(ch) {
   const samples = [];
   const refused = [];
   for (let i = 1; i <= MEASURED; i++) {
-    const answered = await intent(phone, `measure_${i}`, "confirmation.pending", {});
+    const answered = await ch.intent("confirmation.pending", {});
     if (answered.ok) samples.push(answered.ms);
     else refused.push(answered.error);
   }
   const rounded = Object.fromEntries(Object.entries(percentiles(samples)).map(([k, v]) => [k, typeof v === "number" && k !== "n" ? Math.round(v * 10) / 10 : v]));
   record.intent = { operation: "confirmation.pending", sequential: true, ...rounded, refused: refused.length };
   return row("intent", samples.length === MEASURED,
-    "one discrete intent admitted and dispatched over the device channel and answered, timed in the glass's page (ms)",
+    "one discrete intent admitted and dispatched over the test device's channel and answered, timed from its frame to its answer (ms)",
     record.intent);
 }
 
-async function sleepBeyondExpiry(desk, phone) {
-  // Suspend delivery first: a renewal between an earlier store read and
-  // sleep would leave the proof waiting past a certificate no longer held.
-  const captured = await phone.evaluate(() => {
-    const device = window.__device;
-    device.sleep();
-    return {
-      from: device.log.length - 1, socket: device.sockets, standing: device.standing,
-      time_origin: performance.timeOrigin,
-    };
-  });
-  const before = await storedDevice(phone);
-  const { from, socket: oldSocket } = captured;
-  const beforeSleep = (await deviceLog(phone)).slice(0, from).filter((e) => e.socket === oldSocket);
-  const oldGrant = beforeSleep.filter((e) => e.dir === "in" && e.type === "grant").at(-1);
-  const renewalsBeforeSleep = beforeSleep.filter((e) => ["renew", "challenge", "proof", "certificate", "standing"].includes(e.type));
-  const previousStanding = beforeSleep.findLast((e) => e.dir === "in" && e.type === "standing");
-  let expiresMs = previousStanding && previousStanding.expires_at;
-  const relative = ({ at, ...entry }) => ({
-    ms_past_expiry: Number.isFinite(expiresMs) ? Math.round(captured.time_origin + at - expiresMs) : null, ...entry,
-  });
-  record.sleep = {
-    expires_at: expiresMs,
-    stored_certificate_expires_at: before.certificate.expires_at,
-    captured: { certificate: before.certificate, standing: captured.standing, socket: oldSocket },
-    renewals_before_sleep: renewalsBeforeSleep.map(relative),
-  };
-
-  try {
-    // A proof already sent can extend the home's expiry while its reply
-    // is held asleep. Read the native log until that exchange stands or
-    // closes. A held challenge cannot be answered and moves no expiry.
-    const homeStanding = await waitFor(async () => {
-      const onOld = (await deviceLog(phone)).filter((e) => e.socket === oldSocket);
-      const standingAt = onOld.findLastIndex((e) => e.dir === "in" && e.type === "standing");
-      const proofAt = onOld.findLastIndex((e) => e.dir === "out" && e.type === "proof");
-      if (proofAt > standingAt && !onOld.some((e) => e.event === "close")) return null;
-      if (standingAt < 0) throw new Error("the sleeping socket has no recorded home standing");
-      return onOld[standingAt];
-    }, { timeoutMs: 20_000, what: "the sleeping socket's sent proof to stand or close" });
-    const expires = homeStanding.expires_at;
-    if (!Number.isFinite(expires)) throw new Error("the sleeping socket's home standing has no expiry");
-    expiresMs = expires;
-    Object.assign(record.sleep, {
-      expires_at: expires, home_standing: relative(homeStanding),
-      certificate_expiry_note: expires === before.certificate.expires_at
-        ? null : "The stored certificate differs from the home's standing; the wait uses the home's expiry.",
-    });
-    record.sleep.renewals_before_sleep = renewalsBeforeSleep.map(relative);
-    // Asleep past the expiry, while the desktop asks for something more.
-    await askForEntry(desk, "pairing-entry-3", "sk-pairing-3-not-shown");
-    await sleep(Math.max(0, expiresMs - Date.now()) + 4_000);
-    // Keep the captured certificate for connectAsHeld's expired-certificate probe.
-    const wakingDevice = await storedDevice(phone, false);
-    const wokeAt = Date.now();
-    const atWake = await phone.evaluate(() => {
-      const device = window.__device;
-      const observed = {
-        at: performance.now(), standing: device.standing,
-        received_standing: device.log.filter((e) => e.dir === "in" && e.type === "standing").at(-1),
-      };
-      device.wake();
-      const { raw: _raw, ...received } = observed.received_standing || {};
-      return { ...observed, received_standing: received };
-    });
-    record.sleep.at_wake = {
-      ...relative(atWake), certificate: wakingDevice && wakingDevice.certificate,
-      received_standing: atWake.received_standing.at === undefined ? null : relative(atWake.received_standing),
-    };
-    await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-    const shown = await glassPrompt(phone).catch(() => null);
-
-    const all = await deviceLog(phone);
-    const assertionReadAt = Date.now();
-    const log = all.slice(from);
-    const onOld = log.filter((e) => e.socket === oldSocket);
-    const closed = onOld.find((e) => e.event === "close");
-    const grantRevoked = onOld.some((e) => e.dir === "in" && e.type === "revoke" && e.grant_id === (oldGrant && oldGrant.grant_id));
-    const dropped = log.filter((e) => e.dir === "dropped").map((e) => e.type);
-    const next = log.filter((e) => e.socket > oldSocket);
-    const sentNext = next.filter((e) => e.dir === "out");
-    const standingAt = next.findIndex((e) => e.dir === "in" && e.type === "standing");
-    const beforeStanding = standingAt < 0 ? next : next.slice(0, standingAt);
-    const intentBeforeStanding = beforeStanding.some((e) => e.dir === "out" && e.type === "intent");
-    const newGrant = next.find((e) => e.dir === "in" && e.type === "grant");
-    const expired = await connectAsHeld(phone);
-    record.sleep = {
-      expires_at: expires,
-      stored_certificate_expires_at: before.certificate.expires_at,
-      woke_seconds_past_expiry: Math.round((wokeAt - expiresMs) / 1000),
-      dropped_while_asleep: dropped,
-      old_channel: { grant_revoked: grantRevoked, close: closed ? closed.code : null },
-      first_sent_after_wake: sentNext[0] ? sentNext[0].type : null,
-      intent_before_standing: intentBeforeStanding,
-      stream_granted_anew: !!newGrant && (!oldGrant || newGrant.grant_id !== oldGrant.grant_id),
-      asked_while_asleep_shown: !!(shown && shown.preview.includes("pairing-entry-3")),
-      expired_certificate_connect: expired,
-      assertion_read_ms_past_expiry: assertionReadAt - expiresMs,
-      captured: record.sleep.captured,
-      home_standing: record.sleep.home_standing,
-      certificate_expiry_note: record.sleep.certificate_expiry_note,
-      at_wake: record.sleep.at_wake,
-      renewals_before_sleep: record.sleep.renewals_before_sleep,
-    };
-    if (shown) await glassButton(phone, shown.ref, "glass-cancel").click().catch(() => null);
-    return row("sleep",
-      grantRevoked && closed && closed.code === 4408 && record.sleep.first_sent_after_wake === "renew" &&
-        !intentBeforeStanding && record.sleep.stream_granted_anew && record.sleep.asked_while_asleep_shown &&
-        expired.code === 4408,
-      "asleep past its certificate's expiry, the glass's stream ends and its channel closes at the expiry; awake, it renews before anything else, and the expired certificate opens nothing",
-      record.sleep);
-  } finally {
-    // Keep the evidence even when ready or the expired-certificate probe
-    // times out, and include a close that arrives after the assertion read.
-    try {
-      const observed = await phone.evaluate(() => ({
-        at: performance.now(),
-        log: window.__device.log.map(({ raw: _raw, ...entry }) => entry),
-      }));
-      record.sleep.timeline_captured_ms_past_expiry = relative(observed).ms_past_expiry;
-      record.sleep.old_socket_timeline = observed.log
-        .filter((e) => e.socket === oldSocket || e.event === "sleep" || e.event === "wake").map(relative);
-    } catch (error) {
-      record.sleep.timeline_error = error.message || String(error);
-    }
-  }
+// A connection of the test device's own under the certificate it holds
+// now: `connect`, the challenge signed, and the code the home closed it
+// with, or "open" when it stood.
+async function connectAsHeld(device) {
+  const ch = channel(device, { proxyPort: proxy.address().port, base, purpose: "connect" });
+  const outcome = await Promise.race([ch.opened.then(() => "open"), ch.closed, sleep(20_000).then(() => "timed out")]);
+  if (outcome === "open") ch.close();
+  return { code: outcome, seen: ch.log.filter((e) => e.dir === "in").map((e) => e.type) };
 }
 
-async function revoke(desk, phone) {
-  const held = await storedDevice(phone);
-  const from = (await deviceLog(phone)).length;
-  const socket = await phone.evaluate(() => window.__device.sockets);
+async function sleepBeyondExpiry(desk, test) {
+  const { device, ch } = test;
+  const grant = ch.log.findLast((e) => e.dir === "in" && e.type === "grant");
+  const expiresAt = ch.standing && ch.standing.expires_at;
+  ch.sleep();
+  // Asleep past the expiry, while the desktop asks for something more.
+  await askForEntry(desk, "pairing-entry-3", "sk-pairing-3-not-shown");
+  await sleep(Math.max(0, expiresAt - Date.now()) + 4_000);
+  ch.wake();
+  const closed = await Promise.race([ch.closed, sleep(20_000).then(() => "not closed")]);
+  const asleep = ch.log.slice(ch.log.findIndex((e) => e.event === "sleep"));
+  const grantRevoked = asleep.some((e) => e.dir === "in" && e.type === "revoke" && grant && e.grant_id === grant.grant_id);
+  // The expired certificate opens nothing; a renewal on a new connection
+  // stands, under a replacement, and the stream is granted anew.
+  const expired = await connectAsHeld(device);
+  const before = device.certificate.expires_at;
+  const renewed = await connectDevice(device, { proxyPort: proxy.address().port, base });
+  const next = renewed.channel;
+  const stream = next ? await next.intent("streams.open", { stream: "confirmation.changes" }) : null;
+  const newGrant = next ? await waitFor(() => next.log.find((e) => e.dir === "in" && e.type === "grant") || null, { timeoutMs: 10_000, what: "the stream's grant" }).catch(() => null) : null;
+  const pending = next ? await next.intent("confirmation.pending", {}) : null;
+  const asked = pending && pending.ok && (pending.result.confirmations || []).some((c) => JSON.stringify(c.preview || {}).includes("pairing-entry-3"));
+  record.sleep = {
+    expires_at: expiresAt, woke_ms_past_expiry: Date.now() - expiresAt,
+    old_channel: { grant_revoked: grantRevoked, close: closed },
+    expired_certificate_connect: expired,
+    renewed: { stood: !!next, first_sent: next ? next.log.find((e) => e.dir === "out").type : null,
+      certificate_moved: device.certificate.expires_at > before, stream_ok: !!(stream && stream.ok),
+      granted_anew: !!newGrant && (!grant || newGrant.grant_id !== grant.grant_id) },
+    asked_while_asleep_read: !!asked,
+  };
+  test.ch = next;
+  return row("sleep",
+    grantRevoked && closed === 4408 && expired.code === 4408 && !!next && record.sleep.renewed.first_sent === "renew" &&
+      record.sleep.renewed.certificate_moved && record.sleep.renewed.granted_anew && record.sleep.asked_while_asleep_read,
+    "asleep past its certificate's expiry, the test device's stream ends and its channel closes at the expiry; its expired certificate opens nothing; it renews on a new connection, its stream is granted anew and the request made meanwhile is read",
+    record.sleep);
+}
+
+async function revoke(desk, phone, test) {
+  const { device, ch } = test;
+  const grant = ch.log.findLast((e) => e.dir === "in" && e.type === "grant");
+  const from = ch.log.length;
   await openDevices(desk);
-  await desk.waitForSelector(`${layer} [data-test="pairing-client"][data-client="${held.clientId}"]`, { timeout: 30_000 });
-  await desk.locator(`${layer} [data-test="pairing-client"][data-client="${held.clientId}"] [data-test="pairing-revoke"]`).click();
+  const client = `${layer} [data-test="pairing-client"][data-client="${device.clientId}"]`;
+  await desk.waitForSelector(client, { timeout: 30_000 });
+  await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
 
-  // Revoking needs a fresh confirmation: the glass gives it.
-  const shown = await glassPrompt(phone);
-  await glassButton(phone, shown.ref, "glass-passkey").click();
-  await phone.waitForSelector('[data-test="glass-status"][data-state="revoked"]', { timeout: 60_000 });
-  await desk.waitForSelector(`${layer} [data-test="pairing-none"]`, { timeout: 30_000 }).catch(() => null);
-  const listed = await desk.locator(`${layer} [data-test="pairing-client"][data-client="${held.clientId}"]`).count();
-
-  const log = (await deviceLog(phone)).slice(from).filter((e) => e.socket === socket);
-  const grantRevoked = log.some((e) => e.dir === "in" && e.type === "revoke" && e.grant_id);
+  // Revoking needs a fresh confirmation: the phone's Prism gives it.
+  const shown = await phonePrompt(phone);
+  const confirmed = await confirmOnPhone(phone, shown.ref);
+  const closed = await Promise.race([ch.closed, sleep(30_000).then(() => "not closed")]);
+  await desk.waitForSelector(client, { state: "detached", timeout: 30_000 }).catch(() => null);
+  const listed = await desk.locator(client).count();
+  const log = ch.log.slice(from);
+  const grantRevoked = log.some((e) => e.dir === "in" && e.type === "revoke" && grant && e.grant_id === grant.grant_id);
   const clientRevoked = log.some((e) => e.dir === "in" && e.type === "revoke" && !e.grant_id);
-  const closed = log.find((e) => e.event === "close");
-  const stored = await phone.evaluate(() => new Promise((resolve) => {
-    const open = indexedDB.open("cyfr-glass", 1);
-    open.onsuccess = () => {
-      const read = open.result.transaction("glass", "readonly").objectStore("glass").get("device");
-      read.onsuccess = () => resolve(!!read.result);
-      read.onerror = () => resolve(null);
-    };
-    open.onerror = () => resolve(null);
-  }));
-  const revokedConnect = await connectAsHeld(phone);
+  const revokedConnect = await connectAsHeld(device);
   record.revoke = {
-    preview: shown.preview, grant_revoked: grantRevoked, client_revoked: clientRevoked,
-    close: closed ? closed.code : null, still_listed: listed, glass_keeps_device: stored,
-    revoked_certificate_connect: revokedConnect,
+    preview: shown.preview, confirmed, grant_revoked: grantRevoked, client_revoked: clientRevoked,
+    close: closed, still_listed: listed, revoked_certificate_connect: revokedConnect,
   };
   return row("revoke",
-    /pairing\.revoke/.test(shown.preview) && grantRevoked && clientRevoked && closed && closed.code === 4403 &&
-      listed === 0 && stored === false && revokedConnect.code === 4403,
-    "revoked under Devices and confirmed on the glass: its stream ends, it is told and closed, it forgets its key and certificate, and its last certificate opens nothing",
+    /pairing\.revoke/.test(shown.preview) && confirmed && grantRevoked && clientRevoked && closed === 4403 &&
+      listed === 0 && revokedConnect.code === 4403,
+    "revoked under Devices and confirmed in the phone's Prism: the test device's stream ends, it is told and closed, Devices no longer lists it, and its last certificate opens nothing",
     record.revoke);
 }
 
-// The glass's steps once more on the handheld (HANDHELD): the
-// phone signed in again in a context of its own, its authenticator holding
-// the person's passkey carried from the phone's. Its Prism reads and
-// confirms a pairing in the system layer; it becomes the glass, confirms a
-// credential entry, reconnects and is revoked there, and each of those
-// screens meets the handheld's checks. The Prism page around the prompt is
-// measured and recorded, not held.
+// The phone's steps once more on the handheld (HANDHELD): the phone signed
+// in again in a context of its own, its authenticator holding the person's
+// passkey carried from the phone's. Its Prism reads and confirms in its
+// system layer a pairing's consent (for a test device's code), a
+// credential entry the desktop asks for, and that device's revocation;
+// each prompt meets the handheld's checks. The Prism page around the
+// prompt is measured and recorded, not held.
 async function handheld(browser, desk, phoneAuthenticator) {
   const context = await browser.newContext(HANDHELD);
   await context.addCookies([{
     name: "_cyfr_key", value: phoneCookie, url: base, httpOnly: true, secure: true, sameSite: "Lax",
   }]);
-  await context.addInitScript(instrumentDevice);
   const hand = await context.newPage();
   const authenticator = await virtualAuthenticator(hand);
   for (const credential of await phoneAuthenticator.credentials()) await authenticator.add(credential);
   const measured = {};
 
-  // Its key made first, and its code shown, measured and recorded; then a
-  // pairing begun on the desktop for that code, its consent read and
-  // confirmed in the Prism's system layer.
-  const code = await shownCode(hand);
-  const codeScreen = await measureScreen(hand);
-  await beginFor(desk, code);
-  await hand.goto(shell);
-  await connected(hand);
-  const prompt = `${layer} [data-test="confirmation"][data-own="false"]`;
-  await hand.waitForSelector(`${prompt} [data-test="confirm-passkey"]`, { timeout: 30_000 });
-  const consent = (await hand.locator(`${prompt} [data-test="confirmation-preview"]`).first().textContent()).trim();
+  // A pairing begun on the desktop for a test device's code, its consent
+  // read and confirmed in the handheld's Prism.
+  const device = newDevice({ name: "pairing proof handheld test device" });
+  await beginFor(desk, device.code);
+  const consent = await phonePrompt(hand);
   measured.consent_prompt = await measureScreen(hand, layer);
   const prismPage = await measureScreen(hand);
-  await hand.locator(`${prompt} [data-test="confirm-passkey"]`).click();
+  const consentConfirmed = await confirmOnPhone(hand, consent.ref);
   await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
   const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
   const deskCode = (await desk.locator(`${layer} [data-test="pairing-key-code"]`).textContent()).trim();
+  const paired = await pairDevice(device, { proxyPort: proxy.address().port, base, secret: link.split("#code=")[1] });
 
-  // The glass.
-  await hand.goto(link);
-  await hand.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  measured.glass_ready = await measureScreen(hand, "#glass");
-  const held = await storedDevice(hand);
-
-  // A credential entry read and confirmed on the glass.
+  // A credential entry read and confirmed there.
   const name = "pairing-entry-handheld";
   await askForEntry(desk, name, "sk-pairing-handheld-not-shown");
-  const shown = await glassPrompt(hand);
-  measured.glass_prompt = await measureScreen(hand, "#glass");
-  await glassButton(hand, shown.ref, "glass-passkey").click();
-  const outcome = await glassOutcome(hand, shown.ref);
+  const shown = await phonePrompt(hand);
+  measured.entry_prompt = await measureScreen(hand, layer);
+  const entryConfirmed = await confirmOnPhone(hand, shown.ref);
   const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
 
-  // Reconnecting: the glass's page opened again connects under the device
-  // it holds.
-  await hand.goto(`${base}/pair`);
-  await hand.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  measured.reconnected = await measureScreen(hand, "#glass");
-
-  // Revocation, confirmed on the glass.
+  // The test device's revocation, confirmed there.
   await openDevices(desk);
-  const client = `${layer} [data-test="pairing-client"][data-client="${held.clientId}"]`;
+  const client = `${layer} [data-test="pairing-client"][data-client="${device.clientId}"]`;
   await desk.waitForSelector(client, { timeout: 30_000 });
   await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
-  const revoking = await glassPrompt(hand);
-  measured.revoke_prompt = await measureScreen(hand, "#glass");
-  await glassButton(hand, revoking.ref, "glass-passkey").click();
-  await hand.waitForSelector('[data-test="glass-status"][data-state="revoked"]', { timeout: 60_000 });
-  measured.revoked = await measureScreen(hand, "#glass");
+  const revoking = await phonePrompt(hand);
+  measured.revoke_prompt = await measureScreen(hand, layer);
+  const revokeConfirmed = await confirmOnPhone(hand, revoking.ref);
+  await desk.waitForSelector(client, { state: "detached", timeout: 30_000 }).catch(() => null);
+  const listed = await desk.locator(client).count();
   await context.close();
 
   const failures = unmet(measured);
   record.viewport = {
-    viewport: HANDHELD.viewport, code, desktop_code: deskCode, consent, entry: { preview: shown.preview, outcome, completed },
-    revoke_preview: revoking.preview, measured, failures, finding_prism_page: prismPage, finding_code_screen: codeScreen,
+    viewport: HANDHELD.viewport, code: device.code, desktop_code: deskCode, consent: consent.preview, paired: !paired.error,
+    entry: { preview: shown.preview, confirmed: entryConfirmed, completed }, revoke_preview: revoking.preview,
+    revoked: revokeConfirmed && listed === 0, measured, failures, finding_prism_page: prismPage,
   };
   return row("viewport",
-    /pairing\.begin/.test(consent) && deskCode === code && link.startsWith(`${base}/pair#code=`) && !!held &&
-      /vault\.create/.test(shown.preview) && shown.preview.includes(name) && outcome !== null && outcome.ok === "true" &&
-      completed && /pairing\.revoke/.test(revoking.preview) && failures.length === 0,
-    "at 720×720: its key's code typed on the desktop, a pairing's consent read and confirmed in the Prism's system layer, the glass, a credential entry confirmed on it, its reconnection and its revocation, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
+    /pairing\.begin/.test(consent.preview) && consentConfirmed && deskCode === device.code && !paired.error &&
+      /vault\.create/.test(shown.preview) && shown.preview.includes(name) && entryConfirmed && completed &&
+      /pairing\.revoke/.test(revoking.preview) && revokeConfirmed && listed === 0 && failures.length === 0,
+    "at 720×720: a pairing's consent, a credential entry and a revocation, each read and confirmed with the passkey in the Prism's system layer, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);
 }
 
 // ---------------------------------------------------------------------------
 
-let proxy;
 try {
   proxy = await startProxy({ homes });
 } catch (error) {
@@ -1230,23 +926,18 @@ try {
   await phoneContext.addCookies([{
     name: "_cyfr_key", value: phoneCookie, url: base, httpOnly: true, secure: true, sameSite: "Lax",
   }]);
-  await phoneContext.addInitScript(instrumentDevice);
+  await phoneContext.addInitScript(instrumentAssertions);
   desk = await desktop.newPage();
   phone = await phoneContext.newPage();
   const authenticator = await virtualAuthenticator(phone);
 
-  if (await passkey(phone, authenticator)) {
-    const [paired, link, code] = await pair(desk, phone);
-    if (paired) await otherKey(browser, link, code);
-    if (paired && await glass(phone, link, code, authenticator)) {
-      const [confirmed, firstRef] = await confirmEntry(desk, phone);
-      if (confirmed && await fresh(desk, phone, firstRef)) {
-        await commandLine(desk, phone);
-        await measure(phone);
-        await sleepBeyondExpiry(desk, phone);
-        await revoke(desk, phone);
-        await handheld(browser, desk, authenticator);
-      }
+  if (await passkey(phone, authenticator) && await commandLine(desk, phone)) {
+    const [confirmed, firstRef] = await confirmEntry(desk, phone);
+    if (confirmed && await fresh(desk, phone, firstRef)) {
+      const test = await testDevice(desk, phone);
+      await measure(test.ch);
+      if (await sleepBeyondExpiry(desk, test)) await revoke(desk, phone, test);
+      await handheld(browser, desk, authenticator);
     }
   }
 } catch (error) {
@@ -1259,17 +950,13 @@ try {
     const text = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "unread");
     console.error(`  ${name} at ${url}: ${JSON.stringify(text.slice(0, 3000))}`);
   }
-  if (phone) {
-    const log = await phone.evaluate(() => window.__device ? window.__device.log.slice(-40).map(({ raw: _raw, ...e }) => e) : null).catch(() => null);
-    console.error(`  the glass's last frames: ${JSON.stringify(log)}`);
-  }
 } finally {
   await browser.close();
   proxy.close();
 }
 
-const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "command_line", "renewal", "terminal_confirm", "open_ticket", "exit", "pin", "lost_answer",
-  "intent", "sleep", "revoke", "viewport"];
+const STEPS = ["passkey", "pair", "other_key", "command_line", "renewal", "terminal_confirm", "open_ticket", "exit", "pin", "lost_answer",
+  "confirm", "fresh", "intent", "sleep", "revoke", "viewport"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";
@@ -1280,7 +967,7 @@ const table = [
   "|---|---|",
   ...STEPS.map((step) => `| ${step} | ${outcome(step)} |`),
   "",
-  `Device intent (\`confirmation.pending\`, ${MEASURED} sequential, timed in the glass's page): ` +
+  `Device intent (\`confirmation.pending\`, ${MEASURED} sequential, timed over the test device's channel): ` +
     (record.intent ? `p50 ${record.intent.p50} ms, p95 ${record.intent.p95} ms, p99 ${record.intent.p99} ms (n ${record.intent.n})` : "not measured"),
 ];
 writeFileSync(join(outDir, "pairing-proof.md"), table.join("\n") + "\n");
