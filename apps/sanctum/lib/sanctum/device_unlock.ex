@@ -50,12 +50,13 @@ defmodule Sanctum.DeviceUnlock do
 
   Through the device channel only (`auth_method: :device`) and only for a
   client that reports a holder: `unlock/2` with no proof answers an
-  `unlock` challenge reserving one session id; with the proof over it, a
-  32-byte single-use ticket, held 60 seconds with the reserved session,
-  the client and the issuance expectation the channel's context read. The
-  session is reserved as a row no token loads
-  (`Arca.SessionStorage.reserve_client_session/2`), expiring with the
-  ticket. `redeem/1`, the browser's exchange, spends the ticket once and
+  `unlock` challenge reserving one session id, and reserves that session
+  as a row no token loads, expiring with the challenge
+  (`Arca.SessionStorage.reserve_client_session/2`), from the moment the
+  id leaves this home; with the proof over it, while that row still
+  stands, a 32-byte single-use ticket, held 60 seconds with the reserved
+  session, the client and the issuance expectation the channel's context
+  read, and the row carried to the ticket's deadline. `redeem/1`, the browser's exchange, spends the ticket once and
   activates that row (`Sanctum.Session.create_unlocked/1`) in the
   issuance transaction that rereads the person, athanor, seat, client
   and certificate the expectation names, under the client's lock and
@@ -479,7 +480,9 @@ defmodule Sanctum.DeviceUnlock do
   `unlock` challenge reserving one session id, `%{challenge}`; with
   `"proof"` alone, `%{ticket, session_id, expires_at}`, the ticket's
   deadline in ms. Refusals: `:not_a_device`, `:no_holder`,
-  `:proof_refused`, `:invalid_request`, `:not_standing` and `:unavailable`.
+  `:proof_refused`, `:session_retired` (a lock or the channel's end retired
+  the reserved session before the proof), `:invalid_request`,
+  `:not_standing` and `:unavailable`.
   """
   @spec unlock(Context.t(), map()) :: {:ok, map()} | {:error, atom()}
   def unlock(%Context{} = ctx, args) when is_map(args) do
@@ -494,10 +497,14 @@ defmodule Sanctum.DeviceUnlock do
 
   def unlock(_ctx, _args), do: {:error, :invalid_request}
 
+  # The session id leaves this home in the challenge, so its reservation
+  # stands from that moment: a lock the device signs over the id before
+  # its unlock proof arrives deletes the row, and the proof then finds none.
   defp unlock_challenge(ctx, client) do
     with {:ok, now} <- db_now_ms(),
          {:ok, challenge} <-
-           fresh(:unlock, ctx, client, now, session_id: Prima.UUID7.generate_id("ses")) do
+           fresh(:unlock, ctx, client, now, session_id: Prima.UUID7.generate_id("ses")),
+         :ok <- reserve(ctx, challenge.session_id, challenge.expires_at) do
       hold({:device_unlock, ctx.client_id}, challenge, %{challenge: challenge}, now)
       {:ok, %{challenge: challenge}}
     end
@@ -508,7 +515,7 @@ defmodule Sanctum.DeviceUnlock do
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []),
          {:ok, now} <- db_now_ms(),
          session_id = held.challenge.session_id,
-         :ok <- reserve(ctx, session_id, now) do
+         :ok <- still_reserved(ctx, session_id, now + @lifetime_ms) do
       ticket = :crypto.strong_rand_bytes(@ticket_bytes)
 
       Arca.Cache.put(
@@ -534,17 +541,32 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
-  # The session the ticket will activate, reserved as a row no token loads
-  # and expiring with the ticket: what a lock retires.
-  defp reserve(ctx, session_id, now) do
+  # The session the challenge names, reserved as a row no token loads and
+  # expiring with the challenge: what a lock retires.
+  defp reserve(ctx, session_id, expires_at_ms) do
     case Arca.SessionStorage.reserve_client_session(session_id, %{
            client_id: ctx.client_id,
            user_id: ctx.user_id,
            email: ctx.email,
            athanor_id: ctx.athanor_id,
-           expires_at: DateTime.from_unix!(now + @lifetime_ms, :millisecond)
+           expires_at: DateTime.from_unix!(expires_at_ms, :millisecond)
          }) do
       :ok -> :ok
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # The reservation the proof answers, still standing, carried to the
+  # ticket's deadline; one a lock or the channel's end retired, or that
+  # expired, issues no ticket.
+  defp still_reserved(ctx, session_id, until_ms) do
+    case Arca.SessionStorage.hold_client_reservation(
+           ctx.client_id,
+           session_id,
+           DateTime.from_unix!(until_ms, :millisecond)
+         ) do
+      :ok -> :ok
+      {:error, :reservation_retired} -> {:error, :session_retired}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end

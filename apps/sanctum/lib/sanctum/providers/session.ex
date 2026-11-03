@@ -670,6 +670,14 @@ defmodule Sanctum.Providers.Session do
         "The device's proof was refused: unlock again"
       )
 
+  defp device_refusal(:session_retired),
+    do:
+      cli_refused(
+        :conflict,
+        :session_retired,
+        "This unlock was locked before it finished: unlock again"
+      )
+
   defp device_refusal(:invalid_request),
     do: {:invalid_argument, "unlock takes no arguments or its proof alone; lock takes its proof"}
 

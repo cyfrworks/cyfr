@@ -163,6 +163,22 @@ defmodule Arca.SessionStorageTest do
       assert {{:error, :reservation_retired}, _} = activate("pcl_one", id, 60_000)
     end
 
+    test "a reservation is carried to its ticket's deadline only while it stands" do
+      id = reserve!("pcl_hold")
+      until = DateTime.add(DateTime.utc_now(), 120, :second)
+      assert :ok = SessionStorage.hold_client_reservation("pcl_hold", id, until)
+      %{expires_at: held} = Arca.Repo.get!(Arca.Schemas.Session, id)
+      assert DateTime.compare(held, DateTime.truncate(until, :microsecond)) == :eq
+
+      assert {:error, :reservation_retired} =
+               SessionStorage.hold_client_reservation("pcl_other", id, until)
+
+      {:ok, [_unloadable]} = SessionStorage.delete_client_sessions("pcl_hold", [id])
+
+      assert {:error, :reservation_retired} =
+               SessionStorage.hold_client_reservation("pcl_hold", id, until)
+    end
+
     test "a lock, another client or an expired reservation leaves nothing to activate" do
       locked = reserve!("pcl_two")
       assert {:ok, [_unloadable]} = SessionStorage.delete_client_sessions("pcl_two", [locked])

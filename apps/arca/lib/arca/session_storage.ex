@@ -185,13 +185,15 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Reserve the session `id` of the protected device `attrs.client_id` at
-  its unlock: a row of the person (`attrs.user_id`, `:email`,
-  `:athanor_id`) that no token loads, since its token hash has no token
-  behind it, expiring at `attrs.expires_at`, the unlock ticket's deadline.
-  A lock retires it (`delete_client_sessions/2`) and the ticket's
-  redemption activates it (`activate_client_session/3`); whether a lock
-  happened is this row's absence, never a cache entry's. Written under
+  Reserve the session `id` of the protected device `attrs.client_id` when
+  its unlock challenge names it: a row of the person (`attrs.user_id`,
+  `:email`, `:athanor_id`) that no token loads, since its token hash has no
+  token behind it, expiring at `attrs.expires_at`, the challenge's
+  deadline, which the proof carries to the ticket's
+  (`hold_client_reservation/3`). A lock retires it
+  (`delete_client_sessions/2`), before the proof or after, and the
+  ticket's redemption activates it (`activate_client_session/3`); whether
+  a lock happened is this row's absence, never a cache entry's. Written under
   the member's slot (`Arca.Repo.owned/2`).
   """
   @spec reserve_client_session(String.t(), map()) ::
@@ -216,6 +218,38 @@ defmodule Arca.SessionStorage do
     end)
     |> case do
       {:ok, :reserved} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Carry the reservation `id` of the protected device `client_id` to
+  `until`, its ticket's deadline, under the member's slot, while it is
+  still reserved and unexpired on the database's clock; one a lock or the
+  channel's end deleted, or that expired, is
+  `{:error, :reservation_retired}`.
+  """
+  @spec hold_client_reservation(String.t(), String.t(), DateTime.t()) ::
+          :ok | {:error, :reservation_retired | :not_owner | :database_error}
+  # arca:unscoped-ok a reserved session is addressed by its own id and the client its unlock reserved it for.
+  def hold_client_reservation(client_id, id, %DateTime{} = until)
+      when is_binary(client_id) and is_binary(id) do
+    Arca.Repo.owned("Arca.SessionStorage.hold_client_reservation", fn ->
+      now = Arca.ServerMetaStorage.now!()
+
+      from(s in Session,
+        where:
+          s.id == ^id and s.client_id == ^client_id and s.provider == ^@reserved and
+            s.expires_at > ^now
+      )
+      |> Arca.Repo.update_all(set: [expires_at: usec(until)])
+      |> case do
+        {1, _} -> {:ok, :held}
+        {0, _} -> {:error, :reservation_retired}
+      end
+    end)
+    |> case do
+      {:ok, :held} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
