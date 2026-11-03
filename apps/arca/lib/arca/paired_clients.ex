@@ -448,6 +448,7 @@ defmodule Arca.PairedClients do
     end
   end
 
+  # arca:unscoped-ok one person's row, the platform holder `project_passkey!/1` read locked by its credential.
   defp set_standing!(row, standing, now) do
     from(p in PairedClient, where: p.id == ^row.id)
     |> Arca.Repo.update_all(set: [standing: standing, updated_at: now])
@@ -557,7 +558,12 @@ defmodule Arca.PairedClients do
   defp validate_holder(changeset) do
     changeset =
       changeset
-      |> Ecto.Changeset.validate_inclusion(:holder_kind, PairedClient.holder_kinds())
+      # A passkey's platform holder is projected from its credential
+      # (`project_passkey!/1`), never recorded as a device.
+      |> Ecto.Changeset.validate_inclusion(
+        :holder_kind,
+        PairedClient.holder_kinds() -- ["platform"]
+      )
       |> Ecto.Changeset.validate_length(:display_name, min: 1, max: @max_display_name)
       |> Ecto.Changeset.validate_format(:display_name, ~r/\A[^\p{Cc}]+\z/u)
 

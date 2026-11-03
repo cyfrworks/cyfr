@@ -1683,11 +1683,15 @@ defmodule Sanctum.DeviceCertsTest do
       # Its pause is no failed proof: nothing is counted against the bounds.
       assert {:error, :identity_stale} = remote_connect(device)
 
-      assert {:ok, [%{standing: "active"}]} =
+      # The device stands, beside the platform holder of the passkey the
+      # fixture confirmed with.
+      assert {:ok, clients} =
                Arca.PairedClients.list(Prima.Actor.in_athanor(ctx.athanor_id),
                  user_id: ctx.user_id,
                  standing: :all
                )
+
+      assert [%{standing: "active"}] = Enum.filter(clients, &(&1.source_kind == "device_cert"))
     end
   end
 end

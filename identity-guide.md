@@ -164,7 +164,7 @@ The join proof (`tests/join-proof/`) runs every step in Chromium on the desktop,
 
 A passkey belongs to the one CYFR it was registered at, under that CYFR's host, and proves things only there. Register one at each CYFR where you confirm changes.
 
-At a CYFR that is not your own, you need no passkey there: your own CYFR confirms for you (above). A passkey you register there anyway is confirmed the same way, at your CYFR. A recovery of your identity retires the passkeys registered at that CYFR before it; an ordinary rotation of the live key, or adding a recovery code, keeps them.
+At a CYFR that is not your own, you need no passkey there: your own CYFR confirms for you (above). A passkey you register there anyway, while you hold no other fresh method there, is authorized by its platform administrator, who confirms that exact registration with a fresh proof of their own; you and the administrator are told. A recovery of your identity retires the passkeys registered at that CYFR before it; an ordinary rotation of the live key, or adding a recovery code, keeps them.
 
 ---
 

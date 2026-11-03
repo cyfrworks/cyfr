@@ -567,22 +567,17 @@ defmodule Sanctum.Passkeys do
   Connect door this home can
   re-authenticate (`Sanctum.Auth.OIDC.reauth_available?/1`), a verified
   email a one-time code can reach
-  (`Sanctum.Auth.EmailVerification.code_available?/1`), or, for a person
-  whose keys are at another home, that home, which certifies their
-  confirmations here (`Sanctum.RemoteCertification.verify_confirmation/3`).
-  The passkeys are read as the context's own.
+  (`Sanctum.Auth.EmailVerification.code_available?/1`). The passkeys are
+  read as the context's own. A remote person needs no passkey here: their
+  own home certifies their confirmations
+  (`Sanctum.RemoteCertification.verify_confirmation/3`), so a passkey they
+  register here anyway is the administrator's to authorize while they hold
+  no fresh method, as before.
   """
   @spec fresh_method?(Context.t()) :: boolean()
   def fresh_method?(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
     active_here?(ctx, user_id) or Sanctum.Auth.OIDC.reauth_available?(user_id) or
-      Sanctum.Auth.EmailVerification.code_available?(user_id) or remote?(user_id)
-  end
-
-  defp remote?(user_id) do
-    match?(
-      {:ok, %{provenance: "remote"}},
-      Arca.PersonIdentities.get(Prima.Actor.system(), user_id)
-    )
+      Sanctum.Auth.EmailVerification.code_available?(user_id)
   end
 
   defp active_here?(ctx, user_id) do

@@ -122,6 +122,7 @@ defmodule Arca.SessionStorage do
     end
   end
 
+  # arca:unscoped-ok one person's platform holder, named by the session it is about to stand under.
   defp platform_holder_stands(%{client_id: client_id, user_id: user_id})
        when is_binary(client_id) do
     from(p in Arca.Schemas.PairedClient,
