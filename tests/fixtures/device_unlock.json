@@ -1724,9 +1724,9 @@
         "purpose": "enroll",
         "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
         "expires_at": 1790000060000,
-        "admission": "invitation",
+        "admission": "pairing",
         "request_id": "enroll_001",
-        "sig": "IUgO9zjomrIH6unVlR6qmZEFGWR3jvr8KYBU6f9ML_HbmYbL_fC9QOw_fv8Rmc1t0H_E6JJ4UsnrPlX4qmRuDg"
+        "sig": "jnGZUrjcTMETBphlOt5rJs2C-4kWETk_BBuSlFxiR77UtA7tUZoaxTcDoV5g-uegIdQrW6RhJ9vfUxucU1BbDA"
       },
       "now": 1790000001000,
       "error": "invalid_field"
