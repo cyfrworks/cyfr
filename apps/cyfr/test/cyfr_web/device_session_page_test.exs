@@ -90,11 +90,16 @@ defmodule CyfrWeb.DeviceSessionPageTest do
     token: token,
     athanor: athanor
   } do
-    ends_in!(session_id, 1_000)
+    # Room for the mount and the slide on a loaded host; what is held is
+    # that the page outlives the deadline it was mounted under.
+    ends_in!(session_id, 3_000)
+    deadline = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
     conn = Plug.Test.init_test_session(conn, %{session_key() => token})
     {:ok, view, _html} = live(conn, athanor_path("/settings", athanor))
     {:ok, [^session_id]} = Sanctum.DeviceUnlock.slide(ctx, [session_id])
-    Process.sleep(1_500)
+
+    past = DateTime.diff(deadline, DateTime.utc_now(), :millisecond) + 500
+    if past > 0, do: Process.sleep(past)
     assert render(view) =~ "Settings"
   end
 end
