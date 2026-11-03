@@ -54,10 +54,14 @@ defmodule Prima.Sanitizer do
   # sign-in carry's URL fragment as a page hands it to its LiveView or
   # posts it (a carry, a challenge, an assertion); and `x-cyfr-invitation`
   # is the header an invitation's bearer code travels in to a protected
-  # device's enrollment. Longer names such as error_code, keyboard,
+  # device's enrollment. `evaluator`, `blinded` and `evaluated` are a
+  # locked device's PIN evaluation (`Prima.DevicePin`): the identifier that
+  # reaches its evaluator and the elements it exchanges. Longer names such
+  # as error_code, keyboard,
   # connection_state, field_names and fragment_id, and a plain `url`, must
   # remain readable.
-  @exact_sensitive_keys ~w(code state key fields invitation_url fragment x-cyfr-invitation)
+  @exact_sensitive_keys ~w(code state key fields invitation_url fragment x-cyfr-invitation
+                          evaluator blinded evaluated)
   @exact_sensitive_normalized Enum.map(@exact_sensitive_keys, &String.replace(&1, ["-", "_"], ""))
 
   # Compared against the key as written, separators and all. `_t` and

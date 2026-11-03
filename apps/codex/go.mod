@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	charm.land/huh/v2 v2.0.3
 	github.com/boombuler/barcode v1.1.0
+	github.com/cloudflare/circl v1.6.5
 	github.com/coder/websocket v1.8.15
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/google/certificate-transparency-go v1.4.0
@@ -29,6 +30,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
+	github.com/bwesterb/go-ristretto v1.2.4 // indirect
 	github.com/catppuccin/go v0.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

@@ -74,6 +74,10 @@ defmodule Sanctum.MixProject do
       # WebAuthn: passkey registration and assertion verification. Pinned,
       # and the only WebAuthn dependency; Ed25519 stays OTP's `:crypto`.
       {:wax_, "== 0.7.0"},
+      # ristretto255 for the home-assisted PIN's evaluation (RFC 9497,
+      # `Sanctum.DevicePin`): libsodium's group operations, built from
+      # the source the package carries (autoconf, automake and libtool).
+      {:libsodium, "3.0.1"},
       {:stream_data, "~> 1.1", only: [:test, :dev]}
     ]
   end

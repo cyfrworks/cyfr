@@ -518,8 +518,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
-        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.DeviceUnlock
-        Sanctum.Directory Sanctum.Egress
+        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.DevicePin
+        Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
         Sanctum.RunningTasks Sanctum.TinctureAccess
@@ -550,7 +550,8 @@ defmodule Cyfr.Boundaries do
           "damaged head), for the flows the tincture's ingress declares to the origins " <>
           "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
           "decisions, the restore ingress `Sanctum.Recovery`'s, a protected device's " <>
-          "enrollment `Sanctum.DeviceUnlock`'s, and the device channel checks each " <>
+          "enrollment `Sanctum.DeviceUnlock`'s, a locked device's PIN evaluation and " <>
+          "reset `Sanctum.DevicePin`'s, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts` and slides, and at its end " <>
           "retires, the sessions its unlocks reserved and holds its device's storage report " <>
           "through `Sanctum.DeviceUnlock`. " <>
@@ -1999,6 +2000,7 @@ defmodule Cyfr.Boundaries do
       refused: 3
     ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
+    "Sanctum.DevicePin" => [evaluate: 2, reset: 2],
     "Sanctum.DeviceUnlock" => [
       closed: 3,
       enroll: 2,
@@ -2358,6 +2360,17 @@ defmodule Cyfr.Boundaries do
           "`POST /device/session` spends the same ticket the same way and answers the " <>
           "session's token in its body, reading and setting no cookie, so no CSRF token " <>
           "is asked"
+    },
+    device_pin: %{
+      admits: :credential,
+      why:
+        "a locked remote device's PIN (`Sanctum.DevicePin`): the evaluation is reached by " <>
+          "the evaluator identifier alone, which the device holds while its key is wrapped " <>
+          "and which grants nothing but one charged evaluation of one blinded element, " <>
+          "bounded by the evaluator's own wait; the reset is the device key's proof over the " <>
+          "challenge its last evaluation answered, verified against the stored row and " <>
+          "consumed once. No session, cookie or CSRF token is read, and no CORS answer " <>
+          "admits a browser"
     },
     device_enrollment: %{
       admits: :credential,
@@ -2960,6 +2973,20 @@ defmodule Cyfr.Boundaries do
     %{
       module: Emissary.Web.DeviceEnrollmentController,
       site: :resume,
+      plane: :external,
+      origin: :none
+    },
+    # A locked remote device's PIN: its evaluator identifier, then the
+    # reset its unwrapped key proves.
+    %{
+      module: Emissary.Web.DevicePinController,
+      site: :evaluate,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Emissary.Web.DevicePinController,
+      site: :reset,
       plane: :external,
       origin: :none
     },

@@ -67,6 +67,12 @@
           "CyfrWeb.Plugs.FrameRequest",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
+        "device_pin" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.FrameRequest"
+        ],
         "device_enrollment" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -284,6 +290,24 @@
           auth: "device_enrollment",
           live_view: nil,
           pipe_through: ["device_enrollment"]
+        },
+        %{
+          verb: "POST",
+          path: "/device/pin/evaluate",
+          plug: "Emissary.Web.DevicePinController",
+          plug_opts: ":evaluate",
+          auth: "device_pin",
+          live_view: nil,
+          pipe_through: ["device_pin"]
+        },
+        %{
+          verb: "POST",
+          path: "/device/pin/reset",
+          plug: "Emissary.Web.DevicePinController",
+          plug_opts: ":reset",
+          auth: "device_pin",
+          live_view: nil,
+          pipe_through: ["device_pin"]
         },
         %{
           verb: "POST",

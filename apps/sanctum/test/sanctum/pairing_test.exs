@@ -276,6 +276,7 @@ defmodule Sanctum.PairingTest do
     :pairing_revocation,
     :recovery_material,
     :device_pairing,
+    :device_pin,
     :passkey_registration,
     :remote_sign_in,
     :key_rotation,

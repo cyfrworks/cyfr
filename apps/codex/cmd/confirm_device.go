@@ -43,7 +43,11 @@ type deviceConfirmer func(ctx context.Context, ref string, c *console) (confirmO
 
 // confirmOnDevice is the confirmer of this command line's device paired
 // with the home at address, or nil when it holds none there.
-var confirmOnDevice = func(address string) deviceConfirmer {
+var confirmOnDevice = func(address string) deviceConfirmer { return confirmOnDeviceBy(address, "") }
+
+// confirmOnDeviceBy is confirmOnDevice reading the change through session,
+// or through cyfr login's shell's when session is empty.
+func confirmOnDeviceBy(address, session string) deviceConfirmer {
 	path, err := deviceRecord(address)
 	if err != nil {
 		return nil
@@ -53,7 +57,7 @@ var confirmOnDevice = func(address string) deviceConfirmer {
 		return nil
 	}
 	return func(ctx context.Context, ref string, c *console) (confirmOutcome, error) {
-		dev, err := openDevice(deviceOptions{address: address})
+		dev, err := openDevice(deviceOptions{address: address, session: session})
 		if err != nil {
 			return notHere, err
 		}
@@ -76,9 +80,14 @@ var confirmOnDevice = func(address string) deviceConfirmer {
 			return confirmedElsewhere, nil
 		}
 		dev.Decide(ctx, ref, true, secret)
-		if notice := dev.View().Notice; !strings.HasPrefix(notice, "Confirmed") {
+		notice := dev.View().Notice
+		if !strings.HasPrefix(notice, "Confirmed") {
 			return failedHere, errors.New(notice)
 		}
+		// The whole notice, as the device said it: beside the success it
+		// may say that CYFR did not take the PIN's reset, so a try stays
+		// counted.
+		fmt.Fprintln(c.out, notice)
 		return confirmedHere, nil
 	}
 }

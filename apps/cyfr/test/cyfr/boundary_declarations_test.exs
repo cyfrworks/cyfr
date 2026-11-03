@@ -101,10 +101,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions CompanyAuthorizations CompanyLoginAttempts
-          DeviceCertificates DeviceCertifications DirectoryHeads IdentityAttempts IdentityLog
+          DeviceCertificates DeviceCertifications DevicePinEvaluators DirectoryHeads IdentityAttempts IdentityLog
           Invitations PairingInvitations Passkeys PendingConfirmations PersonIdentities
           RequestRateWindows),
-       "the identity, device, passkey, confirmation, carry, " <>
+       "the identity, device, device PIN, passkey, confirmation, carry, " <>
          "admission invitation, company sign-in and pre-authentication rate rows Sanctum " <>
          "reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
@@ -150,6 +150,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "a protected device's enrollment, unlock ticket, lock and storage report, which the " <>
          "enrollment ingress, the device channel and the unlock page call, each rostered " <>
          "for its callers in `Cyfr.Boundaries`' surface rows"},
+      {~w(DevicePin),
+       "a locked remote device's PIN evaluation and reset, which the PIN ingress calls, " <>
+         "rostered for its callers in `Cyfr.Boundaries`' surface rows"},
       {~w(Handle Newcomer),
        "the setup page's first-person admission (`Newcomer`) and the identity card's " <>
          "live handle check (`Handle`), each rostered for its callers in `Cyfr.Boundaries`' " <>
