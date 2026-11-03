@@ -101,6 +101,15 @@ func (d *fakeDevice) Unlocked() bool {
 	return d.view.Page == shell.PageUnlocked || d.view.Page == shell.PageConfirm
 }
 func (d *fakeDevice) Lock(string) { d.mu.Lock(); d.locks++; d.mu.Unlock() }
+func (d *fakeDevice) Reenable(_ context.Context, code string, secret []byte) {
+	d.did("reenable", secret, code)
+	clear(secret)
+}
+func (d *fakeDevice) SetPIN(_ context.Context, pin, again []byte) {
+	d.did("setpin", pin, string(again))
+	clear(pin)
+	clear(again)
+}
 
 func (d *fakeDevice) set(v shell.View) { d.mu.Lock(); d.view = v; d.mu.Unlock() }
 
@@ -299,6 +308,10 @@ func TestLogin_RefusesWhatItCannotHold(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", args, err, want)
 		}
+	}
+	// The home at 127.0.0.1 is this machine: --pin is refused first.
+	if _, err := runCommand(t, t.Context(), "login", "--pin"); err == nil || err.Error() != shell.PINHereSentence("command line") {
+		t.Errorf("login --pin at a home here: %v", err)
 	}
 	t.Setenv(sessionHomeEnv, home.URL)
 	if _, err := runCommand(t, t.Context(), "login"); err == nil || !strings.Contains(err.Error(), "unlocked by cyfr login already") {
@@ -626,5 +639,81 @@ func TestDeviceShell_ALoopbackContextIsTheHomesLocalhost(t *testing.T) {
 			t.Errorf("%s: the key is for %v (%v), want %s", address, rec, err, want)
 		}
 		_ = os.Remove(path)
+	}
+}
+
+// cyfr login --pin asks the new PIN twice once unlocked and hands both to
+// SetPIN; the device's sentence ends the run when no PIN was set.
+func TestLoginDriver_SetPINAsksThePINTwice(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageUnlocked}, func(call string, d *fakeDevice) {
+		if call == "setpin" {
+			d.set(shell.View{Page: shell.PageUnlocked, Notice: "This command line's key is now kept under your six-digit PIN."})
+		}
+	})
+	c, out := typed("123456", "123456")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.setPIN(t.Context()); err != nil {
+		t.Fatalf("setPIN: %v\n%s", err, out)
+	}
+	if string(dev.secrets["setpin"]) != "123456" || dev.given["setpin"] != "123456" || !strings.Contains(out.String(), "now kept under") {
+		t.Fatalf("SetPIN given %q and %q\n%s", dev.secrets["setpin"], dev.given["setpin"], out)
+	}
+
+	refused := newFakeDevice(shell.View{Page: shell.PageUnlocked}, func(call string, d *fakeDevice) {
+		d.set(shell.View{Page: shell.PageUnlocked, Notice: "The two entries differ. Enter the same one twice."})
+	})
+	c, _ = typed("123456", "654321")
+	d = &loginDriver{sh: refused, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.setPIN(t.Context()); err == nil || err.Error() != "The two entries differ. Enter the same one twice." {
+		t.Fatalf("a refused PIN: %v", err)
+	}
+}
+
+// A key under a PIN its home counts is asked for as a PIN.
+func TestLoginDriver_AKeyUnderAPINAsksAPIN(t *testing.T) {
+	c, out := typed("123456")
+	d := &loginDriver{c: c}
+	if _, err := d.askSecret(t.Context(), shell.View{Kind: holder.KindSoftware, PIN: true}, "Unlock this command line with its"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "its PIN: ") {
+		t.Fatalf("asked %q", out)
+	}
+}
+
+// A home that does not take this command line's PIN (or its standing)
+// offers the recovery code in the terminal: the code and the PIN, asked
+// again, re-enable it and it unlocks; an empty code leaves it locked with
+// the home's sentence, and nothing is re-enabled.
+func TestLoginDriver_ASuspendedPINOffersTheRecoveryCode(t *testing.T) {
+	const said = "CYFR does not take this command line's PIN: it was removed, or a restore from a backup suspended it. If it was suspended, your recovery code brings it back."
+	locked := shell.View{Page: shell.PageLocked, Kind: holder.KindSoftware, PIN: true}
+	next := func(call string, d *fakeDevice) {
+		switch call {
+		case "unlock":
+			v := locked
+			v.Kit, v.Notice = true, said
+			d.set(v)
+		case "reenable":
+			d.set(shell.View{Page: shell.PageUnlocked})
+		}
+	}
+	dev := newFakeDevice(locked, next)
+	c, out := typed("123456", "CYFR-RECOVERY-CODE", "123456")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"unlock", "reenable"}) || dev.given["reenable"] != "CYFR-RECOVERY-CODE" ||
+		string(dev.secrets["reenable"]) != "123456" || !strings.Contains(out.String(), said) ||
+		!strings.Contains(out.String(), "Then this command line's PIN: ") {
+		t.Fatalf("calls %v, code %q, secret %q\n%s", dev.calls, dev.given["reenable"], dev.secrets["reenable"], out)
+	}
+
+	left := newFakeDevice(locked, next)
+	c, _ = typed("123456", "")
+	d = &loginDriver{sh: left, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.run(t.Context()); err == nil || err.Error() != said || slices.Contains(left.calls, "reenable") {
+		t.Fatalf("an empty code: %v, calls %v", err, left.calls)
 	}
 }

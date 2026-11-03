@@ -35,7 +35,7 @@
 //                passphrase it shows and shows the key's code and approve
 //                address; the code typed on the desktop and confirmed on
 //                the glass, the link pasted pairs it, and its shell acts as
-//                the person (and the renewal, open_ticket, exit and
+//                the person (and the renewal, open_ticket, exit, pin and
 //                lost_answer steps after it: commandLine below)
 //   intent       the device-intent measurement: one discrete intent
 //                (`confirmation.pending`) admitted and dispatched over the
@@ -638,6 +638,15 @@ const deviceRecords = (cliHome) => {
 //                 cookie in through the unlock's one-time ticket
 //   exit          exiting the shell locks: cyfr login exits 0, the shell's
 //                 session opens nothing and the browser's session ends
+//   pin           (S3) cyfr login --pin on that machine, without a chip,
+//                 at a home on another machine: unlocked by the passphrase,
+//                 the new PIN typed twice, pin.enroll confirmed on this
+//                 command line by the passphrase; the record then keeps the
+//                 key under the PIN alone. Three wrong PINs are each
+//                 counted, a try within the wait says the time of the next,
+//                 the right PIN after it unlocks and a confirmation in its
+//                 shell asks the PIN again; with the home out of reach, as
+//                 after a reboot, the PIN opens nothing
 //   lost_answer   a second machine holding the same key as it stood before
 //                 the pairing's answer (its record copied then) finishes
 //                 with the invitation's code typed and the passphrase: the
@@ -770,6 +779,11 @@ async function commandLine(desk, phone) {
       "exiting the shell locks the command line: cyfr login exits 0, its session opens nothing, and the browser it opened is signed out",
       rec.exit);
 
+    rec.pin = await pinStep(cliHome, passphrase);
+    row("pin", rec.pin.ok,
+      "cyfr login --pin keeps the command line's key under a six-digit PIN its home counts, confirmed on the command line: each wrong PIN is counted, the wait is said, the right PIN unlocks and a confirmation asks it again, and with the home away nothing opens",
+      rec.pin);
+
     // The machine whose answer was lost: the code typed, the same key.
     const lost = terminal(["login", "--context", "proof"], lostHome);
     login = lost;
@@ -804,6 +818,101 @@ async function commandLine(desk, phone) {
     await ask({ op: "cert_seconds", value: String(certSeconds) }).catch(() => {});
     rmSync(cliHome, { recursive: true, force: true });
     rmSync(lostHome, { recursive: true, force: true });
+  }
+}
+
+// The S3 step of commandLine: the paired command line at cliHome switched
+// to a six-digit PIN its home counts, then unlocked by it.
+async function pinStep(cliHome, passphrase) {
+  const pin = "314159";
+  const wrong = "271828";
+  const r = {};
+  let t = terminal(["login", "--context", "proof", "--pin"], cliHome);
+  try {
+    await t.until(/Unlock this command line with its passphrase: /);
+    t.type(passphrase);
+    await t.until(/New PIN: /, 0, 60_000);
+    t.type(pin);
+    await t.until(/The same PIN again: /);
+    t.type(pin);
+    const confirm = await t.until(/CYFR asks to confirm (\S+):[\s\S]*type this command line's PIN or passphrase; press Enter once you confirmed it elsewhere: /, 0, 60_000);
+    r.confirmed_operation = confirm[1];
+    t.type(passphrase);
+    await t.until(/now kept under your six-digit PIN[\s\S]*Unlocked\. This shell holds your CYFR session/, 0, 60_000);
+    t.type("exit");
+    await Promise.race([t.exited, sleep(30_000)]);
+    const records = deviceRecords(cliHome);
+    const stored = records.length === 1 ? JSON.parse(readFileSync(records[0], "utf8")) : {};
+    const text = records.length === 1 ? readFileSync(records[0], "utf8") : "";
+    r.record = { pin_blob: !!stored.pin, passphrase_blob: !!stored.software, kind: stored.kind,
+      evaluator_shape: /^pev_[A-Za-z0-9_-]{43}$/.test(stored.pin?.evaluator || ""), pending: !!stored.pin?.pending, pin_on_disk: text.includes(pin) };
+    r.enroll_exit = t.exit;
+
+    // Three wrong PINs, each counted; the waits are 1 s and 2 s between.
+    r.wrong = [];
+    for (const pause of [0, 1_200, 2_200]) {
+      await sleep(pause);
+      t = terminal(["login", "--context", "proof"], cliHome);
+      await t.until(/Unlock this command line with its PIN: /);
+      t.type(wrong);
+      await Promise.race([t.exited, sleep(30_000)]);
+      r.wrong.push({ exit: t.exit, counted: /That is not this command line's PIN\. CYFR counted the try/.test(t.out) });
+    }
+    // Within the 4 s wait after the third: the one sentence, nothing opened.
+    t = terminal(["login", "--context", "proof"], cliHome);
+    await t.until(/Unlock this command line with its PIN: /);
+    t.type(pin);
+    await Promise.race([t.exited, sleep(30_000)]);
+    const waited = t.out.match(/Too many wrong PINs: CYFR takes this command line's next try at (\d\d:\d\d:\d\d)\./);
+    r.wait = { said: !!waited, at: waited ? waited[1] : null, exit: t.exit };
+
+    // After the wait the right PIN unlocks, and a confirmation in the shell
+    // asks the PIN again.
+    await sleep(4_500);
+    t = terminal(["login", "--context", "proof"], cliHome);
+    await t.until(/Unlock this command line with its PIN: /);
+    t.type(pin);
+    await t.until(/Unlocked\. This shell holds your CYFR session/, 0, 60_000);
+    const digest = createHash("sha256").update(randomBytes(32)).digest("base64url");
+    let mark = t.out.length;
+    t.type(`cyfr pair ${digest} --context proof; echo "pair=$?"`);
+    await t.until(/PIN or passphrase; press Enter once you confirmed it elsewhere: /, mark);
+    t.type(pin);
+    const paired = await t.until(/pair=(\d+)/, mark);
+    r.unlock = { unlocked: true, confirm_exit: Number(paired[1]), link_printed: t.out.slice(mark).includes(`${base}/pair#code=`) };
+    t.type("exit");
+    await Promise.race([t.exited, sleep(30_000)]);
+
+    // As after a reboot, with the home out of reach: nothing opens.
+    const away = spawn("script", ["-qfec", `'${join(outDir, "bin", "cyfr")}' login --context proof`, "/dev/null"], {
+      env: { ...process.env, HOME: cliHome, SHELL: "/bin/sh", HTTPS_PROXY: "http://127.0.0.1:9", CYFR_NO_UPDATE_CHECK: "1" },
+    });
+    let awayOut = "";
+    away.stdout.on("data", (c) => { awayOut += c; if (/its PIN: $/.test(awayOut)) away.stdin.write(`${pin}\n`); });
+    const awayExit = await new Promise((resolve) => away.on("close", resolve));
+    r.home_away = { exit: awayExit, unreachable: /could not be reached/.test(awayOut), unlocked: /Unlocked\./.test(awayOut) };
+
+    r.ok = r.confirmed_operation === "pin.enroll" && r.enroll_exit === 0 && r.record.pin_blob && !r.record.passphrase_blob &&
+      r.record.kind === "software" && r.record.evaluator_shape && !r.record.pending && !r.record.pin_on_disk &&
+      r.wrong.every((w) => w.exit !== 0 && w.counted) && r.wait.said && r.wait.exit !== 0 &&
+      r.unlock.confirm_exit === 0 && r.unlock.link_printed &&
+      r.home_away.exit !== 0 && r.home_away.unreachable && !r.home_away.unlocked;
+    return r;
+  } catch (error) {
+    // A command line that waits where it should not: Go's goroutine dump,
+    // written to its terminal by SIGQUIT, says where (the record keeps it).
+    for (const pid of readdirSync("/proc").filter((d) => /^\d+$/.test(d))) {
+      try {
+        const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+        if (argv[0] === join(outDir, "bin", "cyfr")) process.kill(Number(pid), "SIGQUIT");
+      } catch {}
+    }
+    await sleep(2_000);
+    r.terminal = t ? t.out.slice(-20_000) : null;
+    record.pin = r;
+    throw error;
+  } finally {
+    if (t && t.exit === null) t.kill();
   }
 }
 
@@ -1159,7 +1268,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "command_line", "renewal", "terminal_confirm", "open_ticket", "exit", "lost_answer",
+const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "command_line", "renewal", "terminal_confirm", "open_ticket", "exit", "pin", "lost_answer",
   "intent", "sleep", "revoke", "viewport"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);

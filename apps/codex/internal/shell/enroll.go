@@ -40,6 +40,9 @@ type HomeError struct {
 	Status     int
 	Code       string
 	RetryAfter int
+	// NextAllowedAt is when a home that refused a PIN (pin_wait) takes the
+	// next one, in Unix milliseconds.
+	NextAllowedAt int64
 }
 
 func (e *HomeError) Error() string {
@@ -223,15 +226,16 @@ func post(ctx context.Context, client *http.Client, address, path string, h http
 	}
 	if resp.StatusCode != http.StatusOK {
 		var m struct {
-			Error      string `json:"error"`
-			RetryAfter int    `json:"retry_after"`
+			Error         string `json:"error"`
+			RetryAfter    int    `json:"retry_after"`
+			NextAllowedAt int64  `json:"next_allowed_at"`
 		}
 		_ = json.Unmarshal(answer, &m)
 		if m.RetryAfter == 0 {
 			// rate_limited and unavailable say when in Retry-After.
 			m.RetryAfter, _ = strconv.Atoi(resp.Header.Get("Retry-After"))
 		}
-		return &HomeError{Status: resp.StatusCode, Code: m.Error, RetryAfter: m.RetryAfter}
+		return &HomeError{Status: resp.StatusCode, Code: m.Error, RetryAfter: m.RetryAfter, NextAllowedAt: m.NextAllowedAt}
 	}
 	if out == nil {
 		return nil

@@ -67,6 +67,7 @@ type fakeHome struct {
 	dropPair                   bool                // commits the next pairing and loses its answer
 	pairArgs                   []map[string]any
 	pairFields                 [][]string // pairing.complete's args, without and with the proof
+	pin                        *pinHome   // the PIN evaluators (pin_home_test.go)
 }
 
 // pairing is one invitation a confirmed addition opened: the key it names
@@ -147,6 +148,7 @@ func newFakeHome(t *testing.T) *fakeHome {
 	mux.HandleFunc("POST /restore/kit/reenable", h.kitReenable)
 	mux.HandleFunc("/device/websocket", h.channel)
 	mux.HandleFunc("POST /device/session", h.deviceSession)
+	h.pin = newPINHome(h, mux)
 	h.srv = httptest.NewServer(mux)
 	t.Cleanup(h.srv.Close)
 	t.Cleanup(func() {
@@ -617,6 +619,7 @@ func (h *fakeHome) kitReenable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.reenabled = append(h.reenabled, stringOf(m, "client_id"))
+	h.pin.reauthorize(stringOf(m, "client_id"))
 	h.closeWith = 0
 	reply(w, 200, map[string]any{"reenabled": m["client_id"]})
 }
