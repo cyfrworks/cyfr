@@ -66,6 +66,10 @@ func startSWTPM(t *testing.T) *swtpm {
 		s.env = append(s.env, "LD_LIBRARY_PATH="+strings.Join(path, ":"))
 	} else if p, err := exec.LookPath("swtpm"); err == nil {
 		s.bin = p
+	} else if os.Getenv("CYFR_TEST_SWTPM_REQUIRED") != "" {
+		// CI installs swtpm and sets this, so a lost install fails the
+		// job rather than skipping the chip tests unseen.
+		t.Fatal("swtpm is not installed, and CYFR_TEST_SWTPM_REQUIRED says the chip tests must run")
 	} else {
 		t.Skip("swtpm is not installed: the chip holder is unproven here")
 	}

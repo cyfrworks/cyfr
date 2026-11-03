@@ -80,7 +80,17 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)"
 
+      - name: swtpm, the software TPM the chip holder's tests run against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends swtpm
+
       - name: go test
+        # CYFR_TEST_SWTPM_REQUIRED turns the chip tests' skip into a failure,
+        # so they run here against swtpm or fail the step; a host without
+        # swtpm skips them, saying so.
+        env:
+          CYFR_TEST_SWTPM_REQUIRED: "1"
         # -race, as the Makefile's local invocation runs it. The total
         # coverage goes to the job summary: it is reported, never a floor,
         # so only a failing test fails the step.
