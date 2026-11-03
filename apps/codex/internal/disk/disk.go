@@ -101,6 +101,7 @@ type devNum struct{ major, minor uint32 }
 type mount struct {
 	dev    devNum
 	point  string
+	fstype string
 	source string
 }
 
@@ -140,7 +141,38 @@ func (d detector) path(p string, depth int) State {
 	if err != nil {
 		return Unknown
 	}
+	if m.fstype == "btrfs" {
+		return d.btrfs(dir, depth)
+	}
 	return d.node(dir, depth+1)
+}
+
+// btrfs classifies a btrfs filesystem by every member device it spans, as
+// /sys/fs/btrfs/<fsid>/devices enumerates them: its mount source names one
+// member only, and another may hold data unencrypted. A filesystem whose
+// members cannot be enumerated, the source among them, is unknown.
+func (d detector) btrfs(source string, depth int) State {
+	filesystems, _ := filepath.Glob(filepath.Join(d.Sys, "fs", "btrfs", "*", "devices"))
+	for _, fs := range filesystems {
+		entries, err := os.ReadDir(fs)
+		if err != nil {
+			continue
+		}
+		var members []string
+		holds := false
+		for _, e := range entries {
+			member, err := filepath.EvalSymlinks(filepath.Join(fs, e.Name()))
+			if err != nil {
+				return Unknown
+			}
+			holds = holds || member == source
+			members = append(members, member)
+		}
+		if holds {
+			return d.combine(members, depth)
+		}
+	}
+	return Unknown
 }
 
 // mountOf finds the mount holding p: of the mounts of p's device, the one
@@ -234,11 +266,26 @@ func (d detector) lower(dir string, depth int) State {
 	if err != nil || len(slaves) == 0 {
 		return Unknown
 	}
-	state := Encrypted
-	for _, e := range slaves {
-		branch := Unknown
+	members := make([]string, len(slaves))
+	for i, e := range slaves {
 		if next, err := filepath.EvalSymlinks(filepath.Join(dir, "slaves", e.Name())); err == nil {
-			branch = d.node(next, depth+1)
+			members[i] = next
+		}
+	}
+	return d.combine(members, depth)
+}
+
+// combine is the state of data spread over members, by lower's rule; an
+// empty member path is one that could not be read.
+func (d detector) combine(members []string, depth int) State {
+	if len(members) == 0 {
+		return Unknown
+	}
+	state := Encrypted
+	for _, member := range members {
+		branch := Unknown
+		if member != "" {
+			branch = d.node(member, depth+1)
 		}
 		switch branch {
 		case Unencrypted:
@@ -294,6 +341,7 @@ func readMounts(path string) ([]mount, error) {
 		mounts = append(mounts, mount{
 			dev:    devNum{uint32(major), uint32(minor)},
 			point:  unescape(f[4]),
+			fstype: f[sep+1],
 			source: unescape(f[sep+2]),
 		})
 	}

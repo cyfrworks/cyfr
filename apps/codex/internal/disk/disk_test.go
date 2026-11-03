@@ -154,9 +154,10 @@ func encryptedRoot(f *fixture) (sda string) {
 }
 
 // plainSecondDisk makes sdb with partition sdb1 (8:17), unmounted.
-func plainSecondDisk(f *fixture) {
-	f.part(f.disk("sdb", "8:16"), "sdb1", "8:17")
+func plainSecondDisk(f *fixture) (sdb1 string) {
+	sdb1 = f.part(f.disk("sdb", "8:16"), "sdb1", "8:17")
 	f.stat("/dev/sdb1", "8:17")
+	return sdb1
 }
 
 // stackedOnCrypt mounts / on n LVM mappings stacked over a LUKS2 mapping.
@@ -211,13 +212,13 @@ var cases = []struct {
 	}, encPlain},
 	{"data in an unmounted btrfs subvolume on a separate plain disk", "/srv/cyfr/data", func(f *fixture) {
 		encryptedRoot(f)
-		plainSecondDisk(f)
+		f.link(f.sys("fs", "btrfs", "fsid-b", "devices", "sdb1"), plainSecondDisk(f))
 		f.mount("0:45", "/srv", "btrfs", "/dev/sdb1")
 		f.stat("/srv/cyfr/data", "0:99")
 	}, encPlain},
 	{"data under a mount point with a space", "/srv/my disk/data", func(f *fixture) {
 		encryptedRoot(f)
-		plainSecondDisk(f)
+		f.link(f.sys("fs", "btrfs", "fsid-b", "devices", "sdb1"), plainSecondDisk(f))
 		f.mount("0:45", "/srv/my disk", "btrfs", "/dev/sdb1")
 		f.stat("/srv/my disk/data", "0:99")
 	}, encPlain},
@@ -227,13 +228,21 @@ var cases = []struct {
 		f.mount("8:17", "/mnt/usb", "ext4", "/dev/sdb1")
 		f.stat(dataDir, "8:17")
 	}, encPlain},
-	{"btrfs root on LUKS2, through its mount source", "", func(f *fixture) {
-		f.dm("dm-0", "253:0", luks, f.part(f.disk("sda", "8:0"), "sda2", "8:2"))
+	{"btrfs root on LUKS2, every member enumerated", "", func(f *fixture) {
+		crypt := f.dm("dm-0", "253:0", luks, f.part(f.disk("sda", "8:0"), "sda2", "8:2"))
+		f.link(f.sys("fs", "btrfs", "fsid-a", "devices", "dm-0"), crypt)
 		f.mount("0:30", "/", "btrfs", "/dev/mapper/root")
 		f.stat("/", "0:30")
 		f.stat("/dev/mapper/root", "253:0")
 		f.stat(dataDir, "0:31")
 	}, encEnc},
+	{"btrfs root on LUKS2 whose members are not enumerated", "", func(f *fixture) {
+		f.dm("dm-0", "253:0", luks, f.part(f.disk("sda", "8:0"), "sda2", "8:2"))
+		f.mount("0:30", "/", "btrfs", "/dev/mapper/root")
+		f.stat("/", "0:30")
+		f.stat("/dev/mapper/root", "253:0")
+		f.stat(dataDir, "0:31")
+	}, unknown},
 	{"data on tmpfs", "/run/cyfr/data", func(f *fixture) {
 		encryptedRoot(f)
 		f.mount("0:50", "/run/cyfr", "tmpfs", "tmpfs")
