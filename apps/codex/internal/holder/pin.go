@@ -143,7 +143,7 @@ func (r *Record) pinAAD() []byte {
 // key from its output with HKDF-SHA256 under salt. The output and the
 // derived key are erased here.
 func pinAEAD(pin, salt []byte, eval Evaluate) (cipher.AEAD, error) {
-	output, err := PINOutput(pin, eval)
+	output, err := oprfRound(oprf.NewClient(pinSuite), pin, eval, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -160,15 +160,10 @@ func pinAEAD(pin, salt []byte, eval Evaluate) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// PINOutput is RFC 9497's OPRF output for input pin under the home's key:
-// a fresh random blind, one blinded element sent through eval, the one
-// evaluated element it answers unblinded and finalized.
-func PINOutput(pin []byte, eval Evaluate) ([]byte, error) {
-	return oprfRound(oprf.NewClient(pinSuite), pin, eval, nil)
-}
-
-// oprfRound is one OPRF round with blind, or a random one when blind is
-// nil (the vector tests give RFC 9497's).
+// oprfRound is RFC 9497's OPRF output for input under the home's key: a
+// blind (a fresh random one when blind is nil; the vector tests give RFC
+// 9497's), one blinded element sent through eval, and the one evaluated
+// element it answers unblinded and finalized.
 func oprfRound(c oprf.Client, input []byte, eval Evaluate, blind []byte) ([]byte, error) {
 	var fin *oprf.FinalizeData
 	var req *oprf.EvaluationRequest
