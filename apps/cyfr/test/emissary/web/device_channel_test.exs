@@ -359,6 +359,40 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert_refused(send_frame(state, proof_message(challenge, device)), 4403, "forbidden")
     end
 
+    test "a revoked or suspended client whose certificate expired hears 4403, on an intent and on a new connection",
+         %{session_ctx: session_ctx} do
+      Sanctum.Test.Settings.put("device_cert_seconds", 1)
+      revoked = pair!(session_ctx)
+      suspended = pair!(session_ctx)
+      revoked_state = proven(revoked)
+      suspended_state = proven(suspended)
+      past_expiry(revoked.cert)
+      past_expiry(suspended.cert)
+
+      {:ok, _row} =
+        Sanctum.TestContext.confirming(
+          session_ctx,
+          &Sanctum.Pairing.revoke(&1, revoked.client_id)
+        )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.PairedClient, where: c.id == ^suspended.client_id),
+          set: [standing: "suspended"]
+        )
+
+      for {device, state} <- [{revoked, revoked_state}, {suspended, suspended_state}] do
+        assert_refused_answering(
+          send_frame(state, intent_message("int_1", "pairing.list", %{})),
+          4403,
+          "forbidden"
+        )
+
+        {state, challenge} = connected(device)
+        assert_refused(send_frame(state, proof_message(challenge, device)), 4403, "forbidden")
+      end
+    end
+
     test "a revoked client cannot renew", %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
 
