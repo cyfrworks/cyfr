@@ -66,6 +66,7 @@
 // (OUT_DIR/bin/cyfr is the command line run.sh built for the run)
 
 import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -628,6 +629,10 @@ const deviceRecords = (cliHome) => {
 //   renewal       with certificates living 75 s, the command line's
 //                 certificate renews over its channel and its session stays
 //                 alive past its first certificate's expiry
+//   terminal_confirm  cyfr pair in that shell asks a change that needs a
+//                 fresh confirmation: the home's preview is drawn, then the
+//                 passphrase asked once, which confirms it on this command
+//                 line, and the pairing link is printed
 //   open_ticket   cyfr open in that shell opens the command line's own
 //                 loopback page, whose Open CYFR signs a browser with no
 //                 cookie in through the unlock's one-time ticket
@@ -700,6 +705,28 @@ async function commandLine(desk, phone) {
     row("renewal", rec.renewal.whoami_exit === 0,
       "the command line's certificate renews over its channel and its session outlives its first certificate",
       rec.renewal);
+
+    // A sensitive change asked in the shell and confirmed on this command
+    // line: another device's addition, drawn before the passphrase.
+    const otherDigest = createHash("sha256").update(randomBytes(32)).digest("base64url");
+    mark = login.out.length;
+    login.type(`cyfr pair ${otherDigest} --context proof; echo "pair=$?"`);
+    const asked = await login.until(/PIN or passphrase; press Enter once you confirmed it elsewhere: /, mark);
+    const before = login.out.slice(mark, mark + asked.index);
+    login.type(passphrase);
+    const paired = await login.until(/pair=(\d+)/, mark);
+    const done = login.out.slice(mark);
+    rec.terminal_confirm = {
+      preview_before_secret: /pairing\.begin/.test(before) && spaced(before).includes(otherDigest.slice(0, 4)),
+      secret_asked_once: (done.match(/PIN or passphrase/g) || []).length === 1,
+      pair_exit: Number(paired[1]), link_printed: done.includes(`${base}/pair#code=`),
+      passphrase_echoed: done.split(passphrase).length - 1,
+    };
+    row("terminal_confirm",
+      rec.terminal_confirm.preview_before_secret && rec.terminal_confirm.secret_asked_once && rec.terminal_confirm.pair_exit === 0 &&
+        rec.terminal_confirm.link_printed && rec.terminal_confirm.passphrase_echoed === 0,
+      "a change asked in the shell (another device's addition) shows the home's preview, then asks the passphrase once, which confirms it on this command line",
+      rec.terminal_confirm);
 
     // cyfr open in the shell: the command line's own page, then Open CYFR.
     mark = login.out.length;
@@ -1132,7 +1159,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "command_line", "renewal", "open_ticket", "exit", "lost_answer",
+const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "command_line", "renewal", "terminal_confirm", "open_ticket", "exit", "lost_answer",
   "intent", "sleep", "revoke", "viewport"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
