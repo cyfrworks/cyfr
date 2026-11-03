@@ -27,6 +27,7 @@ defmodule Emissary.Web do
     exports: [
       CanvasController,
       CertificateRenewalController,
+      DeviceEnrollmentController,
       DeviceChannel,
       DirectoryController,
       ExecutionEventsController,

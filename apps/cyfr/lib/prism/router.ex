@@ -66,6 +66,15 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
+      # A protected device's unlock ticket: redeeming one consumes it, so
+      # attempts need their own request budget.
+      pipeline :device_unlock_throttle do
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :device_unlock,
+          max_requests: 30,
+          window_ms: 60_000
+      end
+
       # A passkey sign-in's ticket, like a device flow's: looking one up
       # consumes it, so attempts need their own request budget.
       pipeline :passkey_complete_throttle do
@@ -118,6 +127,19 @@ defmodule Prism.Router do
 
           get "/device/complete/:ticket", AuthController, :device_complete,
             metadata: %{auth: :browser_oauth_flow}
+        end
+
+        # A protected device's unlock: the page takes the one-time ticket
+        # from its fragment and posts it, with the browser pipeline's CSRF
+        # token, for the session's cookie (`PrismWeb.DeviceUnlockController`).
+        scope "/" do
+          pipe_through :device_unlock_throttle
+
+          get "/device/complete", DeviceUnlockController, :show,
+            metadata: %{auth: :device_unlock_ticket}
+
+          post "/device/complete", DeviceUnlockController, :redeem,
+            metadata: %{auth: :device_unlock_ticket}
         end
 
         # A passkey sign-in the sign-in page verified hands its one-time

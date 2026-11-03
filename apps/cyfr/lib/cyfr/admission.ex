@@ -94,9 +94,11 @@ defmodule Cyfr.Admission do
     "Emissary.Web.ExecutionEventsController",
     "Emissary.Web.DirectoryController",
     "Emissary.Web.RestoreController",
+    "Emissary.Web.DeviceEnrollmentController",
     "Emissary.Web.OAuthCallbackController",
     "PrismWeb.AuthController",
     "PrismWeb.PasskeyController",
+    "PrismWeb.DeviceUnlockController",
     "PrismWeb.ReauthController",
     "CyfrWeb.Plugs.AuthRateLimit",
     "CyfrWeb.Plugs.Authenticate",
@@ -119,12 +121,14 @@ defmodule Cyfr.Admission do
                      "execution's event stream, read under the caller's own standing; " <>
                      "and what no person of this CYFR admits: the identity directory, " <>
                      "whose writes the identifier's own chain authorizes, restore, an " <>
-                     "entry path that runs before its person exists, and the recovery " <>
-                     "kit, its own ingress (§9.1, §6.9), the OAuth callback, which " <>
+                     "entry path that runs before its person exists, the recovery " <>
+                     "kit, its own ingress (§9.1, §6.9), and a protected device's " <>
+                     "enrollment under the setup token or a restore's session, the OAuth callback, which " <>
                      "completes the vault.authorize the gate admitted under the state it " <>
                      "left, and the browser's sign-in, re-authentication and policy " <>
-                     "acceptance, which establish a person's sign-in, prove it fresh or " <>
-                     "complete it rather than act under a context the gate admitted"
+                     "acceptance and a protected device's unlock ticket, which establish a " <>
+                     "person's sign-in, prove it fresh or complete it rather than act under " <>
+                     "a context the gate admitted"
 
   @roster [
     %{

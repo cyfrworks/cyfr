@@ -514,7 +514,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
-        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
+        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.DeviceUnlock
+        Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
         Sanctum.RunningTasks Sanctum.TinctureAccess
@@ -544,8 +545,11 @@ defmodule Cyfr.Boundaries do
           "the loader reads a stored head (`admitted_blob/3`, with its one reading of a " <>
           "damaged head), for the flows the tincture's ingress declares to the origins " <>
           "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
-          "decisions, the restore ingress `Sanctum.Recovery`'s, and the device channel " <>
-          "checks each certificate and proof through `Sanctum.DeviceCerts`. " <>
+          "decisions, the restore ingress `Sanctum.Recovery`'s, a protected device's " <>
+          "enrollment `Sanctum.DeviceUnlock`'s, and the device channel checks each " <>
+          "certificate and proof through `Sanctum.DeviceCerts` and slides, and at its end " <>
+          "retires, the sessions its unlocks reserved and holds its device's storage report " <>
+          "through `Sanctum.DeviceUnlock`. " <>
           "`Sanctum.Gate` is the gate every MCP and HTTP call the adapters make passes. " <>
           "`Sanctum.Catalog` is the table the adapters serve: `tools/list` and a call's " <>
           "tool definition, the stream declarations the tincture data routes read, and " <>
@@ -591,8 +595,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
-        Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations Sanctum.Newcomer
-        Sanctum.Pairing
+        Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations
+        Sanctum.Newcomer Sanctum.Pairing
         Sanctum.Passkeys Sanctum.PolicyLog
         Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SignIn
@@ -616,6 +620,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
           "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
           "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
+          "`Sanctum.DeviceUnlock` is a protected device's unlock page: the ticket its " <>
+          "shell's channel was answered, spent once for the session (`redeem/1`), which " <>
+          "decides in the issuance transaction. " <>
           "`Sanctum.Newcomer` is the setup page's admission of the installation's first " <>
           "person: whether the setup link's token opens setup now (`setup_open/1`), " <>
           "before any ceremony, and the setup admission its passkey brings (`admit/2`), " <>
@@ -2020,6 +2027,15 @@ defmodule Cyfr.Boundaries do
       refused: 3
     ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
+    "Sanctum.DeviceUnlock" => [
+      closed: 3,
+      enroll: 2,
+      enrollment_challenge: 2,
+      redeem: 1,
+      report_storage: 2,
+      resume: 2,
+      slide: 2
+    ],
     "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0, wildcard: 0],
@@ -2351,6 +2367,27 @@ defmodule Cyfr.Boundaries do
           "authorization header, checked in constant time before any kit is read, any key " <>
           "staged or any outbound call made (`Sanctum.Recovery`); no session and no CSRF " <>
           "token, since no cross-site form sets the header and no CORS answer admits one"
+    },
+    device_unlock_ticket: %{
+      admits: :credential,
+      why:
+        "a protected device's unlock (`Sanctum.DeviceUnlock`): the GET is a page that " <>
+          "creates nothing and carries the ticket in its fragment, which no request sends; " <>
+          "the POST, under the browser pipeline's CSRF token, spends a 32-byte ticket the " <>
+          "device's own channel was answered once its proof of an unlock challenge " <>
+          "verified, held 60 seconds and taken once, and creates the session in the " <>
+          "issuance transaction that rereads the device's standing"
+    },
+    device_enrollment: %{
+      admits: :credential,
+      why:
+        "a protected device's enrollment (`Sanctum.DeviceUnlock`): the setup token in the " <>
+          "`x-cyfr-setup-token` header, checked in constant time, or a restore's own " <>
+          "session within its first-method window, or for a resume the restore token as " <>
+          "the authorization header; then the device key's proof over an `enroll` " <>
+          "challenge this CYFR holds and consumes once. No CSRF token, since no cross-site " <>
+          "form sets either header and no CORS answer admits one, and a restore's cookie " <>
+          "alone enrolls nothing without the proof over a challenge only its answer carries"
     },
     restore_kit_proof: %{
       admits: :credential,
@@ -2921,6 +2958,26 @@ defmodule Cyfr.Boundaries do
     # credential's context is `Sanctum.Caller.establish_kit/2`'s and names
     # no origin.
     %{module: Emissary.Web.RestoreController, site: :restore, plane: :external, origin: :none},
+    # A protected device's enrollment, an entry path too: the setup token
+    # or a restore's session, then the device key's proof.
+    %{
+      module: Emissary.Web.DeviceEnrollmentController,
+      site: :challenge,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Emissary.Web.DeviceEnrollmentController,
+      site: :complete,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Emissary.Web.DeviceEnrollmentController,
+      site: :resume,
+      plane: :external,
+      origin: :none
+    },
     %{module: Emissary.Web.RestoreController, site: :challenge, plane: :external, origin: :none},
     %{module: Emissary.Web.RestoreController, site: :reproof, plane: :external, origin: :none},
     %{
@@ -3006,6 +3063,12 @@ defmodule Cyfr.Boundaries do
     %{
       module: Module.concat(["PrismWeb", "PasskeyController"]),
       site: :complete,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "DeviceUnlockController"]),
+      site: :redeem,
       plane: :external,
       origin: :none
     },

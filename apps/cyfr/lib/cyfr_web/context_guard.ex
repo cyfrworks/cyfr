@@ -279,8 +279,38 @@ defmodule CyfrWeb.ContextGuard do
   defp put_context(socket, %Context{} = ctx) do
     ctx = interactive(ctx)
     Prima.LoggerContext.set_from_context(ctx)
-    assign(socket, :context, ctx)
+
+    socket
+    |> assign(:context, ctx)
+    |> recheck_at_deadline(ctx)
   end
+
+  # A session that ends at a deadline unless its device slides it (a
+  # protected device's unlock, `Sanctum.DeviceUnlock`) is rechecked at
+  # that instant, so a mounted page never outlives it unasked: the recheck
+  # reads the slid deadline and arms the next, or refuses an ended one.
+  defp recheck_at_deadline(socket, %Context{credential_deadline: %DateTime{} = deadline}) do
+    if LiveView.connected?(socket) do
+      case socket.assigns[:context_deadline] do
+        {^deadline, _timer} ->
+          socket
+
+        held ->
+          if held, do: Process.cancel_timer(elem(held, 1))
+          wait = max(DateTime.diff(deadline, DateTime.utc_now(), :millisecond), 0) + 1
+
+          assign(
+            socket,
+            :context_deadline,
+            {deadline, Process.send_after(self(), @recheck, wait)}
+          )
+      end
+    else
+      socket
+    end
+  end
+
+  defp recheck_at_deadline(socket, %Context{}), do: socket
 
   # ---------------------------------------------------------------------------
   # Components
