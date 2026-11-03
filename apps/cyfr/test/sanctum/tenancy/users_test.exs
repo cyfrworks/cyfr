@@ -220,17 +220,8 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
 
-  test "a post-restore period is the person's: a denial and an athanor's purge leave it, the users row takes it" do
+  test "a post-restore period is the person's: a denial leaves it, the users row takes it" do
     u = person(42)
-
-    # Another person's athanor: the purge is not the person's.
-    {:ok, other} =
-      Athanors.create(%{
-        name: "G42",
-        slug: "g42-#{System.unique_integer([:positive])}",
-        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-        created_by: "system"
-      })
 
     # Written straight to the table: its store comes with the declared
     # restore.
@@ -242,11 +233,6 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert restore_periods(u.id) == 1
 
     assert {:ok, _} = Users.deny(u)
-    assert restore_periods(u.id) == 1
-
-    {:ok, archived} = Athanors.archive(other, force: true)
-    assert {:ok, counts} = Athanors.destroy(archived)
-    refute Map.has_key?(counts, "restore_people")
     assert restore_periods(u.id) == 1
 
     # Its owner is the person's row: deleting it takes the period.

@@ -35,7 +35,7 @@ defmodule Sanctum.DeviceCertsTest do
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Pairing, Person}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Users
 
   @source "198.51.100.7"
 
@@ -976,7 +976,7 @@ defmodule Sanctum.DeviceCertsTest do
     } do
       device = pair!(session_ctx)
       {:ok, ctx} = connect(device)
-      {:ok, _} = Athanors.archive(athanor, force: true)
+      Sanctum.TestContext.archive!(athanor.id)
 
       assert {:error, reason} = DeviceCerts.verify_request(device.certificate, ctx)
       assert reason in [:revoked, :not_standing]

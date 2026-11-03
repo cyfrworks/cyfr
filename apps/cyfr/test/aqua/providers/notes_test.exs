@@ -611,7 +611,7 @@ defmodule Aqua.Providers.NotesTest do
   test "an archived personal athanor cannot be read into", %{ctx: ctx, mine: mine} do
     # "mine" goes through `Context.focus/2`, so it inherits the archive
     # refusal a raw struct update would have skipped.
-    {:ok, _} = Sanctum.Tenancy.Athanors.archive(mine, force: true)
+    Sanctum.TestContext.archive!(mine.id)
 
     assert {:error, {:invalid_argument, msg}} =
              call(ctx, %{"action" => "list", "scope" => "mine"})

@@ -126,7 +126,8 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # Clear any record a fill left: what is under test is the claim, not the
     # backoff.
     {:ok, own} = Sanctum.TestContext.mark_provisioned(own)
-    {:ok, own} = Arca.Athanors.update(Prima.Actor.in_athanor(own.id), %{provisioned_at: nil})
+    :ok = Arca.Athanors.set(Prima.Actor.in_athanor(own.id), provisioned_at: nil)
+    {:ok, own} = Arca.Athanors.get(Prima.Actor.system(), own.id)
 
     refute own.provisioned_at
 

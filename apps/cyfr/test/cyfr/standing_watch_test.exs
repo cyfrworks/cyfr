@@ -16,7 +16,6 @@ defmodule Cyfr.StandingWatchTest do
   import Prima.Test.Wait
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Arca.Cache.init()
@@ -64,7 +63,7 @@ defmodule Cyfr.StandingWatchTest do
 
     Cyfr.Bus.subscribe_global(Cyfr.Bus.caller_invalidated_global())
 
-    assert {:ok, %{status: "archived"}} = Athanors.archive(athanor, force: true)
+    assert %{status: "archived"} = Sanctum.TestContext.archive!(athanor.id)
 
     assert_receive %Cyfr.Bus.CallerInvalidated{session_key: ^hash}, 5_000
   end
@@ -80,7 +79,10 @@ defmodule Cyfr.StandingWatchTest do
     # Member A archives. This VM is also member A, so it drops its own
     # copy; putting it back is what member B's table still holds, having
     # heard nothing yet.
-    assert {:ok, %{status: "archived"}} = Athanors.archive(athanor, force: true)
+    # The watch has heard member A's own announcement before the copy goes
+    # back, so it is not that drop which empties the planted memo.
+    assert %{status: "archived"} = Sanctum.TestContext.archive!(athanor.id)
+    :sys.get_state(Cyfr.StandingWatch)
     Arca.Cache.put(Arca.Cache.Keys.established(hash, nil), ctx, 60_000)
 
     assert {:ok, %Context{athanor_id: ^cached}} = Sanctum.Caller.establish(session.token),

@@ -311,6 +311,41 @@ defmodule Arca.SharedThreadMembers do
 
   def withdraw(%Prima.Actor{}, _thread_id, _identifier, _by), do: {:error, :cross_tenant}
 
+  @doc """
+  Withdraw every invitation `identifier` holds, in every thread, and
+  answer the threads that held one, sorted: what the door's deny of that
+  identifier owes them, since a seat must not outlive the eject. The
+  threads are locked in id order first, as every write to a thread's
+  people takes its thread's lock, so an activation racing it is read or
+  waits. Narrowing who reads a thread, it needs no slot.
+  """
+  @spec withdraw_identifier(Prima.Actor.t(), String.t()) :: {:ok, [String.t()]} | refusal()
+  # arca:unscoped-ok invitations are keyed by identifier, withdrawn from every thread that holds one.
+  def withdraw_identifier(%Prima.Actor{scope: :platform}, identifier)
+      when is_binary(identifier) and identifier != "" do
+    invited =
+      from(m in SharedThreadMember,
+        where: m.person_identifier == ^identifier and m.status == "invited"
+      )
+
+    Arca.Repo.Errors.with_db_rescue("Arca.SharedThreadMembers.withdraw_identifier", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        from(t in SharedThread,
+          where: t.id in subquery(select(invited, [m], m.thread_id)),
+          order_by: [asc: t.id],
+          select: t.id
+        )
+        |> QueryHelpers.for_update()
+        |> Arca.Repo.all()
+
+        {_count, ids} = Arca.Repo.delete_all(select(invited, [m], m.thread_id))
+        ids |> Enum.uniq() |> Enum.sort()
+      end)
+    end)
+  end
+
+  def withdraw_identifier(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+
   # The thread locked, then `by`'s seat in it read under that lock: the
   # first step of every write that removes someone from a thread, so it
   # and a removal of `by` decide in one order. A pair loses no one but by

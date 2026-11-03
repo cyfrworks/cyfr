@@ -3,12 +3,10 @@
 
 defmodule Sanctum.Tenancy.ArchiveTest do
   @moduledoc """
-  Archiving is one chokepoint: whichever path archives an athanor —
-  `Sanctum.Tenancy.Athanors.archive/2` or its person being denied — its
-  API keys are revoked and every member's caller memo is
-  dropped before it returns, what runs in it is cancelled as the server
-  (its runners killed through their worker service) and its members are
-  told.
+  An athanor is archived by its person's denial: its API keys are revoked
+  and every member's caller memo is dropped before the denial returns,
+  what runs in it is cancelled as the server (its runners killed through
+  their worker service) and its members are told.
 
   The credentials and the memos are authorization properties and go
   synchronously. The running work is the execution domain's: the archive
@@ -189,29 +187,6 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     key
   end
 
-  test "archive/2 revokes the athanor's keys, cancels its running work as the server, and tells its members" do
-    :ok = watch_archives!()
-    n = System.unique_integer([:positive])
-    owner = person(n)
-    own = Sanctum.Test.People.athanor!(owner)
-    key = key_in(own.id, owner.id)
-    {running, waiter} = running!(own.id, owner.id)
-
-    Cyfr.Bus.subscribe(
-      Prima.Actor.in_athanor(own.id),
-      Cyfr.Bus.notify(Prima.Actor.in_athanor(own.id))
-    )
-
-    assert {:ok, %{status: "archived"}} = Athanors.archive(own, force: true)
-
-    assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
-    assert_receive {:cancelled, ^running, "system"}, @reaction_ms
-    assert :ok = wait_until(fn -> cancelled?(running) end, @reaction_ms)
-    athanor_id = own.id
-    assert_receive %Cyfr.Bus.Notify{athanor_id: ^athanor_id, kind: :athanor_changed}
-    :ok = settled!([waiter])
-  end
-
   test "archive drops every member's established-context memo, so a cached caller is refused next call" do
     # `Sanctum.Caller` memoizes an established context for a short TTL, and
     # that context carries the athanor. The memo is a cache of an
@@ -248,7 +223,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     memos = Arca.Cache.Keys.match_established(Sanctum.Session.token_hash(session.token))
     refute Arca.Cache.match(memos) == []
 
-    assert {:ok, %{status: "archived"}} = Athanors.archive(own, force: true)
+    assert %{status: "archived"} = Sanctum.TestContext.archive!(own.id)
 
     assert Arca.Cache.match(memos) == [],
            "the archive left a member's caller memoized inside the athanor it just shut"
@@ -256,7 +231,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     refute match?({:ok, %Context{athanor_id: ^cached}}, Sanctum.Caller.establish(session.token))
   end
 
-  test "denying a person archives their own athanor, closing it" do
+  test "denying a person archives their own athanor: its keys revoked, its running work cancelled as the server, its members told" do
     :ok = watch_archives!()
 
     n = System.unique_integer([:positive])
@@ -266,10 +241,17 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     personal_key = key_in(personal.id, u.id)
     {personal_run, personal_waiter} = running!(personal.id, u.id)
 
+    Cyfr.Bus.subscribe(
+      Prima.Actor.in_athanor(personal.id),
+      Cyfr.Bus.notify(Prima.Actor.in_athanor(personal.id))
+    )
+
     assert {:ok, %{status: "denied"}} = Users.deny(u)
 
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
     assert {:error, :revoked} = Sanctum.ApiKey.validate(personal_key, [])
+    athanor_id = personal.id
+    assert_receive %Cyfr.Bus.Notify{athanor_id: ^athanor_id, kind: :athanor_changed}
 
     # The cancel is the watch's, in its own time.
     assert_receive {:cancelled, ^personal_run, "system"}, @reaction_ms

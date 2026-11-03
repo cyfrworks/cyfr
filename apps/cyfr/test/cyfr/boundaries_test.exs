@@ -3002,11 +3002,11 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       "emissary/boundary_plant.ex",
       """
       defmodule Emissary.BoundaryPlant do
-        def plant(hash), do: Prism.Tray.get(hash)
+        def plant(mode), do: Prism.Labels.mode(mode)
       end
       """,
       [
-        "forbidden reference to Prism.Tray",
+        "forbidden reference to Prism.Labels",
         "references from Emissary to Prism are not allowed"
       ]
     )

@@ -428,14 +428,14 @@ end
 
 defmodule Arca.SecurityTransitionsTest do
   @moduledoc """
-  The four standing transitions, each one transaction: what a denial
-  retires, its seats and invitations in shared threads included, what an
-  allow restores and what it never does, archive and reopen, the
+  The standing transitions, each one transaction: what a denial retires,
+  its seats and invitations in shared threads and its person's own
+  athanor included, what an allow restores and what it never does, the
   generation every real change raises, and a failed statement rolling
   back everything — the injected session DELETE, key UPDATE and
   certificate UPDATE failures included, after which an allow revives
-  nothing, and a failed retirement inside an allow or a reopen, which
-  leaves the denial or the archive standing.
+  nothing, and a failed retirement inside an allow, which leaves the
+  denial standing.
   """
 
   use ExUnit.Case, async: false
@@ -450,7 +450,7 @@ defmodule Arca.SecurityTransitionsTest do
     [:cyfr, :arca, :file_offer, :declined]
   ]
 
-  # The tables an allow and a reopen retire stragglers in, each inside the
+  # The tables an allow retires stragglers in, each inside the
   # transition's transaction: a client's confirmations are voided with it
   # (`Arca.PairedClients.retire_dependents!/1`).
   @retirement_tables ~w(frame_credentials paired_clients device_certificates
@@ -530,8 +530,7 @@ defmodule Arca.SecurityTransitionsTest do
 
   # A frame, a paired client with its certificate and a confirmation it
   # confirmed, and a pairing invitation of the person in the athanor,
-  # issued after a denial or an archive: what the allow or the reopen that
-  # follows retires.
+  # issued after a denial: what the allow that follows retires.
   defp stragglers!(athanor_id, user_id) do
     client = paired!(athanor_id, user_id)
 
@@ -954,162 +953,6 @@ defmodule Arca.SecurityTransitionsTest do
     end
   end
 
-  describe "archive_athanor/3 and unarchive_athanor/3" do
-    test "an archive revokes the athanor's keys with it; a reopen revokes none back" do
-      {member, ath} = owner!()
-      key = key!(ath.id, member.id)
-
-      assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert archived.transitioned
-      assert archived.archived_athanor_ids == [ath.id]
-      assert archived.athanor_generations == %{ath.id => 2}
-      assert archived.revoked_api_key_ids == [key]
-      assert archived.member_user_ids == %{ath.id => [member.id]}
-      assert [%{status: "archived", security_generation: 2}] = archived.athanors
-
-      # Idempotent: no second generation, the keys checked again.
-      assert {:ok, again} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      refute again.transitioned
-      assert athanor(ath.id).security_generation == 2
-
-      assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
-
-      assert reopened.reopened_athanor_ids == [ath.id]
-      assert athanor(ath.id).status == "active"
-      assert athanor(ath.id).security_generation == 3
-      assert revoked?(key)
-
-      assert {:ok, %{transitioned: false}} =
-               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
-    end
-
-    test "an archive withdraws the file offers its athanor holds open, once it commits" do
-      {sender, ath} = owner!()
-      recipient = person!()
-      shared_thread!(sender.id, [recipient.id])
-      from_own = %Prima.Actor{athanor_id: ath.id, user_id: sender.id}
-      on_exit(fn -> File.rm_rf(storage_root(ath.id)) end)
-
-      :ok = Arca.put(from_own, ["data", "open.txt"], "open")
-      :ok = Arca.put(from_own, ["data", "declined.txt"], "declined")
-
-      {:ok, %{offer_id: open}} =
-        Arca.FileOffers.offer(from_own, recipient.id, ["data/open.txt"])
-
-      {:ok, %{offer_id: declined}} =
-        Arca.FileOffers.offer(from_own, recipient.id, ["data/declined.txt"])
-
-      :ok = Arca.FileOffers.decline(%Prima.Actor{user_id: recipient.id}, declined)
-
-      test_pid = self()
-      handler = "archive-offers-#{uniq()}"
-
-      :telemetry.attach(
-        handler,
-        [:cyfr, :arca, :file_offer, :withdrawn],
-        fn _event, _m, meta, _c -> send(test_pid, {:withdrawn, meta.offer_id}) end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert archived.ended_offer_ids == [open]
-      refute Map.has_key?(archived, :ended_offers)
-      assert offer_statuses(open) == ["withdrawn"]
-      assert offer_statuses(declined) == ["declined"]
-      assert {:error, :not_found} = Arca.get(from_own, ["payloads", "offers", open, "open.txt"])
-      assert_receive {:withdrawn, ^open}
-
-      # The recipient can no longer take it, and archiving again ends nothing.
-      assert {:error, {:not_offered, "withdrawn"}} =
-               Arca.FileOffers.decline(%Prima.Actor{user_id: recipient.id}, open)
-
-      assert {:ok, %{ended_offer_ids: []}} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-    end
-
-    test "an archive ends more open offers than one statement can name" do
-      ath = athanor!()
-      offers = open_offers!(ath.id, person!().id, 32_800)
-      counters = observe_offer_ends!(ath.id, offers)
-
-      assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert :atomics.get(counters, 1) == 32_800
-      assert :atomics.get(counters, 2) == 32_800
-      assert length(archived.ended_offer_ids) == offers
-      assert open_offer_count(ath.id) == 0
-    end
-
-    test "an injected key UPDATE failure leaves the athanor open and its keys live" do
-      ath = athanor!()
-      key = key!(ath.id, person!().id)
-      failure = fail_on!("api_keys", "UPDATE")
-
-      assert {:error, :database_error} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert athanor(ath.id).status == "active"
-      assert athanor(ath.id).security_generation == 1
-      refute revoked?(key)
-      clear_failure!(failure)
-    end
-
-    test "the caller decides, over the locked row" do
-      ath = athanor!()
-      {:ok, _} = SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert {:error, :refused} =
-               SecurityTransitions.unarchive_athanor(server(), ath.id,
-                 verify: fn %{athanor: %{status: "archived"}} -> {:error, :refused} end
-               )
-
-      assert athanor(ath.id).status == "archived"
-
-      assert {:error, :not_found} =
-               SecurityTransitions.archive_athanor(server(), "ath_nowhere", verify: admit())
-    end
-
-    for table <- @retirement_tables do
-      test "an injected #{table} UPDATE failure rolls the reopen back with every straggler standing" do
-        {member, ath} = owner!()
-        {:ok, _} = SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-        stragglers = stragglers!(ath.id, member.id)
-        before = {athanor(ath.id), rows(stragglers)}
-        assert elem(before, 0).status == "archived"
-        failure = fail_on!(unquote(table), "UPDATE")
-
-        assert {:error, :database_error} =
-                 SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
-
-        # Nothing committed, row for row.
-        assert {athanor(ath.id), rows(stragglers)} == before
-
-        clear_failure!(failure)
-
-        assert {:ok, reopened} =
-                 SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
-
-        assert reopened.transitioned
-        assert reopened.athanor_generations == %{ath.id => 3}
-        assert retired_ids(reopened) == straggler_ids(stragglers)
-        assert athanor(ath.id).status == "active"
-
-        assert straggler_states(stragglers) ==
-                 ["revoked", "revoked", "revoked", "revoked", "voided"]
-      end
-    end
-  end
-
   describe "frame credentials" do
     test "a denial revokes the person's frames everywhere and every frame of what it archives" do
       {user, own} = owner!()
@@ -1144,27 +987,6 @@ defmodule Arca.SecurityTransitionsTest do
       assert frame_state(straggler) == "revoked"
     end
 
-    test "an archive revokes the athanor's frames, and a reopen revokes any since" do
-      {member, ath} = owner!()
-      frame = frame!(ath.id, member.id)
-      elsewhere = frame!(athanor!().id, member.id)
-
-      assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert archived.revoked_frame_credential_ids == [frame]
-      assert frame_state(frame) == "revoked"
-      assert frame_state(elsewhere) == "active"
-
-      straggler = frame!(ath.id, member.id)
-
-      assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
-
-      assert reopened.revoked_frame_credential_ids == [straggler]
-      assert frame_state(straggler) == "revoked"
-    end
-
     test "an injected frame UPDATE failure rolls a denial back with every credential standing" do
       {user, own} = owner!()
       session = session!(user.id, own.id)
@@ -1185,19 +1007,6 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:ok, %{revoked_frame_credential_ids: [^frame]}} =
                SecurityTransitions.deny_user(server(), user.id, verify: admit())
-    end
-
-    test "an injected frame UPDATE failure leaves the athanor open and its frames standing" do
-      ath = athanor!()
-      frame = frame!(ath.id, person!().id)
-      failure = fail_on!("frame_credentials", "UPDATE")
-
-      assert {:error, :database_error} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert athanor(ath.id).status == "active"
-      assert frame_state(frame) == "active"
-      clear_failure!(failure)
     end
   end
 
@@ -1232,27 +1041,6 @@ defmodule Arca.SecurityTransitionsTest do
       assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
       assert change.revoked_paired_client_ids == [straggler]
       assert paired_standing(paired) == "revoked"
-      assert paired_standing(straggler) == "revoked"
-    end
-
-    test "an archive revokes the athanor's clients, and a reopen revokes any since" do
-      {member, ath} = owner!()
-      paired = paired!(ath.id, member.id)
-      elsewhere = paired!(athanor!().id, member.id)
-
-      assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert archived.revoked_paired_client_ids == [paired]
-      assert paired_standing(paired) == "revoked"
-      assert paired_standing(elsewhere) == "active"
-
-      straggler = paired!(ath.id, member.id)
-
-      assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
-
-      assert reopened.revoked_paired_client_ids == [straggler]
       assert paired_standing(straggler) == "revoked"
     end
 
@@ -1321,32 +1109,6 @@ defmodule Arca.SecurityTransitionsTest do
       assert certificate_state(cert) == "revoked"
     end
 
-    test "an archive retires the athanor's; a reopen retires any since, and resurrects none" do
-      {member, ath} = owner!()
-      client = paired!(ath.id, member.id)
-      cert = certificate!(ath.id, member.id, client)
-      invitation = invitation!(ath.id, member.id)
-      confirmed = confirmation!(ath.id, member.id, client: client)
-      elsewhere = invitation!(athanor!().id, member.id)
-
-      assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), ath.id, verify: admit())
-
-      assert archived.revoked_device_certificate_ids == [cert]
-      assert archived.revoked_pairing_invitation_ids == [invitation]
-      assert archived.voided_confirmation_ids == [confirmed]
-      assert invitation_state(elsewhere) == "pending"
-
-      straggler = invitation!(ath.id, member.id)
-
-      assert {:ok, reopened} =
-               SecurityTransitions.unarchive_athanor(server(), ath.id, verify: admit())
-
-      assert reopened.revoked_pairing_invitation_ids == [straggler]
-      assert invitation_state(invitation) == "revoked"
-      assert certificate_state(cert) == "revoked"
-    end
-
     test "an injected certificate UPDATE failure rolls a denial back with every credential standing" do
       {user, own} = owner!()
       session = session!(user.id, own.id)
@@ -1381,11 +1143,8 @@ defmodule Arca.SecurityTransitionsTest do
 
       ath = athanor!()
 
-      assert {:error, {:invalid, %{security_generation: ["is read-only"]}}} =
-               Arca.Athanors.update(Prima.Actor.in_athanor(ath.id), %{security_generation: 9})
-
       assert {:error, {:invalid, %{status: ["is read-only"]}}} =
-               Arca.Athanors.update(Prima.Actor.in_athanor(ath.id), %{status: "archived"})
+               Arca.Athanors.set(Prima.Actor.in_athanor(ath.id), status: "archived")
 
       assert {:error, {:invalid, %{security_generation: ["is read-only"]}}} =
                Arca.Athanors.set(Prima.Actor.in_athanor(ath.id), security_generation: 9)
@@ -1396,9 +1155,9 @@ defmodule Arca.SecurityTransitionsTest do
   end
 
   describe "shares" do
-    # The owner's shares end with their standing: a denial and an archive
-    # of their own athanor revoke every share and block the profiles that
-    # bind one, in their own transaction.
+    # The owner's shares end with their standing: a denial revokes every
+    # share of their own athanor and blocks the profiles that bind one, in
+    # its own transaction.
     defp shared!(owner) do
       entry = Arca.Test.Shares.entry!(owner.actor)
       share = Arca.Test.Shares.share!(owner.actor, entry.id)
@@ -1425,23 +1184,6 @@ defmodule Arca.SecurityTransitionsTest do
                SecurityTransitions.deny_user(server(), terry.user.id, verify: admit())
 
       assert again.revoked_share_ids == []
-    end
-
-    test "an archive of the owner's athanor revokes its shares; a reopen revokes none back" do
-      terry = Arca.Test.Shares.owner!()
-      {share, alice, profile} = shared!(terry)
-
-      assert {:ok, archived} =
-               SecurityTransitions.archive_athanor(server(), terry.athanor.id, verify: admit())
-
-      assert archived.revoked_share_ids == [share.id]
-      assert share_status(terry, share) == "revoked"
-      assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "needs_consent"
-
-      assert {:ok, _} =
-               SecurityTransitions.unarchive_athanor(server(), terry.athanor.id, verify: admit())
-
-      assert share_status(terry, share) == "revoked"
     end
 
     test "a share created after a denial is refused, and a denial's failure keeps its shares" do
@@ -1770,41 +1512,6 @@ defmodule Arca.SecurityTransitionsLockTest do
         Process.sleep(50)
         await_release!(user_id, since, bound_ms)
     end
-  end
-
-  test "an archive and a reopen serialize, each acting on the other's commit", %{own_id: own_id} do
-    test = self()
-
-    archiver =
-      Task.async(fn ->
-        unboxed(fn ->
-          SecurityTransitions.archive_athanor(server(), own_id,
-            verify: fn _rows ->
-              send(test, :archive_holds)
-
-              receive do
-                :go -> :ok
-              end
-            end
-          )
-        end)
-      end)
-
-    assert_receive :archive_holds, 5_000
-
-    reopener =
-      Task.async(fn ->
-        unboxed(fn ->
-          SecurityTransitions.unarchive_athanor(server(), own_id, verify: admit())
-        end)
-      end)
-
-    refute Task.yield(reopener, 300), "the reopen decided while the athanor was held"
-    send(archiver.pid, :go)
-    assert {:ok, %{transitioned: true}} = Task.await(archiver, 25_000)
-    assert {:ok, reopened} = Task.await(reopener, 25_000)
-    assert reopened.transitioned
-    assert reopened.athanor_generations == %{own_id => 3}
   end
 
   # PostgreSQL alone: on SQLite the denial's immediate transaction admits

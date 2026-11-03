@@ -10,7 +10,7 @@ defmodule Arca.Athanors do
   Every function states which shape it is, and the shape decides where its
   athanor comes from.
 
-    * **Inside one tenant.** `current/1`, `update/2`, `set/2` and
+    * **Inside one tenant.** `current/1`, `set/2` and
       `put_settings/4` work on the row the actor's `athanor_id` names.
       The id comes from the actor and never from an argument, so no
       argument a caller passes can move the write to another tenant's
@@ -62,27 +62,6 @@ defmodule Arca.Athanors do
   end
 
   def current(%Prima.Actor{}), do: {:error, :no_athanor}
-
-  @doc """
-  Write `attrs` over the actor's own athanor row through the update
-  changeset — the fields that may change after birth.
-  """
-  @spec update(Prima.Actor.t(), map()) ::
-          {:ok, map()} | {:error, :not_found | :no_athanor} | write_refusal()
-  def update(%Prima.Actor{athanor_id: athanor_id}, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.update", fn ->
-      with {:ok, row} <- read(athanor_id) do
-        row
-        |> Athanor.update_changeset(Map.put(attrs, :updated_at, DateTime.utc_now()))
-        |> Arca.Repo.update()
-        |> settled()
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  def update(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
   @doc """
   Set `fields` on the actor's own athanor row with one statement — the

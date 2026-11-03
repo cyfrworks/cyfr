@@ -465,9 +465,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     in_other = %{ctx | athanor_id: other.id}
     %{slug: slug, secret: secret} = hook!(in_other, %{replay_protection: "none"})
 
-    {:ok, _} = Sanctum.Tenancy.Athanors.archive(other, force: true)
+    Sanctum.TestContext.archive!(other.id)
     conn = post_signed(conn, slug, secret, ~s({}))
-    {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(other)
+    Sanctum.TestContext.reopen!(other.id)
 
     assert conn.status == 404
     {request_id_of(conn), refused(api_class(conn), :none)}

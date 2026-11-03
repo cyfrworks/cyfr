@@ -148,7 +148,7 @@ defmodule Sanctum.TenancyTest do
       uid = "u-archived-#{System.unique_integer([:positive])}"
       a = athanor!("arch-a", uid)
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: a.id})
-      {:ok, _} = Athanors.archive(a, force: true)
+      Sanctum.TestContext.archive!(a.id)
 
       {:ok, result} =
         Tenancy.resolve_status(%Context{user_id: uid, athanor_id: a.id}, force: true)
@@ -338,7 +338,7 @@ defmodule Sanctum.TenancyTest do
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       refute Tenancy.channel_active?(athanor.id, user.id)
 
-      {:ok, _} = Athanors.archive(athanor, force: true)
+      Sanctum.TestContext.archive!(athanor.id)
       refute Tenancy.channel_active?(athanor.id, bystander.id)
     end
 

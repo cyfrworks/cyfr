@@ -35,7 +35,7 @@ defmodule PrismWeb.AquaPanelLive do
   remounts on every navigation. Whether it is open, which thread it
   shows, where it stands, its size and whether it is docked are kept per
   browser session (`Arca.Cache`, under a hash of the
-  session token, the way `Prism.Tray` keeps its counts), so the panel a
+  session token), so the panel a
   person opened on one page is the panel they find on the next. Nothing
   here reads the page's focus: the panel establishes the session itself
   and narrows to the person's own athanor. A person with no athanor of
@@ -48,9 +48,7 @@ defmodule PrismWeb.AquaPanelLive do
 
   A grant the pane's turn needs is asked in the panel's own system layer
   (`PrismWeb.SystemLayer`, DOM id `system-layer-panel`), under the
-  panel's context, which is the person's own athanor whatever athanor the
-  page is on; the page's layer would commit in the page's. That layer
-  opens no stream (`listen: false`): the page's own layer shows the
+  panel's context, the person's own athanor. That layer opens no stream (`listen: false`): the page's own layer shows the
   person's confirmations, and none is drawn twice.
   """
 
@@ -98,9 +96,8 @@ defmodule PrismWeb.AquaPanelLive do
     end
   end
 
-  # Your own athanor, focused. The session's default is whatever page this
-  # is on; the panel is always You. A person with no athanor of their own
-  # gets nothing.
+  # Your own athanor, focused. A person with no athanor of their own gets
+  # nothing.
   defp own(socket, token) do
     ctx = socket.assigns.context
 
@@ -111,7 +108,7 @@ defmodule PrismWeb.AquaPanelLive do
       refocused
       |> assign(:phase, :ready)
       |> assign(:athanor, athanor)
-      |> assign(:kept, {:aqua_panel, Prism.Tray.session_hash(token)})
+      |> assign(:kept, {:aqua_panel, token && Prima.Digest.sha256_hex(token)})
     else
       _ -> assign(socket, :phase, :none)
     end

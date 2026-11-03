@@ -554,12 +554,10 @@ defmodule Sanctum.ApiKeyTest do
 
       assert {:ok, _} = ApiKey.validate(key, [])
 
-      # archiving revokes the athanor's keys for good — reopening the
-      # athanor does not bring a revoked credential back
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
-      assert {:error, :revoked} = ApiKey.validate(key, [])
-      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(athanor)
-      assert {:error, :revoked} = ApiKey.validate(key, [])
+      # an archived athanor closes its channels
+      Sanctum.TestContext.archive!(athanor.id)
+      assert {:error, :channel_closed} = ApiKey.validate(key, [])
+      Sanctum.TestContext.reopen!(athanor.id)
 
       # a key minted in the reopened athanor works
       {:ok, %{api_key: key}} =
@@ -569,8 +567,12 @@ defmodule Sanctum.ApiKeyTest do
 
       assert {:ok, _} = ApiKey.validate(key, [])
 
-      # the creator being denied on this server does
+      # the creator's denial, which archives their athanor, revokes its keys
+      # for good — the allow that reopens it does not bring a revoked
+      # credential back
       {:ok, _} = Sanctum.Tenancy.Users.deny(creator)
+      assert {:error, :revoked} = ApiKey.validate(key, [])
+      {:ok, _} = Sanctum.Tenancy.Users.allow(creator)
       assert {:error, :revoked} = ApiKey.validate(key, [])
     end
   end

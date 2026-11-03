@@ -10,7 +10,6 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.{Caller, Context, Gate, TestContext}
-  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -140,7 +139,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     assert Context.key_bound?(revalidated)
     refute revalidated.platform_admin
 
-    {:ok, _} = Athanors.archive(a, force: true)
+    TestContext.archive!(a.id)
     assert {:ok, %{athanor_id: nil}} = Sanctum.Tenancy.revalidate(key_ctx)
   end
 
@@ -148,7 +147,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     a: a,
     key_ctx: key_ctx
   } do
-    {:ok, _} = Athanors.archive(a, force: true)
+    TestContext.archive!(a.id)
     assert Context.focus(key_ctx, a.id) == {:error, :archived}
     assert Sanctum.Tenancy.list_athanors(key_ctx) == []
   end

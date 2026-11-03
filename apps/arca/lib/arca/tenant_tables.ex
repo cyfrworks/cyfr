@@ -9,8 +9,8 @@ defmodule Arca.TenantTables do
   ## Scope
 
   Purges athanor-owned database rows, including credentials, execution
-  records, messages, and logs. Blob deletion is handled separately by
-  `Sanctum.Tenancy.Athanors.purge_storage/1`.
+  records, messages, and logs. Blobs are not its: the storage tree is
+  `Arca.Storage`'s.
 
   ## Order
 
@@ -225,13 +225,8 @@ defmodule Arca.TenantTables do
   in one transaction, because a half-deleted athanor leaves a caller
   believing data is gone that is not.
 
-  The OPERATION is not. `Sanctum.Tenancy.Athanors.destroy/1` reclaims the
-  storage tree before calling this — it needs the athanor row to build the
-  context, so the order cannot simply be swapped — and if this then fails,
-  the blobs are already gone while the rows stand. That is recoverable
-  (retry erases more, never less) and it is the honest shape to state,
-  rather than a promise of atomicity across two stores that have no shared
-  transaction.
+  The athanor's blobs are not touched: they are another store, with no
+  transaction shared with this one.
   """
   @spec delete_all_for(Prima.Actor.t()) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, term()}
@@ -289,7 +284,7 @@ defmodule Arca.TenantTables do
   @doc """
   Assert the roster still covers every athanor-scoped table.
 
-  A table that carries `athanor_id` and is not here is one `destroy/1`
+  A table that carries `athanor_id` and is not here is one `delete_all_for/1`
   would leave behind — the exact shape of the gap this module closes, and
   invisible until somebody looks. Raises, so it fails a boot rather than
   a backup.
@@ -317,7 +312,7 @@ defmodule Arca.TenantTables do
 
           #{inspect(unrostered)}
 
-        `Sanctum.Tenancy.Athanors.destroy/1` would leave their rows behind,
+        `delete_all_for/1` would leave their rows behind,
         so an athanor's data would survive an erasure that reported success.
         Add each to @roster (children first), or to @not_athanor_scoped with
         the reason it is not an athanor's to delete.

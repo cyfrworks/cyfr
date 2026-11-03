@@ -1459,15 +1459,6 @@ defmodule Cyfr.Boundaries do
           "storage facade's tenant-relative reads."
     },
     %{
-      from: "Prism.Tray",
-      into: "Arca.Cache",
-      functions: [:get],
-      reason:
-        "the tray's badges are kept per browser session under a hash of its token; a " <>
-          "read answers the kept badges or a miss, and drops an expired entry as it " <>
-          "finds it, which is the cache's own housekeeping."
-    },
-    %{
       from: "PrismWeb.AquaPanelLive",
       into: "Arca.Cache",
       functions: [:get],
@@ -1716,14 +1707,6 @@ defmodule Cyfr.Boundaries do
           "released when it is not taken up, so a retried delivery runs once: the claim " <>
           "is the ingress plug's own, keyed by the webhook and the sender's key, and " <>
           "holds no athanor's data."
-    },
-    %{
-      from: "Prism.Tray",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the tray keeps the badges it computed per browser session, under a hash of " <>
-          "its token, for a bounded time: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.AquaPanelLive",

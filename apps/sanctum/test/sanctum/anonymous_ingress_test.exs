@@ -84,7 +84,7 @@ defmodule Sanctum.AnonymousIngressTest do
       assert Sanctum.Tenancy.channel_active?(athanor.id, nil)
 
       # An archived athanor closes every channel it owns.
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
+      Sanctum.TestContext.archive!(athanor.id)
       refute Sanctum.Tenancy.channel_active?(athanor.id, departed.id)
 
       # And no channel survives without an athanor.

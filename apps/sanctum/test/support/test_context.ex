@@ -176,6 +176,28 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
+  The athanor archived as its person's denial archives it: its standing
+  moved (`Arca.Test.Actor.archive!/1`) and its archival announced
+  (`Sanctum.Tenancy.Athanors.announce_archived/2`), which drops its
+  people's context memos and stops work running in it. Answers the row.
+  """
+  def archive!(athanor_id) when is_binary(athanor_id) do
+    athanor = Arca.Test.Actor.archive!(athanor_id)
+    members = Map.new([{athanor_id, List.wrap(athanor.owner_user_id)}])
+
+    :ok =
+      Sanctum.Tenancy.Athanors.announce_archived([athanor_id], %{
+        member_user_ids: members,
+        athanors: [athanor]
+      })
+
+    athanor
+  end
+
+  @doc "The athanor reopened as its person's allow reopens it."
+  def reopen!(athanor_id) when is_binary(athanor_id), do: Arca.Test.Actor.reopen!(athanor_id)
+
+  @doc """
   Build a permissive single-user test Context with namespace `"testns"`,
   working in the `"ath_test"` athanor.
 

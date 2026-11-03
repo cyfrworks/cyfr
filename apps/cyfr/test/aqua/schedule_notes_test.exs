@@ -582,7 +582,7 @@ defmodule Aqua.ScheduleNotesTest do
       schedule = keeping(context)
       run = ran!(schedule, 60, "must not land after archive")
       with_between(context)
-      plant(fn -> {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true) end)
+      plant(fn -> Sanctum.TestContext.archive!(athanor.id) end)
 
       assert {:ok, %{"refused" => 1}} = drain(athanor)
       assert {:ok, "refused"} = outcome(athanor, source(run, schedule))
@@ -592,7 +592,7 @@ defmodule Aqua.ScheduleNotesTest do
     test "an archived athanor's schedule writes nothing", %{athanor: athanor} = context do
       schedule = keeping(context)
       run = ran!(schedule, 60, "x")
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
+      Sanctum.TestContext.archive!(athanor.id)
 
       assert {:ok, %{"refused" => 1}} = drain(athanor)
       assert {:ok, "refused"} = outcome(athanor, source(run, schedule))

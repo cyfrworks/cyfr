@@ -109,7 +109,7 @@ defmodule Sanctum.TenancyContinuationTest do
   end
 
   test "a person whose athanor was archived is refused", %{user: user, athanor: athanor} do
-    {:ok, _} = Athanors.archive(athanor, force: true)
+    Sanctum.TestContext.archive!(athanor.id)
     # Archiving deletes nothing: the seat stands, and the athanor refuses.
     assert Members.member?(user.id, athanor.id)
     assert {:error, :archived} = Tenancy.continuation(user.id, athanor.id, "webhook")

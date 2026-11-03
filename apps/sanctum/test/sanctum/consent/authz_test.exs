@@ -1313,7 +1313,7 @@ defmodule Sanctum.Consent.AuthzTest do
           else: [{String.duplicate("n", bound), :name}, {String.duplicate("n", bound + 1), :id}]
 
       for {name, shown} <- names do
-        {:ok, _} = Arca.Athanors.update(Prima.Actor.in_athanor(athanor.id), %{name: name})
+        :ok = Arca.Athanors.set(Prima.Actor.in_athanor(athanor.id), name: name)
         key = "k-#{byte_size(name)}"
 
         id =

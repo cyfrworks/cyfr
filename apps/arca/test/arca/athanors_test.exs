@@ -76,7 +76,6 @@ defmodule Arca.AthanorsTest do
       nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
 
       assert {:error, :no_athanor} = Athanors.current(nobody)
-      assert {:error, :no_athanor} = Athanors.update(nobody, %{name: "X"})
       assert {:error, :no_athanor} = Athanors.set(nobody, name: "X")
       assert {:error, :no_athanor} = Athanors.put_settings(nobody, nil, "{}", DateTime.utc_now())
       refute_received :queried
@@ -95,7 +94,6 @@ defmodule Arca.AthanorsTest do
       unresolved = %{Prima.Actor.system() | athanor_id: "", scope: :athanor}
 
       assert {:error, :no_athanor} = Athanors.current(unresolved)
-      assert {:error, :no_athanor} = Athanors.update(unresolved, %{name: "X"})
       assert {:error, :no_athanor} = Athanors.set(unresolved, name: "X")
 
       assert {:error, :no_athanor} =
@@ -144,10 +142,7 @@ defmodule Arca.AthanorsTest do
       a = athanor!()
       b = athanor!()
 
-      assert {:ok, %{id: id, name: "renamed"}} =
-               Athanors.update(in_athanor(a.id), %{name: "renamed"})
-
-      assert id == a.id
+      assert :ok = Athanors.set(in_athanor(a.id), name: "renamed")
       assert {:ok, %{name: renamed}} = Athanors.current(in_athanor(a.id))
       assert renamed == "renamed"
 

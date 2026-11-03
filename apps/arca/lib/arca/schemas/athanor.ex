@@ -12,10 +12,10 @@ defmodule Arca.Schemas.Athanor do
   `settings` is a JSON document owned by `Sanctum.Tenancy.Athanors`.
 
   `status`, `archived_at` and `security_generation` are the athanor's
-  standing. An archive or a reopen writes them together in one
-  transaction (`Arca.SecurityTransitions`), raising `security_generation`
-  on every real change; the changesets here refuse them after birth, and
-  refuse a generation at birth, which is always the column's 1.
+  standing. A denial's archive or an allow's reopen writes them together
+  in one transaction (`Arca.SecurityTransitions`), raising
+  `security_generation` on every real change; the changeset here refuses
+  a generation at birth, which is always the column's 1.
   """
 
   use Ecto.Schema
@@ -61,9 +61,6 @@ defmodule Arca.Schemas.Athanor do
     :updated_at
   ]
 
-  # What may change afterwards. The standing columns are not among them.
-  @update_fields [:name, :slug, :settings, :provisioned_at, :updated_at]
-
   # Written only by `Arca.SecurityTransitions`.
   @standing_fields [:status, :archived_at, :security_generation]
 
@@ -72,9 +69,6 @@ defmodule Arca.Schemas.Athanor do
 
   def create_changeset(athanor, attrs),
     do: changeset(athanor, attrs, @create_fields, [:security_generation])
-
-  def update_changeset(athanor, attrs),
-    do: changeset(athanor, attrs, @update_fields, @standing_fields)
 
   defp changeset(athanor, attrs, fields, read_only) do
     athanor

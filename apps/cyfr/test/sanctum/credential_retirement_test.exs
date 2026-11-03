@@ -6,9 +6,9 @@ defmodule Sanctum.CredentialRetirementTest do
   Retirement is permanent, and an issuance answers to the standing its
   context read.
 
-  A denial, an archive or a membership removal retires what it retires in
-  one transaction and announces only what that transaction committed; an
-  allow or a reopen restores standing and nothing it retired. A context
+  A denial or a membership removal retires what it retires in one
+  transaction and announces only what that transaction committed; an
+  allow restores standing and nothing it retired. A context
   read before a retirement — a signed-in identity, a session, a key —
   carries the generations it read (`Sanctum.Context.credential_binding`),
   and issuing a session or a key from it after the restore is refused,
@@ -226,15 +226,14 @@ defmodule Sanctum.CredentialRetirementTest do
       {user, own} = owner!("pre-archive")
       {_session, ctx} = signed_in!(user)
       {:ok, ctx} = Context.focus(ctx, own.id)
-      {:ok, %{api_key: key}} = issue(ctx, %{name: "in-own-#{uniq()}"})
+      {:ok, %{api_key: _}} = issue(ctx, %{name: "in-own-#{uniq()}"})
 
-      {:ok, archived} = Athanors.archive(own, force: true)
+      archived = Sanctum.TestContext.archive!(own.id)
       assert archived.security_generation == 2
-      {:ok, reopened} = Athanors.unarchive(archived)
+      reopened = Sanctum.TestContext.reopen!(own.id)
       assert reopened.security_generation == 3
 
       assert {:error, :stale_generation} = issue(ctx, %{name: "late-#{uniq()}"})
-      assert {:error, :revoked} = ApiKey.validate(key, [])
 
       # Focusing again is a new standing read, and issues; the context read
       # before the archive still cannot rotate what the new one minted.

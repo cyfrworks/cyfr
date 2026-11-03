@@ -28,14 +28,6 @@ defmodule PrismWeb.TopbarLive do
   bar stays compact in normal operation. `lite` shows none of them: the
   chat is the page.
 
-  The tray — what happened in an athanor while the person was elsewhere —
-  is `Prism.Tray`, per session, so it survives the remounts; reading an
-  athanor in the chat clears its count.
-  Which athanor is being looked at is `@viewing`: the focused one on a
-  workbench page, and on the chat page whichever athanor the page has open
-  — the chat says so (`viewing/2`) each time it moves, since it moves by
-  patch and this bar does not remount for a patch.
-
   ## The mode switch
 
   Dashboard | Canvas (`#mode-switch`), in every posture: the page this bar
@@ -55,7 +47,7 @@ defmodule PrismWeb.TopbarLive do
   use PrismWeb, :live_view
 
   alias Cyfr.Bus
-  alias Cyfr.Bus.{Notify, Viewing}
+  alias Cyfr.Bus.Notify
 
   @recent_requests_limit 5
   @recent_tincture_limit 5
@@ -77,9 +69,6 @@ defmodule PrismWeb.TopbarLive do
     ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
 
     if connected?(socket) do
-      # The page this bar sits on says which athanor it has in view.
-      Bus.subscribe_page(Bus.page_viewing(socket.parent_pid))
-
       if ctx.platform_admin,
         do: Bus.subscribe_global(Bus.platform_notify())
 
@@ -99,16 +88,12 @@ defmodule PrismWeb.TopbarLive do
      socket
      |> assign(:personal_namespace_slug, ctx.namespace)
      |> assign(:authenticated, true)
-     |> assign(:tray_key, Prism.Tray.session_hash(token))
      |> assign(:ui_mode, ui_mode)
      |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
      |> assign(:surface, surface)
      |> assign(:dashboard_path, dashboard_path(ui_mode, page, PrismWeb.Focus.route_of(ctx)))
-     |> assign(:viewing, ctx.athanor_id)
-     |> assign(:badges, %{})
      |> assign(:platform_requests, 0)
      |> assign(:offers_waiting, 0)
-     |> assign(:athanors, [])
      |> assign(:open_popover, nil)
      |> assign(:system_status, nil)
      |> assign(:running_requests, [])
@@ -140,15 +125,6 @@ defmodule PrismWeb.TopbarLive do
   defp platform_requests(%{platform_admin: true}), do: length(Sanctum.Door.Store.requests())
   defp platform_requests(_ctx), do: 0
 
-  @doc """
-  Tell the bar over page `host` (the LiveView it is rendered in) that
-  `athanor_id` is the athanor in view — the chat calls it as it moves
-  between athanors, and after it has read the athanor's tray count.
-  """
-  @spec viewing(pid(), String.t()) :: :ok
-  def viewing(host, athanor_id) when is_pid(host) and is_binary(athanor_id),
-    do: Bus.broadcast_page(Bus.page_viewing(host), Viewing.new(athanor_id))
-
   # ============================================================================
   # Events
   # ============================================================================
@@ -173,37 +149,11 @@ defmodule PrismWeb.TopbarLive do
 
     socket =
       socket
-      # The counts as the session left them: reading an athanor in the chat
-      # is what clears one, and the chat has done so before this bar loads.
-      |> assign(:badges, Prism.Tray.get(socket.assigns.tray_key))
       |> assign(:platform_requests, platform_requests(ctx))
       |> load_offers_waiting()
-      |> load_athanors(ctx)
       |> load_initial_state()
 
     {:noreply, socket}
-  end
-
-  # The chat moved to another athanor (and cleared its count on the way):
-  # follow it, and re-read the tray rather than trust the copy held here.
-  # Only an athanor this person holds a seat in — the set the rows and the
-  # badges are drawn from — can be the one in view.
-  # The chat moves between athanors by `push_patch`; the bar's name AND its
-  # links follow, so every page the bar offers is the viewed athanor's.
-  def handle_info(%Viewing{athanor_id: athanor_id}, socket) do
-    known = Enum.map(socket.assigns.athanors, & &1.id)
-
-    case Enum.find(socket.assigns.athanors, &(&1.id == athanor_id)) do
-      %{} = athanor ->
-        {:noreply,
-         socket
-         |> assign(:viewing, athanor_id)
-         |> assign(:athanor_route, Sanctum.Tenancy.Athanors.route_slug(athanor))
-         |> assign(:badges, socket.assigns.tray_key |> Prism.Tray.get() |> Map.take(known))}
-
-      nil ->
-        {:noreply, socket}
-    end
   end
 
   @impl true
@@ -260,35 +210,9 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, track_build_stopped(socket, build)}
   end
 
-  # The tray: one fan-in topic per athanor the person belongs to. Something
-  # happening in an athanor that is not in view becomes a badge on its row;
-  # the one in view shows its own live indicators. Only what wants a
-  # person's attention badges: a card settled by someone else does not,
-  # and an athanor renamed or reconfigured just redraws the list.
-  def handle_info(%Notify{kind: :approval_resolved}, socket) do
-    {:noreply, socket}
-  end
-
-  def handle_info(%Notify{kind: :athanor_changed}, socket) do
-    {:noreply, load_athanors(socket, socket.assigns.context)}
-  end
-
   # The door's queue changed: an operator's chip re-counts.
   def handle_info(%Notify{athanor_id: :platform}, socket) do
     {:noreply, assign(socket, :platform_requests, platform_requests(socket.assigns.context))}
-  end
-
-  def handle_info(%Notify{athanor_id: athanor_id}, socket) do
-    if athanor_id == socket.assigns.viewing or not seated?(socket, athanor_id) do
-      {:noreply, socket}
-    else
-      badges = Prism.Tray.bump(socket.assigns.tray_key, athanor_id)
-      {:noreply, assign(socket, :badges, badges)}
-    end
-  end
-
-  def handle_info(%Bus.Membership{}, socket) do
-    {:noreply, load_athanors(socket, socket.assigns.context)}
   end
 
   # An offer of several files is announced once per file: the messages
@@ -302,8 +226,6 @@ defmodule PrismWeb.TopbarLive do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
-
-  defp seated?(socket, athanor_id), do: Enum.any?(socket.assigns.athanors, &(&1.id == athanor_id))
 
   defp drain_offer_messages do
     receive do
@@ -926,34 +848,6 @@ defmodule PrismWeb.TopbarLive do
       </div>
     </div>
     """
-  end
-
-  # The athanor the person works in, subscribed on its notify topic for the
-  # tray. An athanor that has dropped off the list is unsubscribed: an
-  # archived one must stop reporting.
-  defp load_athanors(socket, ctx) do
-    athanors = Sanctum.Tenancy.list_athanors(ctx)
-
-    if connected?(socket) do
-      ids = MapSet.new(athanors, & &1.id)
-      previous = MapSet.new(socket.assigns[:athanors] || [], & &1.id)
-
-      for gone <- MapSet.difference(previous, ids) do
-        actor = Prima.Actor.in_athanor(gone)
-        Bus.unsubscribe(actor, Bus.notify(actor))
-      end
-
-      # The athanor's own tray topic.
-      for a <- athanors do
-        actor = Prima.Actor.in_athanor(a.id)
-        Bus.unsubscribe(actor, Bus.notify(actor))
-        Bus.subscribe(actor, Bus.notify(actor))
-      end
-    end
-
-    socket
-    |> assign(:athanors, athanors)
-    |> assign(:badges, Map.take(socket.assigns[:badges] || %{}, Enum.map(athanors, & &1.id)))
   end
 
   # ----------------------------------------------------------------------------

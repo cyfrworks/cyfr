@@ -161,20 +161,16 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
   end
 
-  describe "archive/1, unarchive/1, active?/1" do
-    test "archiving flips status and stamps archived_at; nothing is deleted" do
+  describe "active?/1" do
+    test "follows the athanor's standing; an archived athanor is still read" do
       athanor = athanor!()
       assert Athanors.active?(athanor.id)
 
-      assert {:ok, archived} = Athanors.archive(athanor, force: true)
-      assert archived.status == "archived"
-      assert archived.archived_at != nil
+      Sanctum.TestContext.archive!(athanor.id)
       refute Athanors.active?(athanor.id)
-      assert {:ok, _} = Athanors.get(athanor.id)
+      assert {:ok, %{status: "archived"}} = Athanors.get(athanor.id)
 
-      assert {:ok, back} = Athanors.unarchive(archived)
-      assert back.status == "active"
-      assert back.archived_at == nil
+      Sanctum.TestContext.reopen!(athanor.id)
       assert Athanors.active?(athanor.id)
     end
 
@@ -251,27 +247,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
   end
 
-  describe "archive/2 and a person's shares" do
-    # An archive of a person's own athanor revokes its shares in its
-    # transaction, and each is announced once it committed. No person acts.
-    test "announces every share it revoked, once" do
-      terry = Arca.Test.Shares.owner!()
-      share = Arca.Test.Shares.share!(terry.actor, Arca.Test.Shares.entry!(terry.actor).id)
-
-      Sanctum.Test.ShareAnnouncements.listen()
-      assert {:ok, %{status: "archived"}} = Athanors.archive(terry.athanor, force: true)
-
-      share_id = share.id
-
-      assert_receive {:share_announced, :revoked,
-                      %{share_id: ^share_id, kind: :revoked, user_id: nil}}
-
-      refute_receive {:share_announced, _kind, %{share_id: ^share_id}}, 100
-      assert Arca.Test.Shares.share_status(terry.actor, share.id) == "revoked"
-    end
-  end
-
-  describe "by_route_slug/1 and archive rules" do
+  describe "by_route_slug/1 and list_for_user/1" do
     test "@namespace names an athanor, a bare slug nothing; archived athanors do not resolve" do
       n = System.unique_integer([:positive])
 
@@ -288,9 +264,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       assert {:error, :not_found} = Athanors.by_route_slug("alice#{n}")
       assert Athanors.route_slug(person) == "@alice#{n}"
 
-      # a person's athanor refuses archive unless forced
-      assert {:error, :archive_not_forced} = Athanors.archive(person)
-      assert {:ok, %{status: "archived"}} = Athanors.archive(person, force: true)
+      Sanctum.TestContext.archive!(person.id)
       assert {:error, :not_found} = Athanors.by_route_slug("@alice#{n}")
     end
 
@@ -310,7 +284,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       assert id == person.id
       assert [] = Athanors.list_for_user("u-nobody-#{n}")
 
-      {:ok, _} = Athanors.archive(person, force: true)
+      Sanctum.TestContext.archive!(person.id)
       assert [] = Athanors.list_for_user(uid)
     end
   end

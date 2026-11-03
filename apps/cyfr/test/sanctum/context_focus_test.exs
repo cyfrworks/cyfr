@@ -66,7 +66,7 @@ defmodule Sanctum.ContextFocusTest do
 
   test "a caller without a seat is answered alike for an open, an archived and a missing athanor; a member hears archived",
        %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
-    {:ok, archived} = Athanors.archive(a, force: true)
+    archived = Sanctum.TestContext.archive!(a.id)
     missing = Prima.UUID7.generate_id("ath")
 
     # Neither a stranger nor an operator learns which of the three it is.
@@ -84,14 +84,14 @@ defmodule Sanctum.ContextFocusTest do
   end
 
   test "an archived athanor cannot be focused", %{a: a, alice: alice, ctx: ctx} do
-    {:ok, archived} = Athanors.archive(a, force: true)
+    archived = Sanctum.TestContext.archive!(a.id)
     assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), archived)
   end
 
   test "a stale copy of the row is read for its id alone: focus rereads the standing",
        %{a: a, alice: alice, ctx: ctx} do
     {:ok, before_archive} = Athanors.get(a.id)
-    {:ok, _} = Athanors.archive(a, force: true)
+    Sanctum.TestContext.archive!(a.id)
 
     # The copy still says active; the row it names does not.
     assert before_archive.status == "active"
@@ -106,7 +106,7 @@ defmodule Sanctum.ContextFocusTest do
   test "a store that cannot answer is unavailable, never an absence or a refusal",
        %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
     c = ctx.(alice, nil, false)
-    {:ok, _} = Athanors.archive(b, force: true)
+    Sanctum.TestContext.archive!(b.id)
 
     Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
     assert {:error, :unavailable} = Context.focus(c, a.id)
@@ -147,7 +147,7 @@ defmodule Sanctum.ContextFocusTest do
     assert Context.actor(crossed).system
     assert Context.actor(crossed).scope == :athanor
 
-    {:ok, _} = Athanors.archive(b, force: true)
+    Sanctum.TestContext.archive!(b.id)
     assert {:error, :archived} = Context.refocus(sys, b.id)
     assert {:error, :not_found} = Context.refocus(sys, "ath_nope")
 

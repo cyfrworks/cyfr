@@ -10,7 +10,8 @@ defmodule Arca.TenantTablesTest do
   rows, whose writers come later, are written straight to their tables.
 
   The roster's drift against the live schema is
-  `apps/cyfr/test/arca/schema_baseline_test.exs`'s.
+  `apps/cyfr/test/arca/schema_baseline_test.exs`'s; here, the boot check
+  of that drift (`verify_roster!/1`) is driven to fail both ways.
   """
 
   # Takes a member slot by writing its lease row; the slot is the case's own.
@@ -35,6 +36,31 @@ defmodule Arca.TenantTablesTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     :ok
+  end
+
+  describe "the roster is closed" do
+    test "the check raises when a table carrying athanor_id is left off" do
+      omitted = "vault_entries"
+      assert omitted in Arca.TenantTables.athanor_scoped_tables()
+
+      assert_raise RuntimeError, ~r/#{omitted}/, fn ->
+        Arca.TenantTables.verify_roster!(Arca.TenantTables.roster() -- [omitted])
+      end
+    end
+
+    test "the check raises when the roster names a table the schema dropped" do
+      assert_raise RuntimeError, ~r/no_such_table/, fn ->
+        Arca.TenantTables.verify_roster!(["no_such_table" | Arca.TenantTables.roster()])
+      end
+    end
+
+    test "webhook_deliveries is reached through its parent, not by athanor_id" do
+      # It has no `athanor_id` of its own, so the roster cannot cover it;
+      # relying on ON DELETE CASCADE would be relying on
+      # `PRAGMA foreign_keys` being on.
+      assert {"webhook_deliveries", :webhook_id, "webhooks"} in Arca.TenantTables.by_parent()
+      refute "webhook_deliveries" in Arca.TenantTables.athanor_scoped_tables()
+    end
   end
 
   test "an athanor's fenced documents, their staging and its revision floor go with it" do

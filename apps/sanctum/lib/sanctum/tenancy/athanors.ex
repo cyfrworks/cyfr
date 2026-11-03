@@ -3,7 +3,7 @@
 
 defmodule Sanctum.Tenancy.Athanors do
   @moduledoc """
-  Athanor rows: create, find, rename, archive.
+  Athanor rows: create and find.
 
   An athanor is the unit everything is owned by — one person's. Rows are
   created here, inside the person's admission's transaction
@@ -13,22 +13,17 @@ defmodule Sanctum.Tenancy.Athanors do
   provisioning is what fills it.
 
   An athanor is archived only by its person's denial
-  (`Sanctum.Tenancy.Users.deny/1`) or by `archive/2` with `force: true`.
+  (`Sanctum.Tenancy.Users.deny/1`), and reopened only by their allow.
 
   ## What is decided here, and what is stored below
 
   The statements are `Arca.Athanors`'. What stays here is the deciding:
-  which cap a mint must pass, what a slug may be, when an archive is
-  refused, what an unanswerable read should read as, and who is told
-  afterwards. Every call names the actor it runs as — the server
+  which cap a mint must pass, what a slug may be, what an unanswerable
+  read should read as, and who is told afterwards. Every call names the actor it runs as — the server
   (`Prima.Actor.system/0`) for the fabric reads that choose an athanor,
   and the server narrowed to one athanor for every write that must land
   in exactly that one.
   """
-
-  require Logger
-
-  alias Sanctum.Tenancy.Caps
 
   @typedoc "An athanor's row, as the plain map `Arca.Athanors` answers."
   @type athanor :: %{required(:id) => String.t(), optional(atom()) => term()}
@@ -123,51 +118,8 @@ defmodule Sanctum.Tenancy.Athanors do
   @spec route_slug(athanor()) :: String.t()
   def route_slug(%{slug: slug}), do: "@" <> slug
 
-  @doc "Rename an athanor. The slug stays: it is an address."
-  @spec rename(athanor(), String.t()) :: {:ok, athanor()} | {:error, term()}
-  def rename(%{id: _} = athanor, name) when is_binary(name) do
-    name = String.trim(name)
-
-    with :ok <- validate_name(name) do
-      Arca.Athanors.update(in_athanor(athanor.id), %{name: name})
-    end
-  end
-
   @doc """
-  Mark an athanor archived. Nothing is deleted; every ingress gate refuses
-  it, its API keys and its shares are revoked in the same transaction
-  (`Arca.SecurityTransitions.archive_athanor/3`), whatever is running in
-  it is cancelled, the established-context memo of its person is dropped
-  and they are told — the same on every path that archives, so no path
-  leaves work running in a furnace nobody may enter.
-  The announcements follow the commit and are made from what it returned.
-
-  It refuses unless `force: true`. An athanor already
-  archived is archived again: its keys are revoked and checked again and
-  its archival announced again, so a retry reaches whatever a lost
-  announcement did not.
-  """
-  @spec archive(athanor(), keyword()) :: {:ok, athanor()} | {:error, term()}
-  def archive(%{id: id} = athanor, opts \\ []) do
-    force? = Keyword.get(opts, :force, false)
-
-    verify = fn
-      %{athanor: %{status: "active"}} when not force? ->
-        {:error, :archive_not_forced}
-
-      _rows ->
-        :ok
-    end
-
-    with {:ok, change} <- Arca.SecurityTransitions.archive_athanor(server(), id, verify: verify) do
-      announce_archived([id], change)
-      Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
-      {:ok, committed(athanor, change)}
-    end
-  end
-
-  @doc """
-  Announce athanors a committed transition archived, from the data it
+  Announce athanors a committed denial archived, from the data it
   returned: each member's established-context memo is dropped, before
   this returns — the memo caches an AUTHORIZATION decision, so an archive
   that only flipped the status would leave every member working inside
@@ -191,144 +143,6 @@ defmodule Sanctum.Tenancy.Athanors do
 
     :ok
   end
-
-  # The row the caller named, as the transition left it: reread after
-  # commit, and — should that read fail — the caller's copy carrying the
-  # standing the commit returned, never an error for what did commit.
-  defp committed(%{id: id} = athanor, change) do
-    case get(id) do
-      {:ok, current} ->
-        current
-
-      {:error, _reason} ->
-        case Enum.find(change.athanors, &(&1.id == id)) do
-          nil ->
-            athanor
-
-          moved ->
-            %{
-              athanor
-              | status: moved.status,
-                archived_at: moved.archived_at,
-                security_generation: moved.security_generation
-            }
-        end
-    end
-  end
-
-  @doc """
-  Delete an archived athanor's whole storage tree — the one verb that
-  reclaims `athanors/{id}/` from the volume (or the bucket). Archiving never
-  touches storage, precisely so `unarchive/1` reopens a furnace intact;
-  purging is the separate, deliberate, final act. It refuses unless the
-  athanor is archived, and a purged athanor that later reopens comes back
-  with empty storage (its rows are untouched — this deletes blobs only).
-  """
-  @spec purge_storage(athanor()) :: :ok | {:error, term()}
-  def purge_storage(%{id: _} = athanor) do
-    with {:ok, current} <- get(athanor.id) do
-      if current.status == "archived" do
-        ctx = Sanctum.Context.internal(athanor_id: current.id, scope: :athanor)
-
-        with :ok <- Arca.delete_tree(Sanctum.Context.actor(ctx), []) do
-          # The write gate invalidates the whole-tree counter, but the
-          # empty path names no scope, so the per-scope pairs would
-          # otherwise survive until their TTL — drop them all.
-          Arca.Usage.invalidate(internal_actor(current))
-        end
-      else
-        {:error, :not_archived}
-      end
-    end
-  end
-
-  @doc """
-  Erase an archived athanor: its blobs AND its rows. Final.
-
-  The one verb that deletes a tenant's rows. `purge_storage/1` above
-  reclaims the volume and leaves every row standing, and retention
-  (`Cyfr.RetentionScheduler`) skips archived athanors, so after archive
-  and purge alone every sealed vault payload, webhook secret, OAuth
-  ciphertext, execution, message and log stays in the database and in
-  every backup taken afterwards.
-
-  ## What it keeps, and why
-
-  The `athanors` row itself survives as an archived tombstone: an audit
-  trail that loses the fact an athanor ever existed cannot answer "what
-  happened to it". Everything the tombstone owned is gone.
-
-  ## What it refuses
-
-  A **personal** athanor. `users.personal_athanor_id` is not an
-  athanor-scoped column and would still name the tombstone: the unique
-  index would then block minting a replacement, and
-  `Users.allow/1` would try to reopen a wiped shell. Erasing
-  a person is a different act with different consequences —
-  `Sanctum.Door`'s deny and `archive/1` are the person-level verbs.
-
-  An athanor that is not archived, for the same reason `purge_storage/1`
-  does: archiving is the reviewable step that precedes the irreversible
-  one.
-  """
-  @spec destroy(athanor()) :: {:ok, map()} | {:error, term()}
-  def destroy(%{id: _} = athanor) do
-    with {:ok, current} <- get(athanor.id),
-         :ok <- check_destroyable(current),
-         :ok <- Arca.delete_tree(internal_actor(current), []),
-         {:ok, counts} <- Arca.TenantTables.delete_all_for(internal_actor(current)) do
-      Arca.Usage.invalidate(internal_actor(current))
-
-      Logger.warning(
-        "[Sanctum.Tenancy.Athanors] destroyed #{current.id}: " <>
-          "#{counts |> Map.values() |> Enum.sum()} rows across #{map_size(counts)} tables"
-      )
-
-      {:ok, counts}
-    end
-  end
-
-  defp check_destroyable(%{status: status}) when status != "archived",
-    do: {:error, :not_archived}
-
-  defp check_destroyable(%{id: id}) do
-    if Sanctum.Tenancy.Users.personal_athanor?(id) do
-      {:error, :personal_athanor}
-    else
-      :ok
-    end
-  end
-
-  # The server's own actor narrowed to this athanor: `system: true` is
-  # what lets the purge reach the whole tree, `scope: :athanor` is what
-  # keeps it inside this one athanor.
-  defp internal_actor(%{id: id}),
-    do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
-
-  @doc """
-  Reopen an archived athanor, if the server still has room for it
-  (`Arca.SecurityTransitions.unarchive_athanor/3`). Its revoked keys stay
-  revoked; the reopen raises the athanor's generation, so a context read
-  before the archive cannot issue a credential in it afterwards.
-  """
-  @spec unarchive(athanor()) :: {:ok, athanor()} | {:error, term()}
-  def unarchive(%{id: id} = athanor) do
-    with {:ok, change} <-
-           Arca.SecurityTransitions.unarchive_athanor(server(), id, verify: &reopenable/1) do
-      {:ok, committed(athanor, change)}
-    end
-  end
-
-  # An archived athanor freed its place against the server cap when it
-  # closed; taking the place back has to ask for it, or archiving and
-  # reopening would be the way past `CYFR_MAX_ATHANORS`. The count runs
-  # inside the transition, with the athanor locked and the census lock
-  # held (`Arca.AthanorCensus`), so a reopen and a mint at the last place
-  # cannot both land.
-  defp reopenable(%{athanor: %{status: "archived"}}),
-    do: Caps.check_counted(:max_athanors, &count/0)
-
-  defp reopenable(_rows), do: :ok
 
   @doc "The last failed fill on the row, or nil: `%{step, detail, at}`."
   @spec provisioning_failure(athanor()) ::
@@ -502,9 +316,6 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   defp status_gate(_, _opts), do: {:error, :not_found}
-
-  defp validate_name(name) when byte_size(name) in 1..80, do: :ok
-  defp validate_name(_), do: {:error, :invalid_name}
 
   @doc """
   A free slug for a person's own athanor: `hint` (their cyfr.run namespace,

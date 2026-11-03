@@ -380,7 +380,7 @@ defmodule Cyfr.RetentionSchedulerTest do
       # Archived while the walk is on an earlier athanor: after the list of
       # active athanors was read, before the walk reaches this one.
       on_first_athanor(fn ->
-        {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived, force: true)
+        Sanctum.TestContext.archive!(archived.id)
       end)
 
       assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")

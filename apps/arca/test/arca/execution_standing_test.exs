@@ -243,21 +243,22 @@ end
 
 defmodule Arca.ExecutionStandingLockTest do
   @moduledoc """
-  An admission and an archive under two real connections, outside the
-  sandbox, in both orders. Each serializes on the athanor's row — on
-  PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
-  — and the one that waits acts on what the other committed: an admission
-  that committed first is retired by the archive, and one that waited
-  reads the archive and admits nothing. On PostgreSQL the checks hold the
-  row shared: two never wait for each other, and an archive waits for
-  every one of them.
+  An admission and the denial that archives the athanor, its person's,
+  under two real connections, outside the sandbox, in both orders. Each
+  serializes on the athanor's row — on PostgreSQL by waiting on the row,
+  on SQLite by waiting at the lock its transaction takes at entry — and
+  the one that waits acts on what the other committed: an admission that
+  committed first is retired by the archive, and one that waited reads
+  the archive and admits nothing. On PostgreSQL the checks hold the row
+  shared: two never wait for each other, and an archive waits for every
+  one of them.
   """
 
   use ExUnit.Case, async: false
 
   import Ecto.Query
 
-  alias Arca.Schemas.{ApiKey, Athanor, ExecutionAttempt}
+  alias Arca.Schemas.{ApiKey, Athanor, ExecutionAttempt, User}
   alias Arca.Test.Actor
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -265,18 +266,35 @@ defmodule Arca.ExecutionStandingLockTest do
 
   setup do
     athanor_id = Prima.UUID7.generate_id("ath")
+    owner_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
     n = System.unique_integer([:positive])
+    now = DateTime.utc_now()
 
-    {:ok, _} =
-      unboxed(fn ->
+    unboxed(fn ->
+      {:ok, _} =
         Arca.Athanors.insert(Prima.Actor.system(), %{
           id: athanor_id,
-          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          owner_user_id: owner_id,
           name: "Barrier #{n}",
           slug: "std-barrier-#{n}",
           created_by: "system"
         })
-      end)
+
+      # The athanor's person, whose denial is what archives it.
+      {:ok, _} =
+        Arca.Test.People.mint(
+          Prima.Actor.system(),
+          %{
+            id: owner_id,
+            personal_athanor_id: athanor_id,
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          nil
+        )
+    end)
 
     on_exit(fn ->
       unboxed(fn ->
@@ -293,11 +311,12 @@ defmodule Arca.ExecutionStandingLockTest do
         )
 
         Arca.Repo.delete_all(from(k in ApiKey, where: k.athanor_id == ^athanor_id))
+        Arca.Repo.delete_all(from(u in User, where: u.id == ^owner_id))
         Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor_id))
       end)
     end)
 
-    {:ok, athanor_id: athanor_id}
+    {:ok, athanor_id: athanor_id, owner_id: owner_id}
   end
 
   defp attrs(athanor_id) do
@@ -324,12 +343,14 @@ defmodule Arca.ExecutionStandingLockTest do
     end
   end
 
-  defp archive(athanor_id, verify) do
-    Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id, verify: verify)
+  # The archive is the denial of the athanor's person.
+  defp archive(owner_id, verify) do
+    Arca.SecurityTransitions.deny_user(Prima.Actor.system(), owner_id, verify: verify)
   end
 
   test "an admission holding the athanor retires under the archive that waited for it", %{
-    athanor_id: athanor_id
+    athanor_id: athanor_id,
+    owner_id: owner_id
   } do
     test = self()
     grant = unboxed(fn -> Actor.grant(athanor_id) end)
@@ -344,7 +365,7 @@ defmodule Arca.ExecutionStandingLockTest do
 
     assert_receive {:holding, :admission}, 5_000
 
-    archiver = Task.async(fn -> unboxed(fn -> archive(athanor_id, fn _ -> :ok end) end) end)
+    archiver = Task.async(fn -> unboxed(fn -> archive(owner_id, fn _ -> :ok end) end) end)
     refute Task.yield(archiver, 300), "the archive decided while the admission held the athanor"
 
     send(admitter.pid, :go)
@@ -369,7 +390,8 @@ defmodule Arca.ExecutionStandingLockTest do
   end
 
   test "an admission waiting behind an archive reads it and admits nothing", %{
-    athanor_id: athanor_id
+    athanor_id: athanor_id,
+    owner_id: owner_id
   } do
     test = self()
     grant = unboxed(fn -> Actor.grant(athanor_id) end)
@@ -378,7 +400,7 @@ defmodule Arca.ExecutionStandingLockTest do
     archiver =
       Task.async(fn ->
         unboxed(fn ->
-          archive(athanor_id, fn _rows ->
+          archive(owner_id, fn _rows ->
             send(test, {:holding, :archive})
 
             receive do
@@ -407,7 +429,8 @@ defmodule Arca.ExecutionStandingLockTest do
 
   @tag :postgres
   test "two verifications share the athanor, and an archive waits behind either", %{
-    athanor_id: athanor_id
+    athanor_id: athanor_id,
+    owner_id: owner_id
   } do
     if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
       # One writer at a time: there is no shared row lock for two
@@ -431,7 +454,7 @@ defmodule Arca.ExecutionStandingLockTest do
       reader = verification.(:reader, &Arca.Repo.read_transaction/1)
       assert_receive {:holding, :reader}, 5_000
 
-      archiver = Task.async(fn -> unboxed(fn -> archive(athanor_id, fn _ -> :ok end) end) end)
+      archiver = Task.async(fn -> unboxed(fn -> archive(owner_id, fn _ -> :ok end) end) end)
       refute Task.yield(archiver, 300), "the archive locked an athanor two checks held"
 
       send(writer.pid, :go)

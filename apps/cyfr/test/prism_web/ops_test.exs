@@ -105,8 +105,7 @@ defmodule PrismWeb.OpsTest do
   end
 
   # A refusal the guard makes is filed under no tenant, whatever state the
-  # athanor its context names is in: no row of either log can name an
-  # athanor whose erasure has run or may run before the row is written.
+  # athanor its context names is in: no row of either log names it.
   describe "the athanor a refused console call is recorded under" do
     setup do
       Process.register(self(), :ingress_probe_observer)
@@ -131,21 +130,11 @@ defmodule PrismWeb.OpsTest do
       {:ok, person: person, established: established}
     end
 
-    test "a destroyed athanor: one decision with no athanor, and no row names it",
-         %{person: person, established: established} do
-      gone = place!(person)
-      {:ok, on_gone} = Sanctum.Context.focus(established, gone.id)
-      {:ok, archived} = Sanctum.Tenancy.Athanors.archive(gone, force: true)
-      {:ok, _counts} = Sanctum.Tenancy.Athanors.destroy(archived)
-
-      assert_no_tenant(on_gone, gone, person)
-    end
-
     test "an archived athanor: one decision with no athanor, and no row names it",
          %{person: person, established: established} do
       kept = place!(person)
       {:ok, on_kept} = Sanctum.Context.focus(established, kept.id)
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(kept, force: true)
+      Sanctum.TestContext.archive!(kept.id)
 
       assert_no_tenant(on_kept, kept, person)
     end
@@ -159,63 +148,7 @@ defmodule PrismWeb.OpsTest do
       assert_no_tenant(on_left, left, person)
     end
 
-    test "an athanor destroyed after the guard refuses and before the append: no row names it",
-         %{person: person, established: established} do
-      erased = place!(person)
-      focused = seat_removed!(erased, person, established)
-      assert Sanctum.Tenancy.Athanors.active?(erased.id)
-
-      request_id = Prima.UUID7.request_id()
-      stale = %{focused | request_id: request_id, validated_at: nil}
-      test_pid = self()
-      hook = "erased-before-append-#{System.unique_integer([:positive])}"
-      on_exit(fn -> :telemetry.detach(hook) end)
-
-      # The refusal's decision is written by a writer the decision log
-      # starts for this call, in a transaction of its own. At the first
-      # statement inside that transaction the athanor is archived and
-      # destroyed, which erases both logs of it, and the append goes on: it
-      # must name the athanor nowhere. On SQLite that statement belongs to the
-      # write lock taken before the decision row; on PostgreSQL it is the
-      # decision row's own insert, with its `mcp_logs` row still to come.
-      :ok =
-        :telemetry.attach(
-          hook,
-          [:arca, :repo, :query],
-          fn _event, _measurements, metadata, _config ->
-            if self() != test_pid and test_pid in List.wrap(Process.get(:"$callers")) and
-                 not String.match?(metadata.query, ~r/^\s*(begin|commit|rollback)\b/i) do
-              :telemetry.detach(hook)
-              {:ok, archived} = Sanctum.Tenancy.Athanors.archive(erased, force: true)
-              {:ok, _counts} = Sanctum.Tenancy.Athanors.destroy(archived)
-              send(test_pid, {:erased_before_append, self(), metadata.query})
-            end
-          end,
-          nil
-        )
-
-      assert {:error, :not_member} = refused_call(stale)
-      assert_receive {:erased_before_append, writer, first_statement}, 10_000
-
-      # The pause was inside the append, before or at its decision row.
-      assert first_statement =~ ~r/^\s*(PRAGMA|UPDATE|INSERT INTO "decision_logs")/i,
-             first_statement
-
-      # The writer may outlast the log's budget for the caller; whatever it
-      # writes, it has written once it is gone.
-      ref = Process.monitor(writer)
-      assert_receive {:DOWN, ^ref, :process, ^writer, _reason}, 10_000
-
-      assert {:ok, %{status: "archived"}} = Sanctum.Tenancy.Athanors.get(erased.id)
-      assert rows_naming(erased.id) == {0, 0}
-      assert {:ok, [refused]} = global_decisions(request_id)
-
-      assert {refused.admission, refused.athanor_id, refused.user_id} ==
-               {:refused, nil, person.user_id}
-    end
-
-    # An athanor no person's admission made, so `destroy/1` may erase it,
-    # with `person` seated in it.
+    # An athanor no person's admission made, with `person` seated in it.
     defp place!(person) do
       {:ok, athanor} =
         Sanctum.Tenancy.Athanors.create(%{

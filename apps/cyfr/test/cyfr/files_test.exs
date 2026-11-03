@@ -445,7 +445,7 @@ defmodule Arca.FilesTest do
                Prima.ComponentNamespace.message(:not_local_namespace, "acme")
   end
 
-  test "accepted custody survives sender purge without overwriting recipient bytes" do
+  test "accepted custody survives the sender deleting the file, without overwriting recipient bytes" do
     previous_adapter = Application.get_env(:arca, :storage_adapter)
     Application.put_env(:arca, :storage_adapter, Arca.FilesTest.Store)
 
@@ -484,10 +484,8 @@ defmodule Arca.FilesTest do
     Arca.FilesTest.Store.release()
     assert folder == "data/inbox/#{sender.id}/#{offer_id}/"
 
-    # The sender's athanor is archived and erased, rows and blobs.
-    {:ok, home} = Sanctum.Tenancy.Athanors.get(sender.home.id)
-    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(home, force: true)
-    assert {:ok, _counts} = Sanctum.Tenancy.Athanors.destroy(archived)
+    # The sender deletes the file they offered.
+    assert {:ok, _} = Files.delete(sender.actor, "data/reports/q3.csv")
     assert {:error, :not_found} = Arca.get(sender.actor, ["data", "reports", "q3.csv"])
 
     # The recipient keeps a file of their own where the transfer would land.
@@ -511,7 +509,9 @@ defmodule Arca.FilesTest do
     assert {:ok, []} =
              Arca.Storage.list_prefix(recipient.actor, ["payloads", "receipts", offer_id])
 
-    assert {:ok, %{receipts: [], inbox: []}} = file(recipient, %{"action" => "offers"})
+    # The receipt is settled; the offer stands accepted in the sender's rows.
+    assert {:ok, %{receipts: [], inbox: [%{offer_id: ^offer_id, status: "accepted"}]}} =
+             file(recipient, %{"action" => "offers"})
   end
 
   # A person working in an athanor of their own, as a session's context.

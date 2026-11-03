@@ -488,7 +488,7 @@ defmodule Sanctum.TinctureAccessTest do
 
     test "an archived athanor is not found" do
       athanor = create_athanor!("left")
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
+      Sanctum.TestContext.archive!(athanor.id)
       assert {:error, :not_found} = TinctureAccess.public_context("@left")
     end
 

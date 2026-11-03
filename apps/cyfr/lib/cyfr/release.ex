@@ -44,7 +44,7 @@ defmodule Cyfr.Release do
   schema, then assert the tenant roster still covers the schema — the
   checks every boot runs, answered here before the server starts. A table
   that carries `athanor_id` and is not in `Arca.TenantTables` would survive
-  `destroy/1` silently.
+  `Arca.TenantTables.delete_all_for/1` silently.
   """
   @spec migrate() :: :ok
   def migrate do

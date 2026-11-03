@@ -30,8 +30,7 @@ defmodule PrismWeb.ChatLive do
   (`PrismWeb.SystemLayer`), where a grant the pane's turn needs is asked
   under the page's context. The pane owns the thread. The shared thread
   in view is announced (`PrismWeb.RoomFeed`) for the person's own AQUA
-  beside the page; the athanor in view is told to the bar over it
-  (`PrismWeb.TopbarLive.viewing/2`) so the tray follows.
+  beside the page.
 
   The athanor is read once per change to the SET of athanors — a seat
   gained or lost. A message on the open thread or a rename touches the one
@@ -52,17 +51,12 @@ defmodule PrismWeb.ChatLive do
   alias Sanctum.Tenancy.Athanors
 
   @impl true
-  def mount(_params, session, socket) do
-    # The tray is the session's (`Prism.Tray`): opening an athanor here is
-    # looking at it, so its badge is read the same as focusing the bench.
-    token = session[to_string(CyfrWeb.SignInResponse.session_key())]
-
+  def mount(_params, _session, socket) do
     if connected?(socket),
       do: Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(socket.assigns.context.user_id))
 
     {:ok,
      socket
-     |> assign(:tray_key, token && Prism.Tray.session_hash(token))
      # The session's own athanor, as the mount found it: where the chat
      # opens when the address names none. The page's context moves with
      # the athanor it has open.
@@ -212,9 +206,6 @@ defmodule PrismWeb.ChatLive do
 
     case pick(threads, thread_id) do
       {:ok, target} ->
-        if socket.assigns.tray_key, do: Prism.Tray.clear(socket.assigns.tray_key, athanor.id)
-        PrismWeb.TopbarLive.viewing(self(), athanor.id)
-
         {:noreply,
          socket
          |> assign(:loading?, false)
@@ -796,7 +787,7 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  # The athanor's other notifies are the bar's (the tray) and the pane's.
+  # The athanor's other notifies are the pane's.
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do

@@ -386,10 +386,7 @@ defmodule Arca.FileOffersTest do
       # The two still share the thread; the sender's own athanor is gone.
       source!(sender, "a.txt", "x")
 
-      assert {:ok, _} =
-               Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), sender.athanor_id,
-                 verify: fn _rows -> :ok end
-               )
+      Arca.Test.Actor.archive!(sender.athanor_id)
 
       assert {:error, :athanor_archived} =
                FileOffers.offer(sender, recipient.user_id, ["data/docs/a.txt"])
@@ -1850,6 +1847,10 @@ defmodule Arca.FileOffersLockOrderTest do
         {:ok, _} =
           Arca.SharedThreadMembers.seat(Prima.Actor.system(), thread.id, recipient.id, sender.id)
 
+        # The sender's athanor is their own: their denial archives it.
+        {:ok, _} =
+          Arca.Users.update(Prima.Actor.system(), sender.id, %{personal_athanor_id: home.id})
+
         {home, recipient_home, thread, sender, recipient}
       end)
 
@@ -1985,14 +1986,14 @@ defmodule Arca.FileOffersLockOrderTest do
          "words, and neither is aborted",
        %{home: home, sender: sender, recipient_id: recipient_id} do
     offer_id = small_offer!(sender, recipient_id, ~w(c b a), "purged")
-    assert {:ok, %{ended_offer_ids: [^offer_id]}} = archive!(home.id)
+    assert {:ok, %{ended_offer_ids: [^offer_id]}} = unboxed(fn -> deny!(sender.user_id) end)
     decline = fn -> FileOffers.decline(%Prima.Actor{user_id: recipient_id}, offer_id) end
     purge = fn -> purge!(home.id) end
 
     {declined, purged} =
       if postgres?() do
         # The purge waits on a held row of the offer; the decline either
-        # waits beside it or, the archive having ended the offer, does not.
+        # waits beside it or, the denial having ended the offer, does not.
         holder = hold!(offer_id, "b.txt")
         purge_task = backend_task(:purge, purge)
         await_lock!(:purge, [~s(DELETE FROM "file_offers")])
@@ -2037,15 +2038,15 @@ defmodule Arca.FileOffersLockOrderTest do
     assert Enum.uniq(statuses(held, sender)) == ["expired"]
   end
 
-  test "a deny racing the purge of the archived athanor whose one-file offer the archive " <>
-         "ended: neither is aborted",
+  test "a deny racing the purge of the archived athanor whose one-file offer its person's " <>
+         "denial ended: neither is aborted",
        %{home: home, sender: sender, recipient_id: recipient_id} do
     # One row: there is no order among the offer's rows to get wrong. The
     # deny takes the recipient's offers, and the purge erases the sender's
     # athanor's offers before its seats; neither waits on the other across
     # a lock the other holds.
     offer_id = small_offer!(sender, recipient_id, ~w(x), "one")
-    assert {:ok, %{ended_offer_ids: [^offer_id]}} = archive!(home.id)
+    assert {:ok, %{ended_offer_ids: [^offer_id]}} = unboxed(fn -> deny!(sender.user_id) end)
     deny = fn -> deny!(recipient_id) end
     purge = fn -> purge!(home.id) end
 
@@ -2261,14 +2262,6 @@ defmodule Arca.FileOffersLockOrderTest do
 
   defp deny!(user_id) do
     Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user_id, verify: fn _rows -> :ok end)
-  end
-
-  defp archive!(athanor_id) do
-    unboxed(fn ->
-      Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id,
-        verify: fn _rows -> :ok end
-      )
-    end)
   end
 
   defp purge!(athanor_id),

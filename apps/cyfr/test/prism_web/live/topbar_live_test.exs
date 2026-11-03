@@ -4,7 +4,6 @@
 defmodule PrismWeb.TopbarLiveTest do
   @moduledoc """
   The topbar: the AQUA link to the person's own athanor, standing alone;
-  the athanor in view, followed only into one the person holds a seat in;
   the operator's door chip; the live indicators; and the count of files
   offered to the person, from their own topic.
   """
@@ -42,23 +41,6 @@ defmodule PrismWeb.TopbarLiveTest do
 
     assert has_element?(bar, ~s(#aqua-link[href="/a/@#{seated_athanor().slug}/aqua"]), "AQUA")
     refute has_element?(bar, ~s([phx-value-name="athanors"]))
-  end
-
-  test "the bar keeps the person's own athanor in view when the page names one they hold no seat in",
-       %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice)
-    theirs = Sanctum.Test.People.athanor!(test_user().user_id)
-    {view, _html} = mount_athanor(conn, "")
-    bar = topbar(view)
-    viewing = fn -> :sys.get_state(bar.pid).socket.assigns.viewing end
-    assert viewing.() == seated_athanor().id
-
-    send(bar.pid, Cyfr.Bus.Viewing.new(theirs.id))
-    assert viewing.() == seated_athanor().id
-
-    send(bar.pid, Cyfr.Bus.Viewing.new("ath_nobody"))
-    assert viewing.() == seated_athanor().id
   end
 
   test "an operator sees how many wait at the door; the chip follows the door", %{conn: conn} do

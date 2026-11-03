@@ -54,8 +54,8 @@ defmodule Arca.FileOffers do
   Every write that ends an offer locks the rows it ends first, in one
   order, by `offer_id` and then `filename` (`FOR UPDATE` on PostgreSQL),
   and only then writes them: the acceptance's turn to `accepted`,
-  `withdraw/2`, `decline/2`, `expire/2`, a deny's `end_for_person!/2`
-  and an archive's `end_for_athanor!/1`, each writing only the rows its
+  `withdraw/2`, `decline/2`, `expire/2` and a deny's `end_for_person!/2`,
+  each writing only the rows its
   lock took, by id. A row that comes to match after the lock (an offer
   expiring, or one landing already past its expiry) is left to the next
   writer, never written unlocked. A conditional update alone locks rows in the
@@ -64,12 +64,12 @@ defmodule Arca.FileOffers do
   other. It is the one order of the file-offer rows, as
   `Arca.ConsentStorage` states the one order of the entry rows a consent
   revision holds. An offer's rows are inserted together, under the shared
-  locks of its two people and its athanor (`offer/3`), so a deny or an
-  archive in flight is waited for, and one that runs after sees them.
+  locks of its two people and its athanor (`offer/3`), so a deny in
+  flight is waited for, and one that runs after sees them.
 
   One other transaction holds more than one offer row:
   `Arca.TenantTables.delete_all_for/1`, whose single statement erases an
-  archived athanor's rows in scan order. Archiving withdrew every offer
+  archived athanor's rows in scan order. The denial that archived it withdrew every offer
   the athanor held open, and every write that ends an offer takes only
   rows still offered, so none waits on a row the purge holds. Ordering
   the purge's offer rows would not do instead: a deny holds the person's
@@ -500,21 +500,6 @@ defmodule Arca.FileOffers do
 
     end_locked!(ids, withdrawn, "withdrawn", now) ++
       end_locked!(ids, dynamic(true), "declined", now)
-  end
-
-  @doc false
-  # Inside an archive's transaction (`Arca.SecurityTransitions`): every
-  # offer the athanor still holds open is withdrawn, its rows locked in
-  # the one order first, so the purge that later erases the athanor meets
-  # no offer a decline, a deny or an acceptance could still end. Answers
-  # the rows ended, for `after_end/1` once the transaction commits.
-  @spec end_for_athanor!(Prima.Actor.t()) :: [FileOffer.t()]
-  # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
-  def end_for_athanor!(%Prima.Actor{athanor_id: athanor_id})
-      when is_binary(athanor_id) and athanor_id != "" do
-    from(o in FileOffer, where: o.athanor_id == ^athanor_id and o.status == "offered")
-    |> lock_offers!()
-    |> end_locked!(dynamic(true), "withdrawn", now())
   end
 
   # Ends, as `status`, the rows among `ids` (taken by `lock_offers!/1` in

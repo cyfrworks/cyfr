@@ -20,8 +20,13 @@ defmodule Arca.ActorStandingDriftTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     active = athanor!()
-    archived = active_then(&archive!/1)
-    reopened = active_then(&(&1 |> archive!() |> unarchive!()))
+    archived = active_then(&Sanctum.TestContext.archive!(&1.id))
+
+    reopened =
+      active_then(fn athanor ->
+        Sanctum.TestContext.archive!(athanor.id)
+        Sanctum.TestContext.reopen!(athanor.id)
+      end)
 
     assert %{status: "active", security_generation: 1} = standing(active)
     assert %{status: "archived", security_generation: 2} = standing(archived)
@@ -113,15 +118,5 @@ defmodule Arca.ActorStandingDriftTest do
       })
 
     athanor
-  end
-
-  defp archive!(athanor) do
-    {:ok, archived} = Athanors.archive(athanor, force: true)
-    archived
-  end
-
-  defp unarchive!(athanor) do
-    {:ok, reopened} = Athanors.unarchive(athanor)
-    reopened
   end
 end

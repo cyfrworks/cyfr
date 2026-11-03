@@ -100,22 +100,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end
   end
 
-  test "two reopens at the server's last place: one lands, the other stays archived",
-       %{run: run} do
-    archived = for i <- 1..2, do: archived_own!(person!(run, i))
-    cap = cap!(1)
-
-    answers = race(Enum.map(archived, fn own -> fn -> Athanors.unarchive(own) end end))
-
-    assert Enum.count(answers, &match?({:ok, _}, &1)) == 1
-    assert Enum.count(answers, &(&1 == refused(cap))) == 1
-    assert active() == cap
-
-    for {own, answer} <- Enum.zip(archived, answers), answer == refused(cap) do
-      assert {:ok, %{status: "archived"}} = unboxed(fn -> Athanors.get(own.id) end)
-    end
-  end
-
   test "two allows at the server's last place: one lands, the other stays denied",
        %{run: run} do
     denied = for i <- 1..2, do: denied_owner!(run, i)
@@ -133,14 +117,14 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end
   end
 
-  test "a reopen and a mint at the server's last place: one lands", %{run: run} do
-    own = archived_own!(person!(run, 1))
+  test "an allow and a mint at the server's last place: one lands", %{run: run} do
+    {user, _own} = denied_owner!(run, 1)
     owner = person!(run, 2)
     cap = cap!(1)
 
     answers =
       race([
-        fn -> Athanors.unarchive(own) end,
+        fn -> Users.allow(user) end,
         fn -> Athanors.create(personal(owner)) end
       ])
 
@@ -299,15 +283,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
       else
         {:error, reason} -> Arca.Repo.rollback(reason)
       end
-    end)
-  end
-
-  # The person's own athanor, archived; made before the cap is stored.
-  defp archived_own!(owner) do
-    unboxed(fn ->
-      {:ok, own} = Athanors.create(personal(owner))
-      {:ok, archived} = Athanors.archive(own, force: true)
-      archived
     end)
   end
 

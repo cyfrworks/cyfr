@@ -146,16 +146,9 @@ defmodule Sanctum.Tenancy.CapsTest do
     # An archived athanor frees its place: the cap counts active furnaces.
     reset_caps()
     {:ok, doomed} = create("Doomed")
-    {:ok, _} = Athanors.archive(doomed, force: true)
+    Sanctum.TestContext.archive!(doomed.id)
     put_caps(max_athanors: active_count() + 1)
     assert {:ok, _} = create("Fits")
-
-    # ...and taking the place back has to ask for it, or archive-then-reopen
-    # would be the way past the cap.
-    put_caps(max_athanors: active_count())
-    assert {:error, {:limit_reached, :max_athanors, _}} = Athanors.unarchive(doomed)
-    put_caps(max_athanors: active_count() + 1)
-    assert {:ok, %{status: "active"}} = Athanors.unarchive(doomed)
   end
 
   test "athanor_storage_bytes is one check for every writer" do

@@ -260,7 +260,7 @@ defmodule Arca.CredentialIssuanceTest do
       refute unboxed(fn -> Arca.Repo.exists?(where(ApiKey, key_hash: ^attrs.key_hash)) end)
     end
 
-    test "a rotation reads the archive's commit and is refused", %{
+    test "a rotation reads the denial's commit and is refused", %{
       user_id: user_id,
       athanor_id: athanor_id
     } do
@@ -275,22 +275,8 @@ defmodule Arca.CredentialIssuanceTest do
           )
         end)
 
-      archiver =
-        Task.async(fn ->
-          unboxed(fn ->
-            SecurityTransitions.archive_athanor(server(), athanor_id,
-              verify: fn _rows ->
-                send(test, :archive_holds)
-
-                receive do
-                  :go -> :ok
-                end
-              end
-            )
-          end)
-        end)
-
-      assert_receive :archive_holds, 5_000
+      denier = paused_denial(user_id)
+      assert_receive :denial_holds, 5_000
 
       rotator =
         Task.async(fn ->
@@ -307,8 +293,8 @@ defmodule Arca.CredentialIssuanceTest do
         end)
 
       refute Task.yield(rotator, 300)
-      send(archiver.pid, :go)
-      assert {:ok, %{transitioned: true}} = Task.await(archiver, 25_000)
+      send(denier.pid, :go)
+      assert {:ok, %{transitioned: true}} = Task.await(denier, 25_000)
       assert {:error, :stale_generation} = Task.await(rotator, 25_000)
 
       assert unboxed(fn ->

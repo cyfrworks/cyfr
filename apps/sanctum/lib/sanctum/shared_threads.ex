@@ -434,6 +434,20 @@ defmodule Sanctum.SharedThreads do
     with {:ok, thread} <- seated(user_id, thread_id), do: withdrawn(user_id, thread, identifier)
   end
 
+  @doc """
+  Withdraw every invitation a person identifier holds, in every thread —
+  what the door's deny of that identifier owes the threads holding a seat
+  for it, since a seat must not outlive the eject — and answer how many
+  threads held one. Each thread's people are told.
+  """
+  @spec withdraw_identifier(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def withdraw_identifier(identifier) when is_binary(identifier) and identifier != "" do
+    with {:ok, thread_ids} <- Arca.SharedThreadMembers.withdraw_identifier(server(), identifier) do
+      Enum.each(thread_ids, &announce(:changed, &1))
+      {:ok, length(thread_ids)}
+    end
+  end
+
   defp withdrawn(by, thread, identifier) do
     case Arca.SharedThreadMembers.withdraw(server(), thread.id, identifier, by) do
       {:ok, _row} ->

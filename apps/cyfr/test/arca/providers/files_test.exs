@@ -552,10 +552,7 @@ defmodule Arca.Providers.FilesTest do
          %{sender: sender, recipient: recipient} do
       source!(sender, "a.txt", "alpha")
 
-      assert {:ok, _} =
-               Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), sender.home.id,
-                 verify: fn _rows -> :ok end
-               )
+      Sanctum.TestContext.archive!(sender.home.id)
 
       assert {:error, :archived} =
                Tool.handle("file", sender.actor, %{

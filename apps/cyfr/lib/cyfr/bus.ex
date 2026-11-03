@@ -73,7 +73,6 @@ defmodule Cyfr.Bus do
     ThreadEvent,
     Tinctures,
     VaultEntryChanged,
-    Viewing,
     Webhooks
   }
 
@@ -251,14 +250,13 @@ defmodule Cyfr.Bus do
       template: "tenant:<athanor_id>:notify",
       producers: ["Cyfr.TelemetryBridge"],
       consumers: [
-        "PrismWeb.TopbarLive",
         "PrismWeb.ChatLive",
         "PrismWeb.ShellLive",
         "PrismWeb.AquaLive",
         "PrismWeb.ThreadPaneLive",
         "Aqua.Runner"
       ],
-      reason: "the athanor's tray fan-in: what its members see happened"
+      reason: "the athanor's fan-in: what its person's open views hear happened"
     },
     # --- tenant: one subject at a time ---
     %{
@@ -390,7 +388,7 @@ defmodule Cyfr.Bus do
       match: {:prefix, "sanctum:memberships:"},
       template: "sanctum:memberships:<user_id>",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["CyfrWeb.ContextGuard", "PrismWeb.TopbarLive", "PrismWeb.ChatLive"],
+      consumers: ["CyfrWeb.ContextGuard", "PrismWeb.ChatLive"],
       reason: "the subject is the person, not an athanor: which athanors they may now reach"
     },
     %{
@@ -476,16 +474,6 @@ defmodule Cyfr.Bus do
           "the offers again under its own session"
     },
     # --- page: one page instance and the views beside it ---
-    %{
-      key: :page_viewing,
-      scope: :page,
-      struct: Viewing,
-      match: {:prefix, "page:viewing:"},
-      template: "page:viewing:<page_pid>",
-      producers: ["PrismWeb.TopbarLive"],
-      consumers: ["PrismWeb.TopbarLive"],
-      reason: "a page tells the bar over it which athanor it has in view"
-    },
     %{
       key: :room_feed,
       scope: :page,
@@ -773,11 +761,6 @@ defmodule Cyfr.Bus do
   # ---------------------------------------------------------------------------
   # Page topics
   # ---------------------------------------------------------------------------
-
-  @doc "What the page `host` has in view (`Cyfr.Bus.Viewing`)."
-  @spec page_viewing(pid()) :: String.t()
-  def page_viewing(host) when is_pid(host),
-    do: "page:viewing:" <> List.to_string(:erlang.pid_to_list(host))
 
   @doc "The room the page `socket_id` has open (`Cyfr.Bus.RoomInView`)."
   @spec room_feed(String.t()) :: String.t()

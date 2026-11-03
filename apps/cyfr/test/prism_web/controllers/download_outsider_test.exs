@@ -18,7 +18,7 @@ defmodule PrismWeb.DownloadOutsiderTest do
   setup do
     active = Sanctum.Test.People.athanor!(test_user().user_id)
     closed = Sanctum.Test.People.athanor!(test_user().user_id)
-    {:ok, _archived} = Athanors.archive(closed, force: true)
+    Sanctum.TestContext.archive!(closed.id)
 
     routes = %{
       active: Athanors.route_slug(active),

@@ -109,7 +109,7 @@ defmodule Opus.ArchiveFenceTest do
       |> Sanctum.TestContext.via(:api)
 
   defp archive!(athanor) do
-    {:ok, archived} = Athanors.archive(athanor, force: true)
+    archived = Sanctum.TestContext.archive!(athanor.id)
     assert archived.status == "archived"
     archived
   end
@@ -293,7 +293,8 @@ defmodule Opus.ArchiveFenceTest do
     test "admits only fresh roots: the old grant still refuses", %{athanor: athanor, ctx: ctx} do
       old = attached(ctx)
 
-      athanor |> archive!() |> Athanors.unarchive()
+      archive!(athanor)
+      Sanctum.TestContext.reopen!(athanor.id)
 
       assert %{"ok" => %{} = renewals} = renew(old)
       assert renewals[old.attempt] == "lost"

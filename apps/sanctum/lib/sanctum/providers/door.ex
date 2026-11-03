@@ -20,7 +20,9 @@ defmodule Sanctum.Providers.Door do
   unless denied, so a person is never allowed.
   `deny` writes a sticky exclusion of a person or an identifier, ejects
   the person when they are already known
-  (`Sanctum.Tenancy.Users.deny/1`); `remove` deletes an entry — and,
+  (`Sanctum.Tenancy.Users.deny/1`) and withdraws the invitations the
+  identifier holds in shared threads either way
+  (`Sanctum.SharedThreads.withdraw_identifier/1`); `remove` deletes an entry — and,
   when it was an allow, ejects everyone the door would now refuse
   (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered,
   since it names nobody; `list` shows the door; `requests` what is
@@ -157,7 +159,13 @@ defmodule Sanctum.Providers.Door do
           results = Enum.map(denied, &Users.deny/1)
           ejected = Enum.count(results, &match?({:ok, _}, &1))
 
-          rendered = render(entry) |> Map.put(:ejected, ejected)
+          # An identifier nobody here holds can still hold invitations in
+          # shared threads. `Users.deny/1` withdraws them for a person it
+          # knows; for an identifier it does not, this is the whole eject.
+          withdrawn = withdraw_pending(kind, value)
+
+          rendered =
+            render(entry) |> Map.put(:ejected, ejected) |> Map.put(:invites_withdrawn, withdrawn)
 
           Sanctum.Notify.allowlist_changed()
 
@@ -266,6 +274,17 @@ defmodule Sanctum.Providers.Door do
       note: "Their own athanor is reopened; thread seats removed by the deny are not restored"
     })
   end
+
+  # Every invitation the identifier still holds, withdrawn once; the count
+  # is what a pending seat cost.
+  defp withdraw_pending("identifier", value) do
+    case Sanctum.SharedThreads.withdraw_identifier(value) do
+      {:ok, count} -> count
+      {:error, _} -> 0
+    end
+  end
+
+  defp withdraw_pending(_kind, _value), do: 0
 
   defp known_users("person", value) do
     case Users.get(value) do

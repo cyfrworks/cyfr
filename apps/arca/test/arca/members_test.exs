@@ -185,9 +185,7 @@ defmodule Arca.MembersTest do
 
     test "a seat in an archived athanor is :athanor_archived and writes nothing" do
       archived = athanor!()
-
-      {:ok, _} =
-        Arca.SecurityTransitions.archive_athanor(server(), archived.id, verify: fn _ -> :ok end)
+      Arca.Test.Actor.archive!(archived.id)
 
       user = person_id()
 

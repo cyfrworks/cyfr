@@ -124,7 +124,7 @@ defmodule Sanctum.TenancyMCPTest do
 
     test "an archived athanor is a hard stop except where the action asks for it",
          %{ctx: ctx, athanor: athanor} do
-      {:ok, _} = Athanors.archive(athanor, force: true)
+      Sanctum.TestContext.archive!(athanor.id)
 
       # The read passes `include_archived: true` and still works.
       assert {:ok, %{status: "archived"}} =

@@ -132,7 +132,7 @@ defmodule PrismWeb.ModesTest do
       token: token
     } do
       Arca.Cache.put(
-        {:surface, Prism.Tray.session_hash(token)},
+        {:surface, Prima.Digest.sha256_hex(token)},
         %{surface: "glass", page: 7},
         60_000
       )

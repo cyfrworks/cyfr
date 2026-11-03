@@ -172,11 +172,11 @@ defmodule Emissary.Web.WebhookControllerTest do
       refute post_signed(conn, slug, secret, ~s({})).status == 404
 
       # an archived athanor closes it, without leaking existence
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor, force: true)
+      Sanctum.TestContext.archive!(athanor.id)
       conn2 = post_signed(conn, slug, secret, ~s({}))
       assert conn2.status == 404
       assert json_response(conn2, 404)["code"] == "not_found"
-      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(athanor)
+      Sanctum.TestContext.reopen!(athanor.id)
 
       # a denied creator closes it too
       {:ok, _} = Sanctum.Tenancy.Users.deny(creator)

@@ -137,27 +137,6 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc """
-  Whether this athanor is somebody's personal furnace.
-
-  `Athanors.destroy/1` refuses one. `personal_athanor_id` is not an
-  athanor-scoped column, so erasure would leave it naming a tombstone:
-  the unique index would block minting a replacement, and
-  `allow/1` would try to reopen a wiped shell.
-
-  Fail-CLOSED on an unanswerable read — the default is `true`, so a
-  database fault refuses an irreversible delete rather than permitting it.
-  """
-  @spec personal_athanor?(String.t()) :: boolean()
-  def personal_athanor?(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    case Arca.Users.personal_athanor?(server(), athanor_id) do
-      {:ok, personal?} -> personal?
-      {:error, _} -> true
-    end
-  end
-
-  def personal_athanor?(_), do: true
-
-  @doc """
   The person's own athanor — `{:ok, id}` once one has been minted, else
   `:none`.
 

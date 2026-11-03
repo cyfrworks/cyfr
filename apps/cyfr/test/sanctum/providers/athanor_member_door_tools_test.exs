@@ -266,6 +266,32 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, :allowed} = Sanctum.Door.admit_person(user)
   end
 
+  test "door.deny of an identifier no person here holds withdraws its invitations from every shared thread",
+       %{alice: alice, ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    identifier = "per_" <> Prima.Digest.sha256_hex("door-invited-#{n}")
+
+    {:ok, %{id: plans}} = Sanctum.SharedThreads.create(alice, "Plans #{n}")
+    {:ok, %{id: trip}} = Sanctum.SharedThreads.create(alice, "Trip #{n}")
+
+    for thread <- [plans, trip] do
+      assert {:ok, :added} = Sanctum.SharedThreads.add(alice, thread, identifier: identifier)
+      assert {:ok, people} = Sanctum.SharedThreads.people(alice, thread)
+      assert %{status: "invited"} = Enum.find(people, &(&1[:identifier] == identifier))
+    end
+
+    assert {:ok, %{effect: "deny", kind: "identifier", ejected: 0, invites_withdrawn: 2}} =
+             call(admin, "door", %{"action" => "deny", "value" => identifier})
+
+    # The seat does not outlive the eject: each thread's people no longer
+    # name the identifier, and alice still sits in both.
+    for thread <- [plans, trip] do
+      assert {:ok, people} = Sanctum.SharedThreads.people(alice, thread)
+      refute Enum.any?(people, &(&1[:identifier] == identifier))
+      assert Enum.any?(people, &(&1[:user_id] == alice))
+    end
+  end
+
   test "door.allow and door.deny take a handle: the entry keeps the identifier it names, labelled with the handle",
        %{ops: ops, ctx: ctx, n: n} do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
@@ -339,7 +365,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       })
 
     closed = personal!(carol.id)
-    {:ok, %{status: "archived"}} = Athanors.archive(closed, force: true)
+    %{status: "archived"} = Sanctum.TestContext.archive!(closed.id)
     missing = Prima.UUID7.generate_id("ath")
 
     a = ctx.(alice, personal!(alice).id, [])
@@ -369,7 +395,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   test "an archived athanor refuses every mutation by id, for its person and for an operator; its person reads it, and an operator with no seat is answered as for a missing athanor",
        %{alice: alice, ops: ops, ctx: ctx} do
     personal = personal!(alice)
-    {:ok, %{status: "archived"}} = Athanors.archive(personal, force: true)
+    %{status: "archived"} = Sanctum.TestContext.archive!(personal.id)
     a = ctx.(alice, personal.id, [])
     operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
 

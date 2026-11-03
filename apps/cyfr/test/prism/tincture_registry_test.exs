@@ -415,7 +415,7 @@ defmodule Prism.TinctureRegistryTest do
         lay!(athanor_id, "local", "orphan", "0.1.0", manifest)
       end
 
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived, force: true)
+      Sanctum.TestContext.archive!(archived.id)
 
       name = :test_orphans
       {:ok, pid} = TinctureRegistry.start_link(name: name)

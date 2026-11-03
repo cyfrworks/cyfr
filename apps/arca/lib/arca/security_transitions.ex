@@ -3,8 +3,8 @@
 
 defmodule Arca.SecurityTransitions do
   @moduledoc """
-  The standing transitions — deny and allow a person, archive and reopen
-  an athanor, and the declared restore —
+  The standing transitions — deny and allow a person, which archive and
+  reopen their athanor, and the declared restore —
   each as ONE transaction over every row it must change, or nothing.
 
   A transition changes a standing and retires what that standing issued:
@@ -21,10 +21,6 @@ defmodule Arca.SecurityTransitions do
   athanor holds, and declines every other offer addressed to
   them (`Arca.FileOffers`), whose snapshots are released once it commits,
   and revokes every share of their athanor (`Arca.Shares`).
-  An archive revokes the athanor's keys, frame credentials, paired
-  clients, device certificates, pending pairing invitations and shares
-  with it, and withdraws the file offers it holds open, so the purge that
-  erases an archived athanor meets no open offer.
   Every transition that revokes a client
   or a credential voids the pending confirmations it confirmed
   (`Arca.PendingConfirmations`), and a denial voids the
@@ -32,11 +28,10 @@ defmodule Arca.SecurityTransitions do
   commits together or not at all: a statement that fails rolls the whole
   transition back and the caller is answered the failure, so a denial can
   never report success with a credential of the person still standing. An allow restores the person's standing and
-  their own athanor and seat and nothing else; a reopen restores the
-  athanor and nothing else. Neither un-revokes, re-creates or re-seats
-  anything the retirement took, and each revokes again every frame
+  their own athanor and seat and nothing else. It never un-revokes, re-creates or re-seats
+  anything the retirement took, and it revokes again every frame
   credential, paired client, device certificate and pending pairing
-  invitation the person or the athanor still holds: a frame opened, a
+  invitation the person still holds: a frame opened, a
   client paired or an invitation issued under the old standing never
   outlives a change of it.
 
@@ -75,13 +70,13 @@ defmodule Arca.SecurityTransitions do
   A writer of a membership row naming a person takes the person's lock
   first (`Arca.Members`), so a seat racing a denial
   waits for it, or it for them; a file offer is written under its two
-  people's locks and its athanor's, shared, so it waits for a denial or
-  an archive holding them, and either sees an offer that landed first.
-  An allow and a reopen, which count the server's active athanors for
-  their caller, take the server-wide census lock (`Arca.AthanorCensus`)
-  after their row locks and right before the caller's policy, as a mint
-  takes it after the people it holds. After it they write only the rows
-  they hold and the credentials, clients and invitations that hang off
+  people's locks and its athanor's, shared, so it waits for a denial
+  holding them, and either sees an offer that landed first.
+  An allow, which counts the server's active athanors for its caller,
+  takes the server-wide census lock (`Arca.AthanorCensus`)
+  after its row locks and right before the caller's policy, as a mint
+  takes it after the people it holds. After it it writes only the rows
+  it holds and the credentials, clients and invitations that hang off
   them, which no holder of the census lock locks before taking it. A
   transition taking only a suffix of that order never goes back for an
   earlier lock. A declared restore takes its marker's row first, which
@@ -274,47 +269,6 @@ defmodule Arca.SecurityTransitions do
   end
 
   def allow_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
-
-  @doc """
-  Archive the athanor `athanor_id`, revoke its keys and withdraw the file
-  offers it still holds open. An athanor already archived keeps its
-  generation; its keys are revoked and its offers ended again, and
-  checked.
-  """
-  @spec archive_athanor(Prima.Actor.t(), String.t(), keyword()) ::
-          {:ok, change()} | {:error, term()}
-  def archive_athanor(%Prima.Actor{scope: :platform, system: true}, athanor_id, opts)
-      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
-    verify = Keyword.fetch!(opts, :verify)
-
-    case run("Arca.SecurityTransitions.archive_athanor", fn -> archive(athanor_id, verify) end) do
-      {:ok, change} ->
-        # As a denial's: the offers the archive withdrew release their
-        # snapshots and announce themselves only once it committed.
-        {ended, change} = Map.pop(change, :ended_offers, [])
-        Arca.FileOffers.after_end(ended)
-        {:ok, change}
-
-      refusal ->
-        refusal
-    end
-  end
-
-  def archive_athanor(%Prima.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
-
-  @doc """
-  Reopen the archived athanor `athanor_id`. Its revoked keys stay revoked.
-  An athanor already active is answered unchanged.
-  """
-  @spec unarchive_athanor(Prima.Actor.t(), String.t(), keyword()) ::
-          {:ok, change()} | {:error, term()}
-  def unarchive_athanor(%Prima.Actor{scope: :platform, system: true}, athanor_id, opts)
-      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
-    verify = Keyword.fetch!(opts, :verify)
-    run("Arca.SecurityTransitions.unarchive_athanor", fn -> unarchive(athanor_id, verify) end)
-  end
-
-  def unarchive_athanor(%Prima.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
 
   # ---- the runner ------------------------------------------------------------
 
@@ -788,92 +742,7 @@ defmodule Arca.SecurityTransitions do
     end
   end
 
-  # ---- archive and reopen ----------------------------------------------------
-
-  defp archive(athanor_id, verify) do
-    result =
-      with {:ok, athanor} <- lock_athanor(athanor_id),
-           members = lock_members(athanor_id),
-           :ok <-
-             decide(verify, %{
-               transition: :archive_athanor,
-               athanor: Projection.athanor(athanor),
-               member_user_ids: members
-             }) do
-        now = Arca.ServerMetaStorage.now!()
-
-        with {:ok, archived} <-
-               archive_rows(active_ids([athanor_id], %{athanor_id => athanor}), now) do
-          key_ids = revoke_athanor_keys(athanor_id, now)
-          frame_ids = revoke_athanor_frames(athanor_id)
-          paired_ids = revoke_athanor_paired(athanor_id)
-          dependents = PairedClients.retire_dependents!(paired_ids)
-          cert_ids = revoke_athanor_certificates(athanor_id)
-          invitation_ids = revoke_athanor_invitations(athanor_id)
-          ended_offers = Arca.FileOffers.end_for_athanor!(Prima.Actor.in_athanor(athanor_id))
-
-          with {:ok, share_ids} <- revoke_shares([athanor_id]),
-               :ok <- archive_holds(athanor_id) do
-            %{
-              empty_change()
-              | transitioned: archived != %{},
-                athanor_generations: archived,
-                athanors: moved(%{athanor_id => athanor}, archived, "archived", now),
-                archived_athanor_ids: Map.keys(archived),
-                revoked_api_key_ids: key_ids,
-                revoked_frame_credential_ids: frame_ids,
-                revoked_paired_client_ids: paired_ids,
-                revoked_device_certificate_ids: merged_ids(dependents.certificate_ids, cert_ids),
-                revoked_pairing_invitation_ids: invitation_ids,
-                voided_confirmation_ids: dependents.confirmation_ids,
-                member_user_ids: %{athanor_id => members},
-                ended_offer_ids:
-                  ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort(),
-                revoked_share_ids: share_ids
-            }
-            |> Map.put(:ended_offers, ended_offers)
-          end
-        end
-      end
-
-    committed_change(result)
-  end
-
-  defp unarchive(athanor_id, verify) do
-    result =
-      with {:ok, athanor} <- lock_athanor(athanor_id),
-           :ok <- AthanorCensus.lock(),
-           :ok <-
-             decide(verify, %{
-               transition: :unarchive_athanor,
-               athanor: Projection.athanor(athanor)
-             }) do
-        now = Arca.ServerMetaStorage.now!()
-
-        with {:ok, reopened} <- reopen_rows(archived_ids(athanor), now) do
-          frame_ids = revoke_athanor_frames(athanor_id)
-          paired_ids = revoke_athanor_paired(athanor_id)
-          dependents = PairedClients.retire_dependents!(paired_ids)
-          cert_ids = revoke_athanor_certificates(athanor_id)
-          invitation_ids = revoke_athanor_invitations(athanor_id)
-
-          %{
-            empty_change()
-            | transitioned: reopened != %{},
-              athanor_generations: reopened,
-              athanors: moved(%{athanor_id => athanor}, reopened, "active", now),
-              reopened_athanor_ids: Map.keys(reopened),
-              revoked_frame_credential_ids: frame_ids,
-              revoked_paired_client_ids: paired_ids,
-              revoked_device_certificate_ids: merged_ids(dependents.certificate_ids, cert_ids),
-              revoked_pairing_invitation_ids: invitation_ids,
-              voided_confirmation_ids: dependents.confirmation_ids
-          }
-        end
-      end
-
-    committed_change(result)
-  end
+  # ---- the athanor's standing -------------------------------------------------
 
   defp archive_rows([], _now), do: {:ok, %{}}
 
@@ -907,55 +776,6 @@ defmodule Arca.SecurityTransitions do
   # the one that was decided.
   defp exactly({count, rows}, count), do: {:ok, Map.new(rows)}
   defp exactly(_result, _count), do: {:error, :conflict}
-
-  defp revoke_athanor_keys(athanor_id, now) do
-    {_count, ids} =
-      Arca.Repo.update_all(
-        from(k in ApiKey,
-          where: k.athanor_id == ^athanor_id and k.revoked == false,
-          select: k.id
-        ),
-        set: [revoked: true, updated_at: now]
-      )
-
-    Enum.sort(ids || [])
-  end
-
-  defp revoke_athanor_frames(athanor_id),
-    do:
-      FrameCredentials.revoke_all(from(f in FrameCredential, where: f.athanor_id == ^athanor_id))
-
-  defp revoke_athanor_paired(athanor_id),
-    do: PairedClients.revoke_all(from(p in PairedClient, where: p.athanor_id == ^athanor_id))
-
-  defp revoke_athanor_certificates(athanor_id) do
-    DeviceCertificates.revoke_all(
-      from(c in DeviceCertificate, where: c.athanor_id == ^athanor_id)
-    )
-  end
-
-  defp revoke_athanor_invitations(athanor_id) do
-    PairingInvitations.revoke_all(
-      from(i in PairingInvitation, where: i.athanor_id == ^athanor_id)
-    )
-  end
-
-  defp archive_holds(athanor_id) do
-    survivors = [
-      from(a in Athanor, where: a.id == ^athanor_id and a.status != "archived"),
-      from(k in ApiKey, where: k.athanor_id == ^athanor_id and k.revoked == false),
-      from(f in FrameCredential, where: f.athanor_id == ^athanor_id and f.state != "revoked"),
-      from(p in PairedClient, where: p.athanor_id == ^athanor_id and p.standing != "revoked"),
-      from(c in DeviceCertificate, where: c.athanor_id == ^athanor_id and c.state != "revoked"),
-      from(i in PairingInvitation, where: i.athanor_id == ^athanor_id and i.state == "pending"),
-      from(o in FileOffer, where: o.athanor_id == ^athanor_id and o.status == "offered"),
-      from(s in Share, where: s.athanor_id == ^athanor_id and s.status == "active")
-    ]
-
-    if Enum.any?(survivors, &Arca.Repo.exists?/1),
-      do: {:error, :postcondition_failed},
-      else: :ok
-  end
 
   # ---- the declared restore ------------------------------------------------------
 
@@ -1829,13 +1649,6 @@ defmodule Arca.SecurityTransitions do
     end
   end
 
-  defp lock_athanor(athanor_id) do
-    case lock_athanors([athanor_id]) do
-      %{^athanor_id => athanor} -> {:ok, athanor}
-      _ -> {:error, :not_found}
-    end
-  end
-
   defp lock_athanors([]), do: %{}
 
   defp lock_athanors(ids) do
@@ -1865,18 +1678,6 @@ defmodule Arca.SecurityTransitions do
     )
     |> QueryHelpers.for_update()
     |> Arca.Repo.all()
-  end
-
-  defp lock_members(athanor_id) do
-    from(m in Membership,
-      where:
-        m.athanor_id == ^athanor_id and m.scope == "athanor" and m.status == "active" and
-          not is_nil(m.user_id),
-      order_by: [asc: m.id]
-    )
-    |> QueryHelpers.for_update()
-    |> Arca.Repo.all()
-    |> Enum.map(& &1.user_id)
   end
 
   # ---- the answer ------------------------------------------------------------
