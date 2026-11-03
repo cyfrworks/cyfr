@@ -86,19 +86,22 @@ defmodule Sanctum.PlatformContextAuditTest do
 
     test "emits no platform event, an operator's included, admitted or refused" do
       n = System.unique_integer([:positive])
-      alice = "github|https://github.com|audit-alice-#{n}"
-      ops = "github|https://github.com|audit-ops-#{n}"
 
-      {:ok, athanor} =
-        Sanctum.Tenancy.Athanors.create(%{
-          name: "Audit #{n}",
-          slug: "audit-#{n}",
-          owner_user_id: alice,
-          created_by: "system"
+      {:ok, alice} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|audit-alice-#{n}",
+          provider: "github"
         })
 
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(alice, scope: "athanor", athanor_id: athanor.id)
-      {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
+      {:ok, ops} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|audit-ops-#{n}",
+          provider: "github"
+        })
+
+      athanor = Sanctum.Test.People.athanor!(alice)
+      own = Sanctum.Test.People.athanor!(ops)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.id)
 
       person = fn user_id, athanor_id, admin? ->
         Context.build(
@@ -115,13 +118,16 @@ defmodule Sanctum.PlatformContextAuditTest do
       # Whatever setting the rows up built is not the focus's.
       flush()
 
-      # A member's focus, an operator's refused one, and the revalidation
-      # of an operator's session that still names the athanor.
-      assert {:ok, _} = Context.focus(person.(alice, nil, false), athanor.id)
-      assert {:error, :not_found} = Context.focus(person.(ops, nil, true), athanor.id)
+      # The owner's focus, an operator's refused one, and the revalidation
+      # of an operator's session that still names the athanor, which moves
+      # it to their own.
+      assert {:ok, _} = Context.focus(person.(alice.id, nil, false), athanor.id)
+      assert {:error, :not_found} = Context.focus(person.(ops.id, nil, true), athanor.id)
 
-      assert {:ok, %{athanor_id: nil}} =
-               Sanctum.Tenancy.revalidate(person.(ops, athanor.id, true))
+      own_id = own.id
+
+      assert {:ok, %{athanor_id: ^own_id}} =
+               Sanctum.Tenancy.revalidate(person.(ops.id, athanor.id, true))
 
       refute_received {:platform_ctx, _, _}
     end

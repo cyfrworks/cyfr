@@ -279,13 +279,13 @@ defmodule Cyfr.Test.ChatFixture do
 
   @doc """
   The platform administrator of this CYFR, signed in to their own
-  athanor through Prism and holding the platform membership: who shares
+  athanor through Prism and holding the platform administrator's mark: who shares
   a key with everyone, caps the share and revokes it.
   """
   @spec administrator!() :: Sanctum.Context.t()
   def administrator! do
     {user, own} = person!("chat-admin")
-    {:ok, _seat} = Sanctum.TestContext.ensure_platform(user.id)
+    {:ok, _admin} = Sanctum.TestContext.ensure_platform(user.id)
 
     # The suite's signed-in person (`Sanctum.TestContext.local/0`), named
     # for the administrator in their own athanor.

@@ -17,7 +17,6 @@ defmodule Sanctum.Notify do
   """
 
   @kinds [
-    :member_changed,
     :athanor_changed,
     :allowlist_request,
     :allowlist_changed,
@@ -31,8 +30,7 @@ defmodule Sanctum.Notify do
   ]
 
   @type kind ::
-          :member_changed
-          | :athanor_changed
+          :athanor_changed
           | :allowlist_request
           | :allowlist_changed
           | :execution_finished
@@ -57,9 +55,6 @@ defmodule Sanctum.Notify do
   @spec broadcast_platform(kind(), map()) :: :ok
   def broadcast_platform(kind, payload \\ %{}) when is_atom(kind) and is_map(payload),
     do: Sanctum.Telemetry.notify(nil, kind, payload)
-
-  @doc false
-  def member_changed(athanor_id), do: broadcast(athanor_id, :member_changed)
 
   @doc false
   def allowlist_request(email), do: broadcast_platform(:allowlist_request, %{email: email})

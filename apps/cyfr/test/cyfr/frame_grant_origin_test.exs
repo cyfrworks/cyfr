@@ -20,7 +20,6 @@ defmodule Cyfr.FrameGrantOriginTest do
     on_exit(&Prima.Test.RateLimiter.reset!/0)
     Prima.Test.RateLimiter.reset!()
 
-    _athanor = Sanctum.TestContext.athanor!()
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)

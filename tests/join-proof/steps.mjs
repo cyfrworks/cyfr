@@ -307,15 +307,15 @@ async function forgedCompletion(chromium, { home, identifier, hub, hubContext })
   const after = { person: await atHub(identifier), receipts: await receiptsAtHub(identifier) };
   const ownKeysAtH = stored.h.local.filter((key) => !/consecutive-reloads/.test(key));
   record.forged_completion = {
-    memberships: [before.person.memberships, after.person.memberships], receipts: [before.receipts, after.receipts],
+    athanors: [before.person.athanors, after.person.athanors], receipts: [before.receipts, after.receipts],
     sessions: [before.person.sessions.length, after.person.sessions.length], storage_at_a: stored.a, storage_at_h: stored.h,
   };
   return row("forged_completion", "chromium",
-    JSON.stringify(after.person.memberships) === JSON.stringify(before.person.memberships) &&
+    JSON.stringify(after.person.athanors) === JSON.stringify(before.person.athanors) &&
       after.receipts === before.receipts && after.person.sessions.length === before.person.sessions.length &&
       stored.a.local.every((key) => /consecutive-reloads/.test(key)) && stored.a.indexeddb.length === 0 &&
       JSON.stringify(ownKeysAtH) === JSON.stringify(["cyfr:sign-in:your-cyfr"]) && stored.h.indexeddb.length === 0,
-    "a forged completion writes no membership, admission or saved address at either home; H's storage holds only cyfr:sign-in:your-cyfr",
+    "a forged completion writes no athanor, admission or saved address at either home; H's storage holds only cyfr:sign-in:your-cyfr",
     record.forged_completion);
 }
 

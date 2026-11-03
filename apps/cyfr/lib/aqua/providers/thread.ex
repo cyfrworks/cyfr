@@ -738,7 +738,7 @@ defmodule Aqua.Providers.Thread do
 
   # Saying your own lines aloud into a shared thread you sit in. Everything
   # that matters is decided in `Aqua.Aloud.post/4` — the source athanor's
-  # membership, the target's seat, author-only, byte-copied attachments —
+  # owner, the target's seat, author-only, byte-copied attachments —
   # this wraps it exactly as every other action wraps the runner.
   defp act("aloud", ctx, id, %{"message_ids" => ids, "target_thread" => target_thread})
        when is_list(ids) and is_binary(target_thread) do
@@ -762,8 +762,7 @@ defmodule Aqua.Providers.Thread do
         {:ok, %{said_aloud: length(rows), target_thread: target_thread}}
 
       {:error, :not_a_member} ->
-        {:error,
-         {:invalid_argument, "aloud reads only threads of an athanor you are a member of"}}
+        {:error, {:invalid_argument, "aloud reads only threads of your own athanor"}}
 
       {:error, :not_the_author} ->
         {:error,

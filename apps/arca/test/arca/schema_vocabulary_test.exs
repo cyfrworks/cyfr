@@ -786,7 +786,6 @@ defmodule Arca.SchemaVocabularyTest do
       athanor_id: athanor,
       secret_hash: id("hash"),
       user_id: "user_vocab",
-      membership_id: id("mem"),
       prospective_client_id: id("pcl"),
       audience_home: "https://home.example",
       expires_at: now(),

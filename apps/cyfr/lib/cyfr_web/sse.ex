@@ -71,7 +71,7 @@ defmodule CyfrWeb.SSE do
   new subscription.
   """
 
-  alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, FrameCredential, Membership, Session}
+  alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, FrameCredential, Session}
   alias Prima.{StreamGrant, TinctureWire}
   alias Sanctum.Context
 
@@ -238,7 +238,7 @@ defmodule CyfrWeb.SSE do
     # The granted topic lies under the caller's own prefix by construction,
     # so the bus's tenant check cannot refuse it.
     :ok = Cyfr.Bus.subscribe(actor, topic)
-    :ok = Cyfr.Bus.subscribe_standing(ctx.user_id)
+    :ok = Cyfr.Bus.subscribe_standing()
     :ok = subscribe_frame(ctx)
 
     ref = make_ref()
@@ -273,7 +273,7 @@ defmodule CyfrWeb.SSE do
       cancel_deadline(ref)
       cancel_ticks(ref)
       Cyfr.Bus.unsubscribe(actor, topic)
-      Cyfr.Bus.unsubscribe_standing(ctx.user_id)
+      Cyfr.Bus.unsubscribe_standing()
       unsubscribe_frame(ctx)
       flush(ref)
     end
@@ -368,8 +368,7 @@ defmodule CyfrWeb.SSE do
 
       message
       when is_struct(message, Session) or is_struct(message, CallerInvalidated) or
-             is_struct(message, AthanorArchived) or is_struct(message, Membership) or
-             is_struct(message, FrameCredential) ->
+             is_struct(message, AthanorArchived) or is_struct(message, FrameCredential) ->
         if about?(message, state.ctx) do
           case state.revalidate.() do
             {:ok, ctx} -> loop(conn, revalidated(state, ctx))
@@ -518,7 +517,6 @@ defmodule CyfrWeb.SSE do
     do: kind != :created and user_id == ctx.user_id
 
   defp about?(%AthanorArchived{athanor_id: athanor_id}, ctx), do: athanor_id == ctx.athanor_id
-  defp about?(%Membership{}, _ctx), do: true
   defp about?(%CallerInvalidated{}, _ctx), do: true
 
   defp about?(%FrameCredential{id: id}, %Context{frame: %{id: frame_credential}}),

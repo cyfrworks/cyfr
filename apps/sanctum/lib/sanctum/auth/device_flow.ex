@@ -503,8 +503,8 @@ defmodule Sanctum.Auth.DeviceFlow do
           door: identity,
           email: user_info.email,
           provider: to_string(provider),
-          # Start athanor-less; the establish recipe fills the athanor from
-          # memberships (`Sanctum.Caller.establish/2`).
+          # Start athanor-less; the establish recipe fills in the person's
+          # own athanor (`Sanctum.Caller.establish/2`).
           athanor_id: nil,
           permissions: Context.person_permissions()
         )
@@ -556,13 +556,13 @@ defmodule Sanctum.Auth.DeviceFlow do
         end
 
       {:error, :unavailable} ->
-        # A transient membership read, not a refusal: no session was minted,
+        # A transient account read, not a refusal: no session was minted,
         # and the person is told to retry rather than that they belong
         # nowhere. The sign-in page shows "error" as its message.
         %{
           status: "error",
           message:
-            "The server could not read memberships just now. " <>
+            "The server could not read your account just now. " <>
               "Sign in again in a moment."
         }
     end

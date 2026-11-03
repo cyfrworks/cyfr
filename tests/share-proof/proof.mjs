@@ -343,6 +343,7 @@ const FIELDS = {
     first_seen_at: clock,
     last_seen_at: clock,
     denied_at: clock,
+    platform_admin_at: clock,
     security_generation: exact,
     created_at: clock,
     updated_at: clock,
@@ -956,8 +957,9 @@ async function main() {
     // Bea's first sign-in leaves her row as the release fixture's person
     // is made and signs in (an open admission, her GitHub email verified,
     // "Release proof"), active, at security generation 1, her personal
-    // athanor the one her sign-in names. Company AI's share is to Traders
-    // alone, which Ana is not in: her claim of it is refused as not
+    // athanor the one her sign-in names, and no platform administrator's
+    // mark, which only the installation's first person carries. Company
+    // AI's share is to Traders alone, which Ana is not in: her claim of it is refused as not
     // offered, as is the row binding the loader reads, and her vault offers
     // Company Mail's share alone.
     model.bea = {
@@ -975,6 +977,7 @@ async function main() {
         first_seen_at: IN_WINDOW,
         last_seen_at: IN_WINDOW,
         denied_at: null,
+        platform_admin_at: null,
         created_at: IN_WINDOW,
         updated_at: IN_WINDOW,
       },

@@ -143,7 +143,7 @@ defmodule Sanctum.Door.Store do
   end
 
   # The person an entry names, by their id or by the identifier their
-  # identity row holds, read for their platform grant.
+  # identity row holds, read for their platform administrator's mark.
   defp names_platform_admin?("person", value), do: Sanctum.Tenancy.platform_admin?(value)
 
   defp names_platform_admin?("identifier", value) do

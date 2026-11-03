@@ -117,9 +117,9 @@ defmodule Sanctum.TenancyMCPTest do
 
       :telemetry.detach(handler)
 
-      # The row and the seat check, and nothing the athanor holds: no
-      # thread, file, vault or member list is read for the refusal.
-      assert Enum.reject(reads(), &(&1 in ["athanors", "memberships"])) == []
+      # The row and its owner, and nothing the athanor holds: no thread,
+      # file or vault is read for the refusal.
+      assert Enum.reject(reads(), &(&1 == "athanors")) == []
     end
 
     test "an archived athanor is a hard stop except where the action asks for it",

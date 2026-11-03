@@ -164,12 +164,12 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the rail lists only the athanors you hold a seat in", %{conn: conn} do
+  test "the rail lists only the athanor you own", %{conn: conn} do
     alice = person()
     carol = test_user()
     conn = log_in_user(conn, alice)
     theirs = Sanctum.Test.People.athanor!(test_user().user_id)
-    # Carol shares nothing with Alice: her only seat is in her own athanor.
+    # Carol shares nothing with Alice: her only athanor is her own.
     _carol_conn = log_in_user(build_conn(), carol)
 
     {view, _html} = mount_chat(conn)
@@ -178,36 +178,6 @@ defmodule PrismWeb.ChatLiveTest do
     refute theirs.id in Enum.map(athanors, & &1.athanor.id)
     refute has_element?(view, "#athanor-" <> theirs.id)
     refute carol.user_id in Enum.map(people, & &1.user_id)
-
-    Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "a seat the store cannot read says try again shortly, never no athanor or not a member",
-       %{conn: conn} do
-    # The context the page holds stays fresh for the whole test, so the
-    # guard lets each action through to the focus it asks for: what is
-    # checked is the page's own answer to an outage, not the guard's.
-    ttl = Application.get_env(:sanctum, :caller_memo_ttl_ms)
-    Application.put_env(:sanctum, :caller_memo_ttl_ms, 600_000)
-
-    on_exit(fn ->
-      if ttl,
-        do: Application.put_env(:sanctum, :caller_memo_ttl_ms, ttl),
-        else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
-    end)
-
-    alice = person()
-    conn = log_in_user(conn, alice)
-    {view, _html} = mount_chat(conn)
-
-    # The seat read fails; the athanor listing, which selects no membership
-    # column, still answers.
-    Arca.Repo.query!("ALTER TABLE memberships DROP COLUMN added_by")
-
-    # No athanor named: the default's seat cannot be read.
-    html = render_patch(view, PrismWeb.ChatLive.chat_path(nil))
-    assert html =~ "That athanor cannot be opened just now. Try again shortly."
-    refute html =~ "Your session could not be checked"
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -312,7 +282,7 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a thread opens only in its own athanor, and only for a person seated there",
+  test "a thread opens only in its own athanor, and only for that athanor's person",
        %{conn: conn} do
     alice = person()
     bob = test_user()
@@ -347,8 +317,8 @@ defmodule PrismWeb.ChatLiveTest do
     assert athanor.id == athanor().id
     refute open && open.id == thread.id
 
-    # A person with no seat in Bob's athanor cannot address it at all: the
-    # chat leaves for the default athanor.
+    # A person who is not Bob cannot address his athanor at all: the chat
+    # leaves for the default athanor.
     assert {:error, {:live_redirect, %{to: "/chat"}}} =
              live(alice_conn, chat_path(theirs, thread.id))
 

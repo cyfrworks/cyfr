@@ -1830,12 +1830,6 @@ defmodule Arca.FileOffersLockOrderTest do
                 created_by: "system"
               })
 
-            {:ok, _} =
-              Arca.Members.seat(Prima.Actor.in_athanor(athanor.id), %{
-                user_id: who.id,
-                added_by: "test"
-              })
-
             athanor
           end
 
@@ -2044,8 +2038,8 @@ defmodule Arca.FileOffersLockOrderTest do
        %{home: home, sender: sender, recipient_id: recipient_id} do
     # One row: there is no order among the offer's rows to get wrong. The
     # deny takes the recipient's offers, and the purge erases the sender's
-    # athanor's offers before its seats; neither waits on the other across
-    # a lock the other holds.
+    # athanor's offers; neither waits on the other across a lock the other
+    # holds.
     offer_id = small_offer!(sender, recipient_id, ~w(x), "one")
     assert {:ok, %{ended_offer_ids: [^offer_id]}} = unboxed(fn -> deny!(sender.user_id) end)
     deny = fn -> deny!(recipient_id) end
@@ -2065,7 +2059,7 @@ defmodule Arca.FileOffersLockOrderTest do
       end
 
     assert {:ok, %{ended_offer_ids: []}} = denied
-    assert {:ok, %{"file_offers" => 1, "memberships" => _}} = purged
+    assert {:ok, %{"file_offers" => 1}} = purged
   end
 
   # Three files the sender lists last-first, behind a few thousand other

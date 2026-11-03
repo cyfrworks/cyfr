@@ -26,7 +26,6 @@ defmodule Aqua.RunnerRecoveryTest do
   alias Aqua.{Runner, Tape}
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.Bootstrap
-  alias Sanctum.Tenancy.Members
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -56,9 +55,9 @@ defmodule Aqua.RunnerRecoveryTest do
     # The runners run under the paths restored above.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
+    # The turns are a person's, in their own athanor.
     {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
-    ctx = %{ctx | origin: :interactive}
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: ctx.athanor_id)
+    ctx = %{ctx | origin: :interactive, athanor_id: Sanctum.Test.People.athanor!(user).id}
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

@@ -74,7 +74,7 @@ defmodule Sanctum.TestContext do
   @doc """
   Record `athanor` provisioned and forget any failure on its row, as a
   settled fill writes it (`Sanctum.Provisioning`), with no claim behind
-  it: a fixture's, never a server's. Members' open views hear of it.
+  it: a fixture's, never a server's. Its person's open views hear of it.
   """
   def mark_provisioned(%{id: id}) do
     now = DateTime.utc_now()
@@ -93,33 +93,23 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Seat `user_id` as a platform admin with no admission behind it: a
-  fixture's operator, its row written straight into the sandbox. The
-  product's one grant is the installation's first person's
-  (`Sanctum.Newcomer`, `Sanctum.Test.People.first!/1`). Idempotent:
-  answers the row that stands.
+  Mark the person `user_id` the platform administrator with no admission
+  behind it: a fixture's operator, the mark written straight onto their
+  row in the sandbox. The product's one mark is the installation's first
+  person's (`Sanctum.Newcomer`, `Sanctum.Test.People.first!/1`).
+  Idempotent: answers the person's row as it stands.
   """
   def ensure_platform(user_id) when is_binary(user_id) do
-    case Sanctum.Tenancy.Members.platform_seat(user_id) do
-      {:ok, row} ->
-        {:ok, row}
+    require Ecto.Query
 
-      :none ->
-        now = DateTime.utc_now()
+    Arca.Repo.update_all(
+      Ecto.Query.from(u in Arca.Schemas.User,
+        where: u.id == ^user_id and is_nil(u.platform_admin_at)
+      ),
+      set: [platform_admin_at: DateTime.utc_now()]
+    )
 
-        %Arca.Schemas.Membership{}
-        |> Arca.Schemas.Membership.changeset(%{
-          id: Prima.UUID7.generate_id("mem"),
-          user_id: user_id,
-          scope: "platform",
-          status: "active",
-          created_at: now,
-          updated_at: now
-        })
-        |> Arca.Repo.insert!()
-        |> Arca.Data.project()
-        |> then(&{:ok, &1})
-    end
+    Sanctum.Tenancy.Users.get(user_id)
   end
 
   @doc """
@@ -135,9 +125,6 @@ defmodule Sanctum.TestContext do
   def running_pids(request_id) do
     for {^request_id, pid} <- :ets.lookup(Sanctum.RunningTasks, request_id), do: pid
   end
-
-  @doc "The membership row `id` names, as the server reads it."
-  def membership(id), do: Arca.Members.get(Prima.Actor.system(), id)
 
   @doc """
   Copy every shipped unit the athanor lacks into `athanor_id` — the
@@ -648,8 +635,8 @@ defmodule Sanctum.TestContext do
   end
 
   # `passkey!/1` without the raise: `{:error, {:no_standing, refusal}}`
-  # when the person cannot register one here (denied, or without the seat
-  # the registration is asked in), `{:error, other}` for anything else.
+  # when the person cannot register one here (denied, or without an
+  # athanor of their own), `{:error, other}` for anything else.
   @standing_refusals [:not_standing, :unauthenticated, :denied, :not_member]
   defp passkey(user_id) do
     authenticator = Sanctum.TestContext.Authenticator.for_person(user_id)
@@ -692,7 +679,7 @@ defmodule Sanctum.TestContext do
 
   # The local first-method rule, on a session focused nowhere: a passkey is
   # the person's, and the write rechecks the session and the person alone,
-  # whatever seat a fixture's person holds or lacks.
+  # whatever athanor a fixture's person holds or lacks.
   defp first_passkey(user_id, authenticator) do
     session = %{session!(user_id) | athanor_id: nil}
 
@@ -742,25 +729,12 @@ defmodule Sanctum.TestContext do
     end
   end
 
-  # An athanor the person has standing in, where the registration can be
-  # asked: their personal athanor when they hold a seat there (a fixture
-  # may have made the athanor by hand, without one), otherwise any
-  # athanor they sit in. A person who sits in none has no standing.
+  # The athanor the person owns, where the registration can be asked. A
+  # person who owns none has no standing.
   defp own_athanor(user_id) do
-    with {:ok, rows} <- Sanctum.Tenancy.Members.list_by_user(user_id) do
-      seats = for %{scope: "athanor", athanor_id: id} <- rows, is_binary(id), do: id
-
-      personal =
-        case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
-          {:ok, id} -> id
-          :none -> nil
-        end
-
-      cond do
-        personal in seats -> {:ok, personal}
-        seats != [] -> {:ok, hd(seats)}
-        true -> {:error, :not_standing}
-      end
+    case Sanctum.Tenancy.Athanors.get_by_owner(user_id) do
+      {:ok, %{id: id}} -> {:ok, id}
+      {:error, _none} -> {:error, :not_standing}
     end
   end
 
@@ -949,10 +923,10 @@ defmodule Sanctum.TestContext do
 
   @doc """
   The context as an issuer: its identity signed in (`person!/2`) unless it
-  already names a person, the test athanor's row present when it works
-  there, the person seated in the athanor it works in, and the binding an
-  admitted sign-in carries (`t:Sanctum.Context.credential_binding/0`,
-  `source_kind: :identity`, focused through that seat) stamped from
+  already names a person — and then focused on that person's own athanor,
+  since a credential is issued only into the person's own — the test
+  athanor's row present when it works there, and the binding an admitted sign-in carries
+  (`t:Sanctum.Context.credential_binding/0`, `source_kind: :identity`) stamped from
   `snapshot!/1` — the suite's one hand-bound issuer, for the tests that
   issue through a tool rather than by calling the issuer.
   """
@@ -960,7 +934,7 @@ defmodule Sanctum.TestContext do
     ctx =
       if Prima.PersonId.person?(ctx.user_id),
         do: ctx,
-        else: ctx |> person!(attrs) |> elem(0)
+        else: own(person!(ctx, attrs))
 
     if ctx.athanor_id == @athanor_id, do: athanor!()
     snapshot = snapshot!(ctx)
@@ -970,21 +944,14 @@ defmodule Sanctum.TestContext do
       | credential_binding: %{
           source_kind: :identity,
           source_id: nil,
-          focus_basis: seat!(ctx),
           user_generation: snapshot.user_generation,
           athanor_generation: snapshot.athanor_generation
         }
     }
   end
 
-  defp seat!(%Context{athanor_id: nil}), do: nil
-
-  defp seat!(%Context{user_id: user_id, athanor_id: athanor_id}) do
-    {:ok, seat} =
-      Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor_id)
-
-    seat.id
-  end
+  defp own({%Context{} = ctx, user}),
+    do: %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
   @doc """
   Build a platform-scope test Context through the one sanctioned

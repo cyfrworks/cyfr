@@ -29,10 +29,10 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
   import Ecto.Query, only: [from: 2]
 
   alias Arca.PlatformSettings, as: Store
-  alias Arca.Schemas.{Athanor, ExternalIdentity, Membership, User}
+  alias Arca.Schemas.{Athanor, ExternalIdentity, User}
   alias Arca.Test.{Adapter, LockWait}
   alias Ecto.Adapters.SQL.Sandbox
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   @key "max_athanors"
   @racers 8
@@ -286,15 +286,14 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end)
   end
 
-  # A person with their own athanor and a seat in it, as sign-in leaves
-  # them, then denied, which archives the athanor.
+  # A person with their own athanor, as sign-in leaves them, then denied,
+  # which archives the athanor.
   defp denied_owner!(run, i) do
     user = person!(run, i)
 
     unboxed(fn ->
       {:ok, own} = Athanors.create(personal(user))
       {:ok, user} = Users.set_personal_athanor(user, own.id)
-      {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: own.id, added_by: "system")
       {:ok, denied} = Users.deny(user)
       {denied, own}
     end)
@@ -311,10 +310,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
           select: a.id
         )
       )
-
-    Arca.Repo.delete_all(
-      from(m in Membership, where: m.user_id in ^users or m.athanor_id in ^athanors)
-    )
 
     Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.user_id in ^users))
     Arca.Repo.delete_all(from(u in User, where: u.id in ^users))

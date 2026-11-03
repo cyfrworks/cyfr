@@ -96,7 +96,7 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :sanctum, :notify] => %{
       consumers: [:bridge],
-      note: "the tray fan-in: what an athanor's members, or the operator, see happened"
+      note: "the tray fan-in: what an athanor's person, or the operator, sees happened"
     },
     [:cyfr, :sanctum, :caller, :invalidated] => %{
       consumers: [:bridge],
@@ -119,10 +119,6 @@ defmodule Cyfr.Telemetry.Catalog do
       note:
         "a person's frame credential was suspended or revoked; a stream held open " <>
           "under it ends at once on every server"
-    },
-    [:cyfr, :sanctum, :membership, :changed] => %{
-      consumers: [:bridge],
-      note: "which athanors a person may now reach"
     },
     [:cyfr, :sanctum, :shared_thread, :changed] => %{
       consumers: [:bridge],

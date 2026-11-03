@@ -98,7 +98,7 @@
     {"why": "a runner's wire answer, already rendered on the other side: its message passed through", "reason": {"map": {"type": "denied", "message": "Not consented"}}, "sentence": "Not consented"},
     {"why": "a bare sentence renders as its own words", "reason": "already a sentence", "sentence": "already a sentence"},
     {"why": "a credential that was revoked", "class": "unauthenticated", "reason": {"atom": "revoked"}, "sentence": "The presented credential has been revoked"},
-    {"why": "an actor outside the athanor", "class": "forbidden", "reason": {"atom": "not_member"}, "sentence": "Only a member of the athanor can act in its threads"},
+    {"why": "an actor outside the athanor", "class": "forbidden", "reason": {"atom": "not_member"}, "sentence": "Only the athanor's person can act in its threads"},
     {"why": "a send whose run read a class its grant declares no flow of to the exit", "reason": {"tuple": [{"atom": "flow_not_declared"}, [{"atom": "filed"}, {"atom": "outside"}], "api.example.com"]}, "sentence": "This run read filed, outside material, and its grant declares no flow of it to api.example.com"},
     {"why": "a consent signal carrying its detail", "class": "consent_required", "reason": {"tuple": [{"atom": "consent_required"}, {"map": {"detail": "egress to api.example.com was added"}}]}, "sentence": "Consent required: egress to api.example.com was added"},
     {"why": "an athanor with no assistant", "class": "setup_required", "reason": {"atom": "no_agent"}, "sentence": "This athanor has no assistant to address — reset its AQUA tree"},

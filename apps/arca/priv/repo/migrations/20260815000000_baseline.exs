@@ -17,10 +17,9 @@ defmodule Arca.Repo.Migrations.Baseline do
   silently truncates on SQLite, so every composite is a two-column pair and
   its parent carries a unique `(id, athanor_id)` index created first.
 
-  The three nullable `athanor_id` columns are `memberships` (a platform
-  assignment has no athanor), `sessions` (a session exists before its
-  athanor is resolved) and `decision_logs` (a call refused before any
-  tenant was resolved is the host's record, not a tenant's).
+  The two nullable `athanor_id` columns are `sessions` (a session exists
+  before its athanor is resolved) and `decision_logs` (a call refused
+  before any tenant was resolved is the host's record, not a tenant's).
   `invitations` is no athanor's: an invitation is to this CYFR, and the
   shared thread it may seat its newcomer in is no athanor's either.
   `server_meta`, `registry_tokens`,
@@ -171,6 +170,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :first_seen_at, :utc_datetime_usec, null: false
       add :last_seen_at, :utc_datetime_usec, null: false
       add :denied_at, :utc_datetime_usec
+      # The platform administrator's mark: the installation's first person,
+      # written by their admission (setup, or a restore onto an empty
+      # installation) and by nothing else; a denial clears it.
+      add :platform_admin_at, :utc_datetime_usec
 
       add :security_generation, :bigint,
         null: false,
@@ -233,32 +236,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     checked(sqlite?, :server_allowlist, [allowlist_kind])
     create unique_index(:server_allowlist, [:kind, :value])
     create index(:server_allowlist, [:status])
-
-    # Presence-only assignments: a row means "user X is a member of athanor A",
-    # the person's seat in their own athanor (or, with no athanor, a platform
-    # admin). No roles.
-    create table(:memberships, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, :string, null: false
-      add :scope, :string, null: false, default: "athanor"
-      add :status, :string, null: false, default: "active"
-      add :added_by, :string
-      add :athanor_id, references(:athanors, type: :string, on_delete: :delete_all)
-      add :created_at, :utc_datetime_usec, null: false
-      add :updated_at, :utc_datetime_usec, null: false
-    end
-
-    create index(:memberships, [:user_id])
-    create index(:memberships, [:athanor_id])
-
-    # Raw SQL because the uniqueness has to treat a NULL as a value — a
-    # platform assignment carries no athanor — and two rows agreeing on all
-    # three are the same assignment. COALESCE in an index expression is not
-    # something `unique_index/3` can express.
-    execute """
-    CREATE UNIQUE INDEX memberships_assignment_index
-    ON memberships (scope, COALESCE(athanor_id, ''), user_id)
-    """
 
     invitation_ends = [
       %{
@@ -346,8 +323,8 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp identity do
-    # A session is a person's: what they may do is decided by their
-    # memberships, the athanor's consents and the policy, never by a list
+    # A session is a person's: what they may do is decided by their own
+    # athanor, its consents and the policy, never by a list
     # frozen at sign-in.
     create table(:sessions, primary_key: false) do
       add :id, :string, primary_key: true, null: false
@@ -1141,7 +1118,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     ]
 
     # A pairing invitation: the hash of its bearer secret (never the
-    # secret), the person and membership it was opened under, the client id
+    # secret), the person and athanor it was opened under, the client id
     # it reserves for the device that redeems it, its audience and expiry.
     # Consumed once with issuance; a closed invitation never reopens. It
     # names the digest of the key the new device showed before it opened,
@@ -1153,7 +1130,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       add :secret_hash, :string, null: false
       add :user_id, :string, null: false
-      add :membership_id, :string, null: false
       add :prospective_client_id, :string, null: false
       add :audience_home, :text, null: false
       add :expires_at, :utc_datetime_usec, null: false
@@ -2826,7 +2802,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # Threads
   # ==========================================================================
 
-  # A thread belongs to the athanor; every member sees the same thread.
+  # A thread belongs to the athanor, and so to its person.
   # Rows are the shared, durable record — no browser session owns a turn.
   defp threads do
     create table(:threads, primary_key: false) do

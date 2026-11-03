@@ -26,6 +26,11 @@ defmodule Arca.Schemas.User do
   changesets here never write them after birth: `update_changeset/2`
   refuses them as read-only, and `changeset/2` refuses a generation at
   birth, which is always the column's 1.
+
+  `platform_admin_at` is the platform administrator's mark: when the
+  installation's first person was made, written by that admission
+  (`Arca.Users.mint/4`) and cleared by their denial
+  (`Arca.SecurityTransitions`), never by a changeset here.
   """
 
   use Ecto.Schema
@@ -66,6 +71,7 @@ defmodule Arca.Schemas.User do
     field(:first_seen_at, :utc_datetime_usec)
     field(:last_seen_at, :utc_datetime_usec)
     field(:denied_at, :utc_datetime_usec)
+    field(:platform_admin_at, :utc_datetime_usec)
     field(:security_generation, :integer, default: 1)
     field(:created_at, :utc_datetime_usec)
     field(:updated_at, :utc_datetime_usec)
@@ -102,7 +108,7 @@ defmodule Arca.Schemas.User do
   def changeset(user, attrs) do
     user
     |> cast(attrs, @create_fields)
-    |> read_only(attrs, [:security_generation])
+    |> read_only(attrs, [:security_generation, :platform_admin_at])
     |> validated()
   end
 
@@ -114,7 +120,7 @@ defmodule Arca.Schemas.User do
   def update_changeset(user, attrs) do
     user
     |> cast(attrs, @create_fields -- [:admission | @standing_fields])
-    |> read_only(attrs, [:admission | @standing_fields])
+    |> read_only(attrs, [:admission, :platform_admin_at | @standing_fields])
     |> validated()
   end
 

@@ -16,7 +16,6 @@ defmodule Cyfr.Bus.Notify do
   alias Cyfr.Bus.Payload
 
   @kinds [
-    :member_changed,
     :athanor_changed,
     :allowlist_request,
     :allowlist_changed,
@@ -46,8 +45,7 @@ defmodule Cyfr.Bus.Notify do
   defstruct [:athanor_id, :kind, payload: %{}]
 
   @type kind ::
-          :member_changed
-          | :athanor_changed
+          :athanor_changed
           | :allowlist_request
           | :allowlist_changed
           | :execution_finished

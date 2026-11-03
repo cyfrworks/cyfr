@@ -335,16 +335,18 @@ defmodule Sanctum.ValidationCredentialTest do
         verified: true
       })
 
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: "ath_acme")
     user
   end
 
+  # A session of `user`, focused on their own athanor.
   defp session_ctx!(user) do
+    athanor_id = Sanctum.Test.People.athanor!(user).id
+
     ctx =
       Context.build(
         user_id: user.id,
         provider: "github",
-        athanor_id: "ath_acme",
+        athanor_id: athanor_id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -352,7 +354,7 @@ defmodule Sanctum.ValidationCredentialTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: "ath_acme")
+    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
     {session, %{established | client_ip: "127.0.0.1"}}
   end
 

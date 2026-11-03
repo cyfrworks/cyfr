@@ -523,9 +523,13 @@ defmodule Sanctum.DoorTest do
       refused = local!(50)
       session = session_for(refused)
       tenant = Sanctum.TestContext.local()
+      own = Sanctum.Test.People.athanor!(refused)
 
       {:ok, key} =
-        Sanctum.TestContext.create_key(%{tenant | user_id: refused.id}, %{name: "late"})
+        Sanctum.TestContext.create_key(
+          %{tenant | user_id: refused.id, athanor_id: own.id},
+          %{name: "late"}
+        )
 
       {:ok, _} = Store.deny("person", refused.id, "ops")
 

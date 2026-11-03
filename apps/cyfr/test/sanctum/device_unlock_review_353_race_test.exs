@@ -16,7 +16,6 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
     Session,
     PersonIdentity,
     IdentityAttempt,
-    Membership,
     Athanor
   }
 
@@ -50,7 +49,6 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
                   Session,
                   DeviceCertificate,
                   PairedClient,
-                  Membership,
                   IdentityAttempt,
                   PersonIdentity
                 ] do

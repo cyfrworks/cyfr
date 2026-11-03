@@ -11,26 +11,21 @@ defmodule Arca.SecurityTransitions.Issuance do
   retires it.
 
   `targets` names the rows: the person (`:user_id`), the athanor the
-  credential works in (`:athanor_id`, or nil), the membership that
-  authorized the caller's focus (`:membership_id`, or nil) and the
+  credential works in (`:athanor_id`, or nil), and the
   credential the caller holds (`:source`: `{:session, token_hash}`,
   `{:api_key, id}`, `{:device, client_id, expires_at}`, the door an
   admitted sign-in came through as `{:door, identity_key}`, or nil). They are
   locked in the order every standing transition takes
-  (`Arca.SecurityTransitions`): person, athanor, membership, then the
+  (`Arca.SecurityTransitions`): person, athanor, then the
   session, the key, or the paired client and its certificates; the
   credential `write` changes comes last.
 
-  The membership is read by its id as it is stored, whatever the caller
-  believed of it, and handed to `verify` with its `scope` and
-  `athanor_id`: a policy decides on those whether the row stands for the
-  issuance at all. A platform row names no athanor and seats nobody in
-  one, so it can stand only for an issuance that names no athanor
-  (`Sanctum.Issuance`); a caller that names an athanor and a platform row
-  is refused there, never seated by the row's id.
+  The athanor is handed to `verify` with its `owner_user_id`: a policy
+  decides on it whether the person stands there at all, since an athanor
+  is its owner's alone (`Sanctum.Issuance`).
 
   A paired device's source is its paired-client row, locked after the
-  person, the athanor and the membership, and the certificates of that
+  person and the athanor, and the certificates of that
   client that expire at `expires_at`, the expiry of the one the caller's
   context stands under, locked after it. So a revocation of the client or
   of its certificates that commits before the issuance reaches the
@@ -72,7 +67,6 @@ defmodule Arca.SecurityTransitions.Issuance do
     DeviceCertificate,
     DirectoryHead,
     ExternalIdentity,
-    Membership,
     PairedClient,
     PersonIdentity,
     Session,
@@ -97,7 +91,6 @@ defmodule Arca.SecurityTransitions.Issuance do
   @type targets :: %{
           required(:user_id) => String.t(),
           required(:athanor_id) => String.t() | nil,
-          required(:membership_id) => String.t() | nil,
           required(:source) => source()
         }
 
@@ -188,7 +181,6 @@ defmodule Arca.SecurityTransitions.Issuance do
     %{
       user: Projection.user(lock_user(user_id)),
       athanor: Projection.athanor(lock_athanor(Map.get(targets, :athanor_id))),
-      membership: Projection.membership(lock_membership(Map.get(targets, :membership_id))),
       source: lock_source(Map.get(targets, :source), user_id),
       now: Arca.ServerMetaStorage.now!()
     }
@@ -207,15 +199,6 @@ defmodule Arca.SecurityTransitions.Issuance do
   end
 
   defp lock_athanor(_athanor_id), do: nil
-
-  # arca:unscoped-ok the membership an issuing context was focused through, by its own id; a platform row names no athanor, and the policy holds the stored row's scope and athanor to the issuance's.
-  defp lock_membership(membership_id) when is_binary(membership_id) do
-    from(m in Membership, where: m.id == ^membership_id)
-    |> QueryHelpers.for_update()
-    |> Arca.Repo.one()
-  end
-
-  defp lock_membership(_membership_id), do: nil
 
   # arca:unscoped-ok a session addressed by its token hash, the credential the caller holds.
   defp lock_source({:session, token_hash}, _user_id) when is_binary(token_hash) do

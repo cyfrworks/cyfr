@@ -5,8 +5,7 @@ defmodule Arca.Schemas.Thread do
   @moduledoc """
   Ecto schema for the `threads` table (backs `Arca.ThreadStorage`).
 
-  A thread is the athanor's: every member reads the same thread and
-  any member may send the next message. Its transcript is its messages;
+  A thread is the athanor's, and so its person's. Its transcript is its messages;
   its turns are their own rows (`Arca.TurnStorage`). `agent` is
   the one the last turn addressed, `turn_seq` the cursor of the last
   human row a turn took up.

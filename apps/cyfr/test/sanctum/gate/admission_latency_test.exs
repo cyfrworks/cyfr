@@ -659,28 +659,22 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The fixture: an athanor of its own, a person seated in it, a live and a
-  # destroyed session, and a running chain's lineage and authority.
+  # The fixture: a person with their own athanor, a live and a destroyed
+  # session, and a running chain's lineage and authority.
   # ---------------------------------------------------------------------------
 
   defp fixture! do
     n = System.unique_integer([:positive])
 
-    {:ok, athanor} =
-      Sanctum.Tenancy.Athanors.create(%{
-        name: "Admission bench #{n}",
-        slug: "admission-bench-#{n}",
-        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-        created_by: "system"
-      })
-
-    ctx =
-      Sanctum.TestContext.issuer!(%{
+    {person, user} =
+      Sanctum.TestContext.person!(%{
         Sanctum.TestContext.local()
-        | athanor_id: athanor.id,
-          user_id: "local|local|admission-bench-#{n}",
+        | user_id: "local|local|admission-bench-#{n}",
           email: "admission-bench-#{n}@example.com"
       })
+
+    athanor = Sanctum.Test.People.athanor!(user)
+    ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: athanor.id})
 
     {:ok, session} = Sanctum.Session.create(ctx)
     {:ok, dead} = Sanctum.Session.create(ctx)

@@ -10,16 +10,16 @@ defmodule Sanctum.Newcomer do
 
   | Admission | Checked | Makes |
   |---|---|---|
-  | `{:setup, token}` | the token equals the configured setup token (constant-time); in the mint's transaction, under the installation claims' order row, no person exists and no restore holds the installation | a local person, their keys, their athanor, the platform grant |
+  | `{:setup, token}` | the token equals the configured setup token (constant-time); in the mint's transaction, under the installation claims' order row, no person exists and no restore holds the installation | a local person, their keys, their athanor, the platform administrator's mark |
   | `{:invitation, code}` | in the mint's transaction before the person's row, the code's invitation is unexpired, unredeemed and unrevoked, its issuer still an active person here at the standing they issued it under and, when it names a shared thread, still seated there with the thread active, or else still the platform administrator (`Sanctum.Invitations.redeemable/1`), then the mint rate and the athanor cap; redeemed by one conditional write after the person's row | a local person, their keys, their athanor, and the seat in the thread the invitation names, counted against the thread's people cap |
   | `:open` | the door's `*` admits; the mint rate and the athanor cap, in the mint's transaction before the person's row | a local person, their keys, their athanor |
   | `{:remote, remote}` | the door admits the identifier (`Sanctum.Door.sign_in_identifier/1`), or, with an invitation, no deny names it and the invitation is redeemable (`Sanctum.Invitations.redeemable_hash/1`); the head the CYFR sign-in verified is still fresh; in the mint's transaction before the person's row, the invitation again and the mint rate and the athanor cap | a remote person row with no keys, their athanor; pending identifier invitations activate; with an invitation, its redemption, its seat and the identifier's allow |
-  | `{:restore, restore}` | the restore's installation claim, in the mint's transaction (`Arca.InstallationClaims`) | the restored person, their athanor, the platform grant |
+  | `{:restore, restore}` | the restore's installation claim, in the mint's transaction (`Arca.InstallationClaims`) | the restored person, their athanor, the platform administrator's mark |
 
   The installation's first person is its platform administrator: the mint
-  that writes them writes the grant, under the order row and the member
-  slot (`Arca.Users.mint/4`), and no other path grants it; the grant is
-  audited once it commits (`[:cyfr, :sanctum, :tenancy,
+  that writes them writes the mark on their row (`users.platform_admin_at`),
+  under the order row and the member slot (`Arca.Users.mint/4`), and no
+  other path writes it; the mark is audited once it commits (`[:cyfr, :sanctum, :tenancy,
   :platform_admin_bootstrap]`). Only setup and a restore make the first
   person; any other admission onto an empty installation is refused
   `:not_set_up`.

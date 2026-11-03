@@ -50,16 +50,18 @@ defmodule Sanctum.TinctureAuthTest do
         verified: true
       })
 
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: "ath_acme")
     user
   end
 
+  # A session of `user`, focused on their own athanor.
   defp session_ctx!(user) do
+    athanor_id = Sanctum.Test.People.athanor!(user).id
+
     ctx =
       Context.build(
         user_id: user.id,
         provider: "github",
-        athanor_id: "ath_acme",
+        athanor_id: athanor_id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -67,7 +69,7 @@ defmodule Sanctum.TinctureAuthTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: "ath_acme")
+    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
     {session, %{established | client_ip: "127.0.0.1"}}
   end
 
@@ -114,7 +116,7 @@ defmodule Sanctum.TinctureAuthTest do
                TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1")
 
       assert opened.user_id == ctx.user_id
-      assert opened.athanor_id == "ath_acme"
+      assert opened.athanor_id == ctx.athanor_id
       assert opened.version_digest == @digest
       assert opened.expires_at == expires_at
       assert opened.remaining_s > 1_800 and opened.remaining_s <= 3_600
@@ -202,6 +204,7 @@ defmodule Sanctum.TinctureAuthTest do
     test "binds the person, the version, the grant revision and the frame, under its own deadline",
          %{source: ctx} do
       frame = frame_id()
+      athanor_id = ctx.athanor_id
 
       assert {:ok, %{credential: bearer, id: id, deadline: deadline}} =
                TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 4, frame)
@@ -215,7 +218,7 @@ defmodule Sanctum.TinctureAuthTest do
       assert %{
                id: ^id,
                frame_id: ^frame,
-               athanor_id: "ath_acme",
+               athanor_id: ^athanor_id,
                reference: @tincture,
                version_digest: @digest,
                grant_revision: 4,
@@ -309,9 +312,6 @@ defmodule Sanctum.TinctureAuthTest do
           verified: true
         })
 
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(other.id, scope: "athanor", athanor_id: "ath_acme")
-
       {_session, theirs} = session_ctx!(other)
 
       assert {:error, :not_found} = TinctureAuth.suspend_frame(theirs, id)
@@ -380,7 +380,7 @@ defmodule Sanctum.TinctureAuthTest do
                mode: :live
              }
 
-      assert {framed.user_id, framed.athanor_id} == {ctx.user_id, "ath_acme"}
+      assert {framed.user_id, framed.athanor_id} == {ctx.user_id, ctx.athanor_id}
       assert framed.auth_method == :tincture
       assert framed.authenticated
       assert framed.credential_deadline == deadline
@@ -593,7 +593,7 @@ defmodule Sanctum.TinctureAuthTest do
 
       {:ok, swept} =
         Arca.FrameCredentials.delete_revoked_before(DateTime.add(DateTime.utc_now(), 60),
-          athanor_id: "ath_acme"
+          athanor_id: ctx.athanor_id
         )
 
       assert swept >= 1
@@ -697,9 +697,6 @@ defmodule Sanctum.TinctureAuthTest do
           email: "page-other@example.com",
           verified: true
         })
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(other.id, scope: "athanor", athanor_id: "ath_acme")
 
       {_session, theirs} = session_ctx!(other)
       {their_frame, _id} = opened!(theirs)

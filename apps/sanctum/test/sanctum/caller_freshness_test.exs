@@ -94,14 +94,6 @@ defmodule Sanctum.CallerFreshnessTest do
         set: [status: "denied"]
       )
 
-  defp drop_seat!(user_id, athanor_id) do
-    Arca.Repo.delete_all(
-      from(m in Arca.Schemas.Membership,
-        where: m.user_id == ^user_id and m.athanor_id == ^athanor_id
-      )
-    )
-  end
-
   # The identity read follows the stored-session reload and precedes the
   # focus check, outside the standing transaction. Hold that observable
   # boundary while a change commits; the supervised task stops before the
@@ -197,8 +189,7 @@ defmodule Sanctum.CallerFreshnessTest do
       assert fresh.user_id == user.id
       assert fresh.athanor_id == athanor.id
       assert fresh.session_token_hash == ctx.session_token_hash
-      assert %{source_kind: :session, focus_basis: basis} = fresh.credential_binding
-      assert is_binary(basis)
+      assert %{source_kind: :session} = fresh.credential_binding
       assert fresh.request_id == "req_held"
       assert fresh.client_ip == "203.0.113.9"
       assert DateTime.compare(fresh.validated_at, ctx.validated_at) == :gt
@@ -237,20 +228,12 @@ defmodule Sanctum.CallerFreshnessTest do
       assert {:error, :not_standing} = Caller.revalidate_session(ctx)
     end
 
-    test "a lost seat refuses the focus" do
-      %{ctx: ctx, user: user, athanor: athanor} = person!()
-
-      drop_seat!(user.id, athanor.id)
-
-      assert {:error, :not_member} = Caller.revalidate_session(ctx)
-    end
-
     test "a lost focus with unreadable session standing pauses revalidation" do
       %{ctx: ctx, athanor: athanor} = person!()
 
       assert {:error, :unavailable} =
                during_refocus(ctx, fn ->
-                 drop_seat!(ctx.user_id, athanor.id)
+                 archive_row!(athanor.id)
                  Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
                end)
     end

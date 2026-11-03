@@ -20,17 +20,20 @@ defmodule Sanctum.TenantScopeSSOTTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx =
+    # A person resolved into their own athanor, the one they issue in.
+    {person, user} =
       Context.build(
         user_id: "github|https://github.com|s1-u",
         namespace: "ns",
-        athanor_id: "ath_acme",
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
-      |> Sanctum.TestContext.issuer!()
+      |> Sanctum.TestContext.person!()
+
+    own = Sanctum.Test.People.athanor!(user)
+    ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
 
     # An authenticated context that has not resolved an athanor yet (the
     # transient pre-resolution auth state) — the shape the tenant gate exists
@@ -109,7 +112,7 @@ defmodule Sanctum.TenantScopeSSOTTest do
       base = from(k in Arca.Schemas.ApiKey)
 
       scoped = Arca.QueryHelpers.where_tenant(base, Context.actor(ctx))
-      assert inspect(scoped) =~ "athanor_id == ^\"ath_acme\""
+      assert inspect(scoped) =~ "athanor_id == ^#{inspect(ctx.athanor_id)}"
 
       assert_raise ArgumentError, fn ->
         Arca.QueryHelpers.where_tenant(base, Context.actor(unresolved))
@@ -118,7 +121,7 @@ defmodule Sanctum.TenantScopeSSOTTest do
 
     test "tenant_segments/1 is the same athanor, and refuses the unresolved context",
          %{ctx: ctx, unresolved: unresolved} do
-      assert Arca.Storage.tenant_segments(Sanctum.Context.actor(ctx)) == ["ath_acme"]
+      assert Arca.Storage.tenant_segments(Sanctum.Context.actor(ctx)) == [ctx.athanor_id]
 
       assert_raise ArgumentError, fn ->
         Arca.Storage.tenant_segments(Context.actor(unresolved))

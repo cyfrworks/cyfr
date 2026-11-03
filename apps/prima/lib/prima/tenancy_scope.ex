@@ -8,8 +8,8 @@ defmodule Prima.TenancyScope do
   A scope answers which tenant a caller acts in: `athanor` names one
   athanor, `platform` names none and is the server's own operator scope,
   which reads across tenants. Two sides agree on the list — the identity
-  domain converts and validates against it, the stored membership row is
-  held to it — so it is declared here and read from here.
+  domain converts and validates against it, and the actor carries it — so
+  it is declared here and read from here.
 
   One fact, one home: `t:t/0` is the scope an actor carries
   (`t:Prima.Actor.scope/0` is this type), `values/0` the strings a stored

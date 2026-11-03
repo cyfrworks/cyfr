@@ -10,9 +10,9 @@ defmodule Sanctum.Consent.AuthzTest do
   or a key revoked grants nothing. A paired device is an interactive
   caller: it previews and grants as its person's session does, while its
   certificate's deadline holds, its paired client is active and its
-  person is seated. A paired client is the device channel's alone: a
-  context that names one without being the channel's, or the channel's
-  without its client, is refused. Tincture sessions, the guest plane and
+  person and their athanor stand. A paired client is the device
+  channel's alone: a context that names one without being the channel's,
+  or the channel's without its client, is refused. Tincture sessions, the guest plane and
   key overrides stay refused. No client holds a rank.
 
   `confirm/3`, `check/3` and `consume/2` decide a sensitive change: a
@@ -70,7 +70,7 @@ defmodule Sanctum.Consent.AuthzTest do
     :ok
   end
 
-  # A person seated in their own athanor, and the context a session
+  # A person with their own athanor, and the context a session
   # established for them there.
   defp standing_session(_tags) do
     n = System.unique_integer([:positive])
@@ -369,7 +369,7 @@ defmodule Sanctum.Consent.AuthzTest do
   describe "a paired device's change consumed in its write's transaction" do
     setup [:checkout, :standing_session, :paired_device]
 
-    test "holds the device there: the person, the athanor, the seat, the client and its certificates locked before the record",
+    test "holds the device there: the person, the athanor, the client and its certificates locked before the record",
          %{device_ctx: device_ctx} do
       confirmed = Sanctum.TestContext.confirmed(device_ctx, :credential_entry, change())
 
@@ -382,7 +382,7 @@ defmodule Sanctum.Consent.AuthzTest do
         Enum.split_while(statements, &(elem(&1, 0) != "pending_confirmations"))
 
       held =
-        run_of(before_record, ~w(users athanors memberships paired_clients device_certificates))
+        run_of(before_record, ~w(users athanors paired_clients device_certificates))
 
       assert held, "no hold of the device before its record: #{inspect(statements)}"
 
@@ -1360,7 +1360,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
     Athanor,
     DeviceCertificate,
     ExternalIdentity,
-    Membership,
     OauthProviderCredential,
     PairedClient,
     PendingConfirmation,
@@ -1395,8 +1394,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
         Arca.Repo.delete_all(where(OauthProviderCredential, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, user_id: ^user_id))
         Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
@@ -1422,7 +1419,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
               client: client,
               user: standing.user,
               athanor: standing.athanor,
-              seat: standing.seat,
               platform_admin: standing.platform_admin
             },
             []
@@ -1466,9 +1462,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
         slug: "consume-race-#{n}",
         created_by: user_id
       })
-
-    {:ok, _} =
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
   end
 
   # The certificate the device stands under. Establishing a context checks

@@ -9,11 +9,11 @@ defmodule Sanctum.DeviceCertsTest do
   stores, the certificate only locating it. On every request the
   certificate is held to the person's current live key, its expiry
   strictly on this home's clock, its not-before within the clock
-  tolerance, and the paired client and its person's seat, read anew each
-  time. An attempt that proves the key a client's row stores counts
-  against that client's own budget; any other counts against its address
-  and the installation, so a flood naming a client never spends the
-  client's. Every member counts every bound.
+  tolerance, and the paired client and its person's standing in their own
+  athanor, read anew each time. An attempt that proves the key a client's
+  row stores counts against that client's own budget; any other counts
+  against its address and the installation, so a flood naming a client
+  never spends the client's. Every member counts every bound.
 
   A client a declared restore suspended stands for nothing: no connect,
   no request, no renewal, and its context confirms nothing, until its
@@ -58,16 +58,16 @@ defmodule Sanctum.DeviceCertsTest do
         else: Application.delete_env(:sanctum, :public_url)
     end)
 
-    seated!()
+    person!()
   end
 
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A person seated in their own athanor, and the context their session
+  # A person with their own athanor, and the context their session
   # establishes there.
-  defp seated! do
+  defp person! do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
@@ -265,7 +265,6 @@ defmodule Sanctum.DeviceCertsTest do
       client: client,
       user: standing.user,
       athanor: standing.athanor,
-      seat: standing.seat,
       platform_admin: standing.platform_admin
     }
   end
@@ -334,11 +333,11 @@ defmodule Sanctum.DeviceCertsTest do
 
       client_id = device.client_id
 
-      assert %{source_kind: :device, source_id: ^client_id, focus_basis: basis, identity: nil} =
-               ctx.credential_binding
+      assert %{source_kind: :device, source_id: ^client_id, identity: nil} =
+               binding = ctx.credential_binding
 
-      assert {:ok, %{athanor_id: athanor_id}} = Sanctum.TestContext.membership(basis)
-      assert athanor_id == athanor.id
+      refute Map.has_key?(binding, :focus_basis)
+      assert binding.athanor_generation == athanor.security_generation
     end
 
     test "a proof under a key the certificate does not name is refused", %{
@@ -882,7 +881,7 @@ defmodule Sanctum.DeviceCertsTest do
       session_ctx: session_ctx
     } do
       device = pair!(session_ctx)
-      other = seated!()
+      other = person!()
       {:ok, ctx} = connect(device)
       {_key, forged_private} = :crypto.generate_key(:eddsa, :ed25519)
 
@@ -1046,7 +1045,7 @@ defmodule Sanctum.DeviceCertsTest do
       device = pair!(session_ctx)
       other = pair!(session_ctx)
       credential = device_credential(device)
-      stranger = seated!()
+      stranger = person!()
       {other_key, _} = :crypto.generate_key(:eddsa, :ed25519)
 
       for {what, changed} <- [
@@ -1058,11 +1057,7 @@ defmodule Sanctum.DeviceCertsTest do
             another_person: %{credential | user: stranger.user},
             archived_athanor: put_in(credential.athanor.status, "archived"),
             another_athanor: %{credential | athanor: stranger.athanor},
-            another_seat: %{
-              credential
-              | seat: %{credential.seat | athanor_id: stranger.athanor.id}
-            },
-            ended_seat: put_in(credential.seat.status, "removed"),
+            another_owner: put_in(credential.athanor.owner_user_id, stranger.user.id),
             an_identity_row_on_a_local_certificate:
               Map.put(credential, :identity, %{
                 user_id: credential.client.user_id,
@@ -1620,7 +1615,6 @@ defmodule Sanctum.DeviceCertsTest do
         identity: Map.take(row, [:user_id, :provenance, :identifier]),
         user: standing.user,
         athanor: standing.athanor,
-        seat: standing.seat,
         platform_admin: standing.platform_admin
       }
 
@@ -1630,7 +1624,7 @@ defmodule Sanctum.DeviceCertsTest do
       assert {user_id, client_id} == {user.id, device.client_id}
 
       another = "per_" <> Prima.Digest.sha256_hex("another-#{System.unique_integer()}")
-      stranger = seated!()
+      stranger = person!()
 
       for {what, changed} <- [
             another_identifier: put_in(credential.identity.identifier, another),

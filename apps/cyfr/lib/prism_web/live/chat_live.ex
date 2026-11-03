@@ -32,8 +32,8 @@ defmodule PrismWeb.ChatLive do
   in view is announced (`PrismWeb.RoomFeed`) for the person's own AQUA
   beside the page.
 
-  The athanor is read once per change to the SET of athanors — a seat
-  gained or lost. A message on the open thread or a rename touches the one
+  The athanor is read once per change to the SET of athanors — one
+  archived or reopened. A message on the open thread or a rename touches the one
   row it concerns. The shared
   threads are read again on each change told to the person
   (`Cyfr.Bus.SharedThreadChanged`).
@@ -98,9 +98,9 @@ defmodule PrismWeb.ChatLive do
   def shared_path(thread_id) when is_binary(thread_id),
     do: "/chat?" <> URI.encode_query(s: thread_id)
 
-  # The address decides everything: which athanor (a member's own default
+  # The address decides everything: which athanor (the person's own
   # without `a`), then which thread. The athanor is entered through
-  # `Context.focus/2` — membership checked, an archived one refused — and
+  # `Context.focus/2` — its owner checked, an archived one refused — and
   # handed to `CyfrWeb.ContextGuard`, which keeps it current: that focused
   # context is what the lists and the pane run under.
   #
@@ -124,8 +124,8 @@ defmodule PrismWeb.ChatLive do
          {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focus) do
       open_athanor(refocused, athanor, athanors, params["c"])
     else
-      {:error, :no_seat} ->
-        # No seat anywhere: nothing to open, and nothing to patch to.
+      {:error, :no_athanor} ->
+        # No athanor of their own: nothing to open, and nothing to patch to.
         {:noreply,
          socket
          |> assign(:loading?, false)
@@ -233,12 +233,11 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  # No athanor named: the session's default, or — when that seat is gone —
-  # the first athanor the person still holds one in. Never a patch back to
-  # the default, which is how a lost seat would loop. A store that cannot
-  # answer stops the walk as unavailable: it says nothing about a seat,
-  # and read as "no athanor" it would show a person with seats an empty
-  # page.
+  # No athanor named: the session's default, or — when that one no longer
+  # opens — the person's own. Never a patch back to the default, which is
+  # how a lost athanor would loop. A store that cannot answer stops the
+  # walk as unavailable: read as "no athanor" it would show a person with
+  # an athanor an empty page.
   defp focus_on(ctx, default_id, route, athanors) when route in [nil, ""] do
     default =
       case default_id && Athanors.get(default_id) do
@@ -246,7 +245,7 @@ defmodule PrismWeb.ChatLive do
         _ -> []
       end
 
-    Enum.reduce_while(default ++ athanors, {:error, :no_seat}, fn athanor, none ->
+    Enum.reduce_while(default ++ athanors, {:error, :no_athanor}, fn athanor, none ->
       case Sanctum.Context.focus(ctx, athanor) do
         {:ok, focus} -> {:halt, {:ok, focus, athanor}}
         {:error, :unavailable} = unavailable -> {:halt, unavailable}
@@ -255,10 +254,9 @@ defmodule PrismWeb.ChatLive do
     end)
   end
 
-  # `Context.focus/2` decides who may open the athanor named in the URL: a
-  # member, and no one else — a platform admin with no seat there is
-  # refused like anyone, so a URL naming another person's athanor opens
-  # nothing for them.
+  # `Context.focus/2` decides who may open the athanor named in the URL: its
+  # owner, and no one else — a platform admin is refused like anyone, so a
+  # URL naming another person's athanor opens nothing for them.
   defp focus_on(ctx, _default_id, route, _athanors) when is_binary(route) do
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, focus} <- Sanctum.Context.focus(ctx, athanor) do
@@ -372,8 +370,8 @@ defmodule PrismWeb.ChatLive do
   # The rail
   # ============================================================================
 
-  # Rebuilt only when the set of athanors differs from what is listed — a
-  # seat gained or lost; otherwise the athanor in view has its row refreshed
+  # Rebuilt only when the set of athanors differs from what is listed — one
+  # archived or reopened; otherwise the athanor in view has its row refreshed
   # from the lists `open/2` just read, and nothing else is queried.
   defp sync_rail(socket, athanors) do
     ids = MapSet.new(athanors, & &1.id)
@@ -586,7 +584,7 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  # A seeding that failed is retried by any member; the row says how it went.
+  # A seeding that failed is retried by the person; the row says how it went.
   def handle_event("provision", _params, socket) do
     case call_tool(focused(socket), "athanor/provision", %{}) do
       {:ok, _} ->
@@ -610,7 +608,7 @@ defmodule PrismWeb.ChatLive do
   end
 
   # The open thread may have gone between opening the picker and choosing
-  # a thread — deleted by another member — so it is checked, not assumed.
+  # a thread — deleted in another tab — so it is checked, not assumed.
   def handle_event("aloud_post", _params, %{assigns: %{thread: nil}} = socket) do
     {:noreply,
      socket
@@ -748,30 +746,6 @@ defmodule PrismWeb.ChatLive do
       _ ->
         {:noreply, socket}
     end
-  end
-
-  # Someone joined or left the athanor in view: the people list is theirs.
-  def handle_info(%Cyfr.Bus.Notify{kind: :member_changed}, socket) do
-    {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
-  end
-
-  # This person's own seat changed — a seat withdrawn. The guard (`CyfrWeb.ContextGuard`)
-  # revalidates the page's context first and hands the message on: a seat
-  # lost under the athanor this page has open ends the page there — nothing
-  # else keeps anyone in it, an operator's capability included — so it goes
-  # back to the default. Anything else re-reads the set of athanors.
-  def handle_info(
-        %Cyfr.Bus.Membership{athanor_id: id, change: :left},
-        %{assigns: %{athanor: %{id: id}}} = socket
-      ) do
-    {:noreply,
-     socket
-     |> put_flash(:error, "You are no longer a member of that athanor.")
-     |> push_navigate(to: chat_path(nil))}
-  end
-
-  def handle_info(%Cyfr.Bus.Membership{}, socket) do
-    {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
   end
 
   # A shared thread of the person's changed: the rail reads them again, and
@@ -1064,7 +1038,7 @@ defmodule PrismWeb.ChatLive do
             <.tape_skeleton />
           <% @shared -> %>
             <%!-- A shared thread, as its own LiveView under the person's
-                  own seat: no athanor holds it. --%>
+                  seat in it: no athanor holds it. --%>
             {live_render(@socket, PrismWeb.SharedThreadLive,
               id: "shared-pane-" <> @shared.id,
               session: %{"thread_id" => @shared.id}

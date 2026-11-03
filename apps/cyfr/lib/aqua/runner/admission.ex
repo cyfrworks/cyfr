@@ -11,7 +11,7 @@ defmodule Aqua.Runner.Admission do
 
   alias Aqua.Roster
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   # One human line, in bytes: the one bound every sender passes through.
   @max_message_bytes 32 * 1024
@@ -38,7 +38,7 @@ defmodule Aqua.Runner.Admission do
     end
   end
 
-  @doc "The athanor is open and the caller is seated in it."
+  @doc "The athanor is open and the caller's own."
   @spec standing(Context.t(), String.t()) ::
           :ok | {:error, :archived | :not_member | :unavailable}
   def standing(%Context{user_id: user_id} = ctx, athanor_id) do
@@ -49,7 +49,7 @@ defmodule Aqua.Runner.Admission do
       not Athanors.active?(athanor_id) ->
         {:error, :archived}
 
-      not Members.member?(user_id, athanor_id) ->
+      not Users.own_athanor?(user_id, athanor_id) ->
         {:error, :not_member}
 
       true ->

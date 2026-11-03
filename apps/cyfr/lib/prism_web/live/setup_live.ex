@@ -22,7 +22,7 @@ defmodule PrismWeb.SetupLive do
   registration, with the name and the recovery secret and request id
   the browser drew, is the setup admission's credential
   (`Sanctum.Newcomer.admit/2` with `{:setup, token}`), which makes the
-  person, their keys, their athanor, the passkey, the platform grant and
+  person, their keys, their athanor, the passkey, the platform administrator's mark and
   their enrollment in one transaction. A cancelled ceremony sends
   nothing. Then screen 2 registers them at cyfr.run, shows their
   recovery code, and "I saved it" signs them in.

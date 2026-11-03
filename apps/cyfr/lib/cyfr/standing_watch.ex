@@ -11,7 +11,7 @@ defmodule Cyfr.StandingWatch do
   was established in — the status gates the next establish would run are
   exactly what a hit skips. Every session mutation that narrows what a
   live session may reach drops it: logout, a repointed session, a
-  revocation, a membership removal, an archived athanor.
+  revocation, an archived athanor.
 
   The drop is node-local, because the table is. The identity domain is
   below the host and announces rather than broadcasting
