@@ -10,6 +10,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -38,8 +39,11 @@ func screenProject(t *testing.T) *standIn {
 
 func screenCommandsIn(dir string, tail ...string) []string {
 	files := shellQuote([]string{filepath.Join(dir, screenDir)})
+	account, _ := user.Current()
 	return append([]string{
+		"{ ! getent group tss >/dev/null || usermod -aG tss " + shellQuote([]string{account.Username}) + "; }",
 		"install -m 0644 " + files + "/52cyfr-screen " + screenAptLine,
+		"install -D -m 0644 " + files + "/cyfr-screen-policy.json " + screenPolicy,
 		"install -m 0644 " + files + "/cyfr-screen.service " + screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
@@ -65,7 +69,7 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 	want := append([]string{
 		"apt-get update",
-		"apt-get install -y --no-install-recommends labwc wvkbd",
+		"apt-get install -y --no-install-recommends labwc wvkbd swayidle",
 		"deb=$(mktemp --suffix=.deb)",
 		"echo 'Downloading Chrome from Google (about 110 MB)'",
 		`curl -fL --progress-bar -o "$deb" ` + chromeDeb,
@@ -88,7 +92,7 @@ func TestScreenOnRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 
 	s.applied = nil
-	s.installed = []string{"labwc", "wvkbd", "google-chrome-stable"}
+	s.installed = []string{"labwc", "wvkbd", "swayidle", "google-chrome-stable"}
 	askInput = strings.NewReader("yes\n")
 	if err := screenOn(context.Background(), true, &out); err != nil {
 		t.Fatal(err)
@@ -175,16 +179,16 @@ func TestScreenOnDeclinedOrFailed(t *testing.T) {
 	}
 }
 
-// The files carry the address, the account and the directory; the token
-// stays in .env; the launcher can run; and tailnet access goes through the
-// proxy, local access does not.
+// The files name this program, the account and the directory; the token
+// stays in .env, which the shell reads itself; and the launcher can run.
 func TestScreenFilesAreFilledIn(t *testing.T) {
 	screenProject(t)
-	if err := writeScreenFiles(access.Head{Mode: access.ModeLocal, Port: 4321}, "/home/alice/cyfr", "alice"); err != nil {
+	if err := writeScreenFiles("/home/alice/cyfr", "alice"); err != nil {
 		t.Fatal(err)
 	}
+	self, _ := os.Executable()
 	launcher := read(t, filepath.Join(screenDir, "launcher.sh"))
-	if !strings.Contains(launcher, "http://localhost:4321/setup#") || !strings.Contains(launcher, "http://127.0.0.1:4321/") || strings.Contains(launcher, "socks5") || strings.Contains(launcher, "@PORT@") {
+	if !strings.Contains(launcher, "\n    "+self+" screen shell\n") || strings.Contains(launcher, "@") {
 		t.Errorf("launcher:\n%s", launcher)
 	}
 	info, err := os.Stat(filepath.Join(screenDir, "launcher.sh"))
@@ -197,9 +201,6 @@ func TestScreenFilesAreFilledIn(t *testing.T) {
 			t.Errorf("the unit lacks %q:\n%s", want, unit)
 		}
 	}
-	if got := read(t, filepath.Join(screenDir, "waiting.html")); !strings.Contains(got, "Run <code>cyfr up</code> in /home/alice/cyfr to start it.") {
-		t.Errorf("waiting page:\n%s", got)
-	}
 	entries, err := os.ReadDir(screenDir)
 	if err != nil {
 		t.Fatal(err)
@@ -208,14 +209,6 @@ func TestScreenFilesAreFilledIn(t *testing.T) {
 		if strings.Contains(read(t, filepath.Join(screenDir, e.Name())), "the-token") {
 			t.Errorf("%s holds the setup token", e.Name())
 		}
-	}
-
-	if err := writeScreenFiles(access.Head{Mode: access.ModeTailnet, Port: 4321, PublicURL: "https://m.t.ts.net"}, "/home/alice/cyfr", "alice"); err != nil {
-		t.Fatal(err)
-	}
-	launcher = read(t, filepath.Join(screenDir, "launcher.sh"))
-	if !strings.Contains(launcher, `set -- --proxy-server=socks5://127.0.0.1:1055 "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"`) || !strings.Contains(launcher, "https://m.t.ts.net/setup#") {
-		t.Errorf("tailnet launcher:\n%s", launcher)
 	}
 }
 
@@ -231,7 +224,7 @@ func TestScreenOffRunsTheCommandsThroughOneSudo(t *testing.T) {
 	}
 	want := []string{
 		"{ systemctl disable --now cyfr-screen || true; }",
-		"rm -f " + screenUnit + " " + screenAptLine,
+		"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
 		"systemctl daemon-reload",
 		"systemctl enable --now getty@tty1",
 	}
@@ -388,7 +381,7 @@ func TestAccessRewritesTheScreensFiles(t *testing.T) {
 		t.Chdir(dir)
 		s.addressChanges = []string{"Passkeys made at the old address no longer sign anyone in."}
 		if screen {
-			if err := writeScreenFiles(access.Head{Mode: access.ModeLocal, Port: 4000}, dir, "alice"); err != nil {
+			if err := writeScreenFiles(dir, "alice"); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -402,9 +395,8 @@ func TestAccessRewritesTheScreensFiles(t *testing.T) {
 			}
 			continue
 		}
-		launcher := read(t, filepath.Join(screenDir, "launcher.sh"))
-		if !strings.Contains(launcher, `"https://cyfr.example.com/setup#$token"`) || strings.Contains(launcher, "localhost:4000/setup") {
-			t.Errorf("the launcher does not open the new address:\n%s", launcher)
+		if launcher := read(t, filepath.Join(screenDir, "launcher.sh")); !strings.Contains(launcher, " screen shell\n") {
+			t.Errorf("the launcher was not rewritten:\n%s", launcher)
 		}
 	}
 }

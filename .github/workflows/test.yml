@@ -1998,7 +1998,9 @@ jobs:
         run: |
           set -uo pipefail
           paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus docker-entrypoint.sh .env.example .env.locus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md'
-          excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
+          # The passphrase word list is BIP-0039's English list, third-party
+          # data pinned by its SHA-256 (internal/holder), not CYFR's words.
+          excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/** :(exclude)apps/codex/internal/holder/bip39_english.txt'
           fail=0
           for p in \
             '\borg_id\b' \

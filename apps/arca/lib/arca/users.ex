@@ -239,8 +239,9 @@ defmodule Arca.Users do
       (`Arca.Schemas.User.admissions/0`), recorded on their row.
     * `restore:` — the installation claim a restore's mint names
       (`%{request_id: …, token_digest: …}`), never a caller's argument.
-    * `rp_id:` (required for `setup`) — the home's current WebAuthn RP ID,
-      the address at which a passkey of setup's person still works
+    * `rp_id:` and `home:` (required for `setup`) — the home's current
+      WebAuthn RP ID and home URL, the address at which a passkey or a
+      certified device of setup's person still works
       (`Arca.InstallationClaims.guard!/3`).
     * `verify:` — the higher owner's check (`ARCHITECTURE.md` §4.4), run
       inside the transaction after the installation guard and before any
@@ -265,7 +266,7 @@ defmodule Arca.Users do
   refuses everything but its restore (`:restore_reserved`); a restore is
   `:not_claimed` unless its claim is pending exactly as named, and
   `:not_empty` on a node that holds a person; a `setup` once its person
-  holds a method at `rp_id` (`Arca.InstallationClaims`) is `:setup_closed`. A
+  holds a method at that address (`Arca.InstallationClaims`) is `:setup_closed`. A
   `setup` on a node whose person setup made holds none mints nothing and
   answers `{:error, {:readmit, person}}`: that person is admitted again
   through `readmit/3`. A node whose boot installed no mode raises
@@ -307,7 +308,7 @@ defmodule Arca.Users do
 
   defp mint_guarded(actor, admission, user_attrs, identity_attrs, opts) do
     restore = Keyword.get(opts, :restore)
-    rp_id = if admission == "setup", do: Keyword.fetch!(opts, :rp_id)
+    here = if admission == "setup", do: here(opts)
     verify = Keyword.get(opts, :verify, fn -> :ok end)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
     user_attrs = user_attrs |> Map.new() |> Map.put(:admission, admission)
@@ -317,7 +318,7 @@ defmodule Arca.Users do
         identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
 
     Arca.Repo.owned("Arca.Users.mint", fn ->
-      case Arca.InstallationClaims.guard!(admission, restore, rp_id) do
+      case Arca.InstallationClaims.guard!(admission, restore, here) do
         {:readmit, %User{} = user} ->
           {:error, {:readmit, Arca.Data.project(user)}}
 
@@ -343,7 +344,7 @@ defmodule Arca.Users do
 
   @doc """
   Admit again the person `setup` made, `user_id`, while they hold no
-  method at `rp_id:` (required, the home's current RP ID): the
+  method at `rp_id:` and `home:` (required, the home's current address): the
   installation guard decides it again under the order row
   (`Arca.InstallationClaims.guard!/3`), as `mint/4` decided it, so a
   method registered since refuses `:setup_closed`. `also:` runs in that
@@ -355,11 +356,11 @@ defmodule Arca.Users do
           | {:error, :setup_closed | :restore_reserved | :not_owner | term()}
   def readmit(%Prima.Actor{scope: :platform}, user_id, opts)
       when is_binary(user_id) and is_list(opts) do
-    rp_id = Keyword.fetch!(opts, :rp_id)
+    here = here(opts)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
 
     Arca.Repo.owned("Arca.Users.readmit", fn ->
-      case Arca.InstallationClaims.guard!("setup", nil, rp_id) do
+      case Arca.InstallationClaims.guard!("setup", nil, here) do
         {:readmit, %User{id: ^user_id} = user} ->
           with :ok <- also_ran(also.(Arca.Data.project(user))), do: {:ok, user}
 
@@ -376,6 +377,10 @@ defmodule Arca.Users do
   end
 
   def readmit(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+
+  # The home's current address a setup names (`Arca.InstallationClaims`):
+  # its RP ID and its home URL, both required.
+  defp here(opts), do: %{rp_id: Keyword.fetch!(opts, :rp_id), home: Keyword.fetch!(opts, :home)}
 
   defp first_grant(:first, user_id), do: Arca.Members.grant_platform!(user_id)
   defp first_grant(:ok, _user_id), do: :ok

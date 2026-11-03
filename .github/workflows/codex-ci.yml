@@ -80,11 +80,27 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)"
 
+      # swtpm, the software TPM the chip holder's tests run against. On
+      # GitHub it is installed and CYFR_TEST_SWTPM_REQUIRED turns the chip
+      # tests' skip into a failure, so they run or fail the step; the commit
+      # gate's replay on a host without swtpm (GITHUB_ACTIONS unset) installs
+      # nothing and the chip tests skip, saying so.
+      - name: swtpm, the software TPM the chip holder's tests run against
+        run: |
+          if command -v swtpm >/dev/null; then exit 0; fi
+          if [ "${GITHUB_ACTIONS:-}" != true ]; then
+            echo "swtpm is not installed on this host: the chip holder's tests skip here"
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends swtpm
+
       - name: go test
         # -race, as the Makefile's local invocation runs it. The total
         # coverage goes to the job summary: it is reported, never a floor,
         # so only a failing test fails the step.
         run: |
+          if [ "${GITHUB_ACTIONS:-}" = true ]; then export CYFR_TEST_SWTPM_REQUIRED=1; fi
           go test ./... -race -coverprofile="$RUNNER_TEMP/cover.out"
           echo "apps/codex coverage: $(go tool cover -func "$RUNNER_TEMP/cover.out" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
 

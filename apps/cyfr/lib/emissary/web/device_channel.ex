@@ -124,6 +124,27 @@ defmodule Emissary.Web.DeviceChannel do
   again at each ping. The channel closes when the certificate it is
   bound to expires unrenewed, at that instant on this home's clock.
 
+  ## A protected device's sessions
+
+  A protected device (one whose key a local unlock guards,
+  `Sanctum.DeviceUnlock`) unlocks with the intent `session.unlock`, which
+  the gate decides like every intent. The channel keeps the session id
+  each answered unlock reserved. The device sends its standing report,
+  its `capabilities`, after its proof and every 30 seconds; each one it
+  sends, once the certificate and the client's standing are read again,
+  slides those sessions to 60 seconds past the database's clock, never
+  past the certificate it stands under (`Sanctum.DeviceUnlock.slide/2`).
+  Nothing else slides them: not the server's own ping, which a severed
+  connection still answers until the mount's read timeout closes it, and
+  no browser traffic. So a device that stops reporting leaves its
+  sessions to end within 60 seconds of its last report. When the channel
+  ends, closed by either side or refused, they end with it, with any
+  ticket not yet redeemed (`Sanctum.DeviceUnlock.closed/3`).
+
+  The report names the device's disks (`Prima.DeviceCert.Storage`): it is
+  held for 60 seconds for its person's devices list, and a report naming
+  two states for one volume is refused by its shape.
+
   ## Refusals
 
   Each refusal is one admission decision, recorded under the call id the
@@ -246,6 +267,8 @@ defmodule Emissary.Web.DeviceChannel do
       grant, the stream's name, its forwarder and its deadline's timer.
     * `standing` — whether the channel hears the person's standing
       announcements.
+    * `sessions` — the session ids this connection's unlocks reserved,
+      which each standing report slides and its end retires.
     * `closed` — true once a refusal closed the channel: nothing after it
       is recorded or acted on.
   """
@@ -268,6 +291,7 @@ defmodule Emissary.Web.DeviceChannel do
             }
           },
           standing: boolean(),
+          sessions: [String.t()],
           closed: boolean()
         }
 
@@ -296,6 +320,7 @@ defmodule Emissary.Web.DeviceChannel do
        call_id: nil,
        grants: %{},
        standing: false,
+       sessions: [],
        closed: false
      }}
   end
@@ -393,7 +418,13 @@ defmodule Emissary.Web.DeviceChannel do
 
   def handle_info(_message, state), do: {:ok, state}
 
+  # The channel's end, closed by either side or refused, ends the sessions
+  # its unlocks reserved and their unspent tickets.
   @impl true
+  def terminate(_reason, %{client: %Context{} = client, sessions: [_ | _] = sessions}) do
+    Sanctum.DeviceUnlock.closed(client.user_id, client.client_id, sessions)
+  end
+
   def terminate(_reason, _state), do: :ok
 
   # ---------------------------------------------------------------------------
@@ -438,9 +469,22 @@ defmodule Emissary.Web.DeviceChannel do
     do: refuse(state, :proof_missing)
 
   # Once a proof verified: each discrete intent, checked and then through
-  # the gate, and the renewal exchange under the certificate the client
-  # stands under.
+  # the gate, the renewal exchange under the certificate the client
+  # stands under, and a protected device's storage report.
   defp receive_message({:intent, intent}, state), do: admit(intent, state)
+
+  # The device's standing report: what it says of its disks, and the one
+  # thing that slides its sessions, once its standing is read again.
+  defp receive_message({:capabilities, %{capabilities: names}}, state) do
+    with :ok <- Sanctum.DeviceUnlock.report_storage(state.client, names),
+         {:ok, client} <- Sanctum.DeviceCerts.verify_request(state.cert, state.client) do
+      {:ok, slid(%{state | client: carried(client, state)})}
+    else
+      {:error, :contradictory} -> refuse(state, :malformed_frame)
+      {:error, :unavailable} -> {:ok, state}
+      {:error, reason} -> refuse(assign_call(state), reason)
+    end
+  end
 
   defp receive_message({:renew, _body}, %{challenge: nil} = state),
     do: challenge(:renew, %{client_id: state.client.client_id, certificate: state.cert}, state)
@@ -607,13 +651,13 @@ defmodule Emissary.Web.DeviceChannel do
         origin: :interactive
     }
 
-    answer =
+    {answer, state} =
       case Sanctum.Gate.call_external(tool, ctx, Map.put(args, "action", action),
              call_id: state.call_id,
              method: "device/intent"
            ) do
-        {:ok, result} -> %{id: id, result: result}
-        {:error, reason} -> %{id: id, error: error(reason)}
+        {:ok, result} -> {%{id: id, result: result}, unlocked(operation, result, state)}
+        {:error, reason} -> {%{id: id, error: error(reason)}, state}
       end
 
     {:reply, :ok, {:text, wire({:answer, answer})}, state}
@@ -814,6 +858,25 @@ defmodule Emissary.Web.DeviceChannel do
   defp overflowing? do
     {:message_queue_len, depth} = Process.info(self(), :message_queue_len)
     depth > @max_backlog
+  end
+
+  # The session an answered unlock reserved, kept for the standing reports
+  # and the channel's end.
+  defp unlocked("session.unlock", %{session_id: session_id}, state) when is_binary(session_id),
+    do: %{state | sessions: Enum.uniq([session_id | state.sessions])}
+
+  defp unlocked(_operation, _result, state), do: state
+
+  # A standing report slides the sessions this connection's unlocks
+  # reserved and forgets the ones that ended; a store that cannot answer
+  # moves none, and they end at their expiry.
+  defp slid(%{sessions: []} = state), do: state
+
+  defp slid(state) do
+    case Sanctum.DeviceUnlock.slide(state.client, state.sessions) do
+      {:ok, live} -> %{state | sessions: live}
+      {:error, :unavailable} -> state
+    end
   end
 
   defp recheck(state) do

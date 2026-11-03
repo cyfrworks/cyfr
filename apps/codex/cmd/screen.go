@@ -10,14 +10,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/holder"
+	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +37,11 @@ const (
 	screenDir     = ".cyfr/screen"
 	screenUnit    = "/etc/systemd/system/cyfr-screen.service"
 	screenAptLine = "/etc/apt/apt.conf.d/52cyfr-screen"
-	chromeDeb     = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+	// screenPolicy is Chrome's managed policy on this machine: no password
+	// saving or autofill, so a PIN or passphrase is never offered to
+	// Google Password Manager, and no extensions.
+	screenPolicy = "/etc/opt/chrome/policies/managed/cyfr-screen.json"
+	chromeDeb    = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 )
 
 // screenPath is a project path the service's unit can hold as it is.
@@ -37,7 +50,7 @@ var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 var screenCmd = &cobra.Command{
 	Use:   "screen",
 	Short: "Show CYFR on this machine's own screen, or stop showing it",
-	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. It opens the setup link, which goes to Prism once setup is done. It never starts or stops CYFR.",
+	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip), shows your recovery code, then opens Prism; it locks after five minutes without use, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
 }
 
 var screenOnCmd = &cobra.Command{
@@ -62,8 +75,18 @@ var screenOffCmd = &cobra.Command{
 	},
 }
 
+var screenShellCmd = &cobra.Command{
+	Use:    "shell",
+	Short:  "Run this machine's screen: its pages, Chrome, keyboard and idle lock (the screen's service runs it)",
+	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runScreenShell(cmd.Context())
+	},
+}
+
 func init() {
-	screenCmd.AddCommand(screenOnCmd, screenOffCmd)
+	screenCmd.AddCommand(screenOnCmd, screenOffCmd, screenShellCmd)
 	rootCmd.AddCommand(screenCmd)
 }
 
@@ -106,14 +129,10 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	head, err := currentHead()
-	if err != nil {
-		return err
-	}
-	if err := writeScreenFiles(head, dir, account); err != nil {
+	if err := writeScreenFiles(dir, account); err != nil {
 		return fmt.Errorf("cyfr screen could not write %s (%v)", screenDir, err)
 	}
-	commands := screenCommands(dir)
+	commands := screenCommands(dir, account)
 	fmt.Fprintln(out, "These commands show CYFR on this machine's own screen, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
@@ -155,14 +174,14 @@ func screenSite() (string, string, error) {
 
 // screenCommands are the commands `cyfr screen on` runs, the packages'
 // only if needed.
-func screenCommands(dir string) []string {
-	base, chrome := machine.installed("labwc") && machine.installed("wvkbd"), machine.installed("google-chrome-stable")
+func screenCommands(dir, account string) []string {
+	base, chrome := machine.installed("labwc") && machine.installed("wvkbd") && machine.installed("swayidle"), machine.installed("google-chrome-stable")
 	var commands []string
 	if !base || !chrome {
 		commands = append(commands, "apt-get update")
 	}
 	if !base {
-		commands = append(commands, "apt-get install -y --no-install-recommends labwc wvkbd")
+		commands = append(commands, "apt-get install -y --no-install-recommends labwc wvkbd swayidle")
 	}
 	if !chrome {
 		commands = append(commands,
@@ -174,7 +193,11 @@ func screenCommands(dir string) []string {
 	}
 	files := shellQuote([]string{filepath.Join(dir, screenDir)})
 	return append(commands,
+		// The TPM's resource manager is the tss group's: the screen's
+		// account joins it, where there is one, to keep its PIN in the chip.
+		"{ ! getent group tss >/dev/null || usermod -aG tss "+shellQuote([]string{account})+"; }",
 		"install -m 0644 "+files+"/52cyfr-screen "+screenAptLine,
+		"install -D -m 0644 "+files+"/cyfr-screen-policy.json "+screenPolicy,
 		"install -m 0644 "+files+"/cyfr-screen.service "+screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
@@ -188,7 +211,7 @@ func screenOff(out io.Writer) error {
 	}
 	commands := []string{
 		"{ systemctl disable --now cyfr-screen || true; }",
-		"rm -f " + screenUnit + " " + screenAptLine,
+		"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
 		"systemctl daemon-reload",
 		"systemctl enable --now getty@tty1",
 	}
@@ -205,36 +228,34 @@ func screenOff(out io.Writer) error {
 }
 
 // followScreen rewrites the screen's files of the project in the working
-// directory, when it has them, for head, the one .env holds after a
-// change, so the screen opens CYFR at its address with no `cyfr screen on`.
-func followScreen(head access.Head) error {
+// directory, when it has them, after a change of address: the shell reads
+// the new head when the screen next starts.
+func followScreen() error {
 	if !fileExists(screenDir) {
 		return nil
 	}
 	dir, account, err := screenSite()
 	if err == nil {
-		err = writeScreenFiles(head, dir, account)
+		err = writeScreenFiles(dir, account)
 	}
 	if err != nil {
-		return fmt.Errorf("This machine's screen still opens the old address: cyfr could not rewrite %s (%v). Run `cyfr screen on` to rewrite it", screenDir, err)
+		return fmt.Errorf("cyfr could not rewrite this machine's screen files %s (%v). Run `cyfr screen on` to rewrite them", screenDir, err)
 	}
 	return nil
 }
 
-// writeScreenFiles renders the embedded files into the project, at head's
-// address: `cyfr screen on` and a change of address (cyfr access) rewrite
-// them.
-func writeScreenFiles(head access.Head, dir, account string) error {
-	proxy := "set --"
-	if head.Mode == access.ModeTailnet {
-		proxy = `set -- --proxy-server=socks5://127.0.0.1:1055 "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"`
+// writeScreenFiles renders the embedded files into the project, naming
+// this program, the directory and the account: `cyfr screen on` and a
+// change of address (cyfr access) rewrite them.
+func writeScreenFiles(dir, account string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
 	}
-	port := head.Port
-	if port == 0 {
-		port = 4000
+	if !screenPath.MatchString(self) {
+		return fmt.Errorf("the cyfr program's path %q is not one of letters, digits and / . _ - alone", self)
 	}
-	fill := strings.NewReplacer("@PROXY@", proxy, "@ADDRESS@", access.Describe(head).Address,
-		"@PORT@", strconv.Itoa(port), "@DIR@", dir, "@ACCOUNT@", account)
+	fill := strings.NewReplacer("@CYFR@", self, "@DIR@", dir, "@ACCOUNT@", account)
 	if err := os.MkdirAll(screenDir, 0o700); err != nil {
 		return err
 	}
@@ -256,4 +277,196 @@ func writeScreenFiles(head access.Head, dir, account string) error {
 		}
 	}
 	return nil
+}
+
+// screenIdle is how long the screen waits without local input before it
+// locks: labwc reports the idle time from real input, which no page can
+// fake.
+const screenIdle = 5 * 60
+
+// screenProxy is CYFR's SOCKS5 proxy on this machine's loopback, the one
+// way this device reaches a tailnet address.
+const screenProxy = "socks5://127.0.0.1:1055"
+
+// runScreenShell is the screen's session inside labwc: the shell's pages on
+// loopback, the on-screen keyboard, swayidle and Chrome on those pages.
+// The idle watch and a suspend send this process SIGUSR1, which locks;
+// Chrome's exit locks and starts it again on the lock page; this process's
+// own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any lock ends
+// the sessions at the home first, then starts Chrome again, so no page of
+// the unlocked session outlives it.
+func runScreenShell(ctx context.Context) error {
+	_ = holder.HardenProcess()
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	head, err := currentHead()
+	if err != nil {
+		return fmt.Errorf("The screen cannot read how CYFR is reached here (%v)", err)
+	}
+	address := access.Describe(head).Address
+	client := &http.Client{}
+	chromeArgs := []string{"--no-first-run", "--no-default-browser-check", "--disable-extensions",
+		"--ozone-platform=wayland", "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome"), "--app=" + shell.Origin + "/"}
+
+	if head.Mode == access.ModeTailnet {
+		proxy, _ := url.Parse(screenProxy)
+		client.Transport = &http.Transport{Proxy: http.ProxyURL(proxy)}
+		chromeArgs = append(chromeArgs, "--proxy-server="+screenProxy, "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1")
+	}
+
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer stop()
+	// A Chrome a killed shell left behind still shows its pages: it ends
+	// before this shell starts its own, on the lock page.
+	profile := "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome")
+	_ = exec.Command("pkill", "-f", "--", profile).Run()
+	// So do a keyboard and an idle watch a killed shell left, the watch
+	// aimed at that shell's pid.
+	_ = exec.Command("pkill", "-x", "wvkbd-mobintl").Run()
+	_ = exec.Command("pkill", "-f", "--", "^swayidle -w timeout [0-9]+ kill -USR1 ").Run()
+	chrome := &screenChrome{args: chromeArgs}
+	host, _ := os.Hostname()
+	sh, err := shell.New(shell.Config{
+		Address: address, Client: client, DisplayName: host,
+		Record:  filepath.Join(dir, screenDir, "holder.json"),
+		DataDir: filepath.Join(dir, "data"),
+		Tokens:  screenTokens,
+		Restart: chrome.restart,
+	})
+	if err != nil {
+		return err
+	}
+	srv := &shell.Server{Shell: sh, Reachable: func() bool { return screenReachable(client, address) }}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ctx) }()
+
+	keyboard := screenChild(exec.Command("wvkbd-mobintl"))
+	_ = keyboard.Start()
+	defer func() {
+		if keyboard.Process != nil {
+			_ = keyboard.Process.Kill()
+			_ = keyboard.Wait()
+		}
+	}()
+
+	idled := make(chan os.Signal, 1)
+	signal.Notify(idled, sigUSR1)
+	defer signal.Stop(idled)
+	go func() {
+		for range idled {
+			sh.Lock("Locked after five minutes without use, or for a suspend.")
+		}
+	}()
+
+	// The idle and suspend lock is swayidle's: a screen without it would
+	// stay unlocked unwatched, so its failure to start, or its exit, locks
+	// the screen and ends this shell, which the launcher starts again with
+	// a new watcher, locked.
+	lockNow := strconv.Itoa(os.Getpid())
+	idle := screenChild(exec.Command("swayidle", "-w",
+		"timeout", strconv.Itoa(screenIdle), "kill -USR1 "+lockNow,
+		"before-sleep", "kill -USR1 "+lockNow))
+	if err := idle.Start(); err != nil {
+		sh.Lock("")
+		return fmt.Errorf("The screen's idle lock (swayidle) did not start (%v)", err)
+	}
+	watching := make(chan error, 1)
+	go func() { watching <- idle.Wait() }()
+	defer func() { _ = idle.Process.Kill() }()
+
+	browsing, stopBrowsing := context.WithCancel(ctx)
+	defer stopBrowsing()
+	browser := make(chan error, 1)
+	go func() {
+		for browsing.Err() == nil {
+			if err := chrome.run(browsing); err != nil {
+				browser <- err
+				return
+			}
+			if browsing.Err() == nil && sh.Unlocked() {
+				sh.Lock("Locked because the browser closed.")
+			}
+			select {
+			case <-browsing.Done():
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+
+	var ended error
+	select {
+	case <-ctx.Done():
+	case ended = <-served:
+	case err := <-watching:
+		ended = fmt.Errorf("The screen's idle lock (swayidle) stopped (%v): the screen locked and starts again", err)
+	case err := <-browser:
+		ended = fmt.Errorf("Chrome did not start (%v)", err)
+	}
+	sh.Lock("")
+	stopBrowsing()
+	return ended
+}
+
+// sigUSR1 is Linux's SIGUSR1, named by number so this file builds where
+// the screen never runs: the screen runs on Ubuntu alone.
+const sigUSR1 = syscall.Signal(10)
+
+// screenChrome is the one Chrome the screen runs.
+type screenChrome struct {
+	args []string
+	mu   sync.Mutex
+	proc *os.Process
+}
+
+// run runs Chrome on the shell's pages until it exits or ctx ends.
+func (c *screenChrome) run(ctx context.Context) error {
+	cmd := screenChild(exec.CommandContext(ctx, "google-chrome-stable", c.args...))
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.proc = cmd.Process
+	c.mu.Unlock()
+	_ = cmd.Wait()
+	c.mu.Lock()
+	c.proc = nil
+	c.mu.Unlock()
+	return nil
+}
+
+// restart ends Chrome, whose loop starts it again on the lock page.
+func (c *screenChrome) restart() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.proc != nil {
+		_ = c.proc.Signal(syscall.SIGTERM)
+	}
+}
+
+// screenTokens reads .env's setup and restore tokens as the server reads
+// them, each time a page needs one, so neither travels in an argument.
+func screenTokens() (string, string) {
+	values, err := access.ReadEnvValues(".env")
+	if err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(values[setupTokenVar]), strings.TrimSpace(values["CYFR_RESTORE_TOKEN"])
+}
+
+// screenReachable is whether the home answers now, within two seconds.
+func screenReachable(client *http.Client, address string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address+"/", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
 }

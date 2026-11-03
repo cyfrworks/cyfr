@@ -18,7 +18,7 @@ defmodule Arca.Schemas.PendingConfirmation do
   @type t :: %__MODULE__{}
 
   @states ~w(pending confirmed consumed cancelled voided expired)
-  @proofs ~w(passkey oidc_reauth email_code)
+  @proofs ~w(passkey oidc_reauth email_code device)
 
   @doc "The states a confirmation moves through; all but the first two are terminal."
   @spec states() :: [String.t()]

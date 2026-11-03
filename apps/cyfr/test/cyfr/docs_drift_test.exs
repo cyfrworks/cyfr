@@ -350,6 +350,20 @@ defmodule Cyfr.DocsDriftTest do
   # The retired-name pattern of the vocabulary-gate job: the one pattern of
   # its fossil loop that spells the capitalised form of the retired name.
   defp retired_name_pattern do
+    patterns =
+      for [pattern] <- Regex.scan(~r/^\s+'([^']+)' \\$/m, fossil_loop(), capture: :all_but_first),
+          pattern =~ "[Ee]state",
+          do: pattern
+
+    case patterns do
+      [pattern] -> Regex.compile!(pattern)
+      other -> flunk("the fossil loop holds #{length(other)} retired-name patterns, not one")
+    end
+  end
+
+  # The fossil loop of the vocabulary-gate job: the run block of its step,
+  # up to the loop's `do`.
+  defp fossil_loop do
     workflow = File.read!(@workflow)
 
     [_, run] =
@@ -359,15 +373,18 @@ defmodule Cyfr.DocsDriftTest do
       ) ||
         flunk("test.yml has no #{inspect(@fossil_step)} step with a fossil loop")
 
-    patterns =
-      for [pattern] <- Regex.scan(~r/^\s+'([^']+)' \\$/m, run, capture: :all_but_first),
-          pattern =~ "[Ee]state",
-          do: pattern
+    run
+  end
 
-    case patterns do
-      [pattern] -> Regex.compile!(pattern)
-      other -> flunk("the fossil loop holds #{length(other)} retired-name patterns, not one")
-    end
+  # The exact paths the gate's fossil loop excludes (its `excl=` pathspecs
+  # without a glob), third-party data that is not CYFR's words; the
+  # exclusion list lives in the workflow and is read here, not copied.
+  defp retired_name_exempt do
+    [_, excl] =
+      Regex.run(~r/^\s+excl='([^']*)'/m, fossil_loop()) ||
+        flunk("the fossil loop has no excl= pathspec list")
+
+    for ":(exclude)" <> path <- String.split(excl), not String.contains?(path, "*"), do: path
   end
 
   test "the retired-name pattern is read from the gate and reads the name, not English words" do
@@ -392,9 +409,13 @@ defmodule Cyfr.DocsDriftTest do
 
     files = String.split(listing, <<0>>, trim: true)
     assert "README.md" in files and Enum.any?(files, &String.starts_with?(&1, "seed/"))
+    exempt = retired_name_exempt()
+
+    assert exempt != [] and Enum.all?(exempt, &(&1 in files)),
+           "the gate exempts a path that is not tracked: #{inspect(exempt)}"
 
     hits =
-      for rel <- files,
+      for rel <- files -- exempt,
           path = Path.join(@repo_root, rel),
           File.regular?(path),
           text = File.read!(path),

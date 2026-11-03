@@ -57,7 +57,12 @@ defmodule Sanctum.Providers.Pairing do
       passkey or a paired device; a recovery kit re-enables through the kit
       ingress, not here. No certificate is issued: the device reconnects
       under its own, or renews it through its channel.
-    * `list` answers the person's active paired clients.
+    * `list` answers the person's active paired clients; a protected
+      device's carry what holds its key (`holder_kind`), the name it shows
+      (`display_name`) and what it last reported of its disks within the
+      last minute (`storage`: `root` and `data`, each `encrypted`,
+      `unencrypted` or `unknown`), information a person reads and never
+      an input to a decision.
   """
 
   alias Prima.{Arg, DeviceCert, Operation}
@@ -341,9 +346,15 @@ defmodule Sanctum.Providers.Pairing do
       source: client.source,
       paired_at: Prima.Time.iso8601(client.paired_at),
       certificate_expires_at: Prima.Time.iso8601(client.certificate_expires_at),
-      current: client.current
+      current: client.current,
+      holder_kind: client.holder_kind,
+      display_name: client.display_name,
+      storage: storage(client.storage)
     }
   end
+
+  defp storage(nil), do: nil
+  defp storage(%{root: root, data: data}), do: %{root: to_string(root), data: to_string(data)}
 
   # The ceremony's own refusals in the one refusal shape every surface
   # renders (`Prima.Refusal`), each with the sentence its person reads; the

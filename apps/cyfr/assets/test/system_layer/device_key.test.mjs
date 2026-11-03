@@ -61,6 +61,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (name) => JSON.parse(readFileSync(resolve(here, "../../../../../tests/fixtures", name), "utf8"))
 const device = fixture("device.json")
 const certs = fixture("device_cert.json")
+const unlock = fixture("device_unlock.json")
 const subtle = globalThis.crypto.subtle
 
 const named = (name) => device.messages.find((vector) => vector.name === name).message
@@ -154,6 +155,21 @@ describe("device_cert.json", () => {
     for (const nonce of [connect.nonce + "=", connect.nonce.slice(0, -2), "", 7]) {
       const challenge = {...connect, nonce}
       await assert.rejects(prove(challenge, key, askedFor(challenge), subtle), (error) => error.refused === true, String(nonce))
+    }
+  })
+
+  // A browser key is no protected holder: it never enrolls, unlocks,
+  // confirms with a raw signature or signs a lock, whatever a home asks.
+  test("the glass refuses to sign every protected device's purpose", async () => {
+    const key = await privateKey("device_1")
+    const purposes = Object.keys(unlock.purpose_fields)
+    assert.deepEqual(purposes.toSorted(), Object.keys(unlock.proofs).toSorted())
+
+    for (const purpose of purposes) {
+      assert.equal(PURPOSES.includes(purpose), false, purpose)
+      const {sig: _sig, ...challenge} = unlock.proofs[purpose]
+      assert.equal(expectedChallenge(challenge, askedFor(challenge)), false, purpose)
+      await assert.rejects(prove(challenge, key, askedFor(challenge), subtle), (error) => error.refused === true, purpose)
     }
   })
 

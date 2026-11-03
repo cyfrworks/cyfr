@@ -174,7 +174,8 @@ defmodule Sanctum.RecoveryTest do
       },
       nil,
       admission: "setup",
-      rp_id: Sanctum.Passkeys.rp_id()
+      rp_id: Sanctum.Passkeys.rp_id(),
+      home: Sanctum.Person.home()
     )
   end
 

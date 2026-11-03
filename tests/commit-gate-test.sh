@@ -1344,7 +1344,7 @@ pt="$scratch/pass.trace" pl="$scratch/pass.tmp/cyfr-gate-$pass_id"
 for leg in go audit boot; do
   has_line "^==> $leg +ok " "$scratch/pass.out" || fail "the $leg leg did not pass: $(cat "$scratch/pass.out")"
 done
-for job in 'go.codex_test: codex-ci.yml test: 6 steps' 'go.keeper: keeper-ci.yml keeper: 5 steps' \
+for job in 'go.codex_test: codex-ci.yml test: 7 steps' 'go.keeper: keeper-ci.yml keeper: 5 steps' \
   'audit.spdx: license-lint.yml spdx-headers: 2 steps' 'audit.govuln_codex: security.yml go-audit tree=apps/codex: 2 steps' \
   'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 5 steps' \
   'audit.npm_audit: security.yml npm-audit: 1 step'; do
