@@ -10,9 +10,13 @@ defmodule PrismWeb.SystemLayer.Pairing do
   person reads and never a decision; the pairing code, and the person's command-line sessions
   (`Sanctum.CliSignIn`), each with its revoke control.
 
-  Pairing a device begins on the new device: this home's `/pair` page
-  makes its key and shows the key's code (`Prima.Device.key_code/1`). The
-  person types that code here, and `pairing.begin` asks for it, a
+  Pairing a device begins on the new device: a command line's `cyfr
+  login`, or this home's `/pair` page in a browser, makes its key and shows
+  the key's code (`Prima.Device.key_code/1`) and a QR code of this home's
+  `/devices/add` page with the key's digest in the fragment
+  (`PrismWeb.DeviceAddLive`), which a phone's camera opens here with the
+  code filled in. A device without a camera types the code, or pastes it,
+  and `pairing.begin` asks for it, a
   sensitive change the layer confirms like any other, whose preview names
   the same code. Its answer's `invitation_url` (this home's `/pair` page,
   the secret in the fragment) is drawn here as a QR code (`PrismWeb.QR`),
@@ -29,6 +33,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
   use Phoenix.Component
 
   attr :prompt_id, :string, required: true
+  attr :key_code, :string, default: nil
   attr :pairing, :map, default: nil
   attr :may, :boolean, required: true
   attr :myself, :any, required: true
@@ -129,11 +134,12 @@ defmodule PrismWeb.SystemLayer.Pairing do
       >
         <input type="hidden" name="prompt_id" value={@prompt_id} />
         <label class="block text-sm" for={"#{@prompt_id}-pairing-key-code"}>
-          Open this CYFR's /pair page on the new device and type the code it shows
+          Type or paste the code the new device shows: cyfr login on a command line, or this CYFR's /pair page in a browser. Check it matches before you pair.
         </label>
         <input
           id={"#{@prompt_id}-pairing-key-code"}
           name="key_code"
+          value={@key_code}
           type="text"
           autocomplete="off"
           spellcheck="false"

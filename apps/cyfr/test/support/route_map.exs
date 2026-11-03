@@ -862,6 +862,15 @@
         },
         %{
           verb: "GET",
+          path: "/devices/add",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":index",
+          auth: "browser_authenticated",
+          live_view: "PrismWeb.DeviceAddLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
           path: "/invite",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":invite",

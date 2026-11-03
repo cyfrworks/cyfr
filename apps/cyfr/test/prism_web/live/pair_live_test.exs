@@ -318,6 +318,11 @@ defmodule PrismWeb.PairLiveTest do
     assert has_element?(view, ~s([data-test="pair-key-code"]), code)
     assert has_element?(view, ~s([data-test="pair-key-qr"] svg))
 
+    # The QR code is the address a phone's camera opens to add this key.
+    {:ok, svg} = PrismWeb.QR.svg(Sanctum.Person.home() <> "/devices/add#key=" <> key_digest)
+    [drawn] = Regex.run(~r/<path d="([^"]+)"/, svg, capture: :all_but_first)
+    assert render(view) =~ drawn
+
     # A digest the page cannot read draws nothing.
     {:ok, other, _html} = live(conn, "/pair")
     render_hook(other, "prepared", %{"key_digest" => "not-a-digest"})

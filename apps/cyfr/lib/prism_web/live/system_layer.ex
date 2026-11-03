@@ -3012,6 +3012,7 @@ defmodule PrismWeb.SystemLayer do
     ~H"""
     <Pairing.devices
       prompt_id={@prompt.id}
+      key_code={@prompt.subject[:key_code]}
       pairing={@pairing}
       may={@may}
       myself={@myself}

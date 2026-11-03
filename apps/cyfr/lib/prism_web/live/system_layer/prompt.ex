@@ -59,9 +59,12 @@ defmodule PrismWeb.SystemLayer.Prompt do
       person reads (a pair's is the other person's), which the sheet offers
       beside everyone as the share's audience. It creates the share
       through `share.create`;
-    * `:pairing` — nothing: the prompt reads the person's paired clients
-      itself and begins a pairing through `pairing.begin`, whose answer's
-      link it draws as a QR code (`PrismWeb.SystemLayer.Pairing`);
+    * `:pairing` — nothing, or `key_code`, the code of the key a new
+      device shows (`Prima.Device.key_code/1`), which the prompt's form
+      starts filled with: the prompt reads the person's paired clients
+      itself and begins a pairing through `pairing.begin` when the person
+      asks, whose answer's link it draws as a QR code
+      (`PrismWeb.SystemLayer.Pairing`);
     * `:confirmation` — one pending confirmation as `confirmation.pending`
       lists it: its public `ref`, the `operation` and `action` it confirms,
       the `preview` and `asker` the home stored, its `expires_at`, the
@@ -242,6 +245,13 @@ defmodule PrismWeb.SystemLayer.Prompt do
   defp subject(:sign_in, subject), do: optional_text(subject, :message)
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}
+
+  defp subject(:pairing, %{key_code: code} = subject) when map_size(subject) == 1 do
+    case Prima.Device.from_key_code(code) do
+      {:ok, _digest} -> {:ok, subject}
+      :error -> {:error, :invalid_prompt}
+    end
+  end
 
   # A kit is named by its attempt's id, and carries no secret.
   defp subject(:kit, %{attempt_id: id} = subject)
