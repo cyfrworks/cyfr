@@ -353,9 +353,10 @@ screen_signed_in() {
 # device of the person's, the address a new device's QR code opens
 # (<home>/devices/add#key=<digest>, tests/fixtures/device_unlock.json
 # exchange.pairing.approve_url), for a key made here for it. Its pairing
+# fills the key's code in Devices, Pair a device asks for it, and it
 # needs a fresh confirmation: Prism's Confirm on this device opens the
 # shell's own page, which draws the change CYFR holds, with the key's
-# digest; its Cancel signs nothing, a wrong PIN confirms nothing, and the
+# digest or its code; its Cancel signs nothing, a wrong PIN confirms nothing, and the
 # PIN again confirms it, after which the pairing opens. The home's record
 # of the confirmation (its database, read as root) says which client gave
 # it.
@@ -369,10 +370,16 @@ screen_confirms() {
   screen_open "$address/devices/add#key=$digest" || fail "the screen's Chrome did not take the approve address"
   sleep 8
   check "screenshot screen-add.png" guest_screenshot screen-add.png
+  # The page fills the key's code in Devices; nothing begins until the
+  # person asks.
+  screen_find 'pair a device' last && printf '\n' | guest_keys || fail "QMP did not press Pair a device"
+  sleep 6
+  check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   shell_page_until confirm-drawn 'Confirm on this screen' 20
   check "Confirm on this device opened the screen's own page, which draws the addition CYFR holds, for the key's digest" \
-    sh -c 'grep -q "Confirm on this screen" "$1" && grep -q pairing.begin "$1" && grep -q -- "$2" "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html" "$digest"
+    sh -c 'grep -q "Confirm on this screen" "$1" && grep -q pairing.begin "$1" && grep -qF -e "$2" -e "$3" "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html" \
+    "$digest" "$(printf '%s' "$digest" | sed 's/..../& /g; s/ $//')"
   check "screenshot screen-confirm-drawn.png" guest_screenshot screen-confirm-drawn.png
   ref=$(sed -n 's/.*name="ref" value="\([^"]*\)".*/\1/p' "$GUEST_DIR/shell-confirm-drawn.html" | head -n 1)
   [ -n "$ref" ] || return 0
