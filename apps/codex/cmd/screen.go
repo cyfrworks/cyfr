@@ -322,6 +322,10 @@ func runScreenShell(ctx context.Context) error {
 	// before this shell starts its own, on the lock page.
 	profile := "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome")
 	_ = exec.Command("pkill", "-f", "--", profile).Run()
+	// So do a keyboard and an idle watch a killed shell left, the watch
+	// aimed at that shell's pid.
+	_ = exec.Command("pkill", "-x", "wvkbd-mobintl").Run()
+	_ = exec.Command("pkill", "-f", "--", "^swayidle -w timeout [0-9]+ kill -USR1 ").Run()
 	chrome := &screenChrome{args: chromeArgs}
 	host, _ := os.Hostname()
 	sh, err := shell.New(shell.Config{
@@ -338,7 +342,7 @@ func runScreenShell(ctx context.Context) error {
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ctx) }()
 
-	keyboard := exec.Command("wvkbd-mobintl")
+	keyboard := screenChild(exec.Command("wvkbd-mobintl"))
 	_ = keyboard.Start()
 	defer func() {
 		if keyboard.Process != nil {
@@ -361,9 +365,9 @@ func runScreenShell(ctx context.Context) error {
 	// the screen and ends this shell, which the launcher starts again with
 	// a new watcher, locked.
 	lockNow := strconv.Itoa(os.Getpid())
-	idle := exec.Command("swayidle", "-w",
+	idle := screenChild(exec.Command("swayidle", "-w",
 		"timeout", strconv.Itoa(screenIdle), "kill -USR1 "+lockNow,
-		"before-sleep", "kill -USR1 "+lockNow)
+		"before-sleep", "kill -USR1 "+lockNow))
 	if err := idle.Start(); err != nil {
 		sh.Lock("")
 		return fmt.Errorf("The screen's idle lock (swayidle) did not start (%v)", err)
@@ -418,7 +422,7 @@ type screenChrome struct {
 
 // run runs Chrome on the shell's pages until it exits or ctx ends.
 func (c *screenChrome) run(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "google-chrome-stable", c.args...)
+	cmd := screenChild(exec.CommandContext(ctx, "google-chrome-stable", c.args...))
 	if err := cmd.Start(); err != nil {
 		return err
 	}

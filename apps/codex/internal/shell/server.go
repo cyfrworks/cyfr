@@ -276,6 +276,18 @@ func display(v any) string {
 		return x
 	case nil:
 		return ""
+	case map[string]any:
+		parts := make([]string, 0, len(x))
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			parts = append(parts, k+": "+display(x[k]))
+		}
+		return strings.Join(parts, "; ")
+	case []any:
+		parts := make([]string, len(x))
+		for i, e := range x {
+			parts[i] = display(e)
+		}
+		return strings.Join(parts, ", ")
 	}
 	raw, _ := Canonical(v)
 	return string(raw)

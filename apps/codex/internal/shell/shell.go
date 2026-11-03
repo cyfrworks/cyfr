@@ -304,6 +304,11 @@ func (s *Shell) Restore(ctx context.Context, code string, secret, again []byte) 
 	if s.rec != nil || token == "" {
 		return
 	}
+	// The entries are checked before the restore spends the code at the
+	// home.
+	if _, err := s.checkSecret(secret, again); err != nil {
+		return
+	}
 	a, err := Restore(ctx, s.cfg.Client, s.cfg.Address, token, strings.TrimSpace(code))
 	if err != nil {
 		s.say("%s", restoreSentence(err))
@@ -333,21 +338,42 @@ func restoreSentence(err error) string {
 	return sentence(err)
 }
 
+// checkSecret checks the secret given twice before anything is made or
+// sent: the same both times, six digits for the chip, or the passphrase the
+// page showed where there is no chip. It answers whether the chip holds it.
+func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
+	if string(secret) != string(again) {
+		s.say("The two entries differ. Enter the same one twice.")
+		return false, errors.New("differ")
+	}
+	if s.cfg.Chip() && s.passphrase == "" {
+		if err := holder.CheckPIN(secret); err != nil {
+			s.say("A PIN is six digits.")
+			return false, err
+		}
+		return true, nil
+	}
+	if err := holder.CheckPassphrase(secret); err != nil {
+		s.say("Without a chip, this screen needs the six-word passphrase shown, not a short PIN.")
+		return false, err
+	}
+	if string(secret) != s.passphrase {
+		s.say("Enter the passphrase shown above, exactly.")
+		return false, errors.New("not the shown passphrase")
+	}
+	return false, nil
+}
+
 // newRecord checks the secret given twice and makes the key under the
 // chip, or under the passphrase when the box has no usable chip, and
 // writes it.
 func (s *Shell) newRecord(admission string, secret, again []byte) (*holder.Record, error) {
-	if string(secret) != string(again) {
-		s.say("The two entries differ. Enter the same one twice.")
-		return nil, errors.New("differ")
+	chip, err := s.checkSecret(secret, again)
+	if err != nil {
+		return nil, err
 	}
 	var rec *holder.Record
-	var err error
-	if s.cfg.Chip() && s.passphrase == "" {
-		if err = holder.CheckPIN(secret); err != nil {
-			s.say("A PIN is six digits.")
-			return nil, err
-		}
+	if chip {
 		rec, err = holder.NewChip(s.cfg.Address, RequestID(), admission, secret)
 		if errors.Is(err, holder.ErrNoChip) {
 			s.newPassphrase()
@@ -355,14 +381,6 @@ func (s *Shell) newRecord(admission string, secret, again []byte) (*holder.Recor
 			return nil, err
 		}
 	} else {
-		if err = holder.CheckPassphrase(secret); err != nil {
-			s.say("Without a chip, this screen needs the six-word passphrase shown, not a short PIN.")
-			return nil, err
-		}
-		if string(secret) != s.passphrase {
-			s.say("Enter the passphrase shown above, exactly.")
-			return nil, errors.New("not the shown passphrase")
-		}
 		rec, err = holder.NewSoftware(s.cfg.Address, RequestID(), admission, secret)
 	}
 	if err != nil {

@@ -57,6 +57,7 @@ type fakeHome struct {
 	kitPublic                  []byte // the recovering person's recovery key
 	kitHeld                    map[string]string
 	reenabled                  []string
+	restores                   int
 	shapes                     []string // entries whose fields were not the fixture's
 }
 
@@ -305,6 +306,9 @@ func (h *fakeHome) resumeEntry(w http.ResponseWriter, r *http.Request) {
 
 func (h *fakeHome) restore(w http.ResponseWriter, r *http.Request) {
 	m := h.body(r)
+	h.mu.Lock()
+	h.restores++
+	h.mu.Unlock()
 	if r.Header.Get("Authorization") != "Bearer "+h.restoreToken || h.restoreToken == "" {
 		reply(w, 401, map[string]any{"error": "invalid_token"})
 		return

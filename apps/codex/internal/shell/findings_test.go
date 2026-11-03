@@ -75,3 +75,16 @@ func TestEnroll_ARedirectNeverCarriesTheSetupTokenElsewhere(t *testing.T) {
 	default:
 	}
 }
+
+// Two different entries on the restore page are refused before the
+// recovery code reaches the home, so a typo never spends the restore.
+func TestRestore_DifferentEntriesSendNothing(t *testing.T) {
+	home := newFakeHome(t)
+	home.restoreToken = strings.Repeat("ab", 32)
+	b := newBox(t, home, t.TempDir())
+	p := b.passphrase()
+	b.post("/restore", url.Values{"code": {"CYFR-RIGHT-CODE"}, "secret": {p}, "again": {p + "x"}})
+	if home.restores != 0 || !strings.Contains(b.page(), "The two entries differ") {
+		t.Fatalf("a mismatched restore reached the home %d times", home.restores)
+	}
+}
