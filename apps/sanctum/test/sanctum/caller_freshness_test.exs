@@ -9,8 +9,8 @@ defmodule Sanctum.CallerFreshnessTest do
   session and refocuses it, and `fresh?/1` bounds how long a validated
   context may be acted on — from the validation, never from its reuse.
 
-  Direct row changes exercise missed announcements; the leave races use
-  the public transition while a revalidation is already in progress.
+  Direct row changes exercise missed announcements, some while a
+  revalidation is already in progress.
 
   A remote person's session stands, at establish and at revalidation, only
   on their identity's fresh head and only while bound to its `key_epoch`:
@@ -25,7 +25,6 @@ defmodule Sanctum.CallerFreshnessTest do
   import ExUnit.CaptureLog
 
   alias Sanctum.{Caller, Context, Session}
-  alias Sanctum.Tenancy.{Athanors, Members}
 
   @keys [:caller_memo_ttl_ms]
 
@@ -48,7 +47,7 @@ defmodule Sanctum.CallerFreshnessTest do
     :ok
   end
 
-  # A person seated in a group of their own and a session focused on it.
+  # A person, their own athanor and a session focused on it.
   defp person! do
     n = System.unique_integer([:positive])
 
@@ -60,8 +59,7 @@ defmodule Sanctum.CallerFreshnessTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Fresh #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    athanor = Sanctum.Test.People.athanor!(user)
 
     ctx =
       Context.build(
@@ -77,13 +75,6 @@ defmodule Sanctum.CallerFreshnessTest do
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
     {:ok, established} = Caller.establish(session.token, focus: athanor.id)
     %{user: user, athanor: athanor, session: session, ctx: established}
-  end
-
-  # A second athanor the same person is seated in.
-  defp second_athanor!(%{user: user}) do
-    {:ok, other} = Athanors.create_group(user.id, "Other #{System.unique_integer([:positive])}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: other.id)
-    other
   end
 
   defp delete_session!(hash),
@@ -113,7 +104,7 @@ defmodule Sanctum.CallerFreshnessTest do
 
   # The identity read follows the stored-session reload and precedes the
   # focus check, outside the standing transaction. Hold that observable
-  # boundary while a leave commits; the supervised task stops before the
+  # boundary while a change commits; the supervised task stops before the
   # sandbox is released even when an assertion fails.
   defp during_refocus(ctx, change) do
     test = self()
@@ -246,37 +237,12 @@ defmodule Sanctum.CallerFreshnessTest do
       assert {:error, :not_standing} = Caller.revalidate_session(ctx)
     end
 
-    test "a lost seat refuses the focus and never falls back to another athanor" do
-      %{ctx: ctx, user: user, athanor: athanor} = fixture = person!()
-      _other = second_athanor!(fixture)
+    test "a lost seat refuses the focus" do
+      %{ctx: ctx, user: user, athanor: athanor} = person!()
 
       drop_seat!(user.id, athanor.id)
 
       assert {:error, :not_member} = Caller.revalidate_session(ctx)
-    end
-
-    test "a leave after the session reload refuses the session it revoked, not only the focus" do
-      %{ctx: ctx, athanor: athanor} = fixture = person!()
-      _other = second_athanor!(fixture)
-
-      assert {:error, :unauthenticated} =
-               during_refocus(ctx, fn ->
-                 assert :ok = Members.remove_member(athanor, user_id: ctx.user_id)
-                 assert {:error, :invalid_session} = Session.load_by_hash(ctx.session_token_hash)
-                 assert {:error, :unauthenticated} = Caller.revalidate_session(ctx)
-               end)
-    end
-
-    test "a leave after the session reload refuses only the focus when its session stands elsewhere" do
-      %{ctx: ctx} = fixture = person!()
-      other = second_athanor!(fixture)
-      {:ok, focused} = Context.focus(ctx, other.id)
-
-      assert {:error, :not_member} =
-               during_refocus(focused, fn ->
-                 assert :ok = Members.remove_member(other, user_id: ctx.user_id)
-                 assert {:ok, _} = Session.load_by_hash(ctx.session_token_hash)
-               end)
     end
 
     test "a lost focus with unreadable session standing pauses revalidation" do
@@ -284,7 +250,7 @@ defmodule Sanctum.CallerFreshnessTest do
 
       assert {:error, :unavailable} =
                during_refocus(ctx, fn ->
-                 assert :ok = Members.remove_member(athanor, user_id: ctx.user_id)
+                 drop_seat!(ctx.user_id, athanor.id)
                  Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
                end)
     end
@@ -293,15 +259,6 @@ defmodule Sanctum.CallerFreshnessTest do
       %{ctx: ctx, athanor: athanor} = person!()
       archive_row!(athanor.id)
       assert {:error, :not_member} = Caller.revalidate_session(ctx)
-    end
-
-    test "a focus moved to another seat of the same person is revalidated there" do
-      %{ctx: ctx} = fixture = person!()
-      other = second_athanor!(fixture)
-      {:ok, moved} = Context.focus(ctx, other.id)
-
-      assert {:ok, %Context{athanor_id: athanor_id}} = Caller.revalidate_session(moved)
-      assert athanor_id == other.id
     end
 
     test "a session row key that names another person's session refuses" do
@@ -540,8 +497,7 @@ defmodule Sanctum.CallerFreshnessTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Remote #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    athanor = Sanctum.Test.People.athanor!(user)
     Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id))
 
     {live, _} = keypair()

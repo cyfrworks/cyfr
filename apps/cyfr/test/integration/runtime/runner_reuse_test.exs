@@ -49,9 +49,9 @@ defmodule Locus.Runtime.RunnerReuseTest do
 
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
         name: "Reuse #{unique}",
         slug: "reuse-#{unique}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

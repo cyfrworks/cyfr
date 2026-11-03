@@ -107,7 +107,7 @@ fn args ->
 
   segment = fn athanor_id ->
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
-    if athanor.kind == "person", do: "@" <> athanor.slug, else: athanor.slug
+    "@" <> athanor.slug
   end
 
   # The setup admission (`Sanctum.Newcomer.admit/2`) under a setup token

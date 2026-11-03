@@ -135,40 +135,6 @@ defmodule Sanctum.Providers.Session do
      }}
   end
 
-  # Point the session at another athanor the caller may work in — what a
-  # non-browser client does instead of following a `/a/<athanor>` URL.
-  def handle(%Context{} = ctx, %{"action" => "use", "athanor" => athanor})
-      when is_binary(athanor) do
-    with {:ok, resolved} <- resolve_athanor(athanor),
-         {:ok, focused} <- Sanctum.Session.use_athanor(ctx, resolved.id) do
-      {:ok, %{athanor: Sanctum.Providers.Athanor.render(resolved), scope: focused.scope}}
-    else
-      # Focus answers this only to a member: a caller without a seat is
-      # told what a missing athanor tells them, below.
-      {:error, :archived} ->
-        {:error, {:invalid_argument, "That athanor is archived"}}
-
-      # No such athanor, or none the caller holds a seat in: one refusal,
-      # naming what the caller named, for an open, an archived and an
-      # absent athanor alike. A session row gone under the call (revoked
-      # meanwhile) answers `:not_found` from `use_athanor/2` too, and is
-      # answered so as well: naming the session instead would tell a caller
-      # with no seat that the athanor exists.
-      {:error, :not_found} ->
-        {:error, {:not_found, "Athanor", athanor}}
-
-      {:error, :no_session} ->
-        {:error,
-         {:invalid_argument, "session.use needs a session — a key is bound to one athanor"}}
-
-      {:error, _} ->
-        {:error, {:unavailable, "Storage"}}
-    end
-  end
-
-  def handle(_ctx, %{"action" => "use"}),
-    do: {:error, {:invalid_argument, "Missing required argument: athanor"}}
-
   # Revoke the Sanctum session authenticated by this request.
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
       when is_binary(hash) do

@@ -44,7 +44,6 @@ defmodule Cyfr.BusPayloadTest do
     ThreadEvent,
     Tinctures,
     VaultEntryChanged,
-    Viewing,
     Webhooks
   }
 
@@ -112,7 +111,6 @@ defmodule Cyfr.BusPayloadTest do
       FrameCredential.new(:revoked, "usr_payload", "fcr_payload"),
       Notify.new(@actor, :approval_pending, %{thread_id: "t", approval_id: "a"}),
       Ping.new(1),
-      Viewing.new("ath_payload"),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
       ScheduleCompleted.new(@actor)
     ]
@@ -326,7 +324,7 @@ defmodule Cyfr.BusPayloadTest do
       assert_raise ArgumentError, fn -> Request.new(@actor, :logged, __meta__: :x) end
     end
 
-    test "the tray's kinds are the identity domain's, exactly" do
+    test "the notify topic's kinds are the identity domain's, exactly" do
       assert Notify.kinds() == Sanctum.Notify.kinds()
     end
 
@@ -359,7 +357,7 @@ defmodule Cyfr.BusPayloadTest do
 
     test "names its tenant, from the actor it was built for" do
       for %{athanor_id: athanor_id} = sample <- samples(),
-          sample.__struct__ not in [Membership, Viewing],
+          sample.__struct__ != Membership,
           do: assert(athanor_id in ["ath_payload", :platform])
     end
 

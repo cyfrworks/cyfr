@@ -60,7 +60,6 @@ defmodule Emissary.Web.DeviceChannelTest do
   alias Prima.{Device, DeviceCert}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
 
   @vectors Path.expand("../../../../../tests/fixtures/device.json", __DIR__)
   @external_resource @vectors
@@ -326,18 +325,15 @@ defmodule Emissary.Web.DeviceChannelTest do
       )
     end
 
-    test "a person who left the athanor is refused before new work", %{
+    test "a person denied at the door is refused before new work", %{
       session_ctx: session_ctx,
-      user: user,
-      athanor: athanor
+      user: user
     } do
       device = pair!(session_ctx)
       state = proven(device)
 
-      # A second member keeps the group open while the person leaves.
-      other = seated(%{})
-      {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
-      :ok = Members.remove_member(athanor, user_id: user.id)
+      # The denial removes the person's seat in their own athanor.
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
 
       assert_refused_answering(
         send_frame(state, intent_message("int_1", "pairing.list", %{})),
@@ -1347,16 +1343,13 @@ defmodule Emissary.Web.DeviceChannelTest do
 
     test "a standing change heard on the bus ends the streams at once, not at the next ping", %{
       session_ctx: session_ctx,
-      user: user,
-      athanor: athanor
+      user: user
     } do
       state = proven(pair!(session_ctx))
       {grant_id, _grant, state} = open_stream!(state, "s1")
 
-      # A second member keeps the group open while the person leaves.
-      other = seated(%{})
-      {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
-      :ok = Members.remove_member(athanor, user_id: user.id)
+      # The denial removes the person's seat in their own athanor.
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
 
       assert_receive %Cyfr.Bus.Membership{} = announcement, 2_000
 
@@ -2099,7 +2092,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     %{cert: DeviceCert.sign(cert, live_private), client_id: client_id, private: device_private}
   end
 
-  # A person seated in a group of their own, and the context their session
+  # A person seated in their own athanor, and the context their session
   # establishes there.
   defp seated(_context) do
     n = System.unique_integer([:positive])
@@ -2112,7 +2105,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Channel #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

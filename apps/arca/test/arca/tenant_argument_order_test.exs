@@ -70,14 +70,9 @@ defmodule Arca.TenantArgumentOrderTest do
   #     `where_tenant_unless_platform/2` and `stamp_tenant!/2` compose onto
   #     a query or a map — the subject is what is piped, and the tenant
   #     narrows or stamps it.
-  #   * `update_athanor/2` writes the athanor as a VALUE onto a session
-  #     found by its token hash. Swapping those looks up a session whose
-  #     hash equals an athanor id, finds none, and says so; it cannot reach
-  #     another tenant's row, and the two are different types besides.
   @exempt %{
     "query_helpers.ex" =>
-      ~w(where_athanor where_tenant where_tenant_unless_platform stamp_tenant!),
-    "session_storage.ex" => ~w(update_athanor)
+      ~w(where_athanor where_tenant where_tenant_unless_platform stamp_tenant!)
   }
 
   # The public functions that still read the tenant from their options, by

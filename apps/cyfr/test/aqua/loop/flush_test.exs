@@ -228,7 +228,7 @@ defmodule Aqua.Loop.FlushTest do
     script!([
       round_one(),
       %{"entries" => []},
-      flush_reply([keep("n1", "about-you", "they like trains"), keep("n2", "about-us", "x")]),
+      flush_reply([keep("n1", "about-you", "they like trains")]),
       reply("the story so far"),
       reply("done")
     ])
@@ -237,7 +237,7 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, steps} = Tape.steps(ctx, turn)
     flush_calls = Enum.filter(steps, &(&1.purpose == "flush" and &1.kind != "model"))
 
-    assert ["error", "error"] = Enum.map(flush_calls, & &1.outcome)
+    assert ["error"] = Enum.map(flush_calls, & &1.outcome)
     assert :none = Aqua.Notes.pinned(ctx)
     assert {:error, _} = Aqua.Notes.read(ctx, "about-you")
   end

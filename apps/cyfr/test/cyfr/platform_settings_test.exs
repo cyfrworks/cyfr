@@ -280,7 +280,17 @@ defmodule Cyfr.PlatformSettingsTest do
 
     test "a cap set refuses the next creation over it, with no restart", %{ctx: ctx} do
       {:ok, count} = Sanctum.Tenancy.Athanors.count()
-      mint = fn -> Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Capped") end
+
+      mint = fn ->
+        n = System.unique_integer([:positive])
+
+        Sanctum.Tenancy.Athanors.create(%{
+          name: "Capped",
+          slug: "capped-#{n}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          created_by: ctx.user_id
+        })
+      end
 
       assert {:ok, %{pending: false}} = Settings.set(ctx, "max_athanors", count + 1)
       assert {:ok, _} = mint.()
@@ -346,8 +356,8 @@ defmodule Cyfr.PlatformSettingsTest do
 
       assert set_by == ctx.user_id and at == listing.revision
 
-      assert %{source: "default", value: 50, default: 50, pending: false, divergent: false} =
-               by_key["max_groups_per_person"]
+      assert %{source: "default", value: 1000, default: 1000, pending: false, divergent: false} =
+               by_key["max_threads_per_athanor"]
 
       assert %{value: level} = by_key["log_level"]
       assert level == Atom.to_string(Logger.level())

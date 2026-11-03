@@ -144,7 +144,7 @@ defmodule Prima.TinctureWire do
   @installed_keys ~w(icon name open ref)
 
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
-  @athanor_segment ~r/\A@?[a-z0-9]+(-[a-z0-9]+)*\z/
+  @athanor_segment ~r/\A@[a-z0-9]+(-[a-z0-9]+)*\z/
   @component_operation ~r/\A[a-z][a-z0-9_-]{0,62}\z/
   @max_title 120
 
@@ -217,8 +217,7 @@ defmodule Prima.TinctureWire do
 
   @doc """
   Whether `identity` names a public tincture: an athanor URL segment
-  (`@<namespace>` or a group's slug), a publisher and a name, and nothing
-  else.
+  (`@<namespace>`), a publisher and a name, and nothing else.
   """
   @spec public_identity?(term()) :: boolean()
   def public_identity?(%{athanor: athanor, publisher: publisher, name: name} = identity)

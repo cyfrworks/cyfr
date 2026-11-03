@@ -88,9 +88,9 @@ defmodule Opus.ArchiveFenceTest do
   defp athanor! do
     {:ok, athanor} =
       Athanors.create(%{
-        kind: "group",
         name: "Fence",
         slug: "fence-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 
@@ -109,7 +109,7 @@ defmodule Opus.ArchiveFenceTest do
       |> Sanctum.TestContext.via(:api)
 
   defp archive!(athanor) do
-    {:ok, archived} = Athanors.archive(athanor, force: true)
+    archived = Sanctum.TestContext.archive!(athanor.id)
     assert archived.status == "archived"
     archived
   end
@@ -293,7 +293,8 @@ defmodule Opus.ArchiveFenceTest do
     test "admits only fresh roots: the old grant still refuses", %{athanor: athanor, ctx: ctx} do
       old = attached(ctx)
 
-      athanor |> archive!() |> Athanors.unarchive()
+      archive!(athanor)
+      Sanctum.TestContext.reopen!(athanor.id)
 
       assert %{"ok" => %{} = renewals} = renew(old)
       assert renewals[old.attempt] == "lost"

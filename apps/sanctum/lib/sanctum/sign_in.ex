@@ -68,7 +68,7 @@ defmodule Sanctum.SignIn do
   alias Sanctum.Auth.Identity
   alias Sanctum.Consent.Authz
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @typedoc """
   What a linked sign-in method's provider proved: the method's identity
@@ -123,17 +123,15 @@ defmodule Sanctum.SignIn do
   # sign-in: a pending invitation activates on the next one, and a fill's
   # failure lands on its athanor's row.
   defp unlocked(user_id) do
-    for activate <- [&Members.activate_invited/1, &Sanctum.SharedThreads.activate_invited/1] do
-      case activate.(%{id: user_id}) do
-        {:ok, _n} ->
-          :ok
+    case Sanctum.SharedThreads.activate_invited(%{id: user_id}) do
+      {:ok, _n} ->
+        :ok
 
-        {:error, reason} ->
-          Logger.error(
-            "[Sanctum.SignIn] an invitation's activation failed for #{user_id}: " <>
-              inspect(reason)
-          )
-      end
+      {:error, reason} ->
+        Logger.error(
+          "[Sanctum.SignIn] an invitation's activation failed for #{user_id}: " <>
+            inspect(reason)
+        )
     end
 
     :ok = Sanctum.Provisioning.after_sign_in(user_id)

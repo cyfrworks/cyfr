@@ -23,7 +23,7 @@ defmodule Sanctum.ExecutionStandingTest do
 
     {:ok, athanor} =
       Athanors.create(%{
-        kind: "group",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         name: "Standing",
         slug: "standing-#{System.unique_integer([:positive])}",
         created_by: "system"
@@ -72,7 +72,7 @@ defmodule Sanctum.ExecutionStandingTest do
     assert {:error, :not_standing} = ExecutionStanding.capture(ctx(nil))
     assert {:error, :not_standing} = ExecutionStanding.capture(ctx("ath_no_such_athanor"))
 
-    {:ok, _} = Athanors.archive(athanor)
+    Sanctum.TestContext.archive!(athanor.id)
     assert {:error, :not_standing} = ExecutionStanding.capture(ctx(athanor.id))
   end
 
@@ -87,10 +87,10 @@ defmodule Sanctum.ExecutionStandingTest do
     {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
     assert :ok = verify(grant)
 
-    {:ok, archived} = Athanors.archive(athanor)
+    Sanctum.TestContext.archive!(athanor.id)
     assert {:error, :not_standing} = verify(grant)
 
-    {:ok, _reopened} = Athanors.unarchive(archived)
+    Sanctum.TestContext.reopen!(athanor.id)
     assert {:error, :not_standing} = verify(grant)
 
     {:ok, fresh} = ExecutionStanding.capture(ctx(athanor.id))
@@ -103,7 +103,7 @@ defmodule Sanctum.ExecutionStandingTest do
 
   test "a retirement's check asks nothing of the athanor", %{athanor: athanor} do
     {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
-    {:ok, _} = Athanors.archive(athanor)
+    Sanctum.TestContext.archive!(athanor.id)
     assert :ok = ExecutionStanding.stamp_only(grant)
   end
 
@@ -115,8 +115,8 @@ defmodule Sanctum.ExecutionStandingTest do
 
     assert {:ok, []} = scan_of(athanor.id)
 
-    {:ok, archived} = Athanors.archive(athanor)
-    {:ok, _reopened} = Athanors.unarchive(archived)
+    Sanctum.TestContext.archive!(athanor.id)
+    Sanctum.TestContext.reopen!(athanor.id)
 
     # Work admitted after the reopen stands, and is not found.
     {:ok, fresh} = ExecutionStanding.capture(ctx(athanor.id))

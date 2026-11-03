@@ -35,7 +35,7 @@ defmodule Sanctum.DeviceCertsTest do
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Pairing, Person}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @source "198.51.100.7"
 
@@ -61,7 +61,7 @@ defmodule Sanctum.DeviceCertsTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A person seated in a group of their own, and the context their session
+  # A person seated in their own athanor, and the context their session
   # establishes there.
   defp seated! do
     n = System.unique_integer([:positive])
@@ -74,7 +74,7 @@ defmodule Sanctum.DeviceCertsTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Devices #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(
@@ -951,27 +951,13 @@ defmodule Sanctum.DeviceCertsTest do
              ) == {:error, :unknown_subject}
     end
 
-    test "standing is read anew on every request: revoked, denied, left and archived", %{
-      session_ctx: session_ctx,
-      user: user,
-      athanor: athanor
-    } do
+    test "standing is read anew on every request: a revoked client", %{session_ctx: session_ctx} do
       # Revoked: the pairing's own end.
       revoked = pair!(session_ctx)
       {:ok, ctx} = connect(revoked)
       assert {:ok, _} = DeviceCerts.verify_request(revoked.certificate, ctx)
       {:ok, _row} = revoke!(session_ctx, revoked.client_id)
       assert DeviceCerts.verify_request(revoked.certificate, ctx) == {:error, :revoked}
-
-      # Left: a second member keeps the group open while the person leaves,
-      # and the leave revokes the client they paired there with the seat.
-      left = pair!(session_ctx)
-      {:ok, ctx} = connect(left)
-      other = seated!()
-      {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
-      :ok = Members.remove_member(athanor, user_id: user.id)
-      assert DeviceCerts.verify_request(left.certificate, ctx) == {:error, :revoked}
-      assert DeviceCerts.client_standing(ctx) == {:error, :revoked}
     end
 
     test "a denied person's device stands for nothing", %{session_ctx: session_ctx, user: user} do
@@ -990,7 +976,7 @@ defmodule Sanctum.DeviceCertsTest do
     } do
       device = pair!(session_ctx)
       {:ok, ctx} = connect(device)
-      {:ok, _} = Athanors.archive(athanor)
+      Sanctum.TestContext.archive!(athanor.id)
 
       assert {:error, reason} = DeviceCerts.verify_request(device.certificate, ctx)
       assert reason in [:revoked, :not_standing]

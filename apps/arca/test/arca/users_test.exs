@@ -129,7 +129,6 @@ defmodule Arca.UsersTest do
       assert {:error, :cross_tenant} = Users.get_by_namespace(member, "alice")
       assert {:error, :cross_tenant} = Users.list(member)
       assert {:error, :cross_tenant} = Users.identities(member, "usr_1")
-      assert {:error, :cross_tenant} = Users.personal_athanor?(member, "ath_1")
       assert {:error, :cross_tenant} = Users.touch_identity(member, "k", DateTime.utc_now())
       assert {:error, :cross_tenant} = Users.update(member, row.id, %{display_name: "X"})
       assert {:error, :cross_tenant} = Users.mint(member, %{}, %{}, admission: "open")
@@ -434,13 +433,6 @@ defmodule Arca.UsersTest do
       assert read == Enum.uniq(read)
       assert Enum.sort(read) == Enum.sort([newcomer.id | ids])
       assert {:ok, []} = Users.list(server(), order: :id, after: List.last(read))
-    end
-
-    test "personal_athanor? answers whether any row names the athanor as its own" do
-      user = person!()
-      assert {:ok, false} = Users.personal_athanor?(server(), "ath_unclaimed")
-      {:ok, _} = Users.update(server(), user.id, %{personal_athanor_id: "ath_claimed"})
-      assert {:ok, true} = Users.personal_athanor?(server(), "ath_claimed")
     end
 
     test "touch_identity stamps the sighting without touching the person" do

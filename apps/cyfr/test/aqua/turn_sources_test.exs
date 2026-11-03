@@ -53,18 +53,16 @@ defmodule Aqua.TurnSourcesTest do
 
     user = test_user()
 
-    {:ok, room} =
-      Athanors.create_group(user.user_id, "Sources #{System.unique_integer([:positive])}")
-
-    conn = log_in_user(conn, user, athanor_id: room.id)
-    {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
-    ctx = ready_athanor!(room.id, user.user_id)
+    own = Sanctum.Test.People.athanor!(user.user_id)
+    conn = log_in_user(conn, user, athanor_id: own.id)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(own)
+    ctx = ready_athanor!(own.id, user.user_id)
     # The loops' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
     ScriptedWorker.fresh_limits!(ctx, [@model, @http, @files])
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    {:ok, conn: conn, ctx: ctx, room: room, thread: thread, host: Source.outside("news.example")}
+    {:ok, conn: conn, ctx: ctx, own: own, thread: thread, host: Source.outside("news.example")}
   end
 
   describe "a standing allow after an outside read" do
@@ -120,7 +118,7 @@ defmodule Aqua.TurnSourcesTest do
     end
 
     test "the card's event through the pane and approval.resolve stores an allow naming the host, spent before and after a restart",
-         %{conn: conn, ctx: ctx, room: room, thread: thread, host: host} do
+         %{conn: conn, ctx: ctx, own: own, thread: thread, host: host} do
       turn = accept!(ctx, thread, "@aqua read and keep")
 
       script!([
@@ -138,7 +136,7 @@ defmodule Aqua.TurnSourcesTest do
       assert {:paused, :approval} = run(ctx, turn)
       %{id: card_id} = pending_card(ctx, turn)
 
-      pane = room_pane(conn, room, thread)
+      pane = own_pane(conn, own, thread)
       card_dom = ~s([id$="-card-#{card_id}"])
       assert render(pane) =~ "news.example"
 
@@ -210,7 +208,7 @@ defmodule Aqua.TurnSourcesTest do
 
     test "the prompt's pinned page and an outside-derived note in the index join without a notes.read",
          %{ctx: ctx, thread: thread, host: host} do
-      {:ok, _} = Aqua.Notes.pin(ctx, "about-us", "We are planning a trip.")
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
       {:ok, _} = Aqua.Notes.keep(ctx, "clip", "Fares rise on Monday", sources: [host])
 
       turn = accept!(ctx, thread, "@aqua hello")
@@ -603,10 +601,10 @@ defmodule Aqua.TurnSourcesTest do
     assert {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
   end
 
-  defp room_pane(conn, room, thread) do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(Athanors.route_slug(room), thread.id))
+  defp own_pane(conn, own, thread) do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(Athanors.route_slug(own), thread.id))
     settled_render(view)
-    child!(view, "pane-" <> room.id)
+    child!(view, "pane-" <> own.id)
   end
 
   # A nested view mounts after its host renders; look again until it has.

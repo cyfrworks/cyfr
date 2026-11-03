@@ -175,8 +175,10 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     Prima.Test.RateLimiter.reset!()
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
 
-    _athanor = Sanctum.TestContext.athanor!()
-    issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+    # The source is a person signed in and working in their own athanor.
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    own = Sanctum.Test.People.athanor!(user)
+    issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)
     echo!(source)
@@ -272,15 +274,23 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
   defp frame_id, do: "frm_data_#{System.unique_integer([:positive])}"
 
-  # Another signed-in person of the same athanor.
+  # A public tincture's address names its athanor by its route segment.
+  defp address(ctx) do
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+    Sanctum.Tenancy.Athanors.route_slug(athanor)
+  end
+
+  # Another signed-in person, working in their own athanor.
   defp person!(namespace) do
-    issuer =
-      Sanctum.TestContext.issuer!(%{
+    {person, user} =
+      Sanctum.TestContext.person!(%{
         Sanctum.TestContext.local()
         | user_id: "local|local|#{namespace}",
           namespace: namespace
       })
 
+    own = Sanctum.Test.People.athanor!(user)
+    issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, ctx} = Sanctum.Caller.establish(session.token)
     ctx
@@ -704,18 +714,17 @@ defmodule Emissary.Web.TinctureDataControllerTest do
         })
 
       declared!(source, "priv-data")
-      :ok
+      {:ok, address: address(source)}
     end
 
-    defp public(name), do: %{athanor: "test", publisher: "local", name: name}
-
-    test "invokes under its public profile, named by its address, with no bearer" do
+    test "invokes under its public profile, named by its address, with no bearer",
+         %{address: address} do
       body =
         TinctureWire.request(:invoke, %{
           ref: "reagent:local.echo:1.0.0",
           operation: "run",
           args: %{},
-          public: public("pub-data")
+          public: public(address, "pub-data")
         })
 
       conn = data(:invoke, body)
@@ -723,15 +732,17 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       assert [row] = mcp_rows("tincture")
       assert row.action == "invoke_public"
-      assert %{"athanor" => "test", "tincture_name" => "pub-data"} = Jason.decode!(row.input)
+
+      assert %{"athanor" => ^address, "tincture_name" => "pub-data"} =
+               Jason.decode!(row.input)
     end
 
-    test "a private tincture named as public is not found, whoever asks" do
+    test "a private tincture named as public is not found, whoever asks", %{address: address} do
       body =
         TinctureWire.request(:action, %{
           operation: "system.status",
           args: %{},
-          public: public("priv-data")
+          public: public(address, "priv-data")
         })
 
       conn = data(:action, body)
@@ -739,14 +750,15 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       assert %{class: "not_found"} = refused(conn, :action)
     end
 
-    test "a request with a bearer and a public tincture is refused unread", %{source: source} do
+    test "a request with a bearer and a public tincture is refused unread",
+         %{source: source, address: address} do
       frame = frame!(source, "pub-data", digest_of("pub-data"))
 
       body =
         TinctureWire.request(:action, %{
           operation: "system.status",
           args: %{},
-          public: public("pub-data")
+          public: public(address, "pub-data")
         })
 
       conn = data(:action, body, bearer: frame.bearer)
@@ -758,21 +770,23 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     # aborts the test's transaction, so a second request would meet that,
     # not the outage. Every kind is admitted through the same caller.
     for kind <- [:invoke, :action, :stream_open] do
-      test "a registry that cannot answer for it is refused unavailable at admission: #{kind}" do
+      test "a registry that cannot answer for it is refused unavailable at admission: #{kind}",
+           %{address: address} do
         # The athanor and the public profile resolve; the version cannot.
         Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
 
-        conn = data(unquote(kind), public_request(unquote(kind), "pub-data"))
+        conn = data(unquote(kind), public_request(unquote(kind), address, "pub-data"))
         assert conn.status == 503
         assert %{class: "unavailable", stage: "admission"} = refused(conn, unquote(kind))
       end
 
       for name <- ["pub-data", "priv-data", "no-such-data"] do
         test "a profile store that cannot answer is unavailable, never not found: " <>
-               "#{kind} #{name}" do
+               "#{kind} #{name}",
+             %{address: address} do
           Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
 
-          conn = data(unquote(kind), public_request(unquote(kind), unquote(name)))
+          conn = data(unquote(kind), public_request(unquote(kind), address, unquote(name)))
           assert conn.status == 503
           assert %{class: "unavailable", stage: "admission"} = refused(conn, unquote(kind))
         end
@@ -780,26 +794,33 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     end
   end
 
-  # A request of `kind` naming the public tincture `name`.
-  defp public_request(:invoke, name),
+  # The public tincture `name` at the athanor `address`.
+  defp public(address, name), do: %{athanor: address, publisher: "local", name: name}
+
+  # A request of `kind` naming the public tincture `name` at `address`.
+  defp public_request(:invoke, address, name),
     do:
       TinctureWire.request(:invoke, %{
         ref: "reagent:local.echo:1.0.0",
         operation: "run",
         args: %{},
-        public: public(name)
+        public: public(address, name)
       })
 
-  defp public_request(:action, name),
+  defp public_request(:action, address, name),
     do:
-      TinctureWire.request(:action, %{operation: "system.status", args: %{}, public: public(name)})
+      TinctureWire.request(:action, %{
+        operation: "system.status",
+        args: %{},
+        public: public(address, name)
+      })
 
-  defp public_request(:stream_open, name),
+  defp public_request(:stream_open, address, name),
     do:
       TinctureWire.request(:stream_open, %{
         stream: "mcp_servers.changes",
         subject: nil,
-        public: public(name)
+        public: public(address, name)
       })
 
   # ---------------------------------------------------------------------------
@@ -947,9 +968,20 @@ defmodule Emissary.Web.TinctureDataControllerTest do
           []
         )
 
+      # The bystander holds the same declaration in their own athanor,
+      # under a name of its own, as a grant's profile id is its name's.
       other = person!("bystander")
+
+      their_digest =
+        tincture!(
+          other,
+          "their-confirm",
+          %{"streams" => [%{"name" => "confirmation.changes"}]},
+          []
+        )
+
       mine = frame!(source, "confirm-dash", digest)
-      theirs = frame!(other, "confirm-dash", digest)
+      theirs = frame!(other, "their-confirm", their_digest)
 
       # A subject from the frame is never taken, the holder's own included.
       for subject <- [other.user_id, source.user_id] do
@@ -968,7 +1000,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       actor = Sanctum.Context.actor(source)
       my_topic = Cyfr.Bus.confirmations(actor, source.user_id)
-      their_topic = Cyfr.Bus.confirmations(actor, other.user_id)
+      their_topic = Cyfr.Bus.confirmations(Sanctum.Context.actor(other), other.user_id)
       wait_until(fn -> Registry.lookup(Cyfr.PubSub, my_topic) != [] end, @stream_ms)
       wait_until(fn -> Registry.lookup(Cyfr.PubSub, their_topic) != [] end, @stream_ms)
 
@@ -1369,7 +1401,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     test "a public page's invoke is held to its public profile's flows", %{source: source} do
       name = "flow-pub"
       tincture!(source, name, %{"connect" => [@origin]}, [@echo])
-      public = %{athanor: "test", publisher: "local", name: name}
+      public = public(address(source), name)
 
       grant!(source, name, :public, [])
       conn = invoke(public: public)
@@ -1591,7 +1623,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     end
 
     test "takes no public page's request", %{mine: mine} do
-      public = %{athanor: "test", publisher: "local", name: "home-canvas"}
+      public = %{athanor: "@test", publisher: "local", name: "home-canvas"}
       path = Prima.TinctureWire.stream_path(mine.frame_id)
 
       body =

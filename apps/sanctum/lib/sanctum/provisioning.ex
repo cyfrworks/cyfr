@@ -10,10 +10,10 @@ defmodule Sanctum.Provisioning do
   (`mint_personal/1`, called by `Sanctum.Newcomer`): a person needs no
   registry, no namespace and no claim to have one, and a cap that refuses
   it refuses the admission before the person's row
-  (`personal_admissible/0`), so no person is made without the athanor. A
-  group is minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`)
-  and filled the first time something reads its bundle
-  (`start_provisioning/1`). Provisioning is idempotent — `provisioned_at`
+  (`personal_admissible/0`), so no person is made without the athanor. It
+  is filled after the admission commits, and again the first time something
+  reads its bundle while it is unfilled (`start_provisioning/1`).
+  Provisioning is idempotent — `provisioned_at`
   marks completion and every step tolerates being repeated — and loud: a
   failure leaves the row unprovisioned with its step and reason on the row
   (`provisioning_failure`), and the next read of the bundle or the next
@@ -45,8 +45,7 @@ defmodule Sanctum.Provisioning do
     * `after_sign_in/1`'s personal fill (`sign_in`): the row and the seat
       were written by the admission; the fill is asked for and runs in the
       background under its own claim. A held claim means someone is
-      filling already, and the sign-in adds nothing. The group retries are
-      asked for the same way. No backoff.
+      filling already, and the sign-in adds nothing. No backoff.
     * `start_provisioning/1`, `ready/1` and `status/1` (`first_need`):
       readers never claim and never wait. They read the claim once and
       answer — filled, filling, failed — and ask for a fill only when
@@ -143,14 +142,11 @@ defmodule Sanctum.Provisioning do
   @doc """
   Called after an admission commits, at every later sign-in, and whenever
   the person's namespace is recorded (`Sanctum.SignIn.record_namespace/2`):
-  asks for the fill of their own athanor while it is unfilled, and for a
-  retry of any group of theirs whose provisioning failed earlier. Mints
+  asks for the fill of their own athanor while it is unfilled. Mints
   nothing: a person's athanor is their admission's (`mint_personal/1`).
   """
   @spec after_sign_in(String.t()) :: :ok
   def after_sign_in(user_id) when is_binary(user_id) do
-    retry_groups(user_id)
-
     case Athanors.get_by_owner(user_id) do
       {:ok, %{status: "active"} = athanor} ->
         fill_after_sign_in(athanor, person_ctx(user_id, athanor.id))
@@ -184,7 +180,7 @@ defmodule Sanctum.Provisioning do
           {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
   def mint_personal(%{id: user_id} = user, athanor_id \\ nil) do
     name = personal_name(user)
-    attrs = %{kind: "person", name: name, owner_user_id: user_id, created_by: user_id}
+    attrs = %{name: name, owner_user_id: user_id, created_by: user_id}
     attrs = if is_binary(athanor_id), do: Map.put(attrs, :id, athanor_id), else: attrs
 
     with {:ok, slugs} <- Athanors.person_slugs(user[:namespace], name),
@@ -566,9 +562,7 @@ defmodule Sanctum.Provisioning do
 
   # Run `fun` under a claim this process now answers for: a keeper renews
   # the lease while it runs, and whatever `fun` did not settle is released
-  # when it ends — when the attempt ends, not when the process does, since
-  # one task fills several athanors in turn (a sign-in retries a person's
-  # groups).
+  # when it ends — when the attempt ends, not when the process does.
   #
   # The keeper is stopped before the release, and stopping it is what
   # quiesces whatever the attempt started beside itself, so the release
@@ -1027,22 +1021,6 @@ defmodule Sanctum.Provisioning do
   end
 
   # ---- the person's own athanor ----------------------------------------------
-
-  # A person's unprovisioned groups are retried with their credential — the
-  # request starts them in the background, and a fill may pull from the registry,
-  # so a sign-in never hangs on an unreachable one. Bounded per sign-in; a
-  # failure lands on the group's row and the next sign-in (or a member's
-  # `athanor.provision`) tries again.
-  @retry_groups_per_sign_in 5
-
-  defp retry_groups(user_id) do
-    Athanors.list_for_user(user_id)
-    |> Enum.filter(&match?(%{kind: "group", provisioned_at: nil}, &1))
-    |> Enum.take(@retry_groups_per_sign_in)
-    |> Enum.each(fn group -> request_fill(group, person_ctx(user_id, group.id), "sign_in") end)
-
-    :ok
-  end
 
   # What the athanor is called: the person's screen name, else the
   # address's local part, else the namespace, else a plain word.

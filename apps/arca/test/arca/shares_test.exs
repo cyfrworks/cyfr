@@ -105,7 +105,8 @@ defmodule Arca.SharesTest do
 
     test "every refusal writes nothing", %{terry: terry, entry: entry} do
       stranger = owner!()
-      group = group!([stranger.user.id])
+      elsewhere = owner!()
+      seat!(elsewhere.athanor.id, stranger.user.id)
       outsiders = thread!([stranger.user.id])
       archived = thread!([terry.user.id])
 
@@ -118,11 +119,11 @@ defmodule Arca.SharesTest do
       revoked = entry!(terry.actor)
       {:ok, _} = Arca.VaultStorage.set_status(terry.actor, revoked.id, "revoked")
       theirs = entry!(stranger.actor)
-      group_actor = %Prima.Actor{athanor_id: group.id, user_id: stranger.user.id}
+      elsewhere_actor = %Prima.Actor{athanor_id: elsewhere.athanor.id, user_id: stranger.user.id}
       not_owner = %{terry.actor | user_id: stranger.user.id}
 
       for {actor, attrs, refusal} <- [
-            {group_actor, %{entry_id: entry.id}, :not_own_athanor},
+            {elsewhere_actor, %{entry_id: entry.id}, :not_own_athanor},
             {not_owner, %{entry_id: entry.id}, :not_own_athanor},
             {terry.actor, %{entry_id: entry.id, audience: "thread", thread_id: outsiders.id},
              :not_member},
@@ -580,7 +581,7 @@ defmodule Arca.SharesConcurrencyTest do
     end
 
     for %{athanor: athanor, user: user} <- made do
-      {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
+      {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
       Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
 
       Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id))

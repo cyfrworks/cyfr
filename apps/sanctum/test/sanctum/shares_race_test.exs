@@ -61,7 +61,7 @@ defmodule Sanctum.SharesRaceTest do
         do: Arca.Repo.delete_all(from(t in Arca.Schemas.SharedThread, where: t.id == ^thread.id))
 
     for %{athanor: athanor, user: user} <- owners do
-      {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
+      {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor.id))
       Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id))
 
       if user do

@@ -88,7 +88,16 @@ defmodule Sanctum.PlatformContextAuditTest do
       n = System.unique_integer([:positive])
       alice = "github|https://github.com|audit-alice-#{n}"
       ops = "github|https://github.com|audit-ops-#{n}"
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice, "Audit #{n}")
+
+      {:ok, athanor} =
+        Sanctum.Tenancy.Athanors.create(%{
+          name: "Audit #{n}",
+          slug: "audit-#{n}",
+          owner_user_id: alice,
+          created_by: "system"
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(alice, scope: "athanor", athanor_id: athanor.id)
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
 
       person = fn user_id, athanor_id, admin? ->
@@ -107,10 +116,12 @@ defmodule Sanctum.PlatformContextAuditTest do
       flush()
 
       # A member's focus, an operator's refused one, and the revalidation
-      # of an operator's session that still names the group.
-      assert {:ok, _} = Context.focus(person.(alice, nil, false), group.id)
-      assert {:error, :not_found} = Context.focus(person.(ops, nil, true), group.id)
-      assert {:ok, %{athanor_id: nil}} = Sanctum.Tenancy.revalidate(person.(ops, group.id, true))
+      # of an operator's session that still names the athanor.
+      assert {:ok, _} = Context.focus(person.(alice, nil, false), athanor.id)
+      assert {:error, :not_found} = Context.focus(person.(ops, nil, true), athanor.id)
+
+      assert {:ok, %{athanor_id: nil}} =
+               Sanctum.Tenancy.revalidate(person.(ops, athanor.id, true))
 
       refute_received {:platform_ctx, _, _}
     end

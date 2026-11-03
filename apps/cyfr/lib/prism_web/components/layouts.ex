@@ -54,7 +54,7 @@ defmodule PrismWeb.Layouts do
   end
 
   @doc """
-  The drawer off the page: the mode's pages, a search row, and New group….
+  The drawer off the page: the mode's pages and a search row.
   Stateless — opened and closed by `Phoenix.LiveView.JS`, rendered hidden
   by every page, so navigating away closes it.
   """
@@ -112,22 +112,6 @@ defmodule PrismWeb.Layouts do
               {item.label}
             </.link>
           <% end %>
-          <div class="pt-4 pb-1">
-            <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-              Athanors
-            </p>
-          </div>
-          <button
-            type="button"
-            id="drawer-new-group"
-            phx-click={
-              hide_drawer()
-              |> JS.push("toggle_popover", value: %{name: "athanors"}, target: "#topbar")
-            }
-            class="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-gray-300 hover:bg-gray-800/60 hover:text-white"
-          >
-            <.icon name="user" class="h-5 w-5 text-gray-500" /> New group…
-          </button>
         </nav>
       </div>
     </div>

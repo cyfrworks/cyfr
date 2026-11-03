@@ -24,7 +24,6 @@ defmodule Arca.ExecutionLockOrderTest do
     ExecutionEvent,
     Message,
     Thread,
-    ThreadSubscription,
     Turn,
     TurnStep
   }
@@ -116,7 +115,6 @@ defmodule Arca.ExecutionLockOrderTest do
     Arca.Repo.delete_all(from(s in TurnStep, where: s.turn_id in ^turn_ids))
     Arca.Repo.delete_all(from(m in Message, where: m.thread_id == ^thread_id))
     Arca.Repo.delete_all(from(t in Turn, where: t.id in ^turn_ids))
-    Arca.Repo.delete_all(from(f in ThreadSubscription, where: f.thread_id == ^thread_id))
     Arca.Repo.delete_all(from(t in Thread, where: t.id == ^thread_id))
   end
 

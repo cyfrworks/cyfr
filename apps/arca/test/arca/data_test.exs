@@ -215,9 +215,9 @@ defmodule Arca.DataTest do
       assert {:ok, minted} =
                Arca.Athanors.mint(server(),
                  attrs: %{
-                   kind: "group",
                    name: "Data #{n}",
                    slug: "data-#{n}",
+                   owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
                    created_by: "usr_d"
                  },
                  also: fn athanor ->

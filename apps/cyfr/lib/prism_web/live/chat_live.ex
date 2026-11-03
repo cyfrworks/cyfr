@@ -3,19 +3,18 @@
 
 defmodule PrismWeb.ChatLive do
   @moduledoc """
-  The chat — one zone across every athanor the person belongs to, at
-  `/chat`.
+  The chat — the person's own threads with AQUA and the threads they share
+  with people, at `/chat`.
 
-  The rail is the person's contact list: every athanor they sit in with
-  its threads, then the threads they share with people — their pairs,
+  The rail is the person's contact list: their athanor with its threads,
+  then the threads they share with people — their pairs,
   each shown by the other person's name, and their shared threads by
   title (`shared_thread.list`). Opening an athanor's thread opens it in
   place as `PrismWeb.ThreadPaneLive`, a nested LiveView with a focused
   context of its own, so nothing here depends on which athanor the session
   happens to default to; opening a shared thread opens
-  `PrismWeb.SharedThreadLive`, which no athanor holds. The workbench's
-  switcher governs the workbench; this page governs itself through its
-  address: `?a=<route>` names the athanor, `?c=<thread_id>` its thread
+  `PrismWeb.SharedThreadLive`, which no athanor holds. This page governs
+  itself through its address: `?a=<route>` names the athanor, `?c=<thread_id>` its thread
   (without it the athanor's most recent, or a fresh one started by the
   first message), and `?s=<thread>` a shared thread.
 
@@ -25,18 +24,17 @@ defmodule PrismWeb.ChatLive do
   title (`shared_thread.create`) and adds the people named
   (`shared_thread.add`). The session's default athanor does not move.
 
-  The page owns what is the page's: the selection, the lists and what is
-  followed, which athanors are unfolded, the phone drawer, the say-aloud
+  The page owns what is the page's: the selection, the lists, whether the
+  athanor's threads are unfolded, the phone drawer, the say-aloud
   picker, the selected athanor's own notifications, and the system layer
   (`PrismWeb.SystemLayer`), where a grant the pane's turn needs is asked
   under the page's context. The pane owns the thread. The shared thread
   in view is announced (`PrismWeb.RoomFeed`) for the person's own AQUA
-  beside the page; the athanor in view is told to the bar over it
-  (`PrismWeb.TopbarLive.viewing/2`) so the tray follows.
+  beside the page.
 
-  The athanors are read once per change to the SET of athanors — a seat
-  gained or lost. Moving between athanors, a message on the open thread,
-  a follow or a rename each touch the one row they concern. The shared
+  The athanor is read once per change to the SET of athanors — a seat
+  gained or lost. A message on the open thread or a rename touches the one
+  row it concerns. The shared
   threads are read again on each change told to the person
   (`Cyfr.Bus.SharedThreadChanged`).
   """
@@ -53,17 +51,12 @@ defmodule PrismWeb.ChatLive do
   alias Sanctum.Tenancy.Athanors
 
   @impl true
-  def mount(_params, session, socket) do
-    # The tray is the session's (`Prism.Tray`): opening an athanor here is
-    # looking at it, so its badge is read the same as focusing the bench.
-    token = session[to_string(CyfrWeb.SignInResponse.session_key())]
-
+  def mount(_params, _session, socket) do
     if connected?(socket),
       do: Cyfr.Bus.subscribe_global(Cyfr.Bus.shared_threads(socket.assigns.context.user_id))
 
     {:ok,
      socket
-     |> assign(:tray_key, token && Prism.Tray.session_hash(token))
      # The session's own athanor, as the mount found it: where the chat
      # opens when the address names none. The page's context moves with
      # the athanor it has open.
@@ -81,7 +74,6 @@ defmodule PrismWeb.ChatLive do
      |> assign(:focus, nil)
      |> assign(:athanor_label, nil)
      |> assign(:threads, [])
-     |> assign(:followed, MapSet.new())
      |> assign(:thread, nil)
      |> assign(:pane, nil)
      |> assign(:shared_threads, [])
@@ -214,9 +206,6 @@ defmodule PrismWeb.ChatLive do
 
     case pick(threads, thread_id) do
       {:ok, target} ->
-        if socket.assigns.tray_key, do: Prism.Tray.clear(socket.assigns.tray_key, athanor.id)
-        PrismWeb.TopbarLive.viewing(self(), athanor.id)
-
         {:noreply,
          socket
          |> assign(:loading?, false)
@@ -230,10 +219,6 @@ defmodule PrismWeb.ChatLive do
          |> assign(:athanor_route, Athanors.route_slug(athanor))
          |> assign(:athanor_label, athanor_label(athanor, socket.assigns.mine, ctx))
          |> assign(:threads, threads)
-         |> assign(
-           :followed,
-           Arca.ThreadSubscriptionStorage.followed(Sanctum.Context.actor(ctx), ctx.user_id)
-         )
          |> update(:expanded, &MapSet.put(&1, athanor.id))
          |> select(target)
          |> sync_rail(athanors)}
@@ -399,9 +384,8 @@ defmodule PrismWeb.ChatLive do
       else: build_rail(socket, athanors)
   end
 
-  # Every athanor the person holds a seat in, each entered through
-  # `Context.focus/2` for its own list, sorted own athanor, DMs, groups;
-  # and the shared threads with the people in them, for a pair.
+  # The person's athanor, entered through `Context.focus/2` for its own
+  # list, and the shared threads with the people in them, for a pair.
   defp build_rail(socket, athanors) do
     %{context: ctx, mine: mine} = socket.assigns
 
@@ -411,43 +395,24 @@ defmodule PrismWeb.ChatLive do
         %{
           athanor: athanor,
           route: Athanors.route_slug(athanor),
-          kind: athanor_kind(athanor, mine),
           label: athanor_label(athanor, mine, ctx),
-          threads: athanor_threads(focus),
-          followed:
-            Arca.ThreadSubscriptionStorage.followed(Sanctum.Context.actor(focus), ctx.user_id)
+          threads: athanor_threads(focus)
         }
       end
-      |> Enum.sort_by(&{kind_rank(&1.kind), String.downcase(&1.label)})
-
-    # An athanor with nothing followed has only its other threads to show, so
-    # they start unfolded — once, when the athanor first joins the rail. A
-    # later toggle is the person's and stands through every rebuild.
-    listed = MapSet.new(socket.assigns.athanors, & &1.athanor.id)
-
-    expanded =
-      Enum.reduce(rows, socket.assigns.expanded, fn row, acc ->
-        cond do
-          MapSet.member?(listed, row.athanor.id) -> acc
-          Enum.any?(row.threads, &MapSet.member?(row.followed, &1.id)) -> acc
-          true -> MapSet.put(acc, other_key(row.athanor.id))
-        end
-      end)
 
     socket
     |> assign(:athanors, rows)
-    |> assign(:expanded, expanded)
     |> patch_row()
     |> load_shared()
   end
 
   # The athanor in view, from what the page already holds for it.
   defp patch_row(%{assigns: %{athanor: %{id: id}}} = socket) do
-    %{threads: threads, followed: followed} = socket.assigns
+    %{threads: threads} = socket.assigns
 
     update(socket, :athanors, fn rows ->
       for row <- rows do
-        if row.athanor.id == id, do: %{row | threads: threads, followed: followed}, else: row
+        if row.athanor.id == id, do: %{row | threads: threads}, else: row
       end
     end)
   end
@@ -462,11 +427,9 @@ defmodule PrismWeb.ChatLive do
     |> assign(:athanor, athanor)
     |> assign(:athanor_label, label)
     |> update(:athanors, fn rows ->
-      rows
-      |> Enum.map(fn row ->
+      Enum.map(rows, fn row ->
         if row.athanor.id == athanor.id, do: %{row | athanor: athanor, label: label}, else: row
       end)
-      |> Enum.sort_by(&{kind_rank(&1.kind), String.downcase(&1.label)})
     end)
   end
 
@@ -477,16 +440,7 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  defp athanor_kind(%{id: id}, mine) when id == mine, do: :mine
-  defp athanor_kind(%{roster: "frozen"}, _mine), do: :dm
-  defp athanor_kind(_athanor, _mine), do: :group
-
-  defp kind_rank(:mine), do: 0
-  defp kind_rank(:dm), do: 1
-  defp kind_rank(:group), do: 2
-
-  # Your own athanor is "You"; a DM is the other person, never the pair
-  # row's own name; a group is its name (`Athanors.pair_label/2`).
+  # Your own athanor is "You" (`PrismWeb.Athanors.label/2`).
   defp athanor_label(athanor, _mine, ctx), do: PrismWeb.Athanors.label(athanor, ctx)
 
   # The active shared threads the person sits in, pairs first by the other
@@ -528,8 +482,6 @@ defmodule PrismWeb.ChatLive do
   defp shared_label(%{title: title}) when is_binary(title), do: title
   defp shared_label(_thread), do: "Thread"
 
-  defp other_key(athanor_id), do: athanor_id <> ":other"
-
   # Whether `id` names one of the open athanor's own threads.
   defp thread_here?(socket, id) when is_binary(id),
     do: Enum.any?(socket.assigns.threads, &(&1.id == id))
@@ -551,10 +503,6 @@ defmodule PrismWeb.ChatLive do
   @impl true
   def handle_event("toggle_athanor", %{"id" => id}, socket) do
     {:noreply, toggle(socket, id)}
-  end
-
-  def handle_event("toggle_other", %{"id" => id}, socket) do
-    {:noreply, toggle(socket, other_key(id))}
   end
 
   def handle_event("open_athanor", %{"route" => route}, socket) do
@@ -697,36 +645,6 @@ defmodule PrismWeb.ChatLive do
     {:noreply, assign(socket, :aloud_for, nil)}
   end
 
-  # Following decides emphasis and notification, never visibility. The
-  # write is the fact; the page's own set follows it without a re-read.
-  # The id comes off the wire and the row is written under the athanor in
-  # focus, so only one of that athanor's own threads may be named.
-  def handle_event("follow_thread", %{"id" => id}, socket) do
-    focus = focused(socket)
-
-    with true <- thread_here?(socket, id),
-         {:ok, _} <-
-           PrismWeb.Ops.call_tool(focus, "thread/follow", %{"thread" => id}) do
-      {:noreply, socket |> update(:followed, &MapSet.put(&1, id)) |> patch_row()}
-    else
-      false -> {:noreply, put_flash(socket, :error, "That thread isn't in this athanor.")}
-      {:error, _} -> {:noreply, put_flash(socket, :error, "Could not follow — try again.")}
-    end
-  end
-
-  def handle_event("unfollow_thread", %{"id" => id}, socket) do
-    focus = focused(socket)
-
-    with true <- thread_here?(socket, id),
-         {:ok, _} <-
-           PrismWeb.Ops.call_tool(focus, "thread/unfollow", %{"thread" => id}) do
-      {:noreply, socket |> update(:followed, &MapSet.delete(&1, id)) |> patch_row()}
-    else
-      false -> {:noreply, put_flash(socket, :error, "That thread isn't in this athanor.")}
-      {:error, _} -> {:noreply, put_flash(socket, :error, "Could not unfollow — try again.")}
-    end
-  end
-
   def handle_event("delete_thread", %{"id" => id}, socket) do
     focus = focused(socket)
 
@@ -837,8 +755,7 @@ defmodule PrismWeb.ChatLive do
     {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
   end
 
-  # This person's own seats changed — a group they were added to, a DM the
-  # other person minted, a seat withdrawn. The guard (`CyfrWeb.ContextGuard`)
+  # This person's own seat changed — a seat withdrawn. The guard (`CyfrWeb.ContextGuard`)
   # revalidates the page's context first and hands the message on: a seat
   # lost under the athanor this page has open ends the page there — nothing
   # else keeps anyone in it, an operator's capability included — so it goes
@@ -869,7 +786,7 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  # The athanor's other notifies are the bar's (the tray) and the pane's.
+  # The athanor's other notifies are the pane's.
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
@@ -964,9 +881,9 @@ defmodule PrismWeb.ChatLive do
   def render(assigns) do
     ~H"""
     <div id="chat-root" class="flex h-full min-h-0">
-      <%!-- The rail: your own athanor, your DMs, your groups and their
-            threads, across every athanor you belong to — a column beside the
-            chat, a drawer over it on a phone. --%>
+      <%!-- The rail: your own athanor's threads, then your pairs and
+            shared threads — a column beside the chat, a drawer over it on a
+            phone. --%>
       <aside
         id="thread-list"
         aria-label="Chats"
@@ -1035,9 +952,6 @@ defmodule PrismWeb.ChatLive do
                 class="flex min-h-6 flex-1 min-w-0 items-center gap-2 text-left hover:text-gray-200"
               >
                 <span class="truncate">{row.label}</span>
-                <span :if={row.kind == :dm} class="text-xs text-gray-600 normal-case">
-                  DM
-                </span>
                 <span class="ml-auto text-xs text-gray-600 normal-case">
                   {length(row.threads)}
                 </span>
@@ -1047,44 +961,15 @@ defmodule PrismWeb.ChatLive do
               <div :if={row.threads == []} class="px-3 py-2 text-xs text-gray-600">
                 No threads yet.
               </div>
-              <% {following, other} =
-                Enum.split_with(row.threads, &MapSet.member?(row.followed, &1.id)) %>
-              <ul :if={following != []} class="divide-y divide-gray-800/60">
+              <ul :if={row.threads != []} class="divide-y divide-gray-800/60">
                 <.thread_row
-                  :for={thread <- following}
+                  :for={thread <- row.threads}
                   thread={thread}
                   route={row.route}
                   current={@thread}
                   athanor_id={@athanor && @athanor.id}
-                  followed
                 />
               </ul>
-              <% other_open? = MapSet.member?(@expanded, other_key(row.athanor.id)) %>
-              <div :if={other != []} class="border-t border-gray-800/60">
-                <button
-                  type="button"
-                  phx-click="toggle_other"
-                  phx-value-id={row.athanor.id}
-                  aria-expanded={to_string(other_open?)}
-                  class="min-h-6 w-full px-4 py-1 text-left text-xs uppercase tracking-wider text-gray-600 hover:text-gray-400"
-                >
-                  Other threads ({length(other)})
-                </button>
-                <ul
-                  :if={other_open?}
-                  id={"athanor-other-" <> row.athanor.id}
-                  class="divide-y divide-gray-800/60"
-                >
-                  <.thread_row
-                    :for={thread <- other}
-                    thread={thread}
-                    route={row.route}
-                    current={@thread}
-                    athanor_id={@athanor && @athanor.id}
-                    followed={false}
-                  />
-                </ul>
-              </div>
             </div>
           </section>
 
@@ -1311,13 +1196,9 @@ defmodule PrismWeb.ChatLive do
   attr :route, :string, required: true
   attr :current, :any, default: nil
   attr :athanor_id, :string, default: nil
-  attr :followed, :boolean, required: true
 
-  # One thread in the rail. Follow/unfollow is a word, not a glyph — the
-  # action must read as what it does. Following decides emphasis and
-  # notification, never access: every row opens on a click. The actions
-  # show on hover or focus at a desk, and always on a phone, which has
-  # neither.
+  # One thread in the rail. Its action shows on hover or focus at a desk,
+  # and always on a phone, which has neither.
   defp thread_row(assigns) do
     assigns =
       assign(assigns, :open?, assigns.current && assigns.thread.id == assigns.current.id)
@@ -1338,7 +1219,7 @@ defmodule PrismWeb.ChatLive do
         aria-current={@open? && "true"}
         class="flex-1 min-w-0 py-2 text-left"
       >
-        <p class={["truncate", if(@followed, do: "text-gray-200", else: "text-gray-400")]}>
+        <p class="truncate text-gray-200">
           {@thread.title}
         </p>
         <p class="text-xs text-gray-600 mt-0.5">
@@ -1348,19 +1229,10 @@ defmodule PrismWeb.ChatLive do
       <button
         :if={@athanor_id && @thread.athanor_id == @athanor_id}
         type="button"
-        phx-click={if @followed, do: "unfollow_thread", else: "follow_thread"}
-        phx-value-id={@thread.id}
-        class="shrink-0 py-2 text-xs text-gray-500 hover:text-gray-200 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
-      >
-        {if @followed, do: "Unfollow", else: "Follow"}
-      </button>
-      <button
-        :if={@athanor_id && @thread.athanor_id == @athanor_id}
-        type="button"
         phx-click="delete_thread"
         phx-value-id={@thread.id}
         class="min-w-6 shrink-0 py-2 text-gray-500 hover:text-red-400 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
-        data-confirm="Delete this thread for everyone?"
+        data-confirm="Delete this thread?"
         aria-label="Delete"
       >
         ×

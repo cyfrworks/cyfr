@@ -4,11 +4,9 @@
 defmodule Aqua.Runner.Admission do
   @moduledoc """
   What a send is held to before anything is written, in order: the text
-  and its size, the sender's standing (the athanor open, the sender a
-  member), and the addressing — a one-person athanor addresses its agent
-  with every message; any other needs a mention, every time, and an
-  unaddressed line is people talking. Only the name is decided here; the
-  agent resolves inside the turn.
+  and its size, the sender's standing (the athanor open, the sender its
+  person), and the agent it addresses — every message addresses one. Only
+  the name is decided here; the agent resolves inside the turn.
   """
 
   alias Aqua.Roster
@@ -18,7 +16,7 @@ defmodule Aqua.Runner.Admission do
   # One human line, in bytes: the one bound every sender passes through.
   @max_message_bytes 32 * 1024
 
-  @type decision :: :post | {:turn, String.t()}
+  @type decision :: {:turn, String.t()}
 
   @doc """
   Admit `text` from `ctx` into the thread, or refuse it with the
@@ -36,7 +34,7 @@ defmodule Aqua.Runner.Admission do
     cond do
       text == "" and attachments == [] -> {:error, :empty}
       byte_size(text) > @max_message_bytes -> {:error, :message_too_long}
-      true -> with :ok <- standing(ctx, athanor_id), do: address(athanor_id, text, opts)
+      true -> with :ok <- standing(ctx, athanor_id), do: address(text, opts)
     end
   end
 
@@ -63,17 +61,13 @@ defmodule Aqua.Runner.Admission do
     end
   end
 
-  defp address(athanor_id, text, opts) do
+  defp address(text, opts) do
     roster = Keyword.get(opts, :agents, [])
     {_stripped, mentioned} = Roster.parse_mention(text, roster)
 
-    if mentioned || Members.solo?(athanor_id) do
-      case pick(roster, mentioned, Keyword.get(opts, :agent), Keyword.get(opts, :last)) do
-        {:ok, name} -> {:ok, {:turn, name}, text}
-        {:error, _} = error -> error
-      end
-    else
-      {:ok, :post, text}
+    case pick(roster, mentioned, Keyword.get(opts, :agent), Keyword.get(opts, :last)) do
+      {:ok, name} -> {:ok, {:turn, name}, text}
+      {:error, _} = error -> error
     end
   end
 

@@ -36,7 +36,6 @@ defmodule Sanctum.Auth.OIDCReauthTest do
 
   alias Sanctum.Auth.OIDC
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   @issuer "https://idp.example.com"
 
@@ -125,7 +124,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
   defp restore(app, key, nil), do: Application.delete_env(app, key)
   defp restore(app, key, value), do: Application.put_env(app, key, value)
 
-  # A person whose door is this issuer's subject, seated in a group, and the
+  # A person whose door is this issuer's subject, seated in their own athanor, and the
   # context their session establishes there.
   defp seated!(subject \\ "sub-#{System.unique_integer([:positive])}") do
     n = System.unique_integer([:positive])
@@ -138,7 +137,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Reauth #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(
@@ -298,7 +297,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
           verified: true
         })
 
-      {:ok, athanor} = Athanors.create_group(user.id, "Reauth GH #{n}")
+      athanor = Sanctum.Test.People.athanor!(user)
 
       ctx =
         Context.build(

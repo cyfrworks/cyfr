@@ -24,9 +24,8 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
   dispatches it as its own sensitive change, under the confirmation
   prompt the operation's `confirmation_required` signal opens. A key,
   webhook or device is re-enabled from a page focused on its own
-  athanor, since each is scoped to it. Elsewhere the checklist links to
-  that athanor. A passkey is the person's own and is re-enabled from any
-  page.
+  athanor, since each is scoped to it. A passkey is the person's own and
+  is re-enabled from any page.
 
   The checklist holds nothing secret: names, labels, a key's display
   prefix and ids.
@@ -35,14 +34,12 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
   use Phoenix.Component
 
   # Each operation: the tool it is dispatched as, the argument naming
-  # the item, the checklist's list of such items, and the page of an
-  # athanor the item is re-enabled from when this page is focused
-  # elsewhere.
+  # the item, and the checklist's list of such items.
   @operations %{
-    "key.reenable" => {"key/reenable", "key_id", :api_keys, "/api-keys"},
-    "webhook.reenable" => {"webhook/reenable", "webhook_id", :webhooks, "/webhooks"},
-    "pairing.reenable" => {"pairing/reenable", "client_id", :paired_clients, "/settings"},
-    "passkey.reenable" => {"passkey/reenable", "passkey_id", :passkeys, nil}
+    "key.reenable" => {"key/reenable", "key_id", :api_keys},
+    "webhook.reenable" => {"webhook/reenable", "webhook_id", :webhooks},
+    "pairing.reenable" => {"pairing/reenable", "client_id", :paired_clients},
+    "passkey.reenable" => {"passkey/reenable", "passkey_id", :passkeys}
   }
 
   @lists [:api_keys, :webhooks, :paired_clients, :passkeys, :profiles, :vault_entries]
@@ -61,7 +58,7 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
   @spec request(map() | nil, String.t(), String.t(), String.t() | nil) ::
           {:ok, String.t(), map()} | :error
   def request(%{} = checklist, operation, id, athanor_id) when is_binary(id) do
-    with {:ok, {tool, arg, list, _page}} <- Map.fetch(@operations, operation),
+    with {:ok, {tool, arg, list}} <- Map.fetch(@operations, operation),
          %{} = item <- Enum.find(Map.get(checklist, list, []), &(&1.id == id)),
          true <- here?(item, athanor_id) do
       {:ok, tool, %{arg => id}}
@@ -272,17 +269,14 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
   attr :myself, :any, required: true
   attr :button_class, :any, required: true
 
-  # One suspended item: its control where this page reaches it, else a
-  # link to the athanor it is re-enabled from.
+  # One suspended item: its control where this page reaches it, else
+  # where it is re-enabled from.
   defp reenable(assigns) do
     item = assigns.item
-    {_tool, _arg, _list, page} = Map.fetch!(@operations, assigns.operation)
 
     assigns =
       assign(assigns,
         here: here?(item, assigns.athanor_id),
-        place: Map.get(item, :athanor_id) && Map.get(assigns.places, item.athanor_id),
-        page: page,
         name: name(assigns.operation, item),
         detail: detail(assigns.operation, item, assigns.places)
       )
@@ -312,15 +306,7 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
       >
         Re-enable
       </button>
-      <.link
-        :if={not @here and @place != nil}
-        navigate={PrismWeb.Focus.path(@place.route, @page)}
-        data-test="restore-checklist-elsewhere"
-        class="shrink-0 text-blue-300 underline"
-      >
-        Re-enable in {@place.name}
-      </.link>
-      <span :if={not @here and is_nil(@place)} class="shrink-0 text-xs text-gray-300">
+      <span :if={not @here} class="shrink-0 text-xs text-gray-300">
         Re-enable it from its own athanor.
       </span>
     </li>

@@ -8,27 +8,25 @@ defmodule PrismWeb.DownloadOutsiderTest do
   without a current seat in the URL's athanor exactly as they answer for
   an athanor that does not exist (`ARCHITECTURE.md` §5.1): a visitor with
   no session is sent to sign in for an active, an archived and a missing
-  athanor alike, and a signed-in person with no seat, a former member
-  included, gets 404 for each.
+  athanor alike, and a signed-in person with no seat gets 404 for each.
   """
 
   use PrismWeb.ConnCase, async: false
 
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Athanors
 
   setup do
-    owner = test_user()
-    {:ok, active} = Athanors.create_group(owner.user_id, "Open #{owner.namespace}")
-    {:ok, closed} = Athanors.create_group(owner.user_id, "Closed #{owner.namespace}")
-    {:ok, _archived} = Athanors.archive(closed)
+    active = Sanctum.Test.People.athanor!(test_user().user_id)
+    closed = Sanctum.Test.People.athanor!(test_user().user_id)
+    Sanctum.TestContext.archive!(closed.id)
 
     routes = %{
       active: Athanors.route_slug(active),
       archived: Athanors.route_slug(closed),
-      missing: "no-such-group-#{System.unique_integer([:positive])}"
+      missing: "@no-such-athanor-#{System.unique_integer([:positive])}"
     }
 
-    {:ok, active: active, routes: routes}
+    {:ok, routes: routes}
   end
 
   @downloads %{
@@ -58,20 +56,6 @@ defmodule PrismWeb.DownloadOutsiderTest do
         for {_which, route} <- routes do
           assert get(conn, "/a/#{route}" <> @suffix).status == 404, route
         end
-      end
-
-      test "answers a former member 404 as it answers for a missing athanor", %{
-        conn: conn,
-        active: active,
-        routes: routes
-      } do
-        former = test_user()
-        conn = log_in_user(conn, former)
-        {:ok, _seat} = Members.ensure(former.user_id, scope: "athanor", athanor_id: active.id)
-        :ok = Members.remove_member(active, user_id: former.user_id)
-
-        assert get(conn, "/a/#{routes.active}" <> @suffix).status == 404
-        assert get(conn, "/a/#{routes.missing}" <> @suffix).status == 404
       end
     end
   end

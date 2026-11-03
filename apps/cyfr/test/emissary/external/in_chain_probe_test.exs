@@ -54,8 +54,11 @@ defmodule Emissary.External.InChainProbeTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    # A seated member with a session, as the suite's sign-in leaves it.
-    issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local(:api))
+    # A person working in their own athanor with a session, as the suite's
+    # sign-in leaves them.
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:api))
+    own = Sanctum.Test.People.athanor!(user)
+    issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     {:ok, session} = Sanctum.Session.create(issuer)
 
     {:ok, server} =

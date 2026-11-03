@@ -942,7 +942,7 @@ defmodule Arca.FencedPublicationFloorRaceTest do
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
-        {:ok, _} = Arca.TenantTables.delete_all_for(actor)
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
       end)
     end)
 
@@ -1115,7 +1115,7 @@ defmodule Arca.FencedPublicationFloorBudgetTest do
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
-        {:ok, _} = Arca.TenantTables.delete_all_for(actor)
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
       end)
     end)
 

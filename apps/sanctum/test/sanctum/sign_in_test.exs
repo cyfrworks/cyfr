@@ -10,10 +10,9 @@ defmodule Sanctum.SignInTest do
   no person holds is `:no_person` and leaves no door request. A method is
   linked to a standing person under a fresh proof, and their last one
   goes only while they keep a way in. Each admitted sign-in turns the
-  invitations the person's identifier holds into their seats, a shared
-  thread's among them, except where a declared restore still holds the
-  thread: that invitation waits for the first sign-in after the hold
-  lifts.
+  shared-thread invitations the person's identifier holds into their
+  seats, except where a declared restore still holds the thread: that
+  invitation waits for the first sign-in after the hold lifts.
   """
 
   use ExUnit.Case, async: false
@@ -22,7 +21,7 @@ defmodule Sanctum.SignInTest do
 
   alias Arca.Schemas.{PersonIdentity, RestorePerson, SharedThreadMember}
   alias Sanctum.SignIn
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
   alias Sanctum.Test.People
 
   setup tags do
@@ -171,27 +170,6 @@ defmodule Sanctum.SignInTest do
       assert id == user.id
     end
 
-    test "activates the invitations the person's CYFR identity holds" do
-      n = System.unique_integer([:positive])
-      {:ok, owner} = People.linked(info(n))
-      %{user: user, key: key, identifier: identifier} = remote!(n)
-      {:ok, _} = Sanctum.Door.Store.allow("identifier", identifier, "ops")
-      {:ok, group} = Athanors.create_group(owner.id, "Invited #{n}")
-
-      {:ok, _} =
-        Members.create(%{
-          person_identifier: identifier,
-          scope: "athanor",
-          status: "invited",
-          athanor_id: group.id,
-          added_by: owner.id
-        })
-
-      refute Members.member?(user.id, group.id)
-      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
-      assert Members.member?(user.id, group.id)
-    end
-
     test "a returning person's invitation into a shared thread becomes their seat at their next sign-in" do
       n = System.unique_integer([:positive])
       {:ok, owner} = People.linked(info(n))
@@ -246,7 +224,7 @@ defmodule Sanctum.SignInTest do
     assert id == uid
     # the athanor was theirs since admission; the claim does not re-address it
     assert {:ok, %{personal_athanor_id: ^pid}} = Users.get(uid)
-    assert {:ok, %{kind: "person"}} = Athanors.get(pid)
+    assert {:ok, %{owner_user_id: ^uid}} = Athanors.get(pid)
     assert Sanctum.Namespace.lookup(uid) == "user6ns"
 
     # Idempotent; a different slug from the registry keeps the recorded one.
@@ -274,13 +252,12 @@ defmodule Sanctum.SignInTest do
       :ok
     end
 
-    # A person seated in a group of their own, and a context their own
+    # A person seated in their own athanor, and a context their own
     # session establishes there.
     defp seated!(overrides \\ %{}) do
       n = System.unique_integer([:positive])
       {:ok, user} = People.linked(info(n, overrides))
-      {:ok, athanor} = Athanors.create_group(user.id, "Link #{n}")
-      {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+      athanor = People.athanor!(user)
       %{user: user, athanor: athanor, ctx: session_ctx(user, athanor)}
     end
 

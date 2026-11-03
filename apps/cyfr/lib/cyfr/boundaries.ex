@@ -370,7 +370,7 @@ defmodule Cyfr.Boundaries do
           "checks which may stand, and reads and writes the rows only through it. " <>
           "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s in-process agent read " <>
           "alone — the first-need hook: a turn reads its athanor's tree in-process " <>
-          "rather than through the `aqua` tool, and the bundle a group athanor " <>
+          "rather than through the `aqua` tool, and the bundle an unfilled athanor " <>
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
@@ -1463,15 +1463,6 @@ defmodule Cyfr.Boundaries do
           "storage facade's tenant-relative reads."
     },
     %{
-      from: "Prism.Tray",
-      into: "Arca.Cache",
-      functions: [:get],
-      reason:
-        "the tray's badges are kept per browser session under a hash of its token; a " <>
-          "read answers the kept badges or a miss, and drops an expired entry as it " <>
-          "finds it, which is the cache's own housekeeping."
-    },
-    %{
       from: "PrismWeb.AquaPanelLive",
       into: "Arca.Cache",
       functions: [:get],
@@ -1511,14 +1502,6 @@ defmodule Cyfr.Boundaries do
       reason:
         "the chat page lists and opens the focused athanor's threads under its " <>
           "actor; the assistant owns every thread write."
-    },
-    %{
-      from: "PrismWeb.ChatLive",
-      into: "Arca.ThreadSubscriptionStorage",
-      functions: [:followed],
-      reason:
-        "the chat page marks the threads the person follows, read under the focused " <>
-          "athanor's actor; following is changed through the assistant."
     },
     %{
       from: "PrismWeb.ExecutionsLive",
@@ -1630,14 +1613,6 @@ defmodule Cyfr.Boundaries do
           "decodes a message's stored payload and resolution with the store's own " <>
           "projections, which read no row; the assistant owns every thread write."
     },
-    %{
-      from: "PrismWeb.TopbarLive",
-      into: "Arca.ThreadSubscriptionStorage",
-      functions: [:follows?],
-      reason:
-        "the top bar shows whether the person follows the open thread, read under the " <>
-          "actor; following is changed through the assistant."
-    },
     # --- the MCP surface's web adapters ---
     %{
       from: "Emissary.Web.ExecutionEventsController",
@@ -1736,14 +1711,6 @@ defmodule Cyfr.Boundaries do
           "released when it is not taken up, so a retried delivery runs once: the claim " <>
           "is the ingress plug's own, keyed by the webhook and the sender's key, and " <>
           "holds no athanor's data."
-    },
-    %{
-      from: "Prism.Tray",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the tray keeps the badges it computed per browser session, under a hash of " <>
-          "its token, for a bounded time: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.AquaPanelLive",
@@ -2142,9 +2109,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Tenancy.Members" => [
       list_by_athanor: 1,
-      member?: 2,
-      people_sharing: 1,
-      solo?: 1
+      member?: 2
     ],
     "Sanctum.Tenancy.Users" => [
       display_name: 1,

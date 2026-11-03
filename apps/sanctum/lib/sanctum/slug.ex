@@ -5,8 +5,9 @@ defmodule Sanctum.Slug do
   @moduledoc """
   Slugs from names, in the grammar personal namespaces use
   (`Prima.ComponentRef.personal_slug_regex/0`): lowercase alphanumerics
-  and single hyphens, 1–39 bytes. A group's slug is derived from its name
-  once, at creation; a person's slug is their namespace and never derived.
+  and single hyphens, 1–39 bytes. An athanor's slug is its person's
+  namespace when they have one, else derived from their name once, at
+  their admission.
   """
 
   @max_length 39

@@ -29,8 +29,6 @@ apps/sanctum/test/sanctum/passkeys_test.exs	8	pending
 apps/sanctum/test/sanctum/person_test.exs	8	pending
 apps/sanctum/test/sanctum/policy/ceiling_test.exs	5	pending
 apps/sanctum/test/sanctum/recovery_test.exs	5	pending
-apps/sanctum/test/sanctum/tenancy/athanors_destroy_test.exs	1	pending
-apps/sanctum/test/sanctum/tenancy/athanors_purge_test.exs	1	pending
 apps/sanctum/test/sanctum/tenancy/caps_test.exs	1	pending
 apps/sanctum/test/sanctum/tenancy_test.exs	5	pending
 apps/sanctum/test/sanctum/tool_grants_test.exs	2	pending

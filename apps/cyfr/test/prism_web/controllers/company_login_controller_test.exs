@@ -32,7 +32,6 @@ defmodule PrismWeb.CompanyLoginControllerTest do
   use CyfrWeb.ConnCase, async: false
 
   alias Sanctum.Auth.OIDC
-  alias Sanctum.Tenancy.Athanors
 
   @issuer "https://idp.example.com"
 
@@ -126,7 +125,7 @@ defmodule PrismWeb.CompanyLoginControllerTest do
     :ok
   end
 
-  # A person seated in a group of their own, and their session's token.
+  # A person in their own athanor, and their session's token.
   defp person! do
     n = System.unique_integer([:positive])
 
@@ -138,7 +137,7 @@ defmodule PrismWeb.CompanyLoginControllerTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Company #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     ctx =
       Sanctum.Context.build(

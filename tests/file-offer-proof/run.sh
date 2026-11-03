@@ -5,7 +5,7 @@
 # The file-offer proof (README.md): a `cyfr` release started as the browser
 # harness starts a home (tests/browser/harness.sh), home.test behind the
 # harness's HTTPS front, three people signed in, two of them seated
-# together in one group and the third in no athanor but their own. In
+# together in one shared thread and the third in no thread with them. In
 # Chromium (proof.mjs), each person in a browser context of their own, the
 # sender offers files from the Files page, the recipient answers them in
 # its Inbox, the sender edits an offered original and withdraws an offer,
@@ -143,9 +143,9 @@ sender_id="$(field "$sender" user_id)"
 recipient_id="$(field "$recipient" user_id)"
 outsider_id="$(field "$outsider" user_id)"
 
-step "the sender's group, with the recipient seated in it"
-group="$(offer_fixture group "$sender_token" "$recipient_id" "File offer proof")"
-printf '%s' "$group" | grep -q '"added":"added"' || fail "the group was not made with the recipient in it: $group"
+step "the sender's shared thread, with the recipient seated in it"
+thread="$(offer_fixture thread "$sender_token" "$recipient_id" "File offer proof")"
+printf '%s' "$thread" | grep -q '"added":"added"' || fail "the thread was not made with the recipient in it: $thread"
 
 step "each person's session as their browser's cookie, and each one's own athanor filled"
 declare -A cookie
@@ -159,12 +159,12 @@ python3 -c "import json, sys; sys.exit(set(json.loads(sys.argv[1])['states'].val
   fail "an athanor is not filled: $settled"
 
 # What the proof is told of the run: the people without their session
-# tokens, the group, the viewport and the cases shown elsewhere.
-python3 - "$OUT/setup.json" "$VIEWPORT" "$sender" "$recipient" "$outsider" "$group" "$settled" \
+# tokens, the thread, the viewport and the cases shown elsewhere.
+python3 - "$OUT/setup.json" "$VIEWPORT" "$sender" "$recipient" "$outsider" "$thread" "$settled" \
   "$OUT/shown-elsewhere.json" <<'PY'
 import json, sys
 
-out, viewport, sender, recipient, outsider, group, settled, shown = sys.argv[1:]
+out, viewport, sender, recipient, outsider, thread, settled, shown = sys.argv[1:]
 people = {}
 for role, raw in (("sender", sender), ("recipient", recipient), ("outsider", outsider)):
     person = json.loads(raw)
@@ -173,7 +173,7 @@ for role, raw in (("sender", sender), ("recipient", recipient), ("outsider", out
 setup = {
     "viewport": viewport,
     "people": people,
-    "group": json.loads(group),
+    "thread": json.loads(thread),
     "settled": json.loads(settled)["states"],
     "shown_elsewhere": json.load(open(shown)),
 }

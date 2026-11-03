@@ -668,9 +668,9 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
 
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
         name: "Admission bench #{n}",
         slug: "admission-bench-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 
@@ -743,7 +743,7 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
   # tenant roster, then the athanor, the person and their identities.
   defp cleanup!(%{athanor_id: athanor_id, user_id: user_id}) do
     Arca.RecordSink.flush()
-    {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
+    {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
     Arca.Repo.delete_all(from(a in "athanors", where: a.id == ^athanor_id))
     Arca.Repo.delete_all(from(i in "external_identities", where: i.user_id == ^user_id))
     Arca.Repo.delete_all(from(u in "users", where: u.id == ^user_id))

@@ -65,9 +65,9 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
         id: id,
-        kind: "group",
         name: "Cluster #{label}",
         slug: slug,
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 
@@ -445,7 +445,7 @@ defmodule Cyfr.Cluster.Fixtures do
         Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       )
 
-  @doc "A person with a session of their own, and their group athanor."
+  @doc "A person with a session of their own, in their own athanor."
   @spec person!() :: map()
   def person! do
     n = System.unique_integer([:positive])
@@ -459,13 +459,13 @@ defmodule Cyfr.Cluster.Fixtures do
         name: "Cluster #{n}"
       })
 
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.id, "Cluster #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(%{
         Sanctum.Context.build(
           user_id: user.id,
-          athanor_id: group.id,
+          athanor_id: athanor.id,
           permissions: [:*],
           scope: :athanor,
           auth_method: :oidc,
@@ -477,7 +477,7 @@ defmodule Cyfr.Cluster.Fixtures do
 
     %{
       user_id: user.id,
-      athanor_id: group.id,
+      athanor_id: athanor.id,
       token: session.token,
       hash: Sanctum.Session.token_hash(session.token)
     }
@@ -633,34 +633,19 @@ defmodule Cyfr.Cluster.Fixtures do
   end
 
   @doc "Archive `athanor_id` from this member, which announces the invalidation."
-  @spec archive!(String.t()) :: atom()
-  def archive!(athanor_id) do
-    {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
-    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(athanor)
-    archived.status
-  end
+  @spec archive!(String.t()) :: String.t()
+  def archive!(athanor_id), do: Sanctum.TestContext.archive!(athanor_id).status
 
   @doc """
   Archive `athanor_id` from this member with its announcement lost: the
-  transition commits, and no member is told.
+  standing moves, and no member is told.
   """
   @spec archive_unheard!(String.t()) :: String.t()
-  def archive_unheard!(athanor_id) do
-    {:ok, change} =
-      Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id,
-        verify: fn _rows -> :ok end
-      )
-
-    change.athanors |> Enum.find(&(&1.id == athanor_id)) |> Map.fetch!(:status)
-  end
+  def archive_unheard!(athanor_id), do: Arca.Test.Actor.archive!(athanor_id).status
 
   @doc "Reopen `athanor_id` from this member."
   @spec reopen!(String.t()) :: String.t()
-  def reopen!(athanor_id) do
-    {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
-    {:ok, reopened} = Sanctum.Tenancy.Athanors.unarchive(athanor)
-    reopened.status
-  end
+  def reopen!(athanor_id), do: Sanctum.TestContext.reopen!(athanor_id).status
 
   @doc """
   An execution of `athanor_id` with `n` durable events after its start: a

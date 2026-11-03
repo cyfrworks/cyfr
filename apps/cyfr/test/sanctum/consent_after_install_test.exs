@@ -129,16 +129,23 @@ defmodule Sanctum.ConsentAfterInstallTest do
     Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
     Application.put_env(:cyfr, :oci_registry_url, Compendium.RegistryHost.none())
 
-    {:ok, group} = Athanors.create_group(ctx.user_id, "Installed #{n}")
-    in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.start_provisioning(in_group)
-    {:ok, group} = Athanors.get(group.id)
-    assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
+    {:ok, slugs} = Athanors.person_slugs(nil, "Installed #{n}")
+
+    {:ok, athanor} =
+      Athanors.create_personal(
+        %{name: "Installed #{n}", owner_user_id: ctx.user_id, created_by: ctx.user_id},
+        slugs
+      )
+
+    in_athanor = %{ctx | athanor_id: athanor.id}
+    :ok = Provisioning.start_provisioning(in_athanor)
+    {:ok, athanor} = Athanors.get(athanor.id)
+    assert %DateTime{} = athanor.provisioned_at, inspect(Athanors.settings(athanor))
 
     assert {:ok, %Prima.Authority{}} =
-             Opus.authority_for(in_group, :default, @formula)
+             Opus.authority_for(in_athanor, :default, @formula)
 
-    assert Aqua.ConsentStatus.state(in_group, @formula) == {:ok, :current}
+    assert Aqua.ConsentStatus.state(in_athanor, @formula) == {:ok, :current}
 
     # The optional provider is installed, as the console's Install does.
     # That widens the closure the formula's consent was minted against, so
@@ -150,23 +157,23 @@ defmodule Sanctum.ConsentAfterInstallTest do
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
 
     assert {:ok, _} =
-             Sanctum.Gate.call_external("component", in_group, %{
+             Sanctum.Gate.call_external("component", in_athanor, %{
                "action" => "pull",
                "reference" => @remote
              })
 
     assert {:error, {:consent_required, _}} =
-             Opus.authority_for(in_group, :default, @formula)
+             Opus.authority_for(in_athanor, :default, @formula)
 
-    assert Aqua.ConsentStatus.state(in_group, @formula) == {:ok, :stale}
-    assert Aqua.stale_consent_refs(in_group) == {:ok, [{@formula, :stale}]}
+    assert Aqua.ConsentStatus.state(in_athanor, @formula) == {:ok, :stale}
+    assert Aqua.stale_consent_refs(in_athanor) == {:ok, [{@formula, :stale}]}
 
     # The bundled assistant names nothing the install touched: its closure
     # ships in the seed, so its consent stands and a turn still pins it.
-    assert Aqua.ConsentStatus.state(in_group, Prima.AgentRef.soul_ref()) == {:ok, :current}
+    assert Aqua.ConsentStatus.state(in_athanor, Prima.AgentRef.soul_ref()) == {:ok, :current}
 
     assert {:ok, %Prima.Authority{}} =
-             Opus.authority_for(in_group, :default, "agent:local.aqua")
+             Opus.authority_for(in_athanor, :default, "agent:local.aqua")
   end
 
   # A local formula that may use the published provider once it is installed.

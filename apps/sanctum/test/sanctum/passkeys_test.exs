@@ -49,7 +49,6 @@ defmodule Sanctum.PasskeysTest do
   alias Sanctum.Consent.Authz
   alias Sanctum.{Context, Passkeys, TestContext}
   alias Sanctum.TestContext.Authenticator
-  alias Sanctum.Tenancy.Athanors
   alias Sanctum.Test.DirectoryServer
 
   setup tags do
@@ -64,8 +63,8 @@ defmodule Sanctum.PasskeysTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A local person with a sign-in method linked, their own athanor and a
-  # group, and the context a new session of theirs establishes there. Their
+  # A local person with a sign-in method linked, their own athanor, and
+  # the context a new session of theirs establishes there. Their
   # email is unverified unless `verified: true`: a verified one is a fresh
   # method wherever a code transport is configured. The door is GitHub
   # unless `provider:` and `key:` name another.
@@ -83,7 +82,7 @@ defmodule Sanctum.PasskeysTest do
         name: "Passkeys #{n}"
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Passkeys #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
     %{user: user, athanor: athanor, key: key, ctx: session_ctx(user, athanor, opts)}
   end
 
@@ -732,7 +731,8 @@ defmodule Sanctum.PasskeysTest do
       key = Sanctum.Auth.Identity.cyfr_key(identity.url, identity.identifier)
 
       # Admitted through the `cyfr` door: a remote person, judged by the
-      # identifier, with a group to work in here and no athanor of their own.
+      # identifier, with their own athanor here, as the remote admission
+      # mints it.
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "ops")
 
       now = DateTime.utc_now()
@@ -769,8 +769,7 @@ defmodule Sanctum.PasskeysTest do
       # Their head cached, as the door caches it when it admits them.
       DirectoryServer.cached!(identity)
 
-      {:ok, athanor} =
-        Athanors.create_group(user.id, "Remote #{System.unique_integer([:positive])}")
+      {:ok, athanor} = Sanctum.Provisioning.mint_personal(user)
 
       %{ctx: admin_ctx} = person!()
       {admin_auth, _} = registered!(admin_ctx)
@@ -1202,7 +1201,6 @@ defmodule Sanctum.PasskeysTest do
 
       %{
         person: user,
-        person_athanor: athanor,
         pending: pending,
         admin: %{admin_ctx | platform_admin: true},
         admin_auth: admin_auth,
@@ -1237,24 +1235,18 @@ defmodule Sanctum.PasskeysTest do
 
       assert admin_user == admin.user_id
 
-      # The person's own clients hear of the new passkey, and they and the
-      # members of every athanor they belong to hear of the recovery; the
-      # administrator's athanor hears of neither.
+      # The person's own clients hear of the new passkey and of the
+      # recovery, in their athanor; the administrator's athanor hears of
+      # neither.
       assert_receive {:announced, [:cyfr, :sanctum, :notify], _,
                       %{kind: :passkey_registered, athanor_id: registered}}
 
       assert registered == person.personal_athanor_id
 
-      recovered =
-        for _ <- 1..2 do
-          assert_receive {:announced, [:cyfr, :sanctum, :notify], _,
-                          %{kind: :passkey_recovered} = meta}
+      assert_receive {:announced, [:cyfr, :sanctum, :notify], _,
+                      %{kind: :passkey_recovered, athanor_id: recovered}}
 
-          meta.athanor_id
-        end
-
-      assert Enum.sort(recovered) ==
-               Enum.sort([person.personal_athanor_id, context.person_athanor.id])
+      assert recovered == person.personal_athanor_id
 
       admin_athanor = context.admin_athanor.id
 
@@ -1428,20 +1420,15 @@ defmodule Sanctum.PasskeysTest do
                {:error, :assertion_refused}
     end
 
-    test "a proof from another member is refused", %{ctx: ctx, athanor: athanor} do
+    test "a proof from another person is refused", %{ctx: ctx} do
       row = opened!(ctx)
 
-      %{user: other_user} = other = person!()
+      other = person!()
       {other_auth, _} = registered!(other.ctx)
-
-      {:ok, _seat} =
-        Sanctum.Tenancy.Members.ensure(other_user.id, scope: "athanor", athanor_id: athanor.id)
-
-      other_here = session_ctx(other_user, athanor)
 
       # Their own passkey over this record, and this record through their session.
       assert Passkeys.assert(
-               other_here,
+               other.ctx,
                row.ref,
                Authenticator.assertion(other_auth, challenge(row))
              ) ==

@@ -38,7 +38,6 @@ defmodule PrismWeb.FilesLiveTest do
   import Ecto.Query, only: [from: 2]
 
   alias PrismWeb.FilesLiveTest.StalledStore
-  alias Sanctum.Tenancy.Members
 
   setup %{conn: conn} do
     user = test_user()
@@ -211,13 +210,13 @@ defmodule PrismWeb.FilesLiveTest do
       assert %{status: "declined"} = Enum.find(outbox, &(&1.offer_id == second))
     end
 
-    test "files picked under data/ are offered to someone picked from the people sharing an " <>
-           "athanor, and once accepted the offer shows accepted with no withdraw",
+    test "files picked under data/ are offered to someone picked from the people sharing a " <>
+           "thread, and once accepted the offer shows accepted with no withdraw",
          %{conn: conn, ctx: ctx} do
       recipient = sharing_person!(ctx, name: "Rita Recipient")
       _stranger = test_user(name: "Stan Stranger")
       archived = sharing_person!(ctx, name: "Archie Archived")
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived.group)
+      {:ok, _} = Sanctum.SharedThreads.archive(ctx.user_id, archived.thread.id)
 
       :ok = Arca.put(actor(ctx), ["data", "a.txt"], "alpha")
       :ok = Arca.put(actor(ctx), ["data", "b.txt"], "beta")
@@ -329,53 +328,6 @@ defmodule PrismWeb.FilesLiveTest do
       assert html =~ "Nothing is waiting for you"
     end
 
-    test "the people a person may send to are those seated with them in an active athanor, " <>
-           "and no one else",
-         %{ctx: ctx} do
-      me = ctx.user_id
-      bob = sharing_person!(ctx, name: "Bob")
-      carol = test_user(name: "Carol")
-      {:ok, _} = Members.ensure(carol.user_id, scope: "athanor", athanor_id: bob.group.id)
-
-      # Bob shares a second group with me: he is listed once.
-      {:ok, second} =
-        Sanctum.Tenancy.Athanors.create_group(bob.user_id, "Second #{bob.namespace}")
-
-      {:ok, _} = Members.ensure(me, scope: "athanor", athanor_id: second.id)
-
-      # An invitation seats no one.
-      {:ok, _} =
-        Members.create(%{
-          scope: "athanor",
-          athanor_id: second.id,
-          person_identifier: "per_" <> Prima.Digest.sha256_hex("invited-#{bob.namespace}"),
-          status: "invited",
-          added_by: me
-        })
-
-      # An archived room is no room.
-      archie = sharing_person!(ctx, name: "Archie")
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archie.group)
-
-      # Someone who sits in rooms of their own, never with me.
-      stan = test_user(name: "Stan")
-      {:ok, _} = Sanctum.Tenancy.Athanors.create_group(stan.user_id, "Alone #{stan.namespace}")
-
-      assert {:ok, people} = Members.people_sharing(me)
-      assert Enum.sort(Enum.map(people, & &1.user_id)) == Enum.sort([bob.user_id, carol.user_id])
-      assert Enum.all?(people, &(Enum.sort(Map.keys(&1)) == [:display_name, :email, :user_id]))
-
-      assert %{display_name: "Bob", email: bob_email} =
-               Enum.find(people, &(&1.user_id == bob.user_id))
-
-      assert bob_email == bob.email
-
-      # Seen from another member, the person is there and the caller is not.
-      assert {:ok, seen_by_carol} = Members.people_sharing(carol.user_id)
-      assert Enum.sort(Enum.map(seen_by_carol, & &1.user_id)) == Enum.sort([bob.user_id, me])
-      assert {:ok, []} = Members.people_sharing(stan.user_id)
-    end
-
     test "the picker lists someone who shares only a thread with the person, and a copy reaches them",
          %{conn: conn, ctx: ctx} do
       rita = test_user(name: "Thread Rita")
@@ -398,7 +350,7 @@ defmodule PrismWeb.FilesLiveTest do
       assert recipient == rita.user_id
     end
 
-    test "a refused read of the people sharing an athanor is told, never shown as no one",
+    test "a refused read of the people sharing a thread is told, never shown as no one",
          %{conn: conn, ctx: ctx} do
       # The page's context stays fresh across the click, so the event
       # reads nothing of the store before the people read it makes.
@@ -417,35 +369,37 @@ defmodule PrismWeb.FilesLiveTest do
       {view, _html} = mount_athanor(conn, "/files?p=data")
       view |> element(~s(#files-entries input[phx-value-path="data/a.txt"])) |> render_click()
 
-      Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
+      Arca.Repo.query!("ALTER TABLE shared_thread_members RENAME TO shared_thread_members_gone")
 
       html =
         try do
           view |> element("#files-send-copy") |> render_click()
         after
-          Arca.Repo.query!("ALTER TABLE athanors_unavailable RENAME TO athanors")
+          Arca.Repo.query!(
+            "ALTER TABLE shared_thread_members_gone RENAME TO shared_thread_members"
+          )
         end
 
-      refute html =~ "You share no athanor or thread with anyone yet."
+      refute html =~ "You share no thread with anyone yet."
       refute has_element?(view, "#send-copy-form")
-      assert html =~ "Who you share an athanor or a thread with could not be read."
+      assert html =~ "Who you share a thread with could not be read."
     end
   end
 
-  # Someone who shares a group with `ctx`'s person, working in that group
-  # in a session of theirs, with the group's tree in place.
+  # Someone `ctx`'s person seated with them in a shared thread of theirs,
+  # working in their own athanor in a session of theirs, with its tree in
+  # place.
   defp sharing_person!(ctx, attrs) do
     person = test_user(attrs)
+    own = Sanctum.Test.People.athanor!(person.user_id)
 
-    {:ok, group} =
-      Sanctum.Tenancy.Athanors.create_group(person.user_id, "Shared #{person.namespace}")
-
-    {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: group.id)
+    {:ok, thread} = Sanctum.SharedThreads.create(ctx.user_id, "Shared #{person.namespace}")
+    {:ok, :added} = Sanctum.SharedThreads.add(ctx.user_id, thread.id, user_id: person.user_id)
 
     session =
       Sanctum.Context.build(
         user_id: person.user_id,
-        athanor_id: group.id,
+        athanor_id: own.id,
         permissions: Sanctum.Context.person_permissions(),
         scope: :athanor,
         auth_method: :oidc,
@@ -453,7 +407,7 @@ defmodule PrismWeb.FilesLiveTest do
       )
 
     :ok = Arca.ensure_roots(Sanctum.Context.actor(session))
-    Map.merge(person, %{ctx: session, group: group})
+    Map.merge(person, %{ctx: session, thread: thread})
   end
 
   defp put!(who, name, content),

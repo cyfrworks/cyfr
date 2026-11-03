@@ -33,7 +33,7 @@ defmodule Sanctum.Consent.AuthzTest do
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.Authz.Request
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @digest "sha256:commit-one"
 
@@ -66,7 +66,7 @@ defmodule Sanctum.Consent.AuthzTest do
     :ok
   end
 
-  # A person seated in a group of their own, and the context a session
+  # A person seated in their own athanor, and the context a session
   # established for them there.
   defp standing_session(_tags) do
     n = System.unique_integer([:positive])
@@ -79,8 +79,7 @@ defmodule Sanctum.Consent.AuthzTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Authz #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(
@@ -1057,8 +1056,7 @@ defmodule Sanctum.Consent.AuthzTest do
     end
 
     test "another person's record is theirs: naming it opens one's own", %{
-      session_ctx: session_ctx,
-      athanor: athanor
+      session_ctx: session_ctx
     } do
       confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
 
@@ -1072,10 +1070,12 @@ defmodule Sanctum.Consent.AuthzTest do
           verified: true
         })
 
-      {:ok, _} = Members.ensure(other.id, scope: "athanor", athanor_id: athanor.id)
-
       theirs = %{
-        ctx(auth_method: :oidc, user_id: other.id, athanor_id: athanor.id)
+        ctx(
+          auth_method: :oidc,
+          user_id: other.id,
+          athanor_id: Sanctum.Test.People.athanor!(other).id
+        )
         | confirmation_id: confirmed.confirmation_id
       }
 
@@ -1313,7 +1313,7 @@ defmodule Sanctum.Consent.AuthzTest do
           else: [{String.duplicate("n", bound), :name}, {String.duplicate("n", bound + 1), :id}]
 
       for {name, shown} <- names do
-        {:ok, _} = Arca.Athanors.update(Prima.Actor.in_athanor(athanor.id), %{name: name})
+        :ok = Arca.Athanors.set(Prima.Actor.in_athanor(athanor.id), name: name)
         key = "k-#{byte_size(name)}"
 
         id =
@@ -1453,7 +1453,7 @@ defmodule Sanctum.Consent.AuthzRaceTest do
     {:ok, _} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
         id: athanor_id,
-        kind: "group",
+        owner_user_id: user_id,
         name: "Consume race #{n}",
         slug: "consume-race-#{n}",
         created_by: user_id

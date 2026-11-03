@@ -40,7 +40,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes two surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Tailscale Serve or Caddy) and installable as a PWA: the chat with **AQUA** — your friendly assistant — one zone across every athanor you belong to (a shared thread every member of an athanor sees, with approvals any member can decide), your own AQUA in a panel on every page, each athanor's AQUA page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
+- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Tailscale Serve or Caddy) and installable as a PWA: the chat with **AQUA** — your friendly assistant — beside the shared threads you talk in with other people, your own AQUA in a panel on every page, your athanor's AQUA page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
 
 ## Quick Start
 
@@ -119,18 +119,17 @@ cyfr -h
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your thread with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an athanor with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own athanor that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen athanor minted by clicking a person in the chat rail (anyone you share an athanor with is there; it ends when either person leaves — clicking again starts a new, empty one), following a thread decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. Your athanor is your own place, and nobody else sits in it: in your own thread with AQUA every message addresses AQUA and you decide its approvals — the same thread on your phone and your laptop. People talk in shared threads: a title, its people, each equal, and their messages with attachments. Nothing runs in a shared thread — no AQUA answers there and no approval card appears. A pair is a shared thread of two, made by clicking a person in the chat rail (anyone you share a thread with is there); it ends when either person leaves, and clicking again starts a new, empty one. Your own AQUA rides along in a floating panel on every page — a private thread in your own athanor that reads the thread you have open — and a line from it reaches a shared thread only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the chat:
 
-- **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<athanor>&c=<thread>` deep-links one). The athanor's **AQUA** page at `/a/<athanor>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search`, `forget` and `endorse` (a person's click making a note kept after outside reading their own) — and a schedule with `keep_outcome` in its metadata files each run's output as one.
-- **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
-- **The drawer** — off the chat, on every screen size: **AQUA**, **Files**, **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the system layer's grant sheet binds an entry to the model's catalyst. The shipped model catalysts name their connection on each request; CYFR attaches the key in the host, and the catalyst receives no key.
+- **The chat** — one page, `/chat`: a rail of your own threads with AQUA, your pairs and your shared threads (`/chat?c=<thread>` deep-links one of your own, `/chat?s=<thread>` a shared one). **New thread with people** names a title and people. A shared thread's header holds its people, adding someone by name, an invitation link, rename, leave and archive. The athanor's **AQUA** page at `/a/<athanor>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search`, `forget` and `endorse` (a person's click making a note kept after outside reading their own) — and a schedule with `keep_outcome` in its metadata files each run's output as one.
+- **The drawer** — off the chat, on every screen size: **AQUA**, **Files**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the system layer's grant sheet binds an entry to the model's catalyst. The shipped model catalysts name their connection on each request; CYFR attaches the key in the host, and the catalyst receives no key.
 - **Canvases** — **Canvas** on the top bar (`/a/<athanor>/canvas`) is the shell: your canvases, each your own page, written in HTML, CSS and JavaScript like any app and showing what it reads, with the apps you open over them, each a window, a tile at an edge or full, arranged as you leave it. Move between canvases with the dots on the shelf along the bottom, Ctrl+Alt+1 to 8, Ctrl+Alt+←/→ while no app is active, or a swipe on the shelf; only the canvas you are looking at reads and acts. A canvas changes nothing in CYFR, and what it reads can leave your browser as any app's can. Ask AQUA for a canvas and it writes one (`canvas.write`) as a new version once you approve it, on a card that names what the canvas reads; your browser validates the version before it shows it, keeping the version it replaces. A **feed** runs one operation of an installed component on an interval, and a canvas reads its results by the feed's name; AQUA always asks before it binds one, and the **Schedules** page lists and removes them. A canvas that does not start, or whose page stops, is replaced by the standard canvas while your windows and AQUA stay as they are, with one line offering to try it again or restore its last working version.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has an auth provider; operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
-Tinctures can stay private inside Prism, or be made public and shared at CYFR's address, `<address>/t/<athanor>/<publisher>/<name>`: `http://localhost:4000` with local access, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` with tailnet access, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` with public access, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
+Tinctures can stay private inside Prism, or be made public and shared at CYFR's address, `<address>/t/@<namespace>/<publisher>/<name>`: `http://localhost:4000` with local access, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` with tailnet access, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` with public access, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
 
 ## Project Layout
 
@@ -163,7 +162,7 @@ your-project/
     ├── cache/              # Immutable cached artifacts (OCI blobs)
     ├── system/             # Server-internal scratch (health probes)
     ├── shared/             # One tree per shared thread: its attachments
-    └── athanors/           # One tree per athanor — each person's and each group's
+    └── athanors/           # One tree per athanor — each person's own
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/
             │   ├── catalysts/   # Bundled: files, http, claude, openai, gemini, grok, openrouter
@@ -253,7 +252,7 @@ suggests a choice on the grant sheet and binds nothing by itself. Each
 binding has its own lifetime: standing, until a time, or once under one
 root run. **Share** offers an attach-only API key or bundle whose
 destination names its methods and paths to everyone on this CYFR or to one
-group you are in, with optional daily caps per person and in total. The
+shared thread you sit in, with optional daily caps per person and in total. The
 people it is offered to see it under **Shared with you** and pick it on
 their own grant sheet, and CYFR attaches the key to their requests without
 disclosing it. **Shared by you** lists your shares with today's use, where
@@ -718,24 +717,24 @@ of any CYFR. With no person yet the page offers none of these: it says the
 CYFR is not set up and points to the link `cyfr init` or `cyfr setup`
 printed.
 
-An invitation admits someone without opening sign-in to everyone. A
-member creates an invitation link for a group they sit in, on **Members**
-(or `cyfr call invitation '{"action":"create","athanor_id":"ath_…"}'`, with
-an optional `"name"`); typing a name on **Members** that nobody holds yet
-offers a link with that name filled in. The platform administrator may also
-create one that names no group. The link is `<CYFR address>/invite#<code>`:
+An invitation admits someone without opening sign-in to everyone. The
+platform administrator creates an invitation link to this CYFR on
+**Settings** (**Invite to this CYFR**); anyone in a shared thread creates
+one that also seats the newcomer there, from the thread's header (or `cyfr
+call invitation '{"action":"create","thread_id":"sth_…"}'`, with an
+optional `"name"`, which fills the newcomer's name in). The link is `<CYFR address>/invite#<code>`:
 it is shown once, works once and expires after seven days, and this CYFR
-keeps only the code's hash. Its page names who invited and to which group.
-Someone new types their name and creates a passkey, which makes the person,
-their keys, their athanor and the seat in the group, then saves their
-recovery code. Someone who already has a CYFR name takes **Already have a
+keeps only the code's hash. Its page names who invited and to which thread,
+if any. Someone new types their name and creates a passkey, which makes the
+person, their keys, their athanor and the seat in the thread, then saves
+their recovery code. Someone who already has a CYFR name takes **Already have a
 CYFR name? Sign in with it.** and signs in from their own CYFR; the sign-in
 redeems the invitation, seats them and writes an allow of their identifier,
 so they sign in later without the link. That allow is written only where no
 deny names them, a deny written later outranks it, and it shows in `cyfr
 admin list` and Settings' allowlist, where it is removed like any other.
 The issuer or the administrator revokes a link; a link whose issuer has
-since left the group or been denied, or whose issuer's standing has changed
+since left the thread or been denied, or whose issuer's standing has changed
 since it was made (a restore from backup changes everyone's), admits no one.
 
 The first person of a CYFR is made by its setup, or by a restore onto an
@@ -759,9 +758,9 @@ passphrase), does the same and shows the recovery code. A lost answer is
 finished with the same key, never by setting up again; once the person
 holds a passkey, a paired device or a linked sign-in method, the link,
 and any other token, says it is not valid or setup is complete.
-A local admission at this server (setup, an invitation, an open admission or a restore) makes the person with their
-own keys and their own athanor, and an invitation adds the seat it names; a remote admission, of a person whose keys
-another CYFR holds, makes neither. The athanor is seeded and baseline-consented
+Every admission at this server (setup, an invitation, an open admission, a restore, or a sign-in from another CYFR)
+makes the person with their own athanor, and an invitation adds the thread seat it names; a local admission also makes
+their keys, which a remote admission, of a person whose keys another CYFR holds, leaves at their own CYFR. The athanor is seeded and baseline-consented
 (the bundled `catalyst:local.http`
 is granted `egress.domains ["*"]` for public hosts, GET/POST/HEAD, 60/min;
 private addresses it cannot reach at all — its manifest declares no
@@ -771,17 +770,17 @@ reachable from a chain as an MCP server on `CYFR_PRIVATE_EGRESS_TARGETS`,
 which is the server's own, and not as a URL to fetch). Sign-in never asks
 cyfr.run: the athanor is filled in the background (see [Operator
 notes](#operator-notes-for-shared-servers-and-open-sign-in)), and push tokens
-are needed only to publish. A remote person's keys and athanor stay at
-their own CYFR, and here they hold what their memberships give them. An
+are needed only to publish. An
 installation set up for a restore (`CYFR_RESTORE_TOKEN`) reserves its first
 person for the restore: setup makes no one before it ([Backup and
 restore](#backup-and-restore)). `cyfr admin deny <person|identifier>`
 (their id here, `usr_…`, or their person identifier) revokes a
-person's sessions and keys, archives their own athanor, removes them from every group
-and withdraws the invitations that identifier was still holding; removing
+person's sessions and keys, archives their own athanor, removes them from every shared
+thread (archiving their pairs and every thread they leave empty) and withdraws the
+invitations that identifier was still holding; removing
 the deny (`cyfr admin remove <entry-id>`), or for an identifier `cyfr admin
-allow`, lets them back in and reopens their own athanor — group seats are not
-restored, a member adds them again. Work running in an athanor when it is
+allow`, lets them back in and reopens their own athanor — thread seats are not
+restored, someone in the thread adds them again. Work running in an athanor when it is
 archived stops for good, on every server, whether or not the server heard:
 a reopen admits only runs started after it.
 
@@ -792,13 +791,14 @@ and anyone who signs in with their CYFR identity —
 that is the public-hosting configuration, and it is the one where the limits
 matter. They are platform settings in
 [configuration-guide.md](configuration-guide.md): the `tenancy` group's
-athanors on the server, groups one person creates, DMs one person holds,
-seats in a group, threads, schedules, feeds and external servers in an
-athanor, the bytes one athanor holds, and the athanors minted per hour (`CYFR_MINT_PER_HOUR`, a rate). Each count
-ships with a generous default — 10,000 athanors, 50 groups, 200 DMs, 1,000
-seats, and 1,000 each of threads, schedules, feeds and external servers —
-and each is turned off with `0`; the bytes one
-athanor holds have no ceiling until you set one. The mint rate is a bound
+athanors on the server, shared threads one person creates, pairs one
+person holds, people in one shared thread, threads, schedules, feeds and
+external servers in an athanor, the bytes one athanor holds, and the
+athanors minted per hour (`CYFR_MINT_PER_HOUR`, a rate). The athanor
+counts ship with a generous default — 10,000 athanors, and 1,000 each of
+threads, schedules, feeds and external servers in one — and each is turned
+off with `0`; the shared-thread counts and the bytes one athanor holds have
+no ceiling until you set one. The mint rate is a bound
 that is never 0: `CYFR_MINT_PER_HOUR=0` refuses the boot, and unset is no
 bound.
 
@@ -811,41 +811,41 @@ always beats `*`.
 Closing sign-in to everyone again — `cyfr admin remove` on the `*` entry — ejects
 everyone it was the only reason for: their sessions end and the API keys they
 created are revoked. Their standing is untouched (nothing is archived, no
-group seat is lost); that is what `deny` is for. The eject happens when the
+thread seat is lost); that is what `deny` is for. The eject happens when the
 entry is removed, so an allowlist row edited directly in the database, or a
 `*` removed while the server is down, leaves live credentials behind — remove
 it through `cyfr admin` on a running server.
 
 ### A CYFR for a household or a team
 
-A household, a team or two people can keep their shared athanors on one
-always-on server, the group's CYFR. Someone with no CYFR of their own
+A household, a team or two people can keep their shared threads on one
+always-on server, the CYFR they join. Someone with no CYFR of their own
 signs in there with one of its sign-in methods, as on any server; someone with a
-CYFR of their own joins from it, where their keys and their own
-athanor stay:
+CYFR of their own joins from it, where their keys stay:
 
-- **Letting them in.** The platform admin of the group's CYFR allows their
-  name (`cyfr admin allow @name`), and a member adds them to a group the
-  same way (**Members**, or `cyfr member add @name`); either keeps the
+- **Letting them in.** The platform admin of the CYFR they join allows their
+  name (`cyfr admin allow @name`), and anyone in a shared thread adds them to
+  it the same way (the thread's header, or `cyfr thread add`); either keeps the
   identifier the name belongs to. The command line also takes their person
   identifier, `per_…`, which their own CYFR's **Settings → Your name** shows.
-  An identifier the group's CYFR has not seen yet leaves an invitation that
+  An identifier the CYFR they join has not seen yet leaves an invitation that
   activates at their first sign-in. An invitation link does both at once:
   signing in from their own CYFR with it seats them and lets them in.
-- **Signing in.** On the sign-in page of the group's CYFR they choose **Sign
+- **Signing in.** On the sign-in page of the CYFR they join, they choose **Sign
   in from your CYFR** and type their own CYFR's address, which a link can
   fill and the browser remembers for that page; they confirm there, and
-  both show the same short code. The group's CYFR reads their identity at
-  the directory it names, which need not be its own, and mints them no
-  keys and no athanor.
-- **Confirming at the group's CYFR.** Signing in with their CYFR identity is
+  both show the same short code. The CYFR they join reads their identity at
+  the directory it names, which need not be its own, mints them no keys, and
+  makes them an athanor of their own there, as it does for anyone it admits.
+- **Confirming at the CYFR they join.** Signing in with their CYFR identity is
   not a fresh proof. Their first passkey there, which its sensitive changes
   need, is authorized by its platform admin under the admin's own fresh
   confirmation; after that they confirm for themselves. A phone they pair
   there is certified at their own CYFR ([devices-guide.md](devices-guide.md)).
-- **Leaving.** Leaving one athanor, or being removed from it, ends that
-  membership, the sessions bound to it and the devices paired for it;
-  their other athanors there, and their own CYFR, are untouched.
+- **Leaving.** Leaving a shared thread, or being removed from it, ends that
+  seat and nothing else: their athanor there, its sessions and devices, and
+  their own CYFR are untouched. A deny is the one way out of the CYFR
+  they joined.
 
 CYFR registers its own people at the directory `CYFR_DIRECTORY_URL` names,
 `https://cyfr.run` by default. Any operator, a household or a team
@@ -1088,7 +1088,7 @@ approvals, unused once-bindings and pending confirmations are dropped;
 every invitation link still open is revoked;
 every stored credential is unusable until it is rotated where it came from
 and entered again; runs open at the backup end uncertain and none resumes;
-and a group admits no new member until each of its members who held a passkey or device has recovered, or a platform administrator ends that member's recovery (`person.close_recovery`).
+and a shared thread admits no one new until each of its people who held a passkey or device has recovered, or a platform administrator ends that person's recovery (`person.close_recovery`).
 [identity-guide.md](identity-guide.md) has the person's side. The
 sign-in providers' OAuth client credentials and the registry push tokens
 stay as the backup restored them. An object store (`CYFR_STORAGE=s3`) is
@@ -1115,7 +1115,7 @@ identifier and new keys onto a fresh installation from their recovery code,
 never their data.
 The operator sets a one-time `CYFR_RESTORE_TOKEN` there and hands it to
 them, and they open `https://<installation>/restore`; until it completes,
-no sign-in method signs anyone in. Their memberships at any other CYFR stand, and they
+no sign-in method signs anyone in. Their athanors and thread seats at any other CYFR stand, and they
 pair their devices again. [identity-guide.md](identity-guide.md) has the
 steps and what each loss costs.
 
@@ -1148,8 +1148,8 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr open` | Open the context's address in your browser, this machine's loopback context as `http://localhost:<port>`; in the shell `cyfr login` started, open this command line's own page instead, whose Open CYFR signs the browser in through a one-time ticket, never the command line's session |
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
-| `cyfr athanor list/get/use/create/rename/settings/provision/archive/unarchive` | Your athanors, your own and your groups: list and show them, point this session at one, create, rename or archive a group, merge settings, retry a provisioning that failed |
-| `cyfr member list/add/remove/leave` | Who is in an athanor: add someone by name (`@name`), person identifier (`per_…`) or user id (`usr_…`), remove someone by user id or person identifier, or leave a group |
+| `cyfr athanor get/settings/provision` | Your athanor: show it, merge settings, retry a provisioning that failed |
+| `cyfr thread create/pair/add/remove/leave/list/people/post` | Shared threads: create one with a title, find or make a pair with someone you share a thread with, add someone by name (`@name`), person identifier (`per_…`) or user id (`usr_…`), remove someone, leave, list your threads, list a thread's people, post a message |
 
 ### Components
 
@@ -1254,7 +1254,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | Sanctum | decisions and the gate: identity, tenancy, authority, consent, vault, caps, the operation table, admission and dispatch, the request log and decision record | `apps/sanctum` | the `cyfr` release | — | — | — | `sanctum` | `[Sanctum…]` |
 | Cyfr | the host: boot, ownership, bus, telemetry, configuration and settings, the endpoint and every other admission path, wiring | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release, image `cyfr` | `cyfr`, with `caddy` in front for public access and `tailscale` in front for tailnet access, with a loopback SOCKS5 proxy for this device's browser | `CYFR_` | — | — | `[Cyfr…]` |
 | Compendium | components: kinds, manifests, registry, activation, provenance, builds over Locus, the tincture rules | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | — | `compendium` | `[Compendium…]` |
-| Aqua | the assistant: threads, rooms, turns, approvals, notes, attachments, memory, its providers | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | — | `aqua` | `[Aqua…]` |
+| Aqua | the assistant: a person's own threads, turns, approvals, notes, attachments, memory, saying a line aloud into a shared thread, its providers | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | — | `aqua` | `[Aqua…]` |
 | Opus | execution: admission, attempts, HostAPI, WorkerAPI, guest egress, schedules | `apps/cyfr/lib/opus` | the `cyfr` release | — | `CYFR_OPUS_`, `CYFR_HOST_API_` | — | `opus` | `[Opus…]` |
 | Emissary | external application protocol adapters: MCP in both directions (external MCP servers over HTTP or through Locus), the HTTP API and its event streams, health, webhooks, the vault's OAuth callback, tinctures' files and data routes | `apps/cyfr/lib/emissary`, `apps/cyfr/lib/emissary/web` | the `cyfr` release | — | — | — | `emissary` | `[Emissary…]` |
 | Prism | the screen: the console | `apps/cyfr/lib/prism`, `apps/cyfr/lib/prism_web` | the `cyfr` release | — | — | — | — | `[Prism…]` |
@@ -1265,7 +1265,8 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | port | one of four behaviours a lower part declares and a higher one implements, installed at boot | — | — | — | — | — | — | — |
 | plane | the kind of caller an operation is admitted for: an external caller, or a call inside a running chain | — | — | — | — | — | — | — |
 | actor | the tenant and identity carrier | — | — | — | — | — | — | — |
-| athanor | the tenancy unit, a person's own or a group's, with no organization or project above it; the one CYFR that holds it decides everything about it | — | — | — | — | — | — | — |
+| athanor | the tenancy unit, one person's own place, with no organization or project above it; the one CYFR that holds it decides everything about it | — | — | — | — | — | — | — |
+| shared thread | a place people talk, which no athanor holds: a title, its people, each equal, and their messages and attachments, with nothing running in it; a pair is a shared thread of two, fixed at its birth | — | — | — | — | — | — | — |
 | lease | a control-plane server's database-held claim to its slot | — | — | — | — | — | — | — |
 | fence | the lease row's renewal token, which each renewal and takeover of the row names and raises; never a publication's identity ([`ARCHITECTURE.md` §6.3](ARCHITECTURE.md#63-publication)) | — | — | — | — | — | — | — |
 | attempt | one try at running an execution on a worker service | — | — | — | — | — | — | — |
@@ -1281,7 +1282,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | `key_epoch` | the identity log entry that introduced a person's current live key; when it changes, every other CYFR retires what it bound to the old one | — | — | — | — | — | — | — |
 | `recovery_epoch` | the first entry of a person's identity log, or the latest recovery that replaced their live key; a passkey another CYFR registered for them is bound to it | — | — | — | — | — | — | — |
 | restore | bringing a person's identity onto a fresh installation from their recovery code, under that installation's single-use restore token; it restores no data | — | — | — | — | — | — | — |
-| carry | a sign-in at another CYFR, such as one that keeps a household's or a team's shared athanors always on, from the address of the person's own CYFR given on its sign-in page, begun at their own CYFR and carried between the two by their browser | — | — | — | — | — | — | — |
+| carry | a sign-in at another CYFR, such as one that keeps a household's or a team's shared threads always on, from the address of the person's own CYFR given on its sign-in page, begun at their own CYFR and carried between the two by their browser | — | — | — | — | — | — | — |
 | pending action | the durable record of one carry: its destination, challenge and return address, resumed by an exact retry | — | — | — | — | — | — | — |
 | passkey | a credential registered at one CYFR, under that CYFR's host, that signs the person in there and gives their fresh confirmations there | — | — | — | — | — | — | — |
 | device key | the key pair a paired device makes and never exports, which its device certificates name | — | — | — | — | — | — | — |

@@ -15,7 +15,7 @@ defmodule Arca.TurnStorageTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{Message, Thread, ThreadSubscription, Turn}
+  alias Arca.Schemas.{Message, Thread, Turn}
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
   alias Ecto.Adapters.SQL.Sandbox
@@ -201,7 +201,6 @@ defmodule Arca.TurnStorageTest do
 
     Arca.Repo.delete_all(from(m in Message, where: m.thread_id == ^thread_id))
     Arca.Repo.delete_all(from(t in Turn, where: t.id in ^turn_ids))
-    Arca.Repo.delete_all(from(f in ThreadSubscription, where: f.thread_id == ^thread_id))
     Arca.Repo.delete_all(from(t in Thread, where: t.id == ^thread_id))
   end
 end

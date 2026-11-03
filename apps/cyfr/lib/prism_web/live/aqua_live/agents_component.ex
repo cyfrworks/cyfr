@@ -587,13 +587,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp acting_count(_), do: 0
 
-  # The allowlist is the athanor's, not the person's: in a group, a member
-  # editing it is editing what AQUA may do for everyone in it.
-  defp allowlist_owner(%{kind: "group", name: name}),
-    do: "This allowlist is #{name}'s — it applies to every member."
-
-  defp allowlist_owner(_athanor), do: ""
-
   defp agent_provider_for_select(agent) do
     detect_provider_from_ref(agent["catalyst_ref"])
   end
@@ -1082,7 +1075,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           <p class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
             <span class="normal-case text-gray-600">
-              — {capabilities_hint(@is_soul)} {allowlist_owner(@athanor)}
+              — {capabilities_hint(@is_soul)}
             </span>
           </p>
           <% auto_count = count_auto(@tool_policy, @tool_actions) %>

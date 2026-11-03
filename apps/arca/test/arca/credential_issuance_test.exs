@@ -95,9 +95,9 @@ defmodule Arca.CredentialIssuanceTest do
       {:ok, _} =
         Arca.Athanors.insert(server(), %{
           id: athanor_id,
-          kind: "group",
           name: "CI #{n}",
           slug: "ci-#{n}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           created_by: user_id
         })
     end)
@@ -236,14 +236,8 @@ defmodule Arca.CredentialIssuanceTest do
     } do
       test = self()
 
-      # The athanor stays open: the person is one of two, so the denial
-      # leaves the group standing and the refusal is the person's.
-      other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
-
-      unboxed(fn ->
-        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: other, added_by: "x"})
-      end)
-
+      # The athanor stays open: it is not the person's own, so the denial
+      # leaves it standing and the refusal is the person's.
       denier = paused_denial(user_id)
       assert_receive :denial_holds, 5_000
       attrs = key_attrs(user_id, athanor_id)
@@ -266,7 +260,7 @@ defmodule Arca.CredentialIssuanceTest do
       refute unboxed(fn -> Arca.Repo.exists?(where(ApiKey, key_hash: ^attrs.key_hash)) end)
     end
 
-    test "a rotation reads the archive's commit and is refused", %{
+    test "a rotation reads the denial's commit and is refused", %{
       user_id: user_id,
       athanor_id: athanor_id
     } do
@@ -281,22 +275,8 @@ defmodule Arca.CredentialIssuanceTest do
           )
         end)
 
-      archiver =
-        Task.async(fn ->
-          unboxed(fn ->
-            SecurityTransitions.archive_athanor(server(), athanor_id,
-              verify: fn _rows ->
-                send(test, :archive_holds)
-
-                receive do
-                  :go -> :ok
-                end
-              end
-            )
-          end)
-        end)
-
-      assert_receive :archive_holds, 5_000
+      denier = paused_denial(user_id)
+      assert_receive :denial_holds, 5_000
 
       rotator =
         Task.async(fn ->
@@ -313,8 +293,8 @@ defmodule Arca.CredentialIssuanceTest do
         end)
 
       refute Task.yield(rotator, 300)
-      send(archiver.pid, :go)
-      assert {:ok, %{transitioned: true}} = Task.await(archiver, 25_000)
+      send(denier.pid, :go)
+      assert {:ok, %{transitioned: true}} = Task.await(denier, 25_000)
       assert {:error, :stale_generation} = Task.await(rotator, 25_000)
 
       assert unboxed(fn ->
@@ -1395,7 +1375,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     }
   end
 
-  # A person seated in a group of their own, in this case's sandbox.
+  # A person seated in an athanor another person owns, in this case's sandbox.
   defp standing! do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
@@ -1428,9 +1408,9 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     {:ok, _} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
         id: athanor_id,
-        kind: "group",
         name: "Order #{n}",
         slug: "order-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: user_id
       })
 

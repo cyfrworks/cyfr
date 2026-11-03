@@ -14,8 +14,8 @@ defmodule Aqua.NotesTest do
     assert Notes.describe(%{kept: "flight", athanor_id: "ath_1", replaced: true}) ==
              "📝 Replaced the note: flight"
 
-    assert Notes.describe(%{pinned: "about-us", athanor_id: "ath_1"}) == "📝 Pinned about-us"
-    assert Notes.describe(%{cleared: "about-us", athanor_id: "ath_1"}) == "📝 Cleared about-us"
+    assert Notes.describe(%{pinned: "about-you", athanor_id: "ath_1"}) == "📝 Pinned about-you"
+    assert Notes.describe(%{cleared: "about-you", athanor_id: "ath_1"}) == "📝 Cleared about-you"
     assert Notes.describe(%{forgot: "flight", athanor_id: "ath_1"}) == "📝 Forgot the note: flight"
   end
 
@@ -105,7 +105,13 @@ defmodule Aqua.NotesStoreTest do
 
     n = System.unique_integer([:positive])
     user = "local|idp|notes-#{n}"
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Notes #{n}")
+
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Notes #{n}", owner_user_id: user, created_by: user},
+        ["notes-#{n}"]
+      )
+
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
     {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end
@@ -138,13 +144,13 @@ defmodule Aqua.NotesStoreTest do
     actor: actor
   } do
     member!()
-    assert {:ok, %{pinned: "about-us"}} = Notes.pin(ctx, "about-us", "We plan a trip.")
+    assert {:ok, %{pinned: "about-you"}} = Notes.pin(ctx, "about-you", "We plan a trip.")
     assert {:ok, %{content: "We plan a trip."}} = Notes.pinned(ctx)
-    assert %{revision: 1} = Arca.FencedPublication.document(actor, "notes/about-us.md")
+    assert %{revision: 1} = Arca.FencedPublication.document(actor, "notes/about-you.md")
 
-    assert {:ok, %{cleared: "about-us"}} = Notes.pin(ctx, "about-us", "")
+    assert {:ok, %{cleared: "about-you"}} = Notes.pin(ctx, "about-you", "")
     assert :none = Notes.pinned(ctx)
-    assert {:ok, %{cleared: "about-us"}} = Notes.pin(ctx, "about-us", "")
+    assert {:ok, %{cleared: "about-you"}} = Notes.pin(ctx, "about-you", "")
   end
 
   describe "the member's ownership" do
@@ -292,7 +298,7 @@ defmodule Aqua.NotesStoreTest do
                Notes.endorse(ctx, "clip", Prima.Source.to_json_list([host]))
 
       assert {:error, {:invalid_argument, _}} =
-               Notes.endorse(ctx, "about-us", Prima.Source.to_json_list([host]))
+               Notes.endorse(ctx, "about-you", Prima.Source.to_json_list([host]))
 
       assert {:error, {:not_found, "note", "gone"}} =
                Notes.endorse(ctx, "gone", Prima.Source.to_json_list([host]))
@@ -371,11 +377,11 @@ defmodule Aqua.NotesStoreTest do
       assert {:ok, %{sources: [%Prima.Source{class: :filed}, ^host], thread: ^thread}} =
                Notes.read(ctx, "clip")
 
-      assert {:ok, %{pinned: "about-us"}} =
+      assert {:ok, %{pinned: "about-you"}} =
                Aqua.Providers.Notes.handle(
                  "notes",
                  guest,
-                 Map.merge(lineage, %{"action" => "pin", "name" => "about-us", "content" => "y"})
+                 Map.merge(lineage, %{"action" => "pin", "name" => "about-you", "content" => "y"})
                )
 
       assert {:ok, %{sources: []}} = Notes.pinned(ctx)
@@ -495,7 +501,13 @@ defmodule Aqua.NotesRunReadTest do
 
     n = System.unique_integer([:positive])
     user = "local|idp|run-read-#{n}"
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Run read #{n}")
+
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Run read #{n}", owner_user_id: user, created_by: user},
+        ["run-read-#{n}"]
+      )
+
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
     {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end
@@ -537,7 +549,7 @@ defmodule Aqua.NotesRunReadTest do
   end
 
   defp read(ctx, run, name),
-    do: Notes.read(ctx, name, "athanor", root_execution_id: run.execution_id)
+    do: Notes.read(ctx, name, root_execution_id: run.execution_id)
 
   test "the first read records the revision it answered, and a later read leaves it", %{ctx: ctx} do
     run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
@@ -567,7 +579,7 @@ defmodule Aqua.NotesRunReadTest do
 
     assert {:ok, _} = read(ctx, run, "other")
     assert {:ok, _} = Notes.read(ctx, "nightly")
-    assert {:ok, _} = Notes.read(ctx, "nightly", "athanor", root_execution_id: "exec_elsewhere")
+    assert {:ok, _} = Notes.read(ctx, "nightly", root_execution_id: "exec_elsewhere")
     assert recorded(ctx, run) == nil
   end
 
@@ -603,8 +615,15 @@ defmodule Aqua.NotesRunReadTest do
   test "a chain in another athanor cannot record this occurrence's read", %{ctx: ctx} do
     run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
     n = System.unique_integer([:positive])
-    {:ok, other} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Elsewhere #{n}")
-    elsewhere = %{ctx | athanor_id: other.id}
+    owner = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+    {:ok, other} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Elsewhere #{n}", owner_user_id: owner, created_by: owner},
+        ["elsewhere-#{n}"]
+      )
+
+    elsewhere = %{ctx | user_id: owner, athanor_id: other.id}
 
     assert {:error, {:not_found, "note", "nightly"}} = read(elsewhere, run, "nightly")
     assert recorded(ctx, run) == nil

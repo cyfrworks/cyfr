@@ -625,7 +625,7 @@ defmodule Aqua.Loop do
   defp request(%State{spec: spec} = state, rows, excerpt, _first?) do
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
-    multi? = spec.several_people? or length(authors) > 1
+    multi? = length(authors) > 1
 
     names =
       if multi?, do: Map.new(authors, &{&1, Sanctum.Tenancy.Users.display_name(&1)}), else: %{}

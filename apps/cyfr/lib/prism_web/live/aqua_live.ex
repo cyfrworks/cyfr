@@ -5,17 +5,15 @@ defmodule PrismWeb.AquaLive do
   @moduledoc """
   The athanor's AQUA, at `/a/<athanor>/aqua`: the soul and the roles it
   clones into — each with a prompt, a model and a capability allowlist,
-  the athanor's own (`Compendium.AquaTemplate` seeds them), edited by any
-  member through the `aqua` tool — beside the page the soul reads first
-  (`about-you` in a person's athanor, `about-us` in a group's, pinned
-  through the `notes` tool), the notes kept here, and the scrolls it can
+  the athanor's own (`Compendium.AquaTemplate` seeds them), edited by its
+  person through the `aqua` tool — beside the page the soul reads first
+  (`about-you`, pinned through the `notes` tool), the notes kept here, and the scrolls it can
   read on demand. Every write from this page goes through the tool a
   card in chat goes through, so one gate answers for both.
 
   The page shows the tree of the athanor in focus and nothing else: a
-  person's own athanor page edits their own tree, a group's page the
-  group's. The soul reads only the tree it lives in, so a role in
-  someone's private closet is not the group's to offer.
+  person's own athanor page edits their own tree. The soul reads only the
+  tree it lives in.
 
   Four sections, each a `Phoenix.LiveComponent` that owns its reads and
   its writes (`PrismWeb.AquaLive.Section` states the contract): the roster

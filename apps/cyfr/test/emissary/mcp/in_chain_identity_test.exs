@@ -201,10 +201,10 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
   test "the tenancy verbs are people's acts — never reachable from a running chain" do
     verbs = [
-      {"athanor", "create"},
-      {"athanor", "archive"},
-      {"member", "add"},
-      {"member", "remove"},
+      {"athanor", "settings"},
+      {"athanor", "provision"},
+      {"shared_thread", "add"},
+      {"shared_thread", "remove"},
       {"door", "allow"},
       # A chain may read the athanor's agent definitions, never rewrite them
       # — the tool_policy it runs under is not its own to widen.

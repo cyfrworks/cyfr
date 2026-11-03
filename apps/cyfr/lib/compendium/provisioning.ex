@@ -144,7 +144,7 @@ defmodule Compendium.Provisioning do
 
           {:error, reason} ->
             # A retry the supervisor could not start is only a deferral: the
-            # next sign-in (or a member's athanor.provision) tries again.
+            # next sign-in (or the person's athanor.provision) tries again.
             Logger.error("[Provisioning] background provisioning not started: #{inspect(reason)}")
 
             not_started.()
@@ -301,7 +301,7 @@ defmodule Compendium.Provisioning do
   published dependencies are re-pulled and baseline consents minted for
   any row still without one. Newer shipped versions are NOT copied in:
   they read as available until a person pulls them, so an upgrade never
-  changes an athanor under its members.
+  changes an athanor under its person.
 
   Runs at boot (`Cyfr.SeedOffer`); a failure logs and moves on — a sync
   must never take the server down or block another athanor's.

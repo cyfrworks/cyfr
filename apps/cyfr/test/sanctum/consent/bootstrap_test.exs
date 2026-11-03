@@ -325,8 +325,8 @@ defmodule Sanctum.Consent.BootstrapTest do
       end
     end
 
-    # `person`, signed in to the shared test athanor, a group, where a
-    # first sign-in binds no share; Ana, signed in to her own athanor,
+    # `person`, signed in to the shared test athanor, not their own, where
+    # a first sign-in binds no share; Ana, signed in to her own athanor,
     # where a first sign-in binds a share; the platform administrator.
     setup %{ctx: ctx} do
       {person, _user} = Sanctum.TestContext.person!(ctx)
@@ -396,7 +396,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     end
 
     # A share is bound only in a person's own athanor.
-    test "a first sign-in to a group athanor binds no share, and mints the catalyst",
+    test "a first sign-in to an athanor not the person's own binds no share, and mints the catalyst",
          %{person: person, admin: admin} do
       ship_model!(person)
       share!(admin)

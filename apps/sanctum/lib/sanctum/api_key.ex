@@ -602,8 +602,7 @@ defmodule Sanctum.ApiKey do
   # (see Sanctum.ApiKey.context_from_metadata/1), not at lookup time.
   #
   # A key is a standing channel of its athanor: it stops when the athanor is
-  # archived or its creator is denied on this server (its creator merely
-  # leaving the group leaves it running for the members who remain).
+  # archived or its creator is denied on this server.
   defp validate_key_against_store(key, key_type, client_ip) do
     case Arca.ApiKeyStorage.get_key_by_hash(hash_key(key)) do
       {:error, :not_found} ->

@@ -37,7 +37,6 @@ defmodule Sanctum.Providers.ConfirmationTest do
   alias Sanctum.Context
   alias Sanctum.TestContext
   alias Sanctum.TestContext.{Authenticator, MailSink}
-  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -46,7 +45,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     seated!()
   end
 
-  # A person with a verified email, seated in a group of their own, and the
+  # A person with a verified email, seated in their own athanor, and the
   # context their session establishes there.
   defp seated!(opts \\ []) do
     n = System.unique_integer([:positive])
@@ -59,7 +58,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
         verified: Keyword.get(opts, :verified, true)
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Confirmation #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
     %{user: user, athanor: athanor, session_ctx: session_ctx(user, athanor)}
   end
 
@@ -376,7 +375,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
           verified: true
         })
 
-      {:ok, athanor} = Athanors.create_group(user.id, "Confirmation oidc #{n}")
+      athanor = Sanctum.Test.People.athanor!(user)
       ctx = session_ctx(user, athanor)
       id = asked!(ctx)
 
@@ -523,7 +522,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
           verified: true
         })
 
-      {:ok, athanor} = Athanors.create_group(user.id, "Confirmation addition #{n}")
+      athanor = Sanctum.Test.People.athanor!(user)
       %{oidc_user: user, oidc_ctx: session_ctx(user, athanor)}
     end
 
@@ -866,31 +865,8 @@ defmodule Sanctum.Providers.ConfirmationTest do
       assert row!(session_ctx, id).state == "pending"
     end
 
-    test "a ref names one record in one athanor of one person; any other ref is refused", %{
-      session_ctx: session_ctx,
-      user: user
-    } do
-      authenticator = TestContext.passkey!(user.id)
+    test "a ref that names no record is refused", %{session_ctx: session_ctx} do
       id = asked!(session_ctx)
-      named = ref(id)
-      assertion = assertion!(authenticator, row!(session_ctx, id))
-
-      # The same person, working in another athanor of theirs: the ref
-      # names nothing there.
-      {:ok, elsewhere} = Athanors.create_group(user.id, "Elsewhere #{System.unique_integer()}")
-      elsewhere_ctx = session_ctx(user, elsewhere)
-
-      {:ok, %{confirmations: there}} = call(elsewhere_ctx, "pending", %{})
-      refute Enum.any?(there, &(&1.ref == named))
-
-      for {action, args} <- [
-            {"confirm", %{"ref" => named, "assertion" => assertion}},
-            {"cancel", %{"ref" => named}},
-            {"reauth", %{"ref" => named, "method" => "email"}}
-          ] do
-        assert %Prima.Refusal{class: :not_found} = refusal(call(elsewhere_ctx, action, args)),
-               action
-      end
 
       # A ref that names no record, here or anywhere.
       unknown = ref("cnf_" <> Encoding.b64(:crypto.strong_rand_bytes(32)))

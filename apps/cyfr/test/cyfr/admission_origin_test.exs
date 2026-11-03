@@ -74,9 +74,6 @@ defmodule Cyfr.AdmissionOriginTest do
   @target "reagent:local.origin-target"
   @dep "reagent:local.origin-dep"
   @dep_ref "reagent:local.origin-dep:0.1.0"
-  # `Sanctum.TestContext.athanor!/0`'s group slug: a public tincture's address.
-  @address "test"
-
   # The rows this test holds: every entry that names an origin.
   @rows for row <- Boundaries.admission_entries(), row.origin != :none, do: row
 
@@ -479,7 +476,7 @@ defmodule Cyfr.AdmissionOriginTest do
           ref: @dep_ref,
           operation: "run",
           args: %{},
-          public: %{athanor: @address, publisher: "local", name: "origin-public"}
+          public: %{athanor: address(source), publisher: "local", name: "origin-public"}
         })
 
       assert data(:invoke, public_body).status == 200
@@ -782,7 +779,7 @@ defmodule Cyfr.AdmissionOriginTest do
         kind,
         TinctureWire.request(
           kind,
-          Map.put(request, :public, %{athanor: @address, publisher: "local", name: public})
+          Map.put(request, :public, %{athanor: address(source), publisher: "local", name: public})
         )
       )
 
@@ -798,12 +795,22 @@ defmodule Cyfr.AdmissionOriginTest do
     end
   end
 
+  # A person signed in and working in their own athanor, holding the
+  # frames' dependency.
   defp frame_source! do
-    issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    own = Sanctum.Test.People.athanor!(user)
+    issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)
     echo!(source)
     source
+  end
+
+  # A public tincture's address: its athanor's route segment.
+  defp address(ctx) do
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+    Sanctum.Tenancy.Athanors.route_slug(athanor)
   end
 
   # The reagent the frames' tinctures name as their static dependency,

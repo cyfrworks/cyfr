@@ -132,7 +132,7 @@ defmodule Sanctum.Gate.VisibilityTest do
 
     # `unlock` and `lock` refuse every context but a protected device's
     # own channel (`Sanctum.DeviceUnlock`); listing them grants nothing.
-    test "sees every session action — the anonymous ones, `use`, and a device's unlock and lock" do
+    test "sees every session action — the anonymous ones, and a device's unlock and lock" do
       assert Enum.sort(visible_actions("session", ctx_with([:execute]))) ==
                ~w(lock logout read_resource unlock use whoami)
     end

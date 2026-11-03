@@ -57,7 +57,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # mode and quotas refuse a stale value, and so does the mint rate, the
   # security bound on how fast strangers are minted an athanor; the other
   # rate limits, stream limits and cache bounds serve one.
-  @refuse ~w(max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
+  @refuse ~w(max_athanors max_pairs_per_person
              max_shared_threads_per_person max_people_per_thread max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
              max_external_servers_per_athanor mint_per_hour athanor_storage_bytes session_ttl_hours
              webhook_max_skew_seconds webhook_idempotency_ttl_seconds
@@ -292,7 +292,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     test "exactly the settings that move, and the four the tincture frames read live" do
       assert Enum.sort(Enum.map(Roster.entries(), & &1.key)) ==
                Enum.sort(~w(
-                 max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
+                 max_athanors max_pairs_per_person
                  max_shared_threads_per_person max_people_per_thread
                  max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
                  max_external_servers_per_athanor mint_per_hour athanor_storage_bytes
@@ -349,14 +349,13 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end
     end
 
-    # Sanctum's ceilings on the server's athanors and a group's seats ship
-    # with a generous default, and 0 removes each; an athanor's bytes, the
+    # Sanctum's ceiling on the server's athanors ships with a generous
+    # default, and 0 removes it; an athanor's bytes, the
     # pairs a person holds, the shared threads a person makes and the
     # people in one ship with no ceiling, which an administrator sets.
-    test "the server's athanors and a group's seats ship bounded; an athanor's bytes, pairs and a shared thread's ceilings unbounded" do
+    test "the server's athanors ship bounded; an athanor's bytes, pairs and a shared thread's ceilings unbounded" do
       for {key, default, said} <- [
             {"max_athanors", 10_000, "Unset, 10,000, and 0 removes the ceiling"},
-            {"max_members_per_group", 1_000, "unset, 1,000, and 0 removes the ceiling"},
             {"athanor_storage_bytes", nil, "Unset, no ceiling, and 0 is the same"},
             {"max_pairs_per_person", nil, "Unset, no ceiling, and 0 is the same"},
             {"max_shared_threads_per_person", nil, "unset, no ceiling, and 0 is the same"},
@@ -734,7 +733,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       defaults = Roster.defaults()
 
       assert map_size(defaults) == length(Roster.entries())
-      assert defaults["max_groups_per_person"] == %{default: 50, stale: :refuse}
+      assert defaults["max_athanors"] == %{default: 10_000, stale: :refuse}
       assert defaults["log_level"] == %{default: :info, stale: :serve}
 
       for {_key, declared} <- defaults do

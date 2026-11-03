@@ -33,9 +33,9 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
         name: "Chain log #{n}",
         slug: "chain-log-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

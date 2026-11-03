@@ -599,27 +599,6 @@ defmodule Sanctum.Session do
   end
 
   @doc """
-  Point a session at another of the caller's athanors — what `session.use`
-  and Codex `--athanor` do for non-browser clients. The athanor must be one
-  `Sanctum.Context.focus/2` would grant.
-  """
-  @spec use_athanor(Context.t(), String.t()) ::
-          {:ok, Context.t()}
-          | {:error, :not_found | :archived | :no_session | term()}
-  def use_athanor(%Context{session_token_hash: hash} = ctx, athanor_id)
-      when is_binary(hash) and is_binary(athanor_id) do
-    with {:ok, focused} <- Context.focus(ctx, athanor_id),
-         :ok <- Arca.SessionStorage.update_athanor(hash, athanor_id) do
-      # The next establish must read the repointed row, not the memo of
-      # the athanor this session just left.
-      Sanctum.Caller.invalidate_hash(hash)
-      {:ok, focused}
-    end
-  end
-
-  def use_athanor(%Context{}, _athanor_id), do: {:error, :no_session}
-
-  @doc """
   Drop the established-context memo for every session the user holds,
   without revoking any of them.
 

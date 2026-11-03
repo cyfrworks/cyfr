@@ -36,7 +36,6 @@ defmodule Cyfr.StorageReserveTest do
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   # A reserve small enough for any test filesystem.
   @bytes 64 * 1024
@@ -546,7 +545,7 @@ defmodule Cyfr.StorageReserveTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Storage reserve #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

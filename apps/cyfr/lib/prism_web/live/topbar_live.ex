@@ -4,9 +4,8 @@
 defmodule PrismWeb.TopbarLive do
   @moduledoc """
   The chrome — a nested LiveView mounted via `live_render` in the app
-  layout, remounted with every page: the brand, the athanor switcher (You,
-  then your groups; the one create, New group…), the mode switch, the
-  drawer button, a search icon for the palette, the person, how many files
+  layout, remounted with every page: the brand, the link to the person's
+  AQUA, the mode switch, the drawer button, a search icon for the palette, the person, how many files
   people have offered the person and wait for their answer (`file/offers`,
   read again whenever their own topic, `Cyfr.Bus.file_offers/1`, says one
   moved), and — for a platform admin — how many door requests wait.
@@ -29,14 +28,6 @@ defmodule PrismWeb.TopbarLive do
   bar stays compact in normal operation. `lite` shows none of them: the
   chat is the page.
 
-  The tray — badges on the switcher rows for what happened in an athanor
-  while the person was elsewhere — is `Prism.Tray`, per session, so it
-  survives the remounts; reading an athanor in the chat clears its count.
-  Which athanor is being looked at is `@viewing`: the focused one on a
-  workbench page, and on the chat page whichever athanor the page has open
-  — the chat says so (`viewing/2`) each time it moves, since it moves by
-  patch and this bar does not remount for a patch.
-
   ## The mode switch
 
   Dashboard | Canvas (`#mode-switch`), in every posture: the page this bar
@@ -56,7 +47,7 @@ defmodule PrismWeb.TopbarLive do
   use PrismWeb, :live_view
 
   alias Cyfr.Bus
-  alias Cyfr.Bus.{Notify, Viewing}
+  alias Cyfr.Bus.Notify
 
   @recent_requests_limit 5
   @recent_tincture_limit 5
@@ -69,9 +60,8 @@ defmodule PrismWeb.TopbarLive do
   on_mount {CyfrWeb.ContextGuard, :protected}
 
   # `CyfrWeb.ContextGuard` established the session, focused on the page's
-  # athanor, and subscribed this bar to the person's standing — their
-  # memberships among it, which is what the switcher lists; a session the
-  # guard refuses never reaches here.
+  # athanor, and subscribed this bar to the person's standing; a session
+  # the guard refuses never reaches here.
   @impl true
   def mount(_params, session, socket) do
     token = session[to_string(CyfrWeb.SignInResponse.session_key())]
@@ -79,9 +69,6 @@ defmodule PrismWeb.TopbarLive do
     ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
 
     if connected?(socket) do
-      # The page this bar sits on says which athanor it has in view.
-      Bus.subscribe_page(Bus.page_viewing(socket.parent_pid))
-
       if ctx.platform_admin,
         do: Bus.subscribe_global(Bus.platform_notify())
 
@@ -101,17 +88,12 @@ defmodule PrismWeb.TopbarLive do
      socket
      |> assign(:personal_namespace_slug, ctx.namespace)
      |> assign(:authenticated, true)
-     |> assign(:tray_key, Prism.Tray.session_hash(token))
      |> assign(:ui_mode, ui_mode)
      |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
      |> assign(:surface, surface)
      |> assign(:dashboard_path, dashboard_path(ui_mode, page, PrismWeb.Focus.route_of(ctx)))
-     |> assign(:viewing, ctx.athanor_id)
-     |> assign(:badges, %{})
      |> assign(:platform_requests, 0)
      |> assign(:offers_waiting, 0)
-     |> assign(:athanors, [])
-     |> assign(:labels, %{})
      |> assign(:open_popover, nil)
      |> assign(:system_status, nil)
      |> assign(:running_requests, [])
@@ -143,15 +125,6 @@ defmodule PrismWeb.TopbarLive do
   defp platform_requests(%{platform_admin: true}), do: length(Sanctum.Door.Store.requests())
   defp platform_requests(_ctx), do: 0
 
-  @doc """
-  Tell the bar over page `host` (the LiveView it is rendered in) that
-  `athanor_id` is the athanor in view — the chat calls it as it moves
-  between athanors, and after it has read the athanor's tray count.
-  """
-  @spec viewing(pid(), String.t()) :: :ok
-  def viewing(host, athanor_id) when is_pid(host) and is_binary(athanor_id),
-    do: Bus.broadcast_page(Bus.page_viewing(host), Viewing.new(athanor_id))
-
   # ============================================================================
   # Events
   # ============================================================================
@@ -166,23 +139,6 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, assign(socket, :open_popover, nil)}
   end
 
-  # The one create the chat list offers: a group, born with its creator as
-  # the only member. The chat opens on the new athanor — named in the
-  # address, since the session's default is still the previous one.
-  def handle_event("create_group", %{"name" => name}, socket) do
-    case call_tool(socket, "athanor/create", %{"name" => String.trim(name)}) do
-      {:ok, %{route: route}} when is_binary(route) ->
-        {:noreply, push_navigate(socket, to: PrismWeb.ChatLive.chat_path(route))}
-
-      {:ok, _} ->
-        {:noreply, socket |> assign(:open_popover, nil) |> load_athanors(socket.assigns.context)}
-
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not create the group: #{error_message(reason)}")}
-    end
-  end
-
   # ============================================================================
   # PubSub fan-in
   # ============================================================================
@@ -193,37 +149,11 @@ defmodule PrismWeb.TopbarLive do
 
     socket =
       socket
-      # The counts as the session left them: reading an athanor in the chat
-      # is what clears one, and the chat has done so before this bar loads.
-      |> assign(:badges, Prism.Tray.get(socket.assigns.tray_key))
       |> assign(:platform_requests, platform_requests(ctx))
       |> load_offers_waiting()
-      |> load_athanors(ctx)
       |> load_initial_state()
 
     {:noreply, socket}
-  end
-
-  # The chat moved to another athanor (and cleared its count on the way):
-  # follow it, and re-read the tray rather than trust the copy held here.
-  # Only an athanor this person holds a seat in — the set the rows and the
-  # badges are drawn from — can be the one in view.
-  # The chat moves between athanors by `push_patch`; the bar's name AND its
-  # links follow, so every page the bar offers is the viewed athanor's.
-  def handle_info(%Viewing{athanor_id: athanor_id}, socket) do
-    known = Enum.map(socket.assigns.athanors, & &1.id)
-
-    case Enum.find(socket.assigns.athanors, &(&1.id == athanor_id)) do
-      %{} = athanor ->
-        {:noreply,
-         socket
-         |> assign(:viewing, athanor_id)
-         |> assign(:athanor_route, Sanctum.Tenancy.Athanors.route_slug(athanor))
-         |> assign(:badges, socket.assigns.tray_key |> Prism.Tray.get() |> Map.take(known))}
-
-      nil ->
-        {:noreply, socket}
-    end
   end
 
   @impl true
@@ -280,62 +210,9 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, track_build_stopped(socket, build)}
   end
 
-  # The tray: one fan-in topic per athanor the person belongs to. Something
-  # happening in an athanor that is not in view becomes a badge on its row;
-  # the one in view shows its own live indicators. Only what wants a
-  # person's attention badges: a card settled by someone else does not,
-  # and an athanor renamed or reconfigured just redraws the list.
-  def handle_info(%Notify{kind: :approval_resolved}, socket) do
-    {:noreply, socket}
-  end
-
-  def handle_info(%Notify{kind: :athanor_changed}, socket) do
-    {:noreply, load_athanors(socket, socket.assigns.context)}
-  end
-
   # The door's queue changed: an operator's chip re-counts.
   def handle_info(%Notify{athanor_id: :platform}, socket) do
     {:noreply, assign(socket, :platform_requests, platform_requests(socket.assigns.context))}
-  end
-
-  # A notify that names a thread is for that thread's FOLLOWERS: an
-  # approval pending in a thread this person unfollowed does not light
-  # their tray. The runner still broadcasts on the one athanor topic — the
-  # filter lives at the reader, so no per-user topics exist and the tray
-  # is where following becomes a notification fact.
-  #
-  # The subscription was keyed when the list was read; whether this person
-  # still holds a seat there is read again, through the focus rule, before
-  # anything of that athanor is read or counted.
-  def handle_info(%Notify{athanor_id: athanor_id, payload: %{thread_id: thread_id}}, socket)
-      when is_binary(athanor_id) and is_binary(thread_id) do
-    %{context: ctx, viewing: viewing} = socket.assigns
-
-    with false <- athanor_id == viewing,
-         {:ok, there} <- Sanctum.Context.focus(ctx, athanor_id),
-         true <-
-           Arca.ThreadSubscriptionStorage.follows?(
-             Sanctum.Context.actor(there),
-             thread_id,
-             ctx.user_id
-           ) do
-      {:noreply, assign(socket, :badges, Prism.Tray.bump(socket.assigns.tray_key, athanor_id))}
-    else
-      _ -> {:noreply, socket}
-    end
-  end
-
-  def handle_info(%Notify{athanor_id: athanor_id}, socket) do
-    if athanor_id == socket.assigns.viewing or not seated?(socket, athanor_id) do
-      {:noreply, socket}
-    else
-      badges = Prism.Tray.bump(socket.assigns.tray_key, athanor_id)
-      {:noreply, assign(socket, :badges, badges)}
-    end
-  end
-
-  def handle_info(%Bus.Membership{}, socket) do
-    {:noreply, load_athanors(socket, socket.assigns.context)}
   end
 
   # An offer of several files is announced once per file: the messages
@@ -349,8 +226,6 @@ defmodule PrismWeb.TopbarLive do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
-
-  defp seated?(socket, athanor_id), do: Enum.any?(socket.assigns.athanors, &(&1.id == athanor_id))
 
   defp drain_offer_messages do
     receive do
@@ -606,7 +481,7 @@ defmodule PrismWeb.TopbarLive do
       >
         {Phoenix.Flash.get(@flash, kind)}
       </div>
-      <!-- The drawer, the brand, the athanor in focus (the switcher: You, then your groups) -->
+      <!-- The drawer, the brand, the person's AQUA -->
       <div class="flex items-center gap-2 lg:w-[15rem] lg:pl-1">
         <button
           :if={@authenticated}
@@ -627,107 +502,14 @@ defmodule PrismWeb.TopbarLive do
           <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-7 w-7 rounded-md" />
           <span class="text-lg font-bold text-white tracking-tight">CYFR</span>
         </.link>
-        <div :if={@authenticated} class="relative">
-          <button
-            type="button"
-            phx-click="toggle_popover"
-            phx-value-name="athanors"
-            class={[
-              "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors max-w-[10rem]",
-              if(@open_popover == "athanors",
-                do: "bg-gray-800 text-gray-200",
-                else: "text-gray-300 hover:bg-gray-800/60"
-              )
-            ]}
-          >
-            <span id="viewing-name" class="truncate text-xs font-medium">
-              {Map.get(@labels, @viewing, "Athanor")}
-            </span>
-            <span
-              :if={badge_total(@badges, @viewing) > 0}
-              class="h-2 w-2 rounded-full bg-blue-400 shrink-0"
-            />
-            <span :if={length(@athanors) > 1} class="text-gray-500">▾</span>
-            <span :if={length(@athanors) <= 1} class="text-gray-600">+</span>
-          </button>
-          <div
-            :if={@open_popover == "athanors"}
-            phx-click-away="close_popover"
-            class="absolute left-0 top-full mt-2 w-64 rounded-lg border border-gray-700 bg-gray-900 shadow-xl p-2 z-40"
-          >
-            <%!-- A row opens the athanor's chat; its small AQUA link, the
-                  workbench. --%>
-            <ul :if={length(@athanors) > 1} class="space-y-0.5 text-sm">
-              <li
-                :for={a <- @athanors}
-                class={[
-                  "flex items-center gap-1 rounded-md pr-1",
-                  if(a.id == @viewing,
-                    do: "bg-gray-800 text-white",
-                    else: "text-gray-300 hover:bg-gray-800/60"
-                  )
-                ]}
-              >
-                <.link
-                  navigate={PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(a))}
-                  class="flex flex-1 min-w-0 items-center justify-between px-2 py-1.5"
-                  aria-current={a.id == @viewing && "true"}
-                >
-                  <span class="truncate">
-                    {Map.get(@labels, a.id, a.name)}
-                    <span
-                      :if={a.roster == "frozen"}
-                      class="rounded bg-gray-800 px-1 text-[10px] text-gray-500 ml-1"
-                      title="A DM — a frozen two-person athanor"
-                    >
-                      DM
-                    </span>
-                    <span class="text-xs text-gray-500 ml-1">
-                      {Sanctum.Tenancy.Athanors.route_slug(a)}
-                    </span>
-                  </span>
-                  <span
-                    :if={Map.get(@badges, a.id, 0) > 0}
-                    class="ml-2 rounded-full bg-blue-500/80 px-1.5 text-[10px] text-white"
-                  >
-                    {Map.get(@badges, a.id)}
-                  </span>
-                </.link>
-                <.link
-                  navigate={PrismWeb.Focus.path(a, "/aqua")}
-                  class="shrink-0 rounded px-1.5 py-1 text-[10px] uppercase tracking-wider text-gray-500 hover:bg-gray-700 hover:text-gray-200"
-                  title={"Open the AQUA of " <> Map.get(@labels, a.id, a.name)}
-                >
-                  AQUA
-                </.link>
-              </li>
-            </ul>
-            <form
-              phx-submit="create_group"
-              class={[
-                "flex items-center gap-1 px-1",
-                if(length(@athanors) > 1, do: "mt-2 pt-2 border-t border-gray-800", else: "")
-              ]}
-            >
-              <input
-                type="text"
-                name="name"
-                required
-                minlength="1"
-                maxlength="80"
-                placeholder="New group…"
-                autocomplete="off"
-                class="flex-1 min-w-0 rounded-md border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
-              />
-              <button
-                type="submit"
-                class="rounded-md bg-gray-800 px-2 py-1 text-[11px] text-gray-200 hover:bg-gray-700"
-              >
-                Create
-              </button>
-            </form>
-          </div>
-        </div>
+        <.link
+          :if={@authenticated}
+          id="aqua-link"
+          navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
+          class="rounded-md px-2 py-1 text-xs font-medium uppercase tracking-wider text-gray-300 hover:bg-gray-800/60 hover:text-gray-200"
+        >
+          AQUA
+        </.link>
       </div>
 
       <nav
@@ -1081,47 +863,6 @@ defmodule PrismWeb.TopbarLive do
       </div>
     </div>
     """
-  end
-
-  # The athanors the person may work in — their own first, then their
-  # groups — each subscribed on its notify topic for the tray badges. An
-  # athanor that has dropped off the list is unsubscribed: a seat that was
-  # removed must stop badging, not keep reporting what happens in a furnace
-  # its former member can no longer open.
-  defp load_athanors(socket, ctx) do
-    athanors = Sanctum.Tenancy.list_athanors(ctx)
-
-    if connected?(socket) do
-      ids = MapSet.new(athanors, & &1.id)
-      previous = MapSet.new(socket.assigns[:athanors] || [], & &1.id)
-
-      for gone <- MapSet.difference(previous, ids) do
-        actor = Prima.Actor.in_athanor(gone)
-        Bus.unsubscribe(actor, Bus.notify(actor))
-      end
-
-      # Each seat's own tray topic, keyed by the athanor the person's
-      # membership list names.
-      for a <- athanors do
-        actor = Prima.Actor.in_athanor(a.id)
-        Bus.unsubscribe(actor, Bus.notify(actor))
-        Bus.subscribe(actor, Bus.notify(actor))
-      end
-    end
-
-    socket
-    |> assign(:athanors, athanors)
-    |> assign(:labels, Map.new(athanors, &{&1.id, row_label(&1, ctx)}))
-    |> assign(:badges, Map.take(socket.assigns[:badges] || %{}, Enum.map(athanors, & &1.id)))
-  end
-
-  # Named once, at load: the person's own athanor is "You", a DM is the
-  # other person, a group its name — read here rather than in the render,
-  # which would ask the store for every DM row on every paint.
-  defp row_label(athanor, ctx), do: PrismWeb.Athanors.label(athanor, ctx)
-
-  defp badge_total(badges, viewing) do
-    badges |> Map.delete(viewing) |> Map.values() |> Enum.sum()
   end
 
   # ----------------------------------------------------------------------------

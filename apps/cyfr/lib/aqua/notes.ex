@@ -21,25 +21,16 @@ defmodule Aqua.Notes do
 
   ## One pile, two temperatures
 
-  An athanor has one flat pile. Two names in it are **pinned** — `about-you`
-  in a person's own athanor, `about-us` in a shared one — and a pinned page
-  is read into every turn, so it is held short (`pin_max_bytes/0`, refused
+  An athanor has one flat pile. One name in it is **pinned** — `about-you`
+  — and the pinned page is read into every turn, so it is held short (`pin_max_bytes/0`, refused
   rather than truncated). Everything else is **filed**: listed by name,
   read on demand. Pinning an empty page clears it; that is unpin.
 
   ## A note lands where you are
 
-  Writes take no scope. `keep/4`, `pin/4` and `forget/2` act on the athanor
-  the context is focused on: your own when you are talking to your own
-  assistant, the room's when you are in a room. A room's assistant cannot
-  file into your private pile and nothing you keep at home reaches a room —
-  the tenant boundary is the whole rule, and there is no argument to get it
-  wrong with.
-
-  Reads take a scope: `"athanor"` (where you are; the default), `"mine"`
-  (your own athanor, reached through `Sanctum.Context.focus/2` so
-  membership and archival are checked, never by a raw swap), or
-  `"everywhere"` (every athanor you hold a seat in).
+  Reads and writes take no scope. Every call acts on the athanor the
+  context is focused on, the person's own — the tenant boundary is the
+  whole rule, and there is no argument to get it wrong with.
 
   ## Provenance
 
@@ -68,7 +59,6 @@ defmodule Aqua.Notes do
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Users
 
   # The folder the Files page shows these documents under
   # (`Arca.Files.document_roots/0`); pinned here so the key prefix and the
@@ -78,13 +68,11 @@ defmodule Aqua.Notes do
   @key_prefix @root <> "/"
   @key_suffix ".md"
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9 _.-]{0,80}\z/
-  @pinned_names ~w(about-you about-us)
+  @pinned_names ~w(about-you)
   @pin_max_bytes 2048
-  @scopes ~w(athanor mine everywhere)
   @snippet_chars 160
   @index_limit 40
 
-  @type scope :: String.t()
   @type provenance :: [
           kept_by: String.t(),
           thread: String.t(),
@@ -115,29 +103,15 @@ defmodule Aqua.Notes do
           | {:unavailable, String.t()}
 
   @doc """
-  The one pinned page this athanor has: `about-you` in a person's own
-  athanor, `about-us` in a shared one. The other name is refused at
-  `pin/4` — an athanor has one page, and which one is a fact about the
-  athanor, not a choice per call.
+  The one pinned page this athanor has: `about-you`.
   """
   @spec pinned_page(Context.t()) :: {:ok, String.t()} | {:error, :not_found}
   def pinned_page(%Context{} = ctx) do
     case Sanctum.Tenancy.Athanors.get(Context.athanor!(ctx)) do
-      {:ok, %{kind: "person"}} -> {:ok, "about-you"}
-      {:ok, _} -> {:ok, "about-us"}
+      {:ok, _} -> {:ok, "about-you"}
       {:error, _} -> {:error, :not_found}
     end
   end
-
-  @doc """
-  Whether the context is focused on the person's own athanor. A running
-  chain may read across athanors only from there — see `list/2`. The
-  predicate itself is tenancy's (`Sanctum.Tenancy.Users.own_athanor?/2`);
-  this is its spelling over a context.
-  """
-  @spec at_home?(Context.t()) :: boolean()
-  def at_home?(%Context{user_id: user_id, athanor_id: focus}),
-    do: Users.own_athanor?(user_id, focus)
 
   @spec pinned?(String.t()) :: boolean()
   def pinned?(name), do: name in @pinned_names
@@ -410,7 +384,7 @@ defmodule Aqua.Notes do
   def describe(_result), do: nil
 
   # ---------------------------------------------------------------------------
-  # Reads — scoped
+  # Reads — the focused athanor, no scope
   # ---------------------------------------------------------------------------
 
   @doc "The athanor's pinned page with its provenance, or `:none` when nothing is pinned."
@@ -472,73 +446,44 @@ defmodule Aqua.Notes do
 
   @typedoc """
   A page of notes — `notes`, whether `more` lie beyond it, and the `next`
-  cursor to continue from (`"<athanor_id>/<name>"`, the last one shown).
-  One budget across every athanor a scope names, in a fixed order — the
-  focus first, then the person's other athanors by id, names sorted — so a
+  cursor to continue from (the last name shown). Names are sorted, so a
   page and its successor never overlap or skip.
   """
   @type page(entry) :: %{notes: [entry], more: boolean(), next: String.t() | nil}
 
   @doc """
-  The note names in the scope, with the athanor each lives in — a page of
-  them (`t:page/1`). `opts`: `:limit` (default #{@page_limit}, at most
-  #{@page_max}), `:after` (a cursor from a previous page).
+  The note names — a page of them (`t:page/1`). `opts`: `:limit`
+  (default #{@page_limit}, at most #{@page_max}), `:after` (a cursor from
+  a previous page).
   """
-  @spec list(Context.t(), scope(), keyword()) ::
-          {:ok, page(%{name: String.t(), athanor_id: String.t()})} | {:error, refusal()}
-  def list(%Context{} = ctx, scope \\ "athanor", opts \\ []) do
-    walk(ctx, scope, opts, fn c, name -> [%{name: name, athanor_id: c.athanor_id}] end)
+  @spec list(Context.t(), keyword()) :: {:ok, page(%{name: String.t()})} | {:error, refusal()}
+  def list(%Context{} = ctx, opts \\ []) do
+    walk(ctx, opts, fn name -> [%{name: name}] end)
   end
 
-  # One walk for `list/3` and `search/4`: the scope's athanors in their
-  # fixed order, each athanor's names sorted, resumed after the cursor, and
-  # `visit` asked about each name until the page is full. The work is
-  # bounded by the page, not by the pile: a name past the page is never
-  # visited (for a search, never read). A visit answers the hits a name
-  # yields — none, for a search that misses or a note that cannot be read.
-  defp walk(ctx, scope, opts, visit) do
+  # One walk for `list/2` and `search/3`: the names sorted, resumed after
+  # the cursor, and `visit` asked about each name until the page is full.
+  # The work is bounded by the page, not by the pile: a name past the page
+  # is never visited (for a search, never read). A visit answers the hits a
+  # name yields — none, for a search that misses or a note that cannot be
+  # read.
+  defp walk(ctx, opts, visit) do
     limit = opts |> Keyword.get(:limit) |> page_limit()
 
-    with {:ok, contexts} <- contexts(ctx, scope),
-         {:ok, cursor} <- cursor(Keyword.get(opts, :after)),
-         {:ok, contexts} <- from_cursor(contexts, cursor) do
-      contexts
-      |> Enum.reduce_while({:ok, [], nil}, fn c, {:ok, acc, next} ->
-        if length(acc) > limit do
-          {:halt, {:ok, acc, next}}
-        else
-          case names(c) do
-            {:ok, names} ->
-              names
-              |> after_cursor(c.athanor_id, cursor)
-              |> Enum.reduce_while({:ok, acc, next}, fn name, {:ok, acc, next} ->
-                if length(acc) > limit do
-                  {:halt, {:ok, acc, next}}
-                else
-                  case visit.(c, name) do
-                    [] -> {:cont, {:ok, acc, next}}
-                    hits -> {:cont, {:ok, acc ++ hits, {c.athanor_id, name}}}
-                  end
-                end
-              end)
-              |> then(&{:cont, &1})
-
-            {:error, _} = err ->
-              {:halt, err}
-          end
-        end
+    with {:ok, cursor} <- cursor(Keyword.get(opts, :after)),
+         {:ok, names} <- names(ctx) do
+      names
+      |> after_cursor(cursor)
+      |> Enum.reduce_while([], fn name, acc ->
+        if length(acc) > limit, do: {:halt, acc}, else: {:cont, acc ++ visit.(name)}
       end)
       |> case do
-        {:ok, hits, _next} when length(hits) > limit ->
+        hits when length(hits) > limit ->
           shown = Enum.take(hits, limit)
-          last = List.last(shown)
-          {:ok, %{notes: shown, more: true, next: encode_cursor({last.athanor_id, last.name})}}
+          {:ok, %{notes: shown, more: true, next: List.last(shown).name}}
 
-        {:ok, hits, _next} ->
+        hits ->
           {:ok, %{notes: hits, more: false, next: nil}}
-
-        {:error, _} = err ->
-          err
       end
     end
   end
@@ -547,74 +492,35 @@ defmodule Aqua.Notes do
   defp page_limit(_), do: @page_limit
 
   defp cursor(nil), do: {:ok, nil}
-
-  defp cursor(after_) when is_binary(after_) do
-    case String.split(after_, "/", parts: 2) do
-      [athanor_id, name] when athanor_id != "" and name != "" -> {:ok, {athanor_id, name}}
-      _ -> {:error, {:invalid_argument, "after must be a cursor a previous page answered"}}
-    end
-  end
+  defp cursor(after_) when is_binary(after_) and after_ != "", do: {:ok, after_}
 
   defp cursor(_),
     do: {:error, {:invalid_argument, "after must be a cursor a previous page answered"}}
 
-  defp encode_cursor({athanor_id, name}), do: athanor_id <> "/" <> name
-
-  # Resume after the cursor. Athanors are visited in the scope's fixed
-  # order: those before the cursor's were shown whole and are dropped, the
-  # cursor's continues past the name, later ones start at their
-  # beginning. A cursor naming an athanor the scope does not hold — a
-  # different scope, a seat since lost — is not a place to resume from.
-  defp from_cursor(contexts, nil), do: {:ok, contexts}
-
-  defp from_cursor(contexts, {cursor_athanor, _name}) do
-    case Enum.drop_while(contexts, &(&1.athanor_id != cursor_athanor)) do
-      [] -> {:error, {:invalid_argument, "after names an athanor this scope does not hold"}}
-      rest -> {:ok, rest}
-    end
-  end
-
-  defp after_cursor(names, _athanor_id, nil), do: names
-
-  defp after_cursor(names, athanor_id, {cursor_athanor, cursor_name}) do
-    if athanor_id == cursor_athanor, do: Enum.filter(names, &(&1 > cursor_name)), else: names
-  end
+  defp after_cursor(names, nil), do: names
+  defp after_cursor(names, cursor), do: Enum.filter(names, &(&1 > cursor))
 
   @doc """
-  One note with its provenance. `everywhere` is not a read scope: a
-  search answers the athanor each match lives in, and a read follows it
-  with the `:athanor_id` locator — the one athanor, opened under the
-  reader's own seat (`Sanctum.Context.focus/2`: membership and archive
-  checked), and never from a room's chain, which reads its own pile alone.
+  One note with its provenance.
 
   `:root_execution_id` names the chain the read is made in, as the host
   stamped it (never a value a model wrote). A scheduled run's first read
-  of its schedule's note in the athanor in focus is recorded on the
+  of its schedule's note is recorded on the
   occurrence with the revision it answered, 0 for no note
   (`Aqua.ScheduleNotes.read_by_run/4`): the revision the run's outcome is
   later published over. A read whose record cannot be written answers
   unavailable, so a run never acts on a read its outcome cannot account
   for.
   """
-  @spec read(Context.t(), String.t(), scope(), keyword()) :: {:ok, note()} | {:error, refusal()}
-  def read(ctx, name, scope \\ "athanor", opts \\ [])
-
-  def read(%Context{}, _name, "everywhere", _opts) do
-    {:error,
-     {:invalid_argument,
-      "read takes a scope of athanor or mine, or the athanor_id a search answered — " <>
-        "search everywhere, then read where the note was found"}}
-  end
-
-  def read(%Context{} = ctx, name, scope, opts) do
-    with :ok <- check_name(name),
-         {:ok, read_ctx} <- read_context(ctx, scope, Keyword.get(opts, :athanor_id)) do
-      case read_with_revision(read_ctx, name) do
+  @spec read(Context.t(), String.t(), keyword()) :: {:ok, note()} | {:error, refusal()}
+  def read(%Context{} = ctx, name, opts \\ []) do
+    with :ok <- check_name(name) do
+      case read_with_revision(ctx, name) do
         {:ok, note, revision} ->
-          with :ok <- read_by_run(ctx, read_ctx, name, revision, opts), do: {:ok, note}
+          with :ok <- read_by_run(ctx, name, revision, opts), do: {:ok, note}
 
         :none ->
-          with :ok <- read_by_run(ctx, read_ctx, name, 0, opts),
+          with :ok <- read_by_run(ctx, name, 0, opts),
                do: {:error, {:not_found, "note", name}}
 
         :unreadable ->
@@ -642,10 +548,9 @@ defmodule Aqua.Notes do
     end
   end
 
-  # Only a read in the athanor the chain runs in can be its schedule's.
-  defp read_by_run(ctx, read_ctx, name, revision, opts) do
+  defp read_by_run(ctx, name, revision, opts) do
     case Keyword.get(opts, :root_execution_id) do
-      root when is_binary(root) and root != "" and read_ctx.athanor_id == ctx.athanor_id ->
+      root when is_binary(root) and root != "" ->
         case Aqua.ScheduleNotes.read_by_run(Context.actor(ctx), root, name, revision) do
           :ok -> :ok
           {:error, :unavailable} -> {:error, {:unavailable, "Notes"}}
@@ -660,27 +565,21 @@ defmodule Aqua.Notes do
   Notes whose name or body contains `query` (case-insensitive), each with
   the first matching line as a snippet and the sources its provenance
   carries — a page of them (`t:page/1`), the same `:limit`/`:after` as
-  `list/3`. Only the notes a page can show are read.
+  `list/2`. Only the notes a page can show are read.
   """
-  @spec search(Context.t(), String.t(), scope(), keyword()) ::
-          {:ok,
-           page(%{
-             name: String.t(),
-             athanor_id: String.t(),
-             snippet: String.t(),
-             sources: [Prima.Source.t()]
-           })}
+  @spec search(Context.t(), String.t(), keyword()) ::
+          {:ok, page(%{name: String.t(), snippet: String.t(), sources: [Prima.Source.t()]})}
           | {:error, refusal()}
-  def search(ctx, query, scope \\ "athanor", opts \\ [])
+  def search(ctx, query, opts \\ [])
 
-  def search(%Context{} = ctx, query, scope, opts) when is_binary(query) do
+  def search(%Context{} = ctx, query, opts) when is_binary(query) do
     case query |> String.trim() |> String.downcase() do
       "" -> {:error, {:invalid_argument, "search needs a query"}}
-      needle -> walk(ctx, scope, opts, &match(&1, &2, needle))
+      needle -> walk(ctx, opts, &match(ctx, &1, needle))
     end
   end
 
-  def search(%Context{}, _query, _scope, _opts),
+  def search(%Context{}, _query, _opts),
     do: {:error, {:invalid_argument, "search needs a query"}}
 
   # ---------------------------------------------------------------------------
@@ -890,7 +789,7 @@ defmodule Aqua.Notes do
       {:ok, %{content: body, sources: sources}} ->
         case snippet(name, body, needle) do
           {:ok, snippet} ->
-            [%{name: name, athanor_id: ctx.athanor_id, snippet: snippet, sources: sources}]
+            [%{name: name, snippet: snippet, sources: sources}]
 
           :none ->
             []
@@ -912,116 +811,6 @@ defmodule Aqua.Notes do
 
       line ->
         {:ok, line |> String.trim() |> String.slice(0, @snippet_chars)}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Scope → contexts
-  # ---------------------------------------------------------------------------
-
-  # The one athanor a read names: the locator a search answered, else
-  # `athanor` (the focus) or `mine` (the person's own). `everywhere` is not
-  # one athanor, so it is not a read scope. A locator for the focus is the
-  # focus; any other athanor is opened under the reader's seat, and never
-  # from a room's chain.
-  defp read_context(ctx, _scope, athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    cond do
-      athanor_id == ctx.athanor_id -> {:ok, ctx}
-      true -> with :ok <- guest_may_cross(ctx), do: locate(ctx, athanor_id)
-    end
-  end
-
-  defp read_context(ctx, "athanor", _none), do: {:ok, ctx}
-
-  defp read_context(ctx, "mine", _none) do
-    with :ok <- guest_may_cross(ctx), do: personal(ctx)
-  end
-
-  defp read_context(_ctx, _other, _none) do
-    {:error, {:invalid_argument, "scope must be one of #{Enum.join(@scopes, ", ")}"}}
-  end
-
-  # The athanor a locator names, as the reader may open it: a seat they do
-  # not hold, or an archived athanor, reads as no such note — the locator
-  # is not a way to learn which athanors exist. A store that cannot answer
-  # is unavailable, never an absence.
-  defp locate(ctx, athanor_id) do
-    case Context.focus(ctx, athanor_id) do
-      {:ok, focused} -> {:ok, focused}
-      {:error, :unavailable} -> {:error, {:unavailable, "Storage"}}
-      {:error, _} -> {:error, {:not_found, "athanor", athanor_id}}
-    end
-  end
-
-  # Every seat the person holds, the focus first. An athanor the focus can
-  # no longer open (archived between the listing and the read) is skipped,
-  # not an error — the answer is what can be read now. A store that cannot
-  # answer refuses the whole read: an athanor skipped for an outage would
-  # read as one holding no notes.
-  defp contexts(%Context{} = ctx, "everywhere") do
-    with :ok <- guest_may_cross(ctx),
-         {:ok, others} <- other_seats(ctx) do
-      {:ok, [ctx | others]}
-    end
-  end
-
-  defp contexts(ctx, scope) do
-    with {:ok, one} <- read_context(ctx, scope, nil), do: {:ok, [one]}
-  end
-
-  defp other_seats(ctx) do
-    ctx
-    |> Sanctum.Tenancy.list_athanors()
-    |> Enum.sort_by(& &1.id)
-    |> Enum.reject(&(&1.id == ctx.athanor_id))
-    |> Enum.reduce_while({:ok, []}, fn athanor, {:ok, focused} ->
-      case Context.focus(ctx, athanor) do
-        {:ok, one} -> {:cont, {:ok, [one | focused]}}
-        {:error, :unavailable} -> {:halt, {:error, {:unavailable, "Storage"}}}
-        {:error, _refused} -> {:cont, {:ok, focused}}
-      end
-    end)
-    |> case do
-      {:ok, focused} -> {:ok, Enum.reverse(focused)}
-      refused -> refused
-    end
-  end
-
-  # A running chain reads across athanors only from the person's own
-  # athanor. In a room, the room's assistant sees the room's pile and
-  # nothing else — a private ledger is not something a shared turn can
-  # open, however politely it asks. The person can, from their own
-  # assistant or from the door.
-  defp guest_may_cross(%Context{plane: :guest} = ctx) do
-    if at_home?(ctx),
-      do: :ok,
-      else:
-        {:error,
-         {:invalid_argument,
-          "a room's assistant reads only the room's notes — look in your own from your own assistant"}}
-  end
-
-  defp guest_may_cross(_ctx), do: :ok
-
-  # "Mine" is the person's own athanor, reached through `Context.focus/2` —
-  # the narrowing entry, not a raw struct update: focus checks
-  # membership (production seats the owner in their personal athanor at
-  # mint, `Sanctum.Provisioning.ensure_personal_athanor/1`) and refuses an
-  # archived athanor, both of which a bare `%{ctx | athanor_id: id}` would
-  # skip.
-  defp personal(%Context{user_id: user_id} = ctx) do
-    with {:ok, id} <- Users.personal_athanor_id(user_id),
-         {:ok, focused} <- Context.focus(ctx, id) do
-      {:ok, focused}
-    else
-      :none ->
-        {:error, {:invalid_argument, "you have no personal athanor"}}
-
-      {:error, :unavailable} ->
-        {:error, {:unavailable, "Storage"}}
-
-      {:error, reason} ->
-        {:error, {:invalid_argument, "your personal athanor cannot be opened (#{reason})"}}
     end
   end
 

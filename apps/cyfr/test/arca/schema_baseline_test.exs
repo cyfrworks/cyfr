@@ -116,11 +116,12 @@ defmodule Arca.SchemaBaselineTest do
     # names them.
     refute "provider" in user_names
 
-    # A seat names a person or the identifier it waits for; no email does.
+    # A seat names a person; no email and no identifier does.
     membership_names = Enum.map(columns("memberships"), & &1.name)
-    for col <- ~w(person_identifier status added_by), do: assert(col in membership_names)
+    for col <- ~w(status added_by), do: assert(col in membership_names)
     refute "email" in membership_names
-    refute Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
+    refute "person_identifier" in membership_names
+    assert Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
   end
 
   test "a person and an athanor carry a positive standing generation, 1 at birth" do
@@ -139,9 +140,9 @@ defmodule Arca.SchemaBaselineTest do
     athanor = fn generation ->
       %{
         id: "ath_gen_#{System.unique_integer([:positive])}",
-        kind: "group",
         name: "Generation",
         slug: "generation-#{System.unique_integer([:positive])}",
+        owner_user_id: "usr_gen_owner_#{System.unique_integer([:positive])}",
         created_by: "usr_schema",
         security_generation: generation,
         created_at: now,
@@ -256,8 +257,8 @@ defmodule Arca.SchemaBaselineTest do
     assert is_nil(columns["recovery_limit"].default)
   end
 
-  test "threads hold the messages and subscriptions" do
-    for table <- ~w(messages thread_subscriptions tool_grants approvals) do
+  test "threads hold the messages, tool grants and approvals" do
+    for table <- ~w(messages tool_grants approvals) do
       assert "thread_id" in Enum.map(columns(table), & &1.name), "#{table} lacks thread_id"
     end
 

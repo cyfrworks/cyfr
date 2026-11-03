@@ -108,14 +108,13 @@ defmodule Sanctum.AdmissionCapacityTest do
                Newcomer.admit({:setup, @token}, {:passkey, registration(), identity()})
 
       assert {:ok, own} = Athanors.get_by_owner(admin.id)
-      assert own.kind == "person"
       assert Members.member?(admin.id, own.id)
     end)
   end
 
   describe "the mint rate" do
-    test "unset is no bound; a bound refuses the admission past it, and groups do not draw on it" do
-      admin = set_up!()
+    test "unset is no bound; a bound refuses the admission past it" do
+      _admin = set_up!()
       assert {:ok, nil} = Arca.PlatformSettings.effective("mint_per_hour")
       assert {:ok, %{person: _first}} = open()
 
@@ -126,10 +125,7 @@ defmodule Sanctum.AdmissionCapacityTest do
       assert {:error, {:limit_reached, :mint_per_hour, ^minted}} = open()
       assert people() == 2
 
-      # Groups people create do not draw on the mint budget: the bound
-      # measures person athanors, so a member's `athanor.create` cannot
-      # starve admissions.
-      {:ok, _} = Athanors.create_group(admin.id, "Not a mint")
+      # One more place in the bound admits one more.
       mint_rate!(minted + 1)
       assert {:ok, _} = open()
     end

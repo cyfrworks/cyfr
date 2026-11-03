@@ -16,7 +16,6 @@ defmodule Cyfr.StandingWatchTest do
   import Prima.Test.Wait
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Arca.Cache.init()
@@ -43,20 +42,20 @@ defmodule Cyfr.StandingWatchTest do
         verified: true
       })
 
-    {:ok, group} = Athanors.create_group(owner.id, "Standing #{n}")
+    athanor = Sanctum.Test.People.athanor!(owner)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(%{
-        member_ctx(group.id, owner.id)
+        member_ctx(athanor.id, owner.id)
         | provider: "github",
           email: owner.email
       })
 
-    {:ok, group: group, session: session, hash: Sanctum.Session.token_hash(session.token)}
+    {:ok, athanor: athanor, session: session, hash: Sanctum.Session.token_hash(session.token)}
   end
 
   test "an archive announces the row key on the bus, so a peer hears it", %{
-    group: group,
+    athanor: athanor,
     session: session,
     hash: hash
   } do
@@ -64,23 +63,26 @@ defmodule Cyfr.StandingWatchTest do
 
     Cyfr.Bus.subscribe_global(Cyfr.Bus.caller_invalidated_global())
 
-    assert {:ok, %{status: "archived"}} = Athanors.archive(group)
+    assert %{status: "archived"} = Sanctum.TestContext.archive!(athanor.id)
 
     assert_receive %Cyfr.Bus.CallerInvalidated{session_key: ^hash}, 5_000
   end
 
   test "an athanor archived on another member refuses a caller this one had cached", %{
-    group: group,
+    athanor: athanor,
     session: session,
     hash: hash
   } do
     assert {:ok, %Context{athanor_id: cached} = ctx} = Sanctum.Caller.establish(session.token)
-    assert cached == group.id
+    assert cached == athanor.id
 
     # Member A archives. This VM is also member A, so it drops its own
     # copy; putting it back is what member B's table still holds, having
     # heard nothing yet.
-    assert {:ok, %{status: "archived"}} = Athanors.archive(group)
+    # The watch has heard member A's own announcement before the copy goes
+    # back, so it is not that drop which empties the planted memo.
+    assert %{status: "archived"} = Sanctum.TestContext.archive!(athanor.id)
+    :sys.get_state(Cyfr.StandingWatch)
     Arca.Cache.put(Arca.Cache.Keys.established(hash, nil), ctx, 60_000)
 
     assert {:ok, %Context{athanor_id: ^cached}} = Sanctum.Caller.establish(session.token),

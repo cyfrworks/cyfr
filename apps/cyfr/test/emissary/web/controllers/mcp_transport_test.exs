@@ -275,8 +275,7 @@ defmodule Emissary.Web.MCPTransportTest do
           verified: true
         })
 
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "MCP remote #{n}")
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+      athanor = Sanctum.Test.People.athanor!(user)
       Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id))
 
       {live, _} = :crypto.generate_key(:eddsa, :ed25519)

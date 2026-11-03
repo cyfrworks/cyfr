@@ -82,7 +82,7 @@ defmodule Aqua.FacadeTest do
   test "the pinned page's bounds and names are Aqua.Notes'" do
     assert Aqua.pin_max_bytes() == Aqua.Notes.pin_max_bytes()
 
-    for name <- ["about-you", "about-us", "notes", ""],
+    for name <- ["about-you", "notes", ""],
         do: assert(Aqua.note_pinned?(name) == Aqua.Notes.pinned?(name))
 
     assert Aqua.describe_note_result(:not_a_write) == nil

@@ -372,7 +372,7 @@ defmodule Arca.ThreadStorageRaceTest do
 
   alias Arca.PlatformSettings, as: Store
   alias Arca.QueryHelpers
-  alias Arca.Schemas.{Athanor, Thread, ThreadSubscription}
+  alias Arca.Schemas.{Athanor, Thread}
   alias Arca.Test.Actor
   alias Arca.Test.LockWait
   alias Arca.ThreadStorage, as: Threads
@@ -400,8 +400,6 @@ defmodule Arca.ThreadStorageRaceTest do
       unboxed(fn ->
         {:ok, %{revision: revision}} = Store.all()
         {:ok, _} = Store.delete(@key, revision)
-
-        Arca.Repo.delete_all(from(s in ThreadSubscription, where: s.athanor_id == ^athanor))
 
         Arca.Repo.delete_all(from(t in Thread, where: t.athanor_id == ^athanor))
         Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor))

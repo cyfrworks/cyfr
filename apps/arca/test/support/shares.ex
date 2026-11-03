@@ -64,7 +64,6 @@ defmodule Arca.Test.Shares do
 
     {:ok, athanor} =
       Arca.Athanors.insert(server(), %{
-        kind: "person",
         name: "Own #{n}",
         slug: "sh-own-#{n}",
         owner_user_id: user.id,
@@ -79,21 +78,6 @@ defmodule Arca.Test.Shares do
       athanor: athanor,
       actor: %Prima.Actor{athanor_id: athanor.id, user_id: user.id, scope: :athanor}
     }
-  end
-
-  @doc "A group athanor with `members` (person ids) seated in it."
-  @spec group!([String.t()], map()) :: map()
-  def group!(members \\ [], attrs \\ %{}) do
-    n = uniq()
-
-    {:ok, athanor} =
-      Arca.Athanors.insert(
-        server(),
-        Map.merge(%{kind: "group", name: "G#{n}", slug: "sh-g-#{n}", created_by: "system"}, attrs)
-      )
-
-    for member <- members, do: seat!(athanor.id, member)
-    athanor
   end
 
   @doc """
