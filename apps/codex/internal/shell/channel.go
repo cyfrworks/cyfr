@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -28,14 +29,28 @@ const DeviceProtocol = "cyfr-device/v1"
 // after it, so a connection the network silently drops ends the channel
 // at the next report instead of standing until the kernel gives up on
 // its retransmissions. Both are variables for the tests.
+// They are atomics because a test sets them while an earlier test's
+// channel may still be reporting.
 var (
-	reportEvery = 30 * time.Second
-	heardWithin = 10 * time.Second
+	reportEvery = durationVar(30 * time.Second)
+	heardWithin = durationVar(10 * time.Second)
 	// readerFirst is how long a failed report or ping waits for the
 	// reader to record a close the home sent (4403, 4408), which the
 	// failure may have raced, before it records the silence itself.
-	readerFirst = 2 * time.Second
+	readerFirst = durationVar(2 * time.Second)
 )
+
+// A duration read by a channel's goroutines and set by a test.
+type duration struct{ atomic.Int64 }
+
+func durationVar(d time.Duration) *duration {
+	v := &duration{}
+	v.Store(int64(d))
+	return v
+}
+
+func (d *duration) Get() time.Duration  { return time.Duration(d.Load()) }
+func (d *duration) Set(v time.Duration) { d.Store(int64(v)) }
 
 // The reasons a channel ends, each a sentence the lock page can show.
 var (
@@ -103,6 +118,17 @@ func (e *IntentError) Error() string {
 		return "CYFR refused it: " + m.Class
 	}
 	return "CYFR refused it"
+}
+
+// class is the refusal's class, which every refusal on the channel
+// carries (with its sentence) where it carries no reason: "unavailable"
+// for a home or a cyfr.run that did not answer.
+func (e *IntentError) class() string {
+	var m struct {
+		Class string `json:"class"`
+	}
+	_ = json.Unmarshal(e.Raw, &m)
+	return m.Class
 }
 
 // says is whether the refusal names one of reasons, as its tag, reason
@@ -305,14 +331,14 @@ func (c *Channel) read() {
 // for the reader to end the channel with the home's code; only a
 // connection that stays silent is ended here.
 func (c *Channel) reportLoop() {
-	t := time.NewTicker(reportEvery)
+	t := time.NewTicker(reportEvery.Get())
 	defer t.Stop()
 	for {
 		select {
 		case <-c.done:
 			return
 		case <-t.C:
-			ctx, cancel := context.WithTimeout(context.Background(), heardWithin)
+			ctx, cancel := context.WithTimeout(context.Background(), heardWithin.Get())
 			err := c.send(ctx, c.capabilities())
 			if err == nil {
 				err = c.conn.Ping(ctx)
@@ -321,7 +347,7 @@ func (c *Channel) reportLoop() {
 			if err != nil {
 				select {
 				case <-c.done:
-				case <-time.After(readerFirst):
+				case <-time.After(readerFirst.Get()):
 					c.end(closeReason(err))
 					c.conn.CloseNow()
 				}

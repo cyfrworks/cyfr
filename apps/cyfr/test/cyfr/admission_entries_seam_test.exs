@@ -97,6 +97,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.DeviceEnrollmentController, :complete} => :device_enrollment_no_proof,
     {Emissary.Web.DeviceEnrollmentController, :resume} => :device_enrollment_resume_no_token,
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
+    {Emissary.Web.DeviceSessionController, :create} => :device_session_ticket_unknown,
     {Emissary.Web.RestoreController, :restore} => :restore_disabled,
     {Emissary.Web.RestoreController, :challenge} => :restore_challenge_disabled,
     {Emissary.Web.RestoreController, :reproof} => :restore_reproof_disabled,
@@ -574,6 +575,16 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     conn = restore_post("/device/enrollment/resume", %{"admission" => "restore"})
     assert json_response(conn, 401) == %{"error" => "invalid_token"}
     {request_id_of(conn), refused("unauthenticated", :none)}
+  end
+
+  def device_session_ticket_unknown(_conn, _ctx) do
+    conn =
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> post("/device/session", Jason.encode!(%{"ticket" => "nope"}))
+
+    assert json_response(conn, 403) == %{"error" => "ticket_refused"}
+    {request_id_of(conn), refused("forbidden", :none)}
   end
 
   def device_unlock_ticket_unknown(_conn, _ctx) do

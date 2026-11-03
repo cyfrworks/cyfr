@@ -60,6 +60,13 @@
           ":fetch_session",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
+        "device_session" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.FrameRequest",
+          "CyfrWeb.Plugs.AuthRateLimit"
+        ],
         "device_enrollment" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -277,6 +284,15 @@
           auth: "device_enrollment",
           live_view: nil,
           pipe_through: ["device_enrollment"]
+        },
+        %{
+          verb: "POST",
+          path: "/device/session",
+          plug: "Emissary.Web.DeviceSessionController",
+          plug_opts: ":create",
+          auth: "device_unlock_ticket",
+          live_view: nil,
+          pipe_through: ["device_session"]
         },
         %{
           verb: "GET",
@@ -819,20 +835,20 @@
         },
         %{
           verb: "GET",
-          path: "/cli",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.CliLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
           path: "/company-login",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
           auth: "browser_company_login",
           live_view: "PrismWeb.CompanyLoginLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/devices/add",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":index",
+          auth: "browser_authenticated",
+          live_view: "PrismWeb.DeviceAddLive",
           pipe_through: ["browser"]
         },
         %{

@@ -104,10 +104,8 @@ defmodule PrismWeb.SystemLayer do
       (`credential_sharing`); the prompt reports `:confirmed` once the
       share is made, and shows a refusal's sentence and stays open
       otherwise;
-    * pairing — `pairing.list` and `session.cli_list` when it opens,
-      `pairing.begin`, whose answer's `invitation_url` it draws as a QR
-      code, `pairing.revoke`, and `session.cli_revoke` of a command line's
-      session;
+    * pairing — `pairing.list` when it opens, `pairing.begin`, whose
+      answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
     * the fallback notice's kept version — `canvas.restore` of the canvas,
       under today's grant: a grant that waits for the person raises the
       grant prompt, and once that is confirmed the restore is asked again;
@@ -1360,7 +1358,7 @@ defmodule PrismWeb.SystemLayer do
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
     do:
       assign(socket,
-        pairing: %{prompt_id: id, clients: :unread, command_lines: :unread, invitation: nil},
+        pairing: %{prompt_id: id, clients: :unread, invitation: nil},
         recovery: nil
       )
 
@@ -1373,12 +1371,7 @@ defmodule PrismWeb.SystemLayer do
   # What a shown prompt reads: for the pairing prompt, the person's paired
   # clients.
   defp load_shown(%{assigns: %{pairing: %{clients: :unread} = pairing}} = socket),
-    do:
-      assign(socket, :pairing, %{
-        pairing
-        | clients: clients(socket),
-          command_lines: command_lines(socket)
-      })
+    do: assign(socket, :pairing, %{pairing | clients: clients(socket)})
 
   defp load_shown(socket), do: socket
 
@@ -1518,16 +1511,6 @@ defmodule PrismWeb.SystemLayer do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open(socket, id, [:pairing]) do
         {:ok, prompt} -> {:noreply, pairing_revoke(socket, prompt, client_id)}
-        :none -> {:noreply, socket}
-      end
-    end)
-  end
-
-  def handle_event("cli_revoke", %{"id" => id, "session" => session_id}, socket)
-      when is_binary(session_id) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      case open(socket, id, [:pairing]) do
-        {:ok, prompt} -> {:noreply, cli_revoke(socket, prompt, session_id)}
         :none -> {:noreply, socket}
       end
     end)
@@ -2378,36 +2361,13 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  # The person's command-line sessions, listed beside their paired
-  # devices; revoking one needs only the session (`session.cli_revoke`).
-  defp command_lines(socket) do
-    case Ops.call_tool(socket.assigns.context, "session/cli_list", %{}) do
-      {:ok, %{sessions: sessions}} -> {:ok, sessions}
-      {:error, reason} -> {:error, Ops.error_message(reason)}
-    end
-  end
-
-  defp cli_revoke(socket, prompt, session_id) do
-    case Ops.call_tool(socket.assigns.context, "session/cli_revoke", %{
-           "session_id" => session_id
-         }) do
-      {:ok, _revoked} ->
-        socket
-        |> assign(:pairing, %{pairing_of(socket, prompt) | command_lines: command_lines(socket)})
-        |> assign(:error, nil)
-
-      {:error, reason} ->
-        assign(socket, :error, Ops.error_message(reason))
-    end
-  end
-
   defp pairing_of(socket, prompt) do
     case socket.assigns.pairing do
       %{prompt_id: id} = pairing when id == prompt.id ->
         pairing
 
       _other ->
-        %{prompt_id: prompt.id, clients: {:ok, []}, command_lines: {:ok, []}, invitation: nil}
+        %{prompt_id: prompt.id, clients: {:ok, []}, invitation: nil}
     end
   end
 
@@ -3015,6 +2975,7 @@ defmodule PrismWeb.SystemLayer do
     ~H"""
     <Pairing.devices
       prompt_id={@prompt.id}
+      key_code={@prompt.subject[:key_code]}
       pairing={@pairing}
       may={@may}
       myself={@myself}
@@ -3380,9 +3341,6 @@ defmodule PrismWeb.SystemLayer do
   defp asker(%{"kind" => "session"} = asker),
     do:
       "a browser signed in#{if asker["name"], do: " with #{asker["name"]}", else: ""}#{since(asker)}"
-
-  defp asker(%{"kind" => "command_line"} = asker),
-    do: "the command line#{if asker["name"], do: " on #{asker["name"]}", else: ""}#{since(asker)}"
 
   defp asker(_asker), do: "a client of yours"
 

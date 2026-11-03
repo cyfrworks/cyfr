@@ -4,830 +4,627 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/cyfr/codex/internal/config"
+	"github.com/cyfr/codex/internal/confirmation"
+	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/mcp"
-	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/shell"
 )
 
-// devicePollServer answers every session.device_poll with the given status.
-func devicePollServer(status string) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]any{
-			"jsonrpc": "2.0",
-			"id":      1,
-			"result": map[string]any{
-				"content": []map[string]any{
-					{"type": "text", "text": fmt.Sprintf(`{"status":%q}`, status)},
-				},
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
+// fakeDevice stands in for this command line's device: the views it
+// shows, each action recorded with what it was given and moving to the
+// view next answers for it.
+type fakeDevice struct {
+	mu      sync.Mutex
+	view    shell.View
+	calls   []string
+	secrets map[string][]byte // the secret each action was given, copied
+	given   map[string]string
+	next    func(call string, d *fakeDevice)
+	locks   int
+	session string
 }
 
-// Cancellation must end device polling promptly.
-func TestPollDeviceAuth_ReturnsPromptlyOnCancel(t *testing.T) {
-	srv := devicePollServer("pending")
-	defer srv.Close()
+func newFakeDevice(view shell.View, next func(string, *fakeDevice)) *fakeDevice {
+	return &fakeDevice{view: view, next: next, secrets: map[string][]byte{}, given: map[string]string{}, session: "TOKEN-1"}
+}
 
-	client := mcp.NewClient(srv.URL)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	start := time.Now()
-	done := make(chan error, 1)
-	go func() {
-		_, err := pollDeviceAuth(ctx, client, "github", "dev-code",
-			50*time.Millisecond, time.Now().Add(30*time.Second), 30, "laptop")
-		done <- err
-	}()
-
-	// Let at least one poll round-trip happen, then cancel mid-loop.
-	time.Sleep(120 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("want context.Canceled, got %v", err)
-		}
-		if elapsed := time.Since(start); elapsed > 2*time.Second {
-			t.Fatalf("poll loop took %v to notice cancellation", elapsed)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("poll loop did not return after cancellation — it would spin until the deadline")
+func (d *fakeDevice) did(call string, secret []byte, given ...string) {
+	d.mu.Lock()
+	d.calls = append(d.calls, call)
+	if secret != nil {
+		d.secrets[call] = bytes.Clone(secret)
+	}
+	d.given[call] = strings.Join(given, "|")
+	next := d.next
+	d.mu.Unlock()
+	if next != nil {
+		next(call, d)
 	}
 }
 
-func TestPollDeviceAuth_CompleteReturnsResult(t *testing.T) {
-	srv := devicePollServer("complete")
-	defer srv.Close()
+func (d *fakeDevice) View() shell.View { d.mu.Lock(); defer d.mu.Unlock(); return d.view }
+func (d *fakeDevice) Begin()           { d.mu.Lock(); d.view.Notice = ""; d.mu.Unlock() }
+func (d *fakeDevice) Setup(_ context.Context, name string, secret, again []byte) {
+	d.did("setup", secret, name, string(again))
+	clear(secret)
+	clear(again)
+}
+func (d *fakeDevice) Join(_ context.Context, invitation, name string, secret, again []byte) {
+	d.did("join", secret, invitation, name)
+	clear(secret)
+	clear(again)
+}
+func (d *fakeDevice) Prepare(secret, again []byte) {
+	d.did("prepare", secret, string(again))
+	clear(again)
+}
+func (d *fakeDevice) Pair(_ context.Context, link string, secret []byte) {
+	d.did("pair", secret, link)
+	clear(secret)
+}
+func (d *fakeDevice) Finish(_ context.Context, name, code string, secret []byte) {
+	d.did("finish", secret, name, code)
+	clear(secret)
+}
+func (d *fakeDevice) Unlock(_ context.Context, secret []byte) { d.did("unlock", secret); clear(secret) }
+func (d *fakeDevice) Saved(context.Context)                   { d.did("saved", nil) }
+func (d *fakeDevice) Rename(_ context.Context, name string)   { d.did("rename", nil, name) }
+func (d *fakeDevice) Session(context.Context) (string, error) {
+	d.did("session", nil)
+	return d.session, nil
+}
+func (d *fakeDevice) Draw(_ context.Context, ref string) { d.did("draw", nil, ref) }
+func (d *fakeDevice) Decide(_ context.Context, ref string, confirm bool, secret []byte) {
+	d.did("decide", secret, ref, strconv.FormatBool(confirm))
+	clear(secret)
+}
+func (d *fakeDevice) Unlocked() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.view.Page == shell.PageUnlocked || d.view.Page == shell.PageConfirm
+}
+func (d *fakeDevice) Lock(string) { d.mu.Lock(); d.locks++; d.mu.Unlock() }
 
-	client := mcp.NewClient(srv.URL)
-	result, err := pollDeviceAuth(t.Context(), client, "github", "dev-code",
-		10*time.Millisecond, time.Now().Add(5*time.Second), 5, "laptop")
-	if err != nil {
-		t.Fatalf("pollDeviceAuth failed: %v", err)
+func (d *fakeDevice) set(v shell.View) { d.mu.Lock(); d.view = v; d.mu.Unlock() }
+
+// typed is a console the person types lines into, its output kept.
+func typed(lines ...string) (*console, *bytes.Buffer) {
+	ch := make(chan []byte, len(lines))
+	for _, l := range lines {
+		ch <- []byte(l)
 	}
-	if status, _ := result["status"].(string); status != "complete" {
-		t.Errorf("want the complete poll result back, got %v", result)
-	}
+	close(ch)
+	out := &bytes.Buffer{}
+	quiet := 0
+	return &console{out: out, lines: func() <-chan []byte { return ch },
+		quiet: func() func() { quiet++; return func() {} }}, out
 }
 
-func TestPollDeviceAuth_DeniedStops(t *testing.T) {
-	srv := devicePollServer("denied")
-	defer srv.Close()
+const passphrase = "abandon ability able about above absent"
 
-	client := mcp.NewClient(srv.URL)
-	_, err := pollDeviceAuth(t.Context(), client, "github", "dev-code",
-		10*time.Millisecond, time.Now().Add(5*time.Second), 5, "laptop")
-	if err == nil || !strings.Contains(err.Error(), "Authorization denied") {
-		t.Fatalf("want denial error, got %v", err)
-	}
-}
-
-func TestPollDeviceAuth_DeadlineTimesOut(t *testing.T) {
-	// Deadline already passed: the loop must not poll at all.
-	client := mcp.NewClient("http://127.0.0.1:0")
-	_, err := pollDeviceAuth(t.Context(), client, "github", "dev-code",
-		10*time.Millisecond, time.Now().Add(-time.Second), 900, "laptop")
-	if err == nil || !strings.Contains(err.Error(), "Login timed out") {
-		t.Fatalf("want timeout error, got %v", err)
-	}
-}
-
-// testSetupToken is the setup token the tests' .env holds.
-const testSetupToken = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
-
-// The attempt, identifier and recovery code the fake CYFR answers its first
-// person with.
-const (
-	setupAttempt    = "att_first"
-	setupIdentifier = "per_5e0b6c1d9a2f4e7b8c3d0a1f2e5b6c9d8a7f4e3b2c1d0e9f8a7b6c5d4e3f2a1b"
-	setupCode       = "CYFR-7Q2M-XK4D-91PA-6TRZ"
-)
-
-// The sentences of the refusals registry.register answers the command line
-// acts on.
-var (
-	nameTaken      = registerRefusals["name_taken"]
-	nameReserved   = registerRefusals["name_reserved"]
-	directorySlow  = registerRefusals["directory_unavailable"]
-	registrySilent = registerRefusals["registry_unavailable"]
-)
-
-// The texts cyfr login --setup prints around the code.
-const (
-	codeSentence   = "If this CYFR is ever lost, this is the one thing that brings you back. Save it in your password manager. Press Enter once you saved it."
-	signedInAsMira = "Signed in as @mira. Add another recovery code in Settings.\n"
-	silentCyfrRun  = "cyfr.run did not answer. Run cyfr login --setup again to finish."
-)
-
-// setupHome is a CYFR's MCP endpoint as cyfr login --setup reaches it. The
-// first session.setup makes the person and their attempt with the name it
-// carries; each later one readmits them, answering the attempt with its code
-// until person.recovery_code_saved and with none after. registry.register
-// takes a name it carries in place of the attempt's, and refuses a name
-// cyfr.run holds (held) with its sentence. refusals scripts the sentences
-// calls are refused with, in turn, by tool and action ("session.setup").
-type setupHome struct {
-	*httptest.Server
-	mu       sync.Mutex
-	calls    []setupCall
-	requests int
-	refusals map[string][]string
-	held     map[string]string
-	setups   int
-	name     string
-	saved    bool
-	// onCall, when set, runs as each call arrives, before its answer.
-	onCall func(call string)
-}
-
-type setupCall struct {
-	call          string
-	arguments     map[string]any
-	authorization string
-}
-
-func newSetupHome(t *testing.T) *setupHome {
-	t.Helper()
-	h := &setupHome{refusals: map[string][]string{}, held: map[string]string{}}
-	version := protocolVersionFromVectors(t)
-	h.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
+// cyfr login on a machine without a chip makes the key under the
+// passphrase it shows, typed twice, before anything is sent; then shows
+// the approve address as a QR code, the address and the key's code a
+// person types on a device without a camera, takes the link pasted, and
+// completes the pairing with that link and the same passphrase, which
+// it never prints and erases once used.
+func TestLoginDriver_PairShowsTheApprovalAndTakesTheLink(t *testing.T) {
+	const digest = "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
+	dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, func(call string, d *fakeDevice) {
+		switch call {
+		case "prepare":
+			d.set(shell.View{Page: shell.PageFinish, Admission: "pair", Digest: digest, Kind: holder.KindSoftware})
+		case "pair":
+			d.set(shell.View{Page: shell.PageUnlocked})
 		}
-		raw, _ := io.ReadAll(r.Body)
-		if err := json.Unmarshal(raw, &req); err != nil {
-			t.Errorf("unreadable request: %v", err)
+	})
+	c, out := typed(passphrase, passphrase, "https://alice.example/pair#code=CODE")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"prepare", "pair"}) {
+		t.Fatalf("calls %v", dev.calls)
+	}
+	if string(dev.secrets["prepare"]) != passphrase || string(dev.secrets["pair"]) != passphrase ||
+		dev.given["pair"] != "https://alice.example/pair#code=CODE" {
+		t.Errorf("prepared with %q, paired with %q and %q", dev.secrets["prepare"], dev.secrets["pair"], dev.given["pair"])
+	}
+	printed := out.String()
+	for _, want := range []string{passphrase, "https://alice.example/devices/add", shell.KeyCode(digest), "▀", "Link or code: "} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("the output lacks %q:\n%s", want, printed)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		h.mu.Lock()
-		h.requests++
-		h.mu.Unlock()
-		if req.Method == "server/discover" {
-			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
-				"result": map[string]any{"supportedVersions": []string{version}}})
+	}
+	if strings.Count(printed, passphrase) != 1 {
+		t.Errorf("the passphrase was printed more than the once it is shown:\n%s", printed)
+	}
+	if d.held != nil {
+		t.Error("the passphrase is held after the pairing")
+	}
+}
+
+// A key made by an earlier run whose pairing did not finish is paired by
+// a later one with the code alone, typed on a machine without a camera,
+// and the PIN asked once: the key is not made again.
+func TestLoginDriver_ALaterRunFinishesThePairingWithATypedCode(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageFinish, Admission: "pair", Digest: "DIGEST", Kind: holder.KindChip},
+		func(call string, d *fakeDevice) {
+			if call == "pair" {
+				d.set(shell.View{Page: shell.PageUnlocked})
+			}
+		})
+	c, out := typed("7Kq2 pX9a bC3d eF4g hI", "123456")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"pair"}) || dev.given["pair"] != "7Kq2 pX9a bC3d eF4g hI" || string(dev.secrets["pair"]) != "123456" {
+		t.Fatalf("calls %v, given %q, secret %q", dev.calls, dev.given["pair"], dev.secrets["pair"])
+	}
+	if !strings.Contains(out.String(), "PIN: ") {
+		t.Errorf("no PIN asked:\n%s", out)
+	}
+}
+
+// Where the chip keeps the key, a six-digit PIN is asked twice; a chip
+// that cannot protect it makes the device show a passphrase instead,
+// which is asked for next, and the run goes on with it.
+func TestLoginDriver_ARefusedChipOffersThePassphrase(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageSetup, Chip: true}, nil)
+	dev.next = func(call string, d *fakeDevice) {
+		if call != "prepare" {
+			if call == "pair" {
+				d.set(shell.View{Page: shell.PageUnlocked})
+			}
 			return
 		}
-
-		tool, _ := req.Params["name"].(string)
-		args, _ := req.Params["arguments"].(map[string]any)
-		action, _ := args["action"].(string)
-		call := tool + "." + action
-		if h.onCall != nil {
-			h.onCall(call)
-		}
-		h.mu.Lock()
-		h.calls = append(h.calls, setupCall{call: call, arguments: args, authorization: r.Header.Get("Authorization")})
-		answer, refusal := h.answer(call, args)
-		h.mu.Unlock()
-
-		if refusal != "" {
-			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
-				"result": map[string]any{"content": []map[string]any{{"type": "text", "text": refusal}}, "isError": true}})
+		if string(d.secrets["prepare"]) == "123456" {
+			d.set(shell.View{Page: shell.PageSetup, Chip: true, Passphrase: passphrase,
+				Notice: "This box's chip cannot keep your PIN safely (lockout). Use the passphrase below instead."})
 			return
 		}
-		text, _ := json.Marshal(answer)
-		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
-			"result": map[string]any{"content": []map[string]any{{"type": "text", "text": string(text)}}}})
-	}))
-	t.Cleanup(h.Close)
-	return h
-}
-
-// answer is the call's answer, or the sentence it is refused with.
-func (h *setupHome) answer(call string, args map[string]any) (map[string]any, string) {
-	if call == "registry.register" {
-		// A name the call carries replaces the attempt's before cyfr.run
-		// is asked, so a refused one stays the attempt's.
-		if name, ok := args["name"].(string); ok {
-			h.name = name
+		d.set(shell.View{Page: shell.PageFinish, Admission: "pair", Digest: "DIGEST", Kind: holder.KindSoftware})
+	}
+	c, out := typed("123456", "123456", passphrase, passphrase, "CODE")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	if err := d.run(t.Context()); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"prepare", "prepare", "pair"}) || string(dev.secrets["pair"]) != passphrase {
+		t.Fatalf("calls %v, paired with %q", dev.calls, dev.secrets["pair"])
+	}
+	for _, want := range []string{"six-digit PIN", "cannot keep your PIN safely", passphrase} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the output lacks %q:\n%s", want, out)
 		}
 	}
-	if queue := h.refusals[call]; len(queue) > 0 {
-		h.refusals[call] = queue[1:]
-		return nil, queue[0]
-	}
-
-	switch call {
-	case "session.setup":
-		h.setups++
-		if h.setups == 1 {
-			h.name, _ = args["name"].(string)
-		}
-		recovery := map[string]any{"attempt_id": setupAttempt, "identifier": setupIdentifier, "name": h.name}
-		if !h.saved {
-			recovery["code"] = setupCode
-		}
-		return map[string]any{"session_token": fmt.Sprintf("setup-session-%d", h.setups), "user_id": "usr_first",
-			"readmitted": h.setups > 1, "recovery": recovery}, ""
-	case "registry.register":
-		if refusal := h.held[h.name]; refusal != "" {
-			return nil, refusal
-		}
-		return map[string]any{"attempt_id": setupAttempt, "identifier": setupIdentifier, "name": h.name}, ""
-	case "person.recovery_code_saved":
-		h.saved = true
-		return map[string]any{"attempt_id": setupAttempt}, ""
-	case "session.logout":
-		return map[string]any{"message": "Logged out successfully"}, ""
-	}
-	return map[string]any{}, ""
 }
 
-func (h *setupHome) reached() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.requests
-}
-
-// sent is every call that reached the home, in order.
-func (h *setupHome) sent() []setupCall {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return slices.Clone(h.calls)
-}
-
-// called is the calls' names, in order.
-func (h *setupHome) called() []string {
-	names := []string{}
-	for _, c := range h.sent() {
-		names = append(names, c.call)
-	}
-	return names
-}
-
-// each is every call of the name, in order.
-func (h *setupHome) each(call string) []setupCall {
-	var calls []setupCall
-	for _, c := range h.sent() {
-		if c.call == call {
-			calls = append(calls, c)
-		}
-	}
-	return calls
-}
-
-// inSetupProject makes the working directory a project of the test's own
-// whose .env holds env, and a config whose current context is the home at
-// url's.
-func inSetupProject(t *testing.T, url, env string) string {
-	t.Helper()
-	t.Chdir(t.TempDir())
-	if env != "" {
-		if err := os.WriteFile(".env", []byte(env), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return withContexts(t, "local", map[string]*config.Context{"local": {URL: url}})
-}
-
-// runLoginSetup runs cyfr login --setup with args under ctx, as a process of its
-// own: --name keeps no value from an earlier run.
-func runLoginSetup(t *testing.T, ctx context.Context, args ...string) (string, error) {
-	t.Helper()
-	flagLoginName = ""
-	t.Cleanup(func() { flagLoginName = "" })
-	return runLogin(t, ctx, append([]string{"login", "--setup"}, args...)...)
-}
-
-// savedToken is the session the context local holds.
-func savedToken(t *testing.T, path string) string {
-	t.Helper()
-	return loadContexts(t, path).Contexts["local"].Token
-}
-
-// secretsKept checks that no recovery secret a setup sent, and the code
-// unless shown is true, is in what the command printed or answered.
-func secretsKept(t *testing.T, home *setupHome, out string, err error, shown bool) {
-	t.Helper()
-	said := out
-	if err != nil {
-		said += err.Error()
-		if strings.Contains(err.Error(), setupCode) {
-			t.Errorf("the error names the recovery code: %v", err)
-		}
-	}
-	for _, setup := range home.each("session.setup") {
-		if secret, _ := setup.arguments["recovery_secret"].(string); secret == "" || strings.Contains(said, secret) {
-			t.Errorf("the recovery secret %q was printed or never sent:\n%s", secret, said)
-		}
-	}
-	if !shown && strings.Contains(out, setupCode) {
-		t.Errorf("the recovery code was printed:\n%s", out)
-	}
-}
-
-// endedSession checks that the home was asked to end the session n with
-// its own credential, last.
-func endedSession(t *testing.T, home *setupHome, n int) {
-	t.Helper()
-	calls := home.sent()
-	if len(calls) == 0 {
-		t.Fatal("nothing reached the home")
-	}
-	last := calls[len(calls)-1]
-	if want := fmt.Sprintf("Bearer setup-session-%d", n); last.call != "session.logout" || last.authorization != want {
-		t.Errorf("the last call was %s with %q, want session.logout with %q", last.call, last.authorization, want)
-	}
-}
-
-// cyfr login --setup --name sends the setup token .env holds, the machine's
-// name, the name, a recovery secret and a request id it drew, with no
-// credential; takes the name at cyfr.run and prints the code with the
-// session; and once Enter is pressed says the code is saved, then keeps
-// the session under the context and says who signed in.
-func TestLoginSetup_MakesTheFirstPersonAndSignsThemIn(t *testing.T) {
-	home := newSetupHome(t)
-	path := inSetupProject(t, home.URL, "CYFR_ACCESS=local\nCYFR_SETUP_TOKEN= "+testSetupToken+" \n")
-	term := onTerminal(t, false)
-	term.enter()
-	home.onCall = func(call string) {
-		if call == "person.recovery_code_saved" && savedToken(t, path) != "" {
-			t.Error("the session was kept before the code was saved")
-		}
-	}
-
-	out, err := runLoginSetup(t, t.Context(), "--name", "mira")
-	if err != nil {
-		t.Fatalf("login --setup: %v\n%s", err, out)
-	}
-	want := "Your name is @mira.\nYour recovery code:\n" + setupCode + "\n" + codeSentence + "\n" + signedInAsMira
-	if out != want {
-		t.Errorf("login --setup printed\n%s\nwant\n%s", out, want)
-	}
-	if got := savedToken(t, path); got != "setup-session-1" {
-		t.Errorf("the context holds %q, want the setup's session", got)
-	}
-	if got, want := home.called(), []string{"session.setup", "registry.register", "person.recovery_code_saved"}; !slices.Equal(got, want) {
-		t.Fatalf("CYFR was asked %v, want %v", got, want)
-	}
-
-	setup := home.each("session.setup")[0]
-	args := setup.arguments
-	if got := slices.Sorted(maps.Keys(args)); !slices.Equal(got, []string{"action", "machine", "name", "recovery_secret", "request_id", "setup_token"}) {
-		t.Errorf("the setup sent %v", got)
-	}
-	if args["setup_token"] != testSetupToken || args["machine"] != machineName() || args["name"] != "mira" {
-		t.Errorf("the setup sent the token %v, machine %v and name %v", args["setup_token"], args["machine"], args["name"])
-	}
-	secret, _ := args["recovery_secret"].(string)
-	if raw, err := base64.RawURLEncoding.Strict().DecodeString(secret); err != nil || len(raw) != 32 {
-		t.Errorf("the recovery secret %q is not 32 bytes of unpadded base64url", secret)
-	}
-	if id, _ := args["request_id"].(string); !regexp.MustCompile(`\Areq_[0-9a-f]{32}\z`).MatchString(id) {
-		t.Errorf("the request id %q is not req_ and 32 hexadecimal digits", id)
-	}
-	if setup.authorization != "" {
-		t.Errorf("the setup carried the credential %q", setup.authorization)
-	}
-
-	register := home.each("registry.register")[0]
-	if !maps.Equal(register.arguments, map[string]any{"action": "register"}) || register.authorization != "Bearer setup-session-1" {
-		t.Errorf("the registration sent %v with %q", register.arguments, register.authorization)
-	}
-	saved := home.each("person.recovery_code_saved")[0]
-	if !maps.Equal(saved.arguments, map[string]any{"action": "recovery_code_saved", "attempt_id": setupAttempt}) ||
-		saved.authorization != "Bearer setup-session-1" {
-		t.Errorf("the code was said saved with %v and %q", saved.arguments, saved.authorization)
-	}
-	secretsKept(t, home, out, err, true)
-}
-
-// On a terminal with no --name, the name is asked for, again while
-// nothing is typed, and the @ written before it is not part of it.
-func TestLoginSetup_AsksTheNameOnATerminal(t *testing.T) {
-	home := newSetupHome(t)
-	path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	term := onTerminal(t, true)
-	term.lines <- "  "
-	term.lines <- " @mira "
-	term.enter()
-
-	out, err := runLoginSetup(t, t.Context())
-	if err != nil {
-		t.Fatalf("login --setup: %v\n%s", err, out)
-	}
-	if !strings.HasPrefix(out, "Your name: @Your name: @Your name is @mira.\n") || !strings.HasSuffix(out, signedInAsMira) {
-		t.Errorf("login --setup printed\n%s", out)
-	}
-	if name := home.each("session.setup")[0].arguments["name"]; name != "mira" {
-		t.Errorf("the setup sent the name %q", name)
-	}
-	if got := savedToken(t, path); got != "setup-session-1" {
-		t.Errorf("the context holds %q", got)
-	}
-}
-
-// With no --name and no terminal to ask on, cyfr login --setup refuses
-// without asking, though input waits; with a terminal whose input ends
-// before a name, it refuses once asked. Either way nothing reaches CYFR
-// and nothing is saved.
-func TestLoginSetup_RefusesWithoutAName(t *testing.T) {
-	for name, c := range map[string]struct {
-		terminal bool
-		args     []string
-	}{
-		"no terminal":               {false, nil},
-		"no terminal, empty --name": {false, []string{"--name", " "}},
-		"the input ends":            {true, nil},
-	} {
-		t.Run(name, func(t *testing.T) {
-			home := newSetupHome(t)
-			path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-			term := onTerminal(t, c.terminal)
-			if !c.terminal {
-				term.lines <- "mira"
-			}
-			close(term.lines)
-			out, err := runLoginSetup(t, t.Context(), c.args...)
-			if err == nil || err.Error() != "Give your name with --name. It is yours for life." {
-				t.Fatalf("login --setup answered %v\n%s", err, out)
-			}
-			if asked := strings.Contains(out, "Your name: @"); asked != c.terminal {
-				t.Errorf("login --setup asked for the name: %t\n%s", asked, out)
-			}
-			if n := home.reached(); n != 0 {
-				t.Errorf("%d requests reached CYFR", n)
-			}
-			if got := savedToken(t, path); got != "" {
-				t.Errorf("the context holds %q", got)
+// --setup and --join make a person with this device: the name and the
+// secret go to the device's admission, the recovery code is shown, as a
+// QR code and as text, until Enter says it was saved, and a name taken
+// is asked again.
+func TestLoginDriver_ANewPersonSavesTheRecoveryCode(t *testing.T) {
+	for _, mode := range []string{"setup", "join"} {
+		dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, func(call string, d *fakeDevice) {
+			switch call {
+			case "setup", "join":
+				d.set(shell.View{Page: shell.PageName, Name: "mira", Notice: "Someone holds the name mira, or cyfr.run keeps it. Choose another."})
+			case "rename":
+				d.set(shell.View{Page: shell.PageRecovery, Recovery: &shell.Recovery{Code: "CYFR-RECOVERY-CODE", Name: "mira2"}})
+			case "saved":
+				d.set(shell.View{Page: shell.PageUnlocked})
 			}
 		})
-	}
-}
-
-// A name cyfr.run holds for someone else, or keeps for itself, is asked
-// for again on a terminal and taken in place of the attempt's.
-func TestLoginSetup_ATakenNameIsAskedForAgain(t *testing.T) {
-	for _, refusal := range []string{nameTaken, nameReserved} {
-		t.Run(refusal, func(t *testing.T) {
-			home := newSetupHome(t)
-			home.held["mira"] = refusal
-			path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-			term := onTerminal(t, true)
-			term.lines <- "mira-2"
-			term.enter()
-
-			out, err := runLoginSetup(t, t.Context(), "--name", "mira")
-			if err != nil {
-				t.Fatalf("login --setup: %v\n%s", err, out)
-			}
-			if !strings.HasPrefix(out, refusal+"\nYour name: @Your name is @mira-2.\n") ||
-				!strings.HasSuffix(out, "Signed in as @mira-2. Add another recovery code in Settings.\n") {
-				t.Errorf("login --setup printed\n%s", out)
-			}
-			registers := home.each("registry.register")
-			if len(registers) != 2 || !maps.Equal(registers[0].arguments, map[string]any{"action": "register"}) ||
-				!maps.Equal(registers[1].arguments, map[string]any{"action": "register", "name": "mira-2"}) {
-				t.Errorf("the registrations sent %+v", registers)
-			}
-			if got := savedToken(t, path); got != "setup-session-1" {
-				t.Errorf("the context holds %q", got)
-			}
-			secretsKept(t, home, out, err, true)
-		})
-	}
-}
-
-// Off a terminal a taken name ends the run with cyfr.run's sentence,
-// keeping no session; run again with another --name, the readmission
-// takes that name in place of the attempt's.
-func TestLoginSetup_ATakenNameOffATerminalIsGivenAgain(t *testing.T) {
-	home := newSetupHome(t)
-	home.held["mira"] = nameTaken
-	path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	onTerminal(t, false)
-
-	out, err := runLoginSetup(t, t.Context(), "--name", "mira")
-	if want := nameTaken + "\nRun cyfr login --setup --name NAME with another name to finish."; err == nil || err.Error() != want {
-		t.Fatalf("login --setup answered %v, want %q\n%s", err, want, out)
-	}
-	if ExitStatus(err) != exitFailure {
-		t.Errorf("the run exits %d", ExitStatus(err))
-	}
-	if got := savedToken(t, path); got != "" {
-		t.Errorf("the context holds %q", got)
-	}
-	endedSession(t, home, 1)
-	secretsKept(t, home, out, err, false)
-
-	onTerminal(t, false).enter()
-	out, err = runLoginSetup(t, t.Context(), "--name", "mira-2")
-	if err != nil {
-		t.Fatalf("login --setup again: %v\n%s", err, out)
-	}
-	if !strings.HasPrefix(out, "Your name is @mira-2.\nYour recovery code:\n"+setupCode+"\n") {
-		t.Errorf("login --setup again printed\n%s", out)
-	}
-	registers := home.each("registry.register")
-	if len(registers) != 3 || !maps.Equal(registers[1].arguments, map[string]any{"action": "register"}) ||
-		!maps.Equal(registers[2].arguments, map[string]any{"action": "register", "name": "mira-2"}) {
-		t.Errorf("the registrations sent %+v", registers)
-	}
-	if got := savedToken(t, path); got != "setup-session-2" {
-		t.Errorf("the context holds %q", got)
-	}
-}
-
-// A silent cyfr.run ends the run with exit 1, prints no code, saves nothing
-// and ends the session; run again, the same attempt finishes.
-func TestLoginSetup_ASilentCyfrRunSavesNothing(t *testing.T) {
-	for _, refusal := range []string{directorySlow, registrySilent} {
-		t.Run(refusal, func(t *testing.T) {
-			home := newSetupHome(t)
-			home.refusals["registry.register"] = []string{refusal}
-			path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-			onTerminal(t, false)
-
-			out, err := runLoginSetup(t, t.Context(), "--name", "mira")
-			if err == nil || err.Error() != silentCyfrRun {
-				t.Fatalf("login --setup answered %v, want %q\n%s", err, silentCyfrRun, out)
-			}
-			if ExitStatus(err) != exitFailure {
-				t.Errorf("the run exits %d", ExitStatus(err))
-			}
-			if got := savedToken(t, path); got != "" {
-				t.Errorf("the context holds %q", got)
-			}
-			if got, want := home.called(), []string{"session.setup", "registry.register", "session.logout"}; !slices.Equal(got, want) {
-				t.Errorf("CYFR was asked %v, want %v", got, want)
-			}
-			endedSession(t, home, 1)
-			secretsKept(t, home, out, err, false)
-
-			onTerminal(t, false).enter()
-			out, err = runLoginSetup(t, t.Context(), "--name", "mira")
-			if err != nil {
-				t.Fatalf("login --setup again: %v\n%s", err, out)
-			}
-			if want := "Your name is @mira.\nYour recovery code:\n" + setupCode + "\n" + codeSentence + "\n" + signedInAsMira; out != want {
-				t.Errorf("login --setup again printed\n%s", out)
-			}
-			setups := home.each("session.setup")
-			if setups[0].arguments["recovery_secret"] == setups[1].arguments["recovery_secret"] ||
-				setups[0].arguments["request_id"] == setups[1].arguments["request_id"] {
-				t.Error("the second run sent the first run's secret or request id")
-			}
-			if got := savedToken(t, path); got != "setup-session-2" {
-				t.Errorf("the context holds %q", got)
-			}
-		})
-	}
-}
-
-// Readmitted once the code is saved, CYFR answers no code: the run takes
-// the name, keeps the session and says who signed in, with no code and no
-// wait.
-func TestLoginSetup_TheReadmissionAfterTheCodeIsSaved(t *testing.T) {
-	home := newSetupHome(t)
-	path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	onTerminal(t, false).enter()
-	if out, err := runLoginSetup(t, t.Context(), "--name", "mira"); err != nil {
-		t.Fatalf("login --setup: %v\n%s", err, out)
-	}
-
-	onTerminal(t, false)
-	out, err := runLoginSetup(t, t.Context(), "--name", "mira")
-	if err != nil {
-		t.Fatalf("login --setup again: %v\n%s", err, out)
-	}
-	if out != signedInAsMira {
-		t.Errorf("login --setup again printed\n%s", out)
-	}
-	if got, want := home.called()[3:], []string{"session.setup", "registry.register"}; !slices.Equal(got, want) {
-		t.Errorf("the readmission asked %v, want %v", got, want)
-	}
-	if got := savedToken(t, path); got != "setup-session-2" {
-		t.Errorf("the context holds %q", got)
-	}
-}
-
-// Input that ends, or the person leaving, before Enter keeps no session,
-// says nothing saved and ends the session.
-func TestLoginSetup_NoEnterSavesNothing(t *testing.T) {
-	t.Run("the input ends", func(t *testing.T) {
-		home := newSetupHome(t)
-		path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-		close(onTerminal(t, false).lines)
-
-		out, err := runLoginSetup(t, t.Context(), "--name", "mira")
-		if err == nil || !strings.HasPrefix(err.Error(), "The input ended before you saved your recovery code, so nothing was saved.") {
-			t.Fatalf("login --setup answered %v\n%s", err, out)
+		c, out := typed(passphrase, passphrase, "@mira2", "")
+		d := &loginDriver{sh: dev, c: c, mode: mode, name: "mira", invitation: "INVITE", home: "https://alice.example"}
+		if err := d.run(t.Context()); err != nil {
+			t.Fatalf("%s: %v\n%s", mode, err, out)
 		}
-		if got := savedToken(t, path); got != "" {
-			t.Errorf("the context holds %q", got)
+		if !slices.Equal(dev.calls, []string{mode, "rename", "saved"}) || dev.given["rename"] != "mira2" {
+			t.Fatalf("%s: calls %v, renamed %q", mode, dev.calls, dev.given["rename"])
 		}
-		if len(home.each("person.recovery_code_saved")) != 0 {
-			t.Error("the code was said saved")
+		if mode == "join" && dev.given["join"] != "INVITE|mira" {
+			t.Errorf("joined with %q", dev.given["join"])
 		}
-		endedSession(t, home, 1)
-		secretsKept(t, home, out, err, true)
+		for _, want := range []string{"CYFR-RECOVERY-CODE", "▀", "Press Enter once you saved it", "Choose another"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%s: the output lacks %q:\n%s", mode, want, out)
+			}
+		}
+	}
+}
+
+// An action that leaves its page as it was ends the run with the
+// device's sentence and locks it: a wrong PIN is said, never tried again
+// by itself; input that ends before an answer ends the run too.
+func TestLoginDriver_AFailureEndsWithItsSentenceAndLocks(t *testing.T) {
+	dev := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, func(call string, d *fakeDevice) {
+		d.set(shell.View{Page: shell.PageLocked, Kind: holder.KindChip, Notice: "That is not this command line's PIN or passphrase. Nothing was sent anywhere."})
 	})
-
-	t.Run("Ctrl-C", func(t *testing.T) {
-		home := newSetupHome(t)
-		path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-		onTerminal(t, false)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		// The person leaves as the command waits for Enter, its one read.
-		confirmationInput = func() <-chan string {
-			cancel()
-			return make(chan string)
-		}
-
-		out, err := runLoginSetup(t, ctx, "--name", "mira")
-		if !errors.Is(err, prompt.ErrAborted) || ExitStatus(err) != exitInterrupted {
-			t.Fatalf("login --setup answered %v\n%s", err, out)
-		}
-		if !strings.Contains(out, "Stopped before you saved your recovery code.") {
-			t.Errorf("login --setup printed\n%s", out)
-		}
-		if got := savedToken(t, path); got != "" {
-			t.Errorf("the context holds %q", got)
-		}
-		if len(home.each("person.recovery_code_saved")) != 0 {
-			t.Error("the code was said saved")
-		}
-		endedSession(t, home, 1)
-	})
-}
-
-// Under --json the answer alone is on standard output, naming the person
-// and never the code, which is printed with the rest on standard error.
-func TestLoginSetup_JSONAnswersWithoutTheCode(t *testing.T) {
-	home := newSetupHome(t)
-	inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	onTerminal(t, false).enter()
-
-	out, err := runLoginSetup(t, t.Context(), "--name", "mira", "--json")
-	if err != nil {
-		t.Fatalf("login --setup --json: %v\n%s", err, out)
+	c, _ := typed("000000", "123456")
+	d := &loginDriver{sh: dev, c: c, mode: "pair", home: "https://alice.example"}
+	err := d.run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "not this command line's PIN") || len(dev.calls) != 1 || dev.locks != 1 {
+		t.Fatalf("run: %v, calls %v, locks %d", err, dev.calls, dev.locks)
 	}
-	// The capture is standard output, then standard error.
-	decoder := json.NewDecoder(strings.NewReader(out))
-	var answer map[string]any
-	if err := decoder.Decode(&answer); err != nil {
-		t.Fatalf("standard output does not start with the answer: %v\n%s", err, out)
-	}
-	want := map[string]any{"status": "signed_in", "context": "local", "user_id": "usr_first", "readmitted": false,
-		"name": "mira", "identifier": setupIdentifier}
-	if !maps.Equal(answer, want) {
-		t.Errorf("the answer is %v, want %v", answer, want)
-	}
-	rest := out[decoder.InputOffset():]
-	if !strings.Contains(rest, "Your recovery code:\n"+setupCode+"\n") {
-		t.Errorf("standard error lacks the code:\n%s", rest)
+
+	ended := newFakeDevice(shell.View{Page: shell.PageLocked, Kind: holder.KindChip}, nil)
+	c, _ = typed()
+	if err := (&loginDriver{sh: ended, c: c, mode: "pair"}).run(t.Context()); !errors.Is(err, errInputEnded) || len(ended.calls) != 0 {
+		t.Fatalf("ended input: %v, calls %v", err, ended.calls)
 	}
 }
 
-// Without a setup token in the working directory's .env, cyfr login
-// --setup is refused naming .env before anything reaches CYFR, and saves
-// nothing.
-func TestLoginSetup_RefusesWithoutATokenInEnv(t *testing.T) {
-	for name, c := range map[string]struct{ env, want string }{
-		"no .env":             {"", "There is no .env here, so no CYFR_SETUP_TOKEN: run cyfr login --setup in the directory cyfr init set up."},
-		".env without it":     {"CYFR_ACCESS=local\n", "There is no CYFR_SETUP_TOKEN in .env here: run cyfr login --setup in the directory cyfr init set up."},
-		".env assigning none": {"CYFR_ACCESS=local\nCYFR_SETUP_TOKEN=\n", "There is no CYFR_SETUP_TOKEN in .env here: run cyfr login --setup in the directory cyfr init set up."},
+// cyfr login refuses, before any key is made or anything sent, what it
+// cannot hold: off a terminal (unattended work uses an API key), flags
+// that do not go together, and a terminal it unlocked already.
+func TestLogin_RefusesWhatItCannotHold(t *testing.T) {
+	home, reached := countingHome(t)
+	withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
+	opened := 0
+	previous := openDevice
+	openDevice = func(o deviceOptions) (device, error) { opened++; return previous(o) }
+	t.Cleanup(func() { openDevice = previous })
+
+	for args, want := range map[string]string{
+		"login":                            "on a terminal",
+		"login --setup --join":             "use one of them",
+		"login --setup --invitation CODE":  "use one of them",
+		"login --name mira":                "use it with one of them",
+		"login --join --name mira --token": "",
 	} {
-		t.Run(name, func(t *testing.T) {
-			home := newSetupHome(t)
-			path := inSetupProject(t, home.URL, c.env)
-			onTerminal(t, false)
-			out, err := runLoginSetup(t, t.Context(), "--name", "mira")
-			if err == nil || err.Error() != c.want {
-				t.Fatalf("login --setup answered %v, want %q\n%s", err, c.want, out)
-			}
-			if n := home.reached(); n != 0 {
-				t.Errorf("%d requests reached CYFR", n)
-			}
-			if got := savedToken(t, path); got != "" {
-				t.Errorf("the context holds %q", got)
-			}
-		})
-	}
-}
-
-// --setup and --provider together, and --name without --setup, are
-// refused before anything reaches CYFR.
-func TestLoginSetup_RefusesFlagsThatDoNotGoTogether(t *testing.T) {
-	home := newSetupHome(t)
-	inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	onTerminal(t, false)
-
-	_, err := runLoginSetup(t, t.Context(), "--name", "mira", "--provider", "github")
-	if err == nil || !strings.Contains(err.Error(), "--setup") || !strings.Contains(err.Error(), "--provider") {
-		t.Errorf("login --setup --provider answered %v", err)
-	}
-	flagLoginName = ""
-	_, err = runLogin(t, t.Context(), "login", "--name", "mira")
-	if err == nil || err.Error() != "--name names the first person --setup makes: use it with --setup." {
-		t.Errorf("login --name answered %v", err)
-	}
-	if n := home.reached(); n != 0 {
-		t.Errorf("%d requests reached CYFR", n)
-	}
-}
-
-// A CYFR whose first person has a sign-in method refuses the setup token:
-// the command line says CYFR's sentence and that cyfr login signs it in,
-// and saves nothing.
-func TestLoginSetup_SetupClosedNamesCyfrLogin(t *testing.T) {
-	const closed = "This CYFR is set up. Sign in with your passkey, a device you connected, or a sign-in method you linked."
-	home := newSetupHome(t)
-	home.refusals["session.setup"] = []string{closed}
-	path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	onTerminal(t, false)
-	_, err := runLoginSetup(t, t.Context(), "--name", "mira")
-	if err == nil || !strings.HasPrefix(err.Error(), closed+"\n") || !strings.Contains(err.Error(), "signs in with cyfr login.") {
-		t.Fatalf("login --setup answered %v, want CYFR's sentence and cyfr login", err)
-	}
-	if got := savedToken(t, path); got != "" {
-		t.Errorf("the context holds %q", got)
-	}
-	if got := home.called(); !slices.Equal(got, []string{"session.setup"}) {
-		t.Errorf("CYFR was asked %v", got)
-	}
-}
-
-// A CYFR that does not answer is the command line's connection refusal,
-// as cyfr login's.
-func TestLoginSetup_ServerDownIsAConnectionRefusal(t *testing.T) {
-	home := newSetupHome(t)
-	inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	onTerminal(t, false)
-	home.Close()
-	_, err := runLoginSetup(t, t.Context(), "--name", "mira")
-	if err == nil || !strings.HasPrefix(err.Error(), "Failed to connect: ") {
-		t.Fatalf("login --setup answered %v, want the connection refusal", err)
-	}
-}
-
-// A context changed to another address while the setup signs in keeps
-// nothing: the session is ended at the CYFR that issued it.
-func TestLoginSetup_EndsTheSessionWhenTheContextMoved(t *testing.T) {
-	home := newSetupHome(t)
-	path := inSetupProject(t, home.URL, "CYFR_SETUP_TOKEN="+testSetupToken+"\n")
-	onTerminal(t, false).enter()
-	home.onCall = func(call string) {
-		if call == "session.setup" {
-			cfg := loadContexts(t, path)
-			cfg.Contexts["local"].URL = "https://other.example"
-			if err := cfg.SaveTo(path); err != nil {
-				t.Error(err)
-			}
-		}
-	}
-	_, err := runLoginSetup(t, t.Context(), "--name", "mira")
-	if err == nil || !errors.Is(err, errContextMoved) || !strings.Contains(err.Error(), "the session was ended and nothing saved") {
-		t.Fatalf("login --setup answered %v", err)
-	}
-	endedSession(t, home, 1)
-	if got := loadContexts(t, path).Contexts["local"]; got.Token != "" || got.URL != "https://other.example" {
-		t.Errorf("the moved context holds %+v", got)
-	}
-}
-
-// The refusals the command line acts on are the sentences Prima.Refusal
-// answers them with, word for word.
-func TestLoginSetup_RegisterRefusalsAreCyfrsSentences(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "apps", "prima", "lib", "prima", "refusal.ex"))
-	if err != nil {
-		t.Fatalf("read refusal.ex: %v", err)
-	}
-	if len(registerRefusals) != 4 {
-		t.Errorf("the command line acts on %d refusals, want 4", len(registerRefusals))
-	}
-	for reason, sentence := range registerRefusals {
-		row := regexp.MustCompile(`defp row\(:` + reason + `\),\s*do:\s*\{:\w+,\s*"([^"]*)"\}`).FindSubmatch(raw)
-		if row == nil {
-			t.Errorf("refusal.ex has no single-sentence row for :%s", reason)
+		if want == "" {
 			continue
 		}
-		if string(row[1]) != sentence {
-			t.Errorf(":%s is %q in refusal.ex, %q here", reason, row[1], sentence)
+		_, err := runCommand(t, t.Context(), strings.Fields(args)...)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", args, err, want)
 		}
+	}
+	t.Setenv(sessionHomeEnv, home.URL)
+	if _, err := runCommand(t, t.Context(), "login"); err == nil || !strings.Contains(err.Error(), "unlocked by cyfr login already") {
+		t.Errorf("a login shell's login: %v", err)
+	}
+	if opened != 0 || reached.Load() != 0 {
+		t.Errorf("refused logins opened the device %d times and asked the home %d things", opened, reached.Load())
+	}
+	entries, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".cyfr", "devices"))
+	if len(entries) != 0 {
+		t.Errorf("a refused login made a key: %v", entries)
+	}
+}
+
+// A command sends the session of cyfr login's shell only to that shell's
+// home, and an API key given by --token or CYFR_TOKEN before it; nothing
+// stored sends a credential.
+func TestClientAt_TheShellsSessionGoesToItsHomeAlone(t *testing.T) {
+	withContexts(t, "home", map[string]*config.Context{"home": {URL: "https://alice.example"}})
+	t.Setenv(sessionEnv, "TOKEN-1")
+	t.Setenv(sessionHomeEnv, "https://ALICE.example/")
+	if got := clientAt("https://alice.example").SessionID; got != "TOKEN-1" {
+		t.Errorf("the shell's home was sent %q", got)
+	}
+	for _, other := range []string{"https://mallory.example", "http://alice.example", "https://alice.example/other"} {
+		if got := clientAt(other).SessionID; got != "" {
+			t.Errorf("%s was sent %q", other, got)
+		}
+	}
+	t.Setenv("CYFR_TOKEN", "cyfr_key")
+	if got := clientAt("https://alice.example").SessionID; got != "cyfr_key" {
+		t.Errorf("CYFR_TOKEN did not come first: %q", got)
+	}
+}
+
+// A sign-in an earlier command line saved under a context is deleted from
+// the config at the first command that reads it, which says once to run
+// cyfr login; it is never sent to the home.
+func TestOldSignIn_IsDeletedAndNeverSent(t *testing.T) {
+	var auth []string
+	var mu sync.Mutex
+	home := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		http.Error(w, "no", http.StatusUnauthorized)
+	}))
+	t.Cleanup(home.Close)
+	path := withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
+	raw, _ := json.Marshal(map[string]any{"current_context": "home",
+		"contexts": map[string]any{"home": map[string]any{"url": home.URL, "token": "an-old-cli-session"}}})
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr, _ := runCommand(t, t.Context(), "whoami")
+	if !strings.Contains(stderr, "The sign-in this command line saved for home was deleted") || !strings.Contains(stderr, "Run cyfr login") {
+		t.Errorf("no sentence:\n%s", stderr)
+	}
+	after, _ := os.ReadFile(path)
+	if bytes.Contains(after, []byte("an-old-cli-session")) || bytes.Contains(after, []byte(`"token"`)) {
+		t.Errorf("the old sign-in is still stored:\n%s", after)
+	}
+	for _, a := range auth {
+		if strings.Contains(a, "an-old-cli-session") {
+			t.Errorf("the old sign-in was sent: %q", a)
+		}
+	}
+	if again, _ := runCommand(t, t.Context(), "whoami"); strings.Contains(again, "was deleted") {
+		t.Errorf("said twice:\n%s", again)
+	}
+}
+
+// pairedRecord writes a paired device record for address, as cyfr login
+// leaves one.
+func pairedRecord(t *testing.T, address string) {
+	t.Helper()
+	path, err := deviceRecord(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := holder.NewSoftware(address, "", "pair", []byte(passphrase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.ClientID, rec.Athanor, rec.Certificate = "pcl_1", "ath_1", json.RawMessage(`{"client_id":"pcl_1"}`)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Save(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A change answered confirmation_required on a command line paired with
+// the home is offered for confirmation here, in C4's order: the home's
+// preview for exactly the pending ref is drawn first, then the PIN or
+// passphrase is asked once, after it, and that secret confirms the drawn
+// change; the device is locked again. Enter alone repeats the call once
+// confirmed elsewhere, signing nothing; a wrong secret is said and the
+// call repeats; a device that cannot draw the change leaves the plain
+// wait.
+func TestConfirmationWait_ConfirmsOnThisDevice(t *testing.T) {
+	withContexts(t, "home", map[string]*config.Context{"home": {URL: "https://alice.example"}})
+	pairedRecord(t, "https://alice.example")
+	var dev *fakeDevice
+	previous := openDevice
+	openDevice = func(o deviceOptions) (device, error) {
+		if o.address != "https://alice.example" {
+			t.Errorf("opened the device of %s", o.address)
+		}
+		return dev, nil
+	}
+	t.Cleanup(func() { openDevice = previous })
+	const id = "cfm_secret-id"
+	pending := &mcp.ConsentError{Tag: "confirmation_required", Payload: map[string]any{"id": id, "operation": "pairing.begin"}}
+	device := func(drawn bool, notice string) *fakeDevice {
+		return newFakeDevice(shell.View{Page: shell.PageLocked}, func(call string, d *fakeDevice) {
+			switch {
+			case call == "draw" && drawn:
+				d.set(shell.View{Page: shell.PageConfirm, Confirm: &shell.PendingConfirm{Ref: confirmation.Ref(id),
+					Operation: "pairing.begin", Preview: map[string]any{"key_digest": "THE-DIGEST"}}})
+			case call == "draw":
+				d.set(shell.View{Page: shell.PageLocked, Notice: "This command line confirms a change in the shell cyfr login started."})
+			case call == "decide":
+				d.set(shell.View{Page: shell.PageLocked, Notice: notice})
+			}
+		})
+	}
+	run := func(lines ...string) (error, string) {
+		ch := make(chan []byte, len(lines))
+		for _, l := range lines {
+			ch <- []byte(l)
+		}
+		out := &bytes.Buffer{}
+		w := &confirmationWait{out: out, interactive: func() bool { return true }, now: time.Now,
+			lines: func() <-chan []byte { return ch }, address: "https://alice.example", device: confirmOnDevice}
+		return w.wait(t.Context(), pending, false), out.String()
+	}
+
+	dev = device(true, "Confirmed on this command line.")
+	err, out := run(passphrase)
+	if err != nil || strings.Index(out, "THE-DIGEST") > strings.Index(out, "PIN or passphrase") || strings.Index(out, "THE-DIGEST") < 0 {
+		t.Fatalf("confirmed: %v\n%s", err, out)
+	}
+	if !slices.Equal(dev.calls, []string{"draw", "decide"}) || dev.given["draw"] != confirmation.Ref(id) ||
+		dev.given["decide"] != confirmation.Ref(id)+"|true" || string(dev.secrets["decide"]) != passphrase || dev.locks != 1 {
+		t.Fatalf("calls %v, given %v, locks %d", dev.calls, dev.given, dev.locks)
+	}
+
+	dev = device(true, "")
+	if err, _ := run(""); err != nil || dev.given["decide"] != confirmation.Ref(id)+"|false" {
+		t.Fatalf("Enter alone: %v, %v", err, dev.given)
+	}
+
+	dev = device(true, "That is not this command line's PIN or passphrase. Nothing was sent anywhere. Nothing was signed.")
+	if err, out := run("000000"); err != nil || !strings.Contains(out, "not this command line's PIN") {
+		t.Fatalf("a wrong secret: %v\n%s", err, out)
+	}
+
+	dev = device(false, "")
+	if err, out := run(""); err != nil || !slices.Equal(dev.calls, []string{"draw"}) || !strings.Contains(out, "Press Enter once confirmed") ||
+		!strings.Contains(out, "in the shell cyfr login started") {
+		t.Fatalf("no drawing: %v, calls %v\n%s", err, dev.calls, out)
+	}
+}
+
+// captureStderr runs fn with standard error captured.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stderr
+	os.Stderr = w
+	out := make(chan []byte)
+	go func() {
+		var b bytes.Buffer
+		_, _ = b.ReadFrom(r)
+		out <- b.Bytes()
+	}()
+	fn()
+	os.Stderr = saved
+	w.Close()
+	return string(<-out)
+}
+
+// cyfr login's console reads one line per question and nothing past it:
+// what is typed after its last answer stays for the shell it starts.
+func TestAskedLine_TakesNothingPastItsLine(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	if _, err := w.WriteString("the link\r\ncyfr whoami\n"); err != nil {
+		t.Fatal(err)
+	}
+	line, open := <-askedLine(r)
+	if !open || string(line) != "the link" {
+		t.Fatalf("asked line %q, %v", line, open)
+	}
+	w.Close()
+	rest, _ := io.ReadAll(r)
+	if string(rest) != "cyfr whoami\n" {
+		t.Errorf("the shell would read %q", rest)
+	}
+	if _, open := <-askedLine(r); open {
+		t.Error("an ended input answered a line")
+	}
+}
+
+// The console cyfr login asks on leaves the terminal unread once its last
+// question is answered: the line typed next, the first command in the
+// shell it starts, reaches that shell.
+func TestLoginConsole_LeavesTheNextLineToTheShell(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	saved := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = saved })
+	if _, err := w.WriteString("https://alice.example/pair#code=CODE\n"); err != nil {
+		t.Fatal(err)
+	}
+	c := newConsole(io.Discard)
+	c.quiet = func() func() { return func() {} }
+	if line, err := c.line(t.Context(), "Link or code: "); err != nil || string(line) != "https://alice.example/pair#code=CODE" {
+		t.Fatalf("answered %q, %v", line, err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := w.WriteString("cyfr whoami\n"); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	got := make(chan []byte, 1)
+	go func() { rest, _ := io.ReadAll(r); got <- rest }()
+	select {
+	case rest := <-got:
+		if string(rest) != "cyfr whoami\n" {
+			t.Errorf("the shell would read %q", rest)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the shell's first line was taken")
+	}
+}
+
+// In cyfr login's shell the change to confirm is read through the shell's
+// session, the ref alone asked for, and drawn as the home answered it;
+// outside that shell nothing is drawn and the sentence says where it is.
+func TestSessionDevice_DrawsTheChangeThroughTheSession(t *testing.T) {
+	var auth string
+	srv := newCLIServer(t, "", `{"confirmations":[{"ref":"cnr_1","operation":"pairing.begin","preview":{"key_digest":"D1"},"asker":{"name":"cyfr on box"}}]}`)
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		inner.ServeHTTP(w, r)
+	})
+	session := mcp.NewClient(srv.URL)
+	session.SessionID = "TOKEN-1"
+	d := &sessionDevice{session: session}
+	d.Draw(t.Context(), "cnr_1")
+	v := d.View()
+	if v.Page != shell.PageConfirm || v.Confirm.Operation != "pairing.begin" || v.Confirm.Preview["key_digest"] != "D1" || auth != "Bearer TOKEN-1" {
+		t.Fatalf("drawn %+v, auth %q", v, auth)
+	}
+	if name, args := srv.call(0); name != "confirmation" || args["action"] != "pending" || args["request"] != "cnr_1" {
+		t.Errorf("asked %s %v", name, args)
+	}
+
+	outside := &sessionDevice{}
+	outside.Draw(t.Context(), "cnr_1")
+	if outside.drawn != nil || !strings.Contains(outside.notice, "in the shell cyfr login started") {
+		t.Errorf("outside the shell: %+v, %q", outside.drawn, outside.notice)
+	}
+}
+
+// A person made while cyfr.run does not answer has their name waiting for
+// it, not for another: cyfr login ends, locked, saying which command
+// finishes it, and asks for no other name.
+func TestLoginDriver_ASilentCyfrRunEndsTheRunToFinishLater(t *testing.T) {
+	for mode, again := range map[string]string{"setup": "cyfr login --setup", "join": "cyfr login --join --invitation CODE"} {
+		dev := newFakeDevice(shell.View{Page: shell.PageSetup, Passphrase: passphrase}, func(call string, d *fakeDevice) {
+			if call == mode {
+				d.set(shell.View{Page: shell.PageName, Name: "proof", NameWaits: true,
+					Notice: "cyfr.run did not answer. Try again in a moment; you are set up already."})
+			}
+		})
+		c, out := typed(passphrase, passphrase)
+		err := (&loginDriver{sh: dev, c: c, mode: mode, name: "proof", invitation: "INVITE", home: "https://alice.example"}).run(t.Context())
+		if err == nil || err.Error() != "cyfr.run did not answer. Run "+again+" again to finish." || dev.locks != 1 ||
+			slices.Contains(dev.calls, "rename") || strings.Contains(out.String(), "Your name, yours for life") {
+			t.Fatalf("%s: %v, calls %v, locks %d\n%s", mode, err, dev.calls, dev.locks, out)
+		}
+	}
+}
+
+// The local context cyfr init saves names the home by its loopback IP,
+// while the home names itself localhost in what its devices sign: the
+// command line's device is the home's own address, so its key record and
+// every challenge it checks say localhost; any other address is kept.
+func TestDeviceShell_ALoopbackContextIsTheHomesLocalhost(t *testing.T) {
+	withContexts(t, "local", map[string]*config.Context{"local": {URL: "http://127.0.0.1:4000"}})
+	saved := deviceChip
+	deviceChip = func() bool { return false }
+	t.Cleanup(func() { deviceChip = saved })
+	for address, want := range map[string]string{
+		"http://127.0.0.1:4000":     "http://localhost:4000",
+		"http://[::1]:4000":         "http://localhost:4000",
+		"https://home.example":      "https://home.example",
+		"https://home.example:8443": "https://home.example:8443",
+	} {
+		sh, err := deviceShell(deviceOptions{address: address})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := sh.View().Passphrase
+		sh.Prepare([]byte(p), []byte(p))
+		path, _ := deviceRecord(address)
+		rec, err := holder.Load(path)
+		if err != nil || rec.Home != want {
+			t.Errorf("%s: the key is for %v (%v), want %s", address, rec, err, want)
+		}
+		_ = os.Remove(path)
 	}
 }

@@ -772,7 +772,7 @@ defmodule Sanctum.Consent.Authz do
 
   # A name for the client that asked, from what the opener already holds,
   # in the order `opener/1` reads it: a paired client's name, a frame's
-  # tincture, an API key's name, a command line's machine or else a
+  # tincture, an API key's name or else a
   # session's sign-in provider, with the session's creation time, from its
   # own row, or this home for a context no stored credential backs. A hint
   # for the person reading the record: a name that cannot be read is left
@@ -790,11 +790,6 @@ defmodule Sanctum.Consent.Authz do
 
   defp asker(%Context{session_token_hash: hash}) when is_binary(hash) and hash != "" do
     case Arca.SessionStorage.get_session(hash) do
-      {:ok, %{cli_machine: machine, inserted_at: %DateTime{} = since}} when is_binary(machine) ->
-        "command_line"
-        |> named_asker(machine)
-        |> Map.put("since", DateTime.to_iso8601(since))
-
       {:ok, %{provider: provider, inserted_at: %DateTime{} = since}} ->
         "session"
         |> named_asker(provider)

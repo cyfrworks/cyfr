@@ -77,12 +77,18 @@ defmodule Sanctum.DeviceUnlockReview353EdgesTest do
   end
 
   test "review353 a restore enrollment resumes over HTTP only with its token and key proof" do
-    identity = Sanctum.Test.Newcomers.identity()
+    # A local person holding no first method, as a restore leaves them: a
+    # device's setup with the device, its certificate and the mark taken away.
+    %{certificate: %{subject: %{user_id: user_id}}} = enrolled!(@token)
+    Arca.Repo.delete_all(from(c in Arca.Schemas.DeviceCertificate, where: c.user_id == ^user_id))
+    Arca.Repo.delete_all(from(c in Arca.Schemas.PairedClient, where: c.user_id == ^user_id))
 
-    {:ok, %{person: person}} =
-      Sanctum.Newcomer.admit({:setup, @token}, {:command_line, "review", identity})
+    {1, _} =
+      Arca.Repo.update_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user_id),
+        set: [first_method_at: nil]
+      )
 
-    ctx = restore_session!(person.id)
+    ctx = restore_session!(user_id)
     pair = key()
     request_id = Prima.UUID7.generate_id("req")
 

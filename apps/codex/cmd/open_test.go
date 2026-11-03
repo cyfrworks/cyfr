@@ -6,12 +6,15 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cyfr/codex/internal/config"
@@ -31,17 +34,29 @@ func stubBrowser(t *testing.T, err error) *[]string {
 	return &opened
 }
 
+// countingHome is a home that answers nothing but counts what reaches it.
+func countingHome(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
 // cyfr open hands the context's address to the browser and nothing more:
 // no request reaches the home, so no session travels.
 func TestOpen_OpensTheContextsAddress(t *testing.T) {
-	home := newStubHome(t)
+	home, reached := countingHome(t)
 	withContexts(t, "local", map[string]*config.Context{
-		"local": {URL: "http://127.0.0.1:4000", Token: "local-session"},
-		"home":  {URL: home.URL, Token: "home-session"},
+		"local": {URL: "http://127.0.0.1:4000"},
+		"home":  {URL: home.URL},
 	})
 	opened := stubBrowser(t, nil)
 
-	out, err := runLogin(t, t.Context(), "open", "--context", "home")
+	out, err := runCommand(t, t.Context(), "open", "--context", "home")
 	if err != nil {
 		t.Fatalf("open: %v\n%s", err, out)
 	}
@@ -49,18 +64,54 @@ func TestOpen_OpensTheContextsAddress(t *testing.T) {
 	if want := strings.Replace(home.URL, "127.0.0.1", "localhost", 1); !reflect.DeepEqual(*opened, []string{want}) {
 		t.Errorf("opened %v, want the context's address alone, %s", *opened, want)
 	}
-	if n := len(home.actions()); n != 0 {
+	if n := reached.Load(); n != 0 {
 		t.Errorf("open asked the home %d things", n)
-	}
-	if strings.Contains(out, "home-session") {
-		t.Errorf("open printed the session:\n%s", out)
 	}
 
 	// This machine's loopback context opens as the address a home on this
 	// computer serves itself under.
 	*opened = nil
-	if out, err := runLogin(t, t.Context(), "open"); err != nil || !reflect.DeepEqual(*opened, []string{"http://localhost:4000"}) {
+	if out, err := runCommand(t, t.Context(), "open"); err != nil || !reflect.DeepEqual(*opened, []string{"http://localhost:4000"}) {
 		t.Fatalf("open of the current context: %v, opened %v\n%s", err, *opened, out)
+	}
+}
+
+// In the shell cyfr login holds for a home, cyfr open opens the shell's
+// own loopback page for that home alone, whose Open CYFR spends the
+// unlock's ticket: the opener is handed that fixed address, never the
+// session, and the home hears nothing from this command. For another
+// home, or a shell whose pages are not this login's, it opens the address.
+func TestOpen_InTheLoginShellOpensTheShellsPage(t *testing.T) {
+	home, reached := countingHome(t)
+	withContexts(t, "home", map[string]*config.Context{
+		"home":  {URL: home.URL},
+		"other": {URL: "https://other.example"},
+	})
+	t.Setenv(sessionEnv, "the-shells-session")
+	t.Setenv(sessionHomeEnv, home.URL+"/")
+	t.Setenv(shellPagesEnv, "1")
+	opened := stubBrowser(t, nil)
+
+	out, err := runCommand(t, t.Context(), "open")
+	if err != nil {
+		t.Fatalf("open: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(*opened, []string{"http://127.0.0.1:7340/"}) {
+		t.Errorf("opened %v, want the shell's page alone", *opened)
+	}
+	if strings.Contains(out, "the-shells-session") || reached.Load() != 0 {
+		t.Errorf("open printed the session or asked the home:\n%s", out)
+	}
+
+	*opened = nil
+	if _, err := runCommand(t, t.Context(), "open", "--context", "other"); err != nil || !reflect.DeepEqual(*opened, []string{"https://other.example"}) {
+		t.Errorf("another home's open: %v, opened %v", err, *opened)
+	}
+
+	*opened = nil
+	t.Setenv(shellPagesEnv, "")
+	if _, err := runCommand(t, t.Context(), "open"); err != nil || len(*opened) != 1 || (*opened)[0] == "http://127.0.0.1:7340/" {
+		t.Errorf("a shell without pages opened %v (%v)", *opened, err)
 	}
 }
 
@@ -91,7 +142,7 @@ func TestOpen_RefusesWhatItCannotOpen(t *testing.T) {
 	withContexts(t, "odd", map[string]*config.Context{"odd": {URL: "file:///etc/passwd"}})
 	opened := stubBrowser(t, nil)
 
-	_, err := runLogin(t, t.Context(), "open")
+	_, err := runCommand(t, t.Context(), "open")
 	if !exitsOne(err) || !strings.Contains(err.Error(), "is not a web address") {
 		t.Fatalf("want the address refused, got %v", err)
 	}
@@ -101,7 +152,7 @@ func TestOpen_RefusesWhatItCannotOpen(t *testing.T) {
 
 	withContexts(t, "home", map[string]*config.Context{"home": {URL: "https://home.example"}})
 	stubBrowser(t, errors.New("no xdg-open to open it with"))
-	out, err := runLogin(t, t.Context(), "open")
+	out, err := runCommand(t, t.Context(), "open")
 	if !exitsOne(err) || !strings.Contains(out, "Open https://home.example in your browser.") {
 		t.Fatalf("want the address printed and exit 1, got %v\n%s", err, out)
 	}

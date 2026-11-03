@@ -816,10 +816,9 @@ describe("the glass's prompt", () => {
     assert.deepEqual(model.offers, ["passkey", "email", "oidc"])
   })
 
-  test("names a command line's request by the machine it runs on", () => {
+  test("names a kind of asker it does not know as a client of the person's", () => {
     assert.equal(promptModel({...entry, asker: {kind: "command_line", name: "laptop"}}).asker,
-      "the command line on laptop")
-    assert.equal(promptModel({...entry, asker: {kind: "command_line"}}).asker, "the command line")
+      "a client of yours")
   })
 
   test("offers no passkey where the browser has none, and nothing the record does not offer", () => {

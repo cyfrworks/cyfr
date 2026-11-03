@@ -3,7 +3,7 @@
 apps/sanctum/test/sanctum/admission_capacity_test.exs	1	pending
 apps/sanctum/test/sanctum/api_key_test.exs	2	pending
 apps/sanctum/test/sanctum/auth/cyfr_door_test.exs	1	pending
-apps/sanctum/test/sanctum/auth/device_flow_test.exs	20	pending
+apps/sanctum/test/sanctum/auth/device_flow_test.exs	14	pending
 apps/sanctum/test/sanctum/auth/oidc_test.exs	6	pending
 apps/sanctum/test/sanctum/auth/workos_test.exs	1	pending
 apps/sanctum/test/sanctum/auth_tenant_resolution_test.exs	7	pending

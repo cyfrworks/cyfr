@@ -43,7 +43,11 @@ defmodule Sanctum.Providers.Pairing do
       and that certificate is the answer; for anyone else it carries none.
       Such a person's first call without one is answered the challenge and
       `certify`, `{audience, athanor, client_id}`: what their home is to
-      certify (`person.certify` there).
+      certify (`person.certify` there). A protected device carries what it
+      reports of its holder, `holder_kind` and `display_name` together; a
+      browser's glass carries neither. Asked again after it committed, with
+      the same secret and a fresh proof of the same key, it answers the
+      client it paired and its current certificate.
     * `renew` answers the client's id and its replacement certificate. It
       is reached from the device channel's renewal exchange alone, under
       the renewal context the channel obtains for the client that proved
@@ -110,6 +114,14 @@ defmodule Sanctum.Providers.Pairing do
             Arg.new("certificate", :json,
               description:
                 "complete: for a person whose identity is at another CYFR, the device certificate their own CYFR issued for this client, device key, CYFR and athanor; absent for a person whose keys are here"
+            ),
+            Arg.new("holder_kind", :string,
+              description:
+                "complete: a protected device's holder, chip or software, given with display_name; absent for a browser"
+            ),
+            Arg.new("display_name", :string,
+              description:
+                "complete: the name a protected device shows, at most 64 bytes, given with holder_kind"
             )
           ],
           auth: :anonymous,
@@ -215,11 +227,13 @@ defmodule Sanctum.Providers.Pairing do
     with {:ok, secret, device_key} <- pair_request(args),
          {:ok, proof} <- optional_proof(args),
          {:ok, certificate} <- optional_certificate(args),
+         {:ok, holder} <- optional_holder(args),
          {:ok, answer} <-
            Pairing.complete(ctx, secret, %{
              device_key: device_key,
              proof: proof,
-             certificate: certificate
+             certificate: certificate,
+             holder: holder
            }) do
       {:ok, completed(answer)}
     else
@@ -304,6 +318,25 @@ defmodule Sanctum.Providers.Pairing do
 
   # A remote person's home's certificate, read as the device protocol reads
   # one (`Prima.DeviceCert`), or none.
+  # A protected device's holder, both fields or neither.
+  defp optional_holder(args) do
+    case {args["holder_kind"], args["display_name"]} do
+      {nil, nil} ->
+        {:ok, nil}
+
+      {kind, name} ->
+        case Sanctum.DeviceUnlock.holder(kind, name) do
+          {:ok, holder} ->
+            {:ok, holder}
+
+          :error ->
+            {:error,
+             {:invalid_argument,
+              "holder_kind (chip or software) and display_name (at most 64 bytes) come together"}}
+        end
+    end
+  end
+
   defp optional_certificate(%{"certificate" => certificate}) when is_map(certificate) do
     case DeviceCert.decode(certificate) do
       {:ok, decoded} ->

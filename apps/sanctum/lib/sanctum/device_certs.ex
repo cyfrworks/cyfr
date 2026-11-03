@@ -475,8 +475,14 @@ defmodule Sanctum.DeviceCerts do
   # A certificate and the client it is presented for: the context's, or,
   # inside `verify_connect/3` once the proof verified, the client the
   # connection names. Private: a certificate alone proves nothing.
+  #
+  # The client's standing is read before the certificate is: a revoked or
+  # suspended client paired with the certificate's key is told its
+  # standing ended whatever its certificate's age, and only a standing
+  # client hears that its certificate is to be renewed.
   defp checked_request(certificate, client, now, carried) do
     with :ok <- names_client(certificate, client),
+         :ok <- standing_first(certificate),
          {:ok, subject} <- subject(certificate, now),
          certificate = subject.certificate,
          {:ok, row} <- paired_client(certificate.athanor, subject.user_id, certificate.client_id),
@@ -485,6 +491,29 @@ defmodule Sanctum.DeviceCerts do
       established(row, standing, certificate, carried, subject.identity)
     end
   end
+
+  # The client the certificate names, when its row holds the certificate's
+  # key: a client no longer standing refuses here, before anything of the
+  # certificate is checked. A client this home does not hold, or holds
+  # under another key, is decided after the certificate, as before.
+  defp standing_first(%DeviceCert{athanor: athanor_id, client_id: client_id, device_key: key})
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) do
+    case Arca.PairedClients.list(Prima.Actor.in_athanor(athanor_id), standing: :all) do
+      {:ok, rows} ->
+        case Enum.find(rows, &(&1.id == client_id)) do
+          %{device_public_key: ^key} = row ->
+            with {:ok, _row} <- row_standing(row), do: :ok
+
+          _absent_or_another_key ->
+            :ok
+        end
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp standing_first(%DeviceCert{}), do: :ok
 
   # The context names the certificate's client, athanor and, for a local
   # subject, person (an identity subject's person is resolved from the

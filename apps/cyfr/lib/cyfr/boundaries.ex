@@ -340,7 +340,7 @@ defmodule Cyfr.Boundaries do
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
-    Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
+    Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
@@ -597,7 +597,7 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
-        Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
+        Sanctum.Catalog Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
         Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations
         Sanctum.Newcomer Sanctum.Pairing
@@ -623,9 +623,6 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
           "control and never decides: the operation a confirmation dispatches decides. " <>
-          "`Sanctum.CliSignIn` is the `/cli` page's read of the command line's pending " <>
-          "sign-in its link names (`describe/1`), what it shows the person before they " <>
-          "approve; approving is an operation, decided there. " <>
           "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
           "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
           "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
@@ -1945,7 +1942,6 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
-    "Sanctum.CliSignIn" => [describe: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, ingress: 1, put_ingress: 2, resolve: 1],
     # A tincture version's frame opens, and its data routes answer, under
     # the grant held to that version by the decision a run is held to.
@@ -2030,7 +2026,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [admit: 2, identity: 1, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
-    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
+    "Sanctum.Pairing" => [actions: 0, approve_url: 1, can_confirm?: 1],
     "Sanctum.Passkeys" => [newcomer_options: 0, sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],
@@ -2354,18 +2350,23 @@ defmodule Cyfr.Boundaries do
           "the POST, under the browser pipeline's CSRF token, spends a 32-byte ticket the " <>
           "device's own channel was answered once its proof of an unlock challenge " <>
           "verified, held 60 seconds and taken once, and creates the session in the " <>
-          "issuance transaction that rereads the device's standing"
+          "issuance transaction that rereads the device's standing; a command line's " <>
+          "`POST /device/session` spends the same ticket the same way and answers the " <>
+          "session's token in its body, reading and setting no cookie, so no CSRF token " <>
+          "is asked"
     },
     device_enrollment: %{
       admits: :credential,
       why:
         "a protected device's enrollment (`Sanctum.DeviceUnlock`): the setup token in the " <>
-          "`x-cyfr-setup-token` header, checked in constant time, or a restore's own " <>
-          "session within its first-method window, or for a resume the restore token as " <>
-          "the authorization header; then the device key's proof over an `enroll` " <>
-          "challenge this CYFR holds and consumes once. No CSRF token, since no cross-site " <>
-          "form sets either header and no CORS answer admits one, and a restore's cookie " <>
-          "alone enrolls nothing without the proof over a challenge only its answer carries"
+          "`x-cyfr-setup-token` header, checked in constant time, an invitation's code in " <>
+          "the `x-cyfr-invitation` header, the door's open admission counted against the " <>
+          "caller's address, or a restore's own session within its first-method window, " <>
+          "or for a resume the restore token as the authorization header; then the device " <>
+          "key's proof over an `enroll` challenge this CYFR holds and consumes once. No CSRF " <>
+          "token, since no cross-site form sets these headers and no CORS answer admits " <>
+          "one, and a restore's cookie or an open admission alone enrolls nothing without " <>
+          "the proof over a challenge only its answer carries"
     },
     restore_kit_proof: %{
       admits: :credential,
@@ -2955,6 +2956,13 @@ defmodule Cyfr.Boundaries do
     %{
       module: Emissary.Web.DeviceEnrollmentController,
       site: :resume,
+      plane: :external,
+      origin: :none
+    },
+    # A protected command line's session: the unlock's one-time ticket.
+    %{
+      module: Emissary.Web.DeviceSessionController,
+      site: :create,
       plane: :external,
       origin: :none
     },

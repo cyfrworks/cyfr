@@ -38,7 +38,7 @@ CYFR supports two authentication methods. Choose the one that fits your use case
 | Method | When to Use | How It Works |
 |--------|-------------|--------------|
 | **API Keys** | Apps and service-to-service callers (frontend, backend, CI/CD) | `Authorization: Bearer cyfr_pk_...` header |
-| **Session Tokens** | Human devs using the CLI (`cyfr login`) | Approval in Prism, or the device flow with `--provider`; the session is stored in `~/.cyfr/config.json` |
+| **Session Tokens** | Human devs using the CLI (`cyfr login`) | The command line is a protected device: its shell unlocks its key and holds the session in memory while it runs |
 
 ### API Keys
 
@@ -54,21 +54,18 @@ API keys are generated as cryptographically random tokens. CYFR only stores a SH
 
 ### Session Tokens
 
-Session tokens are for human developers using the CLI. `cyfr login` signs the command line in by its person's approval in Prism:
+Session tokens are for human developers using the CLI. `cyfr login` makes the command line one of its person's devices, as the box's own screen is ([devices-guide.md](devices-guide.md)):
 
-1. CLI calls `session.cli_begin` with its machine's name; CYFR answers a session token the CLI keeps, a code, and a link to CYFR's `/cli` page with the approval secret in its fragment
-2. You open the link in a browser signed in to CYFR, check that Prism shows the code the CLI printed, approve, and confirm with a fresh proof
-3. CLI polls `session.cli_poll` until it is approved, then stores the token in `~/.cyfr/config.json` under the context it used; Ctrl-C withdraws the sign-in (`session.cli_cancel`)
+1. The first time, it makes the device's key, protected by a PIN in the machine's TPM or a generated passphrase, and pairs it from another device of the person's, or enrolls it as a new person's first device under setup, an invitation or the open admission (`POST /device/enrollment/*`)
+2. Each time, it unlocks the key and proves it on its device channel (`session.unlock`), and spends the one-time ticket it is answered at `POST /device/session` (`{ticket}` → `{session_token, expires_at}`) for a session bound to that device
+3. It starts the person's shell with the session, which it holds in memory and never writes to disk; the session lives while the shell's device channel keeps it, ends within a minute of the channel's end, and ends at once on `session.lock` or the device's revocation
 
-`cyfr login --provider github` (or `google`) runs the OAuth device flow instead (`session.device_init`, `session.device_poll`), for a machine no one can approve in Prism. Prism lists the command lines signed in either way under Devices, where they are revoked ([devices-guide.md](devices-guide.md)).
-
-Sessions expire after 30 days (720 hours) of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`; set it to `0` to never expire); a request carrying a session as a bearer token does not extend it, so a command line's session ends that long after it signed in. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
+No other device approves a command line, and no provider signs one in. `CYFR_SESSION_TTL_HOURS` (30 days by default) bounds a browser's sessions, never a device's. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
 
 ```bash
-cyfr login                    # Approve this command line in Prism
-cyfr login --provider github  # Or the GitHub device flow
+cyfr login                    # Unlock this command line's key and start a shell
 cyfr whoami                   # Check current session
-cyfr logout                   # Destroy session
+exit                          # Leave the shell: its session ends
 ```
 
 ### Service-to-service
@@ -433,7 +430,7 @@ one annotation. It is short:
 |------|---------|------------|
 | `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
 | `person` | `renew_certificate` | A device paired at another CYFR renews the certificate this CYFR issued it, holding no session here: it proves the device key the certification names over a single-use challenge this CYFR issued, and only a certification still standing under the person's current keys is extended |
-| `session` | `logout`, `whoami`, `device_init`, `device_poll`, `cli_begin`, `setup`, `cli_poll`, `cli_cancel`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions. `setup` is `cyfr login --setup` presenting the installation's setup token with the first person's `name`, the `recovery_secret` and the `request_id` it drew, which makes the first person and opens their registration at cyfr.run, or signs them in again until they hold a passkey, a paired device or a linked sign-in method; it answers their recovery code under `recovery`, until they say it is saved, and the request log redacts the secret and the code. Any other token, or a null one, answers `setup_closed`. `cli_begin` is `cyfr login` asking for a sign-in its person approves in Prism; `cli_poll` and `cli_cancel` name only the session token `cli_begin` answered, which no session holds until the person approves under a fresh confirmation ([devices-guide.md](devices-guide.md)) |
+| `session` | `logout`, `whoami`, `read_resource` | `logout` ends only the caller's own session and `whoami` answers an anonymous caller its empty identity; `read_resource` tells a caller only its own identity and permissions. A protected device enrolls and spends its unlock's ticket through its own HTTP entries, never through these ([devices-guide.md](devices-guide.md)) |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace`, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 

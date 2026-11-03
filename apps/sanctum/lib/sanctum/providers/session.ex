@@ -4,36 +4,17 @@
 defmodule Sanctum.Providers.Session do
   @moduledoc """
   Session tool handlers for the Sanctum MCP provider — logout, whoami,
-  device-flow OAuth, signing a command
-  line in by approving it in Prism (`Sanctum.CliSignIn`), and the caller's
-  self-description resources.
-
-  `setup` is `auth: :anonymous`: the command line of a CYFR with no
-  person yet (`cyfr login --setup`) presents the installation's setup
-  token with the new person's name, the recovery secret it drew and the
-  enrollment's request id, and the setup admission (`Sanctum.Newcomer`)
-  makes the first person, or signs them in again while they hold no
-  sign-in method, with a command-line session for its machine. It answers
-  the session's token, the person, whether they were admitted again, and
-  their enrollment as `recovery`: its `attempt_id`, `identifier`, `name`
-  and, until the person says it is saved, their recovery `code`. The
-  request log redacts the secret and the code (`Prima.Sanitizer`). Any
-  other token, or a CYFR set up already, is `:setup_closed`.
-
-  `cli_begin`, `cli_poll` and `cli_cancel` are `auth: :anonymous`, as
-  the device flow's actions are: the command line that calls them holds
-  no credential yet, and the token `cli_begin` answers it is the only
-  name `cli_poll` and `cli_cancel` take. `cli_approve`, `cli_list` and
-  `cli_revoke` are the person's, through an interactive surface
-  (`consent: :interactive`); approving is a sensitive change
-  (`credential_issuance`, `Sanctum.Pairing`).
+  a protected device's unlock and lock,
+  and the caller's self-description resources. A command line signs in as
+  a protected device does (`Sanctum.DeviceUnlock`): its shell unlocks on
+  its device channel and spends the ticket at `POST /device/session`.
 
   `unlock` and `lock` are a protected device's, through its device
   channel alone (`auth_method: :device`, a client that reports a holder):
   `unlock` with no arguments answers an `unlock` challenge, and with its
   `proof` alone a single-use `ticket`, the `session_id` it reserved and
-  the ticket's `expires_at` (ms), which the device's browser redeems for
-  its session (`Sanctum.DeviceUnlock`); `lock` with the `lock` proof the
+  the ticket's `expires_at` (ms), which the device's browser, or its
+  command line, redeems for its session (`Sanctum.DeviceUnlock`); `lock` with the `lock` proof the
   device signed for that session retires it, `locked: true` even when it
   is already gone. A browser's session, or any other context, is refused.
 
@@ -45,7 +26,6 @@ defmodule Sanctum.Providers.Session do
   """
 
   require Logger
-  require Sanctum.Issuance
 
   alias Sanctum.Context
 
@@ -69,147 +49,6 @@ defmodule Sanctum.Providers.Session do
           auth: :anonymous,
           kind: :read,
           planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "device_init",
-          "Device init session",
-          [
-            Arg.new("provider", :string,
-              description: "OAuth provider for device flow",
-              enum: Sanctum.Auth.DeviceFlow.providers()
-            )
-          ],
-          auth: :anonymous,
-          kind: :write,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "device_poll",
-          "Device poll session",
-          [
-            Arg.new("device_code", :string,
-              required: true,
-              description: "Device code from device_init (for device_poll action)"
-            ),
-            Arg.new("machine", :string,
-              description:
-                "device_poll: the command line's host name, which its session is listed by in Prism"
-            ),
-            Arg.new("provider", :string,
-              description: "OAuth provider for device flow",
-              enum: Sanctum.Auth.DeviceFlow.providers()
-            )
-          ],
-          auth: :anonymous,
-          kind: :write,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "cli_begin",
-          "Begin signing a command line in",
-          [
-            Arg.new("machine", :string,
-              required: true,
-              description:
-                "cli_begin: the command line's host name, which Prism names when it asks to approve it"
-            )
-          ],
-          auth: :anonymous,
-          kind: :write,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "setup",
-          "Set this CYFR up from the command line",
-          [
-            # Nullable: a present null reaches the admission, which answers it
-            # as a wrong token (`setup_closed`); an absent one is the gate's.
-            Arg.new("setup_token", :string,
-              required: true,
-              nullable: true,
-              description: "setup: the installation's setup token, CYFR_SETUP_TOKEN in its .env"
-            ),
-            Arg.new("machine", :string,
-              required: true,
-              description:
-                "setup: the command line's host name, which its session is listed by in Prism"
-            ),
-            Arg.new("name", :string,
-              required: true,
-              description: "setup: the name the first person takes, theirs for life"
-            ),
-            Arg.new("recovery_secret", :string,
-              required: true,
-              description:
-                "setup: the new recovery code's secret, drawn by the command line (32 bytes, unpadded base64url)"
-            ),
-            Arg.new("request_id", :string,
-              required: true,
-              description:
-                "setup: the enrollment's request id, drawn by the command line (req_ and 32 hex digits)"
-            )
-          ],
-          auth: :anonymous,
-          kind: :write,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "cli_poll",
-          "Poll a command line's sign-in",
-          [cli_token("cli_poll")],
-          auth: :anonymous,
-          kind: :read,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "cli_cancel",
-          "Stop a command line's sign-in",
-          [cli_token("cli_cancel")],
-          auth: :anonymous,
-          reduces_authority: true,
-          kind: :write,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "cli_approve",
-          "Approve a command line's sign-in",
-          [
-            Arg.new("approval_secret", :string,
-              required: true,
-              description:
-                "cli_approve: the secret the command line's link carries in its fragment"
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new("session", "cli_list", "List your command-line sessions", [],
-          kind: :read,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "session",
-          "cli_revoke",
-          "Revoke a command-line session",
-          [
-            Arg.new("session_id", :string,
-              required: true,
-              description: "cli_revoke: the command-line session (ses_…), as cli_list names it"
-            )
-          ],
-          reduces_authority: true,
-          kind: :destructive,
-          planes: [:external],
-          consent: :interactive
         ),
         Operation.new(
           "session",
@@ -258,75 +97,9 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — logout, get local identity, set this CYFR up from the command line with its setup token, run device-flow OAuth, sign a command line in by approving it in Prism and list or revoke command-line sessions, or unlock and lock a protected device's browser session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, focus another athanor, or unlock and lock a protected device's session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "cli_begin"} = args) do
-    case Sanctum.CliSignIn.begin(args["machine"], ctx.client_ip) do
-      {:ok, begun} -> {:ok, begun}
-      {:error, reason} -> {:error, cli_refusal(reason)}
-    end
-  end
-
-  # The installation's first person, made or signed in again by the setup
-  # token (`Sanctum.Newcomer`): a command-line session for the machine, and
-  # the enrollment the admission opened or found standing.
-  def handle(_ctx, %{"action" => "setup"} = args) do
-    with {:ok, identity} <- Sanctum.Newcomer.identity(args),
-         {:ok, admitted} <-
-           Sanctum.Newcomer.admit(
-             {:setup, args["setup_token"]},
-             {:command_line, args["machine"], identity}
-           ) do
-      {:ok,
-       Map.merge(
-         %{
-           session_token: admitted.session_token,
-           user_id: admitted.person.id,
-           readmitted: admitted.readmitted
-         },
-         Map.take(admitted, [:recovery])
-       )}
-    else
-      {:error, reason} -> {:error, setup_refusal(reason)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "cli_poll"} = args) do
-    case Sanctum.CliSignIn.poll(args["session_token"], ctx.client_ip) do
-      {:ok, polled} -> {:ok, polled}
-      {:error, reason} -> {:error, cli_refusal(reason)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "cli_cancel"} = args) do
-    case Sanctum.CliSignIn.cancel(args["session_token"], ctx.client_ip) do
-      {:ok, cancelled} -> {:ok, cancelled}
-      {:error, reason} -> {:error, cli_refusal(reason)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "cli_approve"} = args) do
-    case Sanctum.CliSignIn.approve(ctx, args["approval_secret"]) do
-      {:ok, approved} -> {:ok, approved}
-      {:error, reason} -> {:error, cli_refusal(reason)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "cli_list"}) do
-    case Sanctum.CliSignIn.list(ctx) do
-      {:ok, sessions} -> {:ok, %{sessions: Enum.map(sessions, &cli_listed/1)}}
-      {:error, reason} -> {:error, cli_refusal(reason)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "cli_revoke"} = args) do
-    case Sanctum.CliSignIn.revoke(ctx, args["session_id"]) do
-      {:ok, revoked} -> {:ok, revoked}
-      {:error, reason} -> {:error, cli_refusal(reason)}
-    end
   end
 
   def handle(%Context{authenticated: false}, %{"action" => "whoami"}) do
@@ -372,136 +145,6 @@ defmodule Sanctum.Providers.Session do
 
   def handle(%Context{}, %{"action" => "logout"}) do
     {:error, {:invalid_argument, "Not authenticated."}}
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "device_init"} = args) do
-    if device_flow_enabled?() do
-      provider = Map.get(args, "provider", "github")
-
-      # The caller's address, so this anonymous action has a budget of its
-      # own. The transport meters every `/mcp` method together, which
-      # bounds one address but not several between them — the global
-      # ceiling is a circuit breaker, not a per-caller budget.
-      case Sanctum.Auth.DeviceFlow.impl().init_device_flow(provider, ctx.client_ip) do
-        {:ok, device_info} ->
-          {:ok,
-           %{
-             device_code: device_info.device_code,
-             user_code: device_info.user_code,
-             verification_uri: device_info.verification_uri,
-             expires_in: device_info.expires_in,
-             interval: device_info.interval
-           }}
-
-        {:error, {:client_id_not_configured, provider}} ->
-          {:error,
-           "#{provider} client ID not configured. Set CYFR_#{String.upcase(to_string(provider))}_CLIENT_ID"}
-
-        {:error, {:device_code_error, code}} ->
-          # Provider returned a structured error body (e.g. Google's
-          # "unsupported_grant_type" when the OAuth client isn't a
-          # "TV & Limited Input" type, or "invalid_client" for a bad id).
-          Logger.warning(
-            "[Sanctum.Providers.Session] Device flow init rejected by provider: #{inspect(code)}"
-          )
-
-          {:error,
-           "Device flow rejected by provider: #{code}. " <>
-             "For Google, the OAuth client must be type \"TV and Limited Input devices\"."}
-
-        {:error, {:device_code_request_failed, reason}} ->
-          # The reason is a transport term (a Req/Mint struct) — log it,
-          # never reflect it.
-          Logger.warning(
-            "[Sanctum.Providers.Session] Device flow network error: #{inspect(reason)}"
-          )
-
-          {:error, {:unavailable, "The sign-in provider"}}
-
-        {:error, {:unknown_provider, name}} ->
-          {:error, {:invalid_argument, unknown_provider_message(name)}}
-
-        # The init budget of this address or of the server is spent.
-        {:error, {:rate_limited, _retry_after_s} = limited} ->
-          {:error, limited}
-      end
-    else
-      {:error, {:invalid_argument, device_flow_disabled_message()}}
-    end
-  end
-
-  def handle(
-        %Context{} = ctx,
-        %{"action" => "device_poll", "device_code" => device_code} = args
-      ) do
-    with true <- device_flow_enabled?(),
-         {:ok, opts} <- poll_machine(args) do
-      provider = Map.get(args, "provider", "github")
-
-      # Charged to the caller's address, as `device_init` above.
-      case Sanctum.Auth.DeviceFlow.impl().poll_for_session(
-             provider,
-             device_code,
-             ctx.client_ip,
-             opts
-           ) do
-        {:ok, result} ->
-          {:ok, Sanctum.Auth.DeviceFlow.wire(result)}
-
-        {:error, {:client_id_not_configured, provider}} ->
-          {:error,
-           "#{provider} client ID not configured. Set CYFR_#{String.upcase(to_string(provider))}_CLIENT_ID"}
-
-        {:error, reason} when is_binary(reason) ->
-          {:error, reason}
-
-        {:error, {:door, _reason}} ->
-          # One message whichever branch refused; the list is not for
-          # strangers to learn.
-          {:error, Sanctum.Door.refusal_message()}
-
-        {:error, {:token_error, code}} ->
-          # Provider returned a structured error on the token exchange —
-          # e.g. Google's "invalid_request" when client_secret is missing,
-          # or "invalid_grant" for an expired device code.
-          Logger.warning(
-            "[Sanctum.Providers.Session] Token exchange rejected by provider: #{inspect(code)}"
-          )
-
-          {:error, "Token exchange rejected by provider: #{code}"}
-
-        {:error, {:token_request_failed, reason}} ->
-          Logger.warning(
-            "[Sanctum.Providers.Session] Token exchange network error: #{inspect(reason)}"
-          )
-
-          {:error, {:unavailable, "The sign-in provider"}}
-
-        # The server is at capacity: a person admitted without an athanor
-        # would hold a session with nowhere to work, so the door refuses and
-        # the poller is told why rather than "sign-in failed" — a rate
-        # limit, whose sentence is the refusal vocabulary's.
-        {:error, {:limit_reached, _key, _cap}} = limit ->
-          limit
-
-        {:error, {:unknown_provider, name}} ->
-          {:error, {:invalid_argument, unknown_provider_message(name)}}
-
-        {:error, reason} ->
-          Logger.warning(
-            "[Sanctum.Providers.Session] Failed to poll for token: #{inspect(reason)}"
-          )
-
-          {:error, {:unavailable, "The sign-in provider"}}
-      end
-    else
-      false -> {:error, {:invalid_argument, device_flow_disabled_message()}}
-      {:error, _invalid} = refused -> refused
-    end
-  end
-
-  def handle(_ctx, %{"action" => "device_poll"}) do
-    {:error, {:invalid_argument, "Missing required argument: device_code"}}
   end
 
   # The caller's own self-description, from the context the transport
@@ -552,55 +195,11 @@ defmodule Sanctum.Providers.Session do
     end
   end
 
-  # A command line's poll names the machine it runs on, so the session it
-  # signs in is listed and revoked as that command line's; a poll that
-  # names none signs in a session no list shows as one.
-  defp poll_machine(%{"machine" => machine}) when not is_nil(machine) do
-    with {:ok, machine} <- Sanctum.CliSignIn.machine(machine), do: {:ok, [command_line: machine]}
-  end
-
-  defp poll_machine(_args), do: {:ok, []}
-
-  defp cli_token(action),
-    do:
-      Prima.Arg.new("session_token", :string,
-        required: true,
-        description:
-          "#{action}: the session token cli_begin answered, which the command line holds"
-      )
-
-  defp cli_listed(session) do
-    %{
-      session_id: session.session_id,
-      machine: session.machine,
-      signed_in_at: Prima.Time.iso8601(session.signed_in_at),
-      expires_at: Prima.Time.iso8601(session.expires_at),
-      current: session.current
-    }
-  end
-
-  # A command line's sign-in refusals in the one refusal shape every
-  # surface renders (`Prima.Refusal`), each with the sentence its person
-  # reads; the vocabulary's own reasons (a confirmation signal, a rate
-  # limit, a standing or tenancy refusal) pass as they are.
-  # A CYFR that pins no directory makes no local person, so it cannot make
-  # the first one's name.
-  defp setup_refusal(:no_directory),
-    do: %Prima.Refusal{
-      class: :setup_required,
-      reason: :no_directory,
-      message:
-        "This CYFR does not reach cyfr.run, so it cannot make your name. Ask whoever runs " <>
-          "this CYFR."
-    }
-
-  defp setup_refusal(reason), do: reason
-
   # A protected device's unlock and lock refusals, each with the sentence
   # its person reads; the stores' own reasons pass as they are.
   defp device_refusal(:not_a_device),
     do:
-      cli_refused(
+      refused(
         :forbidden,
         :not_a_device,
         "Only a protected device's own screen unlocks or locks its session"
@@ -608,7 +207,7 @@ defmodule Sanctum.Providers.Session do
 
   defp device_refusal(:no_holder),
     do:
-      cli_refused(
+      refused(
         :forbidden,
         :no_holder,
         "This device keeps no protected key, so it cannot unlock: set it up again with a PIN or passphrase"
@@ -616,7 +215,7 @@ defmodule Sanctum.Providers.Session do
 
   defp device_refusal(:proof_refused),
     do:
-      cli_refused(
+      refused(
         :unauthenticated,
         :proof_refused,
         "The device's proof was refused: unlock again"
@@ -624,7 +223,7 @@ defmodule Sanctum.Providers.Session do
 
   defp device_refusal(:session_retired),
     do:
-      cli_refused(
+      refused(
         :conflict,
         :session_retired,
         "This unlock was locked before it finished: unlock again"
@@ -635,7 +234,7 @@ defmodule Sanctum.Providers.Session do
 
   defp device_refusal(:not_standing),
     do:
-      cli_refused(
+      refused(
         :forbidden,
         :not_standing,
         "This device's pairing no longer stands here"
@@ -643,80 +242,8 @@ defmodule Sanctum.Providers.Session do
 
   defp device_refusal(reason), do: reason
 
-  defp cli_refusal(:not_found),
-    do:
-      cli_refused(
-        :not_found,
-        :cli_sign_in_unknown,
-        "This link or session is not one this CYFR knows: run cyfr login again for a new link"
-      )
-
-  defp cli_refusal(:expired),
-    do:
-      cli_refused(
-        :conflict,
-        :cli_sign_in_expired,
-        "This command line's sign-in expired before it was approved: run cyfr login again"
-      )
-
-  defp cli_refusal(:approved),
-    do:
-      cli_refused(
-        :conflict,
-        :cli_sign_in_used,
-        "This command line was already approved: its link signs in once"
-      )
-
-  defp cli_refusal(:cancelled),
-    do:
-      cli_refused(
-        :conflict,
-        :cli_sign_in_cancelled,
-        "The command line stopped waiting: run cyfr login again"
-      )
-
-  defp cli_refusal(:session_required),
-    do:
-      cli_refused(
-        :forbidden,
-        :session_required,
-        "Approve a command line from a browser signed in to this CYFR"
-      )
-
-  # A session minted as a sign-in's is: a session a restore minted, which
-  # initializes no credential of its own, and a remote person's identity
-  # that moved between its reads.
-  defp cli_refusal(:reserved_provider),
-    do:
-      cli_refused(
-        :forbidden,
-        :reserved_provider,
-        "A session from a restore approves no command line: sign in with a sign-in method of yours, then approve"
-      )
-
-  defp cli_refusal(reason) when reason in [:stale_key_epoch, :identity_key_epoch_required],
-    do:
-      cli_refused(
-        :conflict,
-        reason,
-        "Your identity changed while this was approved: approve the command line again"
-      )
-
-  defp cli_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),
-    do: Sanctum.Issuance.standing_refusal(reason)
-
-  defp cli_refusal(reason), do: reason
-
-  defp cli_refused(class, reason, message),
+  defp refused(class, reason, message),
     do: %Prima.Refusal{class: class, reason: reason, message: message}
-
-  # `provider` on device_init/device_poll comes straight from the caller. A
-  # name this server does not know is a mistake worth naming, not a crash and
-  # not an inspect of an internal tuple.
-  defp unknown_provider_message(name) do
-    "Unknown sign-in provider #{inspect(to_string(name))}. " <>
-      "This server knows: #{Enum.join(Sanctum.Auth.DeviceFlow.providers(), ", ")}."
-  end
 
   defp self_description(fields) do
     content =
@@ -753,15 +280,6 @@ defmodule Sanctum.Providers.Session do
   # ============================================================================
   # Helpers shared across session handlers
   # ============================================================================
-
-  # The device flow is offered exactly when GitHub or Google is
-  # configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`).
-  defp device_flow_enabled?, do: Sanctum.Auth.DeviceFlow.configured_providers() != []
-
-  defp device_flow_disabled_message do
-    "This CYFR offers no GitHub or Google sign-in. Sign in with a passkey, a device you " <>
-      "connected, or `cyfr login` approved in the browser."
-  end
 
   # The caller's permissions as the wire names them, sorted.
   defp permission_names(permissions) do

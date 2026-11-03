@@ -688,7 +688,6 @@ function models(S) {
     expires_at: derived(plusHours(first("sign_in:b.sessions[proof]")[0]?.inserted_at ?? "", S.ttlHours), "inserted_at plus session_ttl_hours (Sanctum.Session)"),
     athanor_id: derived(personAthanor()?.id, "the person's own athanor at B"),
     identity_key_epoch: derived(genesisHash, "a genesis's key epoch, its own hash"),
-    cli_machine: nil(),
     client_id: nil(),
     inserted_at: within(win(S, "signin")),
   }];
@@ -732,7 +731,6 @@ function models(S) {
     expires_at: derived(plusHours(adminSession.inserted_at ?? "", S.ttlHours), "inserted_at plus session_ttl_hours (Sanctum.Session)"),
     athanor_id: derived(first("allow:b.athanors")[0]?.id, "B's one athanor"),
     identity_key_epoch: nil(),
-    cli_machine: nil(),
     client_id: nil(),
     inserted_at: within(win(S, "admin")),
   }, "the administrator's"], [remote(), held(first("sign_in:b.sessions[proof]")[0], {}, "as read at sign_in"), "the person's"]]);

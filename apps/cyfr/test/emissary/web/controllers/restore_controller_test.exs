@@ -74,6 +74,23 @@ defmodule Emissary.Web.RestoreControllerTest do
 
   # ---- fixtures ----------------------------------------------------------------
 
+  # A protected device's enrollment as `Sanctum.DeviceUnlock` hands it to a
+  # setup admission once its proof verified.
+  defp device_credential do
+    identity = Sanctum.Test.Newcomers.identity()
+
+    {:device,
+     %{
+       athanor_id: Prima.UUID7.generate_id("ath"),
+       client_id: Prima.UUID7.generate_id("pcl"),
+       device_key: :crypto.strong_rand_bytes(32),
+       request_id: identity.request_id,
+       holder_kind: "chip",
+       display_name: "laptop",
+       user_id: nil
+     }, identity}
+  end
+
   defp keypair, do: :crypto.generate_key(:eddsa, :ed25519)
   defp system, do: Prima.Actor.system()
 
@@ -609,10 +626,7 @@ defmodule Emissary.Web.RestoreControllerTest do
       attempt!(directory, identity(directory), ["submitted"])
 
       assert {:error, :restore_reserved} =
-               Sanctum.Newcomer.admit(
-                 {:setup, token},
-                 {:command_line, "laptop", Sanctum.Test.Newcomers.identity()}
-               )
+               Sanctum.Newcomer.admit({:setup, token}, device_credential())
 
       assert Arca.Repo.aggregate(User, :count) == 0
     end

@@ -14,6 +14,7 @@ import (
 	"runtime"
 
 	"github.com/cyfr/codex/internal/config"
+	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -27,13 +28,19 @@ var openCmd = &cobra.Command{
 	Short:   "Open Aqua in your browser",
 	GroupID: "identity",
 	Long: `Open Aqua in your default browser, at CYFR's address: the --url, the
---context's address, or the current context's. The loopback address cyfr
-init saves for this machine (http://127.0.0.1:<port>) opens as
-http://localhost:<port>, the address CYFR on this computer serves itself
-under, where a passkey works.
+--context's address, or the current context's.
 
-It opens the address and nothing more. No session travels from the command
-line to the browser: sign in there as you always do.`,
+In the shell cyfr login started for that CYFR, it opens this command
+line's own page, where Open CYFR signs the browser in through this
+unlock: CYFR answers a ticket that works once, within a minute, and the
+browser spends it for a session of its own, which lives as long as this
+command line stays unlocked. No session of the command line's travels to
+the browser, and the ticket is in no address this program hands on.
+
+Anywhere else it opens the address and nothing more: sign in there as you
+always do. The loopback address cyfr init saves for this machine
+(http://127.0.0.1:<port>) opens as http://localhost:<port>, the address
+CYFR on this computer serves itself under, where a passkey works.`,
 	Example: `  cyfr open
   cyfr open --context work`,
 	Args: cobra.NoArgs,
@@ -47,6 +54,17 @@ line to the browser: sign in there as you always do.`,
 		parsed, err := url.Parse(address)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return fmt.Errorf("%q is not a web address to open: give CYFR's https:// or http:// address", address)
+		}
+		if _, held := shellSession(address); held && os.Getenv(shellPagesEnv) != "" {
+			// The page is the shell's own, on literal loopback: the
+			// ticket is answered to its form's POST, in a redirect's
+			// fragment, never in this command's arguments.
+			if err := openBrowser(shell.Origin + "/"); err != nil {
+				fmt.Printf("Open %s/ in your browser on this machine.\n", shell.Origin)
+				return fmt.Errorf("Could not open a browser here: %w", err)
+			}
+			fmt.Printf("Opened this command line's page: press Open CYFR there.\n")
+			return nil
 		}
 		address = browserAddress(parsed)
 

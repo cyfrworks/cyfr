@@ -204,16 +204,8 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                MapSet.new([
                  {"session", "logout"},
                  {"session", "whoami"},
-                 {"session", "device_init"},
-                 {"session", "device_poll"},
-                 # A command line signing in holds no credential: it is
-                 # answered a token it then names (`Sanctum.CliSignIn`).
-                 {"session", "cli_begin"},
-                 {"session", "cli_poll"},
-                 {"session", "cli_cancel"},
                  # The caller's own self-description, from its context alone.
                  {"session", "read_resource"},
-                 {"session", "setup"},
                  {"system", "status"},
                  # A published tincture is public by definition; the action
                  # runs under its public profile and nothing else.

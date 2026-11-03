@@ -3,10 +3,12 @@
 
 defmodule Emissary.Web.DeviceEnrollmentController do
   @moduledoc """
-  A protected device's enrollment (`Sanctum.DeviceUnlock`): the box's own
-  screen, which holds a key a local unlock guards, enrolls it at the
-  installation's setup, or as the first method of a person a restore
-  brought back, and resumes an enrollment whose answer it lost.
+  A protected device's enrollment (`Sanctum.DeviceUnlock`): a device that
+  holds a key a local unlock guards, the box's own screen or a command
+  line, enrolls it as the first method of a new person, at the
+  installation's setup, under an invitation or by the open admission, or
+  of a person a restore brought back, and resumes an enrollment whose
+  answer it lost.
   `tests/fixtures/device_unlock.json` (`exchange.http`) holds the field
   lists.
 
@@ -17,6 +19,13 @@ defmodule Emissary.Web.DeviceEnrollmentController do
     * `"admission": "setup"` — the installation's setup token in the
       `x-cyfr-setup-token` header, never a URL, query or body field; the
       request log redacts it (`Prima.Sanitizer`).
+    * `"admission": "invitation"` — the invitation's code in the
+      `x-cyfr-invitation` header, on every route, redacted as the setup
+      token is; a resume's code must be the one the enrollment's person
+      redeemed.
+    * `"admission": "open"` — nothing: the door's open admission admits,
+      and each challenge and resume is counted against the caller's
+      address and the installation (`429 rate_limited`).
     * `"admission": "restore"` — on `challenge` and `complete`, the
       `restore` session `POST /restore` or `/restore/reproof` set, as its
       cookie, inside the first-method window that session opened; on
@@ -29,19 +38,22 @@ defmodule Emissary.Web.DeviceEnrollmentController do
     * `POST /device/enrollment/challenge` — `admission`, `device_key`,
       `request_id`, `holder_kind` and `display_name`: `200 {challenge}`,
       the `enroll` challenge, alive 60 seconds.
-    * `POST /device/enrollment/complete` — `proof`, and for setup the new
-      person's `name` and `recovery_secret`: `200 {certificate,
-      recovery?}`, the device's first certificate and, for setup, the
-      recovery code until the person says it is saved.
+    * `POST /device/enrollment/complete` — `proof`, and for a new person
+      their `name` and `recovery_secret`: `200 {certificate, recovery?}`,
+      the device's first certificate and, for a new person, the recovery
+      code until they say it is saved.
     * `POST /device/enrollment/resume` — `admission`, `device_key` and
       `request_id`: `200 {challenge}`; then `proof` alone: `200
       {certificate, recovery?}`, the committed enrollment's answer again.
 
   Refusals are `{"error": code}`, with `message` when the code has a
-  sentence: `401 invalid_token`, `404 not_found`, `409 setup_closed`,
-  `409 first_method_used`, `409 not_restored` (the restore's window
-  closed: prove the recovery code again), `422 proof_refused`, `422
-  invalid_request`, and `503 unavailable` with a `retry-after` header.
+  sentence: `401 invalid_token`, `403 not_admitted` (the open admission
+  admits no one now), `404 not_found`, `409 setup_closed`, `409
+  first_method_used`, `409 not_restored` (the restore's window closed:
+  prove the recovery code again), `409 invitation_invalid`, `409
+  limit_reached` (the installation's admission caps), `422
+  proof_refused`, `422 invalid_request`, `429 rate_limited` and `503
+  unavailable`, each of the last two with a `retry-after` header.
   """
 
   use Emissary.Web, :controller
@@ -51,6 +63,7 @@ defmodule Emissary.Web.DeviceEnrollmentController do
   alias Prima.DeviceCert.Challenge
 
   @setup_header "x-cyfr-setup-token"
+  @invitation_header "x-cyfr-invitation"
 
   @doc "`POST /device/enrollment/challenge`."
   def challenge(conn, params) do
@@ -88,11 +101,11 @@ defmodule Emissary.Web.DeviceEnrollmentController do
   defp proof_alone(%{"proof" => proof}), do: %{"proof" => proof}
   defp proof_alone(params), do: params
 
-  defp enrolled({:setup, _token}), do: ~w(proof name recovery_secret)
   defp enrolled({:restore, _ctx}), do: ~w(proof)
+  defp enrolled(_new_person), do: ~w(proof name recovery_secret)
 
-  # What admits a challenge or a completion: the setup token, or the
-  # restore's own session.
+  # What admits a challenge or a completion: the setup token, an
+  # invitation's code, the open admission, or the restore's own session.
   defp admission(conn, %{"admission" => "restore"}) do
     case get_session(conn, CyfrWeb.SignInResponse.session_key()) do
       token when is_binary(token) ->
@@ -106,6 +119,11 @@ defmodule Emissary.Web.DeviceEnrollmentController do
         {:error, :not_restored}
     end
   end
+
+  defp admission(conn, %{"admission" => "invitation"}), do: invitation(conn)
+
+  defp admission(conn, %{"admission" => "open"}),
+    do: {:ok, {:open, Sanctum.ClientIp.resolve(conn)}}
 
   defp admission(conn, %{"proof" => _proof} = params) when not is_map_key(params, "admission"),
     do: admission(conn, Map.put(params, "admission", proven_admission(params["proof"])))
@@ -125,10 +143,25 @@ defmodule Emissary.Web.DeviceEnrollmentController do
   defp capability(conn, %{"admission" => "restore"}), do: restore_token(conn)
 
   defp capability(conn, %{"proof" => %{"admission" => "restore"}}), do: restore_token(conn)
+  defp capability(conn, %{"admission" => "invitation"}), do: invitation(conn)
+  defp capability(conn, %{"proof" => %{"admission" => "invitation"}}), do: invitation(conn)
+
+  defp capability(conn, %{"admission" => "open"}),
+    do: {:ok, {:open, Sanctum.ClientIp.resolve(conn)}}
+
+  defp capability(conn, %{"proof" => %{"admission" => "open"}}),
+    do: {:ok, {:open, Sanctum.ClientIp.resolve(conn)}}
 
   defp capability(conn, _params) do
     case get_req_header(conn, @setup_header) do
       [token] when token != "" -> {:ok, {:setup, token}}
+      _absent -> {:error, :invalid_token}
+    end
+  end
+
+  defp invitation(conn) do
+    case get_req_header(conn, @invitation_header) do
+      [code] when code != "" -> {:ok, {:invitation, code}}
       _absent -> {:error, :invalid_token}
     end
   end
@@ -159,6 +192,16 @@ defmodule Emissary.Web.DeviceEnrollmentController do
     |> json(%{error: "unavailable"})
   end
 
+  defp refuse(conn, {:rate_limited, retry_after_s}) do
+    conn
+    |> CallIdentity.refused(429, "rate_limited")
+    |> put_resp_header("retry-after", Integer.to_string(retry_after_s))
+    |> put_status(429)
+    |> json(%{error: "rate_limited"})
+  end
+
+  defp refuse(conn, {:cap_unverifiable, _key}), do: refuse(conn, :unavailable)
+
   defp refuse(conn, %Prima.Refusal{reason: reason, message: message} = refusal) do
     conn
     |> CallIdentity.refused(refusal)
@@ -181,8 +224,12 @@ defmodule Emissary.Web.DeviceEnrollmentController do
   defp status(:invalid_token), do: {401, "invalid_token"}
   defp status(:not_found), do: {404, "not_found"}
 
-  defp status(reason) when reason in [:setup_closed, :first_method_used, :not_restored],
-    do: {409, Atom.to_string(reason)}
+  defp status(reason)
+       when reason in [:setup_closed, :first_method_used, :not_restored, :invitation_invalid],
+       do: {409, Atom.to_string(reason)}
+
+  defp status({:limit_reached, _key, _cap}), do: {409, "limit_reached"}
+  defp status({:door, _reason}), do: {403, "not_admitted"}
 
   defp status(:proof_refused), do: {422, "proof_refused"}
   defp status(_reason), do: {422, "invalid_request"}

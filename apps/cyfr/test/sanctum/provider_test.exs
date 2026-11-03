@@ -195,7 +195,7 @@ defmodule Sanctum.ProviderTest do
 
     test "whoami names when the calling session ends: its row's expiry, as RFC 3339",
          %{ctx: ctx} do
-      ctx = issuer!(ctx)
+      ctx = Sanctum.TestContext.issuer!(ctx)
       {:ok, session} = Sanctum.Session.create(ctx)
       hash = Sanctum.Session.token_hash(session.token)
       session_ctx = %{ctx | session_token_hash: hash}
@@ -232,7 +232,7 @@ defmodule Sanctum.ProviderTest do
     end
 
     test "logout retires the session that called it", %{ctx: ctx} do
-      ctx = issuer!(ctx)
+      ctx = Sanctum.TestContext.issuer!(ctx)
       {:ok, session} = Sanctum.Session.create(ctx)
       assert {:ok, _} = Sanctum.Session.load(session.token)
 
@@ -270,7 +270,7 @@ defmodule Sanctum.ProviderTest do
   describe "key tool" do
     # A key is issued only by a person this server knows, against the
     # standing their rows were read at.
-    setup %{ctx: ctx}, do: {:ok, ctx: issuer!(ctx)}
+    setup %{ctx: ctx}, do: {:ok, ctx: Sanctum.TestContext.issuer!(ctx)}
 
     test "list returns empty initially", %{ctx: ctx} do
       {:ok, result} = key_tool(ctx, %{"action" => "list"})
@@ -781,68 +781,6 @@ defmodule Sanctum.ProviderTest do
     end
   end
 
-  # ============================================================================
-  # Device-flow gate — offered exactly when GitHub or Google is configured
-  # ============================================================================
-
-  describe "session.device_init / device_poll gate" do
-    setup do
-      keys = [:github_client_id, :google_client_id, :google_client_secret]
-      previous = Map.new(keys, &{&1, Application.get_env(:sanctum, &1)})
-      on_exit(fn -> Enum.each(previous, fn {key, value} -> restore_env(key, value) end) end)
-      Enum.each(keys, &Application.delete_env(:sanctum, &1))
-      :ok
-    end
-
-    test "device_init is offered when GitHub is configured", %{ctx: ctx} do
-      Application.put_env(:sanctum, :github_client_id, "test-github-client")
-
-      # Google is not configured, so the flow it asks for still fails, but
-      # on the provider's credentials (proving the gate let it through),
-      # not on the gate's sentence.
-      assert {:error, msg} =
-               Provider.handle("session", ctx, %{
-                 "action" => "device_init",
-                 "provider" => "google"
-               })
-
-      refute err_msg(msg) =~ "offers no GitHub or Google sign-in"
-      assert err_msg(msg) =~ "client ID" or err_msg(msg) =~ "Failed to initialize"
-    end
-
-    test "device_init and device_poll are refused when neither GitHub nor Google is configured",
-         %{ctx: ctx} do
-      assert {:error, msg} =
-               Provider.handle("session", ctx, %{
-                 "action" => "device_init",
-                 "provider" => "github"
-               })
-
-      assert err_msg(msg) =~ "offers no GitHub or Google sign-in"
-
-      assert {:error, msg} =
-               Provider.handle("session", ctx, %{
-                 "action" => "device_poll",
-                 "device_code" => "dummy",
-                 "provider" => "github"
-               })
-
-      assert err_msg(msg) =~ "offers no GitHub or Google sign-in"
-    end
-
-    test "a Google client id without its secret configures no device flow", %{ctx: ctx} do
-      Application.put_env(:sanctum, :google_client_id, "test-google-client")
-
-      assert {:error, msg} =
-               Provider.handle("session", ctx, %{
-                 "action" => "device_init",
-                 "provider" => "google"
-               })
-
-      assert err_msg(msg) =~ "offers no GitHub or Google sign-in"
-    end
-  end
-
   describe "tenant-scoped MCP actions — athanor-scoped vs athanor-less" do
     setup do
       scoped =
@@ -854,7 +792,7 @@ defmodule Sanctum.ProviderTest do
           auth_method: :oidc,
           authenticated: true
         )
-        |> issuer!()
+        |> Sanctum.TestContext.issuer!()
 
       unresolved =
         Context.build(
@@ -897,19 +835,6 @@ defmodule Sanctum.ProviderTest do
       {:error, _} -> :ok
       other -> flunk("expected fail-closed (raise or {:error,_}), got: #{inspect(other)}")
     end
-  end
-
-  # The sign-in methods' credentials are the identity domain's keys:
-  # restoring them under the host's application would leave them set for
-  # every test after.
-  defp restore_env(key, nil), do: Application.delete_env(:sanctum, key)
-  defp restore_env(key, value), do: Application.put_env(:sanctum, key, value)
-
-  # `ctx`'s identity signed in as a person and focused on their own
-  # athanor, the only athanor a credential of theirs is issued into.
-  defp issuer!(ctx) do
-    {person, user} = Sanctum.TestContext.person!(ctx)
-    Sanctum.TestContext.issuer!(%{person | athanor_id: Sanctum.Test.People.athanor!(user).id})
   end
 
   # Providers answer typed reasons where the class is clear; the shared

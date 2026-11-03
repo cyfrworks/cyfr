@@ -342,10 +342,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       # `remote`, whichever door admitted it, and null for a local person.
       # A fresh head that changes it retires the session.
       add :identity_key_epoch, :string
-      # The machine a command line's session was issued to, as the command
-      # line named it; null for a browser's. Its person lists and revokes
-      # the command lines by it.
-      add :cli_machine, :string
       # The protected device whose unlock created the session: its expiry
       # is the device channel's, slid only by that channel and never past
       # its certificate (`Sanctum.DeviceUnlock`). Null for every other
@@ -360,37 +356,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:sessions, [:user_id])
     create index(:sessions, [:expires_at])
     create index(:sessions, [:identity_key_epoch], where: "identity_key_epoch IS NOT NULL")
-
-    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
-    sign_in_state = known("cli_sign_ins_state_known", "state", ~w(pending approved cancelled))
-
-    # A command line waiting to be approved in Prism: the hashes of the
-    # approval secret its link carries and of the session token it holds
-    # (never either secret), the code both sides show, the machine it
-    # names, and its expiry. No person or athanor until approved, and then
-    # the session it minted under that token carries both.
-    create table(:cli_sign_ins, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :approval_hash, :binary, null: false
-      add :token_hash, :binary, null: false
-      add :token_prefix, :string, null: false
-      add :user_code, :string, null: false
-      add :machine, :string, null: false
-
-      add :state, :string,
-        null: false,
-        default: "pending",
-        check: if(sqlite?, do: sign_in_state)
-
-      add :expires_at, :utc_datetime_usec, null: false
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    checked(sqlite?, :cli_sign_ins, [sign_in_state])
-    create unique_index(:cli_sign_ins, [:approval_hash])
-    create unique_index(:cli_sign_ins, [:token_hash])
-    create index(:cli_sign_ins, [:expires_at])
 
     create table(:api_keys, primary_key: false) do
       add :id, :string, primary_key: true, null: false

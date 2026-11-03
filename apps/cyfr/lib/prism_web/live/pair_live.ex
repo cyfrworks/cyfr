@@ -10,9 +10,10 @@ defmodule PrismWeb.PairLive do
   glass's key pair first, non-extractable and kept across reloads
   (`device_key.js`), before any invitation exists, and sends this view
   the key's digest (`prepared`), which the page shows as the key's code
-  (`Prima.Device.key_code/1`) and a QR code of it: the person types it on
-  a client of theirs, where `pairing.begin` opens an invitation for that
-  key alone.
+  (`Prima.Device.key_code/1`) and a QR code of this home's `/devices/add`
+  page with the key's digest (`Sanctum.Pairing.approve_url/1`): the person
+  scans it with a phone of theirs, or types the code on a client of
+  theirs, where `pairing.begin` opens an invitation for that key alone.
 
   The invitation's link opens the page again with its secret in the URL's
   fragment (`#code=…`, `pairing.begin`'s `invitation_url`), which a
@@ -52,8 +53,10 @@ defmodule PrismWeb.PairLive do
   `confirmation.changes` stream read over the channel.
 
   A pairing whose answer never reached the glass — the browser closed
-  between the proof and the answer — was issued once; the same code then
-  answers that it was already used, and the person shows a new one.
+  between the proof and the answer — was issued once; the same code, with
+  the key the glass kept, is answered that pairing again within the
+  invitation's five minutes (`Sanctum.Pairing.complete/3`), and past them
+  the person shows a new one.
   """
 
   use PrismWeb, :live_view
@@ -84,15 +87,19 @@ defmodule PrismWeb.PairLive do
   end
 
   # The key the glass made before any invitation: its code, to type on a
-  # client of the person's, and a QR code of it. A digest this page cannot
-  # read draws nothing.
+  # client of the person's, and a QR code of the address a phone's camera
+  # opens to add it (`Sanctum.Pairing.approve_url/1`). A digest this page
+  # cannot read draws nothing.
   @impl true
   def handle_event("prepared", %{"key_digest" => key_digest}, socket) do
     if Prima.Device.key_digest?(key_digest) do
       code = Prima.Device.key_code(key_digest)
 
       svg =
-        case PrismWeb.QR.svg(code, label: "This device's code", class: "h-48 w-48") do
+        case PrismWeb.QR.svg(Sanctum.Pairing.approve_url(key_digest),
+               label: "This device's code",
+               class: "h-48 w-48"
+             ) do
           {:ok, svg} -> svg
           {:error, :too_long} -> nil
         end

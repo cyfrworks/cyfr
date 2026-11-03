@@ -245,18 +245,9 @@ const (
 	ScheduleReResolve       = "re_resolve"
 	ScheduleResume          = "resume"
 	ScheduleUpdate          = "update"
-	SessionCliApprove       = "cli_approve"
-	SessionCliBegin         = "cli_begin"
-	SessionCliCancel        = "cli_cancel"
-	SessionCliList          = "cli_list"
-	SessionCliPoll          = "cli_poll"
-	SessionCliRevoke        = "cli_revoke"
-	SessionDeviceInit       = "device_init"
-	SessionDevicePoll       = "device_poll"
 	SessionLock             = "lock"
 	SessionLogout           = "logout"
 	SessionReadResource     = "read_resource"
-	SessionSetup            = "setup"
 	SessionUnlock           = "unlock"
 	SessionWhoami           = "whoami"
 	SettingsList            = "list"
@@ -356,7 +347,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "lock", "logout", "read_resource", "setup", "unlock", "whoami"},
+	"session":             {"lock", "logout", "read_resource", "unlock", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
@@ -2551,6 +2542,10 @@ type PairingCompleteArgs struct {
 	Proof Field[PairingCompleteArgsProof] `json:"proof,omitzero"`
 	// complete: for a person whose identity is at another CYFR, the device certificate their own CYFR issued for this client, device key, CYFR and athanor; absent for a person whose keys are here
 	Certificate Field[any] `json:"certificate,omitzero"`
+	// complete: a protected device's holder, chip or software, given with display_name; absent for a browser
+	HolderKind Field[string] `json:"holder_kind,omitzero"`
+	// complete: the name a protected device shows, at most 64 bytes, given with holder_kind
+	DisplayName Field[string] `json:"display_name,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4374,128 +4369,6 @@ func (args ScheduleUpdateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ScheduleUpdate, fields: fields(args)})
 }
 
-// SessionCliApproveArgs carries arguments for session.cli_approve.
-type SessionCliApproveArgs struct {
-	// cli_approve: the secret the command line's link carries in its fragment
-	ApprovalSecret string `json:"approval_secret"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionCliApproveArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionCliApproveArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionCliApprove, fields: fields(args)})
-}
-
-// SessionCliBeginArgs carries arguments for session.cli_begin.
-type SessionCliBeginArgs struct {
-	// cli_begin: the command line's host name, which Prism names when it asks to approve it
-	Machine string `json:"machine"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionCliBeginArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionCliBeginArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionCliBegin, fields: fields(args)})
-}
-
-// SessionCliCancelArgs carries arguments for session.cli_cancel.
-type SessionCliCancelArgs struct {
-	// cli_cancel: the session token cli_begin answered, which the command line holds
-	SessionToken string `json:"session_token"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionCliCancelArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionCliCancelArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionCliCancel, fields: fields(args)})
-}
-
-// SessionCliListArgs carries arguments for session.cli_list.
-type SessionCliListArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionCliListArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionCliListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionCliList, fields: fields(args)})
-}
-
-// SessionCliPollArgs carries arguments for session.cli_poll.
-type SessionCliPollArgs struct {
-	// cli_poll: the session token cli_begin answered, which the command line holds
-	SessionToken string `json:"session_token"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionCliPollArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionCliPollArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionCliPoll, fields: fields(args)})
-}
-
-// SessionCliRevokeArgs carries arguments for session.cli_revoke.
-type SessionCliRevokeArgs struct {
-	// cli_revoke: the command-line session (ses_…), as cli_list names it
-	SessionId string `json:"session_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionCliRevokeArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionCliRevokeArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionCliRevoke, fields: fields(args)})
-}
-
-// SessionDeviceInitArgs carries arguments for session.device_init.
-type SessionDeviceInitArgs struct {
-	// OAuth provider for device flow
-	Provider Field[string] `json:"provider,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionDeviceInitArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionDeviceInitArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionDeviceInit, fields: fields(args)})
-}
-
-// SessionDevicePollArgs carries arguments for session.device_poll.
-type SessionDevicePollArgs struct {
-	// Device code from device_init (for device_poll action)
-	DeviceCode string `json:"device_code"`
-	// device_poll: the command line's host name, which its session is listed by in Prism
-	Machine Field[string] `json:"machine,omitzero"`
-	// OAuth provider for device flow
-	Provider Field[string] `json:"provider,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionDevicePollArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionDevicePollArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionDevicePoll, fields: fields(args)})
-}
-
 // SessionLockArgs carries arguments for session.lock.
 type SessionLockArgs struct {
 	// lock: the device's lock proof for the session its unlock reserved
@@ -4537,29 +4410,6 @@ func (args SessionReadResourceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionReadResource, fields: fields(args)})
-}
-
-// SessionSetupArgs carries arguments for session.setup.
-type SessionSetupArgs struct {
-	// setup: the installation's setup token, CYFR_SETUP_TOKEN in its .env
-	SetupToken *string `json:"setup_token"`
-	// setup: the command line's host name, which its session is listed by in Prism
-	Machine string `json:"machine"`
-	// setup: the name the first person takes, theirs for life
-	Name string `json:"name"`
-	// setup: the new recovery code's secret, drawn by the command line (32 bytes, unpadded base64url)
-	RecoverySecret string `json:"recovery_secret"`
-	// setup: the enrollment's request id, drawn by the command line (req_ and 32 hex digits)
-	RequestId string `json:"request_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionSetupArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionSetupArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionSetup, fields: fields(args)})
 }
 
 // SessionUnlockArgs carries arguments for session.unlock.

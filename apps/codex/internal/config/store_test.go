@@ -6,6 +6,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -90,43 +91,6 @@ func TestCurrent_NilWhenMissing(t *testing.T) {
 	}
 }
 
-func TestSaveTo_PersistsTokenUpdate(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-
-	cfg := &Config{
-		CurrentContext: "local",
-		Contexts: map[string]*Context{
-			"local": {URL: "http://127.0.0.1:4000"},
-		},
-	}
-	if err := cfg.SaveTo(path); err != nil {
-		t.Fatalf("SaveTo failed: %v", err)
-	}
-
-	ctx := cfg.Current()
-	ctx.Token = "test-token-123"
-	if err := cfg.SaveTo(path); err != nil {
-		t.Fatalf("SaveTo after token set failed: %v", err)
-	}
-
-	// The rewrite must also leave the file private and whole — SaveTo
-	// writes a fresh 0600 temp file and renames it into place.
-	if info, err := os.Stat(path); err != nil {
-		t.Fatalf("stat config: %v", err)
-	} else if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("config perm = %o, want 0600", perm)
-	}
-
-	loaded, err := LoadFrom(path)
-	if err != nil {
-		t.Fatalf("LoadFrom failed: %v", err)
-	}
-	if loaded.Contexts["local"].Credential() != "test-token-123" {
-		t.Errorf("expected credential 'test-token-123', got %q", loaded.Contexts["local"].Credential())
-	}
-}
-
 func TestLoadFrom_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -169,4 +133,38 @@ func containsAt(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// A session an earlier command line saved under a context is deleted
+// from the file at the first load, field and all, and said once; a
+// context that held none, and the file's other settings, are kept.
+func TestLoadFrom_DeletesAnOldSignIn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := `{"current_context":"work","contexts":{"work":{"url":"https://work.example","token":"an-old-session"},` +
+		`"home":{"url":"https://home.example"},"lab":{"url":"https://lab.example","token":""}}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var said [][]string
+	saved := SignedOut
+	SignedOut = func(contexts []string) { said = append(said, contexts) }
+	t.Cleanup(func() { SignedOut = saved })
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(said) != 1 || strings.Join(said[0], ",") != "lab,work" {
+		t.Errorf("said %v", said)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "token") || strings.Contains(string(data), "an-old-session") {
+		t.Errorf("the old sign-in is still in the file:\n%s", data)
+	}
+	if cfg.CurrentContext != "work" || cfg.Contexts["home"].URL != "https://home.example" || cfg.Contexts["work"].URL != "https://work.example" {
+		t.Errorf("the contexts were not kept: %+v", cfg)
+	}
+	if _, err := LoadFrom(path); err != nil || len(said) != 1 {
+		t.Errorf("a second load: %v, said %v", err, said)
+	}
 }
