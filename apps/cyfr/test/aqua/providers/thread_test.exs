@@ -267,7 +267,7 @@ defmodule Aqua.Providers.ThreadTest do
     test "every action is external-plane only and interactive-only" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 16
+      assert map_size(actions) == 14
 
       for {name, spec} <- actions do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
@@ -471,40 +471,12 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
                call(ctx, %{"action" => "create", "title" => "One too many"})
 
-      # Another athanor's count is its own.
-      {:ok, room} =
-        Sanctum.Tenancy.Athanors.create_group(
-          ctx.user_id,
-          "Room #{System.unique_integer([:positive])}"
-        )
+      # Another athanor's count is its own: another person's, in their own.
+      n = System.unique_integer([:positive])
+      {other, user} = Sanctum.TestContext.person!(%{ctx | user_id: "local|idp|other-#{n}"})
+      other = %{other | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
-      assert {:ok, %{id: _}} = call(%{ctx | athanor_id: room.id}, %{"action" => "create"})
-    end
-
-    test "follow and unfollow are the caller's own rows, on this athanor's threads only", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      alias Arca.ThreadSubscriptionStorage, as: Subs
-
-      :ok = Subs.unfollow(Sanctum.Context.actor(ctx), thread.id, ctx.user_id)
-      refute MapSet.member?(Subs.followed(Sanctum.Context.actor(ctx), ctx.user_id), thread.id)
-
-      assert {:ok, %{following: true}} =
-               call(ctx, %{"action" => "follow", "thread" => thread.id})
-
-      assert MapSet.member?(Subs.followed(Sanctum.Context.actor(ctx), ctx.user_id), thread.id)
-
-      assert {:ok, %{following: false}} =
-               call(ctx, %{"action" => "unfollow", "thread" => thread.id})
-
-      refute MapSet.member?(Subs.followed(Sanctum.Context.actor(ctx), ctx.user_id), thread.id)
-
-      # A thread in another athanor is not followable from here.
-      elsewhere = %{ctx | athanor_id: "ath_elsewhere"}
-
-      assert {:error, {:not_found, "thread", _}} =
-               call(elsewhere, %{"action" => "follow", "thread" => thread.id})
+      assert {:ok, %{id: _}} = call(other, %{"action" => "create"})
     end
   end
 
@@ -522,13 +494,11 @@ defmodule Aqua.Providers.ThreadTest do
           else: Application.delete_env(:arca, :base_path)
       end)
 
-      # A person of their own (`Sanctum.TestContext.person!/1`), seated in
-      # the source athanor, since aloud checks membership on the source
-      # too, and in a shared thread with someone else.
-      {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+      # A person of their own (`Sanctum.TestContext.person!/1`), working in
+      # their own athanor, since aloud checks membership on the source too,
+      # and in a shared thread with someone else.
+      {ctx, user} = Sanctum.TestContext.person!(ctx)
+      ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
       {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
       {:ok, shared} = Sanctum.SharedThreads.create(ctx.user_id, "Trip")
@@ -636,17 +606,13 @@ defmodule Aqua.Providers.ThreadTest do
 
   describe "the send envelope and the thread's own verbs" do
     setup %{ctx: ctx} do
-      # Two members: a bare line is people talking, so a send here writes
-      # a row and starts nothing.
+      # Every send starts a turn, which a filled athanor admits; each send
+      # here names its agent, and the turns it starts stop with the test.
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure("usr_other_#{System.unique_integer([:positive])}",
-          scope: "athanor",
-          athanor_id: ctx.athanor_id
-        )
-
+      Sanctum.TestContext.ready!(ctx.athanor_id)
+      Cyfr.Test.Sandbox.stop_work_on_exit()
       :ok
     end
 
@@ -688,11 +654,12 @@ defmodule Aqua.Providers.ThreadTest do
                  "files" => [%{"filename" => "x", "media_type" => "text/plain", "data" => "%%%"}]
                })
 
-      assert {:ok, %{accepted: true, message_id: ^message_id, replayed: false, running: false}} =
+      assert {:ok, %{accepted: true, message_id: ^message_id, replayed: false}} =
                call(ctx, %{
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "here is a file",
+                 "agent" => "aqua",
                  "id" => message_id,
                  "attachments" => [ref],
                  "client_id" => "c-1"
@@ -701,9 +668,10 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), message_id)
       assert Threads.payload(row)["attachments"] == [ref]
 
-      assert {:ok, %{messages: [%{id: ^message_id}], cursor: cursor}} =
+      assert {:ok, %{messages: messages, cursor: cursor}} =
                call(ctx, %{"action" => "events", "thread" => thread.id})
 
+      assert Enum.any?(messages, &(&1.id == message_id))
       assert is_integer(cursor)
     end
 
@@ -737,6 +705,7 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "with a file",
+                 "agent" => "aqua",
                  "id" => message_id,
                  "attachments" => [ref],
                  "client_id" => "c-sent"
@@ -774,15 +743,13 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, "again"} = Arca.get(Sanctum.Context.actor(ctx), blob)
     end
 
-    test "a shared thread beside the thread is read for the send and never stored", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      # The sender is a person of their own, seated beside the others.
-      {ctx, _user} = Sanctum.TestContext.person!(ctx)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+    test "a shared thread beside the thread is read for the send and never stored", %{ctx: ctx} do
+      # The sender is a person of their own, working in their own athanor.
+      {ctx, user} = Sanctum.TestContext.person!(ctx)
+      athanor = Sanctum.Test.People.athanor!(user)
+      ctx = %{ctx | athanor_id: athanor.id}
+      Sanctum.TestContext.ready!(athanor.id)
+      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
 
       {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
       {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "shared talk")
@@ -792,6 +759,7 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "about the shared thread",
+                 "agent" => "aqua",
                  "room" => %{"shared_thread_id" => beside.id, "title" => "Beside"}
                })
 
@@ -805,6 +773,7 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "still sent",
+                 "agent" => "aqua",
                  "room" => %{"shared_thread_id" => "sth_elsewhere"}
                })
     end

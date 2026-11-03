@@ -31,7 +31,6 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
   alias Prima.Device
   alias Prima.DeviceCert.Proof
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   @issuer "https://idp.example.com"
 
@@ -241,8 +240,8 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
       on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     end
 
-    # A person seated in a group of their own, who stands, and the context
-    # their session establishes there.
+    # A person in their own athanor, who stands, and the context their
+    # session establishes there.
     defp seated! do
       n = System.unique_integer([:positive])
 
@@ -254,7 +253,7 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
           verified: true
         })
 
-      {:ok, athanor} = Athanors.create_group(user.id, "Company device #{n}")
+      athanor = Sanctum.Test.People.athanor!(user)
       stands!(user.id)
 
       built =

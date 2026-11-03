@@ -21,17 +21,18 @@ defmodule Arca.AthanorsTest do
 
   defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
-  defp group!(overrides \\ %{}) do
+  defp owner_id, do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+  defp athanor! do
     n = System.unique_integer([:positive])
 
     {:ok, athanor} =
-      Athanors.insert(
-        server(),
-        Map.merge(
-          %{kind: "group", name: "G#{n}", slug: "g-#{n}", created_by: "system"},
-          overrides
-        )
-      )
+      Athanors.insert(server(), %{
+        name: "A#{n}",
+        slug: "a-#{n}",
+        owner_user_id: owner_id(),
+        created_by: "system"
+      })
 
     athanor
   end
@@ -75,7 +76,6 @@ defmodule Arca.AthanorsTest do
       nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
 
       assert {:error, :no_athanor} = Athanors.current(nobody)
-      assert {:error, :no_athanor} = Athanors.update(nobody, %{name: "X"})
       assert {:error, :no_athanor} = Athanors.set(nobody, name: "X")
       assert {:error, :no_athanor} = Athanors.put_settings(nobody, nil, "{}", DateTime.utc_now())
       refute_received :queried
@@ -94,7 +94,6 @@ defmodule Arca.AthanorsTest do
       unresolved = %{Prima.Actor.system() | athanor_id: "", scope: :athanor}
 
       assert {:error, :no_athanor} = Athanors.current(unresolved)
-      assert {:error, :no_athanor} = Athanors.update(unresolved, %{name: "X"})
       assert {:error, :no_athanor} = Athanors.set(unresolved, name: "X")
 
       assert {:error, :no_athanor} =
@@ -107,27 +106,24 @@ defmodule Arca.AthanorsTest do
       watch_queries!()
       member = in_athanor("ath_somewhere")
 
-      assert {:error, :cross_tenant} = Athanors.insert(member, %{kind: "group"})
+      assert {:error, :cross_tenant} = Athanors.insert(member, %{name: "X"})
       assert {:error, :cross_tenant} = Athanors.mint(member, attrs: %{})
       assert {:error, :cross_tenant} = Athanors.within_caps(member, [:max_athanors])
       assert {:error, :cross_tenant} = Athanors.get(member, "ath_elsewhere")
       assert {:error, :cross_tenant} = Athanors.get_by_owner(member, "usr_1")
-      assert {:error, :cross_tenant} = Athanors.get_by_slug(member, "group", "g")
-      assert {:error, :cross_tenant} = Athanors.get_by_pair_key(member, "k")
+      assert {:error, :cross_tenant} = Athanors.get_by_slug(member, "g")
       assert {:error, :cross_tenant} = Athanors.list_by_ids(member, ["ath_elsewhere"])
       assert {:error, :cross_tenant} = Athanors.list_active(member)
-      assert {:error, :cross_tenant} = Athanors.list_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Athanors.count_active(member)
 
-      assert {:error, :cross_tenant} =
-               Athanors.count_people_created_since(member, DateTime.utc_now())
+      assert {:error, :cross_tenant} = Athanors.count_created_since(member, DateTime.utc_now())
 
       refute_received :queried
     end
 
     test "a map of the actor's fields, or a bare athanor id, raises before any query" do
       watch_queries!()
-      athanor = group!()
+      athanor = athanor!()
       drain_queries!()
 
       # Neither is an actor: a plain map carrying the fields one does, and
@@ -143,13 +139,10 @@ defmodule Arca.AthanorsTest do
 
   describe "inside one tenant" do
     test "a write takes its athanor from the actor and reaches no other row" do
-      a = group!()
-      b = group!()
+      a = athanor!()
+      b = athanor!()
 
-      assert {:ok, %{id: id, name: "renamed"}} =
-               Athanors.update(in_athanor(a.id), %{name: "renamed"})
-
-      assert id == a.id
+      assert :ok = Athanors.set(in_athanor(a.id), name: "renamed")
       assert {:ok, %{name: renamed}} = Athanors.current(in_athanor(a.id))
       assert renamed == "renamed"
 
@@ -159,8 +152,8 @@ defmodule Arca.AthanorsTest do
     end
 
     test "a read for one actor cannot return another athanor's row" do
-      a = group!()
-      b = group!()
+      a = athanor!()
+      b = athanor!()
 
       assert {:ok, %{id: a_id}} = Athanors.current(in_athanor(a.id))
       assert a_id == a.id
@@ -168,7 +161,7 @@ defmodule Arca.AthanorsTest do
     end
 
     test "put_settings/4 writes only while the document still reads what the caller saw" do
-      athanor = group!()
+      athanor = athanor!()
       now = DateTime.utc_now()
 
       assert :ok = Athanors.put_settings(in_athanor(athanor.id), nil, ~s({"a":1}), now)
@@ -181,21 +174,21 @@ defmodule Arca.AthanorsTest do
     end
 
     test "set/2 answers :not_found rather than writing nothing silently" do
-      athanor = group!()
+      athanor = athanor!()
       assert :ok = Athanors.set(in_athanor(athanor.id), provisioned_at: DateTime.utc_now())
       assert {:error, :not_found} = Athanors.set(in_athanor("ath_missing"), name: "X")
     end
   end
 
   describe "insert/2 refusals" do
-    test "a slug already taken for the kind is :slug_taken, which a derived slug retries on" do
-      athanor = group!()
+    test "a slug already taken is :slug_taken, which a derived slug retries on" do
+      athanor = athanor!()
 
       assert {:error, :slug_taken} =
                Athanors.insert(server(), %{
-                 kind: "group",
                  name: "Other",
                  slug: athanor.slug,
+                 owner_user_id: owner_id(),
                  created_by: "system"
                })
     end
@@ -203,13 +196,12 @@ defmodule Arca.AthanorsTest do
     test "a validation refusal names its fields and carries no changeset" do
       assert {:error, {:invalid, errors}} =
                Athanors.insert(server(), %{
-                 kind: "team",
                  name: "X",
                  slug: "bad slug",
                  created_by: "system"
                })
 
-      assert %{kind: [_ | _], slug: [_ | _]} = errors
+      assert %{owner_user_id: [_ | _], slug: [_ | _]} = errors
       refute match?(%Ecto.Changeset{}, errors)
     end
   end
@@ -217,13 +209,18 @@ defmodule Arca.AthanorsTest do
   describe "mint/2 is one transaction" do
     test "the row and its seats land together, under the caps it names" do
       n = System.unique_integer([:positive])
-      creator = "usr_mint_#{n}"
+      creator = owner_id()
 
       assert {:ok, athanor} =
                Athanors.mint(server(),
                  hold: [creator],
-                 caps: [{:max_groups_per_person, creator}, :max_athanors],
-                 attrs: %{kind: "group", name: "M#{n}", slug: "m-#{n}", created_by: creator},
+                 caps: [:max_athanors],
+                 attrs: %{
+                   name: "M#{n}",
+                   slug: "m-#{n}",
+                   owner_user_id: creator,
+                   created_by: creator
+                 },
                  also: fn minted ->
                    with {:ok, _} <-
                           Arca.Members.seat(in_athanor(minted.id), %{
@@ -242,13 +239,13 @@ defmodule Arca.AthanorsTest do
     # A cap the port refuses is the tenancy domain's to configure, so that
     # case lives where both sides of the port are
     # (`Sanctum.Tenancy.AthanorsTest`); what is Arca's is the slug.
-    test "the slug is the first candidate the kind does not hold, and none free is :slug_taken" do
+    test "the slug is the first candidate no athanor holds, and none free is :slug_taken" do
       n = System.unique_integer([:positive])
-      taken = group!()
+      taken = athanor!()
 
       assert {:ok, %{slug: slug}} =
                Athanors.mint(server(),
-                 attrs: %{kind: "group", name: "Next #{n}", created_by: "system"},
+                 attrs: %{name: "Next #{n}", owner_user_id: owner_id(), created_by: "system"},
                  slugs: [taken.slug, "next-#{n}", "after-#{n}"]
                )
 
@@ -256,11 +253,11 @@ defmodule Arca.AthanorsTest do
 
       assert {:error, :slug_taken} =
                Athanors.mint(server(),
-                 attrs: %{kind: "group", name: "None #{n}", created_by: "system"},
+                 attrs: %{name: "None #{n}", owner_user_id: owner_id(), created_by: "system"},
                  slugs: [taken.slug, "next-#{n}"]
                )
 
-      assert {:error, :not_found} = Athanors.get_by_slug(server(), "group", "none-#{n}")
+      assert {:error, :not_found} = Athanors.get_by_slug(server(), "none-#{n}")
     end
 
     test "a seat that refuses takes the athanor row with it" do
@@ -269,19 +266,29 @@ defmodule Arca.AthanorsTest do
 
       assert {:error, :nope} =
                Athanors.mint(server(),
-                 attrs: %{kind: "group", name: "S#{n}", slug: slug, created_by: "system"},
+                 attrs: %{
+                   name: "S#{n}",
+                   slug: slug,
+                   owner_user_id: owner_id(),
+                   created_by: "system"
+                 },
                  also: fn _minted -> {:error, :nope} end
                )
 
-      assert {:error, :not_found} = Athanors.get_by_slug(server(), "group", slug)
+      assert {:error, :not_found} = Athanors.get_by_slug(server(), slug)
     end
 
     test "a slug the index already holds is :slug_taken and nothing is written" do
-      athanor = group!()
+      athanor = athanor!()
 
       assert {:error, :slug_taken} =
                Athanors.mint(server(),
-                 attrs: %{kind: "group", name: "Dup", slug: athanor.slug, created_by: "system"}
+                 attrs: %{
+                   name: "Dup",
+                   slug: athanor.slug,
+                   owner_user_id: owner_id(),
+                   created_by: "system"
+                 }
                )
     end
   end
@@ -289,11 +296,10 @@ defmodule Arca.AthanorsTest do
   describe "the fabric reads" do
     test "find an athanor by slug, owner and id; count what the caps bound" do
       n = System.unique_integer([:positive])
-      owner = "usr_owner_#{n}"
+      owner = owner_id()
 
       {:ok, person} =
         Athanors.insert(server(), %{
-          kind: "person",
           name: "P#{n}",
           slug: "p-#{n}",
           owner_user_id: owner,
@@ -302,8 +308,8 @@ defmodule Arca.AthanorsTest do
 
       assert {:ok, %{id: id}} = Athanors.get_by_owner(server(), owner)
       assert id == person.id
-      assert {:ok, %{id: ^id}} = Athanors.get_by_slug(server(), "person", person.slug)
-      assert {:error, :not_found} = Athanors.get_by_slug(server(), "group", person.slug)
+      assert {:ok, %{id: ^id}} = Athanors.get_by_slug(server(), person.slug)
+      assert {:error, :not_found} = Athanors.get_by_slug(server(), "p-none-#{n}")
       assert {:ok, %{id: ^id}} = Athanors.get(server(), person.id)
       assert {:error, :not_found} = Athanors.get(server(), "ath_nope")
 
@@ -314,7 +320,7 @@ defmodule Arca.AthanorsTest do
       assert count >= 1
 
       assert {:ok, since} =
-               Athanors.count_people_created_since(
+               Athanors.count_created_since(
                  server(),
                  DateTime.add(DateTime.utc_now(), -3600)
                )

@@ -279,15 +279,14 @@ defmodule Sanctum.Providers.ShareTest do
 
     test "a key is shared, and its shares read, from the person's own athanor alone",
          %{terry: terry, alice: alice, entry: entry} do
-      # A group athanor Terry sits in: an athanor of his, not his own.
-      group = Arca.Test.Shares.group!([terry.user.id])
-      in_group = %{terry.ctx | athanor_id: group.id}
+      # Terry's context in another person's athanor: not his own.
+      elsewhere = %{terry.ctx | athanor_id: alice.athanor.id}
 
       for args <- [
             %{"action" => "create", "entry_id" => entry.id, "audience" => "everyone"},
             %{"action" => "list"}
           ] do
-        assert {:error, {:invalid_argument, "not_own_athanor: " <> _}} = call(in_group, args),
+        assert {:error, {:invalid_argument, "not_own_athanor: " <> _}} = call(elsewhere, args),
                args["action"]
       end
 

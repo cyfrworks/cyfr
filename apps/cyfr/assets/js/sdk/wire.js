@@ -130,7 +130,7 @@ export function request(kind, fields, publicIdentity = null) {
 // (`/t/<athanor>/<publisher>/<name>/…`). The endpoint admits such a request
 // only for a tincture that is public, under its public profile. Any other
 // path — a private version's `/_s/` path among them — names no identity.
-const ATHANOR_SEGMENT = /^@?[a-z0-9]+(-[a-z0-9]+)*$/
+const ATHANOR_SEGMENT = /^@[a-z0-9]+(-[a-z0-9]+)*$/
 const PUBLISHER_SEGMENT = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/
 const NAME_SEGMENT = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 

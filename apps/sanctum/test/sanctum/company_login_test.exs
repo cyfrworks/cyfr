@@ -47,7 +47,7 @@ defmodule Sanctum.CompanyLoginTest do
   alias Arca.Test.QueryCounter
   alias Prima.DeviceCert.Proof
   alias Sanctum.{Caller, CompanyLogin, Context, Pairing}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Users
 
   @issuer "https://idp.example.com"
   @oidc ~s(["oidc","https://idp.example.com","cid"])
@@ -174,7 +174,7 @@ defmodule Sanctum.CompanyLoginTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A person seated in a group of their own, a session of theirs there,
+  # A person seated in their own athanor, a session of theirs there,
   # and the context it establishes, all made while no company sign-in is
   # required.
   defp seated! do
@@ -188,7 +188,7 @@ defmodule Sanctum.CompanyLoginTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Company #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
     token = session!(user, athanor)
     {:ok, ctx} = Caller.establish({:session, token}, focus: athanor.id, refresh: false)
     %{user: user, athanor: athanor, token: token, ctx: ctx}

@@ -1432,8 +1432,7 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  # Every athanor the person works in: their own, then each group an
-  # active membership grants.
+  # The athanor the person works in: their own.
   defp person_athanors(user_id),
     do: user_id |> Sanctum.Tenancy.Athanors.list_for_user() |> Enum.map(& &1.id)
 

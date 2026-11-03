@@ -40,7 +40,13 @@ defmodule Aqua.ModelsTest do
   test "an athanor whose component index is behind answers unavailable, not an empty listing" do
     n = System.unique_integer([:positive])
     user = "local|idp|models-#{n}"
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Models #{n}")
+
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Models #{n}", owner_user_id: user, created_by: user},
+        ["models-#{n}"]
+      )
+
     {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
 
@@ -62,7 +68,13 @@ defmodule Aqua.ModelsTest do
   test "a catalyst listing that cannot be read leaves every soul's model unread" do
     n = System.unique_integer([:positive])
     user = "local|idp|models-unread-#{n}"
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Models unread #{n}")
+
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Models unread #{n}", owner_user_id: user, created_by: user},
+        ["models-unread-#{n}"]
+      )
+
     {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
     soul = Compendium.agent_soul_type()

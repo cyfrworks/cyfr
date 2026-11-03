@@ -114,7 +114,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           ExecutionStanding Health JobClaims McpServerStorage Outbox Overlay PolicyLog
           ProvisioningClaims RateWindows RecordSink ScheduleOccurrences SecurityTransitions
           ServerMetaStorage Storage StorageProjectionChanges StorageProjectionRoots TenantTables
-          ThreadStorage ThreadSubscriptionStorage TurnStorage Usage VaultDefaults
+          ThreadStorage TurnStorage Usage VaultDefaults
           WebhookDeliveryStorage),
        "the storage, lease, claim, outbox and cache facades the layers above call downward"},
       {~w(Cache.Epoch),

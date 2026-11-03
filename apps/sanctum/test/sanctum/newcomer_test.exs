@@ -189,7 +189,6 @@ defmodule Sanctum.NewcomerTest do
                Arca.Repo.get_by(PersonIdentity, user_id: person.id)
 
       assert {:ok, athanor} = Athanors.get_by_owner(person.id)
-      assert athanor.kind == "person"
       assert Members.member?(person.id, athanor.id)
       assert person.personal_athanor_id == athanor.id
 
@@ -708,11 +707,8 @@ defmodule Sanctum.NewcomerTest do
 
       {:ok, %{person: _admitted}} = Newcomer.admit(:open, {:passkey, registered.(), identity()})
 
-      person_athanors = fn ->
-        Arca.Repo.aggregate(from(a in Arca.Schemas.Athanor, where: a.kind == "person"), :count)
-      end
-
-      before = {people(), person_athanors.(), Arca.Repo.aggregate(PersonIdentity, :count)}
+      all_athanors = fn -> Arca.Repo.aggregate(Arca.Schemas.Athanor, :count) end
+      before = {people(), all_athanors.(), Arca.Repo.aggregate(PersonIdentity, :count)}
 
       # The second verifies; its transaction writes the person, their keys
       # and their athanor, and the credential's write is refused there, so
@@ -720,7 +716,7 @@ defmodule Sanctum.NewcomerTest do
       assert {:error, {:conflict, _}} =
                Newcomer.admit(:open, {:passkey, registered.(), identity()})
 
-      assert {people(), person_athanors.(), Arca.Repo.aggregate(PersonIdentity, :count)} == before
+      assert {people(), all_athanors.(), Arca.Repo.aggregate(PersonIdentity, :count)} == before
       assert passkeys() == 1
     end
 
@@ -1103,11 +1099,11 @@ defmodule Sanctum.NewcomerTest do
       assert [%ExternalIdentity{provider: "cyfr"}] =
                Arca.Repo.all(from(i in ExternalIdentity, where: i.user_id == ^person.id))
 
-      # Their own athanor, of kind person, owned by them and recorded on
-      # their row; its fill asked once the admission committed.
+      # Their own athanor, owned by them and recorded on their row; its
+      # fill asked once the admission committed.
       assert {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(person.id)
 
-      assert {:ok, %{id: ^athanor_id, kind: "person", owner_user_id: owner}} =
+      assert {:ok, %{id: ^athanor_id, owner_user_id: owner}} =
                Athanors.get_by_owner(person.id)
 
       assert owner == person.id
@@ -1160,8 +1156,6 @@ defmodule Sanctum.NewcomerTest do
       identity = allowed!(directory)
       thread = thread!(first)
       {:ok, :added} = SharedThreads.add(first.id, thread.id, identifier: identity.identifier)
-      {:ok, group} = Athanors.create_group(first.id, "Invited")
-      {:ok, :invited} = Members.add(group, [identifier: identity.identifier], first.id)
 
       assert [%SharedThreadMember{status: "invited"}] =
                Arca.Repo.all(
@@ -1176,7 +1170,6 @@ defmodule Sanctum.NewcomerTest do
       assert people_rows(thread) == 2
       assert {:ok, [%{id: thread_id}]} = SharedThreads.list(person.id)
       assert thread_id == thread.id
-      assert Members.member?(person.id, group.id)
     end
 
     test "with an invitation, is admitted by it: the redemption, the seat in its thread and the allow in one transaction",

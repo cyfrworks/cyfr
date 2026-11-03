@@ -133,13 +133,11 @@ refused, naming the variable or key and the form it must take.
 
 | Variable | Key | Type | Default | Group | Scope | Stale | What it sets |
 |---|---|---|---|---|---|---|---|
-| `CYFR_MAX_ATHANORS` | `max_athanors` | `integer` | `10000` | `tenancy` | live | refuse | Active athanors on this server; an archived one frees its place. Unset, 10,000, and 0 removes the ceiling. |
-| `CYFR_MAX_GROUPS_PER_PERSON` | `max_groups_per_person` | `integer` | `50` | `tenancy` | live | refuse | Groups one person may create (they may belong to more); 0 turns the cap off. |
+| `CYFR_MAX_ATHANORS` | `max_athanors` | `integer` | `10000` | `tenancy` | live | refuse | Active athanors on this server, each a person's; an archived one frees its place. Unset, 10,000, and 0 removes the ceiling. |
 | `CYFR_MAX_PAIRS_PER_PERSON` | `max_pairs_per_person` | `integer` | none | `tenancy` | live | refuse | Pairs one person may hold open, a pair being a shared thread of two; a pair is made for two, so either person at the cap refuses it, and an ended pair frees its place. Unset, no ceiling, and 0 is the same. |
-| `CYFR_MAX_MEMBERS_PER_GROUP` | `max_members_per_group` | `integer` | `1000` | `tenancy` | live | refuse | Seats in one group, invitations included; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_SHARED_THREADS_PER_PERSON` | `max_shared_threads_per_person` | `integer` | none | `tenancy` | live | refuse | Shared threads one person may create, an archived one not counted (they may sit in more); unset, no ceiling, and 0 is the same. |
 | `CYFR_MAX_PEOPLE_PER_THREAD` | `max_people_per_thread` | `integer` | none | `tenancy` | live | refuse | People in one shared thread, invitations included; unset, no ceiling, and 0 is the same. |
-| `CYFR_MAX_THREADS_PER_ATHANOR` | `max_threads_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Threads one athanor may hold, each a row any member's client can mint; 0 turns the cap off. |
+| `CYFR_MAX_THREADS_PER_ATHANOR` | `max_threads_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Threads one athanor may hold, each a row its person's client can mint; 0 turns the cap off. |
 | `CYFR_MAX_SCHEDULES_PER_ATHANOR` | `max_schedules_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Schedules one athanor may hold, a paused one included and a deleted one or a feed not; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_FEEDS_PER_ATHANOR` | `max_feeds_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Live feeds one athanor may hold, a deleted one or a schedule not; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_EXTERNAL_SERVERS_PER_ATHANOR` | `max_external_servers_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | External MCP servers one athanor may register; unset, 1,000, and 0 removes the ceiling. |

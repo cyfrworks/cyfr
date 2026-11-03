@@ -65,12 +65,8 @@ defmodule PrismWeb.Surface do
     end
   end
 
-  defp key(token) do
-    case Prism.Tray.session_hash(token) do
-      nil -> nil
-      hash -> {:surface, hash}
-    end
-  end
+  defp key(token) when is_binary(token), do: {:surface, Prima.Digest.sha256_hex(token)}
+  defp key(_token), do: nil
 
   defp page(page) when is_binary(page) and page != "", do: page
   defp page(_other), do: nil

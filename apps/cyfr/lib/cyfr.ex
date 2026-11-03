@@ -50,7 +50,6 @@ defmodule Cyfr do
       Bus.ThreadEvent,
       Bus.Tinctures,
       Bus.VaultEntryChanged,
-      Bus.Viewing,
       Bus.Webhooks,
       Cell,
       KeyringFingerprint.Check,

@@ -259,7 +259,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       end
     end
 
-    test "a root's completion and failure reach the tray; a child's do not" do
+    test "a root's completion and failure reach the notify topic; a child's do not" do
       listen(Bus.notify(@actor))
 
       :telemetry.execute([:cyfr, :opus, :execute, :stop], %{}, %{
@@ -423,7 +423,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       assert_receive %Notify{athanor_id: :platform, kind: :allowlist_changed}
     end
 
-    test "a cancel reaches the executions topic as a cancel, and the tray not at all" do
+    test "a cancel reaches the executions topic as a cancel, and the notify topic not at all" do
       listen(Bus.executions(@actor))
       listen(Bus.notify(@actor))
 
@@ -482,7 +482,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       refute_receive %FeedRun{}, 100
     end
 
-    test "a feed's fire and failure ride the feeds' runs, never the schedules', and its failure keeps its tray notice" do
+    test "a feed's fire and failure ride the feeds' runs, never the schedules', and its failure keeps its notify notice" do
       listen(Bus.schedule_runs(@actor))
       listen(Bus.feed_runs(@actor))
       listen(Bus.notify(@actor))
@@ -653,7 +653,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     test "a publish that raises never detaches the handler, and the next event still arrives" do
       listen(Bus.notify(@actor))
 
-      # A kind the tray does not have: the payload refuses it mid-publish.
+      # A kind the notify topic does not have: the payload refuses it mid-publish.
       :telemetry.execute([:cyfr, :sanctum, :notify], %{}, %{
         athanor_id: @athanor,
         kind: :not_a_kind,

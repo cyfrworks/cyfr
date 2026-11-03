@@ -100,53 +100,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end
   end
 
-  test "group mints at the server's last two places: two land, and a refusal leaves no row or seat",
-       %{run: run} do
-    creators = for i <- 1..@racers, do: person!(run, i)
-    cap = cap!(2)
-
-    answers =
-      race(
-        for {creator, i} <- Enum.with_index(creators, 1) do
-          fn -> Athanors.create_group(creator.id, "Census #{i}", slug: "census-#{run}-g#{i}") end
-        end
-      )
-
-    assert Enum.count(answers, &match?({:ok, _}, &1)) == 2
-    assert Enum.count(answers, &(&1 == refused(cap))) == @racers - 2
-    assert active() == cap
-
-    for {creator, answer} <- Enum.zip(creators, answers) do
-      {created, seats} = rows_of(creator.id)
-
-      case answer do
-        {:ok, group} ->
-          assert created == [group.id]
-          assert seats == [group.id]
-
-        refusal ->
-          assert refusal == refused(cap)
-          assert {created, seats} == {[], []}
-      end
-    end
-  end
-
-  test "two reopens at the server's last place: one lands, the other stays archived",
-       %{run: run} do
-    groups = for i <- 1..2, do: archived_group!(person!(run, i), run, i)
-    cap = cap!(1)
-
-    answers = race(Enum.map(groups, fn group -> fn -> Athanors.unarchive(group) end end))
-
-    assert Enum.count(answers, &match?({:ok, _}, &1)) == 1
-    assert Enum.count(answers, &(&1 == refused(cap))) == 1
-    assert active() == cap
-
-    for {group, answer} <- Enum.zip(groups, answers), answer == refused(cap) do
-      assert {:ok, %{status: "archived"}} = unboxed(fn -> Athanors.get(group.id) end)
-    end
-  end
-
   test "two allows at the server's last place: one lands, the other stays denied",
        %{run: run} do
     denied = for i <- 1..2, do: denied_owner!(run, i)
@@ -164,14 +117,14 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end
   end
 
-  test "a reopen and a mint at the server's last place: one lands", %{run: run} do
-    group = archived_group!(person!(run, 1), run, 1)
+  test "an allow and a mint at the server's last place: one lands", %{run: run} do
+    {user, _own} = denied_owner!(run, 1)
     owner = person!(run, 2)
     cap = cap!(1)
 
     answers =
       race([
-        fn -> Athanors.unarchive(group) end,
+        fn -> Users.allow(user) end,
         fn -> Athanors.create(personal(owner)) end
       ])
 
@@ -310,7 +263,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
 
   defp personal(owner) do
     %{
-      kind: "person",
       name: "Census #{owner.id}",
       slug: "census-" <> String.downcase(String.replace(owner.id, ~r/[^a-zA-Z0-9]/, "")),
       owner_user_id: owner.id,
@@ -334,22 +286,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end)
   end
 
-  # A group the person made, archived; made before the cap is stored.
-  defp archived_group!(creator, run, i) do
-    unboxed(fn ->
-      {:ok, group} =
-        Athanors.create(%{
-          kind: "group",
-          name: "Census #{i}",
-          slug: "census-#{run}-a#{i}",
-          created_by: creator.id
-        })
-
-      {:ok, archived} = Athanors.archive(group)
-      archived
-    end)
-  end
-
   # A person with their own athanor and a seat in it, as sign-in leaves
   # them, then denied, which archives the athanor.
   defp denied_owner!(run, i) do
@@ -361,14 +297,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
       {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: own.id, added_by: "system")
       {:ok, denied} = Users.deny(user)
       {denied, own}
-    end)
-  end
-
-  # The athanors the person created and the athanors they sit in.
-  defp rows_of(user_id) do
-    unboxed(fn ->
-      {Arca.Repo.all(from(a in Athanor, where: a.created_by == ^user_id, select: a.id)),
-       Arca.Repo.all(from(m in Membership, where: m.user_id == ^user_id, select: m.athanor_id))}
     end)
   end
 

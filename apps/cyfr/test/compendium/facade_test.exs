@@ -36,7 +36,13 @@ defmodule Compendium.FacadeTest do
     # A filled athanor of its own, so a listing starts no fill behind the test.
     n = System.unique_integer([:positive])
     user = "local|idp|facade-#{n}"
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Facade #{n}")
+
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Facade #{n}", owner_user_id: user, created_by: user},
+        ["facade-#{n}"]
+      )
+
     {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
 

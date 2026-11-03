@@ -62,7 +62,7 @@
     if (publicIdentity2) body.public = publicIdentity2;
     return body;
   }
-  var ATHANOR_SEGMENT = /^@?[a-z0-9]+(-[a-z0-9]+)*$/;
+  var ATHANOR_SEGMENT = /^@[a-z0-9]+(-[a-z0-9]+)*$/;
   var PUBLISHER_SEGMENT = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
   var NAME_SEGMENT = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
   function publicIdentity(pathname) {

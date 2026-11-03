@@ -320,19 +320,15 @@ defmodule Cyfr.Platform.Settings.Roster do
   # Each setting's sentence, by key: every entry's `doc`.
   @setting_docs %{
     "max_athanors" =>
-      "Active athanors on this server; an archived one frees its place. Unset, 10,000, and 0 removes the ceiling.",
-    "max_groups_per_person" =>
-      "Groups one person may create (they may belong to more); 0 turns the cap off.",
+      "Active athanors on this server, each a person's; an archived one frees its place. Unset, 10,000, and 0 removes the ceiling.",
     "max_pairs_per_person" =>
       "Pairs one person may hold open, a pair being a shared thread of two; a pair is made for two, so either person at the cap refuses it, and an ended pair frees its place. Unset, no ceiling, and 0 is the same.",
-    "max_members_per_group" =>
-      "Seats in one group, invitations included; unset, 1,000, and 0 removes the ceiling.",
     "max_shared_threads_per_person" =>
       "Shared threads one person may create, an archived one not counted (they may sit in more); unset, no ceiling, and 0 is the same.",
     "max_people_per_thread" =>
       "People in one shared thread, invitations included; unset, no ceiling, and 0 is the same.",
     "max_threads_per_athanor" =>
-      "Threads one athanor may hold, each a row any member's client can mint; 0 turns the cap off.",
+      "Threads one athanor may hold, each a row its person's client can mint; 0 turns the cap off.",
     "max_schedules_per_athanor" =>
       "Schedules one athanor may hold, a paused one included and a deleted one or a feed not; unset, 1,000, and 0 removes the ceiling.",
     "max_feeds_per_athanor" =>
@@ -419,9 +415,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     [
       # ——— tenancy caps: each gates a creation, so each refuses stale ———
       cap(:max_athanors, "CYFR_MAX_ATHANORS", 10_000, "athanors"),
-      cap(:max_groups_per_person, "CYFR_MAX_GROUPS_PER_PERSON", 50, "groups"),
       cap(:max_pairs_per_person, "CYFR_MAX_PAIRS_PER_PERSON", nil, "pairs"),
-      cap(:max_members_per_group, "CYFR_MAX_MEMBERS_PER_GROUP", 1_000, "members"),
       cap(:max_shared_threads_per_person, "CYFR_MAX_SHARED_THREADS_PER_PERSON", nil, "threads"),
       cap(:max_people_per_thread, "CYFR_MAX_PEOPLE_PER_THREAD", nil, "people"),
       cap(:max_threads_per_athanor, "CYFR_MAX_THREADS_PER_ATHANOR", 1000, "threads"),

@@ -124,14 +124,6 @@ defmodule PrismWeb.Nav do
       modes: @dev
     },
     %{
-      key: "members",
-      label: "Members",
-      path: "/members",
-      icon: "user",
-      section: :configuration,
-      modes: @both
-    },
-    %{
       key: "webhooks",
       label: "Webhooks",
       path: "/webhooks",

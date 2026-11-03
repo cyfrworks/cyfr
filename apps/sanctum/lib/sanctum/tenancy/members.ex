@@ -3,129 +3,72 @@
 
 defmodule Sanctum.Tenancy.Members do
   @moduledoc """
-  Membership assignments — "user X is a member of athanor A".
+  Membership assignments — "user X is a member of athanor A", the person's
+  seat in their own athanor.
 
   A membership row is a presence-only grant: its existence makes the user a
-  member (every member is the athanor's admin — there is no role tier). A
-  `"platform"` row names no athanor: it makes the user a platform admin, the
-  server's operator. The one platform row is the installation's first
-  person's, written by their admission (`Sanctum.Newcomer`,
-  `Arca.Members.grant_platform!/1`); nothing here writes one.
-
-  An `invited` row names a person identifier (`per_…`) instead of a
-  person: someone was added to a group before they ever signed in here.
-  It activates on their admitted `cyfr` sign-in (`activate_invited/1`). It
-  is withdrawn when the door denies that identifier
-  (`withdraw_invites_for_identifier/1`) — a seat must not outlive the
-  eject. Adding an identifier the door does not admit also queues a
-  request for the platform admin — an invite never opens the door by
-  itself.
-
-  Leaving an athanor, or being removed from one, is one standing
-  transition (`Arca.SecurityTransitions.leave_athanor/3`): the seat, the
-  person's follows there, their sessions bound to it and the frame
-  credentials, paired clients, device certificates and pending pairing
-  invitations they hold there go together, and a remote person left with
-  no membership here is retired here with it (that transition's doc).
-  Their other memberships, their identity and their door entry stand: a
-  removal is not a deny, so they may still sign in, admitted to nothing
-  they were removed from. An address a client saved for this home grants
-  nothing either way. A removal reads no directory, so it takes effect at
-  once even while a remote person's identity head cannot be read fresh.
+  member. An athanor has one, its owner's, written with it
+  (`Sanctum.Tenancy.Athanors.create_personal/2`). A `"platform"` row names
+  no athanor: it makes the user a platform admin, the server's operator.
+  The one platform row is the installation's first person's, written by
+  their admission (`Sanctum.Newcomer`, `Arca.Members.grant_platform!/1`);
+  nothing here writes one.
 
   Every change is announced (`Sanctum.Telemetry.membership_changed/3`),
   keyed by the person, so a mounted LiveView can re-derive what it shows.
 
-  ## What is decided here, and what is stored below
-
-  The statements are `Arca.Members`'. What stays here is the deciding: who
-  may be seated and on what proof, which cap bounds a roster, that a
-  frozen athanor never gains a member, what a leave archives, and who is
-  told afterwards. A row inside one athanor is written and read as the
-  server narrowed to that athanor; the rows that name no athanor, or that
-  name a person across every athanor, run as the server itself.
+  The statements are `Arca.Members`'. A row inside one athanor is written
+  and read as the server narrowed to that athanor; the rows that name no
+  athanor, or that name a person across every athanor, run as the server
+  itself.
   """
-
-  alias Sanctum.Door
-  alias Sanctum.Tenancy.{Athanors, Caps, Users}
 
   @typedoc "A membership row, as the plain map `Arca.Members` answers."
   @type membership :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @doc """
-  Insert an athanor membership. `attrs` carries `:user_id` for an active
-  row or `:person_identifier` for an invited one, and `:athanor_id`, which
-  must name an existing athanor. A platform row is no membership this
-  writes (`{:error, :no_athanor}`).
-
-  Opts: `birth: true` seats a frozen athanor's members at its birth;
-  `reserve:` is the closure `Arca.Members.seat/3` runs under the athanor's
-  lock before it writes the seat, which `add/3` passes to count the member
-  cap there. Without it a seat is not counted against the cap.
+  Insert an athanor membership. `attrs` carries `:user_id` and
+  `:athanor_id`, which must name an existing athanor. A platform row is no
+  membership this writes (`{:error, :no_athanor}`).
   """
-  @spec create(map(), keyword()) :: {:ok, membership()} | {:error, term()}
-  def create(attrs, opts \\ []) do
+  @spec create(map()) :: {:ok, membership()} | {:error, term()}
+  def create(attrs) do
     attrs = Map.new(attrs)
 
     if Map.get(attrs, :scope) == "platform",
       do: {:error, :no_athanor},
-      else: seat(attrs, opts)
+      else: Arca.Members.seat(in_athanor(Map.get(attrs, :athanor_id)), attrs)
   end
-
-  # A frozen athanor took its members at birth and never gains another —
-  # every writer of a membership row is held to that here, not only
-  # `add/3`; the birth itself says so with `birth: true`
-  # (`Sanctum.Tenancy.Athanors`).
-  defp seat(attrs, opts) do
-    athanor_id = Map.get(attrs, :athanor_id)
-
-    if not Keyword.get(opts, :birth, false) and frozen?(athanor_id) do
-      {:error, :frozen_roster}
-    else
-      Arca.Members.seat(in_athanor(athanor_id), attrs, Keyword.take(opts, [:reserve]))
-    end
-  end
-
-  defp frozen?(athanor_id) when is_binary(athanor_id),
-    do: match?({:ok, %{roster: "frozen"}}, Athanors.get(athanor_id))
-
-  defp frozen?(_athanor_id), do: false
 
   @doc """
   Idempotently ensure an active membership exists for `user_id`.
 
   Opts: `:scope` (required — the two scopes are different grants and neither
-  is a default), `:athanor_id`, `:added_by`, and `:reserve`, which reaches
-  `create/2` only when the row is written: a person already seated writes
-  nothing and is not counted. Safe under concurrent first sign-ins — a
-  unique-constraint conflict resolves to a re-read of the existing row.
+  is a default), `:athanor_id` and `:added_by`. Safe under concurrent first
+  sign-ins — a unique-constraint conflict resolves to a re-read of the
+  existing row.
   """
   @spec ensure(String.t(), keyword()) :: {:ok, membership()} | {:error, term()}
   def ensure(user_id, opts) when is_binary(user_id) do
     scope = Keyword.fetch!(opts, :scope)
     athanor_id = Keyword.get(opts, :athanor_id)
 
-    # Read-before-write: the membership almost always already exists (it is
-    # minted once), so probing first avoids a failed INSERT — and the noisy
-    # `QUERY ERROR ... memberships` log line — on every later sign-in. A
-    # concurrent first-login can still race past the probe; the INSERT's
-    # conflict then resolves to a re-read.
+    # Read-before-write: the membership almost always already exists, so
+    # probing first avoids a failed INSERT on every later call. A concurrent
+    # call can still race past the probe; the INSERT's conflict then
+    # resolves to a re-read.
     case find(user_id, scope, athanor_id) do
       {:ok, membership} ->
         {:ok, membership}
 
       _ ->
-        case create(
-               %{
-                 user_id: user_id,
-                 scope: scope,
-                 athanor_id: athanor_id,
-                 added_by: Keyword.get(opts, :added_by)
-               },
-               Keyword.take(opts, [:reserve])
-             ) do
+        case create(%{
+               user_id: user_id,
+               scope: scope,
+               athanor_id: athanor_id,
+               added_by: Keyword.get(opts, :added_by)
+             }) do
           {:ok, membership} -> {:ok, membership}
-          # Lost the race: re-read the existing assignment.
           {:error, :conflict} -> find(user_id, scope, athanor_id)
           other -> other
         end
@@ -169,388 +112,24 @@ defmodule Sanctum.Tenancy.Members do
   def platform_seat(_user_id), do: :none
 
   @doc """
-  Add someone to an athanor: a person already on this server (`user_id:`)
-  becomes an active member. An `identifier:` (`per_…`) becomes an active
-  member when a person here holds that identifier, else an `invited` row
-  the person claims on their first admitted `cyfr` sign-in — and, when
-  the door would not admit that identifier, a pending request for the
-  platform admin; whether this home can resolve the identifier at its
-  directory is not asked, since only the person's own sign-in carries
-  their genesis. A stranger's identifier and a known one answer alike, so
-  it cannot be used to learn who is on the server. A malformed one is
-  `:invalid_identifier`.
-
-  A `handle:` (the name, without `@`) is asked of the registry
-  (`Sanctum.Handle.identifier/1`) before anything is written, and the
-  identifier it names is added as an `identifier:` is; the row keeps the
-  identifier, never the handle, and the registry's refusals are answered
-  as that function answers them.
-
-  The per-group member cap bounds every seat this writes, counted under
-  the athanor's lock in the transaction that writes it; a person already
-  seated, or an identifier already invited, writes no seat and so is
-  answered `:added` or `:invited` even at the cap. A person's own athanor
-  has exactly one member — its owner — on every path, not only in the UI.
-  """
-  @spec add(
-          Sanctum.Tenancy.Athanors.athanor(),
-          [user_id: String.t()] | [identifier: String.t()] | [handle: String.t()],
-          String.t()
-        ) ::
-          {:ok, :added | :invited} | {:error, term()}
-  def add(athanor, target, added_by)
-
-  def add(%{kind: "person"}, _target, _added_by), do: {:error, :person_athanor}
-
-  # A frozen athanor took its members at birth and never gains another —
-  # that is what makes a DM a DM. Guarded here, beside the person clause,
-  # so every arm is covered: a rule enforced on one arm is a rule an
-  # invitation walks around. Growing the room is a
-  # different act — mint an open athanor with the three of them, and the
-  # pair stays as it was.
-  def add(%{roster: "frozen"}, _target, _added_by), do: {:error, :frozen_roster}
-
-  def add(%{id: athanor_id, status: "active"} = athanor, [user_id: user_id], added_by)
-      when is_binary(user_id) do
-    opts = [
-      scope: "athanor",
-      athanor_id: athanor_id,
-      added_by: added_by,
-      reserve: fn -> member_cap(athanor_id) end
-    ]
-
-    # A membership names a person — by their own id, or by the key of a
-    # sign-in method linked to them. An id that names no one here, or a
-    # person the door has since denied, is refused.
-    with {:ok, %{status: "active", id: user_id}} <- find_person(user_id),
-         {:ok, _} <- ensure(user_id, opts) do
-      broadcast_change(user_id, athanor.id, :joined)
-      Sanctum.Notify.member_changed(athanor.id)
-      {:ok, :added}
-    else
-      {:ok, %{}} -> {:error, :unknown_user}
-      {:error, :not_found} -> {:error, :unknown_user}
-      other -> other
-    end
-  end
-
-  def add(%{id: _athanor_id, status: "active"} = athanor, [identifier: identifier], added_by)
-      when is_binary(identifier) do
-    with true <-
-           Prima.Identity.Encoding.identifier?(identifier) or {:error, :invalid_identifier} do
-      # A stranger's identifier and a denied person's are invited alike,
-      # and the caller learns only that the row is in place.
-      case Users.get_by_identifier(identifier) do
-        {:ok, %{status: "active", id: user_id}} -> add(athanor, [user_id: user_id], added_by)
-        {:ok, %{}} -> invite_identifier(athanor, identifier, added_by)
-        {:error, :not_found} -> invite_identifier(athanor, identifier, added_by)
-        {:error, _unanswered} -> {:error, :database_error}
-      end
-    end
-  end
-
-  # The registry is asked only once the athanor would take a seat, and
-  # nothing is written until it has answered.
-  def add(%{id: _athanor_id, status: "active"} = athanor, [handle: handle], added_by)
-      when is_binary(handle) do
-    with {:ok, identifier} <- Sanctum.Handle.identifier(handle),
-         do: add(athanor, [identifier: identifier], added_by)
-  end
-
-  def add(_athanor, _target, _added_by), do: {:error, :athanor_archived}
-
-  # The invitation an identifier holds, and the operator's request when
-  # the door would not admit it: only a request actually written puts
-  # someone at the door; an identifier that already has an entry (a
-  # standing deny, say) has its answer already.
-  defp invite_identifier(%{id: athanor_id}, identifier, added_by) do
-    with {:ok, _} <- invited_identifier(athanor_id, identifier, added_by) do
-      unless Door.identifier_admitted?(identifier) do
-        case Door.Store.request("identifier", identifier, added_by) do
-          {:ok, :created, _} -> Sanctum.Notify.allowlist_request(identifier)
-          _ -> :ok
-        end
-      end
-
-      Sanctum.Notify.member_changed(athanor_id)
-      {:ok, :invited}
-    end
-  end
-
-  defp invited_identifier(athanor_id, identifier, added_by) do
-    case Arca.Members.find_invited_identifier(in_athanor(athanor_id), identifier) do
-      {:ok, row} ->
-        {:ok, row}
-
-      {:error, :not_found} ->
-        create(
-          %{
-            person_identifier: identifier,
-            scope: "athanor",
-            status: "invited",
-            athanor_id: athanor_id,
-            added_by: added_by
-          },
-          reserve: fn -> member_cap(athanor_id) end
-        )
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  @doc """
-  The per-group member cap, as a seat's `reserve:` (`create/2`) counts
-  it: every seat the athanor has handed out, active members and the
-  `invited` rows identifiers hold, since such a row is a seat someone will
-  take. Run as
-  `Arca.Members.seat/3`'s `reserve:`, with the athanor's row locked, so two
-  seats cannot both take the last place. `add/3` passes it, and so does an
-  invitation's admission (`Sanctum.Newcomer`).
-  """
-  @spec member_cap(String.t()) :: :ok | {:error, term()}
-  def member_cap(athanor_id) do
-    Caps.check_counted(:max_members_per_group, fn ->
-      Arca.Members.count_seats(in_athanor(athanor_id))
-    end)
-  end
-
-  defp find_person(id) do
-    if Sanctum.Auth.Identity.key?(id), do: Users.get_by_identity(id), else: Users.get(id)
-  end
-
-  @doc """
-  Turn every `invited` row for the identifier of each `cyfr` identity the
-  person holds into their active membership.
-
-  An identifier invitation is claimed by the person whose `cyfr` identity
-  names it as its subject (`Sanctum.Auth.Identity.cyfr_identifier/1`):
-  the `cyfr` door wrote that identity only after verifying their
-  assertion under the identifier's current head, so holding it is proof
-  of the identifier.
-
-  One transaction per identifier (`Arca.Members.activate_invited_identifier/4`),
-  so two sign-ins of the same identity cannot both claim a row:
-  invitations for athanors where the person is already active are
-  dropped, the rest are activated with the identifier consumed. An
-  invitation already activated, or already withdrawn, is not there to
-  find and produces no second membership. Returns how many activated.
-  """
-  @spec activate_invited(Sanctum.Tenancy.Users.user()) ::
-          {:ok, non_neg_integer()} | {:error, :database_error | :not_owner}
-  def activate_invited(%{id: user_id}) when is_binary(user_id),
-    do: claimed(user_id, activate_by_identifier(user_id))
-
-  def activate_invited(_user), do: {:ok, 0}
-
-  defp activate_by_identifier(user_id) do
-    case Arca.Users.identities(server(), user_id) do
-      {:ok, identities} ->
-        identities
-        |> Enum.flat_map(&cyfr_identifiers/1)
-        |> Enum.uniq()
-        |> Enum.reduce_while({:ok, []}, fn identifier, {:ok, claimed} ->
-          case Arca.Members.activate_invited_identifier(
-                 server(),
-                 user_id,
-                 identifier,
-                 DateTime.utc_now()
-               ) do
-            {:ok, athanor_ids} -> {:cont, {:ok, claimed ++ athanor_ids}}
-            {:error, _} = err -> {:halt, err}
-          end
-        end)
-
-      {:error, _unanswered} ->
-        {:error, :database_error}
-    end
-  end
-
-  defp cyfr_identifiers(%{key: key}) do
-    case Sanctum.Auth.Identity.cyfr_identifier(key) do
-      {:ok, identifier} -> [identifier]
-      :error -> []
-    end
-  end
-
-  defp claimed(user_id, {:ok, athanor_ids}) do
-    for athanor_id <- athanor_ids do
-      broadcast_change(user_id, athanor_id, :joined)
-      Sanctum.Notify.member_changed(athanor_id)
-    end
-
-    {:ok, length(athanor_ids)}
-  end
-
-  defp claimed(_user_id, {:error, _} = err), do: err
-
-  @doc """
-  Drop every pending invitation for a person identifier — what a deny of
-  that identifier at the door owes the groups holding a seat for it.
-  Returns how many were withdrawn.
-  """
-  @spec withdraw_invites_for_identifier(String.t() | nil) :: non_neg_integer()
-  def withdraw_invites_for_identifier(identifier)
-      when is_binary(identifier) and identifier != "" do
-    # The deny's best-effort sweep: a withdrawal the store missed leaves
-    # invited rows, not seats, and only an admitted
-    # `cyfr` sign-in claims one, which the door now refuses.
-    case Arca.Members.withdraw_invites_for_identifier(server(), identifier) do
-      {:ok, athanor_ids} ->
-        for athanor_id <- athanor_ids, is_binary(athanor_id) do
-          Sanctum.Notify.member_changed(athanor_id)
-        end
-
-        length(athanor_ids)
-
-      {:error, _} ->
-        0
-    end
-  end
-
-  def withdraw_invites_for_identifier(_), do: 0
-
-  @doc """
-  Withdraw one invitation row, and answer the row that went. The row goes
-  only while it is still an invitation (`Arca.Members.withdraw_invitation/2`):
-  a first sign-in claims an invitation by turning its row into the seat
-  in place, so a row read as an invitation may be a seat by the time it
-  is withdrawn, and then the answer is `{:error, :not_found}` and the seat
-  stands. A person leaves an athanor only through `remove_member/2`.
-  """
-  @spec remove(membership()) :: {:ok, membership()} | {:error, term()}
-  def remove(%{id: id, athanor_id: athanor_id}) when is_binary(id) and is_binary(athanor_id),
-    do: Arca.Members.withdraw_invitation(in_athanor(athanor_id), id)
-
-  # A row naming no athanor is a platform grant, never an invitation.
-  def remove(%{id: id}) when is_binary(id), do: {:error, :not_found}
-
-  @doc """
-  Withdraw the pending invitation a person identifier holds in the
-  athanor, and nothing else: `{:error, :not_found}` when there is
-  none, including once a first sign-in has claimed it, even between this
-  lookup and the delete. A claimed invitation is a seat, and a seat is
-  removed only through `remove_member/2`.
-  """
-  @spec withdraw_invitation(
-          Sanctum.Tenancy.Athanors.athanor(),
-          identifier: String.t()
-        ) :: :ok | {:error, term()}
-  def withdraw_invitation(%{id: athanor_id}, identifier: identifier)
-      when is_binary(identifier) do
-    with {:ok, row} <- Arca.Members.find_invited_identifier(in_athanor(athanor_id), identifier) do
-      withdrawn(athanor_id, row)
-    end
-  end
-
-  defp withdrawn(athanor_id, row) do
-    with {:ok, _row} <- remove(row) do
-      Sanctum.Notify.member_changed(athanor_id)
-      :ok
-    end
-  end
-
-  @doc """
-  Remove a person from an athanor (or a pending invite by identifier). The last active member leaving a group archives it.
-  The owner of a person's athanor is that athanor's one member and is never
-  removed — deny at the door is the only way out of one's own furnace.
-
-  A person leaves through `Arca.SecurityTransitions.leave_athanor/3`: their
-  seat, their thread follows there, their sessions bound to the athanor
-  and the frame credentials, paired clients, device certificates and
-  pending pairing invitations they hold there go in one transaction, or
-  nothing does; a remote person it leaves with no membership here is
-  retired here with it. A follow left behind would resume the moment they
-  are re-added, so a returning member starts unfollowed like a new one.
-
-  `identifier:` withdraws the invitation that
-  identifier holds here, or, when it holds none (a claim that lands
-  between the lookup and the delete included), removes the person here
-  who holds the identifier, through the same transition.
-  """
-  @spec remove_member(
-          Sanctum.Tenancy.Athanors.athanor(),
-          [user_id: String.t()] | [identifier: String.t()]
-        ) ::
-          :ok | {:error, term()}
-  def remove_member(%{kind: "person"}, _target), do: {:error, :person_athanor}
-
-  def remove_member(%{id: athanor_id} = athanor, user_id: user_id) when is_binary(user_id) do
-    # A frozen athanor is archived BEFORE the leave, for the reason
-    # `end_if_frozen/1` gives; a leave that then fails is retried straight
-    # through, the archive being idempotent.
-    with {:ok, _row} <- find(user_id, "athanor", athanor_id),
-         :ok <- end_if_frozen(athanor),
-         {:ok, change} <-
-           Arca.SecurityTransitions.leave_athanor(in_athanor(athanor_id), user_id,
-             verify: &leavable/1
-           ) do
-      announce_left(user_id, athanor_id, change)
-      archive_when_empty(athanor)
-      :ok
-    else
-      {:error, :not_member} -> {:error, :not_found}
-      other -> other
-    end
-  end
-
-  def remove_member(%{id: _} = athanor, identifier: identifier) when is_binary(identifier) do
-    case withdraw_invitation(athanor, identifier: identifier) do
-      {:error, :not_found} ->
-        case Users.get_by_identifier(identifier) do
-          {:ok, %{id: user_id}} -> remove_member(athanor, user_id: user_id)
-          {:error, _} = err -> err
-        end
-
-      other ->
-        other
-    end
-  end
-
-  # Decided again with the athanor locked: a person's own athanor keeps
-  # its owner.
-  defp leavable(%{athanor: %{kind: "person"}}), do: {:error, :person_athanor}
-  defp leavable(_rows), do: :ok
-
-  # After the commit, from what it returned: the sessions it ended let go,
-  # the person's other contexts drop their memo so their next request
-  # revalidates, the shares a retirement revoked announce it, and the
-  # person and the roster are told.
-  defp announce_left(user_id, athanor_id, change) do
-    if change.revoked_session_hashes != [],
-      do: Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
-
-    Sanctum.Session.invalidate_memo_for_user(user_id)
-    Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
-    broadcast_change(user_id, athanor_id, :left)
-    Sanctum.Notify.member_changed(athanor_id)
-  end
-
-  @doc """
   Announce the rows a committed denial removed, from the data it
   returned (`Arca.SecurityTransitions.deny_user/3`): the person hears
-  they left every athanor they sat in, and every roster that lost a seat
-  or an invitation is told.
+  they left their athanor, and its roster is told.
   """
   @spec announce_removed(String.t(), map()) :: :ok
-  def announce_removed(user_id, %{removed_memberships: removed, withdrawn_invitations: withdrawn}) do
+  def announce_removed(user_id, %{removed_memberships: removed}) do
     for %{athanor_id: athanor_id} <- removed, is_binary(athanor_id) do
       broadcast_change(user_id, athanor_id, :left)
+      Sanctum.Notify.member_changed(athanor_id)
     end
 
-    (removed ++ withdrawn)
-    |> Enum.map(& &1.athanor_id)
-    |> Enum.filter(&is_binary/1)
-    |> Enum.uniq()
-    |> Enum.each(&Sanctum.Notify.member_changed/1)
+    :ok
   end
 
   @doc """
-  The members of an athanor — active and invited — as display rows, oldest
-  first: `%{user_id, email, person_identifier, display_name, namespace,
-  status, added_by, since}`.
-  Paged with `limit:` (default and ceiling `Arca.Members.max_page/0`) and
-  `offset:`; the member cap bounds the roster, the page bounds one read.
+  The members of an athanor as display rows, oldest first: `%{user_id,
+  email, display_name, namespace, status, added_by, since}`. Paged with
+  `limit:` (default and ceiling `Arca.Members.max_page/0`) and `offset:`.
   """
   @spec list_by_athanor(String.t(), keyword()) :: {:ok, [map()]} | {:error, :database_error}
   def list_by_athanor(athanor_id, opts \\ []) when is_binary(athanor_id),
@@ -559,80 +138,6 @@ defmodule Sanctum.Tenancy.Members do
   @doc "Every row of a person: platform and athanor, active only. Uncapped."
   @spec list_by_user(String.t()) :: {:ok, [membership()]} | {:error, :database_error}
   def list_by_user(user_id), do: Arca.Members.list_active_for_user(server(), user_id)
-
-  @doc """
-  How many active members an athanor has. Strict like `Athanors.count/0`:
-  a count that decides anything (auto-archive keys on zero) must refuse
-  when the store cannot answer, never read as empty.
-  """
-  @spec count_by_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
-  def count_by_athanor(athanor_id), do: Arca.Members.count_active(in_athanor(athanor_id))
-
-  @doc """
-  Whether two people currently sit together in at least one ACTIVE athanor.
-
-  The DM reachability rule: a pair can be minted only with someone already
-  in a room with you. This is what keeps `athanor.pair` from being a
-  directory — a user id you cannot see on any members list is a user id you
-  cannot pair with, and probing one answers exactly what probing an unknown
-  one does. No athanor is shared server-wide, so two people who belong to no
-  group together cannot reach each other at all; operators are no exception
-  and add each other to a group to talk.
-
-  Active memberships in active athanors only: an invitation is not a seat,
-  and an archived room is not a room. Fails toward "no", like `solo?/1` —
-  an unanswerable read must not open a door.
-  """
-  @spec shared_athanor?(String.t(), String.t()) :: boolean()
-  def shared_athanor?(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
-    do: match?({:ok, true}, Arca.Members.shared_athanor?(server(), user_a, user_b))
-
-  def shared_athanor?(_, _), do: false
-
-  @doc """
-  The people `user_id` sits with: everyone holding an active seat in an
-  active athanor where `user_id` holds one too, as `%{user_id,
-  display_name, email}`, each once and never `user_id` themself, ordered
-  by name. It is the list a person picks the recipient of a copy from;
-  `shared_athanor?/2` is the same rule asked of one pair, and the offer
-  asks it again. An invitation is not a seat and an archived athanor is
-  not a room. A read the store cannot answer is
-  `{:error, :database_error}`, never a shorter list.
-
-  One statement (`Arca.Members.people_sharing/2`) reads the person's
-  seats and the people seated beside them, so the list is one snapshot of
-  the rooms the person sits in as that statement reads them: a room they
-  have left lists no one, and nobody seated in it since is ever listed to
-  them.
-  """
-  @spec people_sharing(String.t()) ::
-          {:ok, [%{user_id: String.t(), display_name: String.t() | nil, email: String.t() | nil}]}
-          | {:error, :database_error}
-  def people_sharing(user_id) when is_binary(user_id) and user_id != "" do
-    case Arca.Members.people_sharing(server(), user_id) do
-      {:ok, people} ->
-        {:ok, Enum.sort_by(people, &{&1.display_name || &1.email || "", &1.user_id})}
-
-      {:error, _reason} ->
-        {:error, :database_error}
-    end
-  end
-
-  @doc """
-  Whether exactly one human is in this athanor.
-
-  Returns whether the athanor has a single human member. Used for implicit
-  agent addressing and speaker prefixes in turn tasks.
-
-  Active memberships only: an `invited` row is a seat nobody is sitting in.
-  Fails toward "several", so an unanswerable count costs an `@` rather than
-  starting turns nobody addressed.
-  """
-  @spec solo?(String.t() | nil) :: boolean()
-  def solo?(athanor_id) when is_binary(athanor_id),
-    do: match?({:ok, 1}, count_by_athanor(athanor_id))
-
-  def solo?(_), do: false
 
   @doc false
   def broadcast_change(user_id, athanor_id, change) when is_binary(user_id),
@@ -650,42 +155,6 @@ defmodule Sanctum.Tenancy.Members do
   # athanor's own roster runs as. A nil athanor is refused by the facade
   # before any query.
   defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
-
-  # A frozen athanor ends when ANYONE leaves, not when the last person does.
-  # Waiting for empty would leave a one-member pair standing: a second You
-  # that the person who stayed can still open, whose `pair_key` still
-  # hashes both ids — so the two could never be paired again, because the
-  # husk holds the key. Ending it releases the key; clicking the name later
-  # mints a new tape rather than reopening this one.
-  #
-  # Archived BEFORE the leave, and the result is the leave's to report:
-  # with the row already gone, a failed archive could never be retried
-  # (`find/3` answers :not_found), and the husk's `pair_key` would block
-  # those two pairing forever. `Athanors.archive/2` re-reads and is
-  # idempotent on an archived row, so both failure orders self-heal — a
-  # failed archive leaves everything as it was, and a failed leave after
-  # it retries straight through.
-  defp end_if_frozen(%{kind: "group", roster: "frozen"} = athanor) do
-    with {:ok, _} <- Athanors.archive(athanor, reason: :empty), do: :ok
-  end
-
-  defp end_if_frozen(_athanor), do: :ok
-
-  defp archive_when_empty(%{id: id, kind: "group"} = athanor) do
-    # Only a verified zero archives. A store failure aborts: archiving is
-    # terminal for a group (an :empty archive releases the slug and cannot
-    # be undone), so a transient read error must never read as "empty".
-    with {:ok, 0} <- count_by_athanor(id),
-         {:ok, current} <- Athanors.get(id) do
-      Athanors.archive(current, reason: :empty)
-    else
-      _ -> {:ok, athanor}
-    end
-
-    :ok
-  end
-
-  defp archive_when_empty(_), do: :ok
 
   defp find(user_id, "platform", _athanor_id),
     do: Arca.Members.find_platform(server(), user_id)

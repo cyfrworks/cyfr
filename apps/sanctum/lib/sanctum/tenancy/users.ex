@@ -13,8 +13,9 @@ defmodule Sanctum.Tenancy.Users do
   never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
   person loses their sessions and API keys, their own athanor is archived
-  (nothing deleted), their group rows are removed and the invitations their
-  identifier was still holding are withdrawn; allowing them again reopens the
+  (nothing deleted), their seats in shared threads are removed and the
+  invitations their identifier was still holding there are withdrawn;
+  allowing them again reopens the
   door and the athanor, re-seats them in it, and leaves the revoked
   credentials revoked.
 
@@ -122,8 +123,8 @@ defmodule Sanctum.Tenancy.Users do
 
   Here rather than beside a caller because it is a fact about the `users`
   row, read by domains that must not depend on each other: the agent
-  harness prefixing a group turn's lines, tenancy naming a pair athanor
-  after the two people in it, and the console naming people.
+  harness prefixing a turn's lines by who said them, a pair named after
+  the other person, and the console naming people.
   """
   @spec display_name(String.t() | nil) :: String.t()
   def display_name(nil), do: "someone"
@@ -135,27 +136,6 @@ defmodule Sanctum.Tenancy.Users do
       _ -> user_id
     end
   end
-
-  @doc """
-  Whether this athanor is somebody's personal furnace.
-
-  `Athanors.destroy/1` refuses one. `personal_athanor_id` is not an
-  athanor-scoped column, so erasure would leave it naming a tombstone:
-  the unique index would block minting a replacement, and
-  `allow/1` would try to reopen a wiped shell.
-
-  Fail-CLOSED on an unanswerable read — the default is `true`, so a
-  database fault refuses an irreversible delete rather than permitting it.
-  """
-  @spec personal_athanor?(String.t()) :: boolean()
-  def personal_athanor?(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    case Arca.Users.personal_athanor?(server(), athanor_id) do
-      {:ok, personal?} -> personal?
-      {:error, _} -> true
-    end
-  end
-
-  def personal_athanor?(_), do: true
 
   @doc """
   The person's own athanor — `{:ok, id}` once one has been minted, else
@@ -271,10 +251,8 @@ defmodule Sanctum.Tenancy.Users do
   @doc """
   Eject a person from this server, as one transaction
   (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
-  session and API key they created, archive their own athanor, every
-  frozen athanor they sit in and every group they leave empty (revoking
-  those athanors' keys), remove their memberships, the invitations
-  their identifier still holds and their thread follows, and remove their
+  session and API key they created, archive their own athanor (revoking
+  its keys), remove their memberships, and remove their
   seats and invitations in shared threads, archiving every pair they sit
   in and every shared thread they leave empty. Either all of it
   commits or none of it does, and a failure is answered, never reported
@@ -282,8 +260,8 @@ defmodule Sanctum.Tenancy.Users do
   caller (`Sanctum.Door.Store.deny/4`).
 
   After the commit, and only from what it returned: the removed sessions'
-  established contexts are dropped and their revocation announced, every
-  archived athanor's members lose their cached contexts and the athanor's
+  established contexts are dropped and their revocation announced, the
+  archived athanor's cached contexts are dropped and its
   archival is announced, every share the denial revoked announces it, and
   every roster the denial changed is told. Denying a person already
   denied re-runs the retirement and checks it.
@@ -312,9 +290,9 @@ defmodule Sanctum.Tenancy.Users do
   (`Arca.SecurityTransitions.allow_user/3`): the person may sign in again,
   their own athanor is reopened — subject to the server's athanor cap,
   whose refusal leaves them denied — and they are seated in it again.
-  Revoked sessions and keys stay revoked, and the group seats and
-  invitations the deny removed are not restored — eject is permanent for
-  groups; a member adds them again. A context read before the deny
+  Revoked sessions and keys stay revoked, and the shared-thread seats and
+  invitations the deny removed are not restored — a thread's people add
+  them again. A context read before the deny
   cannot issue a credential after this: the person's generation moved
   twice.
   """

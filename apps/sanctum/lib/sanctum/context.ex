@@ -831,19 +831,17 @@ defmodule Sanctum.Context do
 
   @doc """
   Focus the context on an athanor: the one narrowing entry every LiveView
-  mount and `session.use` run through.
+  mount runs through.
 
-  A member of the athanor may focus it, and no one else. Anyone without a
+  The athanor's person may focus it, and no one else. Anyone without a
   current seat there is answered `{:error, :not_found}`, whether the
   athanor is open, archived or does not exist: the refusal is the same for
   all three, so an outsider learns nothing of which athanors exist or
   what became of them. A platform admin holding no seat is answered so
   like anyone else, since the capability is over the instance and is not a
-  seat; what an operator does to an athanor they are not in is a
-  platform-scope operation that focuses nothing (`Sanctum.Providers.Athanor`'s
-  purge and destroy). An archived athanor cannot be focused by anyone, and
-  only a seated member is told that it is archived (`:archived`): the seat
-  is read before the standing.
+  seat. An archived athanor cannot be focused by anyone, and only its
+  seated person is told that it is archived (`:archived`): the seat is
+  read before the standing.
 
   The athanor is named by its id, or by a map carrying it (`:id`), and
   only the id is read: its row, its standing and the seat are read again

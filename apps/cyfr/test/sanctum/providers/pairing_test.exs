@@ -30,7 +30,6 @@ defmodule Sanctum.Providers.PairingTest do
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -39,7 +38,7 @@ defmodule Sanctum.Providers.PairingTest do
     seated!()
   end
 
-  # A person seated in a group of their own, and the context their session
+  # A person seated in their own athanor, and the context their session
   # establishes there.
   defp seated! do
     n = System.unique_integer([:positive])
@@ -52,7 +51,7 @@ defmodule Sanctum.Providers.PairingTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Pairing tool #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

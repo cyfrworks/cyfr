@@ -465,7 +465,11 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
       # Their own athanor is minted with them, as every person's is.
       assert {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user.id)
-      assert {:ok, %{id: ^athanor_id, kind: "person"}} = Sanctum.Tenancy.Athanors.get(athanor_id)
+
+      assert {:ok, %{id: ^athanor_id, owner_user_id: owner}} =
+               Sanctum.Tenancy.Athanors.get(athanor_id)
+
+      assert owner == user.id
 
       # The session, bound to their athanor, records the fresh head's
       # key_epoch, with its receipt.

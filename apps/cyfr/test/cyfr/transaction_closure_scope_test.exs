@@ -7,13 +7,13 @@ defmodule Cyfr.TransactionClosureScopeTest do
   (`ARCHITECTURE.md` §4.4).
 
   The higher owner's part of a two-owner write enters Arca's transaction as
-  a `verify:`, `also:` or `reserve:` closure, and runs with Arca's locks
+  a `verify:` or `also:` closure, and runs with Arca's locks
   held. A network call there holds those locks for as long as a remote
   answers, and a broadcast there announces a write the transaction may
   still roll back: broadcast follows the commit, by the caller.
 
   The scan parses every `lib` source of every umbrella application and
-  finds each `verify:`, `also:` or `reserve:` whose value is a closure it
+  finds each `verify:` or `also:` whose value is a closure it
   can read:
 
     * an `fn`, read where it is written;
@@ -48,7 +48,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
   The scan reads code, not text: a comment, a documentation string or a
   string literal that names a refused call is no call.
 
-  Those three names are every closure an Arca function takes, and that is
+  Those two names are every closure an Arca function takes, and that is
   derived from Arca's code rather than assumed: every option an Arca
   function reads out of its keyword list and treats as a function —
   defaults to an `fn`, applies (`also.(row)`), checks with `is_function/2`,
@@ -70,7 +70,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
   alias Prima.Test.SourceTree
 
-  @keys [:verify, :also, :reserve]
+  @keys [:verify, :also]
 
   # The closures an Arca function takes that run with no transaction open,
   # by the function that applies them. Exact: an entry the derivation no
@@ -635,11 +635,11 @@ defmodule Cyfr.TransactionClosureScopeTest do
   end
 
   describe "every closure an Arca function takes" do
-    test "is verify:, also: or reserve:, or applied with no transaction open" do
+    test "is verify: or also:, or applied with no transaction open" do
       derived = arca_closure_options(arca_tree())
 
       # The derivation reads code before its answer is believed: each of
-      # the three is taken somewhere, and a reader that found none of them
+      # the two is taken somewhere, and a reader that found none of them
       # would pass by finding nothing.
       for key <- @keys,
           do:
@@ -661,7 +661,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
       #{Enum.map_join(Enum.sort(named -- Map.keys(@not_in_transaction)), "\n", &"  taken: #{inspect(&1)}")}
       #{Enum.map_join(Enum.sort(Map.keys(@not_in_transaction) -- named), "\n", &"  stale: #{inspect(&1)}")}
 
-      A closure an Arca transaction runs is verify:, also: or reserve:
+      A closure an Arca transaction runs is verify: or also:
       (`ARCHITECTURE.md` §4.4).
       """
     end
@@ -936,7 +936,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
         def write(actor, row) do
           Arca.Users.mint(actor, row, verify: &check/1)
-          Arca.Members.seat(actor, row, reserve: &reserve(actor, &1))
+          Arca.Members.seat(actor, row, also: &reserve(actor, &1))
           Arca.Users.link_identity(actor, row, also: fn row -> announce(row) end)
         end
 
@@ -950,7 +950,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
       assert [
                {"planted.ex", 6, :verify,
                 "calls Sanctum.Egress.pinned_request (Planted, line 11)"},
-               {"planted.ex", 7, :reserve, "calls Sanctum.Notify.broadcast (Planted, line 12)"},
+               {"planted.ex", 7, :also, "calls Sanctum.Notify.broadcast (Planted, line 12)"},
                {"planted.ex", 8, :also, "calls Cyfr.Bus.broadcast_global (Planted, line 14)"}
              ] = scan([{"planted.ex", source}]).refused
     end
@@ -1129,7 +1129,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
         def write(actor, row) do
           Arca.Users.mint(actor, row, also: fn row -> start(fn -> row end) end)
           Arca.Users.mint(actor, row, verify: &connect(&1, 443, []))
-          Arca.Users.mint(actor, row, reserve: fn -> map([row], & &1) && send(row, "row") end)
+          Arca.Users.mint(actor, row, also: fn -> map([row], & &1) && send(row, "row") end)
           Arca.Users.mint(actor, row, also: &start/1)
         end
 
@@ -1299,8 +1299,8 @@ defmodule Cyfr.TransactionClosureScopeTest do
           verify = if row.strict, do: fn _row -> Req.get!(row.url) end, else: verify
           Arca.Users.mint(actor, row, verify: verify)
 
-          {:ok, reserve} = {:ok, fn -> Task.start(fn -> row end) end}
-          Arca.Users.mint(actor, row, reserve: reserve)
+          {:ok, late} = {:ok, fn -> Task.start(fn -> row end) end}
+          Arca.Users.mint(actor, row, also: late)
         end
       end
       """

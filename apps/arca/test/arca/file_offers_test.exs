@@ -198,11 +198,20 @@ defmodule Arca.FileOffersTest do
     sender = person("usr_fo_s#{n}", home!("s", n).id)
     recipient = person("usr_fo_r#{n}", home!("r", n).id)
     stranger = person("usr_fo_x#{n}", home!("x", n).id)
-    group = group!(n)
 
-    for who <- [sender, recipient] do
-      {:ok, _} = Arca.Members.seat(seat_actor(group), %{user_id: who.user_id, added_by: "test"})
-    end
+    {:ok, thread} =
+      Arca.SharedThreads.create(Prima.Actor.system(), %{
+        title: "Offers #{n}",
+        created_by: sender.user_id
+      })
+
+    {:ok, _} =
+      Arca.SharedThreadMembers.seat(
+        Prima.Actor.system(),
+        thread.id,
+        recipient.user_id,
+        sender.user_id
+      )
 
     test_pid = self()
     handler = "file-offers-#{n}"
@@ -374,13 +383,10 @@ defmodule Arca.FileOffersTest do
     test "an offer from an athanor archived since, or from one with no row, is refused under " <>
            "the lock, and nothing of it stands",
          %{sender: sender, recipient: recipient} do
-      # The two still share the group; the sender's own athanor is gone.
+      # The two still share the thread; the sender's own athanor is gone.
       source!(sender, "a.txt", "x")
 
-      assert {:ok, _} =
-               Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), sender.athanor_id,
-                 verify: fn _rows -> :ok end
-               )
+      Arca.Test.Actor.archive!(sender.athanor_id)
 
       assert {:error, :athanor_archived} =
                FileOffers.offer(sender, recipient.user_id, ["data/docs/a.txt"])
@@ -714,7 +720,7 @@ defmodule Arca.FileOffersTest do
       offer_id = offered!(sender, recipient, "file.txt", bytes(9))
       receipt = stalled_accept!(recipient, offer_id, "data/inbox")
 
-      {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
+      {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
       :ok = Arca.delete_tree(sender, [])
 
       assert {:ok, %{status: "completed"}} = FileOffers.complete(recipient, receipt.id)
@@ -1351,27 +1357,13 @@ defmodule Arca.FileOffersTest do
   defp person(user_id, athanor_id),
     do: %Prima.Actor{athanor_id: athanor_id, user_id: user_id, authenticated: true}
 
-  defp seat_actor(group), do: %{Prima.Actor.system() | athanor_id: group.id, scope: :athanor}
-
-  defp group!(n) do
-    {:ok, athanor} =
-      Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
-        name: "Offers #{n}",
-        slug: "offers-#{n}",
-        created_by: "system"
-      })
-
-    athanor
-  end
-
   # A person's own athanor, the one their offers are made from.
   defp home!(tag, n) do
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
         name: "Home #{tag} #{n}",
         slug: "offers-home-#{tag}-#{n}",
+        owner_user_id: "usr_fo_#{tag}#{n}",
         created_by: "system"
       })
 
@@ -1541,30 +1533,38 @@ defmodule Arca.FileOffersRaceTest do
 
     n = System.unique_integer([:positive])
 
-    {group, sender, recipient} =
+    {thread, sender, recipient} =
       unboxed(fn ->
-        [group, sender_home, recipient_home] =
-          for tag <- ~w(race s r) do
+        [sender, recipient] =
+          for tag <- ~w(s r) do
+            user_id = "usr_for_#{tag}#{n}"
+
             {:ok, athanor} =
               Arca.Athanors.insert(Prima.Actor.system(), %{
-                kind: "group",
                 name: "Race #{tag} #{n}",
                 slug: "offers-race-#{tag}-#{n}",
+                owner_user_id: user_id,
                 created_by: "system"
               })
 
-            athanor
+            %Prima.Actor{athanor_id: athanor.id, user_id: user_id}
           end
 
-        sender = %Prima.Actor{athanor_id: sender_home.id, user_id: "usr_for_s#{n}"}
-        recipient = %Prima.Actor{athanor_id: recipient_home.id, user_id: "usr_for_r#{n}"}
-        seat = %{Prima.Actor.system() | athanor_id: group.id, scope: :athanor}
+        {:ok, thread} =
+          Arca.SharedThreads.create(Prima.Actor.system(), %{
+            title: "Race #{n}",
+            created_by: sender.user_id
+          })
 
-        for who <- [sender, recipient] do
-          {:ok, _} = Arca.Members.seat(seat, %{user_id: who.user_id, added_by: "test"})
-        end
+        {:ok, _} =
+          Arca.SharedThreadMembers.seat(
+            Prima.Actor.system(),
+            thread.id,
+            recipient.user_id,
+            sender.user_id
+          )
 
-        {group, sender, recipient}
+        {thread, sender, recipient}
       end)
 
     on_exit(fn ->
@@ -1575,13 +1575,21 @@ defmodule Arca.FileOffersRaceTest do
         else: Application.delete_env(:arca, :storage_adapter)
 
       unboxed(fn ->
-        ids = [sender.athanor_id, recipient.athanor_id, group.id]
+        ids = [sender.athanor_id, recipient.athanor_id]
 
         for id <- ids do
-          {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
+          {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
         end
 
         Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id in ^ids))
+
+        Arca.Repo.delete_all(
+          Ecto.Query.from(m in Arca.Schemas.SharedThreadMember, where: m.thread_id == ^thread.id)
+        )
+
+        Arca.Repo.delete_all(
+          Ecto.Query.from(t in Arca.Schemas.SharedThread, where: t.id == ^thread.id)
+        )
       end)
 
       for who <- [sender, recipient] do
@@ -1682,9 +1690,9 @@ defmodule Arca.FileOffersSharedThreadRaceTest do
       unboxed(fn ->
         {:ok, home} =
           Arca.Athanors.insert(server, %{
-            kind: "group",
             name: "Thread race #{n}",
             slug: "offers-thread-race-#{n}",
+            owner_user_id: "usr_fot_s#{n}",
             created_by: "system"
           })
 
@@ -1702,7 +1710,8 @@ defmodule Arca.FileOffersSharedThreadRaceTest do
       Store.reset()
 
       unboxed(fn ->
-        {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
+        {:ok, _} =
+          Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(sender.athanor_id))
 
         Arca.Repo.delete_all(
           Ecto.Query.from(m in SharedThreadMember, where: m.thread_id == ^thread.id)
@@ -1806,28 +1815,44 @@ defmodule Arca.FileOffersLockOrderTest do
 
     n = System.unique_integer([:positive])
 
-    {group, sender, recipient} =
+    {home, recipient_home, thread, sender, recipient} =
       unboxed(fn ->
         sender = person!(n, "s")
         recipient = person!(n, "r")
 
-        {:ok, group} =
-          Arca.Athanors.insert(Prima.Actor.system(), %{
-            kind: "group",
-            name: "Lock order #{n}",
-            slug: "offers-lock-#{n}",
-            created_by: "system"
+        [home, recipient_home] =
+          for {who, tag} <- [{sender, "s"}, {recipient, "r"}] do
+            {:ok, athanor} =
+              Arca.Athanors.insert(Prima.Actor.system(), %{
+                name: "Lock order #{tag} #{n}",
+                slug: "offers-lock-#{tag}-#{n}",
+                owner_user_id: who.id,
+                created_by: "system"
+              })
+
+            {:ok, _} =
+              Arca.Members.seat(Prima.Actor.in_athanor(athanor.id), %{
+                user_id: who.id,
+                added_by: "test"
+              })
+
+            athanor
+          end
+
+        {:ok, thread} =
+          Arca.SharedThreads.create(Prima.Actor.system(), %{
+            title: "Lock order #{n}",
+            created_by: sender.id
           })
 
-        for who <- [sender, recipient] do
-          {:ok, _} =
-            Arca.Members.seat(Prima.Actor.in_athanor(group.id), %{
-              user_id: who.id,
-              added_by: "test"
-            })
-        end
+        {:ok, _} =
+          Arca.SharedThreadMembers.seat(Prima.Actor.system(), thread.id, recipient.id, sender.id)
 
-        {group, sender, recipient}
+        # The sender's athanor is their own: their denial archives it.
+        {:ok, _} =
+          Arca.Users.update(Prima.Actor.system(), sender.id, %{personal_athanor_id: home.id})
+
+        {home, recipient_home, thread, sender, recipient}
       end)
 
     on_exit(fn ->
@@ -1842,8 +1867,21 @@ defmodule Arca.FileOffersLockOrderTest do
         else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
 
       unboxed(fn ->
-        {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(group.id))
-        Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id == ^group.id))
+        ids = [home.id, recipient_home.id]
+
+        for id <- ids do
+          {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
+        end
+
+        Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id in ^ids))
+
+        Arca.Repo.delete_all(
+          Ecto.Query.from(m in Arca.Schemas.SharedThreadMember, where: m.thread_id == ^thread.id)
+        )
+
+        Arca.Repo.delete_all(
+          Ecto.Query.from(t in Arca.Schemas.SharedThread, where: t.id == ^thread.id)
+        )
 
         for who <- [sender, recipient] do
           Arca.Repo.delete_all(
@@ -1854,13 +1892,14 @@ defmodule Arca.FileOffersLockOrderTest do
         end
       end)
 
-      File.rm_rf(Arca.Adapters.Local.build_path(Prima.Actor.in_athanor(group.id), []))
+      for id <- [home.id, recipient_home.id],
+          do: File.rm_rf(Arca.Adapters.Local.build_path(Prima.Actor.in_athanor(id), []))
     end)
 
     {:ok,
-     group: group,
-     sender: %Prima.Actor{athanor_id: group.id, user_id: sender.id},
-     recipient: %Prima.Actor{athanor_id: group.id, user_id: recipient.id},
+     home: home,
+     sender: %Prima.Actor{athanor_id: home.id, user_id: sender.id},
+     recipient: %Prima.Actor{athanor_id: recipient_home.id, user_id: recipient.id},
      recipient_id: recipient.id}
   end
 
@@ -1946,16 +1985,16 @@ defmodule Arca.FileOffersLockOrderTest do
 
   test "a decline racing the purge of the archived athanor that sent the offer is refused in " <>
          "words, and neither is aborted",
-       %{group: group, sender: sender, recipient_id: recipient_id} do
+       %{home: home, sender: sender, recipient_id: recipient_id} do
     offer_id = small_offer!(sender, recipient_id, ~w(c b a), "purged")
-    assert {:ok, %{ended_offer_ids: [^offer_id]}} = archive!(group.id)
+    assert {:ok, %{ended_offer_ids: [^offer_id]}} = unboxed(fn -> deny!(sender.user_id) end)
     decline = fn -> FileOffers.decline(%Prima.Actor{user_id: recipient_id}, offer_id) end
-    purge = fn -> purge!(group.id) end
+    purge = fn -> purge!(home.id) end
 
     {declined, purged} =
       if postgres?() do
         # The purge waits on a held row of the offer; the decline either
-        # waits beside it or, the archive having ended the offer, does not.
+        # waits beside it or, the denial having ended the offer, does not.
         holder = hold!(offer_id, "b.txt")
         purge_task = backend_task(:purge, purge)
         await_lock!(:purge, [~s(DELETE FROM "file_offers")])
@@ -2000,17 +2039,17 @@ defmodule Arca.FileOffersLockOrderTest do
     assert Enum.uniq(statuses(held, sender)) == ["expired"]
   end
 
-  test "a deny racing the purge of an archived group whose one-file offer the archive ended: " <>
-         "neither is aborted",
-       %{group: group, sender: sender, recipient_id: recipient_id} do
+  test "a deny racing the purge of the archived athanor whose one-file offer its person's " <>
+         "denial ended: neither is aborted",
+       %{home: home, sender: sender, recipient_id: recipient_id} do
     # One row: there is no order among the offer's rows to get wrong. The
-    # deny holds the person's seat in the group before it takes offers,
-    # and the purge erases offers before seats, so a deny that waited on
-    # the offer the purge holds would hold the seat the purge waits on.
+    # deny takes the recipient's offers, and the purge erases the sender's
+    # athanor's offers before its seats; neither waits on the other across
+    # a lock the other holds.
     offer_id = small_offer!(sender, recipient_id, ~w(x), "one")
-    assert {:ok, %{ended_offer_ids: [^offer_id]}} = archive!(group.id)
+    assert {:ok, %{ended_offer_ids: [^offer_id]}} = unboxed(fn -> deny!(sender.user_id) end)
     deny = fn -> deny!(recipient_id) end
-    purge = fn -> purge!(group.id) end
+    purge = fn -> purge!(home.id) end
 
     {denied, purged} =
       if postgres?() do
@@ -2226,16 +2265,8 @@ defmodule Arca.FileOffersLockOrderTest do
     Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user_id, verify: fn _rows -> :ok end)
   end
 
-  defp archive!(athanor_id) do
-    unboxed(fn ->
-      Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id,
-        verify: fn _rows -> :ok end
-      )
-    end)
-  end
-
   defp purge!(athanor_id),
-    do: Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
+    do: Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
 
   defp offered_to(recipient_id) do
     unboxed(fn ->

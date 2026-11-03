@@ -40,10 +40,9 @@ defmodule Sanctum.Tenancy do
   re-querying every request is wasteful). The sign-in paths, which mint a
   session for a Context that has just been admitted, pass `force: true`.
 
-  The athanor chosen is, in order: the one the context already names when a
-  membership still grants it, the person's own athanor, and the first
-  athanor a membership grants. A person with none of those has no working
-  athanor, operator or not.
+  The working athanor is the person's own, while it is active; a person
+  whose athanor is archived, or who has none, has no working athanor,
+  operator or not.
 
   A membership read that FAILED is `{:error, :unavailable}`, distinct from
   a person who genuinely belongs to no athanor (`{:ok, ctx}` with no
@@ -73,14 +72,13 @@ defmodule Sanctum.Tenancy do
   def resolve_status(%Context{} = ctx, _opts), do: do_resolve(ctx)
 
   @doc """
-  The athanors the context may work in — the rows behind the caller's own
-  active memberships, and their own athanor. A platform admin sees their
-  own memberships like anyone else, and works in no other athanor.
+  The athanors the context may work in — the person's own, while it is
+  active. A platform admin works in their own like anyone else, and in no
+  other athanor.
 
   A context an API key stands behind (`Sanctum.Context.key_bound?/1`) works
   in the athanor the key was minted in alone, so its list is that athanor
-  while it is active, and its creator's seats name nothing here. Like the
-  roster, an outage lists fewer athanors, never more.
+  while it is active. An outage lists fewer athanors, never more.
   """
   @spec list_athanors(Context.t()) :: [Sanctum.Tenancy.Athanors.athanor()]
   def list_athanors(%Context{} = ctx) do
@@ -137,7 +135,7 @@ defmodule Sanctum.Tenancy do
   defp resolve_from_memberships(%Context{user_id: user_id} = ctx) do
     with {:ok, user} <- user_row(user_id),
          {:ok, memberships} <- Members.list_by_user(user_id) do
-      {ctx, athanor} = apply_membership(ctx, memberships, user)
+      {ctx, athanor} = apply_membership(ctx, memberships)
       {:ok, bind(ctx, user, athanor, memberships)}
     else
       {:error, reason} ->
@@ -147,7 +145,7 @@ defmodule Sanctum.Tenancy do
   end
 
   # A person unknown to the users table (a context minted by a test stub or
-  # a caller that never came through the door) resolves from memberships alone.
+  # a caller that never came through the door) resolves with no binding.
   defp user_row(user_id) do
     case Users.get(user_id) do
       {:ok, user} -> {:ok, user}
@@ -158,8 +156,8 @@ defmodule Sanctum.Tenancy do
 
   # Set capability and athanor from an already-loaded membership list;
   # answers the context and the chosen athanor's row.
-  defp apply_membership(%Context{} = ctx, memberships, user) do
-    athanor = working_athanor(ctx, memberships, user)
+  defp apply_membership(%Context{} = ctx, memberships) do
+    athanor = working_athanor(ctx)
 
     {%{
        ctx
@@ -272,42 +270,17 @@ defmodule Sanctum.Tenancy do
   defp snapshot_row({:error, :not_found}), do: {:error, :not_found}
   defp snapshot_row({:error, _reason}), do: {:error, :unavailable}
 
-  # The candidates in order of preference, then one read for their rows so
-  # an archived athanor is skipped: the athanor the context already names
-  # (when a membership still grants it), the person's own, and the first a
-  # membership grants. The capability keeps no athanor: an operator whose
-  # session names one they hold no seat in falls back like anyone else.
-  defp working_athanor(%Context{} = ctx, memberships, user) do
-    named? = is_binary(ctx.athanor_id) and ctx.athanor_id != ""
-
-    current =
-      if named? and membership_grants?(memberships, ctx.athanor_id),
-        do: [ctx.athanor_id],
-        else: []
-
-    personal =
-      case user do
-        %{personal_athanor_id: id} when is_binary(id) -> [id]
-        _ -> []
-      end
-
-    granted =
-      for %{scope: "athanor", status: "active", athanor_id: id} <- memberships,
-          is_binary(id),
-          do: id
-
-    candidates = Enum.uniq(current ++ personal ++ granted)
-    active = candidates |> Athanors.list_by_ids() |> Enum.filter(&(&1.status == "active"))
-
-    Enum.find_value(candidates, fn id -> Enum.find(active, &(&1.id == id)) end)
+  # The person's own athanor, by its owner, while it is active; otherwise
+  # none. The capability keeps no athanor. An unanswerable read is none:
+  # entering an athanor still resolves its seat strictly.
+  defp working_athanor(%Context{user_id: user_id}) when is_binary(user_id) do
+    case Athanors.get_by_owner(user_id) do
+      {:ok, %{status: "active"} = athanor} -> athanor
+      _archived_absent_or_unreadable -> nil
+    end
   end
 
-  defp membership_grants?(memberships, athanor_id) do
-    Enum.any?(memberships, fn
-      %{scope: "athanor", status: "active", athanor_id: id} -> id == athanor_id
-      _ -> false
-    end)
-  end
+  defp working_athanor(%Context{}), do: nil
 
   @doc """
   Re-validate a *restored* session context against the user's CURRENT
@@ -317,11 +290,11 @@ defmodule Sanctum.Tenancy do
   re-resolve, but a change after the session was created MUST take effect
   immediately: a denied user is dropped to unauthenticated, a revoked
   platform membership loses the capability, and a session pointing at an
-  athanor the user no longer belongs to (or that was archived) is moved to
-  their own athanor, else the first current membership — a platform admin
-  included, whose capability keeps no athanor. A user with no memberships
-  and no own athanor is dropped to an athanor-less context (the tenant
-  gate then rejects tenant-scoped routes).
+  athanor that is not the user's own active one is moved to their own —
+  a platform admin included, whose capability keeps no athanor. A user
+  whose own athanor is archived, or who has none, is dropped to an
+  athanor-less context (the tenant gate then rejects tenant-scoped
+  routes).
 
   A context an API key stands behind (`Sanctum.Context.key_bound?/1`)
   keeps the athanor the key was minted in, as `Sanctum.Context.focus/2`
@@ -344,8 +317,8 @@ defmodule Sanctum.Tenancy do
       {:ok, %{status: "denied"}} ->
         {:ok, %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}}
 
-      {:ok, user} ->
-        if Context.key_bound?(ctx), do: revalidate_key(ctx), else: revalidate_seats(ctx, user)
+      {:ok, _user} ->
+        if Context.key_bound?(ctx), do: revalidate_key(ctx), else: revalidate_seats(ctx)
 
       {:error, reason} ->
         unavailable("user", user_id, reason)
@@ -354,9 +327,9 @@ defmodule Sanctum.Tenancy do
 
   def revalidate(%Context{} = ctx), do: {:ok, ctx}
 
-  defp revalidate_seats(%Context{user_id: user_id} = ctx, user) do
+  defp revalidate_seats(%Context{user_id: user_id} = ctx) do
     case Members.list_by_user(user_id) do
-      {:ok, memberships} -> {:ok, ctx |> apply_membership(memberships, user) |> elem(0)}
+      {:ok, memberships} -> {:ok, ctx |> apply_membership(memberships) |> elem(0)}
       {:error, reason} -> unavailable("memberships", user_id, reason)
     end
   end
@@ -465,8 +438,7 @@ defmodule Sanctum.Tenancy do
   still act: its athanor is active and its creator has not been denied on
   this server.
 
-  Channels are athanor-owned: a creator who merely leaves the group leaves
-  the channel running for the members who remain. `created_by` is nil or
+  Channels are athanor-owned. `created_by` is nil or
   one of the server's synthetic principals (`system`, `_seed`,
   `webhook:<slug>`) for a channel nobody signed in to create — those are
   never denied. Any other id is read as a person's row: a denied

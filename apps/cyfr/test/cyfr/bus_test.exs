@@ -11,7 +11,7 @@ defmodule Cyfr.BusTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Bus
-  alias Cyfr.Bus.{Execution, Notify, Ping, Progress, RoomInView, Session, Viewing}
+  alias Cyfr.Bus.{Execution, Notify, Ping, Progress, RoomInView, Session}
 
   defp actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
 
@@ -172,18 +172,13 @@ defmodule Cyfr.BusTest do
 
   describe "the page topics" do
     test "stay on this node and carry their own structs" do
-      topic = Bus.page_viewing(self())
-      assert :ok = Bus.subscribe_page(topic)
-      assert :ok = Bus.broadcast_page(topic, Viewing.new("ath_1"))
-      assert_receive %Viewing{athanor_id: "ath_1"}
-
-      assert_raise ArgumentError, fn -> Bus.broadcast_page(topic, RoomInView.new(nil)) end
-      assert_raise ArgumentError, fn -> Bus.subscribe_page(Bus.sessions()) end
-
       room = Bus.room_feed("phx-1")
-      :ok = Bus.subscribe_page(room)
-      :ok = Bus.broadcast_page(room, RoomInView.new(%{"thread_id" => "t"}))
+      assert :ok = Bus.subscribe_page(room)
+      assert :ok = Bus.broadcast_page(room, RoomInView.new(%{"thread_id" => "t"}))
       assert_receive %RoomInView{room: %{"thread_id" => "t"}}
+
+      assert_raise ArgumentError, fn -> Bus.broadcast_page(room, Ping.new(room)) end
+      assert_raise ArgumentError, fn -> Bus.subscribe_page(Bus.sessions()) end
     end
   end
 
@@ -356,11 +351,11 @@ defmodule Cyfr.BusTest do
     end
 
     test "of a page payload raises, and publishes once after the commit" do
-      topic = Bus.page_viewing(self())
+      topic = Bus.room_feed("phx-held")
       :ok = Bus.subscribe_page(topic)
-      viewing = Viewing.new("ath_held_page")
+      in_view = RoomInView.new(%{"thread_id" => "held"})
 
-      held(fn -> Bus.broadcast_page(topic, viewing) end, viewing)
+      held(fn -> Bus.broadcast_page(topic, in_view) end, in_view)
     end
   end
 
@@ -468,7 +463,7 @@ defmodule Cyfr.BusTest do
     test "refuses a key that is not a tenant row, or a subject its row does not take" do
       for {key, subject} <- [
             {:sessions, nil},
-            {:page_viewing, "x"},
+            {:room_feed, "x"},
             {:no_such_topic, nil},
             {:mcp_servers, "x"},
             {:execution_events, nil},

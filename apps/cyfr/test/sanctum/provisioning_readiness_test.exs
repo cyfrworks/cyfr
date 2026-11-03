@@ -30,33 +30,45 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     n = System.unique_integer([:positive])
     creator = "github|https://github.com|ready-#{n}"
-    {:ok, group} = Athanors.create_group(creator, "Ready #{n}")
-    ctx = %{Sanctum.TestContext.local() | user_id: creator, athanor_id: group.id}
+    {:ok, slugs} = Athanors.person_slugs(nil, "Ready #{n}")
 
-    {:ok, group: group, ctx: ctx}
+    {:ok, athanor} =
+      Athanors.create_personal(
+        %{name: "Ready #{n}", owner_user_id: creator, created_by: creator},
+        slugs
+      )
+
+    ctx = %{Sanctum.TestContext.local() | user_id: creator, athanor_id: athanor.id}
+
+    {:ok, athanor: athanor, ctx: ctx}
   end
 
-  test "an unfilled athanor is not ready, and asking starts the fill", %{ctx: ctx, group: group} do
+  test "an unfilled athanor is not ready, and asking starts the fill", %{
+    ctx: ctx,
+    athanor: athanor
+  } do
     refute Provisioning.provisioned?(ctx)
     assert {:error, :not_provisioned} = Provisioning.ready(ctx)
 
     # The suite fills inline, so the attempt has already happened and its
     # outcome — success or a recorded failure — is on the row.
-    {:ok, group} = Athanors.get(group.id)
-    assert group.provisioned_at || Athanors.provisioning_failure(group)
+    {:ok, athanor} = Athanors.get(athanor.id)
+    assert athanor.provisioned_at || Athanors.provisioning_failure(athanor)
   end
 
-  test "a filled athanor is ready", %{ctx: ctx, group: group} do
-    {:ok, _} = Sanctum.TestContext.mark_provisioned(group)
+  test "a filled athanor is ready", %{ctx: ctx, athanor: athanor} do
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     assert Provisioning.provisioned?(ctx)
     assert :ok = Provisioning.ready(ctx)
   end
 
   test "an addressed send to an unready athanor refuses before acceptance", %{
     ctx: ctx,
-    group: group
+    athanor: athanor
   } do
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: group.id)
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: athanor.id)
+
     {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
     # The roster is handed in: reading it would itself start the fill.
@@ -73,12 +85,12 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert Sanctum.Refusals.render(:not_provisioned) =~ "still being prepared"
   end
 
-  test "a reader adds nothing while a fill is already running", %{ctx: ctx, group: group} do
+  test "a reader adds nothing while a fill is already running", %{ctx: ctx, athanor: athanor} do
     # A page load asks several readers, and each starts the fill. Only one
     # attempt runs: the rest read the claim held and return, rather than
     # queueing a worker that would repeat work the running attempt is
     # already doing — or has already failed at.
-    held = held_elsewhere!(group.id)
+    held = held_elsewhere!(athanor.id)
 
     for _ <- 1..12, do: assert(:ok = Sanctum.Provisioning.start_provisioning(ctx))
     assert Provisioning.status(ctx) == :filling
@@ -86,9 +98,9 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     # None of them filled anything, and none of them touched the claim: a
     # reader reads it, and only a fill takes it.
-    assert {:ok, %{provisioned_at: nil} = untouched} = Athanors.get(group.id)
+    assert {:ok, %{provisioned_at: nil} = untouched} = Athanors.get(athanor.id)
     refute Athanors.provisioning_failure(untouched)
-    assert {:ok, current} = Claims.current(%Prima.Actor{athanor_id: group.id})
+    assert {:ok, current} = Claims.current(%Prima.Actor{athanor_id: athanor.id})
 
     assert {current.owner, current.fence, current.attempt} ==
              {held.owner, held.fence, held.attempt}
@@ -114,7 +126,8 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # Clear any record a fill left: what is under test is the claim, not the
     # backoff.
     {:ok, own} = Sanctum.TestContext.mark_provisioned(own)
-    {:ok, own} = Arca.Athanors.update(Prima.Actor.in_athanor(own.id), %{provisioned_at: nil})
+    :ok = Arca.Athanors.set(Prima.Actor.in_athanor(own.id), provisioned_at: nil)
+    {:ok, own} = Arca.Athanors.get(Prima.Actor.system(), own.id)
 
     refute own.provisioned_at
 
@@ -152,17 +165,34 @@ defmodule Sanctum.ProvisioningReadinessTest do
   end
 
   test "a claim is released when its attempt ends, not when its task does" do
-    # One task fills several athanors in turn — a sign-in retries a person's
-    # groups — so a key held for the life of the task would keep the next
+    # One task walks several athanors in turn — a boot's seed sync walks
+    # them all — so a key held for the life of the task would keep the next
     # caller out of an athanor nobody is filling.
     n = System.unique_integer([:positive])
     creator = "github|https://github.com|serial-#{n}"
-    {:ok, first} = Athanors.create_group(creator, "Serial one #{n}")
-    {:ok, second} = Athanors.create_group(creator, "Serial two #{n}")
+    {:ok, slugs} = Athanors.person_slugs(nil, "Serial one #{n}")
+
+    {:ok, first} =
+      Athanors.create_personal(
+        %{name: "Serial one #{n}", owner_user_id: creator, created_by: creator},
+        slugs
+      )
+
+    {:ok, slugs} = Athanors.person_slugs(nil, "Serial two #{n}")
+
+    {:ok, second} =
+      Athanors.create_personal(
+        %{
+          name: "Serial two #{n}",
+          owner_user_id: creator <> "-two",
+          created_by: creator <> "-two"
+        },
+        slugs
+      )
 
     ctx = fn id -> %{Sanctum.TestContext.local() | user_id: creator, athanor_id: id} end
 
-    # Fill both from one process, as the group retry does.
+    # Fill both from one process.
     assert :ok = Sanctum.Provisioning.start_provisioning(ctx.(first.id))
     assert :ok = Sanctum.Provisioning.start_provisioning(ctx.(second.id))
 
@@ -180,42 +210,42 @@ defmodule Sanctum.ProvisioningReadinessTest do
   end
 
   test "a fill that failed is not started again by the notice it caused",
-       %{ctx: ctx, group: group} do
+       %{ctx: ctx, athanor: athanor} do
     # Recording a failure writes the row, and writing the row announces it —
     # which is what a console page reloads on. Its reads must not start
     # another attempt, or one failure becomes an endless retry.
     assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
 
-    {:ok, failed} = Athanors.get(group.id)
+    {:ok, failed} = Athanors.get(athanor.id)
     refute failed.provisioned_at
     assert %{at: first_at} = Athanors.provisioning_failure(failed)
 
     # Everything the reload would do, several times over.
     for _ <- 1..5, do: assert({:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx))
 
-    {:ok, again} = Athanors.get(group.id)
+    {:ok, again} = Athanors.get(athanor.id)
     assert Athanors.provisioning_failure(again).at == first_at
 
     # The reader is told the fill failed, from the claim the failed attempt
     # settled — which no reader took again.
     assert Provisioning.status(ctx) == :failed
-    actor = %Prima.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: athanor.id}
     assert {:ok, %{fence: 1, outcome: "failed", entry_kind: "first_need"}} = Claims.current(actor)
 
     # A person who asks is never told to wait: the explicit verb fills now.
     assert {:error, {:provisioning_failed, _, _}} = Sanctum.Provisioning.provision(again, ctx)
-    {:ok, retried} = Athanors.get(group.id)
+    {:ok, retried} = Athanors.get(athanor.id)
     assert Athanors.provisioning_failure(retried).at != first_at
     assert {:ok, %{fence: 2, outcome: "failed", entry_kind: "provision"}} = Claims.current(actor)
   end
 
   test "the backoff is the claim's: a failure a minute old no longer holds a reader off",
-       %{ctx: ctx, group: group} do
+       %{ctx: ctx, athanor: athanor} do
     assert {:error, :not_provisioned} = Provisioning.ready(ctx)
     assert Provisioning.status(ctx) == :failed
 
     # The same failure, a minute and a second ago, on the claim and the row.
-    actor = %Prima.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: athanor.id}
     {:ok, claim} = Claims.current(actor)
     long_ago = DateTime.add(DateTime.utc_now(), -61, :second)
 
@@ -227,7 +257,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     {:ok, _} =
       Arca.Schemas.Athanor
-      |> Arca.Repo.get!(group.id)
+      |> Arca.Repo.get!(athanor.id)
       |> Ecto.Changeset.change(provisioning_failed_at: long_ago)
       |> Arca.Repo.update()
 
@@ -239,9 +269,9 @@ defmodule Sanctum.ProvisioningReadinessTest do
   end
 
   test "the failure record is the server's: settings neither forge nor clear it",
-       %{ctx: ctx, group: group} do
+       %{ctx: ctx, athanor: athanor} do
     assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
-    {:ok, failed} = Athanors.get(group.id)
+    {:ok, failed} = Athanors.get(athanor.id)
     assert %{at: failed_at} = Athanors.provisioning_failure(failed)
 
     # A member's settings patch naming the old document key reaches nothing
@@ -254,7 +284,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     end
   end
 
-  test "a member that holds no slot in the cell starts no fill", %{ctx: ctx, group: group} do
+  test "a member that holds no slot in the cell starts no fill", %{ctx: ctx, athanor: athanor} do
     # The standing is read from `Arca.ControlPlane`, which answers from a
     # term and a monotonic countdown: no query, so a reader's path pays
     # nothing for asking on the way in.
@@ -262,12 +292,12 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     Arca.ControlPlane.record(:lost)
     assert {:error, :not_provisioned} = Provisioning.ready(ctx)
-    {:ok, untouched} = Athanors.get(group.id)
+    {:ok, untouched} = Athanors.get(athanor.id)
     refute untouched.provisioned_at || Athanors.provisioning_failure(untouched)
 
     Arca.ControlPlane.record(:unclaimed)
     assert {:error, :not_provisioned} = Provisioning.ready(ctx)
-    {:ok, attempted} = Athanors.get(group.id)
+    {:ok, attempted} = Athanors.get(athanor.id)
     assert attempted.provisioned_at || Athanors.provisioning_failure(attempted)
   end
 

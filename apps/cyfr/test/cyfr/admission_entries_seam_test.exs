@@ -372,7 +372,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # ==========================================================================
 
   def tincture_index_unknown(conn, _ctx) do
-    conn = get(conn, "/t/test/local/" <> unique("no-such-tincture"))
+    conn = get(conn, "/t/@test/local/" <> unique("no-such-tincture"))
     assert conn.status == 404
     {request_id_of(conn), refused(api_class(conn), :none)}
   end
@@ -416,7 +416,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   def tincture_rate_limited(conn, _ctx) do
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)
     Prima.Test.RateLimiter.reset!()
-    path = "/t/test/local/" <> unique("no-such-tincture")
+    path = "/t/@test/local/" <> unique("no-such-tincture")
 
     _first = get(conn, path)
     second = conn |> recycle() |> get(path)
@@ -457,13 +457,21 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   def webhook_archived_athanor(conn, ctx) do
     n = System.unique_integer([:positive])
     {ctx, _creator} = Sanctum.TestContext.person!(ctx, %{email: "seam#{n}@example.com"})
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Seam #{n}")
-    in_group = %{ctx | athanor_id: group.id}
-    %{slug: slug, secret: secret} = hook!(in_group, %{replay_protection: "none"})
+    owner = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
-    {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+    {:ok, other} =
+      Sanctum.Tenancy.Athanors.create_personal(
+        %{name: "Seam #{n}", owner_user_id: owner, created_by: owner},
+        ["seam-#{n}"]
+      )
+
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: other.id)
+    in_other = %{ctx | athanor_id: other.id}
+    %{slug: slug, secret: secret} = hook!(in_other, %{replay_protection: "none"})
+
+    Sanctum.TestContext.archive!(other.id)
     conn = post_signed(conn, slug, secret, ~s({}))
-    {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
+    Sanctum.TestContext.reopen!(other.id)
 
     assert conn.status == 404
     {request_id_of(conn), refused(api_class(conn), :none)}

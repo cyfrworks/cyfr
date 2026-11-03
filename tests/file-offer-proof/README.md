@@ -10,8 +10,8 @@ release fixture (`tests/release-boot/fixture.exs` `person`): the sender,
 the installation's first person and so its administrator, made by setup,
 who opens the door to newcomers (`door.allow` of `*`), which admits the
 other two; the recipient, seated with the sender in a
-group the sender creates (`athanor.create`, `member.add`); and the
-outsider, who sits in no athanor but their own. It writes the sender's
+shared thread the sender makes (`shared_thread.create`, `shared_thread.add`);
+and the outsider, who sits in no thread with them. It writes the sender's
 three files under `data/reports/` (`file.write`), each call through the
 gate under the person's own session, and waits until each person's own
 athanor is filled, since its fill writes into the tree the counts are read
@@ -101,7 +101,7 @@ before the run, and the result lists them with the line found.
 |---|---|---|---|
 | race: a completer paused past its lease and a successor publish the transfer once, and the stale one, refused at its next row write, publishes and releases nothing | `apps/arca/test/arca/file_offers_test.exs` | `a stale completer cannot publish or release another claimant's custody` | `Arca.FileOffers` |
 | crash and uncertain publication: a kill at each of the four points between the acceptance's commit and `completed` is finished by the receipts sweep from the recorded path, the offered snapshot landing once and the custody copy released | `apps/cyfr/test/arca/providers/files_test.exs` | `acceptance publishes the offered snapshot once across a crash and retry` | `Arca.FileOffers` |
-| custody: the sender's athanor purged between the commit and publication, the transfer completes from the recipient's custody copy, beside a file of the recipient's own and never over it | `apps/cyfr/test/cyfr/files_test.exs` | `accepted custody survives sender purge without overwriting recipient bytes` | `Arca.FileOffers` |
+| custody: the sender deleting the offered file between the commit and publication, the transfer completes from the recipient's custody copy, beside a file of the recipient's own and never over it | `apps/cyfr/test/cyfr/files_test.exs` | `accepted custody survives the sender deleting the file, without overwriting recipient bytes` | `Arca.FileOffers` |
 
 None of the three is a case of the storage cap, whose own cases are
 `apps/cyfr/test/arca/providers/files_test.exs`'s "an acceptance past the

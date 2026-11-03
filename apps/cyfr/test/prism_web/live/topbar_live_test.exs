@@ -3,17 +3,14 @@
 
 defmodule PrismWeb.TopbarLiveTest do
   @moduledoc """
-  The chat list in the topbar: You and your groups, hidden as a list when
-  there is only one, with "New group…" always there — the one create the
-  home screen offers. Badges come from the athanors' notify topics, and
-  the count of files offered to the person from their own topic.
+  The topbar: the AQUA link to the person's own athanor, standing alone;
+  the operator's door chip; the live indicators; and the count of files
+  offered to the person, from their own topic.
   """
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
-
-  alias Sanctum.Tenancy.Athanors
 
   # The topbar is a nested LiveView; find it inside the page.
   defp topbar(view), do: find_live_child(view, "topbar")
@@ -36,120 +33,14 @@ defmodule PrismWeb.TopbarLiveTest do
     state.socket.assigns.refresh_pending
   end
 
-  test "one athanor: no list, but New group… — which creates and opens the group", %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice)
-    {view, html} = mount_athanor(conn, "")
-
-    bar = topbar(view)
-    render_click(bar, "toggle_popover", %{"name" => "athanors"})
-    popover = render(bar)
-    assert popover =~ "New group…"
-    # a single athanor is not a list
-    refute popover =~ "ath-"
-    assert html =~ "CYFR"
-
-    bar
-    |> form("form[phx-submit=create_group]", %{"name" => "Garden #{alice.namespace}"})
-    |> render_submit()
-
-    [group] = Enum.filter(Athanors.list_for_user(alice.user_id), &(&1.name =~ "Garden"))
-    assert_redirect(bar, PrismWeb.ChatLive.chat_path(Athanors.route_slug(group)))
-  end
-
-  test "two athanors: a list with You and the group, badged by notifies for the one not in focus",
+  test "the AQUA link stands alone: it opens the person's own AQUA, and no athanor list opens",
        %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice)
-    {:ok, group} = Athanors.create_group(alice.user_id, "Bells #{alice.namespace}")
-
+    conn = log_in_user(conn, test_user())
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)
-    render_click(bar, "toggle_popover", %{"name" => "athanors"})
-    assert render(bar) =~ "Bells"
 
-    # A row opens the athanor's chat; the small link beside it, its AQUA.
-    route = Athanors.route_slug(group)
-    assert has_element?(bar, ~s(a[href="#{PrismWeb.ChatLive.chat_path(route)}"]), "Bells")
-    assert has_element?(bar, ~s(a[href="/a/#{route}/aqua"]), "AQUA")
-
-    # something happens in a FOLLOWED thread of the group while another
-    # athanor is in focus: a badge. The creator follows their own thread.
-    group_ctx =
-      Sanctum.Context.build(
-        user_id: alice.user_id,
-        athanor_id: group.id,
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    {:ok, thread} =
-      Arca.ThreadStorage.create(Sanctum.Context.actor(group_ctx), %{title: "Bells thread"})
-
-    Sanctum.Notify.broadcast(group.id, :approval_pending, %{thread_id: thread.id})
-    :sys.get_state(bar.pid)
-    assert render(bar) =~ "bg-blue-500/80"
-
-    # a card settled by someone, or a rename, does not add to the count —
-    # and neither does a thread this person does not follow: the tray is
-    # where following becomes a notification fact.
-    before = render(bar)
-    Sanctum.Notify.broadcast(group.id, :approval_resolved, %{})
-    Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: "Bells"})
-    Sanctum.Notify.broadcast(group.id, :approval_pending, %{thread_id: "thread_unfollowed"})
-    :sys.get_state(bar.pid)
-    assert render(bar) == before
-  end
-
-  test "the bar follows the page only into an athanor the person holds a seat in", %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice)
-    {:ok, group} = Athanors.create_group(alice.user_id, "Seen #{alice.namespace}")
-    {view, _html} = mount_athanor(conn, "")
-    bar = topbar(view)
-    viewing = fn -> :sys.get_state(bar.pid).socket.assigns.viewing end
-    assert viewing.() == seated_athanor().id
-
-    send(bar.pid, Cyfr.Bus.Viewing.new(group.id))
-    assert viewing.() == group.id
-
-    # An id that names no seat of theirs is not followed.
-    send(bar.pid, Cyfr.Bus.Viewing.new("ath_nobody"))
-    assert viewing.() == group.id
-  end
-
-  test "the tray is the session's: a badge survives navigating, and opening the athanor clears it",
-       %{conn: conn} do
-    alice = test_user()
-    conn = log_in_user(conn, alice)
-    {:ok, group} = Athanors.create_group(alice.user_id, "Tray #{alice.namespace}")
-
-    {view, _html} = mount_athanor(conn, "")
-    bar = topbar(view)
-    Sanctum.Notify.broadcast(group.id, :execution_failed, %{})
-    Sanctum.Notify.broadcast(group.id, :schedule_failed, %{})
-    :sys.get_state(bar.pid)
-    render_click(bar, "toggle_popover", %{"name" => "athanors"})
-    assert render(bar) =~ ~r/bg-blue-500\/80[^>]*>\s*2\s*</
-
-    # Another page — the topbar remounts — and the count is still there.
-    {view, _html} = mount_athanor(conn, "/settings")
-    bar = topbar(view)
-    render_click(bar, "toggle_popover", %{"name" => "athanors"})
-    assert render(bar) =~ ~r/bg-blue-500\/80[^>]*>\s*2\s*</
-
-    # Opening the group reads it.
-    {view, _html} = mount_athanor(conn, "", group)
-    bar = topbar(view)
-    render_click(bar, "toggle_popover", %{"name" => "athanors"})
-    refute render(bar) =~ "bg-blue-500/80"
-
-    {view, _html} = mount_athanor(conn, "")
-    bar = topbar(view)
-    render_click(bar, "toggle_popover", %{"name" => "athanors"})
-    refute render(bar) =~ "bg-blue-500/80"
+    assert has_element?(bar, ~s(#aqua-link[href="/a/@#{seated_athanor().slug}/aqua"]), "AQUA")
+    refute has_element?(bar, ~s([phx-value-name="athanors"]))
   end
 
   test "an operator sees how many wait at the door; the chip follows the door", %{conn: conn} do
@@ -284,12 +175,10 @@ defmodule PrismWeb.TopbarLiveTest do
     other = log_in_user(Phoenix.ConnTest.build_conn(), rita)
 
     sam = test_user(name: "Sam")
-    {:ok, group} = Athanors.create_group(sam.user_id, "Pair #{sam.namespace}")
+    sams = Sanctum.Test.People.athanor!(sam.user_id)
+    together!(sam, rita)
 
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(rita.user_id, scope: "athanor", athanor_id: group.id)
-
-    sam_ctx = session(sam.user_id, group.id)
+    sam_ctx = session(sam.user_id, sams.id)
     :ok = Arca.ensure_roots(Sanctum.Context.actor(sam_ctx))
 
     for name <- ~w(a.txt b.txt c.txt),
@@ -349,12 +238,10 @@ defmodule PrismWeb.TopbarLiveTest do
     home = seated_athanor()
 
     sam = test_user(name: "Sam")
-    {:ok, group} = Athanors.create_group(sam.user_id, "Pair #{sam.namespace}")
+    sams = Sanctum.Test.People.athanor!(sam.user_id)
+    together!(sam, rita)
 
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(rita.user_id, scope: "athanor", athanor_id: group.id)
-
-    sam_ctx = session(sam.user_id, group.id)
+    sam_ctx = session(sam.user_id, sams.id)
     :ok = Arca.ensure_roots(Sanctum.Context.actor(sam_ctx))
 
     for name <- ~w(a.txt b.txt),
@@ -390,6 +277,14 @@ defmodule PrismWeb.TopbarLiveTest do
     :sys.get_state(bar.pid)
     assert has_element?(bar, "#file-offers", "1 offer")
     refute has_element?(bar, "#file-offers", "2 offers")
+  end
+
+  # A shared thread seating `from` and `to`, where an offer between them
+  # may be made.
+  defp together!(from, to) do
+    {:ok, thread} = Sanctum.SharedThreads.create(from.user_id, "Plans #{from.namespace}")
+    {:ok, :added} = Sanctum.SharedThreads.add(from.user_id, thread.id, user_id: to.user_id)
+    thread
   end
 
   defp session(user_id, athanor_id) do

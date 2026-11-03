@@ -1229,7 +1229,6 @@ for f in \
   apps/cyfr/test/sanctum/credential_retirement_test.exs \
   apps/cyfr/test/opus/feeds_test.exs \
   apps/cyfr/test/sanctum/consent/commit_test.exs \
-  apps/cyfr/test/sanctum/tenancy/members_test.exs \
   apps/sanctum/test/sanctum/webhook_entries_test.exs \
   apps/sanctum/test/sanctum/issuance_test.exs \
   apps/sanctum/test/sanctum/validation_credential_test.exs \

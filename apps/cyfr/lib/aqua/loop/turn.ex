@@ -56,7 +56,6 @@ defmodule Aqua.Loop.Turn do
     :excerpt,
     :attachments,
     soul?: true,
-    several_people?: false,
     sources: []
   ]
 
@@ -87,10 +86,7 @@ defmodule Aqua.Loop.Turn do
          {:ok, catalyst, model} <- model(ctx, turn, agent, opts),
          {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn) do
       options = decode(turn.options)
-      several? = not Sanctum.Tenancy.Members.solo?(Context.athanor!(ctx))
-
-      prompt =
-        Aqua.Prompt.compose(ctx, agent: agent, authority: authority, several_people?: several?)
+      prompt = Aqua.Prompt.compose(ctx, agent: agent, authority: authority)
 
       spec = %__MODULE__{
         ctx: ctx,
@@ -121,8 +117,7 @@ defmodule Aqua.Loop.Turn do
         options: options,
         excerpt: if(Keyword.get(opts, :excerpt?, true), do: excerpt(ctx, options), else: nil),
         attachments: attachments(ctx, turn),
-        soul?: soul?,
-        several_people?: several?
+        soul?: soul?
       }
 
       {:ok, spec}

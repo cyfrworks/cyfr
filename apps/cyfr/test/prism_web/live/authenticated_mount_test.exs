@@ -28,21 +28,6 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert_redirect(view, "/login")
   end
 
-  test "a mounted view lets go when the person loses the athanor in focus", %{conn: conn} do
-    user = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Let go #{user.namespace}")
-    # The session is the person's own athanor's and the group is in focus by
-    # its address: a leave ends only the sessions bound to the group, so this
-    # one stands and the view lets go of the focus alone.
-    conn = log_in_user(conn, user)
-    {view, _html} = mount_athanor(conn, "/settings", group)
-
-    # A person's own athanor never loses its owner, so the seat that can be
-    # taken away is a group's.
-    :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: user.user_id)
-    assert_redirect(view, "/", 2_000)
-  end
-
   test "no mounted socket keeps the raw session token in its assigns", %{conn: conn} do
     # `Phoenix.LiveView.Socket` derives Inspect with `:assigns` in the `only:`
     # list, so a crash in any LiveView prints them in the GenServer terminate
@@ -61,13 +46,8 @@ defmodule PrismWeb.AuthenticatedMountTest do
              "the #{name} socket holds the raw session token in assigns"
     end
 
-    # Re-derive standing after membership changes.
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Re #{user.namespace}")
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: group.id)
-
-    Sanctum.Tenancy.Members.broadcast_change(user.user_id, group.id, :joined)
+    # Re-derive standing after a membership change.
+    Sanctum.Tenancy.Members.broadcast_change(user.user_id, seated_athanor().id, :joined)
 
     assert render(view) =~ "Settings"
   end
@@ -84,32 +64,21 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert html =~ "Settings"
   end
 
-  test "focus is the URL: a member mounts their group, a stranger is turned away, an unknown slug too",
+  test "focus is the URL: a person mounts their own athanor, another person's and an unknown address are turned away",
        %{conn: conn} do
-    user = test_user()
-    conn = log_in_user(conn, user)
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Focus #{user.namespace}")
+    conn = log_in_user(conn, test_user())
 
-    {view, _html} = mount_athanor(conn, "/members", group)
-    assert render(view) =~ group.name
+    # The person's own athanor is addressed as @<slug>.
+    own = seated_athanor()
+    assert "@" <> _ = Sanctum.Tenancy.Athanors.route_slug(own)
 
-    other = test_user()
+    {view, _html} = mount_athanor(conn, "/settings", own)
+    assert render(view) =~ "Settings"
 
-    {:ok, stranger_group} =
-      Sanctum.Tenancy.Athanors.create_group(other.user_id, "Not yours #{other.namespace}")
+    theirs = Sanctum.Test.People.athanor!(test_user().user_id)
 
-    assert {:error, {:redirect, %{to: "/"}}} =
-             live(conn, athanor_path("/members", stranger_group))
-
-    assert {:error, {:redirect, %{to: "/"}}} = live(conn, "/a/no-such-group/members")
-
-    # a person's own athanor — the one they signed in to — is addressed as
-    # @<namespace>
-    personal = seated_athanor()
-    assert personal.kind == "person"
-
-    {view, _html} = mount_athanor(conn, "/members", personal)
-    assert render(view) =~ "Your own athanor"
+    assert {:error, {:redirect, %{to: "/"}}} = live(conn, athanor_path("/settings", theirs))
+    assert {:error, {:redirect, %{to: "/"}}} = live(conn, "/a/@no-such-athanor/settings")
   end
 
   test "the root lands in the chat, on the session's athanor", %{conn: conn} do
@@ -146,7 +115,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     refute html =~ ">Tinctures<"
   end
 
-  test "lite is chat + switcher + drawer: no sidebar, no live indicators; dev keeps both",
+  test "lite is chat + drawer: no sidebar, no live indicators; dev keeps both",
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -171,7 +140,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     refute html =~ ~s(id="nav-webhooks")
 
     for key <-
-          ~w(chat aqua members vault schedules webhooks mcp-servers settings) do
+          ~w(chat aqua vault schedules webhooks mcp-servers settings) do
       assert has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer lacks #{key}"
     end
 
@@ -184,7 +153,6 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert has_element?(bar, "#open-drawer")
     assert has_element?(bar, "#open-palette")
     assert has_element?(view, "#drawer-search")
-    assert has_element?(view, "#drawer-new-group")
   end
 
   test "the chat page's thread list is a panel a phone can open and close", %{conn: conn} do

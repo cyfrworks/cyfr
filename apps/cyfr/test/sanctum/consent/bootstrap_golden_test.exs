@@ -63,13 +63,14 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     :ok
   end
 
-  # A group athanor filled from the bundle: the server's own context there.
+  # An athanor no person here owns, filled from the bundle: the server's
+  # own context there.
   defp filled!(name) do
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
-        kind: "group",
         name: name,
         slug: "golden-#{System.unique_integer([:positive])}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
         created_by: "system"
       })
 

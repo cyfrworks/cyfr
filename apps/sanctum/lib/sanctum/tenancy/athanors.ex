@@ -3,42 +3,34 @@
 
 defmodule Sanctum.Tenancy.Athanors do
   @moduledoc """
-  Athanor rows: create, find, rename, archive.
+  Athanor rows: create and find.
 
-  An athanor is the unit everything is owned by — a person's or a group's.
-  Rows are created here (a person's inside their admission's transaction,
-  `Sanctum.Provisioning.mint_personal/1`; a group's when a member creates
-  it) and archived, never deleted. Filling an athanor with components and consents is the caller's
-  job (`Sanctum.Provisioning`), not this module's: a row is a name,
+  An athanor is the unit everything is owned by — one person's. Rows are
+  created here, inside the person's admission's transaction
+  (`Sanctum.Provisioning.mint_personal/1`), and archived, never deleted.
+  Filling an athanor with components and consents is the caller's job
+  (`Sanctum.Provisioning`), not this module's: a row is a name,
   provisioning is what fills it.
 
-  A person's athanor is archived only by their denial
-  (`Sanctum.Tenancy.Users.deny/1`) or by `archive/2` with `force: true`; a
-  group is archived by its members or by its last member leaving.
+  An athanor is archived only by its person's denial
+  (`Sanctum.Tenancy.Users.deny/1`), and reopened only by their allow.
 
   ## What is decided here, and what is stored below
 
   The statements are `Arca.Athanors`'. What stays here is the deciding:
-  which cap a mint must pass, what a slug may be, when an archive is
-  refused, what an unanswerable read should read as, and who is told
-  afterwards. Every call names the actor it runs as — the server
+  which cap a mint must pass, what a slug may be, what an unanswerable
+  read should read as, and who is told afterwards. Every call names the actor it runs as — the server
   (`Prima.Actor.system/0`) for the fabric reads that choose an athanor,
   and the server narrowed to one athanor for every write that must land
   in exactly that one.
   """
 
-  require Logger
-
-  alias Sanctum.Tenancy.Caps
-
   @typedoc "An athanor's row, as the plain map `Arca.Athanors` answers."
   @type athanor :: %{required(:id) => String.t(), optional(atom()) => term()}
 
-  @slug_attempts 3
-
   @doc """
-  Insert an athanor. `attrs` must carry `:kind`, `:name`, `:slug` and
-  `:created_by`; a person athanor also `:owner_user_id`. `:id` defaults to a
+  Insert an athanor. `attrs` must carry `:name`, `:slug`, `:owner_user_id`
+  and `:created_by`. `:id` defaults to a
   fresh `ath_` id. The server-wide cap on athanors applies, counted in the
   transaction that inserts the row with the owner's row held
   (`Arca.Athanors.mint/2`), so two creations at the server's last place
@@ -57,7 +49,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Mint a person's own athanor, inside their admission's transaction
   (`Sanctum.Provisioning.mint_personal/1`): the row, with the first slug of
-  `slugs` no person athanor holds, and its owner seated, in one
+  `slugs` no athanor holds, and its owner seated, in one
   `Arca.Athanors.mint/2` under the census lock, so two admissions cannot
   take one slug. It counts no cap: the admission counted the server-wide
   cap before the person's row (`personal_place/0`), or is the
@@ -92,217 +84,24 @@ defmodule Sanctum.Tenancy.Athanors do
   @spec personal_place() :: :ok | {:error, term()}
   def personal_place, do: Arca.Athanors.within_caps(server(), [:max_athanors])
 
-  @doc """
-  Mint a group athanor for `creator_user_id`: the row, its slug (from the
-  name, or `:slug`), and the creator's membership — nobody else is added.
-  The per-person cap on groups applies. All of it lands or none does.
-  """
-  @spec create_group(String.t(), String.t(), keyword()) ::
-          {:ok, athanor()} | {:error, term()}
-  def create_group(creator_user_id, name, opts \\ [])
-      when is_binary(creator_user_id) and is_binary(name) do
-    name = String.trim(name)
-
-    with :ok <- validate_name(name),
-         {:ok, athanor} <-
-           mint_group(creator_user_id, name, Keyword.get(opts, :slug), @slug_attempts) do
-      Sanctum.Tenancy.Members.broadcast_change(creator_user_id, athanor.id, :joined)
-      {:ok, athanor}
-    end
-  end
-
-  # The caps, the slug, the row and the creator's seat in one transaction,
-  # serialized per creator by a write to their user row: two creations by
-  # one person cannot both pass the cap, and a seat that fails leaves no
-  # group. The slug is the first candidate free in the mint's own
-  # transaction; a derived one another creation took first is derived again.
-  defp mint_group(creator_user_id, name, explicit_slug, attempts) do
-    with {:ok, slugs} <- slug_candidates(explicit_slug, name) do
-      result =
-        Arca.Athanors.mint(server(),
-          hold: [creator_user_id],
-          caps: [{:max_groups_per_person, creator_user_id}, :max_athanors],
-          attrs: %{kind: "group", name: name, created_by: creator_user_id},
-          slugs: slugs,
-          also: fn athanor ->
-            with {:ok, _} <-
-                   Sanctum.Tenancy.Members.create(%{
-                     user_id: creator_user_id,
-                     scope: "athanor",
-                     athanor_id: athanor.id,
-                     added_by: creator_user_id
-                   }) do
-              :ok
-            end
-          end
-        )
-
-      case result do
-        {:error, :slug_taken} when is_nil(explicit_slug) and attempts > 1 ->
-          mint_group(creator_user_id, name, nil, attempts - 1)
-
-        {:error, :slug_taken} ->
-          {:error, :slug_taken_or_invalid}
-
-        result ->
-          result
-      end
-    end
-  end
-
-  @doc """
-  The pair of `user_a` and `user_b` — found if it exists, minted if not.
-
-  A DM is a **frozen** group athanor: it takes both members at birth and
-  `Sanctum.Tenancy.Members.add/3` refuses it another forever. That is what
-  lets two people talk without a second tenancy primitive beside the
-  athanor — they get a vault, storage, schedules and an audit trail like
-  any other athanor, and the door is simply closed.
-
-  Find-or-create runs in a transaction keyed on `pair_key`, and a losing
-  racer reads the winner rather than reporting a conflict. Two people
-  double-clicking each other's names get one tape.
-
-  The per-person cap on pairs applies to a mint, and to both people: a
-  pair is minted for two, so either one at `CYFR_MAX_PAIRS_PER_PERSON`
-  refuses it with `{:error, {:limit_reached, :max_pairs_per_person, cap}}`.
-  Finding the existing pair is not a mint and is never capped.
-
-  The row only — it is deliberately **not** provisioned here. A pair that
-  owns nothing needs no registry pull, no component scan and no consent
-  bootstrap to exist; `Sanctum.Provisioning.start_provisioning/1` fills it
-  at first need instead, so clicking a name opens a chat immediately
-  instead of waiting on the network.
-  """
-  @spec create_pair(String.t(), String.t()) :: {:ok, athanor()} | {:error, term()}
-  def create_pair(user_a, user_b)
-      when is_binary(user_a) and is_binary(user_b) and user_a != user_b do
-    key = pair_key(user_a, user_b)
-
-    case get_by_pair_key(key) do
-      {:ok, athanor} ->
-        {:ok, athanor}
-
-      {:error, :not_found} ->
-        mint_pair(key, user_a, user_b)
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  def create_pair(_, _), do: {:error, :invalid_pair}
-
-  @doc """
-  The canonical key for a pair of people: order-independent, so
-  `{alice, bob}` and `{bob, alice}` name the same athanor.
-
-  Hashes the JSON encoding of sorted member ids, preserving unambiguous boundaries.
-  """
-  @spec pair_key(String.t(), String.t()) :: String.t()
-  def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b) do
-    [user_a, user_b]
-    |> Enum.sort()
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.url_encode64(padding: false)
-  end
-
-  @doc "The active frozen athanor with this canonical key, if there is one."
-  @spec get_by_pair_key(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
-  def get_by_pair_key(key) when is_binary(key),
-    do: Arca.Athanors.get_by_pair_key(server(), key)
-
-  # A pair is minted for two, so the cap is asked for both, inside the mint
-  # with both people's rows held (in one order, so two mints cannot
-  # deadlock). Without it one member of a large room could mint an athanor
-  # per co-member from the wire — a DM asks nobody else's consent — and
-  # spend `CYFR_MAX_ATHANORS` for everyone.
-  defp mint_pair(key, user_a, user_b) do
-    name = pair_name(user_a, user_b)
-
-    result =
-      with {:ok, slugs} <- slug_candidates(nil, name) do
-        Arca.Athanors.mint(server(),
-          hold: [user_a, user_b],
-          caps: [{:max_pairs_per_person, user_a}, {:max_pairs_per_person, user_b}, :max_athanors],
-          attrs: %{
-            kind: "group",
-            roster: "frozen",
-            pair_key: key,
-            name: name,
-            created_by: user_a
-          },
-          slugs: slugs,
-          also: fn athanor ->
-            Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
-              case seat(athanor, user_id) do
-                {:ok, _} -> {:cont, :ok}
-                {:error, _} = err -> {:halt, err}
-              end
-            end)
-          end
-        )
-      end
-
-    case result do
-      {:ok, athanor} ->
-        for user_id <- [user_a, user_b],
-            do: Sanctum.Tenancy.Members.broadcast_change(user_id, athanor.id, :joined)
-
-        {:ok, athanor}
-
-      # The unique index is the arbiter: a concurrent double-click loses
-      # here and reads the tape the winner made. Anything else is a real
-      # failure and keeps its reason — a bare `:pair_not_created` would
-      # report "could not open the chat" for a slug clash, a cap, and a
-      # database outage alike.
-      {:error, reason} ->
-        case get_by_pair_key(key) do
-          {:ok, athanor} -> {:ok, athanor}
-          _ -> {:error, reason}
-        end
-    end
-  end
-
-  # A pair's two seats, at birth — the one write a frozen roster admits.
-  defp seat(athanor, user_id) do
-    Sanctum.Tenancy.Members.create(
-      %{user_id: user_id, scope: "athanor", athanor_id: athanor.id, added_by: user_id},
-      birth: true
-    )
-  end
-
-  # Both display names, so the athanor reads as the two people in it. The
-  # slug's own collision fallback handles two pairs of same-named people.
-  defp pair_name(user_a, user_b) do
-    [user_a, user_b]
-    |> Enum.map(&Sanctum.Tenancy.Users.display_name/1)
-    |> Enum.sort()
-    |> Enum.join(" & ")
-    |> String.slice(0, 80)
-  end
-
   @spec get(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id), do: Arca.Athanors.get(server(), id)
 
   @doc """
   A person's own athanor, by its owner. At most one exists per person
-  (a partial unique index on `owner_user_id` where `kind = 'person'`).
+  (a unique index on `owner_user_id`).
   """
   @spec get_by_owner(String.t()) :: {:ok, athanor()} | {:error, :not_found | term()}
   def get_by_owner(user_id) when is_binary(user_id),
     do: Arca.Athanors.get_by_owner(server(), user_id)
 
-  @doc "Find an athanor by kind and slug."
-  @spec get_by_slug(String.t(), String.t()) ::
-          {:ok, athanor()} | {:error, :not_found | :database_error}
-  def get_by_slug(kind, slug) when is_binary(kind) and is_binary(slug),
-    do: Arca.Athanors.get_by_slug(server(), kind, slug)
+  @doc "Find an athanor by slug."
+  @spec get_by_slug(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
+  def get_by_slug(slug) when is_binary(slug), do: Arca.Athanors.get_by_slug(server(), slug)
 
   @doc """
-  Resolve a route segment: `@<namespace>` names a person's athanor, a bare
-  slug a group's. Only active athanors resolve, unless the caller passes
+  Resolve a route segment: `@<namespace>` names a person's athanor. Only
+  active athanors resolve, unless the caller passes
   `include_archived: true` (a read that must still see an archived row —
   `athanor.get`, `unarchive`).
   """
@@ -310,66 +109,17 @@ defmodule Sanctum.Tenancy.Athanors do
   def by_route_slug(segment, opts \\ [])
 
   def by_route_slug("@" <> namespace, opts) when namespace != "" do
-    get_by_slug("person", namespace) |> status_gate(opts)
-  end
-
-  def by_route_slug(slug, opts) when is_binary(slug) and slug != "" do
-    get_by_slug("group", slug) |> status_gate(opts)
+    get_by_slug(namespace) |> status_gate(opts)
   end
 
   def by_route_slug(_, _opts), do: {:error, :not_found}
 
-  @doc "The route segment for an athanor: `@<slug>` for a person, the slug for a group."
+  @doc "The route segment for an athanor: `@<slug>`."
   @spec route_slug(athanor()) :: String.t()
-  def route_slug(%{kind: "person", slug: slug}), do: "@" <> slug
-  def route_slug(%{slug: slug}), do: slug
-
-  @doc "Rename an athanor. The slug stays: it is an address."
-  @spec rename(athanor(), String.t()) :: {:ok, athanor()} | {:error, term()}
-  def rename(%{id: _} = athanor, name) when is_binary(name) do
-    name = String.trim(name)
-
-    with :ok <- validate_name(name) do
-      Arca.Athanors.update(in_athanor(athanor.id), %{name: name})
-    end
-  end
+  def route_slug(%{slug: slug}), do: "@" <> slug
 
   @doc """
-  Mark an athanor archived. Nothing is deleted; every ingress gate refuses
-  it, its API keys and its shares are revoked in the same transaction
-  (`Arca.SecurityTransitions.archive_athanor/3`), whatever is running in
-  it is cancelled, the established-context memo of every member is dropped
-  and its members are told — the same on every path that archives (a
-  member's `athanor.archive`, the last member leaving, a person being
-  denied), so no path leaves work running in a furnace nobody may enter.
-  The announcements follow the commit and are made from what it returned.
-
-  A person's athanor refuses unless `force: true`. An athanor already
-  archived is archived again: its keys are revoked and checked again and
-  its archival announced again, so a retry reaches whatever a lost
-  announcement did not.
-  """
-  @spec archive(athanor(), keyword()) :: {:ok, athanor()} | {:error, term()}
-  def archive(%{id: id} = athanor, opts \\ []) do
-    force? = Keyword.get(opts, :force, false)
-
-    verify = fn
-      %{athanor: %{kind: "person", status: "active"}} when not force? ->
-        {:error, :person_athanor_cannot_be_archived}
-
-      _rows ->
-        :ok
-    end
-
-    with {:ok, change} <- Arca.SecurityTransitions.archive_athanor(server(), id, verify: verify) do
-      announce_archived([id], change)
-      Sanctum.Shares.announce_each(nil, :revoked, change.revoked_share_ids)
-      {:ok, committed(athanor, change)}
-    end
-  end
-
-  @doc """
-  Announce athanors a committed transition archived, from the data it
+  Announce athanors a committed denial archived, from the data it
   returned: each member's established-context memo is dropped, before
   this returns — the memo caches an AUTHORIZATION decision, so an archive
   that only flipped the status would leave every member working inside
@@ -393,150 +143,6 @@ defmodule Sanctum.Tenancy.Athanors do
 
     :ok
   end
-
-  # The row the caller named, as the transition left it: reread after
-  # commit, and — should that read fail — the caller's copy carrying the
-  # standing the commit returned, never an error for what did commit.
-  defp committed(%{id: id} = athanor, change) do
-    case get(id) do
-      {:ok, current} ->
-        current
-
-      {:error, _reason} ->
-        case Enum.find(change.athanors, &(&1.id == id)) do
-          nil ->
-            athanor
-
-          moved ->
-            %{
-              athanor
-              | status: moved.status,
-                archived_at: moved.archived_at,
-                security_generation: moved.security_generation
-            }
-        end
-    end
-  end
-
-  @doc """
-  Delete an archived athanor's whole storage tree — the one verb that
-  reclaims `athanors/{id}/` from the volume (or the bucket). Archiving never
-  touches storage, precisely so `unarchive/1` reopens a furnace intact;
-  purging is the separate, deliberate, final act. It refuses unless the
-  athanor is archived, and a purged athanor that later reopens comes back
-  with empty storage (its rows are untouched — this deletes blobs only).
-  """
-  @spec purge_storage(athanor()) :: :ok | {:error, term()}
-  def purge_storage(%{id: _} = athanor) do
-    with {:ok, current} <- get(athanor.id) do
-      if current.status == "archived" do
-        ctx = Sanctum.Context.internal(athanor_id: current.id, scope: :athanor)
-
-        with :ok <- Arca.delete_tree(Sanctum.Context.actor(ctx), []) do
-          # The write gate invalidates the whole-tree counter, but the
-          # empty path names no scope, so the per-scope pairs would
-          # otherwise survive until their TTL — drop them all.
-          Arca.Usage.invalidate(internal_actor(current))
-        end
-      else
-        {:error, :not_archived}
-      end
-    end
-  end
-
-  @doc """
-  Erase an archived athanor: its blobs AND its rows. Final.
-
-  The one verb that deletes a tenant's rows. `purge_storage/1` above
-  reclaims the volume and leaves every row standing, and retention
-  (`Cyfr.RetentionScheduler`) skips archived athanors, so after archive
-  and purge alone every sealed vault payload, webhook secret, OAuth
-  ciphertext, execution, message and log stays in the database and in
-  every backup taken afterwards.
-
-  ## What it keeps, and why
-
-  The `athanors` row itself survives as an archived tombstone: an audit
-  trail that loses the fact an athanor ever existed cannot answer "what
-  happened to it". Everything the tombstone owned is gone.
-
-  ## What it refuses
-
-  A **personal** athanor. `users.personal_athanor_id` is not an
-  athanor-scoped column and would still name the tombstone: the unique
-  index would then block minting a replacement, and
-  `Users.allow/1` would try to reopen a wiped shell. Erasing
-  a person is a different act with different consequences —
-  `Sanctum.Door`'s deny and `archive/1` are the person-level verbs.
-
-  An athanor that is not archived, for the same reason `purge_storage/1`
-  does: archiving is the reviewable step that precedes the irreversible
-  one.
-  """
-  @spec destroy(athanor()) :: {:ok, map()} | {:error, term()}
-  def destroy(%{id: _} = athanor) do
-    with {:ok, current} <- get(athanor.id),
-         :ok <- check_destroyable(current),
-         :ok <- Arca.delete_tree(internal_actor(current), []),
-         {:ok, counts} <- Arca.TenantTables.delete_all_for(internal_actor(current)) do
-      Arca.Usage.invalidate(internal_actor(current))
-
-      Logger.warning(
-        "[Sanctum.Tenancy.Athanors] destroyed #{current.id}: " <>
-          "#{counts |> Map.values() |> Enum.sum()} rows across #{map_size(counts)} tables"
-      )
-
-      {:ok, counts}
-    end
-  end
-
-  defp check_destroyable(%{status: status}) when status != "archived",
-    do: {:error, :not_archived}
-
-  defp check_destroyable(%{id: id}) do
-    if Sanctum.Tenancy.Users.personal_athanor?(id) do
-      {:error, :personal_athanor}
-    else
-      :ok
-    end
-  end
-
-  # The server's own actor narrowed to this athanor: `system: true` is
-  # what lets the purge reach the whole tree, `scope: :athanor` is what
-  # keeps it inside this one athanor.
-  defp internal_actor(%{id: id}),
-    do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
-
-  @doc """
-  Reopen an archived athanor, if the server still has room for it
-  (`Arca.SecurityTransitions.unarchive_athanor/3`). Its revoked keys stay
-  revoked; the reopen raises the athanor's generation, so a context read
-  before the archive cannot issue a credential in it afterwards. An ended
-  DM never reopens: a frozen athanor is archived the moment either person
-  leaves, so its husk holds one member, and reopening it would seat that
-  person alone in a second You. Clicking the name again mints a new pair
-  instead.
-  """
-  @spec unarchive(athanor()) :: {:ok, athanor()} | {:error, term()}
-  def unarchive(%{id: id} = athanor) do
-    with {:ok, change} <-
-           Arca.SecurityTransitions.unarchive_athanor(server(), id, verify: &reopenable/1) do
-      {:ok, committed(athanor, change)}
-    end
-  end
-
-  # An archived athanor freed its place against the server cap when it
-  # closed; taking the place back has to ask for it, or archiving and
-  # reopening would be the way past `CYFR_MAX_ATHANORS`. The count runs
-  # inside the transition, with the athanor locked and the census lock
-  # held (`Arca.AthanorCensus`), so a reopen and a mint at the last place
-  # cannot both land.
-  defp reopenable(%{athanor: %{roster: "frozen"}}), do: {:error, :frozen_is_final}
-
-  defp reopenable(%{athanor: %{status: "archived"}}),
-    do: Caps.check_counted(:max_athanors, &count/0)
-
-  defp reopenable(_rows), do: :ok
 
   @doc "The last failed fill on the row, or nil: `%{step, detail, at}`."
   @spec provisioning_failure(athanor()) ::
@@ -572,15 +178,16 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc """
-  The active athanors a person may work in: their own, then every group an
-  active membership grants, oldest first. Uncapped — a person's memberships
-  are few, and a truncated list would hide a chat.
+  The athanors a person works in: their own, when it is active, else none.
   """
   @spec list_for_user(String.t()) :: [athanor()]
   def list_for_user(user_id) when is_binary(user_id) do
-    # Deliberate default: a person's sidebar roster — an outage shows fewer
-    # rooms, never more; entering one still resolves membership strictly.
-    rows_or_empty(Arca.Athanors.list_for_user(server(), user_id))
+    # Deliberate default: an outage shows none; entering one still resolves
+    # membership strictly.
+    case get_by_owner(user_id) do
+      {:ok, %{status: "active"} = athanor} -> [athanor]
+      _ -> []
+    end
   end
 
   @doc "Whether the athanor exists and is active."
@@ -595,15 +202,15 @@ defmodule Sanctum.Tenancy.Athanors do
   def active?(_), do: false
 
   @doc """
-  How many person athanors were minted after `since` — the mint-rate cap's
-  measure; groups people create are bounded by their own cap. Strict: a
+  How many athanors were minted after `since` — the mint-rate cap's
+  measure. Strict: a
   count the store cannot answer is `{:error, :database_error}`, never a
   zero the cap would admit past its ceiling.
   """
   @spec count_created_since(DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def count_created_since(%DateTime{} = since),
-    do: Arca.Athanors.count_people_created_since(server(), since)
+    do: Arca.Athanors.count_created_since(server(), since)
 
   @doc """
   How many active athanors this server holds — an archived one frees its
@@ -710,28 +317,6 @@ defmodule Sanctum.Tenancy.Athanors do
 
   defp status_gate(_, _opts), do: {:error, :not_found}
 
-  defp validate_name(name) when byte_size(name) in 1..80, do: :ok
-  defp validate_name(_), do: {:error, :invalid_name}
-
-  # A slug given explicitly must be valid and free; one derived from the name
-  # gets a numeric suffix when taken.
-  # The slugs a mint may take, in order of preference, for the mint to
-  # choose from inside its own transaction (`Arca.Athanors.mint/2`): an
-  # explicit one alone, when the grammar admits it; otherwise one derived
-  # from the name and its numbered successors.
-  defp slug_candidates(explicit, _name) when is_binary(explicit) do
-    if Sanctum.Slug.valid?(explicit),
-      do: {:ok, [explicit]},
-      else: {:error, :slug_taken_or_invalid}
-  end
-
-  defp slug_candidates(nil, name) do
-    case Sanctum.Slug.from_name(name) do
-      nil -> {:error, :invalid_name}
-      base -> {:ok, derived_candidates(base)}
-    end
-  end
-
   @doc """
   A free slug for a person's own athanor: `hint` (their cyfr.run namespace,
   when they have one) if it is valid and free, else one derived from
@@ -742,9 +327,9 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec person_slug(String.t() | nil, String.t()) :: {:ok, String.t()} | {:error, term()}
   def person_slug(hint, name) do
-    if is_binary(hint) and Sanctum.Slug.valid?(hint) and slug_free?("person", hint),
+    if is_binary(hint) and Sanctum.Slug.valid?(hint) and slug_free?(hint),
       do: {:ok, hint},
-      else: derived_slug("person", name)
+      else: derived_slug(name)
   end
 
   @doc """
@@ -765,13 +350,13 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  defp derived_slug(kind, name) do
+  defp derived_slug(name) do
     case Sanctum.Slug.from_name(name) do
       nil ->
         {:error, :invalid_name}
 
       base ->
-        case Enum.find(derived_candidates(base), &slug_free?(kind, &1)) do
+        case Enum.find(derived_candidates(base), &slug_free?/1) do
           nil -> {:error, :slug_taken_or_invalid}
           slug -> {:ok, slug}
         end
@@ -787,14 +372,10 @@ defmodule Sanctum.Tenancy.Athanors do
   # with any trailing hyphen removed. Cutting a slug at a fixed width lands
   # on a hyphen often enough, and `"...-" <> "-2"` is a double hyphen —
   # which the slug grammar (single hyphens only) then rejects, so the mint
-  # fails with a format error rather than taking the next free name. Long
-  # names hit this: a pair athanor named from two email-derived display
-  # names is over the limit before it starts.
+  # fails with a format error rather than taking the next free name.
   defp suffixable(base), do: base |> String.slice(0, 36) |> String.trim_trailing("-")
 
-  # Per kind: the unique index is `[kind, slug]`, so a group slug never
-  # collides with a person's and each is checked against its own kind.
-  defp slug_free?(kind, slug), do: match?({:error, :not_found}, get_by_slug(kind, slug))
+  defp slug_free?(slug), do: match?({:error, :not_found}, get_by_slug(slug))
 
   @doc """
   Whether `value` is an athanor id (`"ath_..."`) rather than a route slug.

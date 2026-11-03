@@ -655,7 +655,15 @@ defmodule Opus.ProviderTest do
          %{ctx: _ctx} do
       n = System.unique_integer([:positive])
       user = "local|idp|graph-outage-#{n}"
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Graph outage #{n}")
+
+      {:ok, athanor} =
+        Sanctum.Tenancy.Athanors.create(%{
+          name: "Graph outage #{n}",
+          slug: "graph-outage-#{n}",
+          owner_user_id: user,
+          created_by: user
+        })
+
       {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
       ctx = PrismWeb.ConnCase.ready_athanor!(athanor.id, user)
       soul = Prima.AgentRef.soul_ref()

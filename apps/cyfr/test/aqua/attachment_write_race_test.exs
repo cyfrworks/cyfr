@@ -3,15 +3,14 @@
 
 defmodule Aqua.AttachmentWriteRaceTest do
   @moduledoc """
-  Two members attaching a file of the same name under one message at once:
-  whichever lands first keeps its bytes, unsent or sent, and the other's
-  write leaves them as they are, since the check and the write are one
-  conditional create (`Aqua.Attachments.store/4`).
+  Two sessions attaching a file of the same name under one message at
+  once: whichever lands first keeps its bytes, unsent or sent, and the
+  other's write leaves them as they are, since the check and the write are
+  one conditional create (`Aqua.Attachments.store/4`).
   """
 
   use ExUnit.Case, async: false
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
 
   defmodule ParkedPut do
     @moduledoc false
@@ -69,27 +68,24 @@ defmodule Aqua.AttachmentWriteRaceTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     n = System.unique_integer([:positive])
 
-    [alice, bob] =
-      for name <- ["alice", "bob"] do
-        {:ok, user} =
-          Sanctum.Test.People.linked(%{
-            id: "github|https://github.com|#{name}-race-#{n}",
-            provider: "github",
-            email: "#{name}-race-#{n}@example.com",
-            verified: true
-          })
+    {:ok, person} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|race-#{n}",
+        provider: "github",
+        email: "race-#{n}@example.com",
+        verified: true
+      })
 
-        user.id
-      end
+    athanor = Sanctum.Test.People.athanor!(person)
+    # A send starts a turn, which a filled athanor admits.
+    Sanctum.TestContext.ready!(athanor.id)
 
-    {:ok, group} = Athanors.create_group(alice, "Attachment race #{n}")
-    {:ok, _} = Members.ensure(bob, scope: "athanor", athanor_id: group.id)
-
+    # The person's two sessions, each in their own athanor.
     [a, b] =
-      for user <- [alice, bob] do
+      for session <- ["first", "second"] do
         Context.build(
-          user_id: user,
-          athanor_id: group.id,
+          user_id: person.id,
+          athanor_id: athanor.id,
           provider: "github",
           permissions: [:*],
           scope: :athanor,
@@ -97,7 +93,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
           authenticated: true
         )
         |> Sanctum.TestContext.via(:prism)
-        |> Map.put(:session_token_hash, :crypto.hash(:sha256, user))
+        |> Map.put(:session_token_hash, :crypto.hash(:sha256, session <> person.id))
       end
 
     {:ok, thread} = Arca.ThreadStorage.create(Context.actor(a))
@@ -106,7 +102,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
 
   for sent <- [false, true] do
     @sent sent
-    test "a member racing another on the same file leaves the other's #{if sent, do: "sent", else: "unsent"} bytes as they are",
+    test "a session racing another on the same file leaves the other's #{if sent, do: "sent", else: "unsent"} bytes as they are",
          fixture do
       %{a: a, b: b, thread: thread} = fixture
       message = Prima.UUID7.generate_id("msg")
@@ -122,6 +118,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
                    "action" => "send",
                    "thread" => thread.id,
                    "message" => "with a file",
+                   "agent" => "aqua",
                    "id" => message,
                    "attachments" => [ref],
                    "client_id" => "race-sent"
@@ -134,7 +131,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
       result = Task.await(task, 5_000)
 
       assert {:ok, "victim bytes"} == Arca.get(Context.actor(b), path),
-             "other member's bytes changed after the competing upload returned #{inspect(result)}"
+             "the other session's bytes changed after the competing upload returned #{inspect(result)}"
     end
   end
 

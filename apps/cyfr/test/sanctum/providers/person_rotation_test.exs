@@ -27,7 +27,6 @@ defmodule Sanctum.Providers.PersonRotationTest do
   alias Prima.Identity
   alias Prima.Identity.Entry
   alias Sanctum.{Cipher, CipherAAD, Context}
-  alias Sanctum.Tenancy.Athanors
 
   # A directory this home cannot reach: a loopback port nothing listens on.
   @unreachable "https://localhost:1"
@@ -39,7 +38,7 @@ defmodule Sanctum.Providers.PersonRotationTest do
     :ok
   end
 
-  # A person seated in a group of their own, and the context their session
+  # A person seated in their own athanor, and the context their session
   # establishes there.
   defp seated! do
     n = System.unique_integer([:positive])
@@ -52,7 +51,7 @@ defmodule Sanctum.Providers.PersonRotationTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Rotation tool #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

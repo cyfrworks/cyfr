@@ -16,8 +16,7 @@ defmodule PrismWeb.FilesLive do
   ## Sending a copy
 
   Files picked under `data/` are offered, through `file/offer`, to a
-  person picked from those the person sits with in an athanor
-  (`Sanctum.Tenancy.Members.people_sharing/1`) or in a shared thread
+  person picked from those the person sits with in a shared thread
   (`Sanctum.SharedThreads.people_in_threads_with/1`). The Inbox lists what
   `file/offers` answers: the offers waiting for the person, each with its
   files' names and sizes and its sender, accepted into the folder the
@@ -261,14 +260,14 @@ defmodule PrismWeb.FilesLive do
     ctx = socket.assigns.context
 
     picker =
-      with {:ok, in_athanors} <- Sanctum.Tenancy.Members.people_sharing(ctx.user_id),
-           {:ok, in_threads} <- Sanctum.SharedThreads.people_in_threads_with(ctx.user_id) do
-        (in_athanors ++ in_threads)
-        |> Enum.uniq_by(& &1.user_id)
-        |> Enum.map(&Map.put(&1, :label, People.label(&1, ctx)))
-        |> Enum.sort_by(&{String.downcase(&1.label), &1.user_id})
-      else
-        {:error, _reason} -> :error
+      case Sanctum.SharedThreads.people_in_threads_with(ctx.user_id) do
+        {:ok, people} ->
+          people
+          |> Enum.map(&Map.put(&1, :label, People.label(&1, ctx)))
+          |> Enum.sort_by(&{String.downcase(&1.label), &1.user_id})
+
+        {:error, _reason} ->
+          :error
       end
 
     {:noreply, assign(socket, :picker, picker)}
@@ -506,13 +505,13 @@ defmodule PrismWeb.FilesLive do
       <.card :if={@picker}>
         <div id="send-copy" class="space-y-3">
           <p class="text-sm text-gray-300">
-            Send a copy of {count(MapSet.to_list(@selected), "file")} to someone you share an athanor or a thread with. The copy is taken now: later edits do not follow it, and nothing lands until they accept it.
+            Send a copy of {count(MapSet.to_list(@selected), "file")} to someone you share a thread with. The copy is taken now: later edits do not follow it, and nothing lands until they accept it.
           </p>
           <p :if={@picker == :error} class="text-sm text-red-300">
-            Who you share an athanor or a thread with could not be read. Try again.
+            Who you share a thread with could not be read. Try again.
           </p>
           <p :if={@picker == []} class="text-sm text-gray-500">
-            You share no athanor or thread with anyone yet.
+            You share no thread with anyone yet.
           </p>
           <form
             :if={is_list(@picker) and @picker != []}

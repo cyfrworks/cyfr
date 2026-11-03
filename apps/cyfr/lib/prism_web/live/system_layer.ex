@@ -2516,8 +2516,11 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp place_name(%{kind: "person"}, _context), do: "your own athanor"
-  defp place_name(athanor, context), do: PrismWeb.Athanors.label(athanor, context)
+  defp place_name(athanor, context) do
+    if PrismWeb.Athanors.own?(athanor, context),
+      do: "your own athanor",
+      else: PrismWeb.Athanors.label(athanor, context)
+  end
 
   # A re-enable asked for from the checklist, dispatched as the layer's
   # own sensitive change. Its fresh confirmation opens the record's

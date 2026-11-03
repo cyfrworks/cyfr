@@ -152,17 +152,6 @@ defmodule Arca.Users do
 
   def identities(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
-  @doc "Whether any person's row names this athanor as their own furnace."
-  @spec personal_athanor?(Prima.Actor.t(), String.t()) :: {:ok, boolean()} | refusal()
-  def personal_athanor?(%Prima.Actor{scope: :platform}, athanor_id)
-      when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.personal_athanor?", fn ->
-      {:ok, Arca.Repo.exists?(from(u in User, where: u.personal_athanor_id == ^athanor_id))}
-    end)
-  end
-
-  def personal_athanor?(%Prima.Actor{}, _athanor_id), do: {:error, :cross_tenant}
-
   @doc "Stamp `now` on the identity row this key names, as its last sighting."
   @spec touch_identity(Prima.Actor.t(), String.t(), DateTime.t()) :: :ok | refusal()
   def touch_identity(%Prima.Actor{scope: :platform}, key, %DateTime{} = now)

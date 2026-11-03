@@ -16,16 +16,13 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
 
   # Each takes authority away and gives none: signing out, a command line
   # withdrawing its sign-in, revoking (a command line's session and a
-  # shared key among them), withdrawing consent, leaving, removing a
-  # member, withdrawing a shared thread's invitation, denying someone at a
-  # door, unlinking a door and archiving.
+  # shared key among them), withdrawing consent, leaving or removing
+  # someone from a shared thread, withdrawing its invitation, denying
+  # someone at a door, unlinking a door and archiving a shared thread.
   @roster ~w(
-    athanor.archive
     door.deny
     invitation.revoke
     key.revoke
-    member.leave
-    member.remove
     pairing.revoke
     passkey.revoke
     person.unlink_door

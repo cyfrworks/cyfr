@@ -3,12 +3,10 @@
 
 defmodule Sanctum.Tenancy.ArchiveTest do
   @moduledoc """
-  Archiving is one chokepoint: whichever path archives an athanor — a
-  member's `athanor.archive`, the last member leaving, a person being
-  denied — its API keys are revoked and every member's caller memo is
-  dropped before it returns, what runs in it is cancelled as the server
-  (its runners killed through their worker service) and its members are
-  told.
+  An athanor is archived by its person's denial: its API keys are revoked
+  and every member's caller memo is dropped before the denial returns,
+  what runs in it is cancelled as the server (its runners killed through
+  their worker service) and its members are told.
 
   The credentials and the memos are authorization properties and go
   synchronously. The running work is the execution domain's: the archive
@@ -24,7 +22,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   @reference "reagent:local.archive-hang:1.0.0"
 
@@ -189,29 +187,6 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     key
   end
 
-  test "archive/2 revokes the athanor's keys, cancels its running work as the server, and tells its members" do
-    :ok = watch_archives!()
-    n = System.unique_integer([:positive])
-    owner = person(n)
-    {:ok, group} = Athanors.create_group(owner.id, "Arch #{n}")
-    key = key_in(group.id, owner.id)
-    {running, waiter} = running!(group.id, owner.id)
-
-    Cyfr.Bus.subscribe(
-      Prima.Actor.in_athanor(group.id),
-      Cyfr.Bus.notify(Prima.Actor.in_athanor(group.id))
-    )
-
-    assert {:ok, %{status: "archived"}} = Athanors.archive(group)
-
-    assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
-    assert_receive {:cancelled, ^running, "system"}, @reaction_ms
-    assert :ok = wait_until(fn -> cancelled?(running) end, @reaction_ms)
-    athanor_id = group.id
-    assert_receive %Cyfr.Bus.Notify{athanor_id: ^athanor_id, kind: :athanor_changed}
-    :ok = settled!([waiter])
-  end
-
   test "archive drops every member's established-context memo, so a cached caller is refused next call" do
     # `Sanctum.Caller` memoizes an established context for a short TTL, and
     # that context carries the athanor. The memo is a cache of an
@@ -231,24 +206,24 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
     n = System.unique_integer([:positive])
     owner = person(n)
-    {:ok, group} = Athanors.create_group(owner.id, "Memo #{n}")
+    own = Sanctum.Test.People.athanor!(owner)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(%{
-        member_ctx(group.id, owner.id)
+        member_ctx(own.id, owner.id)
         | provider: "github",
           email: owner.email
       })
 
     assert {:ok, %Context{athanor_id: cached}} = Sanctum.Caller.establish(session.token)
-    assert cached == group.id
+    assert cached == own.id
 
     # The member's memos, by their session: the cache is the node's, and
     # a caller established elsewhere on it is not this member's.
     memos = Arca.Cache.Keys.match_established(Sanctum.Session.token_hash(session.token))
     refute Arca.Cache.match(memos) == []
 
-    assert {:ok, %{status: "archived"}} = Athanors.archive(group)
+    assert %{status: "archived"} = Sanctum.TestContext.archive!(own.id)
 
     assert Arca.Cache.match(memos) == [],
            "the archive left a member's caller memoized inside the athanor it just shut"
@@ -256,53 +231,31 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     refute match?({:ok, %Context{athanor_id: ^cached}}, Sanctum.Caller.establish(session.token))
   end
 
-  test "the last member leaving a group archives it the same way" do
-    :ok = watch_archives!()
-
-    n = System.unique_integer([:positive])
-    owner = person(n)
-    {:ok, group} = Athanors.create_group(owner.id, "Leave #{n}")
-    key = key_in(group.id, owner.id)
-    {running, waiter} = running!(group.id, owner.id)
-
-    :ok = Members.remove_member(group, user_id: owner.id)
-
-    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
-    assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
-    assert_receive {:cancelled, ^running, "system"}, @reaction_ms
-    assert :ok = wait_until(fn -> cancelled?(running) end, @reaction_ms)
-    :ok = settled!([waiter])
-  end
-
-  test "denying a person archives their own athanor and the groups they were the last member of, closing both" do
+  test "denying a person archives their own athanor: its keys revoked, its running work cancelled as the server, its members told" do
     :ok = watch_archives!()
 
     n = System.unique_integer([:positive])
     u = person(n)
 
     personal = Sanctum.Test.People.athanor!(u)
-    {:ok, alone} = Athanors.create_group(u.id, "Alone #{n}")
-    other = person(n + 100_000)
-    {:ok, shared} = Athanors.create_group(other.id, "Shared #{n}")
-    {:ok, :added} = Members.add(shared, [user_id: u.id], other.id)
     personal_key = key_in(personal.id, u.id)
-    alone_key = key_in(alone.id, u.id)
     {personal_run, personal_waiter} = running!(personal.id, u.id)
-    {alone_run, alone_waiter} = running!(alone.id, u.id)
+
+    Cyfr.Bus.subscribe(
+      Prima.Actor.in_athanor(personal.id),
+      Cyfr.Bus.notify(Prima.Actor.in_athanor(personal.id))
+    )
 
     assert {:ok, %{status: "denied"}} = Users.deny(u)
 
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
-    assert {:ok, %{status: "archived"}} = Athanors.get(alone.id)
-    assert {:ok, %{status: "active"}} = Athanors.get(shared.id)
     assert {:error, :revoked} = Sanctum.ApiKey.validate(personal_key, [])
-    assert {:error, :revoked} = Sanctum.ApiKey.validate(alone_key, [])
+    athanor_id = personal.id
+    assert_receive %Cyfr.Bus.Notify{athanor_id: ^athanor_id, kind: :athanor_changed}
 
-    # The two cancels are the watch's, each in its own time.
+    # The cancel is the watch's, in its own time.
     assert_receive {:cancelled, ^personal_run, "system"}, @reaction_ms
-    assert_receive {:cancelled, ^alone_run, "system"}, @reaction_ms
     assert :ok = wait_until(fn -> cancelled?(personal_run) end, @reaction_ms)
-    assert :ok = wait_until(fn -> cancelled?(alone_run) end, @reaction_ms)
-    :ok = settled!([personal_waiter, alone_waiter])
+    :ok = settled!([personal_waiter])
   end
 end

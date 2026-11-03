@@ -19,7 +19,6 @@ defmodule CyfrWeb.ContextGuardTest do
   alias CyfrWeb.ContextGuard
   alias Phoenix.LiveView.Socket
   alias Sanctum.{Caller, Context}
-  alias Sanctum.Tenancy.{Athanors, Members}
 
   @sanctum_keys [:caller_memo_ttl_ms]
 
@@ -79,12 +78,6 @@ defmodule CyfrWeb.ContextGuardTest do
       Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id),
         set: [status: "archived"]
       )
-
-  defp group!(user, name) do
-    {:ok, group} = Athanors.create_group(user.user_id, "#{name} #{user.namespace}")
-    {:ok, _} = Members.ensure(user.user_id, scope: "athanor", athanor_id: group.id)
-    group
-  end
 
   # A person identifier the door would allow, so a refusal is the
   # revocation's and never the value's.
@@ -197,22 +190,25 @@ defmodule CyfrWeb.ContextGuardTest do
          %{conn: conn} do
       user = test_user()
       {conn, _token, _hash} = signed_in(conn, user)
-      group = group!(user, "Seat")
+      own = Sanctum.Test.People.athanor!(user.user_id)
 
-      {view, _html} = mount_athanor(conn, "/members", group)
-      drop_seat!(user.user_id, group.id)
+      {view, _html} = mount_athanor(conn, "/settings", own)
+      drop_seat!(user.user_id, own.id)
       bound!(0)
 
-      assert {:error, {:redirect, %{to: "/"}}} = render_click(view, "load_members", %{})
+      assert {:error, {:redirect, %{to: "/"}}} =
+               view
+               |> element("button[phx-click=set_mode][phx-value-mode=lite]")
+               |> render_click()
     end
 
     test "an archive nobody announced ends the focus", %{conn: conn} do
       user = test_user()
       {conn, _token, _hash} = signed_in(conn, user)
-      group = group!(user, "Archive")
+      own = Sanctum.Test.People.athanor!(user.user_id)
 
-      {view, _html} = mount_athanor(conn, "/settings", group)
-      archive_row!(group.id)
+      {view, _html} = mount_athanor(conn, "/settings", own)
+      archive_row!(own.id)
       bound!(0)
 
       send(view.pid, :load)
@@ -255,12 +251,8 @@ defmodule CyfrWeb.ContextGuardTest do
       delete_session!(hash)
       bound!(0)
 
-      name = "Never #{System.unique_integer([:positive])}"
-
       assert {:error, {:redirect, %{to: "/login"}}} =
-               render_submit(bar, "create_group", %{"name" => name})
-
-      refute Enum.any?(Athanors.list_for_user(user.user_id), &(&1.name == name))
+               render_click(bar, "toggle_popover", %{"name" => "health"})
     end
 
     test "within the bound a context is acted on; the bound runs from its validation, not its reuse",

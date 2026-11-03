@@ -164,6 +164,12 @@ defmodule Arca.Test.Actor do
     :ok
   end
 
+  # Each athanor is one person's. `ath_test` is the local test person's
+  # (`Sanctum.TestContext.local/0`); any other row a test seeds is a second
+  # person's, under an owner id no other row holds.
+  defp owner_of("ath_test"), do: "local|local|testns"
+  defp owner_of(_athanor_id), do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
   @doc """
   Insert an `athanors` row so settings-bearing paths can resolve it.
   Idempotent.
@@ -188,14 +194,44 @@ defmodule Arca.Test.Actor do
         {:ok, athanor} =
           Arca.Athanors.insert(system, %{
             id: athanor_id,
-            kind: Keyword.get(opts, :kind, "group"),
             name: Keyword.get(opts, :name, athanor_id),
             slug: slug,
             created_by: Keyword.get(opts, :created_by, "system"),
-            owner_user_id: Keyword.get(opts, :owner_user_id)
+            owner_user_id: Keyword.get_lazy(opts, :owner_user_id, fn -> owner_of(athanor_id) end)
           })
 
         athanor
     end
+  end
+
+  @doc """
+  The athanor's standing moved as its person's denial moves it — `status`
+  archived, `archived_at` now and one more `security_generation` — and
+  nothing else: for a test that needs an archived athanor without denying
+  a person (`Arca.SecurityTransitions.deny_user/3` is the product's one
+  path, and retires what the standing issued). Answers the row.
+  """
+  @spec archive!(String.t()) :: map()
+  def archive!(athanor_id), do: standing!(athanor_id, "archived")
+
+  @doc "The athanor reopened as its person's allow reopens it (`archive!/1`'s inverse)."
+  @spec reopen!(String.t()) :: map()
+  def reopen!(athanor_id), do: standing!(athanor_id, "active")
+
+  defp standing!(athanor_id, status) do
+    import Ecto.Query, only: [from: 2]
+
+    now = DateTime.utc_now()
+    archived_at = if status == "archived", do: now
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id and a.status != ^status),
+        set: [status: status, archived_at: archived_at, updated_at: now],
+        inc: [security_generation: 1]
+      )
+
+    {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
+    athanor
   end
 end

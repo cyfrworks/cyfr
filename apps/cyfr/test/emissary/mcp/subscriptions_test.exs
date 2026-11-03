@@ -252,7 +252,10 @@ defmodule Emissary.MCP.SubscriptionsStreamTest do
     # The stream's own window, short: the case's stream ends with it.
     Cyfr.Test.Settings.put("mcp_subscription_max_ms", 3_000)
 
-    ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+    # A person signed in, working in their own athanor.
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    own = Sanctum.Test.People.athanor!(user)
+    ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     {:ok, session} = Sanctum.Session.create(ctx)
     {:ok, ctx: ctx, session: session}
   end

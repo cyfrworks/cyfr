@@ -9,9 +9,8 @@ defmodule Arca.AthanorCensus do
   every write that can raise that number counts it inside the transaction
   that writes: a mint (`Arca.Athanors.mint/2`), an admission counting
   before the person whose athanor it mints (`Arca.Athanors.within_caps/2`),
-  and the two transitions
-  that reopen an archived athanor (`Arca.SecurityTransitions`
-  `allow_user/3` and `unarchive_athanor/3`). Row locks cannot serialize
+  and the transition
+  that reopens an archived athanor (`Arca.SecurityTransitions.allow_user/3`). Row locks cannot serialize
   them, because two mints hold no row in common and a count reads rows
   nobody locks, so each takes this lock before it counts and two writers
   at the last place cannot both count the place free.

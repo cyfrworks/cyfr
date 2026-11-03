@@ -5,8 +5,8 @@ defmodule Arca.Repo.Migrations.Baseline do
   @moduledoc """
   The schema, as one migration.
 
-  Every tenant-owned row carries an `athanor_id` — the athanor (a person's or
-  a group's furnace) that owns it. The column is `NOT NULL` with no default:
+  Every tenant-owned row carries an `athanor_id` — the athanor (a person's
+  furnace) that owns it. The column is `NOT NULL` with no default:
   a row that forgets its athanor must fail, never default into somebody's.
   It carries no foreign key TO `athanors` on purpose — an athanor is
   archived, never deleted, so nothing needs the constraint and every fixture
@@ -115,10 +115,9 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create table(:athanors, primary_key: false) do
       add :id, :string, primary_key: true, null: false
-      add :kind, :string, null: false
       add :name, :string, null: false
       add :slug, :string, null: false
-      add :owner_user_id, :string
+      add :owner_user_id, :string, null: false
       add :status, :string, null: false, default: "active"
       add :archived_at, :utc_datetime_usec
       add :created_by, :string, null: false
@@ -128,10 +127,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       # as JSON. Written by the server alone and cleared by a completed fill.
       add :provisioning_failed_at, :utc_datetime_usec
       add :provisioning_failure, :text
-      # open | frozen: a two-person athanor's members are fixed at creation.
-      add :roster, :string, null: false, default: "open"
-      # SHA-256 over the JSON-encoded sorted member ids of a frozen pair.
-      add :pair_key, :string
 
       add :security_generation, :bigint,
         null: false,
@@ -146,17 +141,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       create constraint(:athanors, athanor_generation.name, check: athanor_generation.expr)
     end
 
-    create unique_index(:athanors, [:kind, :slug])
-
-    # One personal athanor per person, and one active pair per key. Default
-    # index names on purpose: SQLite reports a violation by column, and
-    # ecto_sqlite3 derives the constraint name from it, so only the derived
-    # name matches the changeset on both adapters.
-    create unique_index(:athanors, [:owner_user_id], where: "kind = 'person'")
-
-    create unique_index(:athanors, [:pair_key],
-             where: "pair_key IS NOT NULL AND status = 'active'"
-           )
+    # One athanor per slug and one per person. Default index names on
+    # purpose: SQLite reports a violation by column, and ecto_sqlite3
+    # derives the constraint name from it, so only the derived name matches
+    # the changeset on both adapters.
+    create unique_index(:athanors, [:slug])
+    create unique_index(:athanors, [:owner_user_id])
 
     create index(:athanors, [:status])
 
@@ -244,15 +234,12 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:server_allowlist, [:kind, :value])
     create index(:server_allowlist, [:status])
 
-    # Presence-only assignments: a row means "user X is a member of athanor A"
-    # (or, with no athanor, a platform admin). No roles. An `invited` row is
-    # keyed by a person identifier (`per_…`) before the person has signed in
-    # and carries no user_id; it activates, atomically, on their first
-    # admitted sign-in.
+    # Presence-only assignments: a row means "user X is a member of athanor A",
+    # the person's seat in their own athanor (or, with no athanor, a platform
+    # admin). No roles.
     create table(:memberships, primary_key: false) do
       add :id, :string, primary_key: true, null: false
-      add :user_id, :string
-      add :person_identifier, :string
+      add :user_id, :string, null: false
       add :scope, :string, null: false, default: "athanor"
       add :status, :string, null: false, default: "active"
       add :added_by, :string
@@ -262,18 +249,15 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create index(:memberships, [:user_id])
-    create index(:memberships, [:person_identifier])
     create index(:memberships, [:athanor_id])
 
     # Raw SQL because the uniqueness has to treat a NULL as a value — a
-    # platform assignment carries no athanor, an invited row no user, an
-    # active row no identifier — and two rows agreeing on all four are the
-    # same assignment. COALESCE in an index expression is not something
-    # `unique_index/3` can express.
+    # platform assignment carries no athanor — and two rows agreeing on all
+    # three are the same assignment. COALESCE in an index expression is not
+    # something `unique_index/3` can express.
     execute """
     CREATE UNIQUE INDEX memberships_assignment_index
-    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''),
-                    COALESCE(person_identifier, ''))
+    ON memberships (scope, COALESCE(athanor_id, ''), user_id)
     """
 
     invitation_ends = [
@@ -2897,19 +2881,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:messages, [:athanor_id, :inserted_at])
     create index(:messages, [:athanor_id, :turn_id])
     create index(:messages, [:thread_id, :status])
-
-    # Follows for each member's sidebar: display only; membership still
-    # decides access.
-    create table(:thread_subscriptions, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
-      add :thread_id, :string, null: false
-      add :user_id, :string, null: false
-      add :joined_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:thread_subscriptions, [:thread_id, :user_id])
-    create index(:thread_subscriptions, [:athanor_id, :user_id])
   end
 
   # ==========================================================================

@@ -22,9 +22,7 @@ defmodule PrismWeb.AquaApprovalCard do
     - for this thread until… — the same, ending 1, 8 or 24 hours from
       the click (`:thread`, `until` computed here in UTC);
     - always — a standing allow for the agent wherever it works (an
-      agent-scope row in its home athanor). The row belongs to the
-      athanor, not to whoever clicks: in a group the control says so,
-      because one member is deciding for everyone;
+      agent-scope row in its home athanor);
     - for this schedule — the same, ending with the schedule the card's
       run was started by (`:always`, lifecycle `:schedule`), offered only
       when that run's row names one (`scheduled`);
@@ -303,11 +301,10 @@ defmodule PrismWeb.AquaApprovalCard do
                 phx-click="approval:approve"
                 phx-value-scope="always"
                 phx-target={@myself}
-                data-confirm={@shared_with && always_confirm(@shared_with)}
                 class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
-                title={always_title(@shared_with)}
+                title="Stop asking — adds this action to AQUA's allowlist as auto-approved"
               >
-                always{if @shared_with, do: " — for everyone here"}
+                always
               </button>
               <label :if={@limit} class="inline-flex items-center gap-1" data-test="approval-limit">
                 <input
@@ -343,7 +340,7 @@ defmodule PrismWeb.AquaApprovalCard do
               — standing for this chat{bounds_label(@bounds)}
             </span>
             <span :if={@scope == :always} class="text-gray-500">
-              — won't ask again{if @shared_with, do: ", for anyone here"}{bounds_label(@bounds)}
+              — won't ask again{bounds_label(@bounds)}
             </span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
             <span :if={@result_summary} class="text-gray-400 ml-2 truncate">— {@result_summary}</span>
@@ -381,7 +378,6 @@ defmodule PrismWeb.AquaApprovalCard do
       |> assign(assigns)
       |> assign_new(:decline_reason_open, fn -> false end)
       |> assign_new(:agent_label, fn -> nil end)
-      |> assign_new(:shared_with, fn -> nil end)
       |> assign_new(:result_summary, fn -> nil end)
       |> assign_new(:reason, fn -> nil end)
       |> assign_new(:scope, fn -> nil end)
@@ -455,18 +451,6 @@ defmodule PrismWeb.AquaApprovalCard do
   def handle_event("approval:cancel_decline", _params, socket) do
     {:noreply, assign(socket, :decline_reason_open, false)}
   end
-
-  # The allowlist an "always" writes is the athanor's own — in a group that
-  # is a decision taken on behalf of everyone in it, and the control should
-  # not read as a personal preference.
-  defp always_title(nil),
-    do: "Stop asking — adds this action to AQUA's allowlist as auto-approved"
-
-  defp always_title(name),
-    do: "Stop asking — adds this action to #{name}'s AQUA allowlist, for every member"
-
-  defp always_confirm(name),
-    do: "Stop asking for this action in #{name}? It applies to every member, not just you."
 
   # The choice an offer stands for: once; this thread, ending with the
   # card's own run or at a deadline computed here, in UTC; or the agent

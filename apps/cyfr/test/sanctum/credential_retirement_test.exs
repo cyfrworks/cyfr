@@ -6,9 +6,9 @@ defmodule Sanctum.CredentialRetirementTest do
   Retirement is permanent, and an issuance answers to the standing its
   context read.
 
-  A denial, an archive or a membership removal retires what it retires in
-  one transaction and announces only what that transaction committed; an
-  allow or a reopen restores standing and nothing it retired. A context
+  A denial or a membership removal retires what it retires in one
+  transaction and announces only what that transaction committed; an
+  allow restores standing and nothing it retired. A context
   read before a retirement — a signed-in identity, a session, a key —
   carries the generations it read (`Sanctum.Context.credential_binding`),
   and issuing a session or a key from it after the restore is refused,
@@ -223,45 +223,25 @@ defmodule Sanctum.CredentialRetirementTest do
     end
 
     test "a context read before an archive cannot issue in the athanor after the reopen" do
-      {user, _own} = owner!("pre-archive")
-      {:ok, group} = Athanors.create_group(user.id, "Pre-archive #{uniq()}")
+      {user, own} = owner!("pre-archive")
       {_session, ctx} = signed_in!(user)
-      {:ok, ctx} = Context.focus(ctx, group.id)
-      {:ok, %{api_key: key}} = issue(ctx, %{name: "in-group-#{uniq()}"})
+      {:ok, ctx} = Context.focus(ctx, own.id)
+      {:ok, %{api_key: _}} = issue(ctx, %{name: "in-own-#{uniq()}"})
 
-      {:ok, archived} = Athanors.archive(group)
+      archived = Sanctum.TestContext.archive!(own.id)
       assert archived.security_generation == 2
-      {:ok, reopened} = Athanors.unarchive(archived)
+      reopened = Sanctum.TestContext.reopen!(own.id)
       assert reopened.security_generation == 3
 
       assert {:error, :stale_generation} = issue(ctx, %{name: "late-#{uniq()}"})
-      assert {:error, :revoked} = ApiKey.validate(key, [])
 
       # Focusing again is a new standing read, and issues; the context read
       # before the archive still cannot rotate what the new one minted.
-      {:ok, refocused} = Context.focus(ctx, group.id)
+      {:ok, refocused} = Context.focus(ctx, own.id)
       fresh = "fresh-#{uniq()}"
       assert {:ok, _} = issue(refocused, %{name: fresh})
       assert {:error, :stale_generation} = rotate(ctx, fresh)
       assert {:ok, _} = rotate(refocused, fresh)
-    end
-
-    test "a context whose seat was removed cannot issue in that athanor" do
-      {user, _own} = owner!("seatless")
-      other = person!("stays")
-      {:ok, group} = Athanors.create_group(user.id, "Seat #{uniq()}")
-      {:ok, :added} = Members.add(group, [user_id: other.id], user.id)
-      {_session, ctx} = signed_in!(user)
-      {:ok, ctx} = Context.focus(ctx, group.id)
-
-      :ok = Members.remove_member(group, user_id: user.id)
-      # The confirmation's standing check refuses the lost seat first.
-      assert {:error, :not_standing} = issue(ctx, %{name: "gone-#{uniq()}"})
-
-      # Rejoining is a new row: the old focus is not restored by it.
-      {:ok, :added} = Members.add(group, [user_id: user.id], other.id)
-      assert {:error, reason} = issue(ctx, %{name: "rejoined-#{uniq()}"})
-      assert reason in [:unauthenticated, :not_standing]
     end
   end
 
@@ -323,20 +303,6 @@ defmodule Sanctum.CredentialRetirementTest do
       assert {:error, {:limit_reached, :max_athanors, ^count}} = Users.allow(denied)
       assert {:ok, %{status: "denied", security_generation: 2}} = Users.get(user.id)
       assert {:ok, %{status: "archived"}} = Athanors.get(own.id)
-    end
-
-    test "a frozen athanor ended by a denial stays ended" do
-      {user, _own} = owner!("frozen")
-      other = person!("partner")
-      {:ok, pair} = Athanors.create_pair(user.id, other.id)
-
-      {:ok, denied} = Users.deny(user)
-      assert {:ok, %{status: "archived"}} = Athanors.get(pair.id)
-      {:ok, _} = Users.allow(denied)
-
-      assert {:ok, %{status: "archived"}} = Athanors.get(pair.id)
-      assert {:error, :frozen_is_final} = Athanors.unarchive(pair)
-      refute Members.member?(user.id, pair.id)
     end
   end
 

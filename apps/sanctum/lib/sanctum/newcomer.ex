@@ -155,7 +155,7 @@ defmodule Sanctum.Newcomer do
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @typedoc """
   What the CYFR sign-in verified of a remote person, and the hash of the
@@ -663,17 +663,15 @@ defmodule Sanctum.Newcomer do
     if is_binary(remote[:invitation]),
       do: Sanctum.Invitations.announce(remote.invitation, person.id)
 
-    for activate <- [&Members.activate_invited/1, &Sanctum.SharedThreads.activate_invited/1] do
-      case activate.(person) do
-        {:ok, _n} ->
-          :ok
+    case Sanctum.SharedThreads.activate_invited(person) do
+      {:ok, _n} ->
+        :ok
 
-        {:error, reason} ->
-          Logger.error(
-            "[Sanctum.Newcomer] an invitation's activation failed for #{person.id}: " <>
-              inspect(reason)
-          )
-      end
+      {:error, reason} ->
+        Logger.error(
+          "[Sanctum.Newcomer] an invitation's activation failed for #{person.id}: " <>
+            inspect(reason)
+        )
     end
 
     filled(admission, person)

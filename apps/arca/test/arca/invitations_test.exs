@@ -323,7 +323,7 @@ defmodule Arca.InvitationsTest do
   test "an athanor's erasure leaves every invitation", %{actor: actor, in_athanor: in_athanor} do
     {own, _} = issued!(actor)
 
-    assert {:ok, deleted} = Arca.TenantTables.delete_all_for(in_athanor)
+    assert {:ok, deleted} = Arca.Test.TenantTables.delete_all_for(in_athanor)
     refute Map.has_key?(deleted, "invitations")
     assert {:ok, _} = Invitations.get(server(), own.id)
   end

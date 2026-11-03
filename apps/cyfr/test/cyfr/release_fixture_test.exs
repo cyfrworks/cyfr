@@ -60,7 +60,7 @@ defmodule Cyfr.ReleaseFixtureTest do
     assert {:ok, %{admission: "open"}} = Sanctum.Tenancy.Users.get(second["user_id"])
     refute Sanctum.Tenancy.platform_admin?(second["user_id"])
 
-    assert {:ok, %{kind: "person", owner_user_id: owner}} =
+    assert {:ok, %{owner_user_id: owner}} =
              Sanctum.Tenancy.Athanors.get(second["athanor_id"])
 
     assert owner == second["user_id"]

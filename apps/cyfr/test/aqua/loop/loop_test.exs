@@ -1740,7 +1740,7 @@ defmodule Aqua.LoopTest do
   # when the card was drawn, the root's id and the loop's result.
   defp launch_through_loop!(ctx, thread, app_answer, on_probe) do
     %{ref: app} = launchable_app!(ctx)
-    {:ok, _} = Aqua.Notes.pin(ctx, "about-us", "We are planning a trip.")
+    {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
 
     start_supervised!(
       {ScriptedWorker,
@@ -2062,15 +2062,12 @@ defmodule Aqua.LoopTest do
 
   test "a launch whose root cannot be taken back stops the turn paused around it, and nothing after it runs",
        %{ctx: ctx, thread: thread} do
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
-
     # The athanor is archived while the launched app runs, and the app then
     # fails on its own: its failure is known, and the turn's root no longer
     # stands, so no try takes it back.
     %{turn: turn, result: result} =
       launch_through_loop!(ctx, thread, {:error, "the app failed"}, fn _root_id ->
-        assert {:ok, %{status: "archived"}} =
-                 Sanctum.Tenancy.Athanors.archive(athanor, force: true)
+        assert %{status: "archived"} = Sanctum.TestContext.archive!(ctx.athanor_id)
       end)
 
     assert result == {:paused, :launch}

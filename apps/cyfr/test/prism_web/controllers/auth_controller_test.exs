@@ -195,7 +195,7 @@ defmodule PrismWeb.AuthControllerTest do
       assert {:ok, %{namespace: nil, personal_athanor_id: pid}} =
                Sanctum.Tenancy.Users.get(user.id)
 
-      assert {:ok, %{kind: "person", owner_user_id: owner}} = Sanctum.Tenancy.Athanors.get(pid)
+      assert {:ok, %{owner_user_id: owner}} = Sanctum.Tenancy.Athanors.get(pid)
       assert owner == user.id
       assert {:ok, %{user_id: user_id, athanor_id: ^pid}} = Sanctum.Session.load(token)
       assert user_id == user.id

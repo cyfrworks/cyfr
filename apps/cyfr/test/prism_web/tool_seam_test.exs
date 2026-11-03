@@ -168,11 +168,7 @@ defmodule PrismWeb.ToolSeamTest do
   # deliberately outside this seam: the gate exists for STATE CHANGES; a
   # read needs no consent walk and wrapping every one in MCPHelpers would
   # be indirection without a gate behind it.
-  # `follow`/`unfollow` joined for the same reason as `scan`: they write
-  # rows and read as innocuous verbs, so they slipped past the roster.
-  # Exact names, not `follow\w*` — `followed`/`follows?` are reads, and
-  # reads stay outside this seam.
-  @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|scan\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*|follow|unfollow)$/
+  @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|scan\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*)$/
 
   # Any `Module.function(` call, whatever the module is called locally.
   @any_call ~r/\b([A-Z]\w*(?:\.[A-Z]\w+)*)\.([a-z_]\w*[!?]?)\(/
@@ -278,7 +274,7 @@ defmodule PrismWeb.ToolSeamTest do
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
       ~w(thread/create thread/attach thread/send thread/discard thread/stop approval/resolve
          thread/revoke_grant thread/restart_for_consent),
-    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(thread/follow thread/unfollow thread/delete)
+    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(thread/delete)
   }
 
   test "the chat's turn writes go through the thread tool" do

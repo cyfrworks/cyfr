@@ -6,11 +6,13 @@ defmodule Sanctum.TenancyContinuationTest do
   A recovered turn continues as the person, with the person's surface,
   under the origin its row stores, or not at all: a missing or unknown
   origin is refused before anything is read, and a denied user with a
-  surviving membership, a removed member and an archived athanor are
+  surviving membership, a person not seated and an archived athanor are
   refused, never degraded.
   """
 
   use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
 
   alias Sanctum.Tenancy
   alias Sanctum.Tenancy.{Athanors, Members, Users}
@@ -29,11 +31,7 @@ defmodule Sanctum.TenancyContinuationTest do
         name: "Cont #{n}"
       })
 
-    {:ok, athanor} =
-      Athanors.create_group(user.id, "Continuation #{System.unique_integer([:positive])}")
-
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
-    {:ok, user: user, athanor: athanor}
+    {:ok, user: user, athanor: Sanctum.Test.People.athanor!(user)}
   end
 
   test "a seated person continues with the person's surface, under the stored origin", %{
@@ -78,11 +76,15 @@ defmodule Sanctum.TenancyContinuationTest do
   test "a person not seated in the turn's athanor, and an unknown person, are refused", %{
     user: user
   } do
+    n = System.unique_integer([:positive])
+
     {:ok, other} =
-      Athanors.create_group(
-        "github|https://github.com|owner",
-        "Elsewhere #{System.unique_integer([:positive])}"
-      )
+      Athanors.create(%{
+        name: "Elsewhere #{n}",
+        slug: "elsewhere-#{n}",
+        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+        created_by: "system"
+      })
 
     refute Members.member?(user.id, other.id)
     assert {:error, :not_member} = Tenancy.continuation(user.id, other.id, "programmatic")
@@ -93,17 +95,21 @@ defmodule Sanctum.TenancyContinuationTest do
     user: user,
     athanor: athanor
   } do
-    # Another member keeps the athanor open through the denial, so the
-    # surviving row lands in an athanor that still stands.
-    {:ok, _} = Members.ensure("usr_keeper", scope: "athanor", athanor_id: athanor.id)
+    # The denial archives the person's athanor and takes their seat; both
+    # put back by hand, the surviving row lands in an athanor that stands.
     {:ok, _} = Users.deny(user)
+
+    Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id),
+      set: [status: "active"]
+    )
+
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
     assert Members.member?(user.id, athanor.id)
     assert {:error, :denied} = Tenancy.continuation(user.id, athanor.id, "schedule")
   end
 
   test "a person whose athanor was archived is refused", %{user: user, athanor: athanor} do
-    {:ok, _} = Athanors.archive(athanor)
+    Sanctum.TestContext.archive!(athanor.id)
     # Archiving deletes nothing: the seat stands, and the athanor refuses.
     assert Members.member?(user.id, athanor.id)
     assert {:error, :archived} = Tenancy.continuation(user.id, athanor.id, "webhook")

@@ -3384,7 +3384,7 @@ defmodule Sanctum.Consent.CommitRebindRaceTest do
 
     on_exit(fn ->
       unboxed(fn ->
-        {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor))
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor))
         Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
       end)
 

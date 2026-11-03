@@ -391,7 +391,7 @@ defmodule Arca.ConsentStorageTest do
     end
 
     test "a revoked share, an unknown one, a stale digest, a source no longer active and a " <>
-           "revision outside a person's own athanor write nothing",
+           "revision in an athanor with no row write nothing",
          %{terry: terry, entry: entry, share: share, alice: alice} do
       revoked_entry = Arca.Test.Shares.entry!(terry.actor)
       revoked = Arca.Test.Shares.share!(terry.actor, revoked_entry.id)
@@ -399,7 +399,9 @@ defmodule Arca.ConsentStorageTest do
       reauth_entry = Arca.Test.Shares.entry!(terry.actor)
       reauth = Arca.Test.Shares.share!(terry.actor, reauth_entry.id)
       {:ok, _} = VaultStorage.set_status(terry.actor, reauth_entry.id, "needs_reauth")
-      group = Arca.Test.Shares.group!([alice.user.id])
+      # Granted by no person, a revision binds shares only in an athanor
+      # that has a row.
+      nowhere = "ath_cs_none_#{System.unique_integer([:positive])}"
 
       for {athanor, ref, refusal} <- [
             {alice.athanor.id, Arca.Test.Shares.share_ref(revoked.id),
@@ -409,7 +411,7 @@ defmodule Arca.ConsentStorageTest do
              {:binding_went_stale, share.id}},
             {alice.athanor.id, Arca.Test.Shares.share_ref(reauth.id),
              {:entry_unavailable, "needs_reauth"}},
-            {group.id, Arca.Test.Shares.share_ref(share.id), :not_own_athanor}
+            {nowhere, Arca.Test.Shares.share_ref(share.id), :not_own_athanor}
           ] do
         assert {_profile, {:error, ^refusal}} = share_revision(athanor, [ref]), inspect(refusal)
       end
@@ -1624,7 +1626,7 @@ defmodule Arca.ConsentStorageRaceTest do
 
   setup do
     athanor = "ath_once_race_#{System.unique_integer([:positive])}"
-    on_exit(fn -> unboxed(fn -> Arca.TenantTables.delete_all_for(actor(athanor)) end) end)
+    on_exit(fn -> unboxed(fn -> Arca.Test.TenantTables.delete_all_for(actor(athanor)) end) end)
     {:ok, athanor: athanor}
   end
 

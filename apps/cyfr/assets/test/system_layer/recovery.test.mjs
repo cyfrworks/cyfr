@@ -785,7 +785,7 @@ describe("the kit ingress's requests", () => {
     ])
     assert.deepEqual(reenableBody("webhook.reenable"), {operation: "webhook.reenable"})
     assert.deepEqual(reenableBody("pairing.reenable", "pcl_1"), {operation: "pairing.reenable", client_id: "pcl_1"})
-    assert.throws(() => reenableBody("member.add"))
+    assert.throws(() => reenableBody("key.create"))
     assert.deepEqual(Object.keys(KIT_OPERATIONS).filter(endsRecovery), ["pairing.reenable", "passkey.reenable"])
   })
 

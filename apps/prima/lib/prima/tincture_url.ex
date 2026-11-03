@@ -10,8 +10,7 @@ defmodule Prima.TinctureUrl do
       sides agree on it: the console and the controller build the href a
       browser follows, the registry stores it on an entry, and the
       assistant's visibility tool tells a person where their tincture is.
-      `:athanor` is the athanor's route segment: `@<namespace>` names a
-      person's athanor, a bare slug a group's.
+      `:athanor` is the athanor's route segment, `@<namespace>`.
     * `/_s/:credential/*path` — a private tincture version's served file,
       under its asset credential (`Sanctum.TinctureAuth`). The credential
       names the person, the version and the window, so the path names

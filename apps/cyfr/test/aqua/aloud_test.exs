@@ -175,19 +175,20 @@ defmodule Aqua.AloudTest do
     trip: trip
   } do
     # An athanor Alice sits in that is not her own: its assistant spoke to
-    # everyone there, not to her.
-    group = Arca.Test.Shares.group!([alice.user.id])
-    in_group = %{alice.ctx | athanor_id: group.id}
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_group))
+    # its owner, not to her.
+    %{athanor: other} = Arca.Test.Shares.owner!()
+    Arca.Test.Shares.seat!(other.id, alice.user.id)
+    in_other = %{alice.ctx | athanor_id: other.id}
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_other))
 
     {:ok, answer} =
-      Threads.append(Sanctum.Context.actor(in_group), thread.id, %{
+      Threads.append(Sanctum.Context.actor(in_other), thread.id, %{
         author: "aqua",
         kind: "text",
         content: "Sure."
       })
 
-    assert {:error, :not_the_author} = Aloud.post(in_group, thread.id, [answer.id], trip.id)
+    assert {:error, :not_the_author} = Aloud.post(in_other, thread.id, [answer.id], trip.id)
   end
 
   test "only your own lines can be said aloud", %{ctx: ctx, private: private, trip: trip} do

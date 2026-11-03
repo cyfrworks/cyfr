@@ -37,7 +37,7 @@ defmodule Arca.ObjectRevisionsLockTest do
 
     on_exit(fn ->
       unboxed(fn ->
-        {:ok, _} = Arca.TenantTables.delete_all_for(actor)
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
         Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^id))
       end)
 

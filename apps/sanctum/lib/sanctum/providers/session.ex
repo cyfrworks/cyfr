@@ -4,7 +4,7 @@
 defmodule Sanctum.Providers.Session do
   @moduledoc """
   Session tool handlers for the Sanctum MCP provider — logout, whoami,
-  focusing another athanor (`use`), device-flow OAuth, signing a command
+  device-flow OAuth, signing a command
   line in by approving it in Prism (`Sanctum.CliSignIn`), and the caller's
   self-description resources.
 
@@ -213,20 +213,6 @@ defmodule Sanctum.Providers.Session do
         ),
         Operation.new(
           "session",
-          "use",
-          "Use session",
-          [
-            Arg.new("athanor", :string,
-              required: true,
-              description:
-                "For `use`: the athanor to work in — an id, a group slug, or @<namespace>"
-            )
-          ],
-          kind: :write,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
           "unlock",
           "Unlock a protected device into a browser session",
           [
@@ -272,7 +258,7 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — logout, get local identity, focus another athanor, set this CYFR up from the command line with its setup token, run device-flow OAuth, sign a command line in by approving it in Prism and list or revoke command-line sessions, or unlock and lock a protected device's browser session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, set this CYFR up from the command line with its setup token, run device-flow OAuth, sign a command line in by approving it in Prism and list or revoke command-line sessions, or unlock and lock a protected device's browser session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
   end
@@ -361,40 +347,6 @@ defmodule Sanctum.Providers.Session do
        session_expires_at: session_expires_at(ctx)
      }}
   end
-
-  # Point the session at another athanor the caller may work in — what a
-  # non-browser client does instead of following a `/a/<athanor>` URL.
-  def handle(%Context{} = ctx, %{"action" => "use", "athanor" => athanor})
-      when is_binary(athanor) do
-    with {:ok, resolved} <- resolve_athanor(athanor),
-         {:ok, focused} <- Sanctum.Session.use_athanor(ctx, resolved.id) do
-      {:ok, %{athanor: Sanctum.Providers.Athanor.render(resolved), scope: focused.scope}}
-    else
-      # Focus answers this only to a member: a caller without a seat is
-      # told what a missing athanor tells them, below.
-      {:error, :archived} ->
-        {:error, {:invalid_argument, "That athanor is archived"}}
-
-      # No such athanor, or none the caller holds a seat in: one refusal,
-      # naming what the caller named, for an open, an archived and an
-      # absent athanor alike. A session row gone under the call (revoked
-      # meanwhile) answers `:not_found` from `use_athanor/2` too, and is
-      # answered so as well: naming the session instead would tell a caller
-      # with no seat that the athanor exists.
-      {:error, :not_found} ->
-        {:error, {:not_found, "Athanor", athanor}}
-
-      {:error, :no_session} ->
-        {:error,
-         {:invalid_argument, "session.use needs a session — a key is bound to one athanor"}}
-
-      {:error, _} ->
-        {:error, {:unavailable, "Storage"}}
-    end
-  end
-
-  def handle(_ctx, %{"action" => "use"}),
-    do: {:error, {:invalid_argument, "Missing required argument: athanor"}}
 
   # Revoke the Sanctum session authenticated by this request.
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
@@ -801,16 +753,6 @@ defmodule Sanctum.Providers.Session do
   # ============================================================================
   # Helpers shared across session handlers
   # ============================================================================
-
-  # An archived athanor resolves like an open one, so `focus/2` decides
-  # what the caller hears of it; a store that cannot answer is unavailable.
-  defp resolve_athanor(segment) do
-    if Sanctum.Tenancy.Athanors.athanor_id?(segment) do
-      Sanctum.Tenancy.Athanors.get(segment)
-    else
-      Sanctum.Tenancy.Athanors.by_route_slug(segment)
-    end
-  end
 
   # The device flow is offered exactly when GitHub or Google is
   # configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`).

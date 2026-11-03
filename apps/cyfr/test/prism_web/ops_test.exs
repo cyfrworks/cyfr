@@ -105,15 +105,13 @@ defmodule PrismWeb.OpsTest do
   end
 
   # A refusal the guard makes is filed under no tenant, whatever state the
-  # athanor its context names is in: no row of either log can name a room
-  # whose erasure has run or may run before the row is written.
+  # athanor its context names is in: no row of either log names it.
   describe "the athanor a refused console call is recorded under" do
     setup do
       Process.register(self(), :ingress_probe_observer)
       person = PrismWeb.ConnCase.test_user()
 
-      {:ok, home} =
-        Sanctum.Tenancy.Athanors.create_group(person.user_id, "Home #{person.namespace}")
+      home = Sanctum.Test.People.athanor!(person.user_id)
 
       ctx =
         Sanctum.Context.build(
@@ -132,99 +130,52 @@ defmodule PrismWeb.OpsTest do
       {:ok, person: person, established: established}
     end
 
-    test "a destroyed athanor: one decision with no athanor, and no row names it",
-         %{person: person, established: established} do
-      {:ok, gone} = group!(person, "Gone")
-      {:ok, on_gone} = Sanctum.Context.focus(established, gone.id)
-      {:ok, archived} = Sanctum.Tenancy.Athanors.archive(gone)
-      {:ok, _counts} = Sanctum.Tenancy.Athanors.destroy(archived)
-
-      assert_no_tenant(on_gone, gone, person)
-    end
-
     test "an archived athanor: one decision with no athanor, and no row names it",
          %{person: person, established: established} do
-      {:ok, kept} = group!(person, "Kept")
+      kept = place!(person)
       {:ok, on_kept} = Sanctum.Context.focus(established, kept.id)
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(kept)
+      Sanctum.TestContext.archive!(kept.id)
 
       assert_no_tenant(on_kept, kept, person)
     end
 
     test "a seat removed in an active athanor: one decision with no athanor, the person kept",
          %{person: person, established: established} do
-      {:ok, left} = group!(person, "Left")
+      left = place!(person)
       on_left = seat_removed!(left, person, established)
       assert Sanctum.Tenancy.Athanors.active?(left.id)
 
       assert_no_tenant(on_left, left, person)
     end
 
-    test "a room destroyed after the guard refuses and before the append: no row names it",
-         %{person: person, established: established} do
-      {:ok, room} = group!(person, "Erased")
-      focused = seat_removed!(room, person, established)
-      assert Sanctum.Tenancy.Athanors.active?(room.id)
-
-      request_id = Prima.UUID7.request_id()
-      stale = %{focused | request_id: request_id, validated_at: nil}
-      test_pid = self()
-      hook = "erased-before-append-#{System.unique_integer([:positive])}"
-      on_exit(fn -> :telemetry.detach(hook) end)
-
-      # The refusal's decision is written by a writer the decision log
-      # starts for this call, in a transaction of its own. At the first
-      # statement inside that transaction the room is archived and
-      # destroyed, which erases both logs of it, and the append goes on: it
-      # must name the room nowhere. On SQLite that statement belongs to the
-      # write lock taken before the decision row; on PostgreSQL it is the
-      # decision row's own insert, with its `mcp_logs` row still to come.
-      :ok =
-        :telemetry.attach(
-          hook,
-          [:arca, :repo, :query],
-          fn _event, _measurements, metadata, _config ->
-            if self() != test_pid and test_pid in List.wrap(Process.get(:"$callers")) and
-                 not String.match?(metadata.query, ~r/^\s*(begin|commit|rollback)\b/i) do
-              :telemetry.detach(hook)
-              {:ok, archived} = Sanctum.Tenancy.Athanors.archive(room)
-              {:ok, _counts} = Sanctum.Tenancy.Athanors.destroy(archived)
-              send(test_pid, {:erased_before_append, self(), metadata.query})
-            end
-          end,
-          nil
-        )
-
-      assert {:error, :not_member} = refused_call(stale)
-      assert_receive {:erased_before_append, writer, first_statement}, 10_000
-
-      # The pause was inside the append, before or at its decision row.
-      assert first_statement =~ ~r/^\s*(PRAGMA|UPDATE|INSERT INTO "decision_logs")/i,
-             first_statement
-
-      # The writer may outlast the log's budget for the caller; whatever it
-      # writes, it has written once it is gone.
-      ref = Process.monitor(writer)
-      assert_receive {:DOWN, ^ref, :process, ^writer, _reason}, 10_000
-
-      assert {:ok, %{status: "archived"}} = Sanctum.Tenancy.Athanors.get(room.id)
-      assert rows_naming(room.id) == {0, 0}
-      assert {:ok, [refused]} = global_decisions(request_id)
-
-      assert {refused.admission, refused.athanor_id, refused.user_id} ==
-               {:refused, nil, person.user_id}
-    end
-
-    # `person`, seated in `room` beside another member, focused there, and
-    # then removed: the room stays active and the focus no longer stands.
-    defp seat_removed!(room, person, established) do
-      other = PrismWeb.ConnCase.test_user()
+    # An athanor no person's admission made, with `person` seated in it.
+    defp place!(person) do
+      {:ok, athanor} =
+        Sanctum.Tenancy.Athanors.create(%{
+          name: "Place #{person.namespace}",
+          slug: "place-#{System.unique_integer([:positive])}",
+          owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          created_by: "system"
+        })
 
       {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(other.user_id, scope: "athanor", athanor_id: room.id)
+        Sanctum.Tenancy.Members.ensure(person.user_id, scope: "athanor", athanor_id: athanor.id)
 
-      {:ok, focused} = Sanctum.Context.focus(established, room.id)
-      :ok = Sanctum.Tenancy.Members.remove_member(room, user_id: person.user_id)
+      athanor
+    end
+
+    # `person`, focused in `athanor`, and then their seat's row deleted
+    # with no announcement: the athanor stays active and the focus no
+    # longer stands.
+    defp seat_removed!(athanor, person, established) do
+      {:ok, focused} = Sanctum.Context.focus(established, athanor.id)
+
+      Arca.Repo.delete_all(
+        from(m in Arca.Schemas.Membership,
+          where: m.user_id == ^person.user_id and m.athanor_id == ^athanor.id
+        )
+      )
+
       focused
     end
 
@@ -244,9 +195,6 @@ defmodule PrismWeb.OpsTest do
       refute refused.reason =~ athanor.id
       assert rows_naming(athanor.id) == {0, 0}
     end
-
-    defp group!(person, label),
-      do: Sanctum.Tenancy.Athanors.create_group(person.user_id, "#{label} #{person.namespace}")
 
     # A call the guard refuses: nothing it named runs.
     defp refused_call(stale) do

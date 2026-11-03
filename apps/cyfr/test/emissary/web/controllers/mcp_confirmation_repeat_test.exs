@@ -75,7 +75,6 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
 
   alias Prima.MCP.Protocol
   alias Sanctum.{Context, TestContext}
-  alias Sanctum.Tenancy.Athanors
 
   @key "cyfr/confirmationId"
 
@@ -93,7 +92,7 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "MCP repeat #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

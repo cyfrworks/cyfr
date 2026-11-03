@@ -43,9 +43,9 @@
 //                    door on the Settings page, she is offered nothing, the
 //                    same claim is refused and counts nothing, and nothing of
 //                    a share changes
-//   admin_focus      the administrator's switcher lists no athanor of Ana's,
-//                    a direct visit is refused, and Sanctum's focus decision
-//                    refuses it
+//   admin_focus      no link on the administrator's page leads into Ana's
+//                    athanor, a direct visit is refused, and Sanctum's focus
+//                    decision refuses it
 //
 // The home's part of a step — signing a person in, a claim, a read of what
 // was committed — is run.sh's, asked for through OUT_DIR (`ask-N.json`,
@@ -1106,25 +1106,21 @@ async function main() {
     // admin_focus
     // -----------------------------------------------------------------------
     await open(admin, settings);
-    // The switcher's popover, drawn: its own content (the new-group form it
-    // always holds, beside a row for each athanor when there are several)
-    // is waited for, so its links are read only once it shows them.
-    const popover = 'div[phx-click-away="close_popover"]';
-    await admin.locator("button", { has: admin.locator("#viewing-name") }).click();
-    const drawn = await admin.locator(`${popover} form[phx-submit="create_group"]`)
+    // The topbar, drawn: its assistant link is waited for, so the page's
+    // links are read only once the topbar shows its own.
+    const drawn = await admin.locator("#aqua-link")
       .waitFor({ timeout: 30_000 }).then(() => true).catch(() => false);
-    const switcherLinks = await admin.$$eval(`${popover} a[href]`, (els) => els.map((el) => el.getAttribute("href")));
     const links = await admin.$$eval("a[href]", (els) => els.map((el) => el.getAttribute("href")));
     // A link into Ana's athanor: a path under her segment, spelled either
-    // way, or a page that names her athanor as its `a` (the switcher's chat
-    // rows); never a segment that only begins with hers.
+    // way, or a page that names her athanor as its `a`; never a segment
+    // that only begins with hers.
     const anaRoutes = [`/a/${ana.segment}`, `/a/${encodeURIComponent(ana.segment)}`];
     const intoAna = (href) => {
       const url = new URL(href, base);
       return url.searchParams.get("a") === ana.segment ||
         anaRoutes.some((route) => url.pathname === route || url.pathname.startsWith(`${route}/`));
     };
-    const listsAna = [...switcherLinks, ...links].some(intoAna);
+    const listsAna = links.some(intoAna);
     // The visit lands where the refusal sends it, which says what it says
     // of an athanor that does not exist.
     await admin.goto(pagePath(ana.segment, "/vault"));
@@ -1135,14 +1131,14 @@ async function main() {
     // Nothing the administrator did here changes anything the model holds.
     const focusedState = await stateHolds();
     record.admin_focus = {
-      drawn, switcher_links: switcherLinks, links: links.filter((h) => h.startsWith("/a/")), lists_ana: listsAna,
+      drawn, links: links.filter((h) => h.startsWith("/a/")), lists_ana: listsAna,
       landed, refusedVisit, decision, state: focusedState.compared,
     };
     row("admin_focus",
       drawn && !listsAna && !intoAna(landed) && refusedVisit &&
         same(decision, { platform_admin: true, in_focus: operator.athanor_id, focus: "not_found", refocus: "not_found" }) &&
         !holdsKey(adminHtml) && focusedState.held,
-      "the administrator's switcher lists no athanor of Ana's, a direct visit is refused, and the focus decision " +
+      "no link on the administrator's page leads into Ana's athanor, a direct visit is refused, and the focus decision " +
         "refuses it; the whole state is the model",
       { lists_ana: listsAna, landed, refused_visit: refusedVisit, decision, state: focusedState.compared });
   } catch (error) {

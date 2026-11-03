@@ -41,7 +41,7 @@ defmodule PrismWeb.PairLiveTest do
   # glass made first.
   defp invited!(keys \\ key_pair()) do
     user = test_user()
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Pair #{user.namespace}")
+    athanor = Sanctum.Test.People.athanor!(user.user_id)
 
     built =
       Context.build(

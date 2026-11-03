@@ -50,7 +50,6 @@ defmodule Sanctum.DeviceWriteWindowTest do
   }
 
   alias Sanctum.Consent.Authz
-  alias Sanctum.Tenancy.Athanors
   alias Sanctum.Test.DirectoryServer, as: Directory
   alias Sanctum.TestContext.Authenticator
   alias Sanctum.Vault.OAuthGrant
@@ -83,7 +82,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Glass writes #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(

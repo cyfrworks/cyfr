@@ -621,15 +621,6 @@
         },
         %{
           verb: "GET",
-          path: "/a/:athanor/members",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.MembersLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
           path: "/a/:athanor/registry",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",

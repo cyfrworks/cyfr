@@ -384,7 +384,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           verified: true
         })
 
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "Device link #{n}")
+      athanor = Sanctum.Test.People.athanor!(user)
 
       built =
         Sanctum.Context.build(

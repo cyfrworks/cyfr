@@ -224,7 +224,7 @@ defmodule Compendium.Providers.RegistryTest do
         })
 
       state = RegistryStub.enroll!(person_id)
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(person_id, "Claim op #{n}")
+      athanor = Sanctum.Test.People.athanor!(person_id)
 
       {:ok, session} =
         Sanctum.TestContext.create_session(
@@ -415,7 +415,7 @@ defmodule Compendium.Providers.RegistryTest do
 
       identity = Sanctum.Test.Newcomers.identity(name)
       :ok = Sanctum.Recovery.open_at_admission(person_id, identity, directory.url)
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(person_id, "Register #{n}")
+      athanor = Sanctum.Test.People.athanor!(person_id)
 
       {:ok, session} =
         Sanctum.TestContext.create_session(

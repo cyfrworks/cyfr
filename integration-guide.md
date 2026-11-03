@@ -435,14 +435,13 @@ one annotation. It is short:
 | `person` | `renew_certificate` | A device paired at another CYFR renews the certificate this CYFR issued it, holding no session here: it proves the device key the certification names over a single-use challenge this CYFR issued, and only a certification still standing under the person's current keys is extended |
 | `session` | `logout`, `whoami`, `device_init`, `device_poll`, `cli_begin`, `setup`, `cli_poll`, `cli_cancel`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions. `setup` is `cyfr login --setup` presenting the installation's setup token with the first person's `name`, the `recovery_secret` and the `request_id` it drew, which makes the first person and opens their registration at cyfr.run, or signs them in again until they hold a passkey, a paired device or a linked sign-in method; it answers their recovery code under `recovery`, until they say it is saved, and the request log redacts the secret and the code. Any other token, or a null one, answers `setup_closed`. `cli_begin` is `cyfr login` asking for a sign-in its person approves in Prism; `cli_poll` and `cli_cancel` name only the session token `cli_begin` answered, which no session holds until the person approves under a fresh confirmation ([devices-guide.md](devices-guide.md)) |
 | `system` | `status` | Health checks |
-| `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
+| `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace`, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 
 That is the whole list, and it does **not** widen on a server without an
 auth provider: a request with no credential is an unauthenticated context
 either way. In particular `component.search`/`inspect`/`categories`,
 `aqua.list`/`get`, and the `registry` identity actions all need a session
-or an API key, and `session.use` — switching which athanor you work in —
-needs one too, since there has to be a session to switch.
+or an API key.
 
 MCP resources follow the same rule. `resources/list` and
 `resources/templates/list` are open metadata, but a `resources/read` is
@@ -861,7 +860,7 @@ cyfr log get <call_id>                     # Full details for a specific log ent
 cyfr log correlate <request_id>            # Find related log entries and decisions
 ```
 
-Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. The entries that decide for themselves without the gate, the identity directory, restore and the recovery code, the OAuth callback, and the browser's sign-in, re-authentication and policy acceptance, record each refusal they make, and nothing for a request they admit. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands. An athanor's decisions are its members'; a platform admin reads the host's own, the ones made before any athanor was resolved, with `--global`, and never an athanor's:
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. The entries that decide for themselves without the gate, the identity directory, restore and the recovery code, the OAuth callback, and the browser's sign-in, re-authentication and policy acceptance, record each refusal they make, and nothing for a request they admit. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands. An athanor's decisions are its person's; a platform admin reads the host's own, the ones made before any athanor was resolved, with `--global`, and never an athanor's:
 
 ```bash
 cyfr decision list --admission refused     # Recent refusals
@@ -971,9 +970,9 @@ Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a co
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an athanor or an active shared thread with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
+| `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an active shared thread with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
 | `offers` | — | `inbox` (offers sent to you, with `sender` and `folder`, the folder `accept` lands them in when you name none), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted here that have not landed yet (`status` `received`) or never will (`failed`) |
-| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's personal namespace, which is their name, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
+| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your own athanor. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's personal namespace, which is their name, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
 | `decline` | `offer_id` | Refuse an offer sent to you |
 | `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
 
@@ -1241,13 +1240,11 @@ Postgres / a custom registry.
 The installation's first person, made by its setup (or by a restore onto it
 empty), is its platform administrator, and no other grant exists: minted
 their own athanor past the server caps, never denied by the allowlist, and able
-to run the operator verbs (`door.*`, `execution.force_release`,
-`athanor.purge`, `athanor.destroy`).
-The capability is over the instance, not a seat: an operator works inside one
-athanor at a time like everyone else, and only in one they are a member of.
-They enter no other athanor — opening one they hold no seat in is refused like
-anyone's, and a session that names one they have left falls back to their own
-— and there is no cross-athanor reach. The **server allowlist** (`cyfr admin allow
+to run the operator verbs (`door.*`, `execution.force_release`).
+The capability is over the instance, not a seat: an operator works inside their
+own athanor like everyone else and enters no other — opening another person's is
+refused like anyone's — and there is no cross-athanor reach. They hold no seat in
+a shared thread by the capability, and read one only where they sit. The **server allowlist** (`cyfr admin allow
 <@name|identifier|*>`, `cyfr admin deny <person|identifier|@name>`, or the Settings
 page, which takes a name or `*`) judges people: a person made here signs in unless a
 deny names them, and a person whose keys another CYFR holds signs in when `*` or an
@@ -1278,29 +1275,12 @@ until each of them has recovered.
 
 An operator keeps their keys in their own vault, as everyone does, and offers one to the people here by sharing it with everyone: such a share is what a new person's first sign-in binds when it fits ([Shares](#shares-share-tool)). The people it is offered to grant it through the same consent walk as their own entries; no share bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
 
-### Reclaiming an archived athanor's storage
+### An archived athanor
 
-Archiving an athanor revokes its keys and cancels its running work but
-deliberately leaves its storage tree (`data/athanors/<id>/`) in place, so
-`athanor.unarchive` reopens the furnace intact; a member unarchives a group,
-and allowing a denied person on the allowlist again reopens their own athanor. When the
-bytes should actually be reclaimed, a platform admin runs `athanor.purge`
-(the `athanor` tool) naming the archived athanor: it deletes the whole tree —
-blobs only, rows remain — and is final. `athanor.destroy` deletes the rows
-too, leaving only the archived tombstone, and refuses a person's own athanor.
-Both are platform-scope operations: they need no seat in the athanor, never
-read the one in focus, and open nothing in it. What they reach is what the
-instance holds for its operator to reclaim, an athanor its members archived,
-whose storage and rows stay on the instance's store until then: each answers
-the reclaimed athanor's id and status alone, and `destroy` refusing a
-person's own athanor says so. An athanor still open answers an operator with
-no seat as a missing one does. `athanor.get`, `athanor.unarchive` and every
-other verb refuse them like any non-member, for an archived athanor as for
-an open one. A purged athanor that
-is later unarchived comes back with empty storage. A group whose members were
-all denied keeps no member to unarchive it — allowing them on the allowlist again
-reopens only their own athanors — so it can be purged or destroyed, and
-reopened by no one.
+A deny archives the person's own athanor: its keys are revoked and its
+running work is cancelled, and its storage tree (`data/athanors/<id>/`) and
+rows stay in place, so allowing the person on the allowlist again reopens it
+intact.
 
 ### OIDC (federated identity)
 
@@ -1531,6 +1511,6 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (`cyfr build compile` builds it and registers it)
 - Built tinctures run `npm ci && npm run build` via Locus, installing exactly what `package-lock.json` pins — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
-- Open it in the console at `/a/<athanor>/canvas`, or at `/t/<athanor>/<publisher>/<name>` once it is public
+- Open it in the console at `/a/<athanor>/canvas`, or at `/t/@<namespace>/<publisher>/<name>` once it is public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

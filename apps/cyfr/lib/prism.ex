@@ -14,8 +14,7 @@ defmodule Prism do
     their layout.
   - `Prism.CanvasValidation` — a candidate canvas version trialled on the
     glass before it opens live.
-  - `Prism.Labels` / `Prism.Tray` — mode vocabulary and the notification
-    tray's badge state.
+  - `Prism.Labels` — mode vocabulary.
   - `Prism.Fallback` — the shipped canvas shown in the place of one that
     did not start or stopped, and the ways back the system layer offers.
   - `Prism.ConsentChoices` — the consent sheet's choices, pure over the
@@ -33,8 +32,7 @@ defmodule Prism do
       Fallback,
       Frames,
       Labels,
-      TinctureRegistry,
-      Tray
+      TinctureRegistry
     ],
     check: [aliases: true]
 end

@@ -26,7 +26,6 @@ defmodule Sanctum.Providers.PersonTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
   alias Sanctum.{Cipher, CipherAAD, Context, TestContext}
-  alias Sanctum.Tenancy.Athanors
 
   # A directory this home cannot reach: a loopback port nothing listens on.
   @unreachable "https://localhost:1"
@@ -60,7 +59,7 @@ defmodule Sanctum.Providers.PersonTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Person tool #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(

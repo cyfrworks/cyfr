@@ -34,14 +34,17 @@ defmodule Aqua.Providers.NotesTest do
 
     user = u.id
 
-    # The person's own athanor and their seat there, which their admission
-    # made: `Context.focus/2` (the "mine" read) checks the seat.
+    # The person works in their own athanor, the one their admission made.
     mine = Sanctum.Test.People.athanor!(u)
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
+    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user, athanor_id: mine.id}
 
-    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user, athanor_id: athanor.id}
-    {:ok, home} = Sanctum.Context.focus(ctx, mine.id)
-    {:ok, ctx: ctx, home: home, mine: mine, athanor: athanor}
+    # Another person, working in their own athanor.
+    {:ok, o} =
+      Sanctum.Test.People.linked(%{id: "local|idp|note-other-#{n}", provider: "local"})
+
+    theirs = Sanctum.Test.People.athanor!(o)
+    other = %{Sanctum.TestContext.local(:prism) | user_id: o.id, athanor_id: theirs.id}
+    {:ok, ctx: ctx, other: other, mine: mine, theirs: theirs}
   end
 
   defp call(ctx, args), do: Tool.handle("notes", ctx, args)
@@ -106,24 +109,22 @@ defmodule Aqua.Providers.NotesTest do
 
   test "a note lands in the athanor you are working in, and nowhere else", %{
     ctx: ctx,
-    home: home,
+    other: other,
     mine: mine,
-    athanor: athanor
+    theirs: theirs
   } do
     {:ok, kept} = call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Lisbon"})
-    assert kept.athanor_id == athanor.id
+    assert kept.athanor_id == mine.id
 
-    {:ok, at_home} = call(home, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
-    assert at_home.athanor_id == mine.id
+    {:ok, at_theirs} =
+      call(other, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
 
-    # Where you are is what you see by default.
-    assert {:ok, %{notes: [%{name: "decided", athanor_id: id}]}} =
-             call(ctx, %{"action" => "list"})
+    assert at_theirs.athanor_id == theirs.id
 
-    assert id == athanor.id
-
-    assert {:ok, %{notes: [%{name: "flight"}]}} = call(home, %{"action" => "list"})
-    refute athanor.id == mine.id
+    # Where you are is what you see.
+    assert {:ok, %{notes: [%{name: "decided"}]}} = call(ctx, %{"action" => "list"})
+    assert {:ok, %{notes: [%{name: "flight"}]}} = call(other, %{"action" => "list"})
+    refute theirs.id == mine.id
   end
 
   test "keeping under a name that exists replaces it, and says so", %{ctx: ctx} do
@@ -135,55 +136,6 @@ defmodule Aqua.Providers.NotesTest do
 
     assert {:ok, %{content: "Porto"}} = call(ctx, %{"action" => "read", "name" => "decided"})
     assert {:ok, %{notes: [_]}} = call(ctx, %{"action" => "list"})
-  end
-
-  test "a write names no athanor", %{ctx: ctx} do
-    for args <- [
-          %{"action" => "keep", "name" => "x", "content" => "y", "scope" => "mine"},
-          %{"action" => "pin", "name" => "about-us", "content" => "y", "scope" => "athanor"},
-          %{"action" => "forget", "name" => "x", "scope" => "mine"}
-        ] do
-      assert {:error, {:invalid_argument, msg}} = call(ctx, args)
-      assert msg =~ "scope"
-    end
-  end
-
-  test "your own notes are read from anywhere you are, and only by you", %{
-    ctx: ctx,
-    home: home,
-    mine: mine
-  } do
-    {:ok, _} = call(home, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
-
-    # From the trip, "mine" reaches home — through `Context.focus/2`, so
-    # membership is checked on the way.
-    assert {:ok, %{notes: [%{name: "flight", athanor_id: id}]}} =
-             call(ctx, %{"action" => "list", "scope" => "mine"})
-
-    assert id == mine.id
-
-    assert {:ok, %{content: "BA117", athanor_id: ^id}} =
-             call(ctx, %{"action" => "read", "name" => "flight", "scope" => "mine"})
-
-    # The athanor's own pile does not hold it.
-    assert {:ok, %{notes: []}} = call(ctx, %{"action" => "list"})
-
-    assert {:error, {:not_found, "note", "flight"}} =
-             call(ctx, %{"action" => "read", "name" => "flight"})
-  end
-
-  test "a group's notes are readable by its members", %{ctx: ctx} do
-    {:ok, _} = call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Lisbon"})
-
-    other = %{ctx | user_id: "local|idp|somebody-else"}
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.create(%{user_id: other.user_id, athanor_id: ctx.athanor_id})
-
-    # No private notes in a shared athanor — the invariant is a fact here,
-    # not a sentence in a docstring.
-    assert {:ok, %{notes: [%{name: "decided"}]}} = call(other, %{"action" => "list"})
-    assert {:ok, %{content: "Lisbon"}} = call(other, %{"action" => "read", "name" => "decided"})
   end
 
   test "forgetting removes it", %{ctx: ctx} do
@@ -200,51 +152,55 @@ defmodule Aqua.Providers.NotesTest do
   end
 
   test "a pinned page is short, and pinning nothing clears it", %{ctx: ctx} do
-    {:ok, %{pinned: "about-us"}} =
-      call(ctx, %{"action" => "pin", "name" => "about-us", "content" => "We are planning a trip."})
+    {:ok, %{pinned: "about-you"}} =
+      call(ctx, %{
+        "action" => "pin",
+        "name" => "about-you",
+        "content" => "We are planning a trip."
+      })
 
     assert {:ok, %{content: "We are planning a trip."}} =
-             call(ctx, %{"action" => "read", "name" => "about-us"})
+             call(ctx, %{"action" => "read", "name" => "about-you"})
 
     # Over the cap is refused, never truncated — a page read into every
     # turn is trimmed by a person, not by the tool.
     long = String.duplicate("x", Aqua.Notes.pin_max_bytes() + 1)
 
     assert {:error, {:invalid_argument, msg}} =
-             call(ctx, %{"action" => "pin", "name" => "about-us", "content" => long})
+             call(ctx, %{"action" => "pin", "name" => "about-you", "content" => long})
 
     assert msg =~ "bytes"
 
     assert {:ok, %{content: "We are planning a trip."}} =
-             call(ctx, %{"action" => "read", "name" => "about-us"})
+             call(ctx, %{"action" => "read", "name" => "about-you"})
 
-    {:ok, %{cleared: "about-us"}} =
-      call(ctx, %{"action" => "pin", "name" => "about-us", "content" => "  "})
+    {:ok, %{cleared: "about-you"}} =
+      call(ctx, %{"action" => "pin", "name" => "about-you", "content" => "  "})
 
-    assert {:error, {:not_found, "note", "about-us"}} =
-             call(ctx, %{"action" => "read", "name" => "about-us"})
+    assert {:error, {:not_found, "note", "about-you"}} =
+             call(ctx, %{"action" => "read", "name" => "about-you"})
 
-    # Only the two pinned names take a pin.
+    # Only the pinned name takes a pin.
     assert {:error, {:invalid_argument, msg}} =
              call(ctx, %{"action" => "pin", "name" => "flight", "content" => "BA117"})
 
-    assert msg =~ "about-you, about-us"
+    assert msg =~ "about-you"
   end
 
   test "pinned names are protected from keep and forget", %{ctx: ctx} do
-    {:ok, _} = call(ctx, %{"action" => "pin", "name" => "about-us", "content" => "A trip."})
+    {:ok, _} = call(ctx, %{"action" => "pin", "name" => "about-you", "content" => "A trip."})
 
     assert {:error, {:invalid_argument, msg}} =
-             call(ctx, %{"action" => "keep", "name" => "about-us", "content" => "overwrite"})
+             call(ctx, %{"action" => "keep", "name" => "about-you", "content" => "overwrite"})
 
     assert msg =~ "pin"
 
     assert {:error, {:invalid_argument, msg}} =
-             call(ctx, %{"action" => "forget", "name" => "about-us"})
+             call(ctx, %{"action" => "forget", "name" => "about-you"})
 
     assert msg =~ "pin"
 
-    assert {:ok, %{content: "A trip."}} = call(ctx, %{"action" => "read", "name" => "about-us"})
+    assert {:ok, %{content: "A trip."}} = call(ctx, %{"action" => "read", "name" => "about-you"})
   end
 
   test "a note carries who kept it and when, and the body is only the body", %{ctx: ctx} do
@@ -258,38 +214,19 @@ defmodule Aqua.Providers.NotesTest do
     assert is_nil(note.execution)
   end
 
-  test "search finds a note by content or name, across every athanor you belong to", %{
-    ctx: ctx,
-    home: home,
-    mine: mine,
-    athanor: athanor
-  } do
+  test "search finds a note by content or name", %{ctx: ctx} do
     {:ok, _} =
       call(ctx, %{"action" => "keep", "name" => "decided", "content" => "We go to Lisbon in May."})
 
     {:ok, _} =
-      call(home, %{"action" => "keep", "name" => "porto-hotel", "content" => "Booked, room 4."})
+      call(ctx, %{"action" => "keep", "name" => "porto-hotel", "content" => "Booked, room 4."})
 
     assert {:ok, %{matches: [%{name: "decided", snippet: "We go to Lisbon in May."}]}} =
              call(ctx, %{"action" => "search", "query" => "lisbon"})
 
     # A name matches too, and the snippet is then the first line.
-    assert {:ok, %{matches: [%{name: "porto-hotel", athanor_id: id}]}} =
-             call(ctx, %{"action" => "search", "query" => "PORTO", "scope" => "everywhere"})
-
-    assert id == mine.id
-
-    {:ok, %{matches: everywhere}} =
-      call(ctx, %{"action" => "search", "query" => "o", "scope" => "everywhere"})
-
-    assert Enum.map(everywhere, & &1.athanor_id) |> Enum.sort() ==
-             Enum.sort([athanor.id, mine.id])
-
-    # Read is not a place to guess which athanor held a hit.
-    assert {:error, {:invalid_argument, msg}} =
-             call(ctx, %{"action" => "read", "name" => "decided", "scope" => "everywhere"})
-
-    assert msg =~ "search"
+    assert {:ok, %{matches: [%{name: "porto-hotel", snippet: "Booked, room 4."}]}} =
+             call(ctx, %{"action" => "search", "query" => "PORTO"})
   end
 
   test "a guest cannot name the root; a chain reaches the tool, interactively" do
@@ -362,7 +299,7 @@ defmodule Aqua.Providers.NotesTest do
   end
 
   test "an approved call keeps a note from inside the chain, and only an OIDC session's chain may",
-       %{ctx: ctx, athanor: athanor} do
+       %{ctx: ctx, mine: mine} do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])
 
     # What the model wrote as provenance — ignored in a chain: the host
@@ -384,7 +321,7 @@ defmodule Aqua.Providers.NotesTest do
     # The person's own session, now guest-planed by the approved run: the
     # plane is not asked again, the surface is.
     assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth, lineage)
-    assert id == athanor.id
+    assert id == mine.id
 
     assert {:ok, %{thread: "thread_1", execution: "exec_1", kept_by: kept_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
@@ -427,135 +364,57 @@ defmodule Aqua.Providers.NotesTest do
             }} = in_chain(ctx, args, granting([{"notes", "read"}]))
   end
 
-  test "list and search answer pages, one budget across every athanor", %{ctx: ctx, home: home} do
-    for n <- 1..3,
+  test "list and search answer pages", %{ctx: ctx} do
+    for prefix <- ~w(e m),
+        n <- 1..3,
         do:
           {:ok, _} =
-            call(ctx, %{"action" => "keep", "name" => "e#{n}", "content" => "lisbon #{n}"})
+            call(ctx, %{"action" => "keep", "name" => "#{prefix}#{n}", "content" => "lisbon #{n}"})
 
-    for n <- 1..3,
-        do:
-          {:ok, _} =
-            call(home, %{"action" => "keep", "name" => "m#{n}", "content" => "lisbon #{n}"})
+    # Names sorted; a page of two, then the next page from its cursor (the
+    # last name shown), and so on — no overlap, nothing skipped.
+    {:ok, %{notes: page1, more: true, next: "e2" = cursor1}} =
+      call(ctx, %{"action" => "list", "limit" => 2})
 
-    # The focus first, then the person's other athanors, names sorted; a
-    # page of two, then the next page from its cursor, and so on — no
-    # overlap, nothing skipped.
-    {:ok, %{notes: page1, more: true, next: cursor1}} =
-      call(home, %{"action" => "list", "scope" => "everywhere", "limit" => 2})
+    assert Enum.map(page1, & &1.name) == ["e1", "e2"]
 
-    assert Enum.map(page1, & &1.name) == ["m1", "m2"]
+    {:ok, %{notes: page2, more: true, next: "m1" = cursor2}} =
+      call(ctx, %{"action" => "list", "limit" => 2, "after" => cursor1})
 
-    {:ok, %{notes: page2, more: true, next: cursor2}} =
-      call(home, %{"action" => "list", "scope" => "everywhere", "limit" => 2, "after" => cursor1})
-
-    assert Enum.map(page2, & &1.name) == ["m3", "e1"]
+    assert Enum.map(page2, & &1.name) == ["e3", "m1"]
 
     {:ok, %{notes: page3, more: false, next: nil}} =
-      call(home, %{"action" => "list", "scope" => "everywhere", "limit" => 2, "after" => cursor2})
+      call(ctx, %{"action" => "list", "limit" => 2, "after" => cursor2})
 
-    assert Enum.map(page3, & &1.name) == ["e2", "e3"]
+    assert Enum.map(page3, & &1.name) == ["m2", "m3"]
 
     # A search pages the same way, and reads no note past its page.
     {:ok, %{matches: hits, more: true, next: cursor}} =
-      call(home, %{
-        "action" => "search",
-        "query" => "lisbon",
-        "scope" => "everywhere",
-        "limit" => 4
-      })
+      call(ctx, %{"action" => "search", "query" => "lisbon", "limit" => 4})
 
     assert length(hits) == 4
 
     {:ok, %{matches: rest, more: false}} =
-      call(home, %{
-        "action" => "search",
-        "query" => "lisbon",
-        "scope" => "everywhere",
-        "after" => cursor
-      })
+      call(ctx, %{"action" => "search", "query" => "lisbon", "after" => cursor})
 
-    assert Enum.map(rest, & &1.name) == ["e2", "e3"]
+    assert Enum.map(rest, & &1.name) == ["m2", "m3"]
 
-    assert {:error, {:invalid_argument, msg}} =
-             call(home, %{"action" => "list", "after" => "garbage"})
+    # A cursor is a name a page answered; an empty one is refused.
+    assert {:error, {:invalid_argument, msg}} = call(ctx, %{"action" => "list", "after" => ""})
 
     assert msg =~ "cursor"
   end
 
-  test "a search's athanor is a locator a read may follow — under the reader's own seat", %{
-    ctx: ctx,
-    home: home,
-    athanor: athanor
-  } do
-    {:ok, _} =
-      call(ctx, %{"action" => "keep", "name" => "porto-hotel", "content" => "the Yeatman"})
-
-    {:ok, %{matches: [%{name: "porto-hotel", athanor_id: id}]}} =
-      call(home, %{"action" => "search", "query" => "yeatman", "scope" => "everywhere"})
-
-    assert id == athanor.id
-
-    assert {:ok, %{content: "the Yeatman", athanor_id: ^id}} =
-             call(home, %{"action" => "read", "name" => "porto-hotel", "athanor_id" => id})
-
-    # An athanor the reader holds no seat in reads as no such note — the
-    # locator is not a way to learn which athanors exist.
-    assert {:error, {:not_found, "athanor", "ath_nobody"}} =
-             call(home, %{
-               "action" => "read",
-               "name" => "porto-hotel",
-               "athanor_id" => "ath_nobody"
-             })
-  end
-
-  test "a room's assistant reads only the room's notes", %{ctx: ctx, home: home} do
-    auth = granting([{"notes", "list"}, {"notes", "search"}])
-    {:ok, _} = call(home, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
-
-    # From the trip, a chain cannot open the person's own pile — however
-    # the model asks for it.
-    for args <- [
-          %{"action" => "list", "scope" => "mine"},
-          %{"action" => "search", "query" => "BA117", "scope" => "everywhere"}
-        ] do
-      assert {:error, {:invalid_argument, msg}} = in_chain(ctx, args, auth)
-      assert msg =~ "room's assistant"
-    end
-
-    # The person's own turn, in their own athanor, may look everywhere.
-    assert {:ok, %{matches: [%{name: "flight"}]}} =
-             in_chain(
-               home,
-               %{"action" => "search", "query" => "BA117", "scope" => "everywhere"},
-               auth
-             )
-
-    # And the person themselves, at the door, was never bounded.
-    assert {:ok, %{notes: [%{name: "flight"}]}} =
-             call(ctx, %{"action" => "list", "scope" => "mine"})
-  end
-
-  test "an athanor has one pinned page", %{ctx: ctx, home: home} do
-    assert {:error, {:invalid_argument, msg}} =
-             call(ctx, %{"action" => "pin", "name" => "about-you", "content" => "me"})
-
-    assert msg =~ "about-us"
-
-    assert {:error, {:invalid_argument, msg}} =
-             call(home, %{"action" => "pin", "name" => "about-us", "content" => "us"})
-
-    assert msg =~ "about-you"
-
+  test "a pinned page is the athanor's own", %{ctx: ctx, other: other} do
     assert {:ok, %{pinned: "about-you"}} =
-             call(home, %{
+             call(ctx, %{
                "action" => "pin",
                "name" => "about-you",
                "content" => "Prefers mornings."
              })
 
-    assert {:ok, %{name: "about-you", content: "Prefers mornings."}} = Aqua.Notes.pinned(home)
-    assert :none = Aqua.Notes.pinned(ctx)
+    assert {:ok, %{name: "about-you", content: "Prefers mornings."}} = Aqua.Notes.pinned(ctx)
+    assert :none = Aqua.Notes.pinned(other)
   end
 
   test "the shipped soul's manifest grants the notes actions its policy names" do
@@ -612,8 +471,7 @@ defmodule Aqua.Providers.NotesTest do
 
   test "a standing credential cannot keep, read or forget notes", %{ctx: ctx} do
     # The host-only root stops the guest; this stops the credential. A key
-    # scoped to an athanor must not reach the creator's personal tree
-    # through "mine" — or the athanor's notes through anything.
+    # must not reach the athanor's notes through anything.
     star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
     assert {:error,
@@ -632,10 +490,7 @@ defmodule Aqua.Providers.NotesTest do
               stage: :admission,
               reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
             }} =
-             Sanctum.Gate.call_external("notes", star, %{
-               "action" => "list",
-               "scope" => "mine"
-             })
+             Sanctum.Gate.call_external("notes", star, %{"action" => "list"})
 
     # Discovery agrees with dispatch: the key is not shown the tool.
     shown =
@@ -645,17 +500,6 @@ defmodule Aqua.Providers.NotesTest do
       )
 
     refute Enum.any?(shown, &(&1["name"] == "notes"))
-  end
-
-  test "an archived personal athanor cannot be read into", %{ctx: ctx, mine: mine} do
-    # "mine" goes through `Context.focus/2`, so it inherits the archive
-    # refusal a raw struct update would have skipped.
-    {:ok, _} = Sanctum.Tenancy.Athanors.archive(mine, force: true)
-
-    assert {:error, {:invalid_argument, msg}} =
-             call(ctx, %{"action" => "list", "scope" => "mine"})
-
-    assert msg =~ "archived"
   end
 
   test "a note name is held to a grammar", %{ctx: ctx} do

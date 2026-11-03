@@ -1275,14 +1275,14 @@ The `file` tool (`list`, `read`, `write`, `delete`, and `offer`, `offers`,
 surface on the wire; reads take `storage_read`, changes `storage_write`.
 
 Pick files under `data/` and choose **Send a copy**. The recipient picker
-lists people you share an active athanor with. The offer snapshots the
+lists the people who share a shared thread with you. The offer snapshots the
 files now under the sender's storage cap; later edits do not change it,
 and nothing lands in the recipient's tree until they accept. An offer
 expires after `file_offer_days` (default 7).
 
 The **Inbox** names the sender and offered files and offers **Accept**
-and **Decline**. Acceptance chooses a folder under `data/` in the athanor
-in focus; by default it is `data/inbox/<sender slug>/`, with each offer
+and **Decline**. Acceptance chooses a folder under `data/` in your own
+athanor; by default it is `data/inbox/<sender slug>/`, with each offer
 published in its own `<offer id>/` directory. The recipient's cap is
 checked for custody and publication. Outgoing offers have **Withdraw**
 while they wait; an accepted copy is never recalled. Receipts still

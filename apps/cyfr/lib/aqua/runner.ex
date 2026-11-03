@@ -112,7 +112,7 @@ defmodule Aqua.Runner do
           seq: non_neg_integer(),
           turn_id: String.t() | nil,
           replayed: boolean(),
-          admitted: :turn | :steer | :post
+          admitted: :turn | :steer
         }
 
   # ---------------------------------------------------------------------------
@@ -548,15 +548,6 @@ defmodule Aqua.Runner do
     case Admission.check(ctx, state.athanor_id, text, opts) do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
-
-      {:ok, :post, text} ->
-        case Tape.accept(ctx, state.id, %{message: message(ctx, text, opts)}) do
-          {:ok, %{message: row, replayed: replayed}} ->
-            {:reply, {:ok, result(row, nil, replayed, :post)}, touch(state)}
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
-        end
 
       {:ok, {:turn, name}, text} ->
         admit_turn(state, ctx, name, text, opts)
@@ -1519,8 +1510,7 @@ defmodule Aqua.Runner do
       grants: state.grants,
       agent: state.agent && %{"name" => state.agent, "title" => state.agent},
       turn_user: current && current.user_id,
-      queued: length(state.queue),
-      solo_human: Members.solo?(state.athanor_id)
+      queued: length(state.queue)
     }
   end
 

@@ -4,14 +4,12 @@
 defmodule Sanctum.ApiKeyAthanorScopeTest do
   @moduledoc """
   An API key is a credential of the one athanor it was minted in: it
-  lists, focuses, revalidates into and reads that athanor alone, whatever
-  other seats its creator holds, and its focus there is the key's, so its
-  creator leaving the group does not take the athanor from it.
+  lists, focuses, revalidates into and reads that athanor alone, and its
+  focus there is the key's.
   """
   use ExUnit.Case, async: false
 
   alias Sanctum.{Caller, Context, Gate, TestContext}
-  alias Sanctum.Tenancy.{Athanors, Members}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -20,16 +18,21 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
 
     n = System.unique_integer([:positive])
 
-    {:ok, user} =
-      Sanctum.Test.People.linked(%{
-        id: "github|https://github.com|keyscope-#{n}",
-        provider: "github",
-        email: "keyscope#{n}@example.com",
-        verified: true
-      })
+    [user, other] =
+      for name <- ["keyscope", "keyother"] do
+        {:ok, user} =
+          Sanctum.Test.People.linked(%{
+            id: "github|https://github.com|#{name}-#{n}",
+            provider: "github",
+            email: "#{name}#{n}@example.com",
+            verified: true
+          })
 
-    {:ok, a} = Athanors.create_group(user.id, "Key home #{n}")
-    {:ok, b} = Athanors.create_group(user.id, "Other group #{n}")
+        user
+      end
+
+    a = Sanctum.Test.People.athanor!(user)
+    b = Sanctum.Test.People.athanor!(other)
 
     built =
       Context.build(
@@ -70,14 +73,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     assert key_ctx.auth_method == :api_key
     assert key_ctx.athanor_id == a.id
 
-    assert {:ok, %{athanors: athanors, count: 1}} =
-             Gate.call_external("athanor", key_ctx, %{"action" => "list"})
-
-    assert Enum.map(athanors, & &1.id) == [a.id]
     assert Enum.map(Sanctum.Tenancy.list_athanors(key_ctx), & &1.id) == [a.id]
-
-    assert {:error, _} =
-             Gate.call_external("member", key_ctx, %{"action" => "list", "athanor" => b.id})
 
     assert {:error, _} =
              Gate.call_external("athanor", key_ctx, %{"action" => "get", "athanor" => b.id})
@@ -99,9 +95,6 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
 
     assert {:ok, %{id: id}} = Gate.call_external("athanor", key_ctx, %{"action" => "get"})
     assert id == a.id
-
-    assert {:ok, %{athanor: ^id, members: [_]}} =
-             Gate.call_external("member", key_ctx, %{"action" => "list"})
 
     # Its own athanor's answer is filed whole in its log.
     assert {:ok, %{logs: rows}} =
@@ -132,53 +125,21 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     assert {:ok, %{athanor_id: athanor_id}} = Context.focus(run_ctx, a.id)
     assert athanor_id == a.id
 
-    # A person's own invocation still follows their seats, and carries no
-    # sign-in's binding into the run.
+    # A person's own invocation carries no sign-in's binding into the run.
     person_run = Sanctum.build_tincture_context(session_ctx, tincture)
     refute Context.key_bound?(person_run)
     assert is_nil(person_run.api_key_id)
     assert is_nil(person_run.credential_binding)
-    assert b.id in Enum.map(Sanctum.Tenancy.list_athanors(person_run), & &1.id)
   end
 
-  test "the key keeps its athanor after its creator leaves it, and gains no other", %{
-    user: user,
-    a: a,
-    b: b,
-    raw: raw
-  } do
-    other = "github|https://github.com|stays-#{System.unique_integer([:positive])}"
-    {:ok, _} = Members.ensure(other, scope: "athanor", athanor_id: a.id)
-    :ok = Members.remove_member(a, user_id: user.id)
-    assert {:ok, %{status: "active"}} = Athanors.get(a.id)
-
-    {:ok, key_ctx} = Caller.establish({:api_key, raw})
-    assert Enum.map(Sanctum.Tenancy.list_athanors(key_ctx), & &1.id) == [a.id]
-    assert {:ok, %{athanor_id: athanor_id}} = Context.focus(key_ctx, a.id)
-    assert athanor_id == a.id
-    assert Context.focus(key_ctx, b.id) == {:error, :not_found}
-  end
-
-  test "revalidation keeps the key in its athanor, never its creator's other seat", %{
-    user: user,
-    a: a,
-    raw: raw
-  } do
-    {:ok, key_ctx} = Caller.establish({:api_key, raw})
-    assert {:ok, %{athanor_id: athanor_id}} = Sanctum.Tenancy.revalidate(key_ctx)
-    assert athanor_id == a.id
-
-    other = "github|https://github.com|stays-#{System.unique_integer([:positive])}"
-    {:ok, _} = Members.ensure(other, scope: "athanor", athanor_id: a.id)
-    :ok = Members.remove_member(a, user_id: user.id)
-
+  test "revalidation keeps the key in its athanor", %{a: a, raw: raw} do
     {:ok, key_ctx} = Caller.establish({:api_key, raw})
     assert {:ok, revalidated} = Sanctum.Tenancy.revalidate(key_ctx)
     assert revalidated.athanor_id == a.id
     assert Context.key_bound?(revalidated)
     refute revalidated.platform_admin
 
-    {:ok, _} = Athanors.archive(a)
+    TestContext.archive!(a.id)
     assert {:ok, %{athanor_id: nil}} = Sanctum.Tenancy.revalidate(key_ctx)
   end
 
@@ -186,7 +147,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     a: a,
     key_ctx: key_ctx
   } do
-    {:ok, _} = Athanors.archive(a)
+    TestContext.archive!(a.id)
     assert Context.focus(key_ctx, a.id) == {:error, :archived}
     assert Sanctum.Tenancy.list_athanors(key_ctx) == []
   end

@@ -29,7 +29,6 @@ const (
 	Layout             = "layout"
 	McpLog             = "mcp_log"
 	McpServers         = "mcp_servers"
-	Member             = "member"
 	Notes              = "notes"
 	Oauth              = "oauth"
 	Pairing            = "pairing"
@@ -73,17 +72,9 @@ const (
 	AquaSkillUpdate         = "skill_update"
 	AquaStatus              = "status"
 	AquaUpdate              = "update"
-	AthanorArchive          = "archive"
-	AthanorCreate           = "create"
-	AthanorDestroy          = "destroy"
 	AthanorGet              = "get"
-	AthanorList             = "list"
-	AthanorPair             = "pair"
 	AthanorProvision        = "provision"
-	AthanorPurge            = "purge"
-	AthanorRename           = "rename"
 	AthanorSettings         = "settings"
-	AthanorUnarchive        = "unarchive"
 	BuildCompile            = "compile"
 	BuildStatus             = "status"
 	BuildToolchains         = "toolchains"
@@ -173,10 +164,6 @@ const (
 	McpServersRestart       = "restart"
 	McpServersTest          = "test"
 	McpServersUpdate        = "update"
-	MemberAdd               = "add"
-	MemberLeave             = "leave"
-	MemberList              = "list"
-	MemberRemove            = "remove"
 	NotesEndorse            = "endorse"
 	NotesForget             = "forget"
 	NotesKeep               = "keep"
@@ -271,7 +258,6 @@ const (
 	SessionReadResource     = "read_resource"
 	SessionSetup            = "setup"
 	SessionUnlock           = "unlock"
-	SessionUse              = "use"
 	SessionWhoami           = "whoami"
 	SettingsList            = "list"
 	SettingsReset           = "reset"
@@ -308,14 +294,12 @@ const (
 	ThreadDelete            = "delete"
 	ThreadDiscard           = "discard"
 	ThreadEvents            = "events"
-	ThreadFollow            = "follow"
 	ThreadGet               = "get"
 	ThreadList              = "list"
 	ThreadRestartForConsent = "restart_for_consent"
 	ThreadRevokeGrant       = "revoke_grant"
 	ThreadSend              = "send"
 	ThreadStop              = "stop"
-	ThreadUnfollow          = "unfollow"
 	TinctureInvokeProtected = "invoke_protected"
 	TinctureInvokePublic    = "invoke_public"
 	TinctureVisibilityGet   = "get"
@@ -345,7 +329,7 @@ const (
 var Actions = map[string][]string{
 	"approval":            {"list", "resolve"},
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
-	"athanor":             {"archive", "create", "destroy", "get", "list", "pair", "provision", "purge", "rename", "settings", "unarchive"},
+	"athanor":             {"get", "provision", "settings"},
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"canvas":              {"activate", "catalog", "restore", "versions", "write"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
@@ -360,7 +344,6 @@ var Actions = map[string][]string{
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
-	"member":              {"add", "leave", "list", "remove"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
@@ -373,12 +356,12 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "lock", "logout", "read_resource", "setup", "unlock", "use", "whoami"},
+	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "lock", "logout", "read_resource", "setup", "unlock", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
 	"system":              {"notify", "status"},
-	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
+	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop"},
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
@@ -705,56 +688,9 @@ func (args AquaUpdateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: AquaUpdate, fields: fields(args)})
 }
 
-// AthanorArchiveArgs carries arguments for athanor.archive.
-type AthanorArchiveArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorArchiveArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorArchiveArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorArchive, fields: fields(args)})
-}
-
-// AthanorCreateArgs carries arguments for athanor.create.
-type AthanorCreateArgs struct {
-	// Group name (create, rename)
-	Name string `json:"name"`
-	// Optional slug for create; derived from the name when absent
-	Slug Field[string] `json:"slug,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorCreateArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorCreateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorCreate, fields: fields(args)})
-}
-
-// AthanorDestroyArgs carries arguments for athanor.destroy.
-type AthanorDestroyArgs struct {
-	// The archived athanor to act on — an id, a group slug, or @<namespace>. A platform operation: it never defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorDestroyArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorDestroyArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorDestroy, fields: fields(args)})
-}
-
 // AthanorGetArgs carries arguments for athanor.get.
 type AthanorGetArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
+	// The athanor to act on — an id or @<namespace>. Defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
 }
 
@@ -767,37 +703,9 @@ func (args AthanorGetArgs) MarshalJSON() ([]byte, error) {
 	}{Action: AthanorGet, fields: fields(args)})
 }
 
-// AthanorListArgs carries arguments for athanor.list.
-type AthanorListArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorListArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorList, fields: fields(args)})
-}
-
-// AthanorPairArgs carries arguments for athanor.pair.
-type AthanorPairArgs struct {
-	// pair: the other person's user id — someone you already share an active athanor with
-	User string `json:"user"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorPairArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorPairArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorPair, fields: fields(args)})
-}
-
 // AthanorProvisionArgs carries arguments for athanor.provision.
 type AthanorProvisionArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
+	// The athanor to act on — an id or @<namespace>. Defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
 }
 
@@ -810,41 +718,9 @@ func (args AthanorProvisionArgs) MarshalJSON() ([]byte, error) {
 	}{Action: AthanorProvision, fields: fields(args)})
 }
 
-// AthanorPurgeArgs carries arguments for athanor.purge.
-type AthanorPurgeArgs struct {
-	// The archived athanor to act on — an id, a group slug, or @<namespace>. A platform operation: it never defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorPurgeArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorPurgeArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorPurge, fields: fields(args)})
-}
-
-// AthanorRenameArgs carries arguments for athanor.rename.
-type AthanorRenameArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-	// Group name (create, rename)
-	Name string `json:"name"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorRenameArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorRenameArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorRename, fields: fields(args)})
-}
-
 // AthanorSettingsArgs carries arguments for athanor.settings.
 type AthanorSettingsArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
+	// The athanor to act on — an id or @<namespace>. Defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
 	// For settings: keys to merge into the athanor's settings
 	Settings map[string]any `json:"settings"`
@@ -857,21 +733,6 @@ func (args AthanorSettingsArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: AthanorSettings, fields: fields(args)})
-}
-
-// AthanorUnarchiveArgs carries arguments for athanor.unarchive.
-type AthanorUnarchiveArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AthanorUnarchiveArgs) MarshalJSON() ([]byte, error) {
-	type fields AthanorUnarchiveArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AthanorUnarchive, fields: fields(args)})
 }
 
 // BuildCompileArgs carries arguments for build.compile.
@@ -2475,82 +2336,6 @@ func (args *McpServersUpdateArgsConfigBackendsItem) UnmarshalJSON(data []byte) e
 	return nil
 }
 
-// MemberAddArgs carries arguments for member.add.
-type MemberAddArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-	// The person's user id, when already on this server (add, remove)
-	UserId Field[string] `json:"user_id,omitzero"`
-	// The person's identifier (per_…), in place of a user id (add, remove)
-	Identifier Field[string] `json:"identifier,omitzero"`
-	// The person's handle at the registry (@name or name), in place of a user id or identifier: the identifier it names is added (add)
-	Handle Field[string] `json:"handle,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args MemberAddArgs) MarshalJSON() ([]byte, error) {
-	type fields MemberAddArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: MemberAdd, fields: fields(args)})
-}
-
-// MemberLeaveArgs carries arguments for member.leave.
-type MemberLeaveArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args MemberLeaveArgs) MarshalJSON() ([]byte, error) {
-	type fields MemberLeaveArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: MemberLeave, fields: fields(args)})
-}
-
-// MemberListArgs carries arguments for member.list.
-type MemberListArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-	// Page size for list (default and ceiling 500)
-	Limit Field[int] `json:"limit,omitzero"`
-	// Rows to skip for list (default 0)
-	Offset Field[int] `json:"offset,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args MemberListArgs) MarshalJSON() ([]byte, error) {
-	type fields MemberListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: MemberList, fields: fields(args)})
-}
-
-// MemberRemoveArgs carries arguments for member.remove.
-type MemberRemoveArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
-	Athanor Field[string] `json:"athanor,omitzero"`
-	// The person's user id, when already on this server (add, remove)
-	UserId Field[string] `json:"user_id,omitzero"`
-	// The person's identifier (per_…), in place of a user id (add, remove)
-	Identifier Field[string] `json:"identifier,omitzero"`
-	// With an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)
-	Invitation Field[bool] `json:"invitation,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args MemberRemoveArgs) MarshalJSON() ([]byte, error) {
-	type fields MemberRemoveArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: MemberRemove, fields: fields(args)})
-}
-
 // NotesEndorseArgs carries arguments for notes.endorse.
 type NotesEndorseArgs struct {
 	// What the note is called (keep, pin, read, forget)
@@ -2622,8 +2407,6 @@ func (args NotesKeepArgs) MarshalJSON() ([]byte, error) {
 
 // NotesListArgs carries arguments for notes.list.
 type NotesListArgs struct {
-	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
-	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
 	// list, search: the `next` cursor a previous page answered.
@@ -2664,10 +2447,6 @@ func (args NotesPinArgs) MarshalJSON() ([]byte, error) {
 type NotesReadArgs struct {
 	// What the note is called (keep, pin, read, forget)
 	Name string `json:"name"`
-	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
-	Scope Field[string] `json:"scope,omitzero"`
-	// read: the athanor a search answered for the note — reads it there, under your own seat.
-	AthanorId Field[string] `json:"athanor_id,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2683,8 +2462,6 @@ func (args NotesReadArgs) MarshalJSON() ([]byte, error) {
 type NotesSearchArgs struct {
 	// search: text to find in a note's name or body
 	Query string `json:"query"`
-	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
-	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
 	// list, search: the `next` cursor a previous page answered.
@@ -4800,21 +4577,6 @@ func (args SessionUnlockArgs) MarshalJSON() ([]byte, error) {
 	}{Action: SessionUnlock, fields: fields(args)})
 }
 
-// SessionUseArgs carries arguments for session.use.
-type SessionUseArgs struct {
-	// For `use`: the athanor to work in — an id, a group slug, or @<namespace>
-	Athanor string `json:"athanor"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionUseArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionUseArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionUse, fields: fields(args)})
-}
-
 // SessionWhoamiArgs carries arguments for session.whoami.
 type SessionWhoamiArgs struct {
 }
@@ -5475,21 +5237,6 @@ func (args ThreadEventsArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ThreadEvents, fields: fields(args)})
 }
 
-// ThreadFollowArgs carries arguments for thread.follow.
-type ThreadFollowArgs struct {
-	// Thread id (all actions except create and list)
-	Thread string `json:"thread"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ThreadFollowArgs) MarshalJSON() ([]byte, error) {
-	type fields ThreadFollowArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ThreadFollow, fields: fields(args)})
-}
-
 // ThreadGetArgs carries arguments for thread.get.
 type ThreadGetArgs struct {
 	// Thread id (all actions except create and list)
@@ -5636,21 +5383,6 @@ func (args ThreadStopArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ThreadStop, fields: fields(args)})
 }
 
-// ThreadUnfollowArgs carries arguments for thread.unfollow.
-type ThreadUnfollowArgs struct {
-	// Thread id (all actions except create and list)
-	Thread string `json:"thread"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ThreadUnfollowArgs) MarshalJSON() ([]byte, error) {
-	type fields ThreadUnfollowArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ThreadUnfollow, fields: fields(args)})
-}
-
 // TinctureInvokeProtectedArgs carries arguments for tincture.invoke_protected.
 type TinctureInvokeProtectedArgs struct {
 	// The tincture's publisher (e.g. 'local')
@@ -5674,7 +5406,7 @@ func (args TinctureInvokeProtectedArgs) MarshalJSON() ([]byte, error) {
 
 // TinctureInvokePublicArgs carries arguments for tincture.invoke_public.
 type TinctureInvokePublicArgs struct {
-	// The tincture's public address: its athanor's URL segment ('@<namespace>' for a person's, the slug for a group's)
+	// The tincture's public address: its athanor's URL segment ('@<namespace>')
 	Athanor string `json:"athanor"`
 	// The tincture's publisher (e.g. 'local')
 	Publisher string `json:"publisher"`

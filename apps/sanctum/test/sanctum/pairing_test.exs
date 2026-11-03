@@ -43,7 +43,7 @@ defmodule Sanctum.PairingTest do
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Pairing, Person}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @source "198.51.100.20"
 
@@ -81,7 +81,7 @@ defmodule Sanctum.PairingTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A person seated in a group of their own, and the context their session
+  # A person seated in their own athanor, and the context their session
   # establishes there.
   defp seated! do
     n = System.unique_integer([:positive])
@@ -94,7 +94,7 @@ defmodule Sanctum.PairingTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Pairing #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(
@@ -769,32 +769,6 @@ defmodule Sanctum.PairingTest do
       assert clients(user.id) == []
     end
 
-    test "a code presented after its person left the athanor is refused before issuance", %{
-      session_ctx: session_ctx,
-      user: user,
-      athanor: athanor
-    } do
-      {:ok, invitation} = begin!(session_ctx)
-      {device_key, private} = invitation.key
-
-      {:ok, %{challenge: challenge}} =
-        Pairing.complete(glass(), invitation.invitation_secret, %{device_key: device_key})
-
-      # A second member keeps the group open.
-      other = seated!()
-      {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
-      :ok = Members.remove_member(athanor, user_id: user.id)
-
-      # The leave revoked the pending invitation with the seat.
-      assert Pairing.complete(glass(), invitation.invitation_secret, %{
-               device_key: device_key,
-               proof: signed(challenge, private)
-             }) == {:error, :invalid_invitation}
-
-      assert clients(user.id) == []
-      assert Arca.Repo.all(from(c in DeviceCertificate, where: c.user_id == ^user.id)) == []
-    end
-
     test "a person with no identity row is damage: refused, and nothing is issued", %{
       session_ctx: session_ctx,
       user: user
@@ -1139,28 +1113,10 @@ defmodule Sanctum.PairingTest do
     end
 
     test "cannot reach another person's client, or one that does not exist", %{
-      session_ctx: session_ctx,
-      athanor: athanor
+      session_ctx: session_ctx
     } do
-      # Another member of the same athanor, signed in there.
-      other = seated!()
-      {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
-
-      built =
-        Context.build(
-          user_id: other.user.id,
-          email: other.user.email,
-          provider: "github",
-          athanor_id: athanor.id,
-          permissions: [:*],
-          auth_method: :oidc,
-          authenticated: true
-        )
-
-      {:ok, session} = Sanctum.TestContext.create_session(built)
-
-      {:ok, other_ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+      # Another person, signed in at their own athanor.
+      %{session_ctx: other_ctx} = seated!()
 
       device = pair!(session_ctx)
 
@@ -1179,9 +1135,8 @@ defmodule Sanctum.PairingTest do
     setup %{session_ctx: session_ctx, user: user, athanor: athanor} do
       device = pair!(session_ctx)
 
-      # A second athanor of the person's, with a device of its own.
-      {:ok, second} = Athanors.create_group(user.id, "Pairing second")
-      far = pair!(signed_in!(user, second))
+      # A second device of the person's, paired from another session.
+      far = pair!(signed_in!(user, athanor))
 
       # A second person, recovering beside them.
       other = seated!()
@@ -1291,7 +1246,7 @@ defmodule Sanctum.PairingTest do
       assert restore_open(user.id) == restore_id
     end
 
-    test "the kit re-enables a device in any athanor of its person while their restore is open, and nothing after",
+    test "the kit re-enables any device of its person while their restore is open, and nothing after",
          %{
            device: device,
            far: far,

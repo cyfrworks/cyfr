@@ -24,7 +24,6 @@ defmodule Sanctum.Providers.CliSignInTest do
 
   alias Prima.Identity.Encoding
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -33,7 +32,7 @@ defmodule Sanctum.Providers.CliSignInTest do
     seated!()
   end
 
-  # A person seated in a group of their own, and the context their
+  # A person seated in their own athanor, and the context their
   # browser's session establishes there.
   defp seated!(label \\ "cli") do
     n = System.unique_integer([:positive])
@@ -46,7 +45,7 @@ defmodule Sanctum.Providers.CliSignInTest do
         verified: true
       })
 
-    {:ok, athanor} = Athanors.create_group(user.id, "Command line #{n}")
+    athanor = Sanctum.Test.People.athanor!(user)
 
     built =
       Context.build(
