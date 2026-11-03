@@ -462,9 +462,11 @@ screen_killed() {
 
 # The shell's connection to CYFR severed: its packets, on the ports of its
 # own connections alone, dropped both ways, while Prism's page in Chrome
-# keeps its own. The session ends within 60 s, the page held open past
-# that end leaves for the sign-in page, and once the connection is back
-# the shell finds its channel gone and locks.
+# keeps its own. The session ends within 60 s; the shell, its ping
+# unanswered, locks the screen as unreachable at its next report, which
+# replaces the page held open, unless the home's end came first and sent
+# that page to the sign-in page; and once the connection is back the
+# screen is still locked, for the lost connection and not for idleness.
 screen_severed() {
   local ports cut took seen closes
   step "the shell's connection to CYFR severed past 60 s while Prism's page stays open"
@@ -487,8 +489,10 @@ screen_severed() {
   budget 90 || BUDGET=0
   closes=$((SECONDS + BUDGET))
   until seen=$(guest_ssh "python3 -I ~/box.py visits $SCREEN_PROFILE $cut /login" 2>/dev/null) && [ -n "$seen" ] ||
+    { shell_page severed-locked && grep -q "CYFR is locked" "$GUEST_DIR/shell-severed-locked.html"; } ||
     [ "$SECONDS" -ge "$closes" ]; do sleep 10; done
-  check "Prism's page, held open past the session's end, went to the sign-in page (${seen:-no visit})" test -n "$seen"
+  check "Prism's page, held open past the session's end, went to the sign-in page or was replaced by the lock page (${seen:-locked})" \
+    sh -c '[ -n "$1" ] || grep -q "CYFR is locked" "$2"' sh "$seen" "$GUEST_DIR/shell-severed-locked.html"
   check "screenshot screen-severed-after.png" guest_screenshot screen-severed-after.png
   guest_root_out 'iptables -w -L -v -n -x' >"$GUEST_DIR/severed-counters.txt"
   check "the cut dropped the shell's packets" \
