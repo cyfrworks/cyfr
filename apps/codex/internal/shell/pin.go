@@ -186,9 +186,15 @@ func pinSentence(err error, noun string) string {
 	case errors.Is(err, ErrPINUnknown):
 		return "CYFR does not take this " + noun + "'s PIN: it was removed, or a restore from a backup suspended it. If it was suspended, your recovery code brings it back."
 	case errors.Is(err, ErrPINHere):
-		return "CYFR runs on this machine, so a six-digit PIN cannot protect this " + noun + "'s key: CYFR's data and the key would share one disk. A self-contained box keeps its key under its chip's PIN or a passphrase."
+		return PINHereSentence(noun)
 	case errors.Is(err, holder.ErrBadElement):
 		return "CYFR's answer to this " + noun + "'s PIN was not one it can use. Nothing was unlocked."
 	}
 	return ""
+}
+
+// PINHereSentence is why a device of noun keeps no PIN its home counts
+// where the home is this same machine.
+func PINHereSentence(noun string) string {
+	return "CYFR runs on this machine, so a six-digit PIN cannot protect this " + noun + "'s key: CYFR's data and the key would share one disk. A self-contained box keeps its key under its chip's PIN or a passphrase."
 }

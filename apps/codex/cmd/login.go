@@ -14,9 +14,11 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/config"
+	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/setup"
 	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
@@ -28,6 +30,7 @@ var (
 	flagLoginJoin       bool
 	flagLoginInvitation string
 	flagLoginName       string
+	flagLoginPIN        bool
 )
 
 func init() {
@@ -39,6 +42,8 @@ func init() {
 		"With --join: the code of the invitation that admits you")
 	loginCmd.Flags().StringVar(&flagLoginName, "name", "",
 		"With --setup or --join: your name, yours for life (asked for when not given)")
+	loginCmd.Flags().BoolVar(&flagLoginPIN, "pin", false,
+		"Keep this command line's key under a six-digit PIN that CYFR counts, in place of its passphrase, or under a new PIN (a machine without a chip, at a CYFR on another machine)")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
@@ -84,6 +89,18 @@ cyfr open in that shell opens CYFR in your browser through this unlock. A
 change that needs a fresh confirmation asks your PIN or passphrase again
 in the terminal, over what CYFR shows of the change.
 
+A machine without a chip pairs under its passphrase. Once paired, cyfr
+login --pin keeps the key under a six-digit PIN instead, after you confirm
+the change: every unlock then asks CYFR to count the try (each wrong one
+makes the next wait longer, up to an hour), so a copy of this machine's
+disk cannot guess the PIN offline, and the first unlock after a reboot
+needs CYFR. A copy of both this disk and CYFR's data can still be guessed,
+and restoring CYFR from a backup brings back an older count. cyfr login
+--pin again sets a new PIN. Where CYFR runs on this same machine, its data
+and the key share one disk and a count protects nothing, so --pin is
+refused: a self-contained box keeps its key under its chip's PIN or a
+passphrase.
+
 --setup makes a headless CYFR's (CYFR_HEADLESS=on) first person, with this
 command line as their device, from the directory cyfr init set up, which
 holds CYFR_SETUP_TOKEN in .env. --join makes you a new person at a CYFR
@@ -96,7 +113,8 @@ not cyfr login.`,
 	Example: `  cyfr login
   cyfr login --context work
   cyfr login --setup --name mira
-  cyfr login --join --invitation 7Kq2-pX9a-... --name mira`,
+  cyfr login --join --invitation 7Kq2-pX9a-... --name mira
+  cyfr login --pin`,
 	Args: cobra.NoArgs,
 	RunE: runLogin,
 }
@@ -124,7 +142,17 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if flagLoginPIN && homeHere(address) {
+		return errors.New(shell.PINHereSentence("command line"))
+	}
 	o := deviceOptions{address: address, invitation: strings.TrimSpace(flagLoginInvitation)}
+	// pin.enroll goes through the session this unlock opens, set below
+	// before SetPIN asks for it.
+	var session string
+	console := newConsole(os.Stdout)
+	if flagLoginPIN {
+		o.enrollPIN = func(ctx context.Context) (string, error) { return enrollPIN(ctx, address, session, console) }
+	}
 	if flagLoginSetup {
 		if o.setupToken, err = setupTokenHere(); err != nil {
 			return err
@@ -145,15 +173,21 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	case joining:
 		mode = "join"
 	}
-	d := &loginDriver{sh: sh, c: newConsole(os.Stdout), mode: mode, name: typedName(flagLoginName),
+	d := &loginDriver{sh: sh, c: console, mode: mode, name: typedName(flagLoginName),
 		invitation: o.invitation, home: address}
 	if err := d.run(cmd.Context()); err != nil {
 		return err
 	}
-	session, err := sh.Session(cmd.Context())
+	session, err = sh.Session(cmd.Context())
 	if err != nil {
 		sh.Lock("")
 		return fmt.Errorf("Unlocked, but CYFR opened no session for this command line, so it locked again: %s", strings.TrimSuffix(shellSentence(err), "."))
+	}
+	if flagLoginPIN {
+		if err := d.setPIN(cmd.Context()); err != nil {
+			sh.Lock("")
+			return err
+		}
 	}
 	var pages *shell.Server
 	if s, ok := sh.(*sessionDevice); ok {
@@ -321,7 +355,7 @@ func (d *loginDriver) twice(ctx context.Context, first, second string) ([]byte, 
 
 // askSecret asks for this device's PIN or passphrase, once.
 func (d *loginDriver) askSecret(ctx context.Context, v shell.View, why string) ([]byte, error) {
-	if v.Kind == "chip" {
+	if v.Kind == "chip" || v.PIN {
 		return d.c.secret(ctx, why+" PIN: ")
 	}
 	return d.c.secret(ctx, why+" passphrase: ")
@@ -374,6 +408,55 @@ func (d *loginDriver) finish(ctx context.Context, v shell.View) error {
 	d.sh.Pair(ctx, string(link), secret)
 	return nil
 }
+
+// setPIN asks the new PIN twice and keeps this unlocked command line's key
+// under it (SetPIN), once the change is confirmed through the session.
+func (d *loginDriver) setPIN(ctx context.Context) error {
+	fmt.Fprintln(d.c.out, "Choose a six-digit PIN for this command line. CYFR counts every try: each wrong one makes the next wait longer.")
+	pin, again, err := d.twice(ctx, "New PIN: ", "The same PIN again: ")
+	if err != nil {
+		return err
+	}
+	d.sh.SetPIN(ctx, pin, again)
+	notice := d.sh.View().Notice
+	if !strings.Contains(notice, "now kept under your six-digit PIN") {
+		return errors.New(notice)
+	}
+	fmt.Fprintln(d.c.out, notice)
+	return nil
+}
+
+// enrollPIN is pin.enroll through session: answered confirmation_required,
+// the change is confirmed in this terminal on this device (its key opened
+// afresh by its passphrase or current PIN) or on another device, and the
+// call repeats; the home answers the new evaluator's identifier.
+func enrollPIN(ctx context.Context, address, session string, c *console) (string, error) {
+	client := mcp.NewClient(address)
+	client.SessionID = session
+	client.Confirm = (&confirmationWait{
+		out:         c.out,
+		interactive: func() bool { return true },
+		lines:       c.lines,
+		now:         time.Now,
+		address:     address,
+		device:      func(address string) deviceConfirmer { return confirmOnDeviceBy(address, session) },
+	}).wait
+	answer, err := client.CallTool(ctx, pinTool, map[string]any{"action": pinEnrollAction})
+	if err != nil {
+		return "", err
+	}
+	evaluator, _ := answer["evaluator"].(string)
+	if evaluator == "" {
+		return "", errors.New("CYFR answered no evaluator")
+	}
+	return evaluator, nil
+}
+
+// The PIN enrollment's operation, pin.enroll.
+const (
+	pinTool         = "pin"
+	pinEnrollAction = "enroll"
+)
 
 func (d *loginDriver) unlock(ctx context.Context, v shell.View) error {
 	secret, err := d.askSecret(ctx, v, "Unlock this command line with its")

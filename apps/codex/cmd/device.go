@@ -82,6 +82,12 @@ type deviceOptions struct {
 	invitation string
 	setupToken string
 	locked     func()
+	// session is the session a change to confirm is read through, when
+	// it is not the one cyfr login's shell holds in its environment.
+	session string
+	// enrollPIN is pin.enroll through the unlocked device's session (cyfr
+	// login --pin); nil where no PIN is set up.
+	enrollPIN shell.PINEnroll
 }
 
 // device is this command line's device as cyfr login, a confirmation on
@@ -103,6 +109,7 @@ type device interface {
 	Decide(ctx context.Context, ref string, confirm bool, secret []byte)
 	Unlocked() bool
 	Lock(why string)
+	SetPIN(ctx context.Context, pin, again []byte)
 }
 
 // openDevice is how a command opens this command line's device: its shell
@@ -115,7 +122,11 @@ var openDevice = func(o deviceOptions) (device, error) {
 		return nil, err
 	}
 	d := &sessionDevice{Shell: sh}
-	if token, ok := shellSession(o.address); ok {
+	token, ok := o.session, o.session != ""
+	if !ok {
+		token, ok = shellSession(o.address)
+	}
+	if ok {
 		d.session = mcp.NewClient(o.address)
 		d.session.SessionID = token
 	}
@@ -167,6 +178,8 @@ func deviceShell(o deviceOptions) (*shell.Shell, error) {
 		Chip:        deviceChip,
 		DisplayName: deviceName(),
 		Invitation:  o.invitation,
+		HomeHere:    homeHere(o.address),
+		EnrollPIN:   o.enrollPIN,
 		Tokens:      func() (string, string) { return o.setupToken, "" },
 		Restart:     o.locked,
 		Pair: func(ctx context.Context, args map[string]any) (map[string]any, error) {

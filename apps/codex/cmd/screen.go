@@ -334,6 +334,9 @@ func runScreenShell(ctx context.Context) error {
 		DataDir: filepath.Join(dir, "data"),
 		Tokens:  screenTokens,
 		Restart: chrome.restart,
+		// The box's own screen: its home is this machine, so no PIN the
+		// home counts is offered.
+		HomeHere: true,
 	})
 	if err != nil {
 		return err

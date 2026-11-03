@@ -101,6 +101,11 @@ func (d *fakeDevice) Unlocked() bool {
 	return d.view.Page == shell.PageUnlocked || d.view.Page == shell.PageConfirm
 }
 func (d *fakeDevice) Lock(string) { d.mu.Lock(); d.locks++; d.mu.Unlock() }
+func (d *fakeDevice) SetPIN(_ context.Context, pin, again []byte) {
+	d.did("setpin", pin, string(again))
+	clear(pin)
+	clear(again)
+}
 
 func (d *fakeDevice) set(v shell.View) { d.mu.Lock(); d.view = v; d.mu.Unlock() }
 
