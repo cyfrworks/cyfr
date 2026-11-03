@@ -23,7 +23,9 @@
 #       drawn here; its public key is the one enrolled, and the device, its
 #       certificate and the first-method mark the enrollment set all stand.
 #       The seed is written to `setup-device.json` in the server's working
-#       directory (the cell's), created once with mode 0600, beside the
+#       directory (a release cell's own; an image's temporary directory
+#       where its working directory is not the server's to write), created
+#       once with mode 0600, beside the
 #       device's client, athanor, home and certificate, and is never
 #       answered, taken as an argument or logged: `device_confirm` alone
 #       reads it. Their enrollment is then finished through Arca with no
@@ -135,9 +137,23 @@ fn args ->
   end
 
   # The setup device's record: the seed its key is drawn from and what it
-  # was certified as, in the cell's own directory, created once and
-  # readable by this user alone.
-  device_path = Path.join(File.cwd!(), "setup-device.json")
+  # was certified as, created once and readable by this user alone, in the
+  # server's working directory, a release cell's own, or, where that is not
+  # this user's to write (an image's /app), the server's temporary one.
+  device_path =
+    Enum.find_value([File.cwd!(), System.tmp_dir!()], fn dir ->
+      path = Path.join(dir, "setup-device.json")
+      if File.exists?(path), do: path
+    end) ||
+      Enum.find_value([File.cwd!(), System.tmp_dir!()], fn dir ->
+        case File.stat(dir) do
+          {:ok, %{access: access}} when access in [:write, :read_write] ->
+            Path.join(dir, "setup-device.json")
+
+          _other ->
+            nil
+        end
+      end)
 
   write_device = fn device, create? ->
     modes = if create?, do: [:write, :exclusive], else: [:write]
@@ -405,8 +421,11 @@ fn args ->
         :ok = write_device.(Map.put(device, "certificate", issued), false)
 
         case proven.(:connect, renewed) do
-          {{:ok, client}, _proof} -> {carried.(client), renewed, seed}
-          {refused, _proof} -> raise "the renewed setup device did not connect: #{inspect(refused)}"
+          {{:ok, client}, _proof} ->
+            {carried.(client), renewed, seed}
+
+          {refused, _proof} ->
+            raise "the renewed setup device did not connect: #{inspect(refused)}"
         end
 
       {refused, _proof} ->
@@ -433,10 +452,21 @@ fn args ->
 
           {challenge, key} =
             case tamper do
-              [] -> {challenge, seed}
-              ["digest"] -> {%{challenge | digest: "sha256:" <> String.duplicate("0", 64)}, seed}
-              ["ref"] -> {%{challenge | ref: "cnr_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)}, seed}
-              ["key"] -> {challenge, :crypto.strong_rand_bytes(32)}
+              [] ->
+                {challenge, seed}
+
+              ["digest"] ->
+                {%{challenge | digest: "sha256:" <> String.duplicate("0", 64)}, seed}
+
+              ["ref"] ->
+                {%{
+                   challenge
+                   | ref:
+                       "cnr_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+                 }, seed}
+
+              ["key"] ->
+                {challenge, :crypto.strong_rand_bytes(32)}
             end
 
           proof = Proof.encode(Proof.sign(challenge, key))
