@@ -238,8 +238,9 @@ defmodule Arca.PendingConfirmations do
       now = Arca.ServerMetaStorage.now!()
 
       with {:ok, record} <- locked(actor, Confirmation.ref(id)),
-           :ok <- matches(record, expected) do
-        consumable(record, now)
+           :ok <- matches(record, expected),
+           :ok <- consumable(record, now) do
+        device_stands(record, now)
       end
     end)
   end

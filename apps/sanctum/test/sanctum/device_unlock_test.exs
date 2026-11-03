@@ -670,9 +670,21 @@ defmodule Sanctum.DeviceUnlockTest do
     setup do
       device = enrolled!()
       ctx = connected!(device)
-      answer = unlocked!(ctx, device.key)
-      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
-      {:ok, opener} = Sanctum.Caller.establish(token)
+
+      # The change is asked on another client of the person's: a browser's
+      # session, which stands whatever becomes of the device.
+      browser =
+        Context.build(
+          user_id: ctx.user_id,
+          provider: "passkey",
+          athanor_id: ctx.athanor_id,
+          permissions: Context.person_permissions(),
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, session} = Sanctum.TestContext.create_session(browser)
+      {:ok, opener} = Sanctum.Caller.establish(session.token)
 
       change = %{
         operation: "pairing.revoke",
