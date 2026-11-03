@@ -810,42 +810,6 @@ export function percentiles(values) {
 export const BROWSERS = ["chromium", "firefox", "webkit"];
 
 // ---------------------------------------------------------------------------
-// The glass, shared by the proofs that pair one
-// ---------------------------------------------------------------------------
-
-// The glass's device channel, watched from inside its own page: an init
-// script (`context.addInitScript(instrumentDevice)`) that logs, on
-// `window.__device`, each frame of every device socket, in or out, as its
-// type, id and error class, and each socket's close.
-export function instrumentDevice() {
-  const Native = window.WebSocket;
-  const device = { log: [], sockets: 0 };
-  window.__device = device;
-  const describe = (data) => {
-    try {
-      const map = JSON.parse(data);
-      return { type: map.type, id: map.id, error: map.error ? (map.error.class || "error") : undefined };
-    } catch {
-      return { type: "unreadable" };
-    }
-  };
-  class Watched extends Native {
-    constructor(url, protocols) {
-      super(url, protocols);
-      if (!/\/device\/websocket/.test(String(url))) return;
-      this.__serial = ++device.sockets;
-      super.addEventListener("message", (event) => device.log.push({ socket: this.__serial, dir: "in", ...describe(event.data) }));
-      super.addEventListener("close", (event) => device.log.push({ socket: this.__serial, event: "close", code: event.code }));
-    }
-    send(data) {
-      if (this.__serial) device.log.push({ socket: this.__serial, dir: "out", ...describe(data) });
-      return super.send(data);
-    }
-  }
-  window.WebSocket = Watched;
-}
-
-// ---------------------------------------------------------------------------
 // The recovery code the system layer shows
 // ---------------------------------------------------------------------------
 
