@@ -80,9 +80,14 @@ func confirmOnDeviceBy(address, session string) deviceConfirmer {
 			return confirmedElsewhere, nil
 		}
 		dev.Decide(ctx, ref, true, secret)
-		if notice := dev.View().Notice; !strings.HasPrefix(notice, "Confirmed") {
+		notice := dev.View().Notice
+		if !strings.HasPrefix(notice, "Confirmed") {
 			return failedHere, errors.New(notice)
 		}
+		// The whole notice, as the device said it: beside the success it
+		// may say that CYFR did not take the PIN's reset, so a try stays
+		// counted.
+		fmt.Fprintln(c.out, notice)
 		return confirmedHere, nil
 	}
 }
