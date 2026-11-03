@@ -344,13 +344,18 @@ defmodule Arca.PairedClients do
 
   # arca:db-raise-ok a transaction step: its callers rescue around it.
   def retire_dependents!(client_ids) do
+    certificates =
+      DeviceCertificates.revoke_all(
+        from(c in DeviceCertificate, where: c.paired_client_id in ^client_ids)
+      )
+
     %{
-      certificate_ids:
-        DeviceCertificates.revoke_all(
-          from(c in DeviceCertificate, where: c.paired_client_id in ^client_ids)
-        ),
+      certificate_ids: certificates.certificate_ids,
       confirmation_ids: PendingConfirmations.void_confirmed_by!(:paired_client, client_ids),
-      session_hashes: Arca.SessionStorage.delete_clients!(client_ids)
+      # The certificates' revocation deleted the sessions of a client still
+      # certified; the rest go here. Both hand their hashes on.
+      session_hashes:
+        Enum.uniq(certificates.session_hashes ++ Arca.SessionStorage.delete_clients!(client_ids))
     }
   end
 

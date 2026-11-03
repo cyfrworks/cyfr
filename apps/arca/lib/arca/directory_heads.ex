@@ -361,11 +361,15 @@ defmodule Arca.DirectoryHeads do
     user_ids = people_of(identifier)
     key_moved? = old_key != new_key
 
-    session_hashes =
+    epoch_hashes =
       if key_moved?, do: SessionStorage.delete_key_epoch!(user_ids, old_key), else: []
 
-    certificate_ids =
-      if key_moved?, do: DeviceCertificates.revoke_key_epoch!(identifier, old_key), else: []
+    %{certificate_ids: certificate_ids, session_hashes: device_hashes} =
+      if key_moved?,
+        do: DeviceCertificates.revoke_key_epoch!(identifier, old_key),
+        else: %{certificate_ids: [], session_hashes: []}
+
+    session_hashes = Enum.uniq(epoch_hashes ++ device_hashes)
 
     passkey_ids =
       if old_recovery != new_recovery,
