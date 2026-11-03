@@ -249,7 +249,6 @@ const (
 	SessionLogout           = "logout"
 	SessionReadResource     = "read_resource"
 	SessionUnlock           = "unlock"
-	SessionUse              = "use"
 	SessionWhoami           = "whoami"
 	SettingsList            = "list"
 	SettingsReset           = "reset"
@@ -348,7 +347,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"lock", "logout", "read_resource", "unlock", "use", "whoami"},
+	"session":             {"lock", "logout", "read_resource", "unlock", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
@@ -4426,21 +4425,6 @@ func (args SessionUnlockArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionUnlock, fields: fields(args)})
-}
-
-// SessionUseArgs carries arguments for session.use.
-type SessionUseArgs struct {
-	// For `use`: the athanor to work in — an id, a group slug, or @<namespace>
-	Athanor string `json:"athanor"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionUseArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionUseArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionUse, fields: fields(args)})
 }
 
 // SessionWhoamiArgs carries arguments for session.whoami.

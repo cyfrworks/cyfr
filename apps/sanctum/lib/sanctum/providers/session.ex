@@ -4,7 +4,7 @@
 defmodule Sanctum.Providers.Session do
   @moduledoc """
   Session tool handlers for the Sanctum MCP provider — logout, whoami,
-  focusing another athanor (`use`), a protected device's unlock and lock,
+  a protected device's unlock and lock,
   and the caller's self-description resources. A command line signs in as
   a protected device does (`Sanctum.DeviceUnlock`): its shell unlocks on
   its device channel and spends the ticket at `POST /device/session`.
@@ -48,20 +48,6 @@ defmodule Sanctum.Providers.Session do
         Operation.new("session", "whoami", "Whoami session", [],
           auth: :anonymous,
           kind: :read,
-          planes: [:external]
-        ),
-        Operation.new(
-          "session",
-          "use",
-          "Use session",
-          [
-            Arg.new("athanor", :string,
-              required: true,
-              description:
-                "For `use`: the athanor to work in — an id, a group slug, or @<namespace>"
-            )
-          ],
-          kind: :write,
           planes: [:external]
         ),
         Operation.new(
@@ -294,16 +280,6 @@ defmodule Sanctum.Providers.Session do
   # ============================================================================
   # Helpers shared across session handlers
   # ============================================================================
-
-  # An archived athanor resolves like an open one, so `focus/2` decides
-  # what the caller hears of it; a store that cannot answer is unavailable.
-  defp resolve_athanor(segment) do
-    if Sanctum.Tenancy.Athanors.athanor_id?(segment) do
-      Sanctum.Tenancy.Athanors.get(segment)
-    else
-      Sanctum.Tenancy.Athanors.by_route_slug(segment)
-    end
-  end
 
   # The caller's permissions as the wire names them, sorted.
   defp permission_names(permissions) do

@@ -21,7 +21,6 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "session" => [
       "logout",
       "whoami",
-      "use",
       "unlock",
       "lock",
       "read_resource"

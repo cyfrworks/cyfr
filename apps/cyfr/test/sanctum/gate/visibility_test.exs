@@ -134,7 +134,7 @@ defmodule Sanctum.Gate.VisibilityTest do
     # own channel (`Sanctum.DeviceUnlock`); listing them grants nothing.
     test "sees every session action — the anonymous ones, and a device's unlock and lock" do
       assert Enum.sort(visible_actions("session", ctx_with([:execute]))) ==
-               ~w(lock logout read_resource unlock use whoami)
+               ~w(lock logout read_resource unlock whoami)
     end
 
     test "operator-only actions are shown to platform admins alone" do
