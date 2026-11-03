@@ -420,11 +420,15 @@ func (s *Shell) Finish(ctx context.Context, name, code string, secret []byte) {
 		// home recorded none, so the page asks for it with the PIN.
 		extra = map[string]any{"name": strings.TrimSpace(name), "recovery_secret": RecoverySecret()}
 	case s.rec.Admission == "restore" && restore != "":
-		var err error
-		if a, err = Restore(ctx, s.cfg.Client, s.cfg.Address, restore, strings.TrimSpace(code)); err != nil {
-			s.say("%s", restoreSentence(err))
-			return
-		}
+		// The saved key is proven through the resume first, under the
+		// restore token: a restore whose enrollment committed finds its
+		// client there. Only a resume that finds nothing committed asks
+		// the home to restore again, proven by the recovery code.
+		a = Admission{Kind: "restore", Client: s.cfg.Client, header: http.Header{},
+			resume: http.Header{"Authorization": {"Bearer " + restore}},
+			reprove: func(ctx context.Context) (Admission, error) {
+				return Restore(ctx, s.cfg.Client, s.cfg.Address, restore, strings.TrimSpace(code))
+			}}
 	default:
 		s.say("This screen cannot finish setting up: .env holds no token for it.")
 		return

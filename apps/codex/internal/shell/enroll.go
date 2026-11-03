@@ -68,6 +68,11 @@ type Admission struct {
 	// header is the credential of the enrollment's entries; resume is the
 	// one its resume takes.
 	header, resume http.Header
+	// reprove, when set, gives the admission its entries need, asked only
+	// once a resume found nothing committed: a finished restore's session
+	// is proven again by the recovery code, never before the saved key had
+	// its chance to find its committed client.
+	reprove func(context.Context) (Admission, error)
 }
 
 // SetupAdmission admits the first person under the installation's setup
@@ -116,6 +121,11 @@ func Enroll(ctx context.Context, address string, a Admission, b Binding, d Holde
 		var refused *HomeError
 		if err == nil || !errors.As(err, &refused) || refused.Status >= 500 {
 			return got, err
+		}
+		if a.reprove != nil {
+			if a, err = a.reprove(ctx); err != nil {
+				return Enrolled{}, err
+			}
 		}
 	}
 	proof, err := enrollProof(ctx, address, "/device/enrollment/challenge", a.header, a, b, requestID, key,
