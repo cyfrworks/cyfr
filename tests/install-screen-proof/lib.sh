@@ -235,7 +235,7 @@ guest_boot() {
   proof_own container "$GUEST" "$GUEST_DIR" || fail "the container $GUEST cannot be the run's"
   docker create --init --name "$GUEST" --device /dev/kvm --group-add "$(kvm_gid)" \
     --volume "$VOLUME:/disk" --volume "$BASE_DIR:/base:ro" "$IMAGE" \
-    /proof/guest-boot.sh "$part" "$memory" "$disk" 4 "$CLOUD_IMAGE" >/dev/null ||
+    /proof/guest-boot.sh "$part" "$memory" "$disk" 4 "$CLOUD_IMAGE" "${GUEST_TPM:-swtpm}" >/dev/null ||
     fail "the QEMU container $GUEST was not made"
   # docker cp makes them root's and keeps their mode, and names each so
   # that /seed itself stays the container user's.

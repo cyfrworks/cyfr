@@ -8,12 +8,17 @@
 # on the guest's own screen runs the install script as `curl ... | sh` pipes
 # it, with production trust, then `cyfr init`, whose screen question's first
 # answer shows CYFR on the screen, and `cyfr up`, and CYFR answers on its
-# port. After a reboot labwc and Chrome run on tty1
-# and show CYFR's setup page (screen-setup.png); after `cyfr down` and another
+# port. After a reboot labwc and Chrome run on tty1 and show the screen's
+# own setup page (screen-setup.png): with the guest's isolated swtpm it asks
+# for a six-digit PIN and seals the key in the chip; with --no-tpm it
+# refuses six digits and takes the six-word passphrase it shows. Against a
+# server with the device purposes the run goes on to the recovery code,
+# Prism, the idle lock and the unlock; against one without, it records
+# that part PENDING, never passed. After `cyfr down` and another
 # reboot CYFR stays down, the screen says why (screen-waiting.png), and
 # Ctrl+Alt+F2 reaches a terminal:
 #
-#   tests/install-screen-proof/run.sh [--out DIR]
+#   tests/install-screen-proof/run.sh [--out DIR] [--no-tpm]
 #
 # After the script, this tree's cyfr takes the installed one's place, a
 # stand-in for a signed candidate, which results.txt says (lib.sh,
@@ -59,7 +64,9 @@ proof_traps
 
 INSTALL_VERSION=0.6.0-alpha.5
 
-usage() { echo "usage: $0 [--out DIR]"; }
+usage() { echo "usage: $0 [--out DIR] [--no-tpm]"; }
+# The guest's TPM: an isolated swtpm of its own, or none (--no-tpm).
+GUEST_TPM=swtpm
 OUT=""
 while [ "$#" -gt 0 ]; do
   case $1 in
@@ -67,6 +74,10 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || { usage >&2; exit 64; }
       OUT=$2
       shift 2
+      ;;
+    --no-tpm)
+      GUEST_TPM=none
+      shift
       ;;
     -h | --help) usage; exit 0 ;;
     *) usage >&2; exit 64 ;;
@@ -102,6 +113,38 @@ WORK=$PROOF_WORK
 echo "install proof: prefix $PROOF_PREFIX, evidence in $OUT"
 
 transcript_has() { grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
+
+# shell_page NAME: the screen's own page as the guest's loopback serves it,
+# in GUEST_DIR/shell-NAME.html. A GET opens a page and changes nothing.
+shell_page() { guest_ssh 'curl -s http://127.0.0.1:7340/' >"$GUEST_DIR/shell-$1.html" 2>&1; }
+
+# The setup past enrollment, against a server with the device purposes:
+# the recovery code shown, "I saved it", Prism, the lock after five minutes
+# without input, a wrong PIN said, and the unlock.
+screen_signed_in() {
+  check "the recovery code is shown with its QR" grep -q '<svg' "$GUEST_DIR/shell-enrolled.html"
+  check "screenshot screen-recovery.png" guest_screenshot screen-recovery.png
+  printf '\n' | guest_keys || fail "QMP did not press I saved it"
+  sleep 15
+  check "screenshot screen-prism.png" guest_screenshot screen-prism.png
+  shell_page saved
+  check "the recovery code is gone from the screen once saved" sh -c '! grep -q "Your recovery code" "$1"' sh "$GUEST_DIR/shell-saved.html"
+  check "the key record keeps no setup request once saved" guest_ssh '! grep -q "\"request_id\": *\"req_" ~/cyfr/.cyfr/screen/holder.json'
+  step "five minutes without input lock the screen"
+  sleep 320
+  shell_page idle
+  check "the screen locked itself after five minutes without input" grep -q 'CYFR is locked' "$GUEST_DIR/shell-idle.html"
+  check "screenshot screen-locked.png" guest_screenshot screen-locked.png
+  if [ "$GUEST_TPM" = swtpm ]; then
+    printf '000000\n' | guest_keys || fail "QMP did not type"
+    sleep 5
+    check "screenshot screen-wrong-pin.png" guest_screenshot screen-wrong-pin.png
+  fi
+  printf '%s\n' "$SECRET" | guest_keys || fail "QMP did not type"
+  sleep 15
+  check "screenshot screen-unlocked.png" guest_screenshot screen-unlocked.png
+  check "the unlock reached Prism, the shell's page no longer shown" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-unlocked.png" "$GUEST_DIR/screen-locked.png"
+}
 
 # Whether labwc runs on tty1 and Chrome beside it, within two minutes; the
 # record is GUEST_DIR/screen.txt.
@@ -176,18 +219,60 @@ clean_install() {
   check "CYFR answers on its port (HTTP $code)" sh -c '[ "$1" -ge 200 ] && [ "$1" -lt 400 ]' sh "$code"
   check "screenshot ready.png" guest_screenshot ready.png
 
-  step "a reboot: the screen starts"
+  step "a reboot: the screen starts, locked to its own pages"
   guest_reboot
   screen_runs || fail "labwc and Chrome did not start on tty1 ($GUEST_DIR/screen.txt)"
-  # CYFR's own restart, then the launcher's next look, then the page.
+  # CYFR's own restart, then the shell's next look, then the page.
   guest_ssh "for n in \$(seq 1 90); do curl -s -o /dev/null --max-time 2 http://localhost:4000/ && exit 0; sleep 2; done; exit 1" ||
     fail "CYFR did not come back after the reboot"
   sleep 25
+  if [ "$GUEST_TPM" = swtpm ]; then
+    check "the guest has a TPM, its resource manager the tss group's" guest_ssh 'test -c /dev/tpmrm0 && [ "$(stat -c %G /dev/tpmrm0)" = tss ]'
+    check "cyfr screen on joined the screen's account to tss" guest_ssh 'id -nG proof | tr " " "\n" | grep -qx tss'
+  else
+    check "the guest has no TPM" guest_ssh '! test -e /dev/tpmrm0'
+  fi
   check "screenshot screen-setup.png" guest_screenshot screen-setup.png
+  shell_page setup
+  check "the screen shows the shell's own setup page" grep -q 'Set up CYFR' "$GUEST_DIR/shell-setup.html"
+  if [ "$GUEST_TPM" = swtpm ]; then
+    check "with a chip it asks for a six-digit PIN" grep -q 'Choose a six-digit PIN' "$GUEST_DIR/shell-setup.html"
+  else
+    check "without a chip it asks for the passphrase it shows" grep -q 'no chip to keep a short PIN safe' "$GUEST_DIR/shell-setup.html"
+  fi
   guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
   guest_ssh 'ps -eo args' >"$GUEST_DIR/processes.txt" 2>&1
   check "the setup token is in no process's arguments" sh -c '[ -s "$1" ] && ! grep -qF "$(cat "$1")" "$2"' sh "$WORK/token" "$GUEST_DIR/processes.txt"
-  check "the page that holds the token is the account's alone" guest_ssh '[ "$(stat -c %a ~/cyfr/.cyfr/screen/open.html)" = 600 ]'
+  check "no screen file holds the setup token" guest_ssh "! grep -rqF \"\$(sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env)\" --exclude-dir=chrome ~/cyfr/.cyfr/screen"
+
+  step "setup on the screen, typed: a name and the PIN (or passphrase) twice"
+  if [ "$GUEST_TPM" = none ]; then
+    printf 'alice\t123456\t123456\n' | guest_keys || fail "QMP did not type"
+    sleep 5
+    shell_page six-digits
+    check "without a chip six digits are refused" grep -q 'needs the six-word passphrase' "$GUEST_DIR/shell-six-digits.html"
+    check "a refused PIN made no key" guest_ssh '! test -e ~/cyfr/.cyfr/screen/holder.json'
+    SECRET=$(sed -n 's/.*<p class="code">\([a-z ]*\)<\/p>.*/\1/p' "$GUEST_DIR/shell-six-digits.html" | head -n 1)
+    check "the page shows a six-word passphrase" sh -c '[ "$(printf %s "$1" | wc -w)" = 6 ]' sh "$SECRET"
+    KIND=software
+  else
+    SECRET=$(printf '%06d' $((RANDOM % 1000000)))
+    KIND=chip
+  fi
+  printf 'alice\t%s\t%s\n' "$SECRET" "$SECRET" | guest_keys || fail "QMP did not type"
+  sleep 15
+  guest_ssh 'stat -c %a ~/cyfr/.cyfr/screen/holder.json && cat ~/cyfr/.cyfr/screen/holder.json' >"$GUEST_DIR/holder.txt" 2>&1
+  check "the key record is the account's alone, mode 600" sh -c '[ "$(head -n 1 "$1")" = 600 ]' sh "$GUEST_DIR/holder.txt"
+  check "the key is held by the $KIND holder" grep -qE "\"kind\": *\"$KIND\"" "$GUEST_DIR/holder.txt"
+  check "the key record holds neither the PIN nor the passphrase" sh -c '! grep -qF -- "$1" "$2"' sh "$SECRET" "$GUEST_DIR/holder.txt"
+  check "screenshot screen-enrolled.png" guest_screenshot screen-enrolled.png
+  shell_page enrolled
+  if grep -q 'Your recovery code' "$GUEST_DIR/shell-enrolled.html"; then
+    screen_signed_in
+  else
+    # A server without the device purposes (S1a) answers no enrollment.
+    record PENDING "enrollment, the recovery code, Prism, lock, unlock and confirmation need a candidate server with the device purposes; this one answered: $(sed -n 's/.*<p class="notice" role="status">\([^<]*\)<.*/\1/p' "$GUEST_DIR/shell-enrolled.html" | head -n 1)"
+  fi
 
   step "cyfr down, then a reboot: CYFR stays down and the screen says why"
   guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"
