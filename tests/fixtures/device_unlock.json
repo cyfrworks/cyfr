@@ -2419,9 +2419,22 @@
           }
         },
         "invitation": {
-          "header": "x-cyfr-invitation"
+          "challenge": {
+            "header": "x-cyfr-invitation"
+          },
+          "complete": {
+            "header": "x-cyfr-invitation"
+          },
+          "resume": {
+            "header": "x-cyfr-invitation"
+          }
         },
-        "open": {}
+        "open": {
+          "challenge": "none",
+          "complete": "none",
+          "resume": "none",
+          "bound": "source_address"
+        }
       },
       "enrollment_challenge": {
         "method": "POST",
