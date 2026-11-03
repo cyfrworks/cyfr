@@ -696,6 +696,55 @@ defmodule Sanctum.PairingTest do
                {:error, :invalid_invitation}
     end
 
+    test "concurrent completions of one invitation by its key pair one client, and each answer is that pairing",
+         %{session_ctx: session_ctx, user: user} do
+      {:ok, invitation} = begin!(session_ctx)
+      {device_key, private} = invitation.key
+      secret = invitation.invitation_secret
+
+      submissions =
+        for _ <- 1..4 do
+          {:ok, %{challenge: challenge}} =
+            Pairing.complete(glass(), secret, %{device_key: device_key})
+
+          %{device_key: device_key, proof: signed(challenge, private)}
+        end
+
+      results =
+        submissions
+        |> Enum.map(fn submission ->
+          Task.async(fn -> Pairing.complete(glass(), secret, submission) end)
+        end)
+        |> Task.await_many(30_000)
+
+      assert [%{id: client_id}] = clients(user.id)
+      assert Enum.all?(results, &match?({:ok, %{client_id: ^client_id}}, &1)), inspect(results)
+
+      assert results |> Enum.map(fn {:ok, %{certificate: c}} -> c end) |> Enum.uniq() |> length() ==
+               1
+    end
+
+    test "a revocation racing a repeated completion ends the client, and no answer outlives it",
+         %{session_ctx: session_ctx, user: user} do
+      {:ok, invitation} = begin!(session_ctx)
+      secret = invitation.invitation_secret
+      {:ok, paired} = complete(secret, invitation.key)
+
+      [revoked, repeated] =
+        [
+          Task.async(fn -> revoke!(session_ctx, paired.client_id) end),
+          Task.async(fn -> complete(secret, invitation.key) end)
+        ]
+        |> Task.await_many(30_000)
+
+      assert {:ok, %{standing: "revoked"}} = revoked
+      assert repeated in [{:ok, paired}, {:error, :invalid_invitation}]
+      assert [%{standing: "revoked"}] = clients(user.id)
+
+      # After the revocation the repeat answers nothing.
+      assert complete(secret, invitation.key) == {:error, :invalid_invitation}
+    end
+
     test "a protected device records its holder, both fields together; a browser's glass records none",
          %{session_ctx: session_ctx, user: user} do
       {:ok, invitation} = begin!(session_ctx)

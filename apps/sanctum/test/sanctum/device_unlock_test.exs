@@ -401,6 +401,34 @@ defmodule Sanctum.DeviceUnlockTest do
                new_challenge({:invitation, "nonsense"}, key(), identity())
     end
 
+    test "concurrent completions under one invitation make one person and one device", %{
+      admin_id: admin_id
+    } do
+      {_id, code} = invite!(admin_id)
+      people = Arca.Repo.aggregate(User, :count)
+      clients = Arca.Repo.aggregate(PairedClient, :count)
+
+      completions =
+        for _ <- 1..3 do
+          device = key()
+          identity = identity()
+          {:ok, %{challenge: challenge}} = new_challenge({:invitation, code}, device, identity)
+          {challenge, device, identity}
+        end
+
+      results =
+        completions
+        |> Enum.map(fn {challenge, device, identity} ->
+          Task.async(fn -> new_complete({:invitation, code}, challenge, device, identity) end)
+        end)
+        |> Task.await_many(30_000)
+
+      assert [{:ok, %{certificate: _certificate}}] = Enum.filter(results, &match?({:ok, _}, &1))
+      assert Enum.count(results, &(&1 == {:error, :invitation_invalid})) == 2
+      assert Arca.Repo.aggregate(User, :count) == people + 1
+      assert Arca.Repo.aggregate(PairedClient, :count) == clients + 1
+    end
+
     test "the open admission needs the door's *, and enrolls a new person like an invitation" do
       device = key()
       identity = identity("opened")

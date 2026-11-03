@@ -619,9 +619,16 @@ defmodule Sanctum.Pairing do
          {:ok, expected} <-
            pair_challenge(secret, invitation, device_key, proof.challenge.expires_at),
          :ok <- verified(Proof.verify(proof, expected, now)),
-         {:ok, client} <- committed_client(invitation, device_key),
+         {:ok, answer} <- committed(invitation, device_key) do
+      {:halt, answer}
+    end
+  end
+
+  # The pairing a consumed invitation made, answered again.
+  defp committed(invitation, device_key) do
+    with {:ok, client} <- committed_client(invitation, device_key),
          {:ok, certificate} <- current_certificate(invitation.athanor_id, client.id) do
-      {:halt, %{client_id: client.id, certificate: certificate}}
+      {:ok, %{client_id: client.id, certificate: certificate}}
     end
   end
 
@@ -809,7 +816,12 @@ defmodule Sanctum.Pairing do
         &redeemable(&1, invitation),
         &paired(actor, &1, device_key, issuer, holder)
       )
-      |> redeemed()
+      |> case do
+        # Another completion by the approved key committed first: this one,
+        # its proof verified, is that pairing's repeat.
+        {:error, :consumed} -> committed(invitation, device_key)
+        result -> redeemed(result)
+      end
     end
   end
 
