@@ -341,19 +341,26 @@ defmodule Arca.PairedClientsTest do
           holder_kind: "chip"
         })
 
+      id = Prima.UUID7.generate_id("ses")
       hash = :crypto.hash(:sha256, "device-session-#{row.id}")
 
       :ok =
-        Arca.SessionStorage.create_session(
+        Arca.SessionStorage.reserve_client_session(id, %{
+          client_id: row.id,
+          user_id: "usr_pcl",
+          expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
+        })
+
+      :ok =
+        Arca.SessionStorage.activate_client_session(
           hash,
           %{
-            id: Prima.UUID7.generate_id("ses"),
-            user_id: "usr_pcl",
-            provider: "unlock",
+            id: id,
             client_id: row.id,
+            user_id: "usr_pcl",
             expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
           },
-          Arca.Test.Actor.issuance()
+          Arca.Test.Actor.issuance("usr_pcl")
         )
 
       assert {:ok, %{standing: "revoked", revoked_session_hashes: [^hash]}} =

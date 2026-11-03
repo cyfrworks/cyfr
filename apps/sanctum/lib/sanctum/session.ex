@@ -204,30 +204,29 @@ defmodule Sanctum.Session do
   end
 
   @doc """
-  Create the session a protected device's unlock ticket was redeemed for
+  Activate the session a protected device's unlock ticket was redeemed for
   (`Sanctum.DeviceUnlock.redeem/1`): the explicit entry from a device's
   standing to a person's session, never a relaxation of `create/2`.
-  `held` is what the ticket held: the session id the unlock reserved, the
-  client, the person, athanor and email, the issuance expectation the
-  device channel's context read and that context's credential deadline,
-  its certificate's expiry. The session takes the reserved id, records
-  the client and the provider `unlock`, and expires 60 seconds after the
+  `held` is what the ticket held: the session id the unlock reserved as a
+  row no token loads, the client, the person, athanor and email, the
+  issuance expectation the device channel's context read and that
+  context's credential deadline, its certificate's expiry. The row takes
+  a new token, the provider `unlock`, and an expiry 60 seconds after the
   database's clock, never past the certificate: `session_ttl_hours` plays
-  no part, so zero never lifts the bound. It is written in the issuance
+  no part, so zero never lifts the bound. It is activated in the issuance
   transaction the expectation names, which locks and rereads the person,
-  athanor, seat, client and certificate; `check` runs there after the
-  insert, under the client's lock, and a refusal rolls the session back
-  (a lock that landed first). Answers `%{token, expires_at}`, or the
-  refusals `create/2` answers.
+  athanor, seat, client and certificate, then the reserved row
+  (`Arca.SessionStorage.activate_client_session/3`): a row a lock retired
+  is `{:error, :reservation_retired}`. Answers `%{token, expires_at}`, or
+  the refusals `create/2` answers.
   """
-  @spec create_unlocked(map(), (-> :ok | {:error, term()})) ::
+  @spec create_unlocked(map()) ::
           {:ok, %{token: String.t(), expires_at: DateTime.t()}} | {:error, term()}
   def create_unlocked(
         %{session_id: "ses_" <> _ = session_id, client_id: client_id, expectation: expectation} =
-          held,
-        check
+          held
       )
-      when is_binary(client_id) and is_function(check, 0) do
+      when is_binary(client_id) do
     token = generate_token()
 
     with {:ok, now} <- db_now() do
@@ -239,21 +238,16 @@ defmodule Sanctum.Session do
 
       attrs = %{
         id: session_id,
-        token_prefix: String.slice(token, 0, 8),
-        user_id: held.user_id,
-        email: held.email,
-        provider: "unlock",
-        athanor_id: held.athanor_id,
-        identity_key_epoch: Map.get(expectation, :key_epoch),
         client_id: client_id,
-        expires_at: expires_at,
-        inserted_at: now
+        user_id: held.user_id,
+        token_prefix: String.slice(token, 0, 8),
+        identity_key_epoch: Map.get(expectation, :key_epoch),
+        expires_at: expires_at
       }
 
-      case Arca.SessionStorage.create_session(hash_token(token), attrs,
+      case Arca.SessionStorage.activate_client_session(hash_token(token), attrs,
              lock: Sanctum.Issuance.lock(expectation),
-             verify: Sanctum.Issuance.verify(expectation),
-             also: fn _session -> check.() end
+             verify: Sanctum.Issuance.verify(expectation)
            ) do
         :ok ->
           broadcast_session_created(%{})

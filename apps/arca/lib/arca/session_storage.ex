@@ -23,19 +23,26 @@ defmodule Arca.SessionStorage do
   it). The advance ends every session carrying a `key_epoch` the fresh
   head retired.
 
-  A protected device's unlock creates a session that records its paired
-  `client_id`, under the id the unlock reserved. Its `expires_at` is the
-  device channel's: `slide_client_sessions/4` moves it, never past the
-  certificate's expiry and never for a session already expired, and
-  `refresh_session/2`, the browser's sliding refresh, never moves it. A
-  lock deletes exactly the session it names (`delete_client_session/2`),
-  and a revocation of the client deletes all of its sessions
-  (`delete_clients!/1`).
+  A protected device's unlock reserves a session row that records its
+  paired `client_id` and that no token loads (`reserve_client_session/2`),
+  and the ticket's redemption activates it under its token
+  (`activate_client_session/3`). Its `expires_at` is the device channel's:
+  `slide_client_sessions/4` moves it, never past the certificate's expiry
+  and never for a session already expired, and `refresh_session/2`, the
+  browser's sliding refresh, never moves it. A lock deletes exactly the
+  session it names, reserved or active (`delete_client_sessions/2`); a
+  revocation of the client, or of a certificate of the client that was
+  still unexpired, deletes all of its sessions (`delete_clients!/1`).
   """
 
   import Ecto.Query
 
   alias Arca.Schemas.Session
+
+  # A protected device's session: reserved at its unlock, which no token
+  # loads, and active once its ticket is redeemed.
+  @reserved "unlock_reserved"
+  @unlocked "unlock"
 
   # ============================================================================
   # Sessions
@@ -54,9 +61,9 @@ defmodule Arca.SessionStorage do
   head's current `key_epoch` (`{:error, :stale_key_epoch}`), and is refused
   for any other person (`{:error, :unexpected_key_epoch}`).
   `attrs[:cli_machine]` names the machine a command line's session is
-  issued to, and is absent for a browser's. `attrs[:client_id]` names the
-  protected device whose unlock created the session, which then takes the
-  `attrs[:id]` that unlock reserved (`ses_…`). `also:`
+  issued to, and is absent for a browser's. A protected device's session
+  is never created here: its unlock reserves it and its redemption
+  activates it (`activate_client_session/3`). `also:`
   (optional) is the higher owner's closure, run in the same transaction
   after the insert and handed the session's `%{id, user_id}`: it answers
   `:ok`, or `{:error, reason}` to roll the session back; any other answer
@@ -90,7 +97,7 @@ defmodule Arca.SessionStorage do
     epoch = attrs[:identity_key_epoch]
 
     row = %{
-      id: session_id(attrs),
+      id: Prima.UUID7.generate_id("ses"),
       token_hash: token_hash,
       token_prefix: attrs[:token_prefix],
       user_id: attrs.user_id,
@@ -102,7 +109,6 @@ defmodule Arca.SessionStorage do
       athanor_id: attrs[:athanor_id],
       identity_key_epoch: epoch,
       cli_machine: attrs[:cli_machine],
-      client_id: attrs[:client_id],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
@@ -112,13 +118,6 @@ defmodule Arca.SessionStorage do
       {:ok, %{id: row.id, user_id: row.user_id}}
     end
   end
-
-  # A protected device's session takes the id its unlock reserved, and the
-  # lock proof it holds names; every other session draws one.
-  defp session_id(%{client_id: client_id, id: "ses_" <> _ = id}) when is_binary(client_id),
-    do: id
-
-  defp session_id(_attrs), do: Prima.UUID7.generate_id("ses")
 
   defp also_ran(:ok), do: :ok
   defp also_ran({:error, _reason} = refusal), do: refusal
@@ -186,12 +185,107 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Slide the living sessions `ids` of the protected device `client_id` to
+  Reserve the session `id` of the protected device `attrs.client_id` at
+  its unlock: a row of the person (`attrs.user_id`, `:email`,
+  `:athanor_id`) that no token loads, since its token hash has no token
+  behind it, expiring at `attrs.expires_at`, the unlock ticket's deadline.
+  A lock retires it (`delete_client_sessions/2`) and the ticket's
+  redemption activates it (`activate_client_session/3`); whether a lock
+  happened is this row's absence, never a cache entry's. Written under
+  the member's slot (`Arca.Repo.owned/2`).
+  """
+  @spec reserve_client_session(String.t(), map()) ::
+          :ok | {:error, :not_owner | :database_error}
+  def reserve_client_session("ses_" <> _ = id, %{client_id: client_id} = attrs)
+      when is_binary(client_id) do
+    Arca.Repo.owned("Arca.SessionStorage.reserve_client_session", fn ->
+      row = %{
+        id: id,
+        token_hash: :crypto.strong_rand_bytes(32),
+        user_id: attrs.user_id,
+        email: attrs[:email],
+        provider: @reserved,
+        athanor_id: attrs[:athanor_id],
+        client_id: client_id,
+        expires_at: usec(attrs.expires_at),
+        inserted_at: Arca.ServerMetaStorage.now!()
+      }
+
+      {1, _} = Arca.Repo.insert_all(Session, [row])
+      {:ok, :reserved}
+    end)
+    |> case do
+      {:ok, :reserved} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Activate the reserved session `attrs.id` of the protected device
+  `attrs.client_id` under the token whose hash is `token_hash`, in the
+  issuance transaction (`create_session/3`'s `lock:` and `verify:`): after
+  the person, athanor, seat, client and certificates are locked and
+  reread, the reserved row is locked and, while it is still reserved and
+  unexpired on the database's clock, takes the token, the provider
+  `unlock`, `attrs.expires_at` and `attrs.identity_key_epoch` (bound as
+  `create_session/3` binds it). A row a lock retired, the channel's end
+  deleted or that expired is `{:error, :reservation_retired}`, with
+  nothing written. The client's lock is taken before the row's, as a lock
+  takes it, so a lock that committed first is read here and one that
+  starts later waits and then retires the session.
+  """
+  @spec activate_client_session(binary(), map(), keyword()) :: :ok | {:error, term()}
+  def activate_client_session(token_hash, %{id: id, client_id: client_id} = attrs, opts)
+      when is_binary(token_hash) and is_binary(id) and is_binary(client_id) and is_list(opts) do
+    lock = Keyword.fetch!(opts, :lock)
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.activate_client_session", fn ->
+      Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
+        now = Arca.ServerMetaStorage.now!()
+
+        reserved =
+          from(s in Session,
+            where:
+              s.id == ^id and s.client_id == ^client_id and s.provider == ^@reserved and
+                s.expires_at > ^now,
+            select: s.id
+          )
+          |> Arca.QueryHelpers.for_update()
+          |> Arca.Repo.one()
+
+        with id when is_binary(id) <- reserved || {:error, :reservation_retired},
+             :ok <- Arca.DirectoryHeads.bindable!(attrs.user_id, attrs[:identity_key_epoch]) do
+          {1, _} =
+            Arca.Repo.update_all(from(s in Session, where: s.id == ^id),
+              set: [
+                token_hash: token_hash,
+                token_prefix: attrs[:token_prefix],
+                provider: @unlocked,
+                identity_key_epoch: attrs[:identity_key_epoch],
+                expires_at: usec(attrs.expires_at),
+                inserted_at: now
+              ]
+            )
+
+          {:ok, :activated}
+        end
+      end)
+      |> case do
+        {:ok, :activated} -> :ok
+        {:error, _reason} = refusal -> refusal
+      end
+    end)
+  end
+
+  @doc """
+  Slide the active sessions `ids` of the protected device `client_id` to
   `lifetime_ms` past the database's clock, capped at `cap`, the expiry of
   the certificate the device's channel stands under, under the member's
   slot (`Arca.Repo.owned/2`): a member that lost it moves nothing. A
-  session already expired stays expired, and one of another client is not
-  moved. Answers the ids it moved.
+  session already expired stays expired, a reservation keeps the ticket's
+  deadline, and one of another client is not moved. Answers the ids of
+  `ids` that still stand, active or reserved.
   """
   @spec slide_client_sessions(String.t(), [String.t()], pos_integer(), DateTime.t()) ::
           {:ok, [String.t()]} | {:error, :not_owner | :database_error}
@@ -200,18 +294,18 @@ defmodule Arca.SessionStorage do
       when is_binary(client_id) and is_list(ids) and is_integer(lifetime_ms) do
     Arca.Repo.owned("Arca.SessionStorage.slide_client_sessions", fn ->
       now = Arca.ServerMetaStorage.now!()
-      until = Enum.min([DateTime.add(now, lifetime_ms, :millisecond), cap], DateTime)
+      until = usec(Enum.min([DateTime.add(now, lifetime_ms, :millisecond), cap], DateTime))
 
-      {_count, moved} =
-        Arca.Repo.update_all(
-          from(s in Session,
-            where: s.client_id == ^client_id and s.id in ^ids and s.expires_at > ^now,
-            select: s.id
-          ),
-          set: [expires_at: until]
+      standing =
+        from(s in Session,
+          where: s.client_id == ^client_id and s.id in ^ids and s.expires_at > ^now
         )
 
-      {:ok, Enum.sort(moved || [])}
+      Arca.Repo.update_all(from(s in standing, where: s.provider == ^@unlocked),
+        set: [expires_at: until]
+      )
+
+      {:ok, standing |> select([s], s.id) |> Arca.Repo.all() |> Enum.sort()}
     end)
   end
 
@@ -441,4 +535,8 @@ defmodule Arca.SessionStorage do
       {:ok, count}
     end)
   end
+
+  # An instant at the column's microsecond precision, as a certificate's
+  # millisecond expiry arrives.
+  defp usec(%DateTime{microsecond: {us, _precision}} = at), do: %{at | microsecond: {us, 6}}
 end

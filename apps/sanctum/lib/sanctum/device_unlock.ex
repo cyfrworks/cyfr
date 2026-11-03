@@ -52,24 +52,27 @@ defmodule Sanctum.DeviceUnlock do
   client that reports a holder: `unlock/2` with no proof answers an
   `unlock` challenge reserving one session id; with the proof over it, a
   32-byte single-use ticket, held 60 seconds with the reserved session,
-  the client and the issuance expectation the channel's context read, and
-  no session yet. `redeem/1`, the browser's exchange, spends the ticket
-  once and creates the session (`Sanctum.Session.create_unlocked/2`) in
-  the issuance transaction that rereads the person, athanor, seat, client
-  and certificate the expectation names, under the client's lock. The
-  ticket is bearer authority for this brief exchange alone.
+  the client and the issuance expectation the channel's context read. The
+  session is reserved as a row no token loads
+  (`Arca.SessionStorage.reserve_client_session/2`), expiring with the
+  ticket. `redeem/1`, the browser's exchange, spends the ticket once and
+  activates that row (`Sanctum.Session.create_unlocked/1`) in the
+  issuance transaction that rereads the person, athanor, seat, client
+  and certificate the expectation names, under the client's lock and
+  then the row's. The ticket is bearer authority for this brief exchange
+  alone; a ticket this member's cache no longer holds redeems nothing.
 
   The session expires 60 seconds after the database's clock, never past
   the certificate, and only the device channel's standing check moves it
   (`slide/2`); a browser's sliding refresh never does, and nothing revives
   an expired one. `lock/2` takes the `lock` proof the device signed at
-  unlock for exactly that session: it needs no freshness, retires that
-  session and its unspent ticket, and a repeat answers the same and ends
-  nothing else. A lock that lands before the ticket's redemption leaves a
-  mark the redemption reads under the same client lock, so no cookie
-  escapes it. `closed/2` is the channel's end: its unspent tickets and its
-  sessions go with it. A channel that dies without closing leaves its
-  sessions to their expiry.
+  unlock for exactly that session: it needs no freshness, deletes that
+  session's row, reserved or active, under the client's lock, and a
+  repeat answers the same and ends nothing else. A redemption after it
+  finds no reservation and refuses, so no cookie escapes a lock, whatever
+  a cache holds. `closed/3` is the channel's end: its sessions and
+  reservations go with it. A channel that dies without closing leaves
+  them to their expiry.
 
   ## Confirmation
 
@@ -503,13 +506,13 @@ defmodule Sanctum.DeviceUnlock do
   defp ticket(ctx, proof) do
     with {:ok, held} <- take_proven({:device_unlock, ctx.client_id}, proof),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []),
-         {:ok, now} <- db_now_ms() do
+         {:ok, now} <- db_now_ms(),
+         session_id = held.challenge.session_id,
+         :ok <- reserve(ctx, session_id, now) do
       ticket = :crypto.strong_rand_bytes(@ticket_bytes)
-      session_id = held.challenge.session_id
-      digest = ticket_digest(ticket)
 
       Arca.Cache.put(
-        {:device_ticket, digest},
+        {:device_ticket, ticket_digest(ticket)},
         %{
           session_id: session_id,
           client_id: ctx.client_id,
@@ -522,8 +525,6 @@ defmodule Sanctum.DeviceUnlock do
         @lifetime_ms
       )
 
-      Arca.Cache.put({:device_reserved, session_id}, digest, @lifetime_ms)
-
       {:ok,
        %{
          ticket: Encoding.b64(ticket),
@@ -533,23 +534,37 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
+  # The session the ticket will activate, reserved as a row no token loads
+  # and expiring with the ticket: what a lock retires.
+  defp reserve(ctx, session_id, now) do
+    case Arca.SessionStorage.reserve_client_session(session_id, %{
+           client_id: ctx.client_id,
+           user_id: ctx.user_id,
+           email: ctx.email,
+           athanor_id: ctx.athanor_id,
+           expires_at: DateTime.from_unix!(now + @lifetime_ms, :millisecond)
+         }) do
+      :ok -> :ok
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
   @doc """
-  Spend a ticket once and create its session (the module doc): `%{token,
-  expires_at}`. Refusals: `:invalid_ticket` (malformed, spent, expired, or
-  held by another member), `:locked` (its session was locked first),
-  `:not_standing`, `:stale_generation`, `:unauthenticated`, `:not_owner`
-  and `:unavailable`.
+  Spend a ticket once and activate its session (the module doc): `%{token,
+  expires_at}`. Refusals: `:invalid_ticket` (malformed, spent, expired,
+  held by another member, or its reservation retired by a lock or the
+  channel's end), `:not_standing`, `:stale_generation`, `:unauthenticated`,
+  `:not_owner` and `:unavailable`.
   """
   @spec redeem(term()) :: {:ok, %{token: String.t(), expires_at: DateTime.t()}} | {:error, atom()}
   def redeem(ticket) do
     with {:ok, raw} <- ticket_bytes(ticket),
          digest = ticket_digest(raw),
          {:ok, held} <- take_ticket(digest) do
-      Arca.Cache.invalidate({:device_reserved, held.session_id})
-
-      Sanctum.Session.create_unlocked(held, fn ->
-        if locked?(held.session_id), do: {:error, :locked}, else: :ok
-      end)
+      case Sanctum.Session.create_unlocked(held) do
+        {:error, :reservation_retired} -> {:error, :invalid_ticket}
+        result -> result
+      end
     end
   end
 
@@ -608,8 +623,8 @@ defmodule Sanctum.DeviceUnlock do
   The device channel's standing check: slide the sessions `session_ids`
   its unlocks created to 60 seconds past the database's clock, never past
   the certificate the channel stands under (`ctx.credential_deadline`).
-  Answers the ids that still live, or whose ticket is still unspent. A
-  store that cannot answer moves none.
+  Answers the ids that still stand, active or reserved. A store that
+  cannot answer, or a member that lost its slot, moves none.
   """
   @spec slide(Context.t(), [String.t()]) :: {:ok, [String.t()]} | {:error, :unavailable}
   def slide(%Context{auth_method: :device, client_id: client_id} = ctx, session_ids)
@@ -622,15 +637,14 @@ defmodule Sanctum.DeviceUnlock do
 
       ids ->
         case Arca.SessionStorage.slide_client_sessions(client_id, ids, @lifetime_ms, cap) do
-          {:ok, live} -> {:ok, Enum.filter(ids, &(&1 in live or reserved?(&1)))}
-          {:error, _unanswered} -> {:error, :unavailable}
+          {:ok, standing} -> {:ok, standing}
+          {:error, _unanswered_or_not_owner} -> {:error, :unavailable}
         end
     end
   end
 
   @doc """
-  The device channel's end: its sessions and their unspent tickets go
-  with it. A store that cannot answer leaves the sessions to their
+  The device channel's end: its sessions and reservations go with it. A store that cannot answer leaves the sessions to their
   expiry.
   """
   @spec closed(String.t(), String.t(), [String.t()]) :: :ok
@@ -648,20 +662,11 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
-  # A lock's mark first, then each session's unspent ticket, then the
-  # sessions themselves under the client's lock, then every memo of them.
+  # The sessions' rows, reserved or active, under the client's lock, then
+  # every memo of them.
   defp retire(_user_id, _client_id, []), do: :ok
 
   defp retire(user_id, client_id, session_ids) do
-    for id <- session_ids do
-      Arca.Cache.put({:device_locked, id}, true, 2 * @lifetime_ms)
-
-      case Arca.Cache.take({:device_reserved, id}) do
-        {:ok, digest} -> Arca.Cache.invalidate({:device_ticket, digest})
-        :miss -> :ok
-      end
-    end
-
     case Arca.SessionStorage.delete_client_sessions(client_id, session_ids) do
       {:ok, []} ->
         :ok
@@ -673,11 +678,6 @@ defmodule Sanctum.DeviceUnlock do
         {:error, :unavailable}
     end
   end
-
-  defp locked?(session_id), do: match?({:ok, true}, Arca.Cache.get({:device_locked, session_id}))
-
-  defp reserved?(session_id),
-    do: match?({:ok, _digest}, Arca.Cache.get({:device_reserved, session_id}))
 
   # ===========================================================================
   # What a device reports of its disks

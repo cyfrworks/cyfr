@@ -35,7 +35,7 @@ defmodule Sanctum.DeviceUnlockTest do
   import Ecto.Query, only: [from: 2]
   import Sanctum.Test.Newcomers, only: [identity: 0]
 
-  alias Arca.Schemas.{DeviceCertificate, Membership, PairedClient, PersonIdentity, Session, User}
+  alias Arca.Schemas.{Membership, PairedClient, PersonIdentity, Session, User}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, DeviceUnlock, Newcomer}
 
@@ -146,6 +146,14 @@ defmodule Sanctum.DeviceUnlockTest do
 
   defp session_row(session_id), do: Arca.Repo.get(Session, session_id)
   defp client_row(client_id), do: Arca.Repo.get!(PairedClient, client_id)
+
+  # The client's current certificate revoked through its store, the one
+  # revocation statement every transition runs.
+  defp revoke_certificate!(athanor_id, client_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    {:ok, current} = Arca.DeviceCertificates.current(actor, client_id)
+    {:ok, _revoked} = Arca.DeviceCertificates.revoke(actor, current.id)
+  end
 
   defp revoke_client!(device) do
     actor = Prima.Actor.in_athanor(device.certificate.athanor)
@@ -449,8 +457,10 @@ defmodule Sanctum.DeviceUnlockTest do
       answer = unlocked!(ctx, device.key)
       assert byte_size(Base.url_decode64!(answer.ticket, padding: false)) == 32
       assert "ses_" <> _ = answer.session_id
-      # The ticket's redemption creates the session, not the unlock.
-      assert session_row(answer.session_id) == nil
+      # The unlock reserves the session as a row no token loads; the
+      # ticket's redemption activates it.
+      assert %Session{provider: "unlock_reserved", token_prefix: nil} =
+               session_row(answer.session_id)
 
       assert {:ok, %{token: token, expires_at: expires_at}} = DeviceUnlock.redeem(answer.ticket)
       assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket)
@@ -648,8 +658,7 @@ defmodule Sanctum.DeviceUnlockTest do
       second = unlocked!(ctx, device.key)
       {:ok, %{token: token}} = DeviceUnlock.redeem(first.ticket)
 
-      from(c in DeviceCertificate, where: c.paired_client_id == ^device.certificate.client_id)
-      |> Arca.Repo.update_all(set: [state: "revoked", revoked_at: DateTime.utc_now()])
+      revoke_certificate!(device.certificate.athanor, device.certificate.client_id)
 
       assert {:error, :invalid_session} = Sanctum.Session.load(token)
       assert {:error, :not_standing} = DeviceUnlock.redeem(second.ticket)
@@ -790,8 +799,7 @@ defmodule Sanctum.DeviceUnlockTest do
       {_record, challenge} = pending_challenge!(ctx, ref)
       {:ok, _} = confirm(ctx, ref, signed(challenge, elem(device.key, 1)))
 
-      from(c in DeviceCertificate, where: c.paired_client_id == ^ctx.client_id)
-      |> Arca.Repo.update_all(set: [state: "revoked", revoked_at: DateTime.utc_now()])
+      revoke_certificate!(ctx.athanor_id, ctx.client_id)
 
       refute :ok ==
                Sanctum.Consent.Authz.check(
