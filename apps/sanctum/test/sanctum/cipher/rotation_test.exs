@@ -743,6 +743,7 @@ defmodule Sanctum.Cipher.RotationTest do
       webhook_secret: [:webhooks],
       registry_token: [:registry_tokens],
       oauth_provider_credential: [:oauth_provider_credentials],
+      device_pin_key: [:device_pin_evaluators],
       person_key: [:person_identities, :identity_attempts]
     }
 

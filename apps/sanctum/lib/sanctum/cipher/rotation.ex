@@ -53,8 +53,8 @@ defmodule Sanctum.Cipher.Rotation do
 
   The cipher binds the row's canonical tenant tuple as AAD. This module
   rebuilds that tuple from each row's stored columns; the shapes here MUST
-  stay identical to how `Sanctum.Vault`, `Sanctum.Webhook` and
-  `Sanctum.ProviderCredentials` persist them (the athanor id the storage
+  stay identical to how `Sanctum.Vault`, `Sanctum.Webhook`,
+  `Sanctum.ProviderCredentials` and `Sanctum.DevicePin` persist them (the athanor id the storage
   layer persists is bound through unchanged). Every `Sanctum.CipherAAD`
   purpose has a `rotate_row/3` clause here — the roster test pins the two
   lists together.
@@ -223,6 +223,12 @@ defmodule Sanctum.Cipher.Rotation do
     aad = Sanctum.CipherAAD.provider_credential(row.athanor_id, row.provider)
 
     rotate_columns(:oauth_provider_credentials, row, aad, opts)
+  end
+
+  defp rotate_row(:device_pin_evaluators, row, opts) do
+    aad = Sanctum.CipherAAD.device_pin_key(row.athanor_id, row.id, row.paired_client_id)
+
+    rotate_columns(:device_pin_evaluators, row, aad, opts)
   end
 
   defp rotate_row(:person_identities, row, opts) do

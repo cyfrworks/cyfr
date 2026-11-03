@@ -424,7 +424,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "device_pin.json" => [
       {"apps/prima/test/prima/device_pin_test.exs",
-       ~w(suite evaluator purpose_fields keys proofs verify delay accounting exchange)}
+       ~w(suite evaluator purpose_fields keys proofs verify delay accounting exchange)},
+      {"apps/sanctum/test/sanctum/device_pin_test.exs",
+       ~w(suite rfc9497 elements replacement exchange)}
     ],
     "device_unlock.json" => [
       {"apps/codex/internal/shell/home_test.go", ~w(exchange)},
