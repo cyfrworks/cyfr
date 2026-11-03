@@ -55,8 +55,10 @@ defmodule Sanctum.DevicePin do
   revision, a replay, another device's key or binding, or an expired
   challenge is `:proof_refused` and changes nothing.
 
-  The ingress meters both entries per source address (the router's
-  pipeline); the per-device wait is this module's.
+  Both entries are metered per source address before anything is read,
+  this node's count and then the cell's (`Arca.RequestRateWindows`), 30
+  a minute, refused `{:rate_limited, retry_after_s}`; the per-device wait
+  is beside it.
   """
 
   alias Prima.DeviceCert.{Challenge, Proof}
@@ -65,12 +67,18 @@ defmodule Sanctum.DevicePin do
 
   @identity <<0::256>>
 
+  # Each entry's calls from one source address in a minute, on this node
+  # and in the cell.
+  @window_ms 60_000
+  @source_cap 30
+
   @typedoc "Why an evaluation or a reset is refused."
   @type refusal ::
           :bad_request
           | :not_found
           | {:pin_wait, non_neg_integer()}
           | :proof_refused
+          | {:rate_limited, pos_integer()}
           | :unavailable
 
   # ===========================================================================
@@ -185,9 +193,10 @@ defmodule Sanctum.DevicePin do
   Evaluate one blinded element for a locked device (the module doc).
   Answers the wire's `{evaluated, reset}` map (`Prima.DevicePin.encode_evaluated/2`).
   """
-  @spec evaluate(term()) :: {:ok, map()} | {:error, refusal()}
-  def evaluate(params) do
-    with {:ok, %{evaluator: evaluator, blinded: blinded}} <- request(params),
+  @spec evaluate(term(), String.t() | nil) :: {:ok, map()} | {:error, refusal()}
+  def evaluate(params, source) do
+    with :ok <- metered(:device_pin_evaluate, source),
+         {:ok, %{evaluator: evaluator, blinded: blinded}} <- request(params),
          :ok <- element(blinded),
          {:ok, charged} <- charge(evaluator),
          {:ok, key} <- unseal(charged.evaluator),
@@ -263,9 +272,10 @@ defmodule Sanctum.DevicePin do
   Clear the count of the evaluator whose last evaluation drew the proof's
   challenge (the module doc). Answers `%{"reset" => true}`.
   """
-  @spec reset(term()) :: {:ok, map()} | {:error, refusal()}
-  def reset(params) do
-    with {:ok, %Proof{challenge: presented} = proof} <- reset_request(params) do
+  @spec reset(term(), String.t() | nil) :: {:ok, map()} | {:error, refusal()}
+  def reset(params, source) do
+    with :ok <- metered(:device_pin_reset, source),
+         {:ok, %Proof{challenge: presented} = proof} <- reset_request(params) do
       verify = fn evaluator, client, now -> proven(proof, evaluator, client, now) end
 
       case Arca.DevicePinEvaluators.reset(
@@ -311,4 +321,38 @@ defmodule Sanctum.DevicePin do
   end
 
   defp digest(evaluator), do: :crypto.hash(:sha256, evaluator)
+
+  # A call counted against its source address, this node's count first and
+  # then the cell's, before anything is read.
+  defp metered(bucket, source) do
+    key = if is_binary(source) and source != "", do: source, else: "unknown"
+
+    with :ok <- on_node({bucket, key}) do
+      case Arca.RequestRateWindows.claim(
+             Prima.Actor.system(),
+             bucket,
+             key,
+             @source_cap,
+             @window_ms
+           ) do
+        :ok ->
+          :ok
+
+        {:error, {:rate_limited, retry_after_ms}} ->
+          {:error, {:rate_limited, seconds(retry_after_ms)}}
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  defp on_node(key) do
+    case Prima.RateLimiter.check(key, @source_cap, @window_ms) do
+      :ok -> :ok
+      {:deny, retry_after_s} -> {:error, {:rate_limited, retry_after_s}}
+    end
+  end
+
+  defp seconds(ms), do: max(div(ms + 999, 1_000), 1)
 end

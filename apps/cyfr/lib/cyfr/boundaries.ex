@@ -2359,6 +2359,17 @@ defmodule Cyfr.Boundaries do
           "session's token in its body, reading and setting no cookie, so no CSRF token " <>
           "is asked"
     },
+    device_pin: %{
+      admits: :credential,
+      why:
+        "a locked remote device's PIN (`Sanctum.DevicePin`): the evaluation is reached by " <>
+          "the evaluator identifier alone, which the device holds while its key is wrapped " <>
+          "and which grants nothing but one charged evaluation of one blinded element, " <>
+          "bounded by the evaluator's own wait; the reset is the device key's proof over the " <>
+          "challenge its last evaluation answered, verified against the stored row and " <>
+          "consumed once. No session, cookie or CSRF token is read, and no CORS answer " <>
+          "admits a browser"
+    },
     device_enrollment: %{
       admits: :credential,
       why:
@@ -2960,6 +2971,20 @@ defmodule Cyfr.Boundaries do
     %{
       module: Emissary.Web.DeviceEnrollmentController,
       site: :resume,
+      plane: :external,
+      origin: :none
+    },
+    # A locked remote device's PIN: its evaluator identifier, then the
+    # reset its unwrapped key proves.
+    %{
+      module: Emissary.Web.DevicePinController,
+      site: :evaluate,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Emissary.Web.DevicePinController,
+      site: :reset,
       plane: :external,
       origin: :none
     },

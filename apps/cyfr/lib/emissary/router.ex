@@ -222,6 +222,20 @@ defmodule Emissary.Router do
           window_ms: 60_000
       end
 
+      # A locked remote device's PIN evaluation and its reset
+      # (`Emissary.Web.DevicePinController`): JSON, no session fetched and no
+      # CSRF token, since no cookie is read or set; the evaluator identifier
+      # and the reset proof are the whole credential. An entry path, which
+      # `Sanctum.DevicePin` meters per address before it reads anything,
+      # beside the per-device wait each charge sets, and answers in the
+      # wire's own refusal.
+      pipeline :device_pin do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "device"
+        plug :accepts, ["json"]
+        plug CyfrWeb.Plugs.ApiSecurityHeaders
+        plug CyfrWeb.Plugs.FrameRequest
+      end
+
       # The identity directory's routes (`Sanctum.Directory`), which decide
       # every request and record their own refusals: a directory request is
       # admitted by the identifier's own chain, never by a person of this
@@ -428,6 +442,15 @@ defmodule Emissary.Router do
 
         post "/session", DeviceSessionController, :create,
           metadata: %{auth: :device_unlock_ticket}
+      end
+
+      # A locked remote device's PIN evaluation, by its evaluator
+      # identifier alone, and the reset its unwrapped key proves.
+      scope "/device/pin", Emissary.Web do
+        pipe_through :device_pin
+
+        post "/evaluate", DevicePinController, :evaluate, metadata: %{auth: :device_pin}
+        post "/reset", DevicePinController, :reset, metadata: %{auth: :device_pin}
       end
 
       scope "/restore", Emissary.Web do

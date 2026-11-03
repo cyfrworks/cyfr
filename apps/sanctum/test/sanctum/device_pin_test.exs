@@ -98,7 +98,7 @@ defmodule Sanctum.DevicePinTest do
   defp unlock(evaluator, pin) do
     r = Group.scalar_random()
 
-    case DevicePin.evaluate(%{"evaluator" => evaluator, "blinded" => b64(blind(pin, r))}) do
+    case DevicePin.evaluate(%{"evaluator" => evaluator, "blinded" => b64(blind(pin, r))}, @source) do
       {:ok, answer} ->
         {:ok, %{evaluated: evaluated}} = Prima.DevicePin.decode_evaluated(answer)
         {:ok, finalize(pin, r, evaluated), answer}
@@ -259,7 +259,10 @@ defmodule Sanctum.DevicePinTest do
         waited!(evaluator)
 
         assert {:ok, answer} =
-                 DevicePin.evaluate(%{"evaluator" => evaluator, "blinded" => b64(blinded)})
+                 DevicePin.evaluate(
+                   %{"evaluator" => evaluator, "blinded" => b64(blinded)},
+                   @source
+                 )
 
         evaluated = unb64(answer["evaluated"])
         assert Base.encode16(evaluated, case: :lower) == vector["evaluation_element"]
@@ -272,7 +275,7 @@ defmodule Sanctum.DevicePinTest do
 
       for %{"name" => name, "blinded" => blinded} <- vectors()["elements"]["refused"] do
         assert {:error, :bad_request} =
-                 DevicePin.evaluate(%{"evaluator" => evaluator, "blinded" => blinded}),
+                 DevicePin.evaluate(%{"evaluator" => evaluator, "blinded" => blinded}, @source),
                name
       end
 
@@ -347,7 +350,7 @@ defmodule Sanctum.DevicePinTest do
 
             %{"do" => "reset", "evaluator" => label, "expect" => "reset"} ->
               assert {:ok, %{"reset" => true}} =
-                       DevicePin.reset(reset_proof(held[{:answer, label}], private)),
+                       DevicePin.reset(reset_proof(held[{:answer, label}], private), @source),
                      name
 
               held
@@ -442,7 +445,7 @@ defmodule Sanctum.DevicePinTest do
             [%{"evaluator" => evaluator, "blinded" => blinded}],
             nil
           ] do
-        assert {:error, :bad_request} = DevicePin.evaluate(bad), inspect(bad)
+        assert {:error, :bad_request} = DevicePin.evaluate(bad, @source), inspect(bad)
       end
 
       assert %{attempts: 0, revision: 0} = row(evaluator)
@@ -473,6 +476,21 @@ defmodule Sanctum.DevicePinTest do
       assert row(evaluator).attempts == max
     end
 
+    test "a source past 30 calls a minute is refused before anything is read, another is not",
+         %{evaluator: evaluator} do
+      for _ <- 1..30 do
+        assert {:error, :bad_request} = DevicePin.evaluate(%{"x" => 1}, "203.0.113.9")
+      end
+
+      assert {:error, {:rate_limited, retry}} =
+               DevicePin.evaluate(%{"evaluator" => evaluator, "blinded" => "x"}, "203.0.113.9")
+
+      assert retry in 1..60
+      # The reset is metered on its own.
+      assert {:error, :bad_request} = DevicePin.reset(%{"proof" => %{}}, "203.0.113.9")
+      assert {:ok, _, _} = unlock(evaluator, "123456")
+    end
+
     test "evaluations at once are each charged, one answered and the rest told to wait",
          %{evaluator: evaluator} do
       results =
@@ -501,14 +519,14 @@ defmodule Sanctum.DevicePinTest do
       {:ok, _, second} = unlock(evaluator, "111111")
 
       # The earlier evaluation's success, arriving after the later charge.
-      assert {:error, :proof_refused} = DevicePin.reset(reset_proof(first, private))
+      assert {:error, :proof_refused} = DevicePin.reset(reset_proof(first, private), @source)
       assert %{attempts: 2, revision: 2} = row(evaluator)
 
-      assert {:ok, %{"reset" => true}} = DevicePin.reset(reset_proof(second, private))
+      assert {:ok, %{"reset" => true}} = DevicePin.reset(reset_proof(second, private), @source)
       assert %{attempts: 0, revision: 3, next_allowed_at: nil} = row(evaluator)
 
       # Replayed.
-      assert {:error, :proof_refused} = DevicePin.reset(reset_proof(second, private))
+      assert {:error, :proof_refused} = DevicePin.reset(reset_proof(second, private), @source)
       assert %{revision: 3} = row(evaluator)
 
       # The count cleared, the next evaluation waits for nothing.
@@ -521,7 +539,8 @@ defmodule Sanctum.DevicePinTest do
       {:ok, _, answer} = unlock(evaluator, "222222")
       {_other, other_private} = key()
 
-      assert {:error, :proof_refused} = DevicePin.reset(reset_proof(answer, other_private))
+      assert {:error, :proof_refused} =
+               DevicePin.reset(reset_proof(answer, other_private), @source)
 
       for {field, value} <- [
             {"revision", answer["reset"]["revision"] + 1},
@@ -531,14 +550,16 @@ defmodule Sanctum.DevicePinTest do
             {"client_id", "pcl_elsewhere"}
           ] do
         forged = put_in(answer, ["reset", field], value)
-        assert {:error, :proof_refused} = DevicePin.reset(reset_proof(forged, private)), field
+
+        assert {:error, :proof_refused} = DevicePin.reset(reset_proof(forged, private), @source),
+               field
       end
 
-      assert {:error, :bad_request} = DevicePin.reset(%{"proof" => "x"})
-      assert {:error, :bad_request} = DevicePin.reset(%{"proof" => answer["reset"]})
+      assert {:error, :bad_request} = DevicePin.reset(%{"proof" => "x"}, @source)
+      assert {:error, :bad_request} = DevicePin.reset(%{"proof" => answer["reset"]}, @source)
 
       set!(evaluator, reset_expires_at: System.system_time(:millisecond) - 1)
-      assert {:error, :proof_refused} = DevicePin.reset(reset_proof(answer, private))
+      assert {:error, :proof_refused} = DevicePin.reset(reset_proof(answer, private), @source)
       assert %{attempts: 1} = row(evaluator)
     end
   end
