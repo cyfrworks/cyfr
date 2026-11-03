@@ -118,8 +118,12 @@ func Enroll(ctx context.Context, address string, a Admission, b Binding, d Holde
 	requestID := d.RequestID
 	if resumed {
 		got, err := resume(ctx, address, a, b, requestID, key)
+		// Only the resume's explicit answer that nothing was committed
+		// (404 not_found) leads to a new enrollment, and to a restore's
+		// reproof; any other refusal is the resume's own, and sends no
+		// recovery code.
 		var refused *HomeError
-		if err == nil || !errors.As(err, &refused) || refused.Status >= 500 {
+		if err == nil || !errors.As(err, &refused) || refused.Status != http.StatusNotFound || refused.Code != "not_found" {
 			return got, err
 		}
 		if a.reprove != nil {

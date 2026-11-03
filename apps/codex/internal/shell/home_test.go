@@ -222,7 +222,7 @@ func (h *fakeHome) challengeEntry(resume bool) http.HandlerFunc {
 		}
 		e := h.enrolled[request]
 		if resume && (e == nil || stringOf(m, "device_key") != b64(e.key)) {
-			reply(w, 404, map[string]any{"error": "not_enrolled"})
+			reply(w, 404, map[string]any{"error": "not_found"})
 			return
 		}
 		athanor, client := "ath_01a09fee-045b-770b-b745-a62792bb8798", "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f80"+fmt.Sprintf("%02d", len(h.enrolled)+10)
