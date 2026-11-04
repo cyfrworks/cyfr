@@ -156,13 +156,10 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert Users.prefs(u) == %{"mode" => "lite", "theme" => "dark"}
   end
 
-  test "personal_athanor_id/1 is the person's lookup and own_athanor?/2 reads the owner" do
+  test "own_athanor?/2 reads the owner" do
     u = unhoused(7)
 
-    # Known, but no furnace minted yet — and an unknown id, and no id at all.
-    assert :none = Users.personal_athanor_id(u.id)
-    assert :none = Users.personal_athanor_id("github|https://github.com|nobody")
-    assert :none = Users.personal_athanor_id(nil)
+    # Known, but no furnace minted yet.
     refute Users.own_athanor?(u.id, "ath_anything")
 
     {:ok, personal} =
@@ -173,16 +170,13 @@ defmodule Sanctum.Tenancy.UsersTest do
         created_by: u.id
       })
 
-    {:ok, _} = Users.set_personal_athanor(u, personal.id)
-
-    assert {:ok, personal.id} == Users.personal_athanor_id(u.id)
     assert Users.own_athanor?(u.id, personal.id)
     refute Users.own_athanor?(u.id, "ath_elsewhere")
     # A context with no person (the public or an internal one) is never at home.
     refute Users.own_athanor?(nil, personal.id)
   end
 
-  test "an athanor whose owner is the person is theirs to every reader, the personal pointer unset" do
+  test "an athanor whose owner is the person is theirs to every reader" do
     u = unhoused(8)
 
     {:ok, own} =
@@ -192,8 +186,6 @@ defmodule Sanctum.Tenancy.UsersTest do
         owner_user_id: u.id,
         created_by: u.id
       })
-
-    assert :none = Users.personal_athanor_id(u.id)
 
     ctx =
       Context.build(

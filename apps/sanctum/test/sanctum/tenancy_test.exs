@@ -305,40 +305,6 @@ defmodule Sanctum.TenancyTest do
     end
   end
 
-  describe "list_athanors/1" do
-    setup tags do
-      Arca.Test.Sandbox.setup!(tags)
-      :ok
-    end
-
-    test "a person sees their own athanor" do
-      uid = "u-list-#{System.unique_integer([:positive])}"
-      a = athanor!("list-a", uid)
-      _other = athanor!("list-b")
-
-      ids = Tenancy.list_athanors(%Context{user_id: uid, scope: :athanor}) |> Enum.map(& &1.id)
-      assert ids == [a.id]
-    end
-
-    test "a platform admin sees their own athanor alone" do
-      user = person!("list-plat")
-      _other = athanor!("list-other")
-      {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
-
-      ids =
-        %Context{user_id: user.id, scope: :athanor, platform_admin: true}
-        |> Tenancy.list_athanors()
-        |> Enum.map(& &1.id)
-
-      assert ids == [Sanctum.Test.People.athanor!(user).id]
-    end
-
-    test "a person with no athanor sees none" do
-      ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", scope: :athanor}
-      assert Tenancy.list_athanors(ctx) == []
-    end
-  end
-
   describe "channel_active?/2" do
     setup tags do
       Arca.Test.Sandbox.setup!(tags)

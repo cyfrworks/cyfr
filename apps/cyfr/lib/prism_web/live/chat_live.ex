@@ -32,9 +32,9 @@ defmodule PrismWeb.ChatLive do
   in view is announced (`PrismWeb.RoomFeed`) for the person's own AQUA
   beside the page.
 
-  The athanor is read once per change to the SET of athanors — one
-  archived or reopened. A message on the open thread or a rename touches the one
-  row it concerns. The shared
+  The person's athanor is read once per open, and its row in the rail is
+  rebuilt only when that athanor was archived or reopened. A message on
+  the open thread or a rename touches that row. The shared
   threads are read again on each change told to the person
   (`Cyfr.Bus.SharedThreadChanged`).
   """
@@ -57,17 +57,12 @@ defmodule PrismWeb.ChatLive do
 
     {:ok,
      socket
-     # The session's own athanor, as the mount found it: where the chat
-     # opens when the address names none. The page's context moves with
-     # the athanor it has open.
-     |> assign(:session_athanor_id, socket.assigns.context.athanor_id)
-     |> assign(:mine, personal_athanor(socket.assigns.context))
      |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
      |> assign(:room, nil)
      |> assign(:page_title, "Chat")
      |> assign(:active_nav, "chat")
      |> assign(:loading?, true)
-     |> assign(:athanors, [])
+     |> assign(:own, nil)
      |> assign(:people, [])
      |> assign(:expanded, MapSet.new())
      |> assign(:rail_open?, false)
@@ -117,12 +112,11 @@ defmodule PrismWeb.ChatLive do
 
   defp open(socket, params) do
     ctx = socket.assigns.context
-    athanors = Sanctum.Tenancy.list_athanors(ctx)
+    own = own_athanor(ctx)
 
-    with {:ok, focus, athanor} <-
-           focus_on(ctx, socket.assigns.session_athanor_id, params["a"], athanors),
+    with {:ok, focus, athanor} <- focus_on(ctx, params["a"], own),
          {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focus) do
-      open_athanor(refocused, athanor, athanors, params["c"])
+      open_athanor(refocused, athanor, own, params["c"])
     else
       {:error, :no_athanor} ->
         # No athanor of their own: nothing to open, and nothing to patch to.
@@ -132,7 +126,7 @@ defmodule PrismWeb.ChatLive do
          |> assign(:athanor, nil)
          |> assign(:focus, nil)
          |> assign(:thread, nil)
-         |> assign(:athanors, [])
+         |> assign(:own, nil)
          |> assign(:people, [])}
 
       {:error, :unavailable} ->
@@ -156,7 +150,7 @@ defmodule PrismWeb.ChatLive do
   defp open_shared(socket, thread_id) do
     socket =
       if socket.assigns.loading?,
-        do: build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context)),
+        do: build_rail(socket, own_athanor(socket.assigns.context)),
         else: socket
 
     case PrismWeb.Ops.call_tool(socket, "shared_thread/get", %{"thread" => thread_id}) do
@@ -200,7 +194,7 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  defp open_athanor(socket, athanor, athanors, thread_id) do
+  defp open_athanor(socket, athanor, own, thread_id) do
     ctx = socket.assigns.context
     threads = athanor_threads(ctx)
 
@@ -217,11 +211,11 @@ defmodule PrismWeb.ChatLive do
          # someone reloaded.
          |> assign(:athanor, reread(athanor))
          |> assign(:athanor_route, Athanors.route_slug(athanor))
-         |> assign(:athanor_label, athanor_label(athanor, socket.assigns.mine, ctx))
+         |> assign(:athanor_label, PrismWeb.Athanors.label(athanor, ctx))
          |> assign(:threads, threads)
          |> update(:expanded, &MapSet.put(&1, athanor.id))
          |> select(target)
-         |> sync_rail(athanors)}
+         |> sync_rail(own)}
 
       # The address named a thread this athanor does not hold: say so, and
       # open the athanor's own default rather than a blank pane.
@@ -233,31 +227,27 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  # No athanor named: the session's default, or — when that one no longer
-  # opens — the person's own. Never a patch back to the default, which is
-  # how a lost athanor would loop. A store that cannot answer stops the
-  # walk as unavailable: read as "no athanor" it would show a person with
-  # an athanor an empty page.
-  defp focus_on(ctx, default_id, route, athanors) when route in [nil, ""] do
-    default =
-      case default_id && Athanors.get(default_id) do
-        {:ok, %{status: "active"} = athanor} -> [athanor]
-        _ -> []
-      end
+  # No athanor named: the person's own, or nothing. Never a patch back to
+  # the bare address, which is how a lost athanor would loop. A store that
+  # cannot answer is unavailable: read as "no athanor" it would show a
+  # person with an athanor an empty page.
+  defp focus_on(_ctx, route, nil) when route in [nil, ""], do: {:error, :no_athanor}
 
-    Enum.reduce_while(default ++ athanors, {:error, :no_athanor}, fn athanor, none ->
-      case Sanctum.Context.focus(ctx, athanor) do
-        {:ok, focus} -> {:halt, {:ok, focus, athanor}}
-        {:error, :unavailable} = unavailable -> {:halt, unavailable}
-        {:error, _refused} -> {:cont, none}
-      end
-    end)
+  defp focus_on(_ctx, route, {:error, :unavailable} = unavailable) when route in [nil, ""],
+    do: unavailable
+
+  defp focus_on(ctx, route, own) when route in [nil, ""] do
+    case Sanctum.Context.focus(ctx, own) do
+      {:ok, focus} -> {:ok, focus, own}
+      {:error, :unavailable} = unavailable -> unavailable
+      {:error, _refused} -> {:error, :no_athanor}
+    end
   end
 
   # `Context.focus/2` decides who may open the athanor named in the URL: its
   # owner, and no one else — a platform admin is refused like anyone, so a
   # URL naming another person's athanor opens nothing for them.
-  defp focus_on(ctx, _default_id, route, _athanors) when is_binary(route) do
+  defp focus_on(ctx, route, _own) when is_binary(route) do
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, focus} <- Sanctum.Context.focus(ctx, athanor) do
       {:ok, focus, athanor}
@@ -370,76 +360,75 @@ defmodule PrismWeb.ChatLive do
   # The rail
   # ============================================================================
 
-  # Rebuilt only when the set of athanors differs from what is listed — one
-  # archived or reopened; otherwise the athanor in view has its row refreshed
-  # from the lists `open/2` just read, and nothing else is queried.
-  defp sync_rail(socket, athanors) do
-    ids = MapSet.new(athanors, & &1.id)
-    listed = MapSet.new(socket.assigns.athanors, & &1.athanor.id)
-
-    if MapSet.equal?(ids, listed),
-      do: patch_row(socket),
-      else: build_rail(socket, athanors)
+  # The person's own athanor while it is active; nil when they have none or
+  # it is archived, and `{:error, :unavailable}` when the store cannot
+  # answer, which the bare address says rather than showing an empty page.
+  defp own_athanor(%{user_id: user_id}) when is_binary(user_id) do
+    case Athanors.get_by_owner(user_id) do
+      {:ok, %{status: "active"} = athanor} -> athanor
+      {:ok, _archived} -> nil
+      {:error, :not_found} -> nil
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
   end
 
-  # The person's athanor, entered through `Context.focus/2` for its own
-  # list, and the shared threads with the people in them, for a pair.
-  defp build_rail(socket, athanors) do
-    %{context: ctx, mine: mine} = socket.assigns
+  defp own_athanor(_ctx), do: nil
 
-    rows =
-      for athanor <- athanors,
-          {:ok, focus} <- [Sanctum.Context.focus(ctx, athanor)] do
+  # Rebuilt only when the person's athanor differs from the one listed —
+  # archived, reopened or unreadable; otherwise the athanor in view has its
+  # row refreshed from what `open/2` just read, and nothing else is queried.
+  defp sync_rail(%{assigns: %{own: %{athanor: %{id: id}}}} = socket, %{id: id}),
+    do: patch_row(socket)
+
+  defp sync_rail(%{assigns: %{own: nil}} = socket, own) when not is_map(own),
+    do: patch_row(socket)
+
+  defp sync_rail(socket, own), do: build_rail(socket, own)
+
+  # The person's athanor, entered through `Context.focus/2` for its own
+  # list, and the shared threads with the people in them, for a pair. An
+  # athanor the store could not read lists no row.
+  defp build_rail(socket, own) do
+    ctx = socket.assigns.context
+
+    row =
+      with %{} <- own,
+           {:ok, focus} <- Sanctum.Context.focus(ctx, own) do
         %{
-          athanor: athanor,
-          route: Athanors.route_slug(athanor),
-          label: athanor_label(athanor, mine, ctx),
+          athanor: own,
+          route: Athanors.route_slug(own),
+          # Your own athanor is "You" (`PrismWeb.Athanors.label/2`).
+          label: PrismWeb.Athanors.label(own, ctx),
           threads: athanor_threads(focus)
         }
+      else
+        _ -> nil
       end
 
     socket
-    |> assign(:athanors, rows)
+    |> assign(:own, row)
     |> patch_row()
     |> load_shared()
   end
 
   # The athanor in view, from what the page already holds for it.
-  defp patch_row(%{assigns: %{athanor: %{id: id}}} = socket) do
-    %{threads: threads} = socket.assigns
-
-    update(socket, :athanors, fn rows ->
-      for row <- rows do
-        if row.athanor.id == id, do: %{row | threads: threads}, else: row
-      end
-    end)
-  end
+  defp patch_row(%{assigns: %{athanor: %{id: id}, own: %{athanor: %{id: id}} = row}} = socket),
+    do: assign(socket, :own, %{row | threads: socket.assigns.threads})
 
   defp patch_row(socket), do: socket
 
   # The athanor in view was renamed or reconfigured: its row, re-labelled.
   defp patch_athanor(socket, athanor) do
-    label = athanor_label(athanor, socket.assigns.mine, socket.assigns.context)
+    label = PrismWeb.Athanors.label(athanor, socket.assigns.context)
 
     socket
     |> assign(:athanor, athanor)
     |> assign(:athanor_label, label)
-    |> update(:athanors, fn rows ->
-      Enum.map(rows, fn row ->
-        if row.athanor.id == athanor.id, do: %{row | athanor: athanor, label: label}, else: row
-      end)
+    |> update(:own, fn
+      %{athanor: %{id: id}} = row when id == athanor.id -> %{row | athanor: athanor, label: label}
+      row -> row
     end)
   end
-
-  defp personal_athanor(%{user_id: user_id}) do
-    case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
-      {:ok, id} -> id
-      :none -> nil
-    end
-  end
-
-  # Your own athanor is "You" (`PrismWeb.Athanors.label/2`).
-  defp athanor_label(athanor, _mine, ctx), do: PrismWeb.Athanors.label(athanor, ctx)
 
   # The active shared threads the person sits in, pairs first by the other
   # person's name, then the rest by title, and the people they share one
@@ -898,12 +887,12 @@ defmodule PrismWeb.ChatLive do
           <.rail_skeleton :if={@loading?} />
 
           <section
-            :for={row <- @athanors}
-            id={"athanor-" <> row.athanor.id}
+            :if={@own}
+            id={"athanor-" <> @own.athanor.id}
             class="border-b border-gray-800/60"
           >
-            <% current? = @athanor && row.athanor.id == @athanor.id %>
-            <% unfolded? = MapSet.member?(@expanded, row.athanor.id) %>
+            <% current? = @athanor && @own.athanor.id == @athanor.id %>
+            <% unfolded? = MapSet.member?(@expanded, @own.athanor.id) %>
             <div class={[
               "flex items-center gap-1 pl-1 pr-3 py-1.5 text-xs uppercase tracking-wider",
               if(current?, do: "text-gray-200", else: "text-gray-500")
@@ -911,9 +900,9 @@ defmodule PrismWeb.ChatLive do
               <button
                 type="button"
                 phx-click="toggle_athanor"
-                phx-value-id={row.athanor.id}
+                phx-value-id={@own.athanor.id}
                 aria-expanded={to_string(unfolded?)}
-                aria-label={"Threads of " <> row.label}
+                aria-label={"Threads of " <> @own.label}
                 class="min-h-6 w-6 shrink-0 rounded text-center text-gray-600 hover:text-gray-300"
               >
                 <span aria-hidden="true">{if unfolded?, do: "▾", else: "▸"}</span>
@@ -921,25 +910,25 @@ defmodule PrismWeb.ChatLive do
               <button
                 type="button"
                 phx-click="open_athanor"
-                phx-value-route={row.route}
+                phx-value-route={@own.route}
                 aria-current={current? && "true"}
                 class="flex min-h-6 flex-1 min-w-0 items-center gap-2 text-left hover:text-gray-200"
               >
-                <span class="truncate">{row.label}</span>
+                <span class="truncate">{@own.label}</span>
                 <span class="ml-auto text-xs text-gray-600 normal-case">
-                  {length(row.threads)}
+                  {length(@own.threads)}
                 </span>
               </button>
             </div>
-            <div :if={unfolded?} id={"athanor-threads-" <> row.athanor.id}>
-              <div :if={row.threads == []} class="px-3 py-2 text-xs text-gray-600">
+            <div :if={unfolded?} id={"athanor-threads-" <> @own.athanor.id}>
+              <div :if={@own.threads == []} class="px-3 py-2 text-xs text-gray-600">
                 No threads yet.
               </div>
-              <ul :if={row.threads != []} class="divide-y divide-gray-800/60">
+              <ul :if={@own.threads != []} class="divide-y divide-gray-800/60">
                 <.thread_row
-                  :for={thread <- row.threads}
+                  :for={thread <- @own.threads}
                   thread={thread}
-                  route={row.route}
+                  route={@own.route}
                   current={@thread}
                   athanor_id={@athanor && @athanor.id}
                 />

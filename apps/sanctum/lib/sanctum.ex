@@ -349,8 +349,8 @@ defmodule Sanctum do
 
   An invocation an API key stands behind (`Sanctum.Context.key_bound?/1`)
   carries the key's id and binding into the run, so the run is still the
-  key's and works in the key's athanor alone (`Sanctum.Context.focus/2`,
-  `Sanctum.Tenancy.list_athanors/1`) rather than in every athanor the key's
+  key's and works in the athanor the key was minted in alone
+  (`Sanctum.Context.focus/2`) rather than in every athanor the key's
   creator sits in. Any other caller's binding stays behind: a run is not a
   sign-in and issues nothing on one.
   """

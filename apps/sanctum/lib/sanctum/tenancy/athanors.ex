@@ -163,19 +163,6 @@ defmodule Sanctum.Tenancy.Athanors do
     rows_or_empty(Arca.Athanors.list_active(server()))
   end
 
-  @doc """
-  The athanors a person works in: their own, when it is active, else none.
-  """
-  @spec list_for_user(String.t()) :: [athanor()]
-  def list_for_user(user_id) when is_binary(user_id) do
-    # Deliberate default: an outage shows none; entering one still reads
-    # its owner strictly.
-    case get_by_owner(user_id) do
-      {:ok, %{status: "active"} = athanor} -> [athanor]
-      _ -> []
-    end
-  end
-
   @doc "Whether the athanor exists and is active."
   @spec active?(String.t() | nil) :: boolean()
   def active?(id) when is_binary(id) and id != "" do

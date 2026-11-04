@@ -151,10 +151,8 @@ fn args ->
             )
 
           athanor_route =
-            with {:ok, id} <- Sanctum.Tenancy.Users.personal_athanor_id(user_id),
-                 {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(id) do
-              Sanctum.Tenancy.Athanors.route_slug(athanor)
-            else
+            case Sanctum.Tenancy.Athanors.get_by_owner(user_id) do
+              {:ok, athanor} -> Sanctum.Tenancy.Athanors.route_slug(athanor)
               _none -> nil
             end
 

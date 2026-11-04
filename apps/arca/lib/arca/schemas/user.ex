@@ -12,8 +12,8 @@ defmodule Arca.Schemas.User do
   `Arca.Schemas.ExternalIdentity` row. `admission` is how the person was
   made here (`admissions/0`), written once at birth. `email` is a contact
   field, lowercased and not unique, and decides nothing.
-  `namespace` is the durable copy of the cyfr.run personal namespace;
-  `personal_athanor_id` names the person's own athanor once minted. `status`
+  `namespace` is the durable copy of the cyfr.run personal namespace; the
+  person's own athanor names them as its owner (`owner_user_id`). `status`
   is `"active"` or `"denied"` (server-denied: sessions and keys revoked, the
   personal athanor archived). `prefs` is a JSON document (`mode`, `theme`)
   owned by `Sanctum.Tenancy.Users`.
@@ -65,7 +65,6 @@ defmodule Arca.Schemas.User do
     field(:admission, :string)
     field(:display_name, :string)
     field(:namespace, :string)
-    field(:personal_athanor_id, :string)
     field(:status, :string, default: "active")
     field(:prefs, :string)
     field(:first_seen_at, :utc_datetime_usec)
@@ -85,7 +84,6 @@ defmodule Arca.Schemas.User do
     :admission,
     :display_name,
     :namespace,
-    :personal_athanor_id,
     :status,
     :prefs,
     :first_seen_at,
@@ -147,7 +145,6 @@ defmodule Arca.Schemas.User do
     |> unique_constraint(:id, name: :users_pkey)
     |> unique_constraint(:id, name: :users_id_index)
     |> unique_constraint(:namespace)
-    |> unique_constraint(:personal_athanor_id)
   end
 
   defp downcase(nil), do: nil

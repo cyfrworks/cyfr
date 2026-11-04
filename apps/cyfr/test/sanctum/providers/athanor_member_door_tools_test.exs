@@ -523,8 +523,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
   # The person's own athanor, made with them by their admission.
   defp personal!(user_id) do
-    {:ok, athanor_id} = Users.personal_athanor_id(user_id)
-    {:ok, athanor} = Athanors.get(athanor_id)
+    {:ok, athanor} = Athanors.get_by_owner(user_id)
     athanor
   end
 

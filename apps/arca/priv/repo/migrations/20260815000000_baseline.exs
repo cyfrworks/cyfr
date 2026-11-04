@@ -164,7 +164,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :display_name, :string
       # The cyfr.run publisher namespace, once linked. Not identity.
       add :namespace, :string
-      add :personal_athanor_id, :string
       add :status, :string, null: false, default: "active"
       add :prefs, :text
       add :first_seen_at, :utc_datetime_usec, null: false
@@ -193,8 +192,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:users, [:email])
     create index(:users, [:status])
     create unique_index(:users, [:namespace], where: "namespace IS NOT NULL")
-
-    create unique_index(:users, [:personal_athanor_id], where: "personal_athanor_id IS NOT NULL")
 
     # How an identity provider names a person, keyed by the IdP composite
     # `<provider>|<issuer>|<subject>`. One person may be named by several.
@@ -563,8 +560,8 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   # None of these rows is an athanor's: a person's identity, keys,
-  # passkeys and post-restore period outlive every athanor they sit
-  # in, a directory orders identifiers, and the installation claim and the
+  # passkeys and post-restore period outlive their athanor, a directory
+  # orders identifiers, and the installation claim and the
   # pre-authentication rate windows are the node's. Arca stores bytes and hashes here and
   # verifies no signature.
   defp people do

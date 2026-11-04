@@ -950,7 +950,7 @@ defmodule Sanctum.RecoveryTest do
       assert state.live_key == row.live_public_key
 
       # The keys open in the person's own frame: the live key signs.
-      {:ok, %{personal_athanor_id: athanor_id}} = Users.get(user_id)
+      {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
       {device_key, _} = keypair()
 
       assert {:ok, %Prima.DeviceCert{}} =
@@ -1326,7 +1326,7 @@ defmodule Sanctum.RecoveryTest do
       # The admission wrote the person's athanor and their mark with them;
       # superseded after it, the attempt asks for no fill and issues no
       # session.
-      assert {:ok, _athanor} = Sanctum.Tenancy.Users.personal_athanor_id(user_id)
+      assert {:ok, _athanor} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
       assert Sanctum.Tenancy.platform_admin?(user_id)
 
       assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
@@ -1376,7 +1376,7 @@ defmodule Sanctum.RecoveryTest do
         Recovery.restore(identity.body, @token, context.opts)
 
       # The fill is asked for once the head still names the restored keys.
-      {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user_id)
+      {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
       assert_received {:fill, ^athanor_id, "sign_in"}
 
       :ok = stopped_at_minted!(restored)

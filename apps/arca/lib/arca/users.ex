@@ -10,9 +10,8 @@ defmodule Arca.Users do
 
   A person is not a row inside an athanor. They exist before any athanor
   does — the row is written by their admission, before their athanor is
-  minted — and the one column that names an athanor
-  (`personal_athanor_id`) is a pointer out of the row, not a tenant
-  stamp. Scoping these reads to an athanor would make sign-in impossible
+  minted, and the athanor names its owner, not the other way round.
+  Scoping these reads to an athanor would make sign-in impossible
   and would answer "not on this server" for every person outside the
   caller's athanor.
 

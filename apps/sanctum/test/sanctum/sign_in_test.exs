@@ -220,15 +220,15 @@ defmodule Sanctum.SignInTest do
   end
 
   test "record_namespace/2 lands the claim on the users row and refuses a slug another identity holds" do
-    {:ok, %{id: uid, personal_athanor_id: pid}} = People.linked(info(6))
+    {:ok, %{id: uid}} = People.linked(info(6))
+    %{id: pid} = People.athanor!(uid)
 
     assert {:ok, user} = SignIn.record_namespace(uid, "user6ns")
     assert user.namespace == "user6ns"
     assert {:ok, %{id: id}} = Users.get_by_namespace("user6ns")
     assert id == uid
     # the athanor was theirs since admission; the claim does not re-address it
-    assert {:ok, %{personal_athanor_id: ^pid}} = Users.get(uid)
-    assert {:ok, %{owner_user_id: ^uid}} = Athanors.get(pid)
+    assert {:ok, %{id: ^pid}} = Athanors.get_by_owner(uid)
     assert Sanctum.Namespace.lookup(uid) == "user6ns"
 
     # Idempotent; a different slug from the registry keeps the recorded one.

@@ -303,7 +303,6 @@ row per field of each row of each step's objects:
 | setup:a.users[row] | admission | exact | `"setup"` |
 | setup:a.users[row] | display_name | exact | `null` |
 | setup:a.users[row] | namespace | exact | `"proof"` |
-| setup:a.users[row] | personal_athanor_id | derived | A's one athanor |
 | setup:a.users[row] | status | exact | `"active"` |
 | setup:a.users[row] | prefs | exact | `"{}"`: Newcomer's empty document (newcomer.ex:264), the cleared handle_wanted removed |
 | setup:a.users[row] | first_seen_at | bound | a time inside setup at A |
@@ -367,7 +366,6 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | admission | exact | `"setup"` |
 | allow:b.users[row] | display_name | exact | `null` |
 | allow:b.users[row] | namespace | exact | `"proof-b"`: the name typed on B's first screen |
-| allow:b.users[row] | personal_athanor_id | derived | B's one athanor |
 | allow:b.users[row] | status | exact | `"active"` |
 | allow:b.users[row] | prefs | exact | `"{}"`: Newcomer's empty document (newcomer.ex:264), the cleared handle_wanted removed |
 | allow:b.users[row] | first_seen_at | bound | a time inside setup at B |
@@ -458,7 +456,6 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the administrator's] | id | exact | as read at allow |
 | sign_in:b.users[the administrator's] | last_seen_at | bound | as read at allow, or a time inside the sign-in at B |
 | sign_in:b.users[the administrator's] | namespace | exact | as read at allow |
-| sign_in:b.users[the administrator's] | personal_athanor_id | exact | as read at allow |
 | sign_in:b.users[the administrator's] | platform_admin_at | exact | as read at allow |
 | sign_in:b.users[the administrator's] | prefs | exact | as read at allow |
 | sign_in:b.users[the administrator's] | security_generation | exact | as read at allow |
@@ -470,7 +467,6 @@ row per field of each row of each step's objects:
 | sign_in:b.users[the person's] | admission | exact | `"remote"` |
 | sign_in:b.users[the person's] | display_name | exact | `null` |
 | sign_in:b.users[the person's] | namespace | exact | `null` |
-| sign_in:b.users[the person's] | personal_athanor_id | derived | the person's own athanor at B |
 | sign_in:b.users[the person's] | status | exact | `"active"` |
 | sign_in:b.users[the person's] | prefs | exact | `"{}"`: Newcomer's empty document (newcomer.ex:264) |
 | sign_in:b.users[the person's] | first_seen_at | bound | a time inside the sign-in at B |
@@ -611,7 +607,6 @@ row per field of each row of each step's objects:
 | held:a.users[row] | id | exact | as read at setup |
 | held:a.users[row] | last_seen_at | bound | as read at setup, or a time inside the run from ack's end to the last read |
 | held:a.users[row] | namespace | exact | as read at setup |
-| held:a.users[row] | personal_athanor_id | exact | as read at setup |
 | held:a.users[row] | platform_admin_at | exact | as read at setup |
 | held:a.users[row] | prefs | exact | as read at setup |
 | held:a.users[row] | security_generation | exact | as read at setup |
@@ -778,7 +773,6 @@ row per field of each row of each step's objects:
 | held:b.users[row 1] | id | exact | as read at sign_in |
 | held:b.users[row 1] | last_seen_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
 | held:b.users[row 1] | namespace | exact | as read at sign_in |
-| held:b.users[row 1] | personal_athanor_id | exact | as read at sign_in |
 | held:b.users[row 1] | platform_admin_at | exact | as read at sign_in |
 | held:b.users[row 1] | prefs | exact | as read at sign_in |
 | held:b.users[row 1] | security_generation | exact | as read at sign_in |
@@ -794,7 +788,6 @@ row per field of each row of each step's objects:
 | held:b.users[row 2] | id | exact | as read at sign_in |
 | held:b.users[row 2] | last_seen_at | bound | as read at sign_in, or a time inside the run from signin's end to the last read |
 | held:b.users[row 2] | namespace | exact | as read at sign_in |
-| held:b.users[row 2] | personal_athanor_id | exact | as read at sign_in |
 | held:b.users[row 2] | platform_admin_at | exact | as read at sign_in |
 | held:b.users[row 2] | prefs | exact | as read at sign_in |
 | held:b.users[row 2] | security_generation | exact | as read at sign_in |

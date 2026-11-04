@@ -316,8 +316,7 @@ defmodule Cyfr.SeedOfferTest do
         })
 
       # The person's own athanor, which their admission made unfilled.
-      {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user.id)
-      {:ok, athanor} = Athanors.get(athanor_id)
+      {:ok, athanor} = Athanors.get_by_owner(user.id)
       refute athanor.provisioned_at
 
       actor = %Prima.Actor{athanor_id: athanor.id}

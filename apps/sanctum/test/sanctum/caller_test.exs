@@ -78,8 +78,7 @@ defmodule Sanctum.CallerTest do
   # The person's own athanor, which their admission made: the one a
   # session of theirs resolves to.
   defp member!(user) do
-    {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user.user_id)
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(user.user_id)
     {user, athanor}
   end
 

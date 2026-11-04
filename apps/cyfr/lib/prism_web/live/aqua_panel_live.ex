@@ -58,7 +58,6 @@ defmodule PrismWeb.AquaPanelLive do
   alias Phoenix.LiveView.JS
   alias PrismWeb.SystemLayer
   alias Sanctum.Tenancy.Athanors
-  alias Sanctum.Tenancy.Users
 
   @kept_ttl_ms :timer.hours(24)
   @layer "system-layer-panel"
@@ -101,8 +100,7 @@ defmodule PrismWeb.AquaPanelLive do
   defp own(socket, token) do
     ctx = socket.assigns.context
 
-    with {:ok, id} <- Users.personal_athanor_id(ctx.user_id),
-         {:ok, %{status: "active"} = athanor} <- Athanors.get(id),
+    with {:ok, %{status: "active"} = athanor} <- Athanors.get_by_owner(ctx.user_id),
          {:ok, focused} <- Sanctum.Context.focus(ctx, athanor),
          {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focused) do
       refocused

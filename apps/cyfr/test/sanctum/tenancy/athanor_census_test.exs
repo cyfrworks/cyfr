@@ -293,7 +293,6 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
 
     unboxed(fn ->
       {:ok, own} = Athanors.create(personal(user))
-      {:ok, user} = Users.set_personal_athanor(user, own.id)
       {:ok, denied} = Users.deny(user)
       {denied, own}
     end)

@@ -222,16 +222,16 @@ fn args ->
   end
 
   # A person's context as a request established it and still holds it,
-  # built from their row (their own athanor, at Prism) rather than from
-  # their session: a deny ends the session, and the share's own checks, not
+  # built from their own athanor, at Prism, rather than from their
+  # session: a deny ends the session, and the share's own checks, not
   # the session's, are what a request already in flight meets.
   held_ctx = fn user_id ->
-    {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+    {:ok, own} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
 
     ctx =
       Sanctum.Context.build(
         user_id: user_id,
-        athanor_id: user.personal_athanor_id,
+        athanor_id: own.id,
         permissions: Sanctum.Context.person_permissions(),
         scope: :athanor,
         auth_method: :oidc,

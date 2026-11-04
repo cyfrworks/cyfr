@@ -140,12 +140,9 @@ defmodule Emissary.External.Backends do
 
   ## Shares
 
-  Every live owner of one athanor together, and every live owner whose row
-  one person created (`mcp_servers.created_by`) together, run at most a
-  quarter of the service's pool of backends; a sync past either share is
-  refused. The server's synthetic principal (`"system"`, the creator of a
-  row made under `Sanctum.Context.internal/1`) is one person for the share,
-  across every athanor, exactly as a real person is.
+  Every live owner of one athanor together runs at most a quarter of the
+  service's pool of backends; a sync past that share is refused. An
+  athanor is one person's, so its share is its owner's.
   """
 
   use GenServer
@@ -294,9 +291,9 @@ defmodule Emissary.External.Backends do
   backend's claim (`:claimed_elsewhere`) or the claim row cannot be read
   (`:claim_unavailable`), when the row no longer passes the fence, an env
   template does not resolve or names an attach-only entry
-  (`:disclosure_refused`), the athanor or the row's creator would hold
-  more than their share of the pool, the pool is full, this member does
-  not hold its slot in the cell, or the service cannot be reached.
+  (`:disclosure_refused`), the athanor would hold more than its share of
+  the pool, the pool is full, this member does not hold its slot in the
+  cell, or the service cannot be reached.
   """
   @spec sync(owner()) :: {:ok, grant()} | {:error, term()}
   def sync(owner),
@@ -549,7 +546,6 @@ defmodule Emissary.External.Backends do
           epoch: epoch,
           generation: nil,
           live?: false,
-          person: nil,
           names: [],
           backends: 0,
           waiters: [from],
@@ -707,16 +703,12 @@ defmodule Emissary.External.Backends do
         do: key
   end
 
-  # The backends every other live owner holds: in `key`'s athanor, and per
-  # person who created an owner's row.
+  # The backends every other live owner in `key`'s athanor holds.
   defp held_by_others(state, {athanor_id, _server} = key) do
-    for {{other_athanor, _} = other, %{live?: true} = entry} <- state.owners,
+    for {{^athanor_id, _} = other, %{live?: true} = entry} <- state.owners,
         other != key,
-        reduce: {0, %{}} do
-      {athanor, people} ->
-        athanor = if other_athanor == athanor_id, do: athanor + entry.backends, else: athanor
-        people = Map.update(people, entry.person, entry.backends, &(&1 + entry.backends))
-        {athanor, people}
+        reduce: 0 do
+      held -> held + entry.backends
     end
   end
 
@@ -1006,7 +998,7 @@ defmodule Emissary.External.Backends do
 
       entry ->
         {athanor_id, server_id} = key
-        {athanor_backends, person_backends} = held_by_others(state, key)
+        athanor_backends = held_by_others(state, key)
 
         spec =
           state
@@ -1017,8 +1009,7 @@ defmodule Emissary.External.Backends do
             epoch: entry.epoch,
             idle_ms: state.idle_ms,
             share: share(state),
-            athanor_backends: athanor_backends,
-            person_backends: person_backends
+            athanor_backends: athanor_backends
           })
           |> claim_spec(state)
 
@@ -1091,7 +1082,7 @@ defmodule Emissary.External.Backends do
       else: {:ok, %{type: :status, owners: owners}}
   end
 
-  # The most backends one athanor's owners, or one person's, may run.
+  # The most backends one athanor's owners may run.
   defp share(%State{pool_size: size}) when is_integer(size), do: max(div(size, 4), 1)
   defp share(_state), do: nil
 
@@ -1161,7 +1152,7 @@ defmodule Emissary.External.Backends do
     with {:ok, row} <- fence_one(owner),
          config = Arca.McpServerStorage.config(row),
          {:ok, backends} <- BackendDefinition.validate(config["backends"]),
-         :ok <- within_shares(spec, row.created_by, length(backends)),
+         :ok <- within_share(spec, length(backends)),
          {:ok, sealed} <- seal_env(spec, keys.seal, backends) do
       # A definition's warnings never stop its backends: the administrator
       # was told when it was saved, and each start says so once in the log.
@@ -1184,8 +1175,7 @@ defmodule Emissary.External.Backends do
 
       case post(spec, keys.control, body) do
         {:http, _status, _boot, _body} = answer ->
-          {:synced, answer, BackendDefinition.entry_names(backends), length(backends),
-           row.created_by}
+          {:synced, answer, BackendDefinition.entry_names(backends), length(backends)}
 
         error ->
           error
@@ -1294,19 +1284,12 @@ defmodule Emissary.External.Backends do
 
   defp passes_fence?(fenced, epoch), do: match?({:ok, _row}, fence_verdict(fenced, epoch))
 
-  defp within_shares(%{share: nil}, _person, _count), do: :ok
+  defp within_share(%{share: nil}, _count), do: :ok
 
-  defp within_shares(spec, person, count) do
-    cond do
-      spec.athanor_backends + count > spec.share ->
-        {:error, {:pool_share, spec.share}}
-
-      Map.get(spec.person_backends, person, 0) + count > spec.share ->
-        {:error, {:person_share, spec.share}}
-
-      true ->
-        :ok
-    end
+  defp within_share(spec, count) do
+    if spec.athanor_backends + count > spec.share,
+      do: {:error, {:pool_share, spec.share}},
+      else: :ok
   end
 
   defp seal_env(spec, seal_key, backends) do
@@ -1504,7 +1487,7 @@ defmodule Emissary.External.Backends do
   end
 
   defp answer_boot({:http, _status, boot, _body}), do: boot
-  defp answer_boot({:synced, answer, _names, _count, _person}), do: answer_boot(answer)
+  defp answer_boot({:synced, answer, _names, _count}), do: answer_boot(answer)
   defp answer_boot({:renewed, answer, _fenced_out}), do: answer_boot(answer)
   defp answer_boot({:claimed, _claim, result}), do: answer_boot(result)
   defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
@@ -1576,7 +1559,7 @@ defmodule Emissary.External.Backends do
          state,
          {:sync, key},
          spec,
-         {:synced, {:http, 200, _boot, %{status: status, rev: rev}}, names, count, person}
+         {:synced, {:http, 200, _boot, %{status: status, rev: rev}}, names, count}
        ) do
     case state.owners[key] do
       %{epoch: epoch} = entry when epoch == spec.epoch ->
@@ -1586,7 +1569,6 @@ defmodule Emissary.External.Backends do
             generation: spec.generation,
             names: names,
             backends: count,
-            person: person,
             rev: rev,
             running?: status == :running,
             ready_by: System.monotonic_time(:millisecond) + state.ready_wait_ms
@@ -1762,7 +1744,7 @@ defmodule Emissary.External.Backends do
     version: :protocol_mismatch
   }
 
-  defp refusal({:synced, answer, _names, _count, _person}), do: refusal(answer)
+  defp refusal({:synced, answer, _names, _count}), do: refusal(answer)
   defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
   defp refusal({:claimed, _claim, result}), do: refusal(result)
   defp refusal({:released, answer, _given_up}), do: refusal(answer)

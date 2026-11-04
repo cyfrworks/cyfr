@@ -109,7 +109,7 @@ defmodule Arca.SchemaBaselineTest do
     refute "scope" in Enum.map(columns("sessions"), & &1.name)
     user_names = Enum.map(columns("users"), & &1.name)
 
-    for col <- ~w(email email_verified namespace personal_athanor_id status prefs admission),
+    for col <- ~w(email email_verified namespace status prefs admission),
         do: assert(col in user_names)
 
     # A person is made by an admission, recorded on their row; no provider
