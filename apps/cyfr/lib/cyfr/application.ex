@@ -357,6 +357,9 @@ defmodule Cyfr.Application do
   # explicit port_close can defer the Unix driver's OS close to stop_select.
   # Only an observed refusal establishes that the member no longer listens.
   # All of a Thousand Island server's listen sockets share this address.
+  # A reset or an `:epipe` is a connection a still-listening socket took and
+  # then dropped as it closed: Linux reports a reset that follows the peer's
+  # close as EPIPE, which a loaded node whose connect is read late sees.
   defp await_listener_refusal({:ok, address} = listener, deadline) do
     remaining = deadline - System.monotonic_time(:millisecond)
 
@@ -373,7 +376,7 @@ defmodule Cyfr.Application do
           :gen_tcp.close(socket)
           retry_listener_refusal(listener, deadline)
 
-        {:error, reason} when reason in [:econnreset, :timeout] ->
+        {:error, reason} when reason in [:econnreset, :epipe, :timeout] ->
           retry_listener_refusal(listener, deadline)
 
         error ->

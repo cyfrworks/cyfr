@@ -437,6 +437,10 @@ function models(S) {
     state: exact("active"),
     registration_digest: aDigest("the registration's digest"),
     possession_verified: exact(1),
+    // WebAuthn's backup-eligible flag as the registration reported it: the
+    // proof's virtual authenticator leaves defaultBackupEligibility at its
+    // default, false, so the flag is clear.
+    backup_eligible: exact(0),
     expires_at: noTime(),
     admin_confirmation_id: nil(),
     activated_at: within(win(S, "setup")),
