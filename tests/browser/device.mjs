@@ -78,7 +78,14 @@ async function fetchVia(proxyPort, base, path, { method = "GET", headers = {}, b
 // A tool called anonymously over the home's `/mcp`, as the command line's
 // own client asks `pairing.complete`: its result, or `{error}`.
 export async function mcpCall(proxyPort, base, tool, args) {
-  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: args } });
+  // The request metadata the protocol version asks of every request, as
+  // the command line's client sends it.
+  const _meta = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientInfo": { name: "cyfr-proof-test-device", version: "0" },
+    "io.modelcontextprotocol/clientCapabilities": {},
+  };
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: args, _meta } });
   const res = await fetchVia(proxyPort, base, "/mcp", {
     method: "POST", body,
     headers: {
