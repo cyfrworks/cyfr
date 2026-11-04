@@ -46,6 +46,16 @@ async function signedOut(page, url) {
   return new URL(page.url()).pathname === "/login";
 }
 
+// The carry hook consumes a fragment only when it mounts.
+async function refusedAssertion(page, fragment) {
+  await page.goto("about:blank");
+  const [response] = await Promise.all([
+    page.waitForResponse((answer) => answer.url() === `${H}/auth/cyfr/callback` && answer.request().method() === "POST", { timeout: 30_000 }),
+    page.goto(`${H}/login#cyfr=${fragment}`),
+  ]);
+  if (response.status() !== 401) throw new Error(`the assertion callback answered ${response.status()}, not a refusal`);
+}
+
 // Poll `check` every two seconds until it holds or `limitMs` passes:
 // the milliseconds it took, or null.
 async function within(check, limitMs) {
@@ -115,10 +125,7 @@ async function crafted(chromium, { home, identifier }) {
   await page.goto(`${H}/login#carry=${b64url({ envelope: { source: A }, payload: {} })}`);
   await connected(page);
   await page.waitForFunction(() => /did not ask for/.test(document.body.innerText), null, { timeout: 30_000 });
-  // The carry hook consumes a fragment only when it mounts.
-  await page.goto("about:blank");
-  await page.goto(`${H}/login#cyfr=${b64url({ assertion: {}, genesis: {} })}`);
-  await flashed(page, "This browser no longer holds the sign-in you began here");
+  await refusedAssertion(page, b64url({ assertion: {}, genesis: {} }));
   const signedIn = !(await signedOut(page, settingsAt(H, hubAthanor)));
   await context.close();
 
@@ -732,8 +739,7 @@ async function retired(chromium, state) {
   const replay = await freshContext(chromium);
   const replayPage = await replay.newPage();
   const old = assertions[0];
-  await replayPage.goto(`${H}/login#cyfr=${old}`);
-  await replayPage.locator('[data-test="sign-in-error"]').waitFor({ timeout: 30_000 });
+  await refusedAssertion(replayPage, old);
   const replayedIn = !(await signedOut(replayPage, settingsAt(H, hubAthanor)));
   await replay.close();
   const after = { receipts: await receiptRowsAtHub(identifier), sessions: (await atHub(identifier)).sessions };
