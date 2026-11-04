@@ -822,6 +822,20 @@ defmodule Locus.KeeperTest do
       assert release == %{vector | "spawn_id" => handle.spawn_id}
     end
 
+    # A shell runs its trap once more for a term that arrives while the trap
+    # runs, so a spawn whose trap outlasts the release's signal prints its
+    # line once for each term it is sent.
+    test "release with a grace sends the spawn's group one term signal", %{name: name} do
+      script = ~s(trap 'echo term; sleep 0.5' TERM; echo ready; while :; do sleep 0.1; done)
+      assert {:ok, handle} = spawn_live(name, script)
+      assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+
+      assert :ok = Keeper.release(name, handle, 1_500)
+      events = events_until_released(handle)
+      assert {:stdout, "term\n"} in streams(events)
+      assert ending(events) == [{:exited, nil, "SIGKILL"}, :released]
+    end
+
     test "release with no grace kills the spawn", %{name: name, fake: fake} do
       assert {:ok, handle} = spawn_live(name, "echo ready; exec sleep 30")
       assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000

@@ -215,6 +215,40 @@ defmodule Cyfr.GracefulStopTest do
       assert {:error, :econnrefused} = connect(port)
     end
 
+    # A socket that still listens takes the probe's connection and drops it
+    # as it closes, a close and then a reset, which a connect read after
+    # both answers as :epipe: the suspension probes again until refused.
+    test "a probe a closing listen socket took and dropped is probed again", %{server: server} do
+      assert App.suspend_server(server) == :ok
+      parent = self()
+
+      dropper =
+        Task.async(fn ->
+          {:ok, listening} = :gen_tcp.listen(0, [:binary, active: false, ip: @loopback])
+          {:ok, port} = :inet.port(listening)
+          send(parent, {:dropping, port})
+
+          for _ <- 1..3 do
+            {:ok, socket} = :gen_tcp.accept(listening, 5_000)
+            :ok = :gen_tcp.shutdown(socket, :write)
+            :ok = :inet.setopts(socket, linger: {true, 0})
+            :ok = :gen_tcp.close(socket)
+          end
+
+          :gen_tcp.close(listening)
+        end)
+
+      assert_receive {:dropping, port}, 5_000
+
+      {_, retained, _, _} =
+        List.keyfind(Supervisor.which_children(server), {App, :listener_address}, 0)
+
+      :ok = Agent.update(retained, fn _ -> {:ok, {@loopback, port}} end)
+
+      assert App.suspend_server(server) == :ok
+      assert Task.await(dropper) == :ok
+    end
+
     @tag timeout: 30_000
     test "a failed closure confirmation is retried after the listener exits",
          %{server: server, port: port} do
