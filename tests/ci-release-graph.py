@@ -1332,12 +1332,14 @@ def declare(path, version):
         f.write(f'defmodule Planted.MixProject do\n  def project do\n    [\n      version: "{version}",\n    ]\n  end\nend\n')
 
 
-def helper_env(repo):
+def helper_env(repo, unproven=True, bin_dir=None):
     """What the helper runs under: no configuration of the host's git, an
     identity of its own, the proof of a green HEAD skipped (a disposable
-    repository has no run on GitHub) and the range locale."""
-    return {
-        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    repository has no run on GitHub) unless unproven is False, and the
+    range locale; bin_dir, when given, ahead on PATH."""
+    path = os.environ.get("PATH", "/usr/bin:/bin")
+    env = {
+        "PATH": f"{bin_dir}:{path}" if bin_dir else path,
         "HOME": repo,
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -1345,9 +1347,11 @@ def helper_env(repo):
         "GIT_AUTHOR_EMAIL": "graph@example.invalid",
         "GIT_COMMITTER_NAME": "graph",
         "GIT_COMMITTER_EMAIL": "graph@example.invalid",
-        "RELEASE_UNPROVEN": "1",
         "LC_ALL": range_locale(),
     }
+    if unproven:
+        env["RELEASE_UNPROVEN"] = "1"
+    return env
 
 
 def helper_git(repo, *args):
@@ -1359,14 +1363,19 @@ def helper_git(repo, *args):
 _HELPER_REPOS = []
 
 
-def helper_repo(script, declared):
-    """A repository of its own holding script as scripts/release.sh and the
-    root's and five applications' mix.exs declaring declared, committed."""
+def helper_repo(script, declared, scripts=None):
+    """A repository of its own holding script as scripts/release.sh, each
+    of scripts ({name: text}) as scripts/NAME, and the root's and five
+    applications' mix.exs declaring declared, committed."""
     repo = os.path.join(scratch(), "helper-%d" % len(_HELPER_REPOS))
     _HELPER_REPOS.append(repo)
     os.makedirs(os.path.join(repo, "scripts"))
     with open(os.path.join(repo, "scripts", "release.sh"), "w") as f:
         f.write(script)
+    for name, text in (scripts or {}).items():
+        with open(os.path.join(repo, "scripts", name), "w") as f:
+            f.write(text)
+        os.chmod(os.path.join(repo, "scripts", name), 0o755)
     for path in helper_mixfiles(repo):
         declare(path, declared)
     helper_git(repo, "init", "-q")
@@ -1375,10 +1384,11 @@ def helper_repo(script, declared):
     return repo
 
 
-def run_helper(repo, version, answer=None):
-    """scripts/release.sh VERSION in repo, its standard input a terminal
-    holding answer when one is given (the dirty-tree prompt asks only on a
-    terminal), else nothing. Returns (status, output)."""
+def run_helper(repo, version, answer=None, args=(), unproven=True, bin_dir=None, extra_env=None):
+    """scripts/release.sh VERSION ARGS... in repo, its standard input a
+    terminal holding answer when one is given (the dirty-tree prompt asks
+    only on a terminal), else nothing, under helper_env(repo, unproven,
+    bin_dir) and extra_env. Returns (status, output)."""
     master = slave = None
     stdin = subprocess.DEVNULL
     if answer is not None:
@@ -1387,9 +1397,9 @@ def run_helper(repo, version, answer=None):
         stdin = slave
     try:
         result = subprocess.run(
-            ["bash", "--noprofile", "--norc", os.path.join(repo, "scripts", "release.sh"), version],
+            ["bash", "--noprofile", "--norc", os.path.join(repo, "scripts", "release.sh"), version, *args],
             cwd=repo,
-            env=helper_env(repo),
+            env={**helper_env(repo, unproven, bin_dir), **(extra_env or {})},
             stdin=stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1427,7 +1437,9 @@ def helper_failure(script):
     commit, with another file left uncommitted too; a version edited into
     the mix.exs files and not committed is refused, nothing tagged; a bump
     made over another change already staged commits the mix.exs files
-    alone and leaves that change staged. The first failure, or None."""
+    alone and leaves that change staged; then the proof on GitHub, the
+    tag held to the proved commit and the pushes (helper_proof_failure,
+    helper_bump_failure, helper_push_failure). The first failure, or None."""
     lines = script.splitlines()
     if not any("=~ $RELEASE" in line and "LC_ALL=C" in line for line in lines):
         return "release.sh does not match the version under LC_ALL=C"
@@ -1490,6 +1502,165 @@ def helper_failure(script):
             )
         if "differ from HEAD" not in output:
             return f"release.sh refuses uncommitted mix.exs edits without saying why: {output.strip()[-300:]}"
+    return helper_proof_failure(script) or helper_bump_failure(script) or helper_push_failure(script)
+
+
+# A bin directory of stand-ins: a Mix that answers success and a gh that
+# answers each `gh api PATH ... -q FILTER` from the JSON the case names
+# for the endpoint (GH_CHECK_RUNS, GH_WORKFLOW_RUNS), through jq with the
+# helper's own filter, or fails where the JSON is not given.
+HELPER_GH = r"""#!/usr/bin/env bash
+filter= path=$2
+while [ "$#" -gt 0 ]; do [ "$1" != -q ] || filter=$2; shift; done
+case "$path" in
+  */check-runs*) json=${GH_CHECK_RUNS:-} ;;
+  */actions/runs*) json=${GH_WORKFLOW_RUNS:-} ;;
+  *) json= ;;
+esac
+[ -n "$json" ] || { echo "stand-in: no answer for $path" >&2; exit 1; }
+printf '%s' "$json" | jq -r "$filter"
+"""
+HELPER_MIX = "#!/usr/bin/env bash\nexit 0\n"
+# The audits the proof is followed by pass; the release stage, as --gate
+# runs it, passes once it has moved HEAD by a commit of its own, as
+# another agent in the checkout could during the stage.
+HELPER_AUDIT = "#!/usr/bin/env bash\nexit 0\n"
+HELPER_MOVING_STAGE = """#!/usr/bin/env bash
+rm -rf "$2"
+echo moved > moved.txt
+git add moved.txt
+git commit -qm 'another agent'
+"""
+
+
+def helper_bin():
+    path = os.path.join(scratch(), "helper-bin")
+    if not os.path.isdir(path):
+        os.makedirs(path)
+        for name, text in (("gh", HELPER_GH), ("mix", HELPER_MIX)):
+            with open(os.path.join(path, name), "w") as f:
+                f.write(text)
+            os.chmod(os.path.join(path, name), 0o755)
+    return path
+
+
+def helper_proof_failure(script):
+    """The proof on GitHub: green check runs pass only with the Test
+    workflow's latest run on HEAD completed green; with none (its path
+    filter skipped HEAD), a failed latest run over a green older one, or
+    one still running, nothing is tagged."""
+    green = json.dumps({"check_runs": [{"status": "completed", "conclusion": "success", "name": "codex"}]})
+
+    def runs(*states):
+        return json.dumps({"workflow_runs": [
+            {"path": ".github/workflows/test.yml", "status": status, "conclusion": conclusion,
+             "created_at": f"2026-11-04T0{i}:00:00Z"} for i, (status, conclusion) in enumerate(states)
+        ] + [{"path": ".github/workflows/codex-ci.yml", "status": "completed", "conclusion": "success",
+              "created_at": "2026-11-04T09:00:00Z"}]})
+
+    cases = [
+        ("an older failed Test run and a green latest one", runs(("completed", "failure"), ("completed", "success")), True),
+        ("no Test run", runs(), False),
+        ("a green Test run and a failed latest one", runs(("completed", "success"), ("completed", "failure")), False),
+        ("a Test run in progress", runs(("in_progress", None)), False),
+    ]
+    for name, workflow_runs, accepted in cases:
+        repo = helper_repo(script, "0.6.0-alpha.1", {"dependency-audit.sh": HELPER_AUDIT})
+        head = helper_git(repo, "rev-parse", "HEAD")
+        status, output = run_helper(repo, "0.6.0-alpha.1", unproven=False, bin_dir=helper_bin(),
+                                    extra_env={"GH_CHECK_RUNS": green, "GH_WORKFLOW_RUNS": workflow_runs})
+        tagged = helper_git(repo, "rev-list", "-n", "1", "0.6.0-alpha.1") if helper_git(repo, "tag", "-l") else ""
+        if accepted and (status != 0 or tagged != head):
+            return f"release.sh refused green check runs with {name} (exit {status}): {output.strip()[-300:]}"
+        if not accepted and (status == 0 or tagged):
+            return f"release.sh tagged green check runs with {name} (exit {status}): {output.strip()[-300:]}"
+    return None
+
+
+def helper_bump_failure(script):
+    """The tag names the proved commit: a HEAD moved during the --gate
+    stage is not tagged in its place, and no bump is committed on it; a
+    tree with changes is refused under --gate even when the prompt is
+    answered; a bump commit that is not the proved commit plus version
+    lines (a hook adding another line, or another commit landing under it)
+    is not tagged; a bump of the files still behind, the root already at
+    the version, is tagged."""
+    stage = {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": HELPER_MOVING_STAGE}
+    for declared, version in (("0.6.0-alpha.1", "0.6.0-alpha.1"), (HELPER_BASE, "0.1.0")):
+        repo = helper_repo(script, declared, stage)
+        head = helper_git(repo, "rev-parse", "HEAD")
+        status, output = run_helper(repo, version, args=["--gate"], unproven=False, bin_dir=helper_bin())
+        tags = helper_git(repo, "tag", "-l")
+        tagged = helper_git(repo, "rev-list", "-n", "1", version) if tags else ""
+        moved = helper_git(repo, "log", "-1", "--format=%s")
+        if declared == version and (status != 0 or tagged != head):
+            return f"release.sh tagged {tagged!r}, not the proved {head!r}, after HEAD moved (exit {status}): {output.strip()[-300:]}"
+        if declared != version and (status == 0 or tags or moved != "another agent"):
+            return f"release.sh bumped and tagged {tags!r} on a HEAD moved during the proof (exit {status}): {output.strip()[-300:]}"
+    repo = helper_repo(script, "0.6.0-alpha.1")
+    with open(os.path.join(repo, "notes.txt"), "w") as f:
+        f.write("not committed\n")
+    status, output = run_helper(repo, "0.6.0-alpha.1", "y\n", args=["--gate"])
+    if status == 0 or helper_git(repo, "tag", "-l") or "uncommitted changes the tag would not carry" not in output:
+        return f"release.sh --gate let a tree with changes through (exit {status}): {output.strip()[-300:]}"
+    repo = helper_repo(script, HELPER_BASE)
+    hook = os.path.join(repo, ".git", "hooks", "pre-commit")
+    with open(hook, "w") as f:
+        f.write("#!/bin/sh\necho '# not a version line' >> apps/arca/mix.exs\ngit add apps/arca/mix.exs\n")
+    os.chmod(hook, 0o755)
+    head = helper_git(repo, "rev-parse", "HEAD")
+    status, output = run_helper(repo, "0.1.0")
+    if status == 0 or helper_git(repo, "tag", "-l") or helper_git(repo, "rev-parse", "HEAD") != head:
+        return f"release.sh tagged a bump commit holding a line other than the version (exit {status}): {output.strip()[-300:]}"
+    # A git that lands another commit on HEAD right before the bump's.
+    wrap = os.path.join(scratch(), "helper-landing-bin")
+    if not os.path.isdir(wrap):
+        os.makedirs(wrap)
+        real = shutil.which("git")
+        with open(os.path.join(wrap, "git"), "w") as f:
+            f.write(f"""#!/usr/bin/env bash
+if [ "$1" = commit ] && [ "$2" = --only ]; then
+  landed=$("{real}" commit-tree "HEAD^{{tree}}" -p HEAD -m landed) && "{real}" update-ref HEAD "$landed" || exit 1
+fi
+exec "{real}" "$@"
+""")
+        os.chmod(os.path.join(wrap, "git"), 0o755)
+    repo = helper_repo(script, HELPER_BASE)
+    status, output = run_helper(repo, "0.1.0", bin_dir=wrap)
+    if status == 0 or helper_git(repo, "tag", "-l"):
+        return f"release.sh tagged a bump commit whose parent is not the proved commit (exit {status}): {output.strip()[-300:]}"
+    repo = helper_repo(script, HELPER_BASE)
+    declare(os.path.join(repo, "mix.exs"), "0.1.0")
+    helper_git(repo, "commit", "-qam", "root first")
+    head = helper_git(repo, "rev-parse", "HEAD")
+    status, output = run_helper(repo, "0.1.0")
+    changed = sorted(helper_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "0.1.0").splitlines())
+    expected = sorted(os.path.relpath(path, repo) for path in helper_mixfiles(repo)[1:])
+    if status != 0 or not declares_at(repo, "0.1.0", "0.1.0") or changed != expected or helper_git(repo, "rev-parse", "0.1.0^{commit}^") != head:
+        return f"release.sh did not tag a bump of the files still behind the version (exit {status}, changed {changed!r}): {output.strip()[-300:]}"
+    return None
+
+
+def helper_push_failure(script):
+    """--push: a branch push that fails pushes no tag, says so and fails;
+    a tag push that fails fails; both pushed, it says Pushed!."""
+    for origin, pushed in (("missing", False), ("refuses tags", False), ("bare", True)):
+        repo = helper_repo(script, "0.6.0-alpha.1")
+        remote = os.path.join(repo + "-origin.git")
+        if origin != "missing":
+            helper_git(repo, "init", "-q", "--bare", remote)
+            if origin == "refuses tags":
+                hook = os.path.join(remote, "hooks", "pre-receive")
+                with open(hook, "w") as f:
+                    f.write("#!/bin/sh\nwhile read old new ref; do case $ref in refs/tags/*) exit 1 ;; esac; done\n")
+                os.chmod(hook, 0o755)
+        helper_git(repo, "remote", "add", "origin", remote)
+        status, output = run_helper(repo, "0.6.0-alpha.1", args=["--push"])
+        said = "Pushed!" in output
+        if pushed and (status != 0 or not said or "0.6.0-alpha.1" not in helper_git(remote, "tag", "-l")):
+            return f"release.sh --push to a {origin} origin exits {status} without both pushes: {output.strip()[-300:]}"
+        if not pushed and (status == 0 or said):
+            return f"release.sh --push to a {origin} origin exits {status}, saying Pushed! {said}: {output.strip()[-300:]}"
     return None
 
 
@@ -1504,6 +1675,39 @@ RELEASE_SH_MUTANTS = [
     (
         "uncommitted mix.exs edits let through",
         lambda t: t.replace('if [ -n "$(git status --porcelain -- "${MIXFILES[@]}")" ]; then', "if false; then", 1),
+    ),
+    ("the Test workflow's run unread", lambda t: t.replace('if [ "$TEST_RUN" != "completed success" ]; then', "if false; then", 1)),
+    ("HEAD tagged for the proved commit", lambda t: t.replace('git tag -a "$VERSION" "$HEAD_SHA"', 'git tag -a "$VERSION"', 1)),
+    ("a bump on a moved HEAD", lambda t: t.replace('if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then', "if false; then", 1)),
+    (
+        "a tree with changes let through under --gate",
+        lambda t: t.replace('if [ -n "$GATE" ] && [ -n "$(git status --porcelain)" ]; then', "if false; then", 1),
+    ),
+    (
+        "the bump's lines unread",
+        lambda t: t.replace("! grep -qvE '^[+-][[:space:]]*version: \"[^\"]*\",?[[:space:]]*$' <<< \"$lines\"", ":", 1),
+    ),
+    (
+        "the bump's parent unread",
+        lambda t: t.replace('if [ "$(git rev-parse "$BUMP^")" != "$HEAD_SHA" ] || ! version_only', "if ! version_only", 1),
+    ),
+    (
+        "the bump held to every mix.exs",
+        lambda t: t.replace(
+            '[ -n "$names" ] || return 1',
+            """[ "$(LC_ALL=C sort <<< "$names")" = "$(printf '%s\\n' "${MIXFILES[@]}" | LC_ALL=C sort)" ] || return 1""",
+            1,
+        ),
+    ),
+    (
+        "the pushes chained",
+        lambda t: re.sub(
+            r'  if ! git push -u origin "\$BRANCH"; then.*?\n  fi\n  if ! git push origin "\$VERSION"; then.*?\n  fi\n',
+            '  git push -u origin "$BRANCH" && git push origin "$VERSION"\n',
+            t,
+            count=1,
+            flags=re.S,
+        ),
     ),
 ]
 
@@ -2398,7 +2602,8 @@ def graph_mode():
         f"tag pipeline ok: release.yml, test.yml's static job, .goreleaser.yml, the Dockerfiles, "
         f"the tag check run in {len(tag_cases())} cases, the Homebrew step on {scaffold_accepted} versions "
         f"and the scaffold pinned at {version} and at {scaffold_accepted} versions pass, release.sh in "
-        f"{helper_versions} versions and its tag on a HEAD that declares the version passes, under {range_locale()}; "
+        f"{helper_versions} versions, its tag on a HEAD that declares the version, its proof, its tag of the proved commit "
+        f"and its pushes pass, under {range_locale()}; "
         f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
         f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
         f"scaffold-tarball.sh, {len(RELEASE_SH_MUTANTS)} of release.sh and {3 * len(files)} of the Dockerfiles, "

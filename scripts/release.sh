@@ -62,6 +62,14 @@ if [ -n "$LAST_TAG" ] && ! scripts/ci/seed-guard.sh "$LAST_TAG"; then
   exit 1
 fi
 
+# Under --gate the proof is of the working tree's bytes, which the tag
+# would not carry, so a tree with changes is refused there.
+if [ -n "$GATE" ] && [ -n "$(git status --porcelain)" ]; then
+  echo "Error: --gate proves the working tree, and it has uncommitted changes the tag would not carry:"
+  git status --short
+  echo "Commit or stash them first."
+  exit 1
+fi
 if [ -n "$(git status --porcelain)" ]; then
   echo "Warning: working tree has uncommitted changes:"
   git status --short
@@ -99,10 +107,12 @@ fi
 # publishes anything (release.yml), so a bump that broke a check would
 # publish nothing. The proof is HEAD's run on GitHub, as every change's
 # check is its pull request's run there (CONTRIBUTING.md): the latest run
-# of every check GitHub ran for HEAD has completed and none failed, read
+# of every check GitHub ran for HEAD has completed and none failed, and
+# among them the Test workflow's latest run on HEAD completed green, read
 # through `gh`, which refuses a HEAD that is not pushed, still running or
-# unchecked. A workflow whose path filter kept it from running for HEAD
-# is not among them, and runs at the tag. --gate proves HEAD here instead,
+# unchecked. Another workflow whose path filter kept it from running for
+# HEAD is not among them, and runs at the tag; a HEAD the Test workflow's
+# path filter skipped has no proof there. --gate proves HEAD here instead,
 # for a release cut offline or a HEAD GitHub has not run: the release
 # stage (scripts/stage.sh release, the gate's close as scripts/stages.tsv
 # holds it), CI's checks and the full suite on both database adapters, the
@@ -151,7 +161,25 @@ else
     echo "Wait for green, fix what is red, or prove HEAD here with --gate."
     exit 1
   fi
-  echo "HEAD's tree is proved green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed."
+  # The suites are the Test workflow's: its latest run on HEAD, of any
+  # event, is the one that must be green.
+  if ! TEST_RUN="$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
+      -q '[.workflow_runs[] | select(.path == ".github/workflows/test.yml")] | sort_by(.created_at) | last
+          | if . == null then "none" else "\(.status) \(.conclusion // "-")" end' 2>&1)"; then
+    echo "Error: HEAD's workflow runs could not be read: $TEST_RUN"
+    echo "Sign gh in, or prove HEAD here with --gate."
+    exit 1
+  fi
+  if [ "$TEST_RUN" != "completed success" ]; then
+    if [ "$TEST_RUN" = none ]; then
+      echo "Error: the Test workflow has no run on HEAD $HEAD_SHA (its path filter skipped it): HEAD's suites are unproved."
+    else
+      echo "Error: the Test workflow's latest run on HEAD $HEAD_SHA is $TEST_RUN, not completed success."
+    fi
+    echo "Wait for green, fix what is red, or prove HEAD here with --gate."
+    exit 1
+  fi
+  echo "HEAD's tree is proved green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed, the Test workflow's among them."
 fi
 
 # The dependency audits compare mix.lock with advisory feeds that change
@@ -188,6 +216,18 @@ sedi() {
   fi
 }
 
+# Whether commit $2 is commit $1 with nothing changed but version lines
+# of the mix.exs files: every file it changes is one of them, and every
+# line it removes or adds is a `version: "..."` line.
+version_only() {
+  local names lines
+  names=$(git diff --no-ext-diff --name-only "$1" "$2") || return 1
+  [ -n "$names" ] || return 1
+  [ -z "$(grep -vxF -f <(printf '%s\n' "${MIXFILES[@]}") <<< "$names")" ] || return 1
+  lines=$(git diff --no-ext-diff --no-color -U0 "$1" "$2" | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ') || return 1
+  ! grep -qvE '^[+-][[:space:]]*version: "[^"]*",?[[:space:]]*$' <<< "$lines"
+}
+
 # Whether every mix.exs declares VERSION and no other version. The
 # comparison is of whole strings, so VERSION's dots are no wildcards and
 # 0.9.0 is not 0.9.0-rc.1.
@@ -202,13 +242,20 @@ all_declare() {
 
 if all_declare; then
   # HEAD's commits already bumped every mix.exs, the files being HEAD's
-  # (above): the tag names HEAD and no commit is made.
+  # (above): the tag names the proved commit and no commit is made. It
+  # names HEAD_SHA, not HEAD, which another agent sharing this checkout
+  # may have moved since the proof.
   echo "Every mix.exs declares $VERSION already:"
   grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}"
-  git tag -a "$VERSION" -m "Release $VERSION"
+  git tag -a "$VERSION" "$HEAD_SHA" -m "Release $VERSION"
   echo ""
-  echo "Done! Version $VERSION tagged at $(git rev-parse --short HEAD)."
+  echo "Done! Version $VERSION tagged at $(git rev-parse --short "$HEAD_SHA")."
 else
+  # The bump commit goes on the proved commit alone.
+  if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
+    echo "Error: HEAD moved from the proved $HEAD_SHA to $(git rev-parse HEAD) during the proof; nothing was committed or tagged."
+    exit 1
+  fi
   echo "Bumping version to $VERSION..."
 
   # Every declared version, a pre-release's included, becomes VERSION.
@@ -241,24 +288,38 @@ else
   # files from the working tree and disregards whatever else is staged
   # (`git commit --only -- <paths>`), where `git add -A` or a plain
   # `git commit` would have swept other changes, unstaged or staged, into
-  # the release. The commit is then held to those files before the tag.
+  # the release. The commit is then held, before the tag, to the proved
+  # commit as its parent and to version lines of those files alone (a
+  # file already at VERSION is not among them), and the tag names it.
   git commit --only -m "$COMMIT_MSG" -- "${MIXFILES[@]}"
-  if [ "$(git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort)" != "$(printf '%s\n' "${MIXFILES[@]}" | LC_ALL=C sort)" ]; then
-    echo "Error: the bump commit changed more than the mix.exs files:"
-    git diff-tree --no-commit-id --name-only -r HEAD | sed 's/^/  /'
-    git reset --soft HEAD~1
-    echo "The commit was undone, its changes left staged; nothing was tagged."
+  BUMP="$(git rev-parse HEAD)"
+  if [ "$(git rev-parse "$BUMP^")" != "$HEAD_SHA" ] || ! version_only "$HEAD_SHA" "$BUMP"; then
+    echo "Error: the bump commit $BUMP is not the proved $HEAD_SHA plus version lines of the mix.exs files:"
+    git diff --no-ext-diff --stat "$HEAD_SHA" "$BUMP" | sed 's/^/  /'
+    if [ "$(git rev-parse "$BUMP^")" = "$HEAD_SHA" ]; then
+      git reset --soft HEAD~1
+      echo "The commit was undone, its changes left staged; nothing was tagged."
+    else
+      echo "The commit was left as it is; nothing was tagged."
+    fi
     exit 1
   fi
-  git tag -a "$VERSION" -m "Release $VERSION"
+  git tag -a "$VERSION" "$BUMP" -m "Release $VERSION"
 
   echo ""
-  echo "Done! Version $VERSION committed and tagged at $(git rev-parse --short HEAD): the proved tree $(git rev-parse --short "$HEAD_SHA") plus the version lines; the tag's workflow checks it again before it publishes."
+  echo "Done! Version $VERSION committed and tagged at $(git rev-parse --short "$BUMP"): the proved tree $(git rev-parse --short "$HEAD_SHA") plus the version lines; the tag's workflow checks it again before it publishes."
 fi
 
 if [ "$PUSH" = "--push" ]; then
   echo "Pushing to origin..."
-  git push -u origin "$BRANCH" && git push origin "$VERSION"
+  if ! git push -u origin "$BRANCH"; then
+    echo "Error: the push of $BRANCH failed (above); the tag $VERSION was not pushed."
+    exit 1
+  fi
+  if ! git push origin "$VERSION"; then
+    echo "Error: $BRANCH was pushed and the push of the tag $VERSION failed (above); push it with: git push origin $VERSION"
+    exit 1
+  fi
   echo "Pushed!"
 else
   echo ""
