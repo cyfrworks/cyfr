@@ -64,7 +64,8 @@ describe("the person's own CYFR's /carry", () => {
   test("takes the request under the fixture's fragment key, as a change to confirm", () => {
     const {path, fragment} = vectors.exchange.home.page
     assert.equal(path, "/carry")
-    const request = b64({audience: "https://hub.example", athanor: "ath_x", ref: "cnr_x", digest: "sha256:00", expires_at: 1, preview: {}})
+    const request = b64({audience: "https://hub.example", athanor: "ath_x", ref: "cnr_x", digest: "sha256:00", expires_at: 1, preview: {}, preview_digest: "sha256:00"})
+    assert.deepEqual(Object.keys(JSON.parse(Buffer.from(request, "base64url"))).sort(), vectors.exchange.home.page.request)
     assert.deepEqual(classify(`${fragment}=${request}`), {kind: "confirm", value: request})
   })
 })

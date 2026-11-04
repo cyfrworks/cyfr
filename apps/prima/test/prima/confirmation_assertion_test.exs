@@ -6,10 +6,11 @@ defmodule Prima.ConfirmationAssertionTest do
   The certified cross-home confirmation as data
   (`tests/fixtures/confirmation_assertion.json`): each assertion re-signs
   to its bytes; each is checked under a verified head against the
-  audience, athanor, ref, digest and clock the deciding home holds, so an
-  assertion from another `key_epoch`, key, person, home, athanor or record
-  is refused; each malformed assertion is refused; and the record the
-  vectors name is a real record whose ref and digest are its own.
+  audience, athanor, ref, digest, preview digest and clock the deciding
+  home holds, so an assertion from another `key_epoch`, key, person, home,
+  athanor or record, or over another change's preview, is refused; each
+  malformed assertion is refused; and the record the vectors name is a
+  real record whose ref, digest and preview digest are its own.
   """
 
   use ExUnit.Case, async: true
@@ -57,13 +58,17 @@ defmodule Prima.ConfirmationAssertionTest do
     end
   end
 
-  test "the record the assertions name is a confirmation whose ref and digest are its own" do
-    %{"confirmation" => map, "ref" => ref, "digest" => digest} = vectors()["record"]
+  test "the record the assertions name is a confirmation whose ref, digest and preview digest are its own" do
+    %{"confirmation" => map, "ref" => ref, "digest" => digest, "preview_digest" => preview_digest} =
+      vectors()["record"]
+
     assert {:ok, record} = Prima.Confirmation.decode(map)
     assert Prima.Confirmation.ref(record.id) == ref
     assert Prima.Confirmation.digest(record) == digest
+    assert ConfirmationAssertion.preview_digest(record.preview) == preview_digest
     assert vectors()["assertions"]["valid"]["assertion"]["ref"] == ref
     assert vectors()["assertions"]["valid"]["assertion"]["digest"] == digest
+    assert vectors()["assertions"]["valid"]["assertion"]["preview_digest"] == preview_digest
     assert vectors()["assertions"]["valid"]["assertion"]["athanor"] == record.athanor
     assert vectors()["assertions"]["valid"]["assertion"]["audience"] == record.home
   end
@@ -88,6 +93,7 @@ defmodule Prima.ConfirmationAssertionTest do
           athanor: expect["athanor"],
           ref: expect["ref"],
           digest: expect["digest"],
+          preview_digest: expect["preview_digest"],
           now: expect["now"]
         )
 
@@ -118,6 +124,7 @@ defmodule Prima.ConfirmationAssertionTest do
         athanor: map["athanor"],
         ref: map["ref"],
         digest: map["digest"],
+        preview_digest: map["preview_digest"],
         expires_at: map["expires_at"]
       )
 

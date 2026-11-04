@@ -631,7 +631,8 @@ defmodule Sanctum.PersonTest do
         "ref" => "cnr_" <> String.duplicate("B", 43),
         "digest" => "sha256:" <> String.duplicate("ab", 32),
         "expires_at" => System.os_time(:millisecond) + 300_000,
-        "preview" => Prima.Confirmation.Preview.encode(preview)
+        "preview" => Prima.Confirmation.Preview.encode(preview),
+        "preview_digest" => Prima.ConfirmationAssertion.preview_digest(preview)
       }
 
       {:ok, ctx: ctx, args: args}
@@ -683,6 +684,7 @@ defmodule Sanctum.PersonTest do
       assert assertion.athanor == args["athanor"]
       assert assertion.ref == args["ref"]
       assert assertion.digest == args["digest"]
+      assert assertion.preview_digest == args["preview_digest"]
       assert assertion.expires_at <= System.os_time(:millisecond) + 60_000
       assert Prima.Identity.Encoding.verify(map, row.live_public_key)
 
@@ -705,6 +707,40 @@ defmodule Sanctum.PersonTest do
                vouch(%{ctx | confirmation_id: id}, args)
 
       assert {:ok, %{state: "confirmed"}} = Arca.PendingConfirmations.get(actor, ref)
+    end
+
+    test "a carried preview that is not the one its preview_digest names asks nothing and signs nothing",
+         %{ctx: ctx, args: args, user: user} do
+      enroll!(user.id)
+      Sanctum.TestContext.passkey!(user.id)
+
+      # The change the deciding home's record holds: another one than the
+      # preview carried beside its digest shows.
+      {:ok, actual_preview} =
+        Prima.Confirmation.Preview.new(
+          home: args["audience"],
+          athanor: "The hub",
+          operation: "pairing.revoke",
+          resource: "the laptop you still use",
+          details: %{"client_id" => "pcl_laptop"}
+        )
+
+      carried = %{
+        args
+        | "preview_digest" => Prima.ConfirmationAssertion.preview_digest(actual_preview)
+      }
+
+      assert carried["preview"]["operation"] == "pairing.begin"
+
+      assert {:error, {:invalid_argument, message}} = vouch(ctx, carried)
+      assert message =~ "nothing was signed"
+
+      # Not even under a confirmation this home's own passkey gave: the
+      # refusal comes first, and the confirmation is still there to spend.
+      {:error, {:confirmation_required, %{id: id}}} = vouch(ctx, args)
+      Sanctum.TestContext.prove!(ctx, id)
+      assert {:error, {:invalid_argument, _}} = vouch(%{ctx | confirmation_id: id}, carried)
+      assert {:ok, %{assertion: _}} = vouch(%{ctx | confirmation_id: id}, args)
     end
 
     test "never expires after the record, refuses a past one, this home and a preview of another home",

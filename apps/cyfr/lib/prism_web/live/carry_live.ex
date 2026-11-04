@@ -39,8 +39,9 @@ defmodule PrismWeb.CarryLive do
     * **A change to confirm at another home** (`#confirm=<…>`, from a
       home the person joined, whose pending confirmation is theirs): that
       home's record as its `at_home` names it, its origin as `audience`,
-      the `athanor`, `ref`, `digest`, `expires_at` and the `preview` it
-      stored (`tests/fixtures/confirmation_assertion.json`). It only
+      the `athanor`, `ref`, `digest`, `expires_at`, the `preview` it
+      stored and that preview's `preview_digest`
+      (`tests/fixtures/confirmation_assertion.json`). It only
       shows the change; nothing happens until the person presses Confirm,
       which calls `person.assert_confirmation` under a fresh
       `remote_confirmation` confirmation, which only their passkey or a
@@ -335,11 +336,13 @@ defmodule PrismWeb.CarryLive do
             "ref" => ref,
             "digest" => digest,
             "expires_at" => expires_at,
-            "preview" => preview
+            "preview" => preview,
+            "preview_digest" => preview_digest
           } = object}
-         when map_size(object) == 6 <- Prima.Carry.decode_object(fragment),
+         when map_size(object) == 7 <- Prima.Carry.decode_object(fragment),
          true <- Encoding.home?(audience) and Encoding.id?(athanor),
          true <- Prima.Confirmation.ref?(ref) and Encoding.digest?(digest),
+         true <- Encoding.digest?(preview_digest),
          true <- is_integer(expires_at),
          {:ok, %{home: ^audience} = shown} <- Prima.Confirmation.Preview.decode(preview) do
       {:ok, %{audience: audience, preview: shown, args: object}}

@@ -8,11 +8,27 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "-WFkPMQjcAlOtmWpxX9mUX_FGmDtLLxg7r6uswzsHFgebbfHmSSymUHEJSs7nBSOvs1bfwNuteYnQkMm5HW1CA"
+        "sig": "WBAS-HuQF9rxl4uBpxvFdUOzy0-0EHgrHLfdHK4m9iRx2ouNG9ZBCIKTh-4phCfoxFDAlSxkY_nOT5wAxzRnAg"
       },
       "signer": "alice_live_2"
+    },
+    "for_another_preview": {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:03307b4d2913042105cc5cf75a7db82e702687eb2329fd01a048877dc8b9dc97",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "R4hoNboJMYIZevc-bsdk5QAnAg9MG0DZOWO8xOaCvslgpk1DFkFePxZKgxzS8lFcFcDaZ7HQVnGgI9aBifjQAw"
+      },
+      "signer": "alice_live_1"
     },
     "for_bob": {
       "assertion": {
@@ -22,9 +38,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "V3XINij6ZhX_F3LS10lnu0445QeVcqgbD6qS7DyNn3l19Jg6cPgiNzD4S1fELGm4NWlTdwKAxXSETZL20eKUAQ"
+        "sig": "cmp376XMwSOo4bIRDTS4IW0mV8Bz2LsBq-XEljuHbjQTC_X-xiOCZYj553gkeFvSg4DktXyFhWBHIjFrMreJCQ"
       },
       "signer": "alice_live_1"
     },
@@ -36,9 +53,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "EjB50bP4o94EcpXH7vpckhZq5zaXk3xEn0-cKWudiqgxujrYQ3_XWFBn9zXmpKTJkDfZ8bSqYqHyXKi3ZeznAA"
+        "sig": "IAY7jZeVTNG3jhlglbo3qYJFeEtdQuoKEF3metnjvEVZ1l1kjDTSKR9i82JzkOAZoyAW7vz8ZCQJPKo6LAYKCg"
       },
       "signer": "stranger"
     },
@@ -50,9 +68,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "9uVip-OdC3groaJ2ZqcEmwSXQ6rDwvh0paueaddts4C_olxlD1-Z_o4XhIjb0ES0DcacbEzsrX-YQjLlItSeCQ"
+        "sig": "g7cTr4fQpROq31MjqQ1-JuzCebL8u6Inr8wcV1u4R_EWUsSQEV1GIV8nXhc5foC8gVS2cP_Eq49pOdSDhcNJCg"
       },
       "signer": "alice_live_2"
     },
@@ -64,14 +83,15 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "signer": "alice_live_1"
     }
   },
-  "comment": "The certified cross-home confirmation (Prima.ConfirmationAssertion): a remote person's own CYFR, after a fresh confirmation there by a passkey at its own RP ID or a protected device, signs with the person's live key that they confirmed one pending confirmation at the deciding CYFR; the deciding CYFR checks it under the person's head read fresh from their directory against the record it holds. keys and identity are person_assertion.json's. record is the deciding CYFR's pending confirmation the assertions name (ref = Prima.Confirmation.ref(id), digest = Prima.Confirmation.digest(record)). exchange is how it is carried and recorded, and what the one Devices list answers.",
+  "comment": "The certified cross-home confirmation (Prima.ConfirmationAssertion): a remote person's own CYFR, after a fresh confirmation there by a passkey at its own RP ID or a protected device, signs with the person's live key that they confirmed one pending confirmation at the deciding CYFR; the deciding CYFR checks it under the person's head read fresh from their directory against the record it holds. keys and identity are person_assertion.json's. record is the deciding CYFR's pending confirmation the assertions name (ref = Prima.Confirmation.ref(id), digest = Prima.Confirmation.digest(record), preview_digest = Prima.ConfirmationAssertion.preview_digest(preview), the SHA-256 of the JCS bytes of the record's preview: the person's own CYFR signs only for a carried preview whose preview_digest is the one it was told, and the deciding CYFR refuses one over another preview). exchange is how it is carried and recorded, and what the one Devices list answers.",
   "exchange": {
     "deciding": {
       "callback": {
@@ -102,6 +122,7 @@
           "digest",
           "expires_at",
           "preview",
+          "preview_digest",
           "ref"
         ],
         "methods": {
@@ -140,6 +161,7 @@
         "wrong_audience": "proof_refused",
         "wrong_digest": "proof_refused",
         "wrong_identifier": "proof_refused",
+        "wrong_preview": "proof_refused",
         "wrong_ref": "proof_refused"
       }
     },
@@ -194,6 +216,7 @@
           "digest",
           "expires_at",
           "preview",
+          "preview_digest",
           "ref"
         ]
       },
@@ -204,6 +227,7 @@
           "digest",
           "expires_at",
           "preview",
+          "preview_digest",
           "ref"
         ],
         "confirmation_action": "remote_confirmation",
@@ -333,6 +357,7 @@
       "rp_id": "hub.example"
     },
     "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+    "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
     "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
   },
   "refusals": [
@@ -345,9 +370,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "error": "unknown_field",
       "name": "an unknown field"
@@ -360,9 +386,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-person-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "error": "wrong_protocol",
       "name": "another protocol"
@@ -375,6 +402,7 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
@@ -388,9 +416,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "error": "missing_field",
       "name": "no athanor"
@@ -403,9 +432,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnf_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "error": "invalid_field",
       "name": "a ref that is not a confirmation's"
@@ -418,9 +448,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "error": "invalid_field",
       "name": "a digest that is not sha256"
@@ -433,9 +464,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "error": "invalid_field",
       "name": "an audience that is not an origin"
@@ -448,9 +480,10 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "epoch-1",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
-        "sig": "I4LxtSDSpDAz773rfoPJyllear9KT8kSsVL_sbK_zEQVPR56Agsvp_GZwirqw3Q_ZDLp5vdijjT4UObuXU8KDw"
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
       },
       "error": "invalid_field",
       "name": "a key_epoch that is not a digest"
@@ -463,12 +496,44 @@
         "expires_at": 1790000060000,
         "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "protocol": "cyfr-confirmation-assertion/v1",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
         "sig": "AAAA"
       },
       "error": "invalid_field",
       "name": "a short signature"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "missing_field",
+      "name": "no preview_digest"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "md5:00",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "invalid_field",
+      "name": "a preview_digest that is not sha256"
     }
   ],
   "verify": [
@@ -479,6 +544,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -493,6 +559,7 @@
         "audience": "https://carol.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -506,6 +573,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -519,6 +587,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
       },
       "head": "before_rotation",
@@ -532,6 +601,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -545,6 +615,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000060000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -557,6 +628,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000059999,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -571,6 +643,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "after_rotation",
@@ -583,6 +656,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "after_rotation",
@@ -597,6 +671,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -610,6 +685,7 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
@@ -623,10 +699,25 @@
         "audience": "https://hub.example",
         "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
         "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
         "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
       },
       "head": "before_rotation",
       "name": "an assertion naming another person"
+    },
+    {
+      "assertion": "for_another_preview",
+      "error": "wrong_preview",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion over the preview of another change"
     }
   ]
 }

@@ -49,7 +49,8 @@ defmodule Sanctum.Providers.Confirmation do
       keys are at another home, which certifies their confirmation). A
       record of such a person carries `at_home`, what their browser
       carries to their own home for it: this home as `audience`, the
-      record's `athanor`, `ref`, `digest`, `expires_at` and `preview`. A
+      record's `athanor`, `ref`, `digest`, `expires_at`, `preview` and its
+      `preview_digest` (`Sanctum.RemoteCertification.preview_digest/1`). A
       client offers only those it can carry out. A sign-in and a code are
       offered only inside their windows
       (`Sanctum.Pairing.sign_in_may_confirm/2`): while the person recovers
@@ -246,15 +247,14 @@ defmodule Sanctum.Providers.Confirmation do
       with {:ok, confirmations} <-
              all_pending(rows, fn row ->
                with {:ok, record} <-
-                      {:ok,
-                       row
-                       |> pending(
-                         credentials,
-                         offered(ctx, row, methods, latched?, restore?),
-                         restore?
-                       )
-                       |> Map.put(:enroll, enroll?(row, latched?, restore?))
-                       |> at_home(row, remote?)},
+                      row
+                      |> pending(
+                        credentials,
+                        offered(ctx, row, methods, latched?, restore?),
+                        restore?
+                      )
+                      |> Map.put(:enroll, enroll?(row, latched?, restore?))
+                      |> at_home(row, remote?),
                     do: device_challenge(ctx, row, args["request"], record)
              end),
            do: {:ok, %{confirmations: confirmations}}
@@ -415,17 +415,23 @@ defmodule Sanctum.Providers.Confirmation do
   # record (`Prima.ConfirmationAssertion`): the bindings that home signs
   # over, and the preview it shows before it asks for its own proof.
   defp at_home(record, row, true = _remote?) do
-    Map.put(record, :at_home, %{
-      audience: Sanctum.Person.home(),
-      athanor: row.athanor_id,
-      ref: row.ref,
-      digest: row.digest,
-      expires_at: DateTime.to_unix(row.expires_at, :millisecond),
-      preview: record.preview
-    })
+    with {:ok, preview_digest} <- Sanctum.RemoteCertification.preview_digest(row) do
+      {:ok,
+       Map.put(record, :at_home, %{
+         audience: Sanctum.Person.home(),
+         athanor: row.athanor_id,
+         ref: row.ref,
+         digest: row.digest,
+         expires_at: DateTime.to_unix(row.expires_at, :millisecond),
+         preview: record.preview,
+         preview_digest: preview_digest
+       })}
+    else
+      {:error, reason} -> {:error, refusal(reason)}
+    end
   end
 
-  defp at_home(record, _row, false), do: record
+  defp at_home(record, _row, false), do: {:ok, record}
 
   # The records a `pending` read answers: the one its `request` names, or
   # every open one. While the storage reserve is depleted, only those of

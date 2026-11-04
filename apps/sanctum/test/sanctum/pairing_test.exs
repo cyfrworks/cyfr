@@ -2146,6 +2146,11 @@ defmodule Sanctum.PairingTest do
           athanor: Keyword.get(overrides, :athanor, row.athanor_id),
           ref: Keyword.get(overrides, :ref, row.ref),
           digest: Keyword.get(overrides, :digest, row.digest),
+          preview_digest:
+            Keyword.get_lazy(overrides, :preview_digest, fn ->
+              {:ok, digest} = Sanctum.RemoteCertification.preview_digest(row)
+              digest
+            end),
           expires_at: Keyword.get(overrides, :expires_at, System.os_time(:millisecond) + 60_000)
         )
 
@@ -2192,7 +2197,13 @@ defmodule Sanctum.PairingTest do
                ref: row.ref,
                digest: row.digest,
                expires_at: DateTime.to_unix(row.expires_at, :millisecond),
-               preview: record.preview
+               preview: record.preview,
+               preview_digest:
+                 record.preview
+                 |> Prima.Confirmation.Preview.decode()
+                 |> then(fn {:ok, preview} ->
+                   Prima.ConfirmationAssertion.preview_digest(preview)
+                 end)
              }
     end
 
@@ -2270,6 +2281,36 @@ defmodule Sanctum.PairingTest do
                confirm_home(session_ctx, row.ref, %{"protocol" => "cyfr-person-assertion/v1"})
 
       assert %{state: "pending", proof: nil} = record!(session_ctx, id)
+    end
+
+    test "an assertion their home signed over the preview of another change confirms nothing",
+         %{session_ctx: session_ctx, identity: identity} do
+      {id, row} = asked(session_ctx, device_key())
+      preview = Jason.decode!(row.preview)
+      assert preview["operation"] == "pairing.begin"
+
+      # Their home was shown another change beside this record's ref and
+      # digest, and signed the digest of what it showed.
+      {:ok, shown} =
+        Prima.Confirmation.Preview.decode(%{
+          preview
+          | "operation" => "pairing.revoke",
+            "resource" => "the laptop you still use"
+        })
+
+      assertion =
+        home_asserted(identity, row,
+          preview_digest: Prima.ConfirmationAssertion.preview_digest(shown)
+        )
+
+      assert {:error, %Prima.Refusal{reason: :home_refused}} =
+               confirm_home(session_ctx, row.ref, assertion)
+
+      assert %{state: "pending", proof: nil} = record!(session_ctx, id)
+
+      # The same assertion over the record's own preview confirms it.
+      assert {:ok, %{state: "confirmed"}} =
+               confirm_home(session_ctx, row.ref, home_asserted(identity, row))
     end
 
     test "an assertion under keys their home has since rotated confirms nothing, the directory read live",

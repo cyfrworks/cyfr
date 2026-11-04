@@ -86,10 +86,15 @@ defmodule Sanctum.RemoteCertification do
   `assert_confirmation/2` (`person.assert_confirmation`) is the person's
   home's half. Their browser brings what the deciding home's record
   carries for it (`at_home`: that home as `audience`, the record's
-  `athanor`, `ref`, `digest`, `expires_at` and `preview`), and the change
-  is a sensitive one here (`remote_confirmation`) whose preview names that
-  home, the change it shows and its details, so the person sees here what
-  they confirm there. Only a passkey's assertion or a protected device's
+  `athanor`, `ref`, `digest`, `expires_at`, `preview` and
+  `preview_digest`). The record's `digest` covers a secret this home never
+  holds, so the preview is bound by its own digest: one whose
+  `Prima.ConfirmationAssertion.preview_digest/1` is not the carried
+  `preview_digest` is refused before anything is asked or signed, and the
+  assertion signs that `preview_digest`. The change is a sensitive one
+  here (`remote_confirmation`) whose preview names that home, the change
+  it shows and its details, so the person sees here what they confirm
+  there. Only a passkey's assertion or a protected device's
   proof confirms it, whatever window is open: a sign-in method, an emailed
   code or a session alone never vouches for the person at another home.
   Then the person's live key signs the assertion, expiring 60 seconds on
@@ -104,7 +109,10 @@ defmodule Sanctum.RemoteCertification do
   identity, their head read live from their directory
   (`Sanctum.DeviceCerts.live_head/1`), and the assertion signed by that
   head's live key under its `key_epoch`, for this home, the record's
-  athanor, ref and digest, unexpired on the database's clock. A head the
+  athanor, ref and digest and the `preview_digest` of the preview the
+  record stores (`preview_digest/1`), unexpired on the database's clock,
+  all checked before the record is confirmed: an assertion over a preview
+  of another change confirms nothing. A head the
   directory cannot answer refuses (`:identity_stale`), never trusts the
   cache. The record's one confirmation is the replay bound: it is marked
   `home`, attributed to nothing here, and counts as the person's own
@@ -313,11 +321,13 @@ defmodule Sanctum.RemoteCertification do
   @doc """
   Sign, for the person of `ctx`, that they confirmed one record at another
   home (the module doc). `args` carries `audience`, `athanor`, `ref`,
-  `digest`, `expires_at` (Unix milliseconds) and `preview`, the deciding
-  home's record as its `at_home` names it. Answers `%{assertion: map,
-  callback: url}`.
+  `digest`, `expires_at` (Unix milliseconds), `preview` and
+  `preview_digest`, the deciding home's record as its `at_home` names it.
+  Answers `%{assertion: map, callback: url}`.
 
-  Refusals: `{:invalid_argument, _}`, `:expired` (the record's own expiry
+  Refusals: `{:invalid_argument, _}` (among them a preview whose digest is
+  not `preview_digest`, refused before anything is asked or signed),
+  `:expired` (the record's own expiry
   has passed), `{:confirmation_required, _}` until a passkey or protected
   device of the person's here confirms it, `:own_method_required` (it was
   confirmed some other way), `:not_found` (the person's keys are at
@@ -368,7 +378,8 @@ defmodule Sanctum.RemoteCertification do
         "audience" => request.audience,
         "athanor" => request.athanor,
         "ref" => request.ref,
-        "digest" => request.digest
+        "digest" => request.digest,
+        "preview_digest" => request.preview_digest
       },
       resource: request.audience,
       details:
@@ -422,17 +433,19 @@ defmodule Sanctum.RemoteCertification do
            "ref" => ref,
            "digest" => digest,
            "expires_at" => expires_at,
-           "preview" => preview
+           "preview" => preview,
+           "preview_digest" => preview_digest
          } = args
        )
-       when map_size(args) == 6 do
+       when map_size(args) == 7 do
     with :ok <- other_home(audience),
          :ok <- bound(Encoding.id?(athanor), "The athanor is that CYFR's athanor id"),
          :ok <- bound(Prima.Confirmation.ref?(ref), "The ref is that confirmation's ref"),
          :ok <- bound(Encoding.digest?(digest), "The digest is that confirmation's sha256 digest"),
          :ok <-
            bound(is_integer(expires_at) and expires_at > 0, "The expiry is Unix milliseconds"),
-         {:ok, preview} <- shown(preview, audience) do
+         {:ok, preview} <- shown(preview, audience),
+         :ok <- named(preview, preview_digest) do
       {:ok,
        %{
          audience: audience,
@@ -440,7 +453,8 @@ defmodule Sanctum.RemoteCertification do
          ref: ref,
          digest: digest,
          expires_at: expires_at,
-         preview: preview
+         preview: preview,
+         preview_digest: preview_digest
        }}
     end
   end
@@ -449,7 +463,8 @@ defmodule Sanctum.RemoteCertification do
     do:
       {:error,
        {:invalid_argument,
-        "assert_confirmation needs the audience, athanor, ref, digest, expires_at and preview"}}
+        "assert_confirmation needs the audience, athanor, ref, digest, expires_at, preview " <>
+          "and preview_digest"}}
 
   defp other_home(audience) do
     cond do
@@ -487,10 +502,39 @@ defmodule Sanctum.RemoteCertification do
     end
   end
 
+  # The carried preview is the one the deciding home's `preview_digest`
+  # names: its record's digest covers a secret this home never holds, so
+  # only this binds what the person is shown to the record they confirm.
+  defp named(preview, preview_digest) do
+    if ConfirmationAssertion.preview_digest(preview) == preview_digest,
+      do: :ok,
+      else:
+        {:error,
+         {:invalid_argument,
+          "The preview is not the change that confirmation's preview_digest names; " <>
+            "nothing was signed"}}
+  end
+
+  @doc """
+  The `preview_digest` of the preview a pending confirmation here stores
+  (`Prima.ConfirmationAssertion.preview_digest/1`): what a remote person's
+  record carries in its `at_home`, and what their home's assertion must
+  sign. `:unavailable` for a stored preview that does not read.
+  """
+  @spec preview_digest(%{preview: String.t()}) :: {:ok, String.t()} | {:error, :unavailable}
+  def preview_digest(%{preview: stored}) when is_binary(stored) do
+    with {:ok, map} <- Jason.decode(stored),
+         {:ok, preview} <- Prima.Confirmation.Preview.decode(map) do
+      {:ok, ConfirmationAssertion.preview_digest(preview)}
+    else
+      _damaged -> {:error, :unavailable}
+    end
+  end
+
   @doc """
   Verify `assertion` (`Prima.ConfirmationAssertion`'s JSON map) as the
-  remote person of `ctx` confirming `record` (its `ref`, `digest` and
-  `athanor_id`) here (the module doc). Refusals: `:not_remote` (a person
+  remote person of `ctx` confirming `record` (its `ref`, `digest`,
+  `athanor_id` and stored `preview`) here (the module doc). Refusals: `:not_remote` (a person
   whose keys this home holds confirms with their own passkey or device),
   `:proof_refused` (the assertion does not certify this record for this
   person under their current head), `:identity_stale`, `:unavailable`.
@@ -499,11 +543,12 @@ defmodule Sanctum.RemoteCertification do
           :ok | {:error, :not_remote | :proof_refused | :identity_stale | :unavailable}
   def verify_confirmation(
         %Context{user_id: user_id},
-        %{ref: ref, digest: digest, athanor_id: athanor_id},
+        %{ref: ref, digest: digest, athanor_id: athanor_id} = record,
         assertion
       )
       when is_binary(user_id) do
     with {:ok, identifier} <- remote_identifier(user_id),
+         {:ok, preview_digest} <- preview_digest(record),
          {:ok, state} <- DeviceCerts.live_head(identifier),
          {:ok, now} <- db_now_ms() do
       case ConfirmationAssertion.verify(assertion, state,
@@ -511,6 +556,7 @@ defmodule Sanctum.RemoteCertification do
              athanor: athanor_id,
              ref: ref,
              digest: digest,
+             preview_digest: preview_digest,
              now: now
            ) do
         {:ok, _assertion} -> :ok

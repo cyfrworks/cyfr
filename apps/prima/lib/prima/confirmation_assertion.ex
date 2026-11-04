@@ -16,9 +16,10 @@ defmodule Prima.ConfirmationAssertion do
   person's `identifier`, the `key_epoch` of the head it was signed under,
   the deciding home as `audience`, the deciding home's `athanor` the
   record lives in, the record's public `ref` (`Prima.Confirmation.ref/1`)
-  and stored `digest` (`Prima.Confirmation.digest/1`), an expiry in Unix
-  milliseconds and the live key's signature over the JCS bytes of every
-  other field. `tests/fixtures/confirmation_assertion.json` holds its
+  and stored `digest` (`Prima.Confirmation.digest/1`), the
+  `preview_digest` of the preview the person's home showed
+  (`preview_digest/1`), an expiry in Unix milliseconds and the live key's
+  signature over the JCS bytes of every other field. `tests/fixtures/confirmation_assertion.json` holds its
   vectors and the exchange that carries it.
 
   `verify/3` checks it under the current head the deciding home resolved
@@ -26,13 +27,23 @@ defmodule Prima.ConfirmationAssertion do
   An assertion confirms the one record its `ref` and `digest` name, while
   that record waits for a proof: the record's own single confirmation is
   its replay bound.
+
+  The record's `digest` covers its secret `id`, which the person's home
+  never holds, so that home cannot tell from it which change it is shown.
+  `preview_digest` binds what it showed: the person's home computes it
+  from the preview it carries and signs nothing for a preview whose digest
+  is not the one it was told, and the deciding home computes it from its
+  own record's preview, whose `operation` is the record's
+  (`Prima.Confirmation`), and refuses an assertion over any other, so a
+  preview of another change cannot be shown for a record of this one.
   """
 
+  alias Prima.Confirmation.Preview
   alias Prima.Identity.{Encoding, State}
 
   @protocol "cyfr-confirmation-assertion/v1"
   @lifetime_ms 60_000
-  @required ~w(protocol identifier key_epoch audience athanor ref digest expires_at)
+  @required ~w(protocol identifier key_epoch audience athanor ref digest preview_digest expires_at)
 
   @type t :: %__MODULE__{
           identifier: String.t(),
@@ -41,6 +52,7 @@ defmodule Prima.ConfirmationAssertion do
           athanor: String.t(),
           ref: String.t(),
           digest: String.t(),
+          preview_digest: String.t(),
           expires_at: non_neg_integer(),
           sig: binary() | nil
         }
@@ -55,10 +67,30 @@ defmodule Prima.ConfirmationAssertion do
           | :wrong_athanor
           | :wrong_ref
           | :wrong_digest
+          | :wrong_preview
           | :expired
 
-  @enforce_keys [:identifier, :key_epoch, :audience, :athanor, :ref, :digest, :expires_at]
-  defstruct [:identifier, :key_epoch, :audience, :athanor, :ref, :digest, :expires_at, sig: nil]
+  @enforce_keys [
+    :identifier,
+    :key_epoch,
+    :audience,
+    :athanor,
+    :ref,
+    :digest,
+    :preview_digest,
+    :expires_at
+  ]
+  defstruct [
+    :identifier,
+    :key_epoch,
+    :audience,
+    :athanor,
+    :ref,
+    :digest,
+    :preview_digest,
+    :expires_at,
+    sig: nil
+  ]
 
   @doc "The protocol string an assertion carries."
   @spec protocol() :: String.t()
@@ -71,6 +103,15 @@ defmodule Prima.ConfirmationAssertion do
   """
   @spec lifetime_ms() :: pos_integer()
   def lifetime_ms, do: @lifetime_ms
+
+  @doc """
+  The digest of a confirmation's preview, as an assertion binds it: the
+  SHA-256 of the JCS bytes of its JSON (`Prima.Confirmation.Preview.encode/1`),
+  as `sha256:<hex>`.
+  """
+  @spec preview_digest(Preview.t()) :: String.t()
+  def preview_digest(%Preview{} = preview),
+    do: preview |> Preview.encode() |> Encoding.jcs!() |> Prima.Digest.sha256()
 
   @doc """
   An unsigned assertion from its fields (atom keys). Sign it with
@@ -88,6 +129,7 @@ defmodule Prima.ConfirmationAssertion do
       "athanor" => attrs[:athanor],
       "ref" => attrs[:ref],
       "digest" => attrs[:digest],
+      "preview_digest" => attrs[:preview_digest],
       "expires_at" => attrs[:expires_at]
     }
     |> Encoding.compact()
@@ -109,6 +151,7 @@ defmodule Prima.ConfirmationAssertion do
       "athanor" => assertion.athanor,
       "ref" => assertion.ref,
       "digest" => assertion.digest,
+      "preview_digest" => assertion.preview_digest,
       "expires_at" => assertion.expires_at,
       "sig" => assertion.sig && Encoding.b64(assertion.sig)
     })
@@ -125,13 +168,15 @@ defmodule Prima.ConfirmationAssertion do
   @doc """
   Check an assertion under `state`, the person's current head the deciding
   home read fresh from their directory, against the record it holds:
-  `opts[:audience]` (itself), `opts[:athanor]`, `opts[:ref]` and
-  `opts[:digest]` (the record's), and `opts[:now]` (its clock,
+  `opts[:audience]` (itself), `opts[:athanor]`, `opts[:ref]`,
+  `opts[:digest]` and `opts[:preview_digest]` (the record's, the last by
+  `preview_digest/1` over its preview), and `opts[:now]` (its clock,
   milliseconds). Refusals, in the order checked: a malformed assertion,
   `:wrong_identifier`, `:stale_key_epoch` (signed under a head the
   directory has moved past), `:bad_signature`, `:wrong_audience`,
-  `:wrong_athanor`, `:wrong_ref`, `:wrong_digest`, and `:expired` at or
-  after `expires_at`.
+  `:wrong_athanor`, `:wrong_ref`, `:wrong_digest`, `:wrong_preview` (the
+  person's home showed another preview), and `:expired` at or after
+  `expires_at`.
   """
   @spec verify(t() | map(), State.t(), keyword()) :: {:ok, t()} | {:error, reason()}
   def verify(assertion, %State{} = state, opts) do
@@ -144,7 +189,9 @@ defmodule Prima.ConfirmationAssertion do
          :ok <- same(assertion.audience, Keyword.fetch!(opts, :audience), :wrong_audience),
          :ok <- same(assertion.athanor, Keyword.fetch!(opts, :athanor), :wrong_athanor),
          :ok <- same(assertion.ref, Keyword.fetch!(opts, :ref), :wrong_ref),
-         :ok <- same(assertion.digest, Keyword.fetch!(opts, :digest), :wrong_digest) do
+         :ok <- same(assertion.digest, Keyword.fetch!(opts, :digest), :wrong_digest),
+         :ok <-
+           same(assertion.preview_digest, Keyword.fetch!(opts, :preview_digest), :wrong_preview) do
       if now >= assertion.expires_at, do: {:error, :expired}, else: {:ok, assertion}
     end
   end
@@ -170,6 +217,7 @@ defmodule Prima.ConfirmationAssertion do
          {:ok, athanor} <- Encoding.check(map, "athanor", &Encoding.id?/1),
          {:ok, ref} <- Encoding.check(map, "ref", &Prima.Confirmation.ref?/1),
          {:ok, digest} <- Encoding.check(map, "digest", &Encoding.digest?/1),
+         {:ok, preview_digest} <- Encoding.check(map, "preview_digest", &Encoding.digest?/1),
          {:ok, expires_at} <- Encoding.check(map, "expires_at", &Encoding.ms?/1),
          {:ok, sig} <- signature(map, signed?) do
       {:ok,
@@ -180,6 +228,7 @@ defmodule Prima.ConfirmationAssertion do
          athanor: athanor,
          ref: ref,
          digest: digest,
+         preview_digest: preview_digest,
          expires_at: expires_at,
          sig: sig
        }}

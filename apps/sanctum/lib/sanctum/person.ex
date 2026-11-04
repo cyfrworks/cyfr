@@ -333,8 +333,8 @@ defmodule Sanctum.Person do
   @doc """
   Sign, with the person's live key, that they confirmed one pending
   confirmation at another home (`Prima.ConfirmationAssertion`): `attrs`
-  names the `audience`, its `athanor`, the record's `ref` and `digest` and
-  the assertion's `expires_at`; the identifier and `key_epoch` are the
+  names the `audience`, its `athanor`, the record's `ref` and `digest`, the
+  `preview_digest` of the preview shown and the assertion's `expires_at`; the identifier and `key_epoch` are the
   person's own, as their identity row holds them now. Writes nothing.
 
   Refusals: `:not_found` (no key set here), `:not_enrolled`,
@@ -355,6 +355,7 @@ defmodule Sanctum.Person do
              athanor: attrs.athanor,
              ref: attrs.ref,
              digest: attrs.digest,
+             preview_digest: attrs.preview_digest,
              expires_at: attrs.expires_at
            )
            |> unsigned() do

@@ -100,6 +100,11 @@ defmodule Sanctum.Providers.Assertion do
           Arg.new("preview", :json,
             required: true,
             description: "assert_confirmation: the change as the other CYFR stored it"
+          ),
+          Arg.new("preview_digest", :string,
+            required: true,
+            description:
+              "assert_confirmation: the digest of that preview the other CYFR names (sha256:<hex>)"
           )
         ],
         kind: :write,

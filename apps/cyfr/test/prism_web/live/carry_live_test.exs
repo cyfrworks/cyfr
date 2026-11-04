@@ -421,7 +421,8 @@ defmodule PrismWeb.CarryLiveTest do
             "ref" => "cnr_" <> String.duplicate("C", 43),
             "digest" => "sha256:" <> String.duplicate("ab", 32),
             "expires_at" => System.os_time(:millisecond) + 300_000,
-            "preview" => Prima.Confirmation.Preview.encode(preview)
+            "preview" => Prima.Confirmation.Preview.encode(preview),
+            "preview_digest" => Prima.ConfirmationAssertion.preview_digest(preview)
           },
           overrides
         )
@@ -462,8 +463,8 @@ defmodule PrismWeb.CarryLiveTest do
       {:ok, assertion} = Prima.Carry.decode_object(encoded)
       assert {:ok, signed} = Prima.ConfirmationAssertion.decode(assertion)
 
-      assert {signed.audience, signed.ref, signed.digest} ==
-               {@hub, request["ref"], request["digest"]}
+      assert {signed.audience, signed.ref, signed.digest, signed.preview_digest} ==
+               {@hub, request["ref"], request["digest"], request["preview_digest"]}
 
       assert signed.key_epoch == head(user)
       refute has_element?(view, "[data-test=carry-confirm]")
