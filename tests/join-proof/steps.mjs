@@ -719,35 +719,13 @@ async function retired(chromium, state) {
     record.retired);
 }
 
-// The command line's client at H revoked from `page`'s Devices there, the
-// revocation confirmed through the person's own CYFR, A2, by its
-// assertion. Answers how the confirmation ended and the standing H holds
-// after.
-async function revokeAtHub(page, state) {
-  await open(page, shellAt(H, hubAthanor));
-  await page.locator("#shell-devices").click();
-  const client = `${layer} [data-test="pairing-client"][data-client="${state.terminal.clientId}"]`;
-  await page.waitForSelector(client, { timeout: 30_000 });
-  await page.locator(`${client} [data-test="pairing-revoke"]`).click();
-  const own = `${layer} [data-test="confirmation"][data-own="true"]`;
-  const ref = await (await page.waitForSelector(own, { timeout: 30_000 })).getAttribute("data-ref");
-  const confirmed = await confirmAtHome(page, ref, A2);
-  const standing = await waitFor(async () => {
-    const found = await terminalStanding(state);
-    return found === "revoked" ? found : null;
-  }, { timeoutMs: 30_000, what: "the command line's revocation at H" }).catch(() => terminalStanding(state));
-  return { confirmed: confirmed.done, home_origin: confirmed.home_origin, standing };
-}
-
 async function adminAgain(chromium, state) {
   const { identifier } = state;
   const page = state.newHub.page;
   // The command line paired at H under A's certificate stands there still,
-  // though A is gone: H counts a standing device of the person's as a way
-  // to confirm. The person revokes it from H's Devices, the revocation
-  // confirmed through their new home, A2, by its assertion; then they hold
-  // no way to confirm at H.
-  const revoked = await revokeAtHub(page, state);
+  // but its certificate chains to keys the recovery retired: H counts it as
+  // no way to confirm, so the person holds none at H.
+  const commandLine = await terminalStanding(state);
   await authenticatorWith(page);
   await open(page, settingsAt(H, hubAthanor));
   await page.locator('[data-test="passkey-register"]').click();
@@ -757,11 +735,10 @@ async function adminAgain(chromium, state) {
   const pending = person.passkeys.filter((p) => p.state === "pending");
   const authorized = await authorize(state.admin, person.user_id);
   const after = (await atHub(identifier)).passkeys.filter((p) => p.state === "active");
-  record.admin_again = { revoked, pending: pending.length, authorized, active: after.length };
+  record.admin_again = { command_line_at_hub: commandLine, pending: pending.length, authorized, active: after.length };
   return row("admin_again", "chromium",
-    revoked.confirmed === "confirmed" && revoked.standing === "revoked" &&
-      pending.length === 1 && authorized.asked && after.length === 1,
-    "after the recovery, the command line H holds for the person is revoked through their new home, and a new passkey at H again needs a new recorded authorization by H's operator",
+    commandLine === "active" && pending.length === 1 && authorized.asked && after.length === 1,
+    "after the recovery, with the command line paired under the retired keys still standing at H, a new passkey at H again needs a new recorded authorization by H's operator",
     record.admin_again);
 }
 
