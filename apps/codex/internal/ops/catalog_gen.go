@@ -2783,6 +2783,8 @@ type PersonAssertConfirmationArgs struct {
 	ExpiresAt int `json:"expires_at"`
 	// assert_confirmation: the change as the other CYFR stored it
 	Preview any `json:"preview"`
+	// assert_confirmation: the digest of that preview the other CYFR names (sha256:<hex>)
+	PreviewDigest string `json:"preview_digest"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
