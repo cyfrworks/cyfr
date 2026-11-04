@@ -20,7 +20,13 @@
 #      before it recorded one. Containers go with `docker rm -f -v`, then
 #      networks, volumes and tags, then the directories. Another
 #      directory named under a run prefix is not touched, since a run may
-#      keep its own on purpose.
+#      keep its own on purpose. What a commit gate that is gone left goes
+#      the same way, by the gate's pid (scripts/commit-gate.sh names what a
+#      gate makes): its containers, networks and volumes named
+#      cyfr-gate-<pid>-..., its image tags cyfr-gate-<pid>/... and
+#      cyfr-gate-<pid>-..., and its $JANITOR_TMP/cyfr-gate-<pid>-* scratch
+#      directories of this user. The databases a gate's boot leg names stay
+#      the next gate's to drop.
 #   2. Old images. An image tagged cyfr-locus:in-<h> or cyfr:in-<h>
 #      (scripts/image.sh), or cyfr-install-screen:in-<h> (the
 #      install-screen proof's, tests/install-screen-proof/prepare.sh),
@@ -73,9 +79,8 @@
 # every candidate it keeps, and `worktree <path>: no tag (<exit>)`, `no
 # proof tag (<exit>)` or `no base-image pin` for a worktree whose tag or
 # pin it could not read. It never names or touches anything
-# else: not the gate's own cyfr-gate-<pid>-... names, which the gate
-# sweeps at its next start, not a tag scripts/image.sh did not make, not
-# another project's objects. The per-image lock and the run-finished test,
+# else: not a tag scripts/image.sh did not make, not another project's
+# objects. The per-image lock and the run-finished test,
 # not a queue lane, protect an image between its choice and its
 # container's start and a run until its end, so it runs in any lane.
 #
@@ -84,10 +89,17 @@
 # the directory the runner, the stages and the gate make theirs in; the
 # image lock directory is the one `scripts/image.sh --lock-dir` prints.
 #
+# Every listing a rule reads (Docker's objects, the worktrees, the
+# directories) is checked before the rule uses it: one that fails is named
+# as `failed listing <what>: <reason>` and fails the run. A failed listing
+# of what a rule removes leaves that rule with nothing to remove; a failed
+# listing of what protects (the worktrees, for rules 2 and 7) ends the
+# rule's removals, since an empty list would protect nothing.
+#
 # It runs on Linux: it reads Docker's image dates with GNU `date -d`.
 #
-# Exits 0; 1 naming each removal that failed; 64 on usage; 69 without
-# docker, a Docker daemon, git, flock or pgrep.
+# Exits 0; 1 naming each removal or listing that failed; 64 on usage; 69
+# without docker, a Docker daemon, git, flock or pgrep.
 set -uo pipefail
 
 usage() { echo "usage: $0 [--dry-run] [--keep-build-cache]"; }
@@ -118,6 +130,21 @@ failed=0
 removed() { if $dry; then echo "would remove $1 $2"; else echo "removed $1 $2"; fi; }
 kept() { echo "kept $1 $2: $3"; }
 failure() { echo "failed $1 $2: $3"; failed=1; }
+
+# listed KEY WHAT CMD...: CMD's standard output kept in $lists/KEY for the
+# rule that reads it, and 0; when CMD fails, $lists/KEY empty, a failure
+# naming WHAT and CMD's error, and 1.
+lists=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-janitor.XXXXXX") || exit 1
+trap 'rm -rf "$lists"' EXIT
+listed() {
+  local key=$1 what=$2 err status=0
+  shift 2
+  err=$("$@" 2>&1 >"$lists/$key") || status=$?
+  [ "$status" -ne 0 ] || return 0
+  : >"$lists/$key"
+  failure listing "$what" "${err:-exit $status}"
+  return 1
+}
 
 # Whether pid $1 is a process that has not exited; a zombie has.
 alive() {
@@ -179,36 +206,62 @@ remove_object() {
     image) docker image rm "$2" ;;
   esac
 }
+# A gate's names: cyfr-gate-<pid>- for what its legs name after their
+# run, cyfr-gate-<pid>/ for its image namespace.
+GATE_NAMES_PATTERN='^cyfr-gate-([0-9]+)[-/]'
 declare -A why_kept=()
+# Sets reason to why the run or gate pid $1 names is not finished,
+# remembered per pid.
+kept_for() {
+  if [ -z "${why_kept[$1]+set}" ]; then why_kept[$1]=$(unfinished "$1"); fi
+  reason=${why_kept[$1]}
+}
 sweep_run_objects() {
   local kind=$1 name pid reason
+  listed "$kind" "${kind}s" list_objects "$kind" || return 0
   while IFS= read -r name; do
-    [[ $name =~ $RUN_NAMES_PATTERN ]] || continue
-    pid=${BASH_REMATCH[2]}
-    if [ -z "${why_kept[$pid]+set}" ]; then why_kept[$pid]=$(unfinished "$pid"); fi
-    reason=${why_kept[$pid]}
+    if [[ $name =~ $RUN_NAMES_PATTERN ]]; then pid=${BASH_REMATCH[2]}
+    elif [[ $name =~ $GATE_NAMES_PATTERN ]]; then pid=${BASH_REMATCH[1]}
+    else continue
+    fi
+    kept_for "$pid"
     if [ -n "$reason" ]; then kept "$kind" "$name" "$reason"; continue; fi
     if $dry; then removed "$kind" "$name"; continue; fi
     if out=$(remove_object "$kind" "$name" 2>&1); then removed "$kind" "$name"; else failure "$kind" "$name" "$out"; fi
-  done < <(list_objects "$kind" 2>/dev/null)
+  done <"$lists/$kind"
 }
 for kind in container network volume image; do sweep_run_objects "$kind"; done
 scratch_pattern=${RUN_NAMES_PATTERN}'install-screen\.[^/]+$'
+listed scratch 'install-screen scratch directories' \
+  find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name 'cyfr-*-install-screen.*' -type d -print0
 while IFS= read -r -d '' dir; do
   [[ ${dir##*/} =~ $scratch_pattern ]] || continue
   [ -O "$dir" ] || continue
-  pid=${BASH_REMATCH[2]}
-  if [ -z "${why_kept[$pid]+set}" ]; then why_kept[$pid]=$(unfinished "$pid"); fi
-  reason=${why_kept[$pid]}
+  kept_for "${BASH_REMATCH[2]}"
   if [ -n "$reason" ]; then kept directory "$dir" "$reason"; continue; fi
   if $dry; then removed directory "$dir"
   elif rm -rf -- "$dir"; then removed directory "$dir"
   else failure directory "$dir" 'rm -rf failed'
   fi
-done < <(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name 'cyfr-*-install-screen.*' -type d -print0 2>/dev/null)
+done <"$lists/scratch"
+listed gates 'gate scratch directories' find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name 'cyfr-gate-[0-9]*-*' -print0
+while IFS= read -r -d '' dir; do
+  [[ ${dir##*/} =~ ^cyfr-gate-([0-9]+)- ]] || continue
+  [ -O "$dir" ] || continue
+  kept_for "${BASH_REMATCH[1]}"
+  if [ -n "$reason" ]; then kept directory "$dir" "$reason"; continue; fi
+  if $dry; then removed directory "$dir"
+  elif rm -rf -- "$dir"; then removed directory "$dir"
+  else failure directory "$dir" 'rm -rf failed'
+  fi
+done <"$lists/gates"
 
-# Rule 2. The tags the repository's worktrees produce today.
+# Rule 2. The tags the repository's worktrees produce today. Without the
+# worktrees' list no tag is known to be unproduced, so the rule's removals
+# do not run.
 declare -A produced=()
+worktrees=true
+listed worktrees 'worktrees' git -C "$root" worktree list --porcelain || worktrees=false
 while IFS= read -r worktree; do
   status=0
   for undated in '' --undated; do
@@ -230,7 +283,7 @@ while IFS= read -r worktree; do
     tag=$("$proof" --tag-only 2>/dev/null) || status=$?
     if [ "$status" = 0 ] && [ -n "$tag" ]; then produced[$tag]=1; else echo "worktree $worktree: no proof tag ($status)"; fi
   fi
-done < <(git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p')
+done < <(sed -n 's/^worktree //p' "$lists/worktrees")
 
 # Holds image <h>'s lock on descriptor 8, waiting up to two hours. A dry
 # run makes no lock file: it holds one only where one exists.
@@ -252,6 +305,10 @@ live_uses() {
 }
 
 now=$(date +%s)
+: >"$lists/images"
+if $worktrees; then
+  listed images 'labelled images' docker image ls --filter label=works.cyfr.image-inputs --format '{{.Repository}}:{{.Tag}}'
+fi
 while IFS= read -r tag; do
   [[ $tag =~ ^(cyfr-locus|cyfr|cyfr-install-screen):in-([0-9a-f]{20})$ ]] || continue
   h=${BASH_REMATCH[2]}
@@ -278,7 +335,7 @@ while IFS= read -r tag; do
     failure image "$tag" "$out"
   fi
   release_lock
-done < <(docker image ls --filter label=works.cyfr.image-inputs --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
+done <"$lists/images"
 if $dry; then
   echo 'would prune dangling images labelled works.cyfr.image-inputs'
 elif out=$(docker image prune -f --filter label=works.cyfr.image-inputs 2>&1); then
@@ -317,6 +374,7 @@ drop_database() {
   docker run --rm ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}janitor-psql-$3"} --network host postgres:18.6 \
     psql -v ON_ERROR_STOP=1 -q "$1/postgres" -c "DROP DATABASE IF EXISTS \"$2\" WITH (FORCE)"
 }
+listed runs 'run directories' find "$TMP_ROOT" -maxdepth 1 -name 'cyfr-t.*' -type d -mmin +4320 -print0
 while IFS= read -r -d '' dir; do
   [ -O "$dir" ] || continue
   pid=$(cat "$dir/runner-pid" 2>/dev/null) || pid=
@@ -366,16 +424,18 @@ while IFS= read -r -d '' dir; do
   elif rm -rf "$dir"; then removed directory "$dir"
   else failure directory "$dir" 'rm -rf failed'
   fi
-done < <(find "$TMP_ROOT" -maxdepth 1 -name 'cyfr-t.*' -type d -mmin +4320 -print0 2>/dev/null)
+done <"$lists/runs"
 
 # Rule 5.
+listed logs 'log and evidence directories' \
+  find "$TMP_ROOT" -maxdepth 1 \( -name 'cyfr-stage.*' -o -name 'cyfr-gate.*' -o -name 'cyfr-evidence.*' \) -type d -mmin +10080 -print0
 while IFS= read -r -d '' dir; do
   [ -O "$dir" ] || continue
   if $dry; then removed directory "$dir"
   elif rm -rf "$dir"; then removed directory "$dir"
   else failure directory "$dir" 'rm -rf failed'
   fi
-done < <(find "$TMP_ROOT" -maxdepth 1 \( -name 'cyfr-stage.*' -o -name 'cyfr-gate.*' -o -name 'cyfr-evidence.*' \) -type d -mmin +10080 -print0 2>/dev/null)
+done <"$lists/logs"
 
 # Rule 6.
 for uses in "$STATE"/*.uses; do
@@ -411,13 +471,21 @@ if [ -n "$cache" ] && [ -n "$base_lock" ] && [ -d "$cache" ]; then
   if ! take_base_lock; then
     kept base-images "$cache" 'its lock stayed held for two hours'
   else
+    # Without the worktrees' list no set is known to be unpinned, so the
+    # rule's removals do not run.
     declare -A pinned=()
+    pins=true
+    listed pins 'worktrees' git -C "$root" worktree list --porcelain || pins=false
     while IFS= read -r worktree; do
       file=$worktree/tests/install-screen-proof/base-image.sh
       [ -f "$file" ] || continue
       sum=$(sed -n 's/^CLOUD_IMAGE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$file")
       if [[ $sum =~ ^[0-9a-f]{64}$ ]]; then pinned[$sum]=1; else echo "worktree $worktree: no base-image pin"; fi
-    done < <(git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p')
+    done < <(sed -n 's/^worktree //p' "$lists/pins")
+    : >"$lists/sets"
+    if $pins; then
+      listed sets 'base-image sets' find "$cache" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/[0-9a-f]{64}' -print0
+    fi
     while IFS= read -r -d '' dir; do
       sum=${dir##*/}
       [ -O "$dir" ] || continue
@@ -427,7 +495,7 @@ if [ -n "$cache" ] && [ -n "$base_lock" ] && [ -d "$cache" ]; then
       elif chmod -R u+w -- "$dir" && rm -rf -- "$dir"; then removed base-image "$dir"
       else failure base-image "$dir" 'rm -rf failed'
       fi
-    done < <(find "$cache" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/[0-9a-f]{64}' -print0 2>/dev/null)
+    done <"$lists/sets"
     exec 7>&- 2>/dev/null || :
   fi
 fi
