@@ -2095,7 +2095,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Tenancy" => [
       channel_active?: 2,
       continuation: 3,
-      list_athanors: 1,
       resolve_status: 2,
       revalidate: 1
     ],

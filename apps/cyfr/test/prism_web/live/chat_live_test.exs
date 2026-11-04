@@ -173,9 +173,9 @@ defmodule PrismWeb.ChatLiveTest do
     _carol_conn = log_in_user(build_conn(), carol)
 
     {view, _html} = mount_chat(conn)
-    %{athanors: athanors, people: people} = :sys.get_state(view.pid).socket.assigns
+    %{own: own, people: people} = :sys.get_state(view.pid).socket.assigns
 
-    refute theirs.id in Enum.map(athanors, & &1.athanor.id)
+    assert own.athanor.owner_user_id == alice.user_id
     refute has_element?(view, "#athanor-" <> theirs.id)
     refute carol.user_id in Enum.map(people, & &1.user_id)
 
@@ -638,6 +638,37 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "a store that cannot read the person's athanor says so, and leaves the page as it was",
+       %{conn: conn} do
+    # The guard uses the mount's context as it is while it is fresh, so the
+    # owner read is the first the patch makes.
+    previous = Application.fetch_env(:sanctum, :caller_memo_ttl_ms)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:sanctum, :caller_memo_ttl_ms, value)
+        :error -> Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+      end
+    end)
+
+    Application.put_env(:sanctum, :caller_memo_ttl_ms, 600_000)
+
+    conn = log_in_user(conn, person())
+    {view, _html} = mount_chat(conn)
+    assert has_element?(view, "#athanor-" <> athanor().id)
+
+    # The bare address reads the person's athanor by its owner; with the
+    # table gone the store cannot answer. On PostgreSQL the failed read
+    # aborts the test's transaction, so this is the test's last read.
+    Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
+
+    html = render_patch(view, "/chat")
+    assert html =~ "That athanor cannot be opened just now. Try again shortly."
+    assert has_element?(view, "#athanor-" <> athanor().id)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "archiving the athanor sends every open chat away", %{conn: conn} do
     alice = person()
     alice_conn = log_in_user(conn, alice)
@@ -781,7 +812,7 @@ defmodule PrismWeb.ChatLiveTest do
   end
 
   describe "threads with people" do
-    test "the rail lists your athanors' threads, your pairs by the other's name and your shared threads by title, and ?s= opens one under your seat",
+    test "the rail lists your athanor's threads, your pairs by the other's name and your shared threads by title, and ?s= opens one under your seat",
          %{conn: conn} do
       alice = person()
       bob = test_user()
