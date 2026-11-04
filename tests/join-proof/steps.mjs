@@ -54,6 +54,7 @@ async function refusedAssertion(page, fragment) {
     page.goto(`${H}/login#cyfr=${fragment}`),
   ]);
   if (response.status() !== 401) throw new Error(`the assertion callback answered ${response.status()}, not a refusal`);
+  await page.waitForURL(`${H}/auth/cyfr/callback`, { waitUntil: "load", timeout: 30_000 });
 }
 
 // Poll `check` every two seconds until it holds or `limitMs` passes:
@@ -312,6 +313,7 @@ async function forgedCompletion(chromium, { home, identifier, hubPage, hubContex
   const pending = await waitFor(async () => (await carryActions("a", identifier)).filter((a) => a.phase === "pending").pop(),
     { timeoutMs: 30_000, what: "the pending carry" });
   const forged = b64url({ protocol: "cyfr-carry/v1", action_id: pending.action_id, outcome: "admitted" });
+  await home.desk.goto("about:blank");
   await open(home.desk, `${A}/carry#${forged}`);
   await waitFor(async () =>
     (await carryActions("a", identifier)).some((action) => action.action_id === pending.action_id && action.phase === "completed") ||
