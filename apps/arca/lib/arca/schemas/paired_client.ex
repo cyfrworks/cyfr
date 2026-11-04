@@ -53,6 +53,7 @@ defmodule Arca.Schemas.PairedClient do
     field :standing, :string, default: "active"
     field :holder_kind, :string
     field :display_name, :string
+    field :passkey_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

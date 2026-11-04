@@ -1132,6 +1132,89 @@ defmodule Sanctum.DeviceUnlockTest do
                )
     end
   end
+
+  describe "a passkey beside a device" do
+    # A person setup made by a device's enrollment: they hold no sign-in
+    # method and no passkey, only the box; then a passkey of theirs,
+    # registered under the box's own confirmation.
+    setup do
+      device = enrolled!()
+      device_ctx = connected!(device)
+      user_id = device.certificate.subject.user_id
+      session = Sanctum.TestContext.session!(user_id, "local", device.certificate.athanor)
+      assert {:ok, []} = Arca.Users.identities(Prima.Actor.system(), user_id)
+
+      authenticator = Sanctum.TestContext.Authenticator.new("beside-#{user_id}")
+      {:ok, options} = Sanctum.Passkeys.register(session, %{})
+
+      credential =
+        Sanctum.TestContext.Authenticator.registration(authenticator, options)
+
+      {:error, {:confirmation_required, %{id: id}}} =
+        Sanctum.Passkeys.register(session, %{credential: credential})
+
+      device_confirmed!(device_ctx, device, id)
+
+      {:ok, %{status: "active", passkey: passkey}} =
+        Sanctum.Passkeys.register(%{session | confirmation_id: id}, %{credential: credential})
+
+      %{device: device, device_ctx: device_ctx, session: session, passkey: passkey}
+    end
+
+    # The record `id` names proven by the device's own unlock, over the
+    # challenge its pending read answered.
+    defp device_confirmed!(device_ctx, device, id) do
+      ref = Prima.Confirmation.ref(id)
+
+      {:ok, %{confirmations: [record]}} =
+        Sanctum.Providers.Confirmation.handle(device_ctx, %{
+          "action" => "pending",
+          "request" => ref
+        })
+
+      {:ok, challenge} = Challenge.decode(record.challenge)
+
+      {:ok, %{state: "confirmed"}} =
+        Sanctum.Providers.Confirmation.handle(device_ctx, %{
+          "action" => "confirm",
+          "ref" => ref,
+          "device_proof" => signed(challenge, elem(device.key, 1))
+        })
+    end
+
+    test "the passkey is revoked with the device standing, which still signs its person in", %{
+      device: device,
+      device_ctx: device_ctx,
+      session: session,
+      passkey: passkey
+    } do
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Sanctum.Passkeys.revoke(session, passkey.id)
+
+      device_confirmed!(device_ctx, device, id)
+
+      assert {:ok, %{state: "revoked"}} =
+               Sanctum.Passkeys.revoke(%{session | confirmation_id: id}, passkey.id)
+
+      # The device unlocks a session as before.
+      assert %{ticket: _} = unlocked!(device_ctx, device.key)
+    end
+
+    test "with the device revoked too, the passkey is the last way in and stays", %{
+      device: device,
+      session: session,
+      passkey: passkey
+    } do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in PairedClient, where: p.id == ^device.certificate.client_id),
+          set: [standing: "revoked"]
+        )
+
+      assert {:error, {:conflict, sentence}} = Sanctum.Passkeys.revoke(session, passkey.id)
+      assert sentence =~ "only way to sign in"
+    end
+  end
 end
 
 defmodule Sanctum.DeviceUnlockKilledTest do
