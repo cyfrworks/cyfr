@@ -568,9 +568,13 @@ defmodule Sanctum.Passkeys do
   re-authenticate (`Sanctum.Auth.OIDC.reauth_available?/1`), a verified
   email a one-time code can reach
   (`Sanctum.Auth.EmailVerification.code_available?/1`), or a protected
-  device of theirs that stands, whose unlock proves a confirmation
-  (`Sanctum.DeviceUnlock`): a person a device's enrollment made registers
-  their passkey under it. The passkeys are read as the context's own. A remote person needs no passkey here: their
+  device of theirs that can still prove itself, its client standing and a
+  certificate of it current, a remote person's under the keys their head
+  names now, whose unlock proves a confirmation (`Sanctum.DeviceUnlock`): a
+  person a device's enrollment made registers their passkey under it, and
+  one whose device's certification their keys' rotation or recovery ended
+  holds no fresh method by it. The passkeys are read as the context's own.
+  A remote person needs no passkey here: their
   own home certifies their confirmations
   (`Sanctum.RemoteCertification.verify_confirmation/3`), so a passkey they
   register here anyway is the administrator's to authorize while they hold
@@ -1163,10 +1167,21 @@ defmodule Sanctum.Passkeys do
 
   defp leaves_a_way_in(_ctx, _user_id, _passkey, _was), do: :ok
 
+  # The person's protected devices that can still prove themselves
+  # (`Sanctum.DeviceCerts.proves_itself?/1`). A device whose certification a
+  # rotation or a recovery of the keys ended counts as nothing, neither as a
+  # way in nor as a fresh method.
   defp protected_devices(user_id) do
     case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
-      {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.holder_kind in ["chip", "software"]))}
-      {:error, _unanswered} -> {:error, :unavailable}
+      {:ok, rows} ->
+        {:ok,
+         Enum.filter(
+           rows,
+           &(&1.holder_kind in ["chip", "software"] and Sanctum.DeviceCerts.proves_itself?(&1))
+         )}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 

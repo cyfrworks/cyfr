@@ -619,6 +619,32 @@ defmodule Sanctum.DeviceCerts do
   end
 
   @doc """
+  Whether the paired client `client` (an `Arca.PairedClients` row) can
+  still prove itself here: the row active, and the newest certificate this
+  home recorded for it current and verified now as a request's is
+  (`subject/2`): a local subject's under the live key this home stores for
+  them, an identity subject's under the head their directory names within
+  its freshness bound, so one a rotation or a recovery of the person's
+  keys retired proves nothing. A store or directory that cannot answer
+  proves nothing either.
+  """
+  @spec proves_itself?(map()) :: boolean()
+  def proves_itself?(%{standing: "active", athanor_id: athanor_id, id: client_id})
+      when is_binary(athanor_id) and is_binary(client_id) do
+    with {:ok, %{certificate: bytes}} <-
+           Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor_id), client_id),
+         {:ok, map} <- Jason.decode(bytes),
+         {:ok, %DeviceCert{client_id: ^client_id} = certificate} <- DeviceCert.decode(map),
+         {:ok, _subject} <- subject(certificate, System.system_time(:millisecond)) do
+      true
+    else
+      _ended_or_unanswered -> false
+    end
+  end
+
+  def proves_itself?(_client), do: false
+
+  @doc """
   The head `identifier`'s directory names now, read live whatever the
   cache says (`Sanctum.IdentityFreshness.fresh!/2`), as its verified
   state: for a remote person's proof that must stand on their keys as they
