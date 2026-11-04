@@ -1214,15 +1214,18 @@ await_leg() {
   done
 }
 
-# Sourced (tests/commit-gate-test.sh reads pg_selection), the script
-# defines its functions and runs nothing.
+# The gate's names (run_names_gate, RUN_NAMES_GATE_PATTERN), which its
+# functions use whether the script runs or is sourced.
+# shellcheck source=lib/run-names.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/run-names.sh" || exit 69
+
+# Sourced (tests/commit-gate-test.sh reads pg_selection and runs a leg's
+# cleaner), the script defines its functions and runs nothing.
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
 
 SELF="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")" || exit 1
 ROOT=$(dirname "$(dirname "$SELF")")
 . "$ROOT/scripts/lib/contain.sh" || exit 69
-# shellcheck source=lib/run-names.sh
-. "$ROOT/scripts/lib/run-names.sh" || exit 69
 
 # --- a leg: "$SELF" --leg NAME, started by the gate ------------------------
 # It takes the gate's parsed options and its peers' pids from the
