@@ -47,9 +47,11 @@
 # HOLD (default 2700 s) bounds how long the command may keep the host:
 # at the deadline it is stopped and the exit is 124. A repeat recipe
 # therefore takes the host once per repetition, and the checks queued
-# behind it run in between. QUEUE (default 7200 s) bounds the wait for
-# the host: at the deadline the command has not run and the exit is 75,
-# and no check starts after it, not even one stopped while it waited.
+# behind it run in between. QUEUE (default 14400 s, longer than every hold
+# in scripts/stages.tsv, so a stage's row queued behind any one other row
+# still runs) bounds the wait for the host: at the deadline the command
+# has not run and the exit is 75, and no check starts after it, not even
+# one stopped while it waited.
 # HUP, INT and TERM stop the command and exit 129, 130 and 143. Otherwise
 # the exit is the command's own.
 #
@@ -111,7 +113,7 @@ set -uo pipefail
 # a proof (docs/plans/verification-flow.md, D4), else 0.
 PROOF_SCOPED=1
 
-MODE=exclusive; HOLD=2700; QUEUE=7200; STATUS=false
+MODE=exclusive; HOLD=2700; QUEUE=14400; STATUS=false
 usage() { echo "usage: $0 [-s | -p] [-t HOLD_SECONDS] [-w QUEUE_SECONDS] [--] command [args] | $0 --status"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in

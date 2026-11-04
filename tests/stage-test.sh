@@ -6,9 +6,9 @@
 # scripts/heavy-check.sh that records each call and runs its command (a
 # command holding `#queue-deadline` is answered 75, as a queue deadline is);
 # scripts/lib/nightly.py's flakes and weights on planted run directories;
-# and the real table, read whole by the real scripts/stage.sh and held to
-# every self-test command a pull-request workflow runs. It needs git,
-# python3 with PyYAML, and no Docker, database or build.
+# and the real table, read whole by the real scripts/stage.sh, each
+# self-test its handoff runs held to a pull-request workflow that runs it
+# too. It needs git, python3 with PyYAML, and no Docker, database or build.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 S=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-stage-test.XXXXXX")
@@ -58,7 +58,7 @@ for f in apps/arca/lib/arca/x.ex apps/arca/test/arca/x_test.exs apps/cyfr/lib/cy
   put "$repo/$f" "$f"
 done
 toy_rows=(
-  'handoff|format|none|-|always|git grep -q . -- README.md'
+  'handoff|format|scoped|60|always|git grep -q . -- README.md'
   'handoff|compile|scoped|60|apps/**,config/**|echo compile'
   'handoff|dialyzer|scoped|60|apps/*/lib/**|echo dialyzer'
   'handoff|arca|scoped|60|apps/arca/**|echo arca'
@@ -102,9 +102,12 @@ diff "$S/want" "$S/got" >/dev/null || fail "the rows said: $(tr '\n' ';' <"$S/go
 [ "$(cat "$S/logs-run/env.txt")" = "handoff;apps/cyfr/test/cyfr/a_test.exs;$S/logs-run;unset" ] ||
   fail "the row environment: $(cat "$S/logs-run/env.txt")"
 grep -qx 'compile' "$S/logs-run/compile.log" || fail 'a row log does not hold its output'
+# A row queues with its hold alone: its wait for the host is heavy-check's
+# default queue deadline, which tests/heavy-check-test.sh holds above every
+# hold of the real table.
 grep -qx -- '-s -t 60 -- bash -c echo compile' "$STUB_CALLS" || fail "a scoped row did not queue -s -t 60: $(cat "$STUB_CALLS")"
+grep -qx -- '-s -t 60 -- bash -c git grep -q . -- README.md' "$STUB_CALLS" || fail 'the format row did not queue -s'
 grep -q -- '^-p -t 60 -- bash -c printf' "$STUB_CALLS" || fail 'a proof row did not queue -p'
-if grep -q 'git grep' "$STUB_CALLS"; then fail 'a none row went through heavy-check'; fi
 grep -qF "stage: handoff logs in $S/logs-run" "$S/run.err" || fail 'the log directory is not named'
 
 begin 'the changed set holds deleted paths for the rows, and the touched tests hold only tests that exist'
@@ -205,50 +208,11 @@ refused 9 "'apps/** config/**' is not always, tests or comma-separated globs" 'h
 refused 9 'handoff has a second check called compile' 'handoff|compile|scoped|60|always|echo x'
 refused 9 'only save and handoff rows take tests' 'release|x|scoped|60|tests|echo x'
 refused 9 'only save and handoff rows take globs' 'nightly|x|scoped|60|apps/**|echo x'
-refused 9 'the none lane runs only mix format --check-formatted and git grep, not: mix test' 'handoff|x|none|-|always|mix test'
-refused 9 'the none lane runs one command and no shell operator, not: git grep -q . -- README.md; printf ran >"$STAGE_LOGDIR/unqueued"' \
-  'handoff|x|none|-|always|git grep -q . -- README.md; printf ran >"$STAGE_LOGDIR/unqueued"'
-[ ! -e "$S/logs-refused/unqueued" ] || fail 'a compound none row ran its second command'
-refused 9 'the none lane runs one command and no shell operator, not: git grep -q . -- README.md && echo x' 'handoff|x|none|-|always|git grep -q . -- README.md && echo x'
-# A pipe is the toy table's own field separator, so this row is written whole.
-{ printf '%s
-' "${toy_rows[@]}" | tr '|' '	'; printf 'handoff	x	none	-	always	git grep -q . -- README.md | cat
-'; } >"$repo/scripts/stages.tsv"
-stage refused -l "$S/logs-refused" handoff
-[ "$rc" = 65 ] && grep -qF 'stage: scripts/stages.tsv:9: the none lane runs one command and no shell operator, not: git grep -q . -- README.md | cat' "$S/refused.err" ||
-  fail "a piped none row gave $rc: $(cat "$S/refused.err")"
-refused 9 'the none lane runs one command and no shell operator, not: git grep -q "$(echo x)" -- README.md' 'handoff|x|none|-|always|git grep -q "$(echo x)" -- README.md'
-# The none lane's git grep takes its whole grammar and no other option,
-# however it is spelled: a pager, bundled or quoted, an abbreviation, a
-# conversion program.
-only='the none lane'"'"'s git grep takes only -n, -l, -c, -q, -i, -w, -E, -F, -e PATTERN and --, not'
-refused 9 "$only: -Ocat" 'handoff|x|none|-|always|git grep -Ocat x'
-refused 9 "$only: --open-files-in-pager=cat" 'handoff|x|none|-|always|git grep --open-files-in-pager=cat x'
-refused 9 "$only: -O/bin/cat" 'handoff|x|none|-|always|git grep "-O/bin/cat" x -- README.md'
-refused 9 "$only: -nO/bin/cat" 'handoff|x|none|-|always|git grep -nO/bin/cat x -- README.md'
-refused 9 "$only: --open-files-in=/bin/cat" 'handoff|x|none|-|always|git grep --open-files-in=/bin/cat x -- README.md'
-refused 9 "$only: --textconv" 'handoff|x|none|-|always|git grep --textconv x -- README.md'
-refused 9 "the none lane's git grep takes one pattern before --, not a second: y" 'handoff|x|none|-|always|git grep x y'
-refused 9 "the none lane's git grep names one pattern: git grep -q -- README.md" 'handoff|x|none|-|always|git grep -q -- README.md'
-refused 9 "the none lane's git grep takes plain or quoted words: git grep \"\$HOME\" -- README.md" 'handoff|x|none|-|always|git grep "$HOME" -- README.md'
-refused 9 "the none lane's git grep takes plain or quoted words: git grep x* -- README.md" 'handoff|x|none|-|always|git grep x* -- README.md'
-refused 9 'the none lane runs only mix format --check-formatted and git grep, not: mix format --check-formatted --dot-formatter x' \
-  'handoff|x|none|-|always|mix format --check-formatted --dot-formatter x'
-refused 9 'a row in the none lane holds nothing: its hold is -' 'handoff|x|none|60|always|git grep x'
+refused 9 "no lane is called 'none'" 'handoff|x|none|-|always|git grep x'
 refused 9 "the hold '-' is not seconds" 'handoff|x|scoped|-|always|echo x'
 refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|scoped|60|always|echo x'
 refused 9 'a row has six fields separated by single tabs' 'handoff|x|scoped|60|echo x'
 refused 9 'a field is empty' 'handoff||scoped|60|always|echo x'
-table "${toy_rows[@]}"
-
-begin "the none lane's git grep runs in its grammar's every form"
-for cmd in 'git grep -q README -- README.md' 'git grep -n -i -w -e readme.md -- README.md' \
-  "git grep -l -E 'READ.E' -- README.md" 'git grep -c -F "E.m" -- README.md'; do
-  table "${toy_rows[@]}" "release|read|none|-|always|$cmd"
-  stage grammar -l "$S/logs-grammar" release
-  [ "$rc" = 0 ] && grep -qx 'read: ok [0-9]*s' "$S/grammar.out" || fail "\`$cmd\` gave $rc: $(cat "$S/grammar.err")"
-  rm -rf "$S/logs-grammar"
-done
 table "${toy_rows[@]}"
 
 begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'
@@ -404,23 +368,23 @@ printf '# header\n1.5\tapps/a_test.exs\n0.4\tapps/b_test.exs\n3.0\tapps/c_test.e
 [ "$(cat "$S/wroot/scripts/test-partition-weights.tsv")" = "$(printf '# header\n1.5\tapps/a_test.exs\n0.2\tapps/b_test.exs')" ] ||
   fail 'the tracked table changed'
 
-begin 'the real table reads whole, and has a handoff row for every self-test a pull-request workflow runs'
+begin 'the real table reads whole, and every self-test a handoff row runs is one a pull-request workflow runs'
 status=0; (cd "$ROOT" && scripts/stage.sh -n release) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
 grep -qF 'would run close (exclusive): scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"' "$S/real.out" || fail "$(cat "$S/real.out")"
-guard() { # TABLE [WORKFLOWS]: prints each self-test command no handoff row of TABLE runs
+guard() { # TABLE [WORKFLOWS]: prints each self-test a handoff row of TABLE runs that no pull-request workflow runs
   python3 -I - "${2:-$ROOT/.github/workflows}" "$1" <<'PY'
 import glob, os, re, sys, yaml
 workflows, table = sys.argv[1:3]
 rows = [line.rstrip("\n").split("\t") for line in open(table) if line.strip() and not line.startswith("#")]
 handoff = [row[5] for row in rows if row[0] == "handoff"]
-# A self-test is a script under tests/ that a pull-request workflow runs as a
-# command, named *-test.sh, *_test.py or *-test.exs; or a Python script under
-# tests/ run with no argument, or with --self-check alone. A Python script
-# given anything else (an image suite, given its image) is not one. A command
-# counts only where the shell would run it: comments and heredoc bodies are
-# not read, and a script named among another command's arguments (echo's, a
-# comment's) is not a command.
+# A self-test is a script under tests/ that a command runs, named *-test.sh,
+# *_test.py or *-test.exs; or a Python script under tests/ run with no
+# argument, or with --self-check alone. A Python script given anything else
+# (an image suite, given its image) is not one. A command counts only where
+# the shell would run it, in a handoff row as in a workflow's step: comments
+# and heredoc bodies are not read, and a script named among another
+# command's arguments (echo's, a comment's) is not a command.
 TEST_FILE = re.compile(r"tests/[\w./-]+?(?:-test\.sh|_test\.py|-test\.exs)")
 RESERVED = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}", "time", "exec"}
 
@@ -536,7 +500,7 @@ def self_tests(words):
             return [script + " --self-check"]
     return []
 
-missing = set()
+ci = set()
 for path in sorted(glob.glob(os.path.join(workflows, "*.yml"))):
     spec = yaml.safe_load(open(path))
     on = spec.get(True, spec.get("on")) or {}
@@ -545,23 +509,26 @@ for path in sorted(glob.glob(os.path.join(workflows, "*.yml"))):
     for job in spec["jobs"].values():
         for step in job.get("steps", []):
             for command in commands(step.get("run") or ""):
-                for name in self_tests(command):
-                    script, _, flag = name.partition(" ")
-                    held = r"(?<![\w/.-])" + re.escape(script) + (r"\s+--self-check" if flag else r"(?![\w./-])")
-                    if not any(re.search(held, c) for c in handoff):
-                        missing.add(name)
-print("\n".join(sorted(missing)))
+                ci.update(self_tests(command))
+local = {name for row in handoff for command in commands(row) for name in self_tests(command)}
+print("\n".join(sorted(local - ci)))
 PY
 }
 left=$(guard "$ROOT/scripts/stages.tsv")
-[ -z "$left" ] || fail "no handoff row runs: $left"
-grep -v $'^handoff\tcontain-test\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
-[ "$(guard "$S/stages-short.tsv")" = tests/contain-test.sh ] || fail "a table without the contain-test row was not caught: $(guard "$S/stages-short.tsv")"
-# A Python self-test needs no particular name: release.yml's graph check is
-# run with no argument, as the image suites' self-checks are run with
-# --self-check alone. A table without its row is caught.
-grep -v $'^handoff\trelease-graph\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
-[ "$(guard "$S/stages-short.tsv")" = tests/ci-release-graph.py ] || fail "a table without the release-graph row was not caught: $(guard "$S/stages-short.tsv")"
+[ -z "$left" ] || fail "a handoff row runs a self-test no pull-request workflow runs: $left"
+# The control: a handoff row running a self-test no workflow runs is caught,
+# a shell one, and a Python one run with --self-check alone or with no
+# argument; a Python script given its image is no self-test.
+probe_table() { # COMMAND: the real table with one more handoff row running COMMAND
+  { cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe\tscoped\t60\talways\t%s\n' "$1"; } >"$S/stages-probe.tsv"
+}
+probe_table 'bash tests/stage-probe-test.sh'
+[ "$(guard "$S/stages-probe.tsv")" = tests/stage-probe-test.sh ] || fail "a row running a self-test no workflow runs was not caught: $(guard "$S/stages-probe.tsv")"
+probe_table 'python3 -I tests/stage-probe.py --self-check && python3 -I tests/stage-probe_test.py'
+[ "$(guard "$S/stages-probe.tsv")" = "$(printf '%s\n' 'tests/stage-probe.py --self-check' tests/stage-probe_test.py)" ] ||
+  fail "a row running Python self-tests no workflow runs was not caught: $(guard "$S/stages-probe.tsv")"
+probe_table 'python3 -I tests/stage-probe.py cyfr-locus:review'
+[ -z "$(guard "$S/stages-probe.tsv")" ] || fail "an image suite given its image was counted as a self-test: $(guard "$S/stages-probe.tsv")"
 # The roster tests are application tests, which the guard does not read:
 # their row runs always, whatever a change touches, in the scoped lane.
 rosters_held() { # TABLE: answers whether its rosters row runs both tests always and scoped
@@ -576,26 +543,30 @@ sed $'/^handoff\trosters\t/s/\talways\t/\ttests\t/' "$ROOT/scripts/stages.tsv" >
 ! rosters_held "$S/stages-short.tsv" || fail 'a rosters row that does not run always was not caught'
 sed $'/^handoff\trosters\t/s/\tscoped\t/\texclusive\t/' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 ! rosters_held "$S/stages-short.tsv" || fail 'a rosters row in another lane was not caught'
-# A command counts where the shell runs it: not in a comment, an echo's
-# arguments or a heredoc's body, and a real one with a comment after it
-# does. An image suite, given its image, is no self-test.
+# A workflow runs a self-test where the shell runs it: not in a comment, an
+# echo's arguments or a heredoc's body, and a real command with a comment
+# after it, or after &&, does. An image suite given its image does not run
+# its self-check.
 planted() { # BODY: the workflows with one more pull-request step running BODY
   rm -rf "$S/workflows"; cp -r "$ROOT/.github/workflows" "$S/workflows"
   printf 'on: [pull_request]\njobs:\n  probe:\n    steps:\n      - run: |\n%s\n' "$(printf '%s\n' "$1" | sed 's/^/          /')" >"$S/workflows/probe.yml"
 }
-for body in '# python3 -I tests/locus-runtime-image/canary.py' 'echo python3 -I tests/locus-runtime-image/canary.py' \
-  'python3 -I tests/locus-runtime-image/canary.py cyfr-locus:review' $'python3 - <<\'EOF\'\nbash tests/heredoc-probe-test.sh\nEOF'; do
+probe_table 'bash tests/stage-probe-test.sh'
+for body in '# bash tests/stage-probe-test.sh' 'echo bash tests/stage-probe-test.sh' \
+  $'python3 - <<\'EOF\'\nbash tests/stage-probe-test.sh\nEOF'; do
   planted "$body"
-  [ -z "$(guard "$ROOT/scripts/stages.tsv" "$S/workflows")" ] || fail "counted as a self-test: $body: $(guard "$ROOT/scripts/stages.tsv" "$S/workflows")"
+  [ "$(guard "$S/stages-probe.tsv" "$S/workflows")" = tests/stage-probe-test.sh ] || fail "counted as running the self-test: $body"
 done
+for body in 'bash tests/stage-probe-test.sh # a comment' $'set -e\ntrue && bash tests/stage-probe-test.sh'; do
+  planted "$body"
+  [ -z "$(guard "$S/stages-probe.tsv" "$S/workflows")" ] || fail "not counted as running the self-test: $body: $(guard "$S/stages-probe.tsv" "$S/workflows")"
+done
+probe_table 'python3 -I tests/stage-probe.py --self-check'
+planted 'python3 -I tests/stage-probe.py cyfr-locus:review'
+[ "$(guard "$S/stages-probe.tsv" "$S/workflows")" = 'tests/stage-probe.py --self-check' ] ||
+  fail "an image suite given its image was counted as its self-check: $(guard "$S/stages-probe.tsv" "$S/workflows")"
 planted 'python3 -I tests/stage-probe.py --self-check # no image'
-[ "$(guard "$ROOT/scripts/stages.tsv" "$S/workflows")" = 'tests/stage-probe.py --self-check' ] ||
-  fail "a real command with a comment after it was not counted: $(guard "$ROOT/scripts/stages.tsv" "$S/workflows")"
-planted $'set -e\nbash tests/stage-probe-test.sh && echo bash tests/echoed-test.sh'
-[ "$(guard "$ROOT/scripts/stages.tsv" "$S/workflows")" = tests/stage-probe-test.sh ] ||
-  fail "a command after && was not counted, or an echoed one was: $(guard "$ROOT/scripts/stages.tsv" "$S/workflows")"
-grep -v $'^handoff\truntime-image-checks\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
-[ "$(guard "$S/stages-short.tsv")" = "$(printf '%s\n' tests/locus-runtime-image/canary_test.py 'tests/locus-runtime-image/worker_auth.py --self-check')" ] ||
-  fail "a table without the runtime-image-checks row was not caught: $(guard "$S/stages-short.tsv")"
+[ -z "$(guard "$S/stages-probe.tsv" "$S/workflows")" ] ||
+  fail "a self-check with a comment after it was not counted: $(guard "$S/stages-probe.tsv" "$S/workflows")"
 
 echo 'stage tests passed'

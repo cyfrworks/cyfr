@@ -1026,6 +1026,26 @@ t_queue() {
   touch "$scratch/release-q"; wait "$q"
 }
 
+# --- the default queue deadline outlasts every stage row's hold ----------------
+# scripts/stage.sh queues each row with its hold alone (-t), so a row queued
+# behind another waits heavy-check's default queue deadline: one at or under
+# a row's hold would let a row behind that one give up unrun, exit 75.
+# unheld TABLE: each row of TABLE whose hold the default does not outlast.
+unheld() {
+  local queue
+  queue=$(sed -n 's/^MODE=exclusive; HOLD=[0-9]*; QUEUE=\([1-9][0-9]*\); STATUS=false$/\1/p' "$check")
+  [ "$(printf '%s\n' "$queue" | grep -c .)" = 1 ] || { echo "no one QUEUE default in $check"; return; }
+  awk -F'\t' -v queue="$queue" '!/^#/ && NF == 6 && $4 + 0 >= queue + 0 { print $1 "/" $2 " holds " $4 }' "$1"
+}
+t_queue_default() {
+  local left
+  left=$(unheld "$root/scripts/stages.tsv")
+  [ -z "$left" ] || fail "the default queue deadline does not outlast: $left"
+  # The control: a row that holds as long as the default is caught.
+  { cat "$root/scripts/stages.tsv"; printf 'release\tlong\texclusive\t14400\talways\ttrue\n'; } >"$scratch/stages.tsv"
+  [ "$(unheld "$scratch/stages.tsv")" = 'release/long holds 14400' ] || fail "a row holding the default was not caught: $(unheld "$scratch/stages.tsv")"
+}
+
 # --- stopping the check stops its command and frees the host ------------------
 # signal_running SIGNAL STATUS [LAUNCHER...]
 signal_running() {
@@ -1408,7 +1428,7 @@ cases=(
   exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped
   expired_waiter admission_stopped ticket_order admission_two_stopped stopped_holder lane_race precedence
   proof_among_scoped proof_queue waiters_skipped run_record record_watchdog environment status queued_repeat queue_proof
-  hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped
+  hold hold_frame queue queue_default term int hup usr1 term_queued int_queued hup_queued term_queued_scoped
   term_queued_proof int_queued_proof hup_queued_proof refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains
   await_result await_died await_line await_nested await_bare await_reused await_explicit

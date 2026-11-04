@@ -134,23 +134,24 @@ same worktree refuses, naming the run that holds it.
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
 - Checks run in stages. `scripts/stages.tsv` names what each stage runs,
   and `scripts/stage.sh STAGE` runs it, queuing each check through
-  `scripts/heavy-check.sh` in the lane the table names:
+  `scripts/heavy-check.sh` in the lane the table names. The host answers
+  while you edit and keeps itself; GitHub proves the tree:
   - `save`, after an edit: the format and credo checks, an incremental
     compile with warnings as errors, and the touched tests on SQLite;
-  - `handoff`, before you report a change ready: the format and credo
-    checks, a forced compile on both adapters, the generated files'
-    checks, the touched tests on both adapters (all of `apps/arca/test`
-    when Arca changed), `mix dialyzer` when a `lib` file changed, and the
-    self-test of every harness script you touched;
+  - `handoff`, before you report a change ready, in the scoped and proof
+    lanes only: the format and credo checks, a forced compile on both
+    adapters, the generated files' checks, the touched tests on both
+    adapters (all of `apps/arca/test` when Arca changed), `mix dialyzer`
+    when a `lib` file changed, the light self-test of every harness
+    script you touched, and the install proof when its inputs changed;
   - `pull-request`: the pull request's run on GitHub is the check, and it
     runs every check in parallel. `scripts/stage.sh pull-request` runs
     `scripts/commit-gate.sh`, CI's checks on this host, for working
     offline or reproducing a failing CI job;
-  - `release`: the gate's close, which holds the host for over an hour;
-  - `nightly`, once a day from a worktree of its own, queued like any
-    other check: each adapter's whole suite twice, the tests that failed
-    in one run and passed in the other, the partition weights
-    regenerated into the run's report, and `scripts/janitor.sh`.
+  - `release`: the gate's close, which holds the host for over an hour,
+    run by `scripts/release.sh --gate` for a HEAD with no run on GitHub;
+  - `nightly`: `scripts/janitor.sh`, which a timer on the host runs once
+    a day (the nightly, below).
 
   The touched tests are the changed test files and, for each changed or
   deleted `apps/<app>/lib/<path>.ex`, `apps/<app>/test/<path>_test.exs`
@@ -158,11 +159,20 @@ same worktree refuses, naming the run that holds it.
   lists what it would run. A branch stacked on another sets `STAGE_BASE`
   to that branch, so the handoff stage runs its own changes alone rather
   than everything since `origin/main`.
-- A release tag is cut on a tree its pull request's run proved green:
-  `scripts/release.sh` reads HEAD's check runs through `gh` before it tags
-  HEAD, or HEAD plus a bump commit holding the version lines alone, which
-  the tag's own workflow checks again before it publishes; with `--gate`
-  it runs the release stage here first. Right before it tags it runs the
+
+  The self-tests that need the whole machine, those a workflow runs and
+  no handoff row does, and `go test ./... -race` are the pull request's
+  run's alone: a defect in one shows there. To have one's answer before the pull request, run it
+  here by name in the exclusive lane, as its workflow step runs it:
+  `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or
+  `scripts/heavy-check.sh bash -c 'cd apps/codex && go test ./... -race'`.
+- A release tag is cut on a tree its run on GitHub proved green, and
+  that run is the release's proof: `scripts/release.sh` reads HEAD's
+  check runs through `gh` before it tags HEAD, or HEAD plus a bump commit
+  holding the version lines alone, which the tag's own workflow checks
+  again before it publishes. `--gate` is the fallback for a HEAD with no
+  run: it runs the release stage, the gate's close, here first. Right
+  before it tags it runs the
   dependency audits again (`scripts/dependency-audit.sh`, the same ones CI
   runs), because the advisory feeds they read change independently of the
   tree, and a tag whose own run fails them publishes nothing. The gate's
@@ -185,6 +195,46 @@ same worktree refuses, naming the run that holds it.
   every checkout at the same inputs shares one build.
   `scripts/janitor.sh --dry-run` lists what the nightly janitor would
   remove.
+- The nightly runs on GitHub (`.github/workflows/nightly.yml`), each day
+  at 02:37 Taipei time and on demand: the Test workflow on main's head
+  under its `nightly` input, which runs each test shard's suite twice
+  with the timing formatter, then a job that runs `scripts/lib/nightly.py`
+  over every shard's runs. Its summary and artifacts carry the flake list
+  (each test that failed in one run and passed in the other, or failed in
+  both) and the regenerated `scripts/test-partition-weights.tsv`. When
+  the table differs from the tracked one, the job force-pushes it, on
+  main's head, to the branch `nightly/weights` and prints the
+  `gh pr create` command for its owner: a pull request opened with the
+  job's own token would get no Test run. The weights are seconds on CI's
+  four-vCPU runners, relative, which is all the split reads. The host
+  runs only the janitor, from a user timer at about 04:00; another host
+  copies these two units into `~/.config/systemd/user/`, with its own
+  checkout's path, and runs `systemctl --user enable --now
+  cyfr-nightly.timer` (with `loginctl enable-linger` it runs without a
+  session):
+
+  ```ini
+  # cyfr-nightly.service
+  [Unit]
+  Description=CYFR nightly: the janitor (scripts/stage.sh nightly)
+
+  [Service]
+  Type=oneshot
+  WorkingDirectory=%h/Projects/cyfr
+  ExecStart=%h/Projects/cyfr/scripts/stage.sh nightly
+
+  # cyfr-nightly.timer
+  [Unit]
+  Description=CYFR nightly janitor at about 04:00
+
+  [Timer]
+  OnCalendar=*-*-* 04:00
+  RandomizedDelaySec=10min
+  Persistent=true
+
+  [Install]
+  WantedBy=timers.target
+  ```
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
   `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.
@@ -197,8 +247,9 @@ same worktree refuses, naming the run that holds it.
   record under its own build path. `mix test --failed` reads SQLite's;
   it reaches PostgreSQL's only with
   `MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres`. The split
-  weighs each file by `scripts/test-partition-weights.tsv`; to regenerate
-  it, move it aside, make two runs of
+  weighs each file by `scripts/test-partition-weights.tsv`, which the
+  nightly regenerates; to regenerate it by hand, move it aside, make two
+  runs of
   `CYFR_TEST_TIMINGS_DIR=<absolute dir> scripts/test-partitioned.sh -n 8 -- --formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter`,
   each into a fresh directory, and keep each file's larger
   `elixir scripts/test-timings.exs weights <dir>` value, as its header
