@@ -1494,7 +1494,7 @@ def helper_failure(script):
         repo = helper_repo(script, "0.6.0-alpha.1")
         for path in edited(repo):
             declare(path, "0.6.0-alpha.2")
-        status, output = run_helper(repo, "0.6.0-alpha.2", "y\n")
+        status, output = run_helper(repo, "0.6.0-alpha.2", "y\n0.6.0-alpha.2\n")
         if status == 0 or helper_git(repo, "tag", "-l") or helper_git(repo, "rev-list", "--count", "HEAD") != "1":
             return (
                 f"release.sh tagged 0.6.0-alpha.2 over mix.exs files edited and not committed (exit {status}, "
@@ -1530,6 +1530,13 @@ rm -rf "$2"
 echo moved > moved.txt
 git add moved.txt
 git commit -qm 'another agent'
+"""
+# A release stage during which another agent commits the version bump
+# itself, every mix.exs then declaring the version asked for.
+HELPER_BUMPING_STAGE = """#!/usr/bin/env bash
+rm -rf "$2"
+sed -i 's/version: "[^"]*"/version: "0.1.0"/' mix.exs apps/*/mix.exs
+git commit -qam 'another agent'
 """
 
 
@@ -1579,24 +1586,29 @@ def helper_proof_failure(script):
 
 def helper_bump_failure(script):
     """The tag names the proved commit: a HEAD moved during the --gate
-    stage is not tagged in its place, and no bump is committed on it; a
-    tree with changes is refused under --gate even when the prompt is
-    answered; a bump commit that is not the proved commit plus version
-    lines (a hook adding another line, or another commit landing under it)
-    is not tagged; a bump of the files still behind, the root already at
-    the version, is tagged."""
-    stage = {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": HELPER_MOVING_STAGE}
-    for declared, version in (("0.6.0-alpha.1", "0.6.0-alpha.1"), (HELPER_BASE, "0.1.0")):
-        repo = helper_repo(script, declared, stage)
-        head = helper_git(repo, "rev-parse", "HEAD")
+    stage is refused, nothing tagged and no bump committed, whether the
+    proved commit declares the version already, needs the bump, or the
+    move is another agent's bump to that version; a tree with changes is
+    refused under --gate even when the prompt is answered; a bump commit
+    that is not the proved commit plus version lines declaring the version
+    (a hook adding another line, writing another version or changing a
+    file's mode, or another commit landing under it) is not tagged; a bump
+    of the files still behind, the root already at the version, is
+    tagged."""
+    for declared, version, mover in (
+        ("0.6.0-alpha.1", "0.6.0-alpha.1", HELPER_MOVING_STAGE),
+        (HELPER_BASE, "0.1.0", HELPER_MOVING_STAGE),
+        ("0.0.1", "0.1.0", HELPER_BUMPING_STAGE),
+    ):
+        repo = helper_repo(script, declared, {"dependency-audit.sh": HELPER_AUDIT, "stage.sh": mover})
         status, output = run_helper(repo, version, args=["--gate"], unproven=False, bin_dir=helper_bin())
         tags = helper_git(repo, "tag", "-l")
-        tagged = helper_git(repo, "rev-list", "-n", "1", version) if tags else ""
         moved = helper_git(repo, "log", "-1", "--format=%s")
-        if declared == version and (status != 0 or tagged != head):
-            return f"release.sh tagged {tagged!r}, not the proved {head!r}, after HEAD moved (exit {status}): {output.strip()[-300:]}"
-        if declared != version and (status == 0 or tags or moved != "another agent"):
-            return f"release.sh bumped and tagged {tags!r} on a HEAD moved during the proof (exit {status}): {output.strip()[-300:]}"
+        if status == 0 or tags or moved != "another agent" or "HEAD moved from the proved" not in output:
+            return (
+                f"release.sh asked for {version} on a commit declaring {declared} went on after HEAD moved during the proof "
+                f"(exit {status}, tags {tags!r}, last commit {moved!r}): {output.strip()[-300:]}"
+            )
     repo = helper_repo(script, "0.6.0-alpha.1")
     with open(os.path.join(repo, "notes.txt"), "w") as f:
         f.write("not committed\n")
@@ -1612,6 +1624,21 @@ def helper_bump_failure(script):
     status, output = run_helper(repo, "0.1.0")
     if status == 0 or helper_git(repo, "tag", "-l") or helper_git(repo, "rev-parse", "HEAD") != head:
         return f"release.sh tagged a bump commit holding a line other than the version (exit {status}): {output.strip()[-300:]}"
+    # A hook that changes the bump as it is committed: another version on
+    # an application's line, or the root's mode.
+    for name, change in (
+        ("another version", "sed -i 's/version: \"0.1.0\"/version: \"9.9.9\"/' apps/arca/mix.exs\ngit add apps/arca/mix.exs"),
+        ("a mode change", "chmod +x mix.exs\ngit add mix.exs"),
+    ):
+        repo = helper_repo(script, HELPER_BASE)
+        hook = os.path.join(repo, ".git", "hooks", "pre-commit")
+        with open(hook, "w") as f:
+            f.write(f"#!/bin/sh\n{change}\n")
+        os.chmod(hook, 0o755)
+        head = helper_git(repo, "rev-parse", "HEAD")
+        status, output = run_helper(repo, "0.1.0")
+        if status == 0 or helper_git(repo, "tag", "-l") or helper_git(repo, "rev-parse", "HEAD") != head:
+            return f"release.sh tagged a bump commit a hook gave {name} (exit {status}): {output.strip()[-300:]}"
     # A git that lands another commit on HEAD right before the bump's.
     wrap = os.path.join(scratch(), "helper-landing-bin")
     if not os.path.isdir(wrap):
@@ -1677,7 +1704,6 @@ RELEASE_SH_MUTANTS = [
         lambda t: t.replace('if [ -n "$(git status --porcelain -- "${MIXFILES[@]}")" ]; then', "if false; then", 1),
     ),
     ("the Test workflow's run unread", lambda t: t.replace('if [ "$TEST_RUN" != "completed success" ]; then', "if false; then", 1)),
-    ("HEAD tagged for the proved commit", lambda t: t.replace('git tag -a "$VERSION" "$HEAD_SHA"', 'git tag -a "$VERSION"', 1)),
     ("a bump on a moved HEAD", lambda t: t.replace('if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then', "if false; then", 1)),
     (
         "a tree with changes let through under --gate",
@@ -1687,6 +1713,8 @@ RELEASE_SH_MUTANTS = [
         "the bump's lines unread",
         lambda t: t.replace("! grep -qvE '^[+-][[:space:]]*version: \"[^\"]*\",?[[:space:]]*$' <<< \"$lines\"", ":", 1),
     ),
+    ("the bump's versions unread", lambda t: t.replace(' || ! all_declare "$BUMP"; then', "; then", 1)),
+    ("the bump's modes unread", lambda t: t.replace("""  [ -z "$(awk '!(substr($1, 2) == $2 && $5 == "M")' <<< "$raw")" ] || return 1\n""", "", 1)),
     (
         "the bump's parent unread",
         lambda t: t.replace('if [ "$(git rev-parse "$BUMP^")" != "$HEAD_SHA" ] || ! version_only', "if ! version_only", 1),

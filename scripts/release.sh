@@ -217,10 +217,13 @@ sedi() {
 }
 
 # Whether commit $2 is commit $1 with nothing changed but version lines
-# of the mix.exs files: every file it changes is one of them, and every
-# line it removes or adds is a `version: "..."` line.
+# of the mix.exs files: every file it changes is one of them, modified in
+# place with its mode kept, and every line it removes or adds is a
+# `version: "..."` line.
 version_only() {
-  local names lines
+  local raw names lines
+  raw=$(git diff-tree -r --no-renames "$1" "$2") || return 1
+  [ -z "$(awk '!(substr($1, 2) == $2 && $5 == "M")' <<< "$raw")" ] || return 1
   names=$(git diff --no-ext-diff --name-only "$1" "$2") || return 1
   [ -n "$names" ] || return 1
   [ -z "$(grep -vxF -f <(printf '%s\n' "${MIXFILES[@]}") <<< "$names")" ] || return 1
@@ -228,34 +231,40 @@ version_only() {
   ! grep -qvE '^[+-][[:space:]]*version: "[^"]*",?[[:space:]]*$' <<< "$lines"
 }
 
-# Whether every mix.exs declares VERSION and no other version. The
-# comparison is of whole strings, so VERSION's dots are no wildcards and
-# 0.9.0 is not 0.9.0-rc.1.
+# Whether every mix.exs declares VERSION and no other version, in commit
+# $1 when one is given, else in the working tree. The comparison is of
+# whole strings, so VERSION's dots are no wildcards and 0.9.0 is not
+# 0.9.0-rc.1.
 all_declare() {
   local f found
   for f in "${MIXFILES[@]}"; do
-    found=$(grep -oE 'version: "[^"]*"' "$f" || true)
+    if [ "$#" -gt 0 ]; then
+      found=$(git show "$1:$f" | grep -oE 'version: "[^"]*"' || true)
+    else
+      found=$(grep -oE 'version: "[^"]*"' "$f" || true)
+    fi
     [ -n "$found" ] || return 1
     [ -z "$(grep -vxF "version: \"$VERSION\"" <<< "$found")" ] || return 1
   done
 }
 
-if all_declare; then
-  # HEAD's commits already bumped every mix.exs, the files being HEAD's
-  # (above): the tag names the proved commit and no commit is made. It
-  # names HEAD_SHA, not HEAD, which another agent sharing this checkout
-  # may have moved since the proof.
+# The tag and the bump go on the proved commit alone: a HEAD that another
+# agent sharing this checkout moved during the proof is refused before
+# anything is made, whatever the move changed.
+if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
+  echo "Error: HEAD moved from the proved $HEAD_SHA to $(git rev-parse HEAD) during the proof; nothing was committed or tagged."
+  exit 1
+fi
+
+if all_declare "$HEAD_SHA"; then
+  # The proved commit already bumped every mix.exs: the tag names it and
+  # no commit is made.
   echo "Every mix.exs declares $VERSION already:"
   grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}"
   git tag -a "$VERSION" "$HEAD_SHA" -m "Release $VERSION"
   echo ""
   echo "Done! Version $VERSION tagged at $(git rev-parse --short "$HEAD_SHA")."
 else
-  # The bump commit goes on the proved commit alone.
-  if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
-    echo "Error: HEAD moved from the proved $HEAD_SHA to $(git rev-parse HEAD) during the proof; nothing was committed or tagged."
-    exit 1
-  fi
   echo "Bumping version to $VERSION..."
 
   # Every declared version, a pre-release's included, becomes VERSION.
@@ -289,12 +298,14 @@ else
   # (`git commit --only -- <paths>`), where `git add -A` or a plain
   # `git commit` would have swept other changes, unstaged or staged, into
   # the release. The commit is then held, before the tag, to the proved
-  # commit as its parent and to version lines of those files alone (a
-  # file already at VERSION is not among them), and the tag names it.
+  # commit as its parent, to version lines of those files alone (a file
+  # already at VERSION is not among them) and to every one declaring
+  # VERSION as committed, so a hook cannot change what is tagged; the tag
+  # names it.
   git commit --only -m "$COMMIT_MSG" -- "${MIXFILES[@]}"
   BUMP="$(git rev-parse HEAD)"
-  if [ "$(git rev-parse "$BUMP^")" != "$HEAD_SHA" ] || ! version_only "$HEAD_SHA" "$BUMP"; then
-    echo "Error: the bump commit $BUMP is not the proved $HEAD_SHA plus version lines of the mix.exs files:"
+  if [ "$(git rev-parse "$BUMP^")" != "$HEAD_SHA" ] || ! version_only "$HEAD_SHA" "$BUMP" || ! all_declare "$BUMP"; then
+    echo "Error: the bump commit $BUMP is not the proved $HEAD_SHA plus version lines of the mix.exs files declaring $VERSION:"
     git diff --no-ext-diff --stat "$HEAD_SHA" "$BUMP" | sed 's/^/  /'
     if [ "$(git rev-parse "$BUMP^")" = "$HEAD_SHA" ]; then
       git reset --soft HEAD~1
