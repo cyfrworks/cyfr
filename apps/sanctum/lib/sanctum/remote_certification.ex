@@ -521,7 +521,8 @@ defmodule Sanctum.RemoteCertification do
   record carries in its `at_home`, and what their home's assertion must
   sign. `:unavailable` for a stored preview that does not read.
   """
-  @spec preview_digest(%{preview: String.t()}) :: {:ok, String.t()} | {:error, :unavailable}
+  @spec preview_digest(%{required(:preview) => String.t(), optional(atom()) => term()}) ::
+          {:ok, String.t()} | {:error, :unavailable}
   def preview_digest(%{preview: stored}) when is_binary(stored) do
     with {:ok, map} <- Jason.decode(stored),
          {:ok, preview} <- Prima.Confirmation.Preview.decode(map) do
