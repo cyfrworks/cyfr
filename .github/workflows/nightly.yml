@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# The nightly: the Test workflow on main's head under its nightly input, so
+# each test shard runs the suite twice and keeps both runs; then the reports
+# job lays the runs out as scripts/lib/nightly.py reads them, writes the
+# flake list and the regenerated partition weights into its summary and its
+# artifacts, and, when the weights differ from the tracked table, leaves
+# them on the branch nightly/weights. A pull request opened with this run's
+# token would get no Test run, so the summary prints the command its owner
+# opens it with.
+name: Nightly
+on:
+  schedule:
+    # 02:37 in Taipei, the verification host's and its owner's quiet hour.
+    - cron: '37 18 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+jobs:
+  test:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/test.yml
+    with:
+      nightly: true
+
+  reports:
+    name: The flake list and the partition weights
+    needs: test
+    # A red run is evidence too: a test that failed in one run and passed in
+    # the other is what the flake list is for.
+    if: ${{ !cancelled() && github.repository == 'cyfrworks/cyfr' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # scripts/test-timings.exs, which the weights read the timings with,
+      # runs on Elixir alone.
+      - name: Set up Elixir
+        uses: ./.github/actions/setup-elixir
+        with:
+          build-cache: 'none'
+      - name: Download the test shards' runs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nightly-*-shard-*
+          path: ${{ runner.temp }}/shards
+      # Each adapter's run n is one invocation for nightly.py: every shard's
+      # output in turn, as <adapter>-<n>.log, whose kept line names the one
+      # run directory that gathers every shard's partition logs and
+      # assignments; SQLite's timings gather as timings-<n>. A run that
+      # lacks a partition of its split is incomplete: its tests' failures
+      # are not all there, so the step fails and leaves no weights.
+      - name: Write the flake list and the weights
+        id: reports
+        run: |
+          set -euo pipefail
+          shards="$RUNNER_TEMP/shards" logdir="$RUNNER_TEMP/nightly" complete=true missing=
+          mkdir -p "$logdir"
+          for db in sqlite postgres; do
+            for n in 1 2; do
+              run="$logdir/$db-$n"
+              mkdir -p "$run/assign"
+              : >"$run.log"
+              for shard in "$shards/nightly-$db-shard-"*; do
+                [ -f "$shard/$n/runner.out" ] || continue
+                sed "s|^==> logs and disposable resources kept: .*|==> logs and disposable resources kept: $run|" "$shard/$n/runner.out" >>"$run.log"
+                for log in "$shard/$n/run/p"[0-9]*.log; do
+                  [ -f "$log" ] || continue
+                  i=${log##*/p} && i=${i%.log}
+                  cp "$log" "$run/"
+                  if [ -f "$shard/$n/run/assign/p$i" ]; then cp "$shard/$n/run/assign/p$i" "$run/assign/"; fi
+                done
+                if [ "$db" = sqlite ]; then
+                  mkdir -p "$logdir/timings-$n"
+                  find "$shard/$n/timings" -maxdepth 1 -name 'p*.tsv' -exec cp -t "$logdir/timings-$n/" {} + 2>/dev/null || :
+                fi
+              done
+              if ! awk 'match($0, /^==> partition [0-9]+\/[0-9]+$/) { split($3, f, "/"); seen[f[1]] = 1; total = f[2] }
+                END { for (i = 1; i <= total; i++) if (!(i in seen)) exit 1; exit !total }' "$run.log"; then
+                echo "::error::$db run $n lacks a partition of its split: a shard's run is missing"
+                missing="$missing $db-$n" complete=false
+              fi
+            done
+          done
+          python3 -I scripts/lib/nightly.py flakes "$logdir" >"$logdir/flakes.txt"
+          {
+            echo '## Flakes'
+            echo
+            if ! $complete; then
+              echo "Incomplete: a shard's run is missing from$missing, so the tests of its partitions are not here, and no weights are written."
+              echo
+            fi
+            echo '```'
+            cat "$logdir/flakes.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          $complete || exit 1
+          weights=$(python3 -I scripts/lib/nightly.py weights "$logdir")
+          differ=${weights%% *}
+          [[ $differ =~ ^[0-9]+$ ]] || { echo "::error::the weights said: $weights"; exit 1; }
+          {
+            echo '## Partition weights'
+            echo
+            echo "$weights."
+            echo
+            echo '<details><summary>The regenerated table</summary>'
+            echo
+            echo '```'
+            cat "$logdir/test-partition-weights.tsv"
+            echo '```'
+            echo '</details>'
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "differ=$differ" >>"$GITHUB_OUTPUT"
+      - name: Upload the reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nightly-reports
+          path: |
+            ${{ runner.temp }}/nightly/flakes.txt
+            ${{ runner.temp }}/nightly/test-partition-weights.tsv
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+      # The branch holds main's head and the regenerated table, replaced
+      # each night the table differs.
+      - name: Leave the weights on nightly/weights
+        if: github.ref == 'refs/heads/main' && steps.reports.outputs.differ != '' && steps.reports.outputs.differ != '0'
+        env:
+          DIFFER: ${{ steps.reports.outputs.differ }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/nightly/test-partition-weights.tsv" scripts/test-partition-weights.tsv
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "The partition weights are the nightly's: each test file's larger time of two CI runs of ${GITHUB_SHA::9}" \
+            -- scripts/test-partition-weights.tsv
+          git push --force origin HEAD:refs/heads/nightly/weights
+          command="gh pr create --repo $GITHUB_REPOSITORY --base main --head nightly/weights --title 'The partition weights from the nightly of $(date -u +%F)' --body '$DIFFER rows differ from the tracked table; regenerated by $RUN_URL'"
+          echo "$command"
+          {
+            echo
+            echo "The table is on nightly/weights. Its owner opens the pull request:"
+            echo
+            echo '```'
+            echo "$command"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

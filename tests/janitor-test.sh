@@ -116,8 +116,16 @@ record "$d5" '' "$HEAVY_CHECK_LOCK.proof.holder"
 # A stale record, its group and watchdog gone, for a pid that still lives.
 record "$l2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.slot3.holder"
 plant_container other-project-db
-plant_container cyfr-gate-4242-boot-psql
-touch "$DOCKER_STUB/networks/cyfr-gate-4242-boot-net"
+# Rule 1: what a commit gate made, named by its pid: a gone gate's
+# objects and scratch directories, and a running gate's.
+gate_dead=$(dead_pid); gate_live=$(live_pid)
+for g in "$gate_dead" "$gate_live"; do
+  plant_container "cyfr-gate-$g-boot-psql"
+  touch "$DOCKER_STUB/networks/cyfr-gate-$g-harness-net" "$DOCKER_STUB/volumes/cyfr-gate-$g-harness-data"
+  plant_image "cyfr-gate-$g/cyfr:push" '' "$OLD"
+  plant_image "cyfr-gate-$g-harness-cyfr-tailscale-standin:run1" '' "$OLD"
+  mkdir -p "$S/tmp/cyfr-gate-$g-gate" "$S/tmp/cyfr-gate-$g-harness.tools"
+done
 # Rule 1: the install-screen proof's scratch directories, one of a finished
 # run and one of a live run, beside another directory named under the
 # finished run's prefix, which that run may keep, and one under no prefix.
@@ -263,8 +271,23 @@ has main "kept container cyfr-$seed-$d4-proof: its watchdog $watchdog is alive"
 has main "kept container cyfr-$seed-$d5-proof: its holder record names no group"
 has main "kept container cyfr-$seed-$l2-proof: its pid $l2 is alive"
 for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do there "$DOCKER_STUB/containers/cyfr-$seed-$pid-proof"; done
-for name in other-project-db cyfr-gate-4242-boot-psql; do there "$DOCKER_STUB/containers/$name"; lacks main "$name"; done
-lacks main cyfr-gate-4242-boot-net
+there "$DOCKER_STUB/containers/other-project-db"; lacks main other-project-db
+
+begin "rule 1: a gone gate's objects and scratch directories go by its pid; a running gate's stay"
+gone "$DOCKER_STUB/containers/cyfr-gate-$gate_dead-boot-psql"; has main "removed container cyfr-gate-$gate_dead-boot-psql"
+gone "$DOCKER_STUB/networks/cyfr-gate-$gate_dead-harness-net"; has main "removed network cyfr-gate-$gate_dead-harness-net"
+gone "$DOCKER_STUB/volumes/cyfr-gate-$gate_dead-harness-data"; has main "removed volume cyfr-gate-$gate_dead-harness-data"
+for t in "cyfr-gate-$gate_dead/cyfr:push" "cyfr-gate-$gate_dead-harness-cyfr-tailscale-standin:run1"; do
+  gone "$(image_file "$t")"; has main "removed image $t"
+done
+for d in gate harness.tools; do
+  gone "$S/tmp/cyfr-gate-$gate_dead-$d"; has main "removed directory $S/tmp/cyfr-gate-$gate_dead-$d"
+  there "$S/tmp/cyfr-gate-$gate_live-$d"; has main "kept directory $S/tmp/cyfr-gate-$gate_live-$d: its pid $gate_live is alive"
+done
+there "$DOCKER_STUB/containers/cyfr-gate-$gate_live-boot-psql"
+has main "kept container cyfr-gate-$gate_live-boot-psql: its pid $gate_live is alive"
+there "$(image_file "cyfr-gate-$gate_live/cyfr:push")"
+has main "kept image cyfr-gate-$gate_live/cyfr:push: its pid $gate_live is alive"
 
 begin "rule 1: the install-screen proof's scratch directory, holding a guest's key, goes once its run is finished"
 gone "$scratch_done"; has main "removed directory $scratch_done"
@@ -391,6 +414,68 @@ rm "$DOCKER_STUB/run-fail" "$DOCKER_STUB/rm-fail"
 grep -qF "failed database $db: stub: the run failed" "$S/failing.out" || fail 'the failed drop is not named'
 grep -qF "failed image $t0: Error response from daemon: stub refuses $t0" "$S/failing.out" || fail 'the failed image removal is not named'
 there "$S/tmp/cyfr-t.r5"; there "$S/tmp/cyfr-t.r5/p1/database-created"; there "$(image_file "$t0")"
+
+begin "a listing that fails fails the run; without the worktrees' list no image or base-image set goes"
+# docker ps and git worktree list fail; everything else answers as before.
+mkdir -p "$S/list-bin"
+cat >"$S/list-bin/docker" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = ps ]; then echo 'stub: ps fails' >&2; exit 1; fi
+exec $(command -v docker) "\$@"
+EOF
+cat >"$S/list-bin/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *' worktree list '*) echo 'stub: worktree list fails' >&2; exit 128 ;; esac
+exec $(command -v git) "\$@"
+EOF
+chmod +x "$S/list-bin/docker" "$S/list-bin/git"
+dl=$(dead_pid)
+plant_container "cyfr-$seed-$dl-listing"
+# A gone gate's network and scratch directory, which a container of the
+# gate the failed listing did not show could still hold.
+gl=$(dead_pid)
+touch "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"
+mkdir -p "$S/tmp/cyfr-gate-$gl-harness.tools"
+sum8=8888888888888888888888888888888888888888888888888888888888888888
+mkdir -p "$S/cache/$sum8"; age 30 "$S/cache/$sum8"
+there "$(image_file "$t0")"
+status=0; PATH="$S/list-bin:$PATH" janitor listing --keep-build-cache || status=$?
+[ "$status" = 1 ] || fail "exited $status, not 1"
+has listing 'failed listing containers: stub: ps fails'
+has listing 'failed listing worktrees: stub: worktree list fails'
+there "$DOCKER_STUB/containers/cyfr-$seed-$dl-listing"
+there "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"; lacks listing "network cyfr-gate-$gl-harness-net"
+there "$S/tmp/cyfr-gate-$gl-harness.tools"
+has listing "kept directory $S/tmp/cyfr-gate-$gl-harness.tools: the Docker objects could not all be listed"
+there "$(image_file "$t0")"; lacks listing "$t0"
+there "$S/cache/$sum8"; lacks listing "$sum8"
+janitor listing-after --keep-build-cache || fail "the next run exited $?"
+gone "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"; gone "$S/tmp/cyfr-gate-$gl-harness.tools"
+
+begin "a gone gate whose container cannot be removed keeps its network, image and scratch directory"
+mkdir -p "$S/rm-container-bin"
+cat >"$S/rm-container-bin/docker" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = rm ]; then echo 'stub: rm fails' >&2; exit 1; fi
+exec $(command -v docker) "\$@"
+EOF
+chmod +x "$S/rm-container-bin/docker"
+gr=$(dead_pid)
+plant_container "cyfr-gate-$gr-boot-psql"
+touch "$DOCKER_STUB/networks/cyfr-gate-$gr-harness-net"
+plant_image "cyfr-gate-$gr/cyfr:push" '' "$OLD"
+mkdir -p "$S/tmp/cyfr-gate-$gr-gate"
+status=0; PATH="$S/rm-container-bin:$PATH" janitor rm-container --keep-build-cache || status=$?
+[ "$status" = 1 ] || fail "exited $status, not 1"
+has rm-container "failed container cyfr-gate-$gr-boot-psql: stub: rm fails"
+there "$DOCKER_STUB/containers/cyfr-gate-$gr-boot-psql"
+there "$DOCKER_STUB/networks/cyfr-gate-$gr-harness-net"
+has rm-container "kept network cyfr-gate-$gr-harness-net: an object of its run before it could not be removed"
+there "$(image_file "cyfr-gate-$gr/cyfr:push")"
+there "$S/tmp/cyfr-gate-$gr-gate"
+has rm-container "kept directory $S/tmp/cyfr-gate-$gr-gate: its run's Docker objects could not all be removed"
+janitor rm-container-after --keep-build-cache || fail "the next run exited $?"
+gone "$DOCKER_STUB/containers/cyfr-gate-$gr-boot-psql"; gone "$S/tmp/cyfr-gate-$gr-gate"
 
 # The interleavings of a janitor and an image.sh call for one tag, from a
 # clone, which no worktree of the repository speaks for.

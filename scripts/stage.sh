@@ -7,23 +7,19 @@
 # The stages are save (after an edit), handoff (before a change is
 # reported ready), pull-request (the gate, CI's checks on this host, for
 # offline work and reproducing a CI failure: the pull request's run on
-# GitHub is the check), release (the gate's close) and nightly. What each
-# runs is scripts/stages.tsv, one row per check:
+# GitHub is the check), release (the gate's close, which
+# `scripts/release.sh --gate` runs for a HEAD with no run on GitHub) and
+# nightly (the janitor, which a timer on the host runs once a day). What
+# each runs is scripts/stages.tsv, one row per check:
 #   stage<TAB>check<TAB>lane<TAB>hold<TAB>when<TAB>command
 #   stage    one of the five above
 #   check    [a-z0-9-]+, unique within its stage
-#   lane     none, which runs directly and admits only reads of seconds:
-#            exactly `mix format --check-formatted`, or one `git grep`
-#            with no shell operator (`;`, `&`, `|`, `<`, `>`, a backquote,
-#            `$(`), in this grammar and no other: the options -n, -l, -c,
-#            -q, -i, -w, -E and -F; -e, whose next word is the pattern;
-#            one pattern; `--` and the pathspecs after it. Every other
-#            word that begins with - is refused, bundled or quoted. Each
-#            word is plain ([A-Za-z0-9._/:@%+=,^-]) or quoted whole, '...'
-#            or "..." with no $, backquote or backslash inside; or scoped,
-#            proof or exclusive, the scripts/heavy-check.sh lane it queues
-#            in (-s, -p or no flag)
-#   hold     - for none, else heavy-check's -t in seconds
+#   lane     scoped, proof or exclusive, the scripts/heavy-check.sh lane it
+#            queues in (-s, -p or no flag)
+#   hold     heavy-check's -t in seconds. A row waits for the host as long
+#            as heavy-check's default queue deadline, which is longer than
+#            every hold here (tests/heavy-check-test.sh holds the two
+#            together), so a row queued behind any one other row still runs
 #   when     always; tests, when the stage's touched tests are not none;
 #            or comma-separated path globs with Git's :(glob) meaning,
 #            when a path of the changed set matches one. Only save and
@@ -122,43 +118,6 @@ cd "$root" || refuse 69 "cannot enter $root"
 table=scripts/stages.tsv
 [ -f "$table" ] && [ -r "$table" ] || refuse 65 "$table: there is no stage table to read"
 
-# Whether a none row's git grep, its words after `git grep` in $1, keeps
-# the lane's grammar (the header's); $why says why not.
-single_word="^'([^']*)'(.*)$"
-double_word='^"([^"$`\]*)"(.*)$'
-plain_word='^([A-Za-z0-9._/:@%+=,^-]+)(.*)$'
-none_grep() {
-  local rest=$1 word pattern=false after=false next_is_pattern=false
-  why=
-  while :; do
-    rest=${rest#"${rest%%[! ]*}"}
-    [ -n "$rest" ] || break
-    if [[ $rest =~ $single_word ]] || [[ $rest =~ $double_word ]] || [[ $rest =~ $plain_word ]]; then
-      word=${BASH_REMATCH[1]} rest=${BASH_REMATCH[2]}
-    else
-      rest=x
-    fi
-    case $rest in
-      ''|' '*) ;;
-      *) why="the none lane's git grep takes plain or quoted words: git grep $1"; return 1 ;;
-    esac
-    if $next_is_pattern; then pattern=true next_is_pattern=false; continue; fi
-    $after && continue
-    case $word in
-      --) after=true ;;
-      -n|-l|-c|-q|-i|-w|-E|-F) ;;
-      -e)
-        $pattern && { why="the none lane's git grep takes one pattern before --, not a second: -e"; return 1; }
-        next_is_pattern=true ;;
-      -*) why="the none lane's git grep takes only -n, -l, -c, -q, -i, -w, -E, -F, -e PATTERN and --, not: $word"; return 1 ;;
-      *)
-        $pattern && { why="the none lane's git grep takes one pattern before --, not a second: $word"; return 1; }
-        pattern=true ;;
-    esac
-  done
-  if $next_is_pattern || ! $pattern; then why="the none lane's git grep names one pattern: git grep $1"; return 1; fi
-}
-
 # The table, read whole and refused at its first bad line.
 declare -A seen=()
 rows=()
@@ -176,11 +135,10 @@ while IFS= read -r line || [ -n "$line" ]; do
   [ -z "${seen[$r_stage/$r_check]+set}" ] || refuse 65 "$table:$number: $r_stage has a second check called $r_check"
   seen[$r_stage/$r_check]=1
   case $r_lane in
-    none) [ "$r_hold" = - ] || refuse 65 "$table:$number: a row in the none lane holds nothing: its hold is -" ;;
-    scoped|proof|exclusive)
-      [[ $r_hold =~ ^[1-9][0-9]{0,5}$ ]] || refuse 65 "$table:$number: the hold '$r_hold' is not seconds" ;;
+    scoped|proof|exclusive) ;;
     *) refuse 65 "$table:$number: no lane is called '$r_lane'" ;;
   esac
+  [[ $r_hold =~ ^[1-9][0-9]{0,5}$ ]] || refuse 65 "$table:$number: the hold '$r_hold' is not seconds"
   case $r_when in
     always) ;;
     tests) [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take tests" ;;
@@ -189,15 +147,6 @@ while IFS= read -r line || [ -n "$line" ]; do
       [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take globs" ;;
   esac
   [ -n "${r_command//[[:space:]]/}" ] || refuse 65 "$table:$number: the command is empty"
-  if [ "$r_lane" = none ]; then
-    case $r_command in
-      *[\;\&\|\<\>\`]*|*'$('*)
-        refuse 65 "$table:$number: the none lane runs one command and no shell operator, not: $r_command" ;;
-      'mix format --check-formatted') ;;
-      'git grep '*) none_grep "${r_command#git grep }" || refuse 65 "$table:$number: $why" ;;
-      *) refuse 65 "$table:$number: the none lane runs only mix format --check-formatted and git grep, not: $r_command" ;;
-    esac
-  fi
   if [ "$r_stage" = "$stage" ]; then rows+=("$number"$'\t'"$line"); fi
 done <"$table"
 
@@ -291,7 +240,6 @@ for i in ${rows[@]+"${!rows[@]}"}; do
   started=$SECONDS
   if [ -n "$reason" ]; then echo "$check: skipped ($reason) $((SECONDS - started))s"; continue; fi
   case $lane in
-    none) bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;
     scoped) scripts/heavy-check.sh -s -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;
     proof) scripts/heavy-check.sh -p -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;
     exclusive) scripts/heavy-check.sh -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;

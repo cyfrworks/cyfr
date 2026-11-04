@@ -12,7 +12,7 @@ names. CI cannot read that source, so CI never runs this proof; without
 `CYFR_RUN_DIR` the script says it did not run and why, and exits 0.
 
 ```bash
-CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -- tests/handle-proof/run.sh
+CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -p -- tests/handle-proof/run.sh
 ```
 
 ## What runs
@@ -26,7 +26,7 @@ CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -- tests/handle-proof/ru
 The model checks run independently with
 `node --test tests/handle-proof/models-test.mjs`. The PostgreSQL tamper
 helper's checks run with
-`scripts/heavy-check.sh -- bash tests/handle-proof/registry-test.sh`.
+`scripts/heavy-check.sh -s -- bash tests/handle-proof/registry-test.sh`.
 
 The directory's whole rows are read from `directory.identity_log_entries`
 in the registry's PostgreSQL. Their canonical entries, hashes, lengths
