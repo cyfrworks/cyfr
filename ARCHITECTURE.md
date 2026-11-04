@@ -72,7 +72,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Sanctum: decisions and the gate
 
 - Identity, sessions, doors, keys, devices, passkeys, recovery and fresh confirmation.
-- Membership, tenancy, shared threads and their people (`Sanctum.SharedThreads`), caps and the caller context (`Sanctum.Caller`).
+- Tenancy (a person's own athanor, `Sanctum.Tenancy`), shared threads and their people (`Sanctum.SharedThreads`), caps and the caller context (`Sanctum.Caller`).
 - Consent, the vault and its shares, credential attachment and the credentials tinctures are served under.
 - The gate: the operation table (`Sanctum.Catalog`), its entries (`Sanctum.Gate`, `Sanctum.Streams`), discovery, the request log and the decision record (`Sanctum.Decisions`).
 - No Ecto and no broadcast; it alone reads security rows, and its internal strategies are behaviours selected by configuration.
@@ -184,7 +184,7 @@ The person decides; Sanctum validates, records and checks; and the place that re
 - The athanor is the one tenancy unit, one person's own: their assistant, vault, components, files, schedules, keys, webhooks, devices and storage. Nobody else sits in it, and every person admitted to a CYFR has one there, minted in their admission.
 - Tenant identity comes from the authenticated actor, never from a guest's argument, and ownership travels with rows, blobs, events and cache keys.
 - An athanor's rows stay its own. The one widening across athanors is a share, an entry its owner offers to everyone or to one shared thread: a person in its audience sees the entry only through the share, never its material, and a recipient uses it only through the share their own consent names, read under the owner's athanor (`Sanctum.Shares`).
-- A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions, never an athanor's decisions. The installation's first person, made by its setup or by a restore onto it empty, is its platform administrator, and no other grant exists.
+- A platform administrator holds a capability over the instance, a mark on their person row (`users.platform_admin_at`), and works in their own athanor alone: what the instance holds for them is its own, such as the host's decisions, never another athanor's. The installation's first person, made by its setup or by a restore onto it empty, carries the mark, written by that admission and by nothing else; a denial clears it.
 - A shared thread belongs to no athanor: a title, its people, each equal, and their messages and attachments, with no assistant, approval or execution in it. Every read and write of one checks the caller's seat (`Sanctum.SharedThreads`); a pair is a shared thread of two fixed at its birth, and the platform administrator reads a thread only where they sit.
 - Outsiders learn nothing of an athanor: anyone but its person gets the answer a missing athanor gets.
 - Nothing lands in an athanor its person did not accept.

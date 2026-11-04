@@ -13,13 +13,11 @@ defmodule Sanctum.Issuance do
   # `:issuance_snapshot_permitted` — a `:generation_snapshot` read from the
   # rows (`Sanctum.Tenancy.generation_snapshot/2`). Neither is
   # `{:error, :missing_generation}`, and so is a key with no person behind
-  # it and a person focused on an athanor through no membership. The rows it names are then locked and reread inside the issuing
+  # it. The rows it names are then locked and reread inside the issuing
   # transaction (`Arca.SecurityTransitions.Issuance`): the person must be
   # active at the generation read, the focused athanor active at its
-  # generation read, the membership that authorized the focus still the
-  # person's active seat in that athanor — a platform row stands only for
-  # an issuance that names no athanor — and the credential the context
-  # holds still live. A generation that moved is
+  # generation read and the person's own (its `owner_user_id`), and the
+  # credential the context holds still live. A generation that moved is
   # `{:error, :stale_generation}`; a row that no longer stands is
   # `{:error, :unauthenticated}` — the credential the issuing context
   # presents opens nothing any more.
@@ -29,7 +27,7 @@ defmodule Sanctum.Issuance do
   # :device`), never under a snapshot, an `:identity` binding or a
   # session's: anything else is `{:error, :missing_generation}`, so a
   # device is never taken for a sign-in or a session. Its client is locked
-  # after the person, the athanor and the seat, and the issuance stands
+  # after the person and the athanor, and the issuance stands
   # only while that client is active and the person's own in the athanor
   # the context works in, the context's credential deadline (its
   # certificate's expiry, of which a renewal exchange's context has none)
@@ -79,7 +77,7 @@ defmodule Sanctum.Issuance do
     do: "Your standing changed since this session was read; sign in again"
 
   def standing_refusal(:unauthenticated),
-    do: "Your session, membership or athanor no longer stands; sign in again"
+    do: "Your session or athanor no longer stands; sign in again"
 
   def standing_refusal(:not_standing), do: Prima.Refusal.message(:not_standing)
 
@@ -88,7 +86,6 @@ defmodule Sanctum.Issuance do
           user_generation: pos_integer(),
           athanor_id: String.t() | nil,
           athanor_generation: pos_integer() | nil,
-          membership_id: String.t() | nil,
           source: Arca.SecurityTransitions.Issuance.source(),
           identity: Context.device_identity() | nil,
           key_epoch: String.t() | nil
@@ -126,7 +123,6 @@ defmodule Sanctum.Issuance do
          user_generation: user_generation,
          athanor_id: athanor_id,
          athanor_generation: snapshot.athanor_generation,
-         membership_id: nil,
          source: nil,
          identity: nil,
          key_epoch: nil
@@ -141,7 +137,6 @@ defmodule Sanctum.Issuance do
   defp from_binding(%Context{user_id: user_id, credential_binding: %{} = binding} = ctx)
        when is_binary(user_id) do
     with :ok <- generation_for(ctx.athanor_id, binding.athanor_generation),
-         :ok <- basis_for(ctx.athanor_id, binding.focus_basis),
          {:ok, source} <- source(ctx, binding) do
       {:ok,
        %{
@@ -149,7 +144,6 @@ defmodule Sanctum.Issuance do
          user_generation: binding.user_generation,
          athanor_id: ctx.athanor_id,
          athanor_generation: binding.athanor_generation,
-         membership_id: if(is_binary(binding.focus_basis), do: binding.focus_basis),
          source: source,
          identity: identity(source, binding),
          key_epoch: key_epoch(source, binding)
@@ -165,21 +159,10 @@ defmodule Sanctum.Issuance do
   defp generation_for(_athanor_id, generation) when is_integer(generation), do: :ok
   defp generation_for(_athanor_id, _generation), do: {:error, :missing_generation}
 
-  # A focused person names the membership that authorized the focus, and
-  # the seat check below rereads it; a key's focus is the key itself. A
-  # focus no membership backs is not an issuing standing. This checks the
-  # shape alone and authorizes nothing: which row the id names, and whether
-  # it seats the person in the athanor the issuance names, is decided on
-  # the stored row, locked, by `seat/2`.
-  defp basis_for(nil, _basis), do: :ok
-  defp basis_for(_athanor_id, :key), do: :ok
-  defp basis_for(_athanor_id, basis) when is_binary(basis), do: :ok
-  defp basis_for(_athanor_id, _basis), do: {:error, :missing_generation}
-
   # The credential the context holds, and the one assembly path that
   # stamped it: the session key, the key id and the paired client's id
   # travel with the binding and must agree with it. A device context holds
-  # its paired client, focused through its seat, and the certificate whose
+  # its paired client, focused on its person's athanor, and the certificate whose
   # expiry is its deadline, and nothing else; no other context holds a
   # device's binding.
   defp source(
@@ -188,9 +171,9 @@ defmodule Sanctum.Issuance do
            client_id: id,
            credential_deadline: %DateTime{} = deadline
          },
-         %{source_kind: :device, source_id: id, focus_basis: basis}
+         %{source_kind: :device, source_id: id}
        )
-       when is_binary(id) and id != "" and is_binary(basis),
+       when is_binary(id) and id != "",
        do: {:ok, {:device, id, deadline}}
 
   defp source(%Context{auth_method: :device}, _binding), do: {:error, :missing_generation}
@@ -274,7 +257,7 @@ defmodule Sanctum.Issuance do
   @doc false
   @spec lock(expectation()) :: Arca.SecurityTransitions.Issuance.targets()
   def lock(expectation),
-    do: Map.take(expectation, [:user_id, :athanor_id, :membership_id, :source])
+    do: Map.take(expectation, [:user_id, :athanor_id, :source])
 
   @doc false
   # The policy over the locked rows.
@@ -282,8 +265,7 @@ defmodule Sanctum.Issuance do
   def verify(expectation) do
     fn rows ->
       with :ok <- person(rows.user, expectation),
-           :ok <- athanor(rows.athanor, expectation),
-           :ok <- seat(rows.membership, expectation) do
+           :ok <- athanor(rows.athanor, expectation) do
         holder(rows.source, rows.now, expectation)
       end
     end
@@ -295,39 +277,21 @@ defmodule Sanctum.Issuance do
   defp person(%{status: "active"}, _expectation), do: {:error, :stale_generation}
   defp person(_user, _expectation), do: {:error, :unauthenticated}
 
+  # An issuance into an athanor stands on the athanor being the person's
+  # own, active at the generation read: the platform administrator's
+  # capability is over the instance and issues nothing in another's.
   defp athanor(_athanor, %{athanor_id: nil}), do: :ok
 
-  defp athanor(%{status: "active", security_generation: generation}, %{
-         athanor_generation: generation
-       }),
-       do: :ok
-
-  defp athanor(%{status: "active"}, _expectation), do: {:error, :stale_generation}
-  defp athanor(_athanor, _expectation), do: {:error, :unauthenticated}
-
-  # The stored membership the expectation names, as the lock read it. An
-  # issuance into an athanor stands on the person's active seat in that
-  # athanor and on nothing else: a platform row is the operator's
-  # capability over the instance, never a seat, so a context still naming
-  # one — read before its holder lost the seat, or built by hand — issues
-  # no tenant credential. A platform row stands only for an issuance that
-  # names no athanor.
-  defp seat(_membership, %{membership_id: nil}), do: :ok
-
-  defp seat(
-         %{status: "active", user_id: user_id, scope: "athanor", athanor_id: athanor_id},
-         %{user_id: user_id, athanor_id: athanor_id}
-       )
-       when is_binary(athanor_id),
-       do: :ok
-
-  defp seat(
-         %{status: "active", user_id: user_id, scope: "platform"},
-         %{user_id: user_id, athanor_id: nil}
+  defp athanor(
+         %{status: "active", owner_user_id: user_id, security_generation: generation},
+         %{user_id: user_id, athanor_generation: generation}
        ),
        do: :ok
 
-  defp seat(_membership, _expectation), do: {:error, :unauthenticated}
+  defp athanor(%{status: "active", owner_user_id: user_id}, %{user_id: user_id}),
+    do: {:error, :stale_generation}
+
+  defp athanor(_athanor, _expectation), do: {:error, :unauthenticated}
 
   defp holder(nil, _now, %{source: nil}), do: :ok
 

@@ -23,7 +23,7 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
     {:malformed_record, :internal},
     {:untagged_tenant_resource, :internal},
     {:platform_admin_required, :forbidden},
-    {{:missing_tenant, :no_membership}, :forbidden},
+    {{:missing_tenant, :no_athanor}, :forbidden},
     {{:missing_permission, :vault_read}, :forbidden},
     {{:guest_plane, :vault_read}, :forbidden},
     {{:guest_plane_call, "vault"}, :forbidden},

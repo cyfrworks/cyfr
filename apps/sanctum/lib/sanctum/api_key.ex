@@ -282,8 +282,8 @@ defmodule Sanctum.ApiKey do
   defp encode_allowlist(_), do: {:error, :invalid_ip_allowlist}
 
   # Written in the issuance transaction: the creator and the athanor
-  # locked and reread at the generations the context read, the seat that
-  # authorized the focus still standing and the credential the creator
+  # locked and reread at the generations the context read, the athanor
+  # still the creator's own and the credential the creator
   # holds still live (`Sanctum.Issuance`).
   defp store_key(attrs, expectation, key, name, key_type, scope_list, now) do
     case Arca.ApiKeyStorage.create_key(attrs,
@@ -596,7 +596,7 @@ defmodule Sanctum.ApiKey do
 
   # API keys are athanor credentials: the key hash (192-bit, globally unique)
   # IS the credential, and the athanor is read back FROM the stored key row —
-  # never from the request or the creating user's current membership. A
+  # never from the request or the creating user's current standing. A
   # single untenanted hash lookup is therefore correct and authoritative; the
   # tenant binding is enforced on the resulting Context via require_tenant!
   # (see Sanctum.ApiKey.context_from_metadata/1), not at lookup time.
@@ -667,7 +667,6 @@ defmodule Sanctum.ApiKey do
          %{
            source_kind: :api_key,
            source_id: id,
-           focus_basis: :key,
            user_generation: snapshot.user_generation,
            athanor_generation: snapshot.athanor_generation
          }}
@@ -684,9 +683,8 @@ defmodule Sanctum.ApiKey do
   Build an athanor-scoped `Sanctum.Context` from validated API-key metadata.
 
   Builds an API-key context from the stored key row. The `athanor_id` comes
-  from that row, independent of the creator's current membership, and is
-  the one athanor the context lists, focuses and reads: the creator's
-  other seats widen nothing (`Sanctum.Context.focus/2`,
+  from that row, and is the one athanor the context lists, focuses and
+  reads (`Sanctum.Context.focus/2`,
   `Sanctum.Tenancy.list_athanors/1`). The
   namespace is the creator's personal slug from `Sanctum.Namespace.lookup/1`,
   or nil when no slug is recorded (the namespace is identity-only, so the

@@ -22,7 +22,7 @@
 # scratch directory, kept with RELEASE_BOOT_KEEP=1) and prints the table.
 # RELEASE_BOOT_SKIP_BUILD=1 reuses a release a previous run built;
 # JOIN_PROOF_FRESHNESS (20) is H's identity_freshness_seconds,
-# JOIN_PROOF_CERT_SECONDS (40) A's and A2's device_cert_seconds, and
+# JOIN_PROOF_CERT_SECONDS (120) A's and A2's device_cert_seconds, and
 # JOIN_PROOF_BROWSERS (chromium firefox webkit) the browsers run. A failed
 # proof prints the redacted tail of every cell's log, JOIN_PROOF_LOG_TAIL
 # (4000) lines each; H and A2 log at debug.
@@ -45,7 +45,7 @@ source "$ROOT/tests/identity-proof/front.sh"
 source "$ROOT/tests/identity-proof/cells.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
 FRESH="${JOIN_PROOF_FRESHNESS:-20}"
-CERT_SECONDS="${JOIN_PROOF_CERT_SECONDS:-40}"
+CERT_SECONDS="${JOIN_PROOF_CERT_SECONDS:-120}"
 JOIN_PROOF_BROWSERS="${JOIN_PROOF_BROWSERS:-chromium firefox webkit}"
 PROOF_PID=""
 SECRETS="$WORK/secrets"
@@ -71,6 +71,7 @@ cleanup() {
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   standin_stop
   rm -f "$OUT"/ask-* "$OUT"/answer-* 2>/dev/null || true
+  rm -rf "$OUT/bin"
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
@@ -210,7 +211,7 @@ answer_ask() {
       # A's one person, whom the browser set up. The release fixture's
       # door (the GitHub identity join-person) is linked to them, so it
       # signs them in where a browser holds no passkey (`a_cookie`); A's
-      # certificates live CERT_SECONDS, so a device at H renews at A while
+      # certificates live CERT_SECONDS, so a command line at H renews at A while
       # the proof runs, set under that sign-in as A's platform admin sets
       # it.
       people="$(identity_fixture "$A" people)"
@@ -232,12 +233,17 @@ print(json.dumps({"people": len(people["people"]), "user_id": first["user_id"], 
 PY
 )"
       ;;
+    device_confirm)
+      # H's operator was made by H's setup with a protected device, which
+      # confirms their first passkey there (the release fixture's).
+      ANSWER="$(device_confirmed "$H" "$ask")"
+      ;;
     a_cookie)
       ANSWER="$(json "{'cookie': '$(cookie_of "$A" join-person)', 'segment': '$SEGMENT_A'}")"
       ;;
     admin_cookie)
-      # A session minted now, so the operator's first passkey falls within
-      # its first-method window; the console calls run under it too.
+      # A session minted now; the console calls run under it too. The
+      # operator's first passkey is confirmed by H's setup device.
       admin="$(server_fixture "$H" person operator@example.com join-operator)"
       (umask 077 && field "$admin" token >"$SECRETS/admin-token")
       ANSWER="$(json "{'cookie': '$(browser_cookie "$H" "$(cat "$SECRETS/admin-token")")', 'segment': '$SEGMENT_H'}")"
@@ -399,6 +405,11 @@ cell_tails() {
       echo "(the log could not be redacted, so it is not printed)" >&2
   done
 }
+
+step "the command line the terminal step runs"
+mkdir -p "$OUT/bin"
+( cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -trimpath -o "$OUT/bin/cyfr" . ) ||
+  fail "the cyfr command line did not build"
 
 step "the join proof in $JOIN_PROOF_BROWSERS, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"

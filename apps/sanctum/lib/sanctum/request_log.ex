@@ -28,9 +28,9 @@ defmodule Sanctum.RequestLog do
   athanor.
 
   A row's output is the athanor's only when the output came from it. A
-  call may read another athanor its caller sits in — a note from the
-  person's own athanor, the members or facts of another group — and the
-  members of the athanor it ran in must not read that through its log. An
+  call may read another athanor than the one it ran in — a share's entry,
+  read under its owner's athanor — and the person of the athanor it ran
+  in must not read that through its log. An
   answer names each athanor it read from (`athanor_id`, `athanor`, or an
   athanor row's `id`), so a success whose answer names any athanor other
   than the row's stores `%{"redacted" => "cross_athanor"}` in place of its

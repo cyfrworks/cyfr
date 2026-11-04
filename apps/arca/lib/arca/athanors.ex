@@ -130,7 +130,7 @@ defmodule Arca.Athanors do
   @doc """
   Mint an athanor, the caps it must pass first and the rows that must
   land with it, as ONE transaction. Any refusal rolls all of it back, so
-  a mint that trips a cap leaves no athanor row and no membership.
+  a mint that trips a cap leaves no athanor row.
 
   Run in this order with the transaction open:
 
@@ -149,18 +149,13 @@ defmodule Arca.Athanors do
       candidates for its slug in order of preference — the first no
       athanor holds in this transaction is the slug. None
       free is `:slug_taken`, as a slug the unique index refuses is.
-    * `:also` — a one-arity function taking the inserted athanor, as the
-      plain map the mint answers, and answering `:ok` or
-      `{:error, reason}`: the membership an athanor is born with, which
-      the owner of memberships writes beside the row (§4.4).
   """
   @type cap :: :max_athanors
 
   @spec mint(Prima.Actor.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def mint(%Prima.Actor{scope: :platform} = actor, opts) when is_list(opts) do
-    opts = Keyword.validate!(opts, [:attrs, :also, hold: [], caps: [], slugs: nil])
+    opts = Keyword.validate!(opts, [:attrs, hold: [], caps: [], slugs: nil])
     attrs = Map.new(Keyword.fetch!(opts, :attrs))
-    also = Keyword.get(opts, :also, fn _athanor -> :ok end)
 
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.mint", fn ->
       Arca.Repo.transaction(fn ->
@@ -168,8 +163,7 @@ defmodule Arca.Athanors do
              :ok <- Arca.AthanorCensus.lock(),
              :ok <- check_caps(actor, opts[:caps]),
              {:ok, attrs} <- slugged(attrs, opts[:slugs]),
-             {:ok, athanor} <- do_insert(attrs),
-             :ok <- also.(Arca.Data.project(athanor)) do
+             {:ok, athanor} <- do_insert(attrs) do
           athanor
         else
           {:error, reason} -> Arca.Repo.rollback(reason)

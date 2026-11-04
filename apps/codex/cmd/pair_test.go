@@ -6,6 +6,9 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -235,13 +238,58 @@ func TestPair_ReadsTheCodeAndRefusesAnyOther(t *testing.T) {
 	}
 }
 
-// `cyfr pair list` lists the paired devices.
-func TestPairList_ListsThePairedDevices(t *testing.T) {
-	onTerminal(t, false)
-	srv := newCLIServer(t, "pairing.list",
-		`{"clients":[{"client_id":"pcl_one","source":"local",`+
-			`"paired_at":"2026-09-30T08:00:00Z","certificate_expires_at":"2026-10-01T08:00:00Z","current":false}]}`)
+// devicesVectors is tests/fixtures/confirmation_assertion.json's
+// exchange.devices: the one Devices list's row, each holder kind's synced
+// and what revoking it ends.
+type devicesVectors struct {
+	Exchange struct {
+		Devices struct {
+			List struct {
+				HolderKinds []string       `json:"holder_kinds"`
+				Row         []string       `json:"row"`
+				Synced      map[string]any `json:"synced"`
+			} `json:"pairing.list"`
+			Revoke struct {
+				Scope map[string]string `json:"scope"`
+			} `json:"pairing.revoke"`
+		} `json:"devices"`
+	} `json:"exchange"`
+}
 
+// cyfr pair list is the one Devices list: a row for each holder kind the
+// vector names, a passkey labelled one and said to sync where it may, and
+// each row saying what revoking it ends, a passkey's credential wherever
+// it synced or the device alone, as the vector's scope says.
+func TestPairList_ListsEveryDeviceWithItsHolderAndRevocationScope(t *testing.T) {
+	var v devicesVectors
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "confirmation_assertion.json"))
+	if err != nil || json.Unmarshal(raw, &v) != nil {
+		t.Fatalf("the vector: %v", err)
+	}
+	d := v.Exchange.Devices
+	var clients []map[string]any
+	for i, kind := range d.List.HolderKinds {
+		for _, synced := range []bool{false, true} {
+			if synced && d.List.Synced[kind] == false {
+				continue
+			}
+			row := map[string]any{}
+			for _, f := range d.List.Row {
+				row[f] = nil
+			}
+			row["client_id"] = fmt.Sprintf("pcl_%s_%t", kind, synced)
+			row["display_name"] = fmt.Sprintf("device %d %t", i, synced)
+			row["holder_kind"] = kind
+			row["synced"] = synced
+			row["source"] = "local"
+			row["paired_at"] = "2026-09-30T08:00:00Z"
+			row["current"] = false
+			clients = append(clients, row)
+		}
+	}
+	answer, _ := json.Marshal(map[string]any{"clients": clients})
+	onTerminal(t, false)
+	srv := newCLIServer(t, "pairing.list", string(answer))
 	out, err := runCLI(t, srv, "pair", "list")
 	if err != nil {
 		t.Fatalf("cyfr pair list failed: %v\n%s", err, out)
@@ -249,9 +297,26 @@ func TestPairList_ListsThePairedDevices(t *testing.T) {
 	if name, args := srv.call(0); name != "pairing" || args["action"] != "list" {
 		t.Errorf("expected pairing.list, got %s %v", name, args)
 	}
-	for _, want := range []string{"pcl_one", "local", "2026-10-01T08:00:00Z"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the output lacks %q:\n%s", want, out)
+	lines := strings.Split(out, "\n")
+	for _, c := range clients {
+		kind, synced := c["holder_kind"].(string), c["synced"].(bool)
+		var line string
+		for _, l := range lines {
+			if strings.Contains(l, c["client_id"].(string)) {
+				line = l
+			}
+		}
+		passkey := kind == "platform"
+		wherever := strings.Contains(line, "this passkey, wherever it synced")
+		switch {
+		case line == "" || !strings.Contains(line, c["display_name"].(string)):
+			t.Errorf("%s: no row:\n%s", kind, out)
+		case strings.Contains(line, "Passkey") != passkey:
+			t.Errorf("%s: labelled %q", kind, line)
+		case strings.Contains(line, "may sync") != (passkey && synced):
+			t.Errorf("%s synced %t: %q", kind, synced, line)
+		case wherever != (d.Revoke.Scope[kind] == "credential") || (!wherever && !strings.Contains(line, "this device")):
+			t.Errorf("%s: revoking ends %q, the vector says %q", kind, line, d.Revoke.Scope[kind])
 		}
 	}
 }
@@ -264,7 +329,7 @@ func TestPairList_SaysWhenThereAreNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cyfr pair list failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "No paired devices") {
+	if !strings.Contains(out, "No devices") {
 		t.Errorf("expected the empty message:\n%s", out)
 	}
 }

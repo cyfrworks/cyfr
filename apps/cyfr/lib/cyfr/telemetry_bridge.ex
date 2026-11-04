@@ -7,7 +7,7 @@ defmodule Cyfr.TelemetryBridge do
 
   A foundation below the host emits `:telemetry` and never broadcasts, so
   every announcement the identity domain makes — a tray entry, a session
-  minted or revoked, a dropped caller memo, a membership, a vault entry,
+  minted or revoked, a dropped caller memo, a vault entry,
   a share, an archive, the API key and webhook rosters, a pending
   confirmation — every file offer the storage layer moves, and every
   lifecycle event the console follows reaches `Cyfr.Bus` here. The
@@ -46,7 +46,6 @@ defmodule Cyfr.TelemetryBridge do
     FeedRun,
     FileOffer,
     FrameCredential,
-    Membership,
     Notify,
     PolicyDecision,
     Request,
@@ -268,16 +267,6 @@ defmodule Cyfr.TelemetryBridge do
        )
        when is_binary(user_id) and is_binary(id),
        do: [{:global, Bus.frame_credentials(user_id), FrameCredential.new(change, user_id, id)}]
-
-  defp messages(
-         [:cyfr, :sanctum, :membership, :changed],
-         _measurements,
-         %{user_id: user_id} = meta
-       )
-       when is_binary(user_id) and user_id != "" do
-    membership = Membership.new(:changed, user_id, meta[:athanor_id], meta[:change])
-    [{:global, Bus.memberships(user_id), membership}]
-  end
 
   # A shared thread's change, on the own topic of each person it names:
   # its people, and anyone the change took from it.

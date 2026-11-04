@@ -53,10 +53,8 @@ defmodule Sanctum.TinctureAuth do
   Minting and every use hold a credential to the rows its source names as
   they are now (`Sanctum.Caller.derived_standing/2`): a source logged out,
   deleted, expired, revoked or rotated, a person denied and allowed again,
-  an athanor archived and reopened, or the membership a session's focus
-  rested on removed — rejoining is a new row — refuses it for good. A
-  key's focus is the key, so its creator leaving the athanor does not end
-  it. Only a person's session or key context mints, on a member that holds
+  an athanor archived and reopened, or an athanor no longer the person's,
+  refuses it for good. Only a person's session or key context mints, on a member that holds
   the control plane; a key with no person behind it mints nothing. A store
   that cannot answer is `{:error, :unavailable}`: nothing is minted and
   nothing served.
@@ -122,11 +120,11 @@ defmodule Sanctum.TinctureAuth do
   # neither verifies as the other.
   @asset_credential_salt "tincture_asset_credential_v1"
   @frame_credential_salt "tincture_frame_credential_v1"
-  @version 1
+  @version 2
 
   # The frame bearer's format tag; the bearer carries the deadline it was
   # signed with.
-  @frame_version 2
+  @frame_version 3
 
   # A validation credential's life, in seconds: a trial answers within
   # its own deadline, and the credential is spent at activation.
@@ -186,11 +184,10 @@ defmodule Sanctum.TinctureAuth do
   defp bound_claims(%Context{
          user_id: user_id,
          athanor_id: athanor_id,
-         credential_binding: %{source_kind: kind, source_id: source_id, focus_basis: basis} = b
+         credential_binding: %{source_kind: kind, source_id: source_id} = b
        })
        when is_binary(user_id) and is_binary(athanor_id) and kind in [:session, :api_key] and
-              is_binary(source_id) and (is_binary(basis) or basis == :key) and
-              is_integer(b.athanor_generation) do
+              is_binary(source_id) and is_integer(b.athanor_generation) do
     {:ok,
      %{
        user_id: user_id,
@@ -198,8 +195,7 @@ defmodule Sanctum.TinctureAuth do
        user_generation: b.user_generation,
        athanor_generation: b.athanor_generation,
        source_kind: kind,
-       source_id: source_id,
-       focus_basis: basis
+       source_id: source_id
      }}
   end
 
@@ -209,10 +205,6 @@ defmodule Sanctum.TinctureAuth do
   defp source_kind("api_key"), do: {:ok, :api_key}
   defp source_kind(_), do: :error
 
-  defp focus_basis("key", :api_key), do: {:ok, :key}
-  defp focus_basis(id, :session) when is_binary(id) and id != "key", do: {:ok, id}
-  defp focus_basis(_, _), do: :error
-
   defp positive?(n), do: is_integer(n) and n > 0
 
   # The binding a credential's claims name, in the context's shape.
@@ -220,7 +212,6 @@ defmodule Sanctum.TinctureAuth do
     %{
       source_kind: claims.source_kind,
       source_id: claims.source_id,
-      focus_basis: claims.focus_basis,
       user_generation: claims.user_generation,
       athanor_generation: claims.athanor_generation
     }
@@ -372,7 +363,6 @@ defmodule Sanctum.TinctureAuth do
       version_digest,
       Atom.to_string(claims.source_kind),
       claims.source_id,
-      if(claims.focus_basis == :key, do: "key", else: claims.focus_basis),
       claims.user_generation,
       claims.athanor_generation,
       expires
@@ -381,10 +371,8 @@ defmodule Sanctum.TinctureAuth do
 
   defp asset_claims(credential) do
     case Plug.Crypto.verify(signing_secret(), @asset_credential_salt, credential) do
-      {:ok,
-       [@version, user_id, athanor_id, digest, kind, source_id, basis, user_gen, ath_gen, expires]} ->
+      {:ok, [@version, user_id, athanor_id, digest, kind, source_id, user_gen, ath_gen, expires]} ->
         with {:ok, source_kind} <- source_kind(kind),
-             {:ok, focus_basis} <- focus_basis(basis, source_kind),
              true <-
                Enum.all?([user_id, athanor_id, digest, source_id], &(is_binary(&1) and &1 != "")),
              true <- positive?(user_gen) and positive?(ath_gen) and is_integer(expires) do
@@ -395,8 +383,7 @@ defmodule Sanctum.TinctureAuth do
              user_generation: user_gen,
              athanor_generation: ath_gen,
              source_kind: source_kind,
-             source_id: source_id,
-             focus_basis: focus_basis
+             source_id: source_id
            }, digest, expires}
         else
           _ -> {:error, :invalid_credential}
@@ -529,8 +516,8 @@ defmodule Sanctum.TinctureAuth do
   end
 
   # A bearer naming `row`, signed for the row's deadline. The row is the
-  # standing, and the bearer only names it: the generations and the focus
-  # basis it carries are the ones the caller just read, and a use whose
+  # standing, and the bearer only names it: the generations it carries are
+  # the ones the caller just read, and a use whose
   # rows no longer carry them is refused whether or not the transition that
   # moved them reached this row first. It carries the deadline it was
   # signed with, which no later move of the row's lengthens.
@@ -545,7 +532,6 @@ defmodule Sanctum.TinctureAuth do
           claims.athanor_id,
           claims.user_generation,
           claims.athanor_generation,
-          if(claims.focus_basis == :key, do: "key", else: claims.focus_basis),
           DateTime.to_unix(row.deadline, :microsecond)
         ],
         signed_at: DateTime.to_unix(now),
@@ -917,16 +903,15 @@ defmodule Sanctum.TinctureAuth do
     opts = if held?, do: [max_age: :infinity], else: []
 
     case Plug.Crypto.verify(signing_secret(), @frame_credential_salt, bearer, opts) do
-      {:ok, [@frame_version, id, athanor_id, user_gen, ath_gen, basis, deadline]}
+      {:ok, [@frame_version, id, athanor_id, user_gen, ath_gen, deadline]}
       when is_binary(id) and id != "" and is_binary(athanor_id) and athanor_id != "" and
              is_integer(deadline) ->
-        if positive?(user_gen) and positive?(ath_gen) and (is_binary(basis) and basis != ""),
+        if positive?(user_gen) and positive?(ath_gen),
           do:
             {:ok, id, athanor_id,
              %{
                user_generation: user_gen,
                athanor_generation: ath_gen,
-               focus_basis: basis,
                deadline: DateTime.from_unix!(deadline, :microsecond)
              }},
           else: {:error, :invalid_credential}
@@ -955,29 +940,27 @@ defmodule Sanctum.TinctureAuth do
   defp frame_state(%{state: _revoked}), do: {:error, :revoked}
 
   defp frame_claims(row, bound) do
-    with {:ok, source_kind} <- source_kind(row.source_kind),
-         {:ok, focus_basis} <- focus_basis(bound.focus_basis, source_kind) do
-      %{
-        user_id: row.user_id,
-        athanor_id: row.athanor_id,
-        user_generation: bound.user_generation,
-        athanor_generation: bound.athanor_generation,
-        source_kind: source_kind,
-        source_id: row.source_id,
-        focus_basis: focus_basis
-      }
-    else
-      # A row whose source kind or focus does not read cannot be held to
-      # any standing: it is held to one that refuses.
-      _ ->
+    case source_kind(row.source_kind) do
+      {:ok, source_kind} ->
+        %{
+          user_id: row.user_id,
+          athanor_id: row.athanor_id,
+          user_generation: bound.user_generation,
+          athanor_generation: bound.athanor_generation,
+          source_kind: source_kind,
+          source_id: row.source_id
+        }
+
+      # A row whose source kind does not read cannot be held to any
+      # standing: it is held to one that refuses.
+      :error ->
         %{
           user_id: row.user_id,
           athanor_id: row.athanor_id,
           user_generation: 0,
           athanor_generation: 0,
           source_kind: :api_key,
-          source_id: row.source_id,
-          focus_basis: :key
+          source_id: row.source_id
         }
     end
   end

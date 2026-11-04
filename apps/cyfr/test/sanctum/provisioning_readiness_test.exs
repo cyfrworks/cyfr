@@ -62,13 +62,19 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert :ok = Provisioning.ready(ctx)
   end
 
-  test "an addressed send to an unready athanor refuses before acceptance", %{
-    ctx: ctx,
-    athanor: athanor
-  } do
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: athanor.id)
+  test "an addressed send to an unready athanor refuses before acceptance" do
+    # A turn is a person's, sent in their own athanor, unfilled as their
+    # admission's mint leaves it.
+    n = System.unique_integer([:positive])
 
+    {:ok, user} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|unready-#{n}",
+        provider: "github"
+      })
+
+    own = Sanctum.Test.People.athanor!(user)
+    ctx = %{Sanctum.TestContext.local() | user_id: user.id, athanor_id: own.id}
     {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
     # The roster is handed in: reading it would itself start the fill.

@@ -12,7 +12,7 @@ defmodule Sanctum.Test.People do
   person, linked to their CYFR sign-in identity, and `athanor!/1` reads a
   person's own athanor. `first!/1` is the installation's administrator,
   made by the setup admission's own mint
-  (`Arca.Users.mint/4`), so the platform grant is the product's. A test of
+  (`Arca.Users.mint/4`), so the platform administrator's mark is the product's. A test of
   admission itself goes through `Sanctum.Newcomer`.
   """
 
@@ -23,7 +23,7 @@ defmodule Sanctum.Test.People do
   `info` is `%{id: identity_key, provider:, email:, verified:, name:}`
   (`email`, `verified` and `name` optional). A new person is minted with
   admission `open`, their keys (`Sanctum.Person.mint_keys/1`), their own
-  athanor and its seat (`Sanctum.Provisioning.mint_personal/1`, past the
+  athanor (`Sanctum.Provisioning.mint_personal/1`, past the
   caps) and that identity linked, in one transaction. A second call with
   the same key answers the same person, with the email, its verification
   (`true`, `false`, or nil for none) and the name it carries written over
@@ -44,8 +44,8 @@ defmodule Sanctum.Test.People do
   end
 
   @doc """
-  The person's own athanor, the one their admission made with their seat
-  there: the `athanors` row, read by its owner. Raises when they hold none
+  The person's own athanor, the one their admission made: the `athanors`
+  row, read by its owner. Raises when they hold none
   (a remote person, or a row a test wrote without one).
   """
   @spec athanor!(String.t() | %{required(:id) => String.t()}) :: map()

@@ -18,21 +18,13 @@ defmodule Arca.SharesTest do
     {:ok, terry: terry, entry: entry!(terry.actor)}
   end
 
+  # The platform administrator's mark, set on the row as the installation's
+  # first admission writes it.
   defp administrator!(user_id) do
-    now = DateTime.utc_now()
-
     {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.Membership, [
-        %{
-          id: Prima.UUID7.generate_id("mem"),
-          user_id: user_id,
-          scope: "platform",
-          status: "active",
-          added_by: "test",
-          created_at: now,
-          updated_at: now
-        }
-      ])
+      Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user_id),
+        set: [platform_admin_at: DateTime.utc_now()]
+      )
 
     :ok
   end
@@ -106,7 +98,6 @@ defmodule Arca.SharesTest do
     test "every refusal writes nothing", %{terry: terry, entry: entry} do
       stranger = owner!()
       elsewhere = owner!()
-      seat!(elsewhere.athanor.id, stranger.user.id)
       outsiders = thread!([stranger.user.id])
       archived = thread!([terry.user.id])
 

@@ -957,7 +957,11 @@ defmodule Sanctum.Gate.RequestLogTest do
     test "every API-key type, the webhook secret and the confirmation secret have their " <>
            "declared shape and reach no row",
          %{ctx: ctx} do
-      issuer = Sanctum.TestContext.issuer!(ctx)
+      # The person issues in their own athanor, the only one a credential
+      # of theirs is issued into.
+      {person, user} = Sanctum.TestContext.person!(ctx)
+      own = Sanctum.Test.People.athanor!(user)
+      issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
 
       api_keys =
         for {type, _prefix} <- Prima.CredentialShape.api_key_prefixes() do
@@ -996,7 +1000,15 @@ defmodule Sanctum.Gate.RequestLogTest do
     defp webhook_secret!(ctx) do
       Sanctum.TestContext.ready!(ctx.athanor_id)
       component = "shape-target-#{System.unique_integer([:positive])}"
-      Sanctum.Test.ComponentHelpers.register_test_component(component, "1.0.0", "formula", %{})
+
+      Sanctum.Test.ComponentHelpers.register_test_component(
+        component,
+        "1.0.0",
+        "formula",
+        %{},
+        ctx
+      )
+
       target = "f:local.#{component}"
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, target, origins: [:webhook])
 

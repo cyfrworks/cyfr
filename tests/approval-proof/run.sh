@@ -146,6 +146,7 @@ answer_ask() {
         "$user_id" "$athanor_id")"
       ;;
     clock) ANSWER="$(approval_fixture clock)" ;;
+    device_confirm) ANSWER="$(device_confirmed "$CELL" "$ask")" ;;
     publish) ANSWER="$(publish "$ask")" ;;
     state) ANSWER="$(approval_fixture state "$token" "$APP" "$ask")" ;;
     requested) ANSWER="$(approval_fixture requested "$token" "$ask")" ;;

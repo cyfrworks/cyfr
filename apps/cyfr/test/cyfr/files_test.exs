@@ -517,8 +517,7 @@ defmodule Arca.FilesTest do
   # A person working in an athanor of their own, as a session's context.
   defp person!(label, n) do
     id = "usr_files#{label}#{n}"
-    home = athanor!("home-#{label}", n)
-    seat!(home, id)
+    home = athanor!("home-#{label}", n, id)
 
     ctx =
       Sanctum.Context.build(
@@ -534,22 +533,16 @@ defmodule Arca.FilesTest do
     %{id: id, home: home, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end
 
-  defp athanor!(label, n) do
+  defp athanor!(label, n, owner) do
     {:ok, athanor} =
       Arca.Athanors.insert(Prima.Actor.system(), %{
         name: "Files #{label} #{n}",
         slug: "files-#{label}-#{n}",
-        owner_user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+        owner_user_id: owner,
         created_by: "system"
       })
 
     athanor
-  end
-
-  defp seat!(athanor, user_id) do
-    seat = %{Prima.Actor.system() | athanor_id: athanor.id, scope: :athanor}
-    {:ok, _} = Arca.Members.seat(seat, %{user_id: user_id, added_by: "test"})
-    :ok
   end
 
   defp file(who, args), do: Sanctum.Gate.call_external("file", who.ctx, args)

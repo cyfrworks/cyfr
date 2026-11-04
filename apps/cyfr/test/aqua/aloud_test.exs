@@ -170,25 +170,27 @@ defmodule Aqua.AloudTest do
     assert {:error, :not_the_author} = Aloud.post(ctx, private.id, [note.id], trip.id)
   end
 
-  test "another athanor's assistant's line is not the caller's to say", %{
+  test "no line of an athanor not the caller's own is theirs to say", %{
     alice: alice,
     trip: trip
   } do
-    # An athanor Alice sits in that is not her own: its assistant spoke to
-    # its owner, not to her.
-    %{athanor: other} = Arca.Test.Shares.owner!()
-    Arca.Test.Shares.seat!(other.id, alice.user.id)
-    in_other = %{alice.ctx | athanor_id: other.id}
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_other))
+    # Another person's athanor, which Alice's context names: its assistant
+    # spoke to its person, not to her, and a line under her name there is
+    # still not carried out of an athanor that is not hers.
+    %{athanor: other, actor: owner} = Arca.Test.Shares.owner!()
+    {:ok, thread} = Threads.create(owner)
 
     {:ok, answer} =
-      Threads.append(Sanctum.Context.actor(in_other), thread.id, %{
-        author: "aqua",
-        kind: "text",
-        content: "Sure."
-      })
+      Threads.append(owner, thread.id, %{author: "aqua", kind: "text", content: "Sure."})
 
-    assert {:error, :not_the_author} = Aloud.post(in_other, thread.id, [answer.id], trip.id)
+    {:ok, hers} =
+      Threads.append(owner, thread.id, %{author: alice.user.id, kind: "text", content: "Mine."})
+
+    in_other = %{alice.ctx | athanor_id: other.id}
+
+    assert {:error, :not_a_member} = Aloud.post(in_other, thread.id, [answer.id], trip.id)
+    assert {:error, :not_a_member} = Aloud.post(in_other, thread.id, [hers.id], trip.id)
+    assert contents(alice.user.id, trip) == []
   end
 
   test "only your own lines can be said aloud", %{ctx: ctx, private: private, trip: trip} do

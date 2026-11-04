@@ -7,7 +7,7 @@ defmodule PrismWeb.SetupLiveTest do
   the two screens. Screen 1 takes the first person's name, checked
   against cyfr.run, and their passkey, whose registration with the name
   and the browser's recovery secret and request id makes the person,
-  their athanor, the passkey, the platform grant and their enrollment.
+  their athanor, the passkey, the administrator's mark and their enrollment.
   Screen 2 registers them at cyfr.run before any session cookie, pushes
   their recovery code once to the page's hook, and "I saved it" signs
   them in with the offer of another code. Each answer of cyfr.run leaves
@@ -25,7 +25,7 @@ defmodule PrismWeb.SetupLiveTest do
   import Ecto.Query, only: [from: 2]
   import PrismWeb.AdmissionScreens
 
-  alias Arca.Schemas.{IdentityAttempt, Membership, Passkey, User}
+  alias Arca.Schemas.{IdentityAttempt, Passkey, User}
 
   @token String.duplicate("5e", 32)
   @saved "Saved. You can add another recovery code in Settings, and keep it apart from this one."
@@ -42,8 +42,8 @@ defmodule PrismWeb.SetupLiveTest do
   defp people, do: Arca.Repo.aggregate(User, :count)
   defp passkeys, do: Arca.Repo.aggregate(Passkey, :count)
 
-  defp grants,
-    do: Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
+  defp admins,
+    do: Arca.Repo.aggregate(from(u in User, where: not is_nil(u.platform_admin_at)), :count)
 
   defp person do
     [person] = Arca.Repo.all(User)
@@ -156,7 +156,7 @@ defmodule PrismWeb.SetupLiveTest do
              )
 
       assert has_element?(view, ~s([data-test="admission-create"]))
-      assert {people(), passkeys(), grants()} == {0, 0, 0}
+      assert {people(), passkeys(), admins()} == {0, 0, 0}
 
       admit!(view, "setup")
       assert screen_2?(view, :code)
@@ -172,7 +172,7 @@ defmodule PrismWeb.SetupLiveTest do
 
       admit!(view, "setup", credential)
       assert has_element?(view, ~s([data-test="admission-error"]), "could not be registered")
-      assert {people(), passkeys(), grants()} == {0, 0, 0}
+      assert {people(), passkeys(), admins()} == {0, 0, 0}
     end
 
     test "with no directory pinned, the no-registry sentence and nothing made", %{conn: conn} do
@@ -189,7 +189,7 @@ defmodule PrismWeb.SetupLiveTest do
              )
 
       refute has_element?(view, ~s([data-test="admission-code"]))
-      assert {people(), passkeys(), grants()} == {0, 0, 0}
+      assert {people(), passkeys(), admins()} == {0, 0, 0}
       refute_vocabulary(render(view))
     end
 
@@ -254,7 +254,7 @@ defmodule PrismWeb.SetupLiveTest do
       {path, _flash} = assert_redirect(view)
       assert "/auth/passkey/complete/" <> _ticket = path
 
-      assert {1, 1} == {people(), grants()}
+      assert {1, 1} == {people(), admins()}
 
       assert ["a.example", "b.example"] ==
                Arca.Repo.all(
@@ -282,7 +282,7 @@ defmodule PrismWeb.SetupLiveTest do
 
       {{browser, view, identity}, log} = with_log(fn -> created(conn, "mira") end)
 
-      assert {people(), passkeys(), grants()} == {1, 1, 1}
+      assert {people(), passkeys(), admins()} == {1, 1, 1}
       %{id: user_id, admission: "setup", namespace: "mira"} = person()
       assert %{phase: "accepted", name: "mira"} = attempt = attempt(user_id)
 

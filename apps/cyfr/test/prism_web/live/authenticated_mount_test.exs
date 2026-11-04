@@ -3,8 +3,9 @@
 
 defmodule PrismWeb.AuthenticatedMountTest do
   @moduledoc """
-  The harness contract: a signed-in test user (membership, session) mounts
-  an authenticated LiveView, with or without a publisher namespace.
+  The harness contract: a signed-in test user (their own athanor, a
+  session) mounts an authenticated LiveView, with or without a publisher
+  namespace.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -45,11 +46,6 @@ defmodule PrismWeb.AuthenticatedMountTest do
       refute token in Map.values(assigns),
              "the #{name} socket holds the raw session token in assigns"
     end
-
-    # Re-derive standing after a membership change.
-    Sanctum.Tenancy.Members.broadcast_change(user.user_id, seated_athanor().id, :joined)
-
-    assert render(view) =~ "Settings"
   end
 
   test "an anonymous conn is redirected to /login", %{conn: conn} do

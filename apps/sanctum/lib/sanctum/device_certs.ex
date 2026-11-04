@@ -48,15 +48,15 @@ defmodule Sanctum.DeviceCerts do
   home's clock; then that the certificate's client, athanor and person
   are the context's, and the paired-client row active and holding the
   certificate's device key; then the person's standing: not denied, the
-  athanor open and a seat in it (a platform row is none). Nothing is cached:
+  athanor open and theirs. Nothing is cached:
   the next request reads it all again, so no validation outlives the
   certificate or the standing behind it.
 
   This module verifies and builds no context: once a proof or a request
   verifies, the client's context is established by
   `Sanctum.Caller.establish_device/2`, whose one caller this is, from the
-  verified certificate, the paired client and its person, athanor and
-  seat as read here.
+  verified certificate, the paired client and its person and athanor as
+  read here.
 
   ## A remote person's certificate
 
@@ -167,7 +167,7 @@ defmodule Sanctum.DeviceCerts do
     * `:revoked` — the paired client was revoked.
     * `:not_standing` — no such paired client here, a client a declared
       restore suspended (until its person re-enables it), or the person is
-      denied, the athanor archived or the person no longer seated in it.
+      denied, or the athanor archived or not theirs.
     * `:identity_stale` — a remote person's directory could not confirm
       their head fresh: the request pauses.
     * `:company_login_required` — the person stands but for the company
@@ -239,14 +239,13 @@ defmodule Sanctum.DeviceCerts do
   @type counted :: :ok | {:error, {:rate_limited, non_neg_integer()} | :unavailable}
 
   @typedoc """
-  A person's standing in an athanor, as read now: the users row, the
-  athanor row, and their seat there, and whether they hold the platform's
-  row — a capability, never a seat.
+  A person's standing in their athanor, as read now: the users row, the
+  athanor row, and whether they hold the platform administrator's mark —
+  a capability over the instance.
   """
   @type standing :: %{
           user: map(),
           athanor: map(),
-          seat: map(),
           platform_admin: boolean()
         }
 
@@ -800,13 +799,11 @@ defmodule Sanctum.DeviceCerts do
 
   @doc """
   The standing of the person `user_id` in the athanor `athanor_id`, read
-  now (`t:standing/0`): the person not denied, the athanor open, and a
-  seat of theirs there, as an issuance holds a focus to
-  (`Sanctum.Issuance`). A platform row is no seat: a platform
-  administrator holding none in the athanor has no standing there, and
-  their platform row is reported only as the capability flag
-  (`platform_admin`). `:not_standing` otherwise, `:unavailable` when the
-  store cannot answer.
+  now (`t:standing/0`): the person not denied, the athanor open and
+  theirs (its `owner_user_id`), as an issuance holds a focus to
+  (`Sanctum.Issuance`). Their mark is reported as the capability flag
+  (`platform_admin`) and stands for nothing in the athanor.
+  `:not_standing` otherwise, `:unavailable` when the store cannot answer.
   """
   @spec standing(String.t(), String.t()) ::
           {:ok, standing()} | {:error, :not_standing | :unavailable}
@@ -815,10 +812,9 @@ defmodule Sanctum.DeviceCerts do
          :ok <- active(user),
          {:ok, athanor} <- row(Sanctum.Tenancy.Athanors.get(athanor_id)),
          :ok <- active(athanor),
-         {:ok, platform} <- seat(Sanctum.Tenancy.Members.platform_seat(user_id)),
-         {:ok, seat} <- seat(Sanctum.Tenancy.Members.active_seat(user_id, athanor_id)),
-         {:ok, seat} <- seated(seat) do
-      {:ok, %{user: user, athanor: athanor, seat: seat, platform_admin: not is_nil(platform)}}
+         :ok <- owned(athanor, user_id) do
+      {:ok,
+       %{user: user, athanor: athanor, platform_admin: Sanctum.Tenancy.platform_admin?(user)}}
     end
   end
 
@@ -829,14 +825,8 @@ defmodule Sanctum.DeviceCerts do
   defp active(%{status: "active"}), do: :ok
   defp active(_row), do: {:error, :not_standing}
 
-  defp seat({:ok, row}), do: {:ok, row}
-  defp seat(:none), do: {:ok, nil}
-  defp seat({:error, _unanswered}), do: {:error, :unavailable}
-
-  # Only a seat in the athanor stands for the person there; the platform
-  # row, read above for the capability flag, never does.
-  defp seated(nil), do: {:error, :not_standing}
-  defp seated(seat), do: {:ok, seat}
+  defp owned(%{owner_user_id: user_id}, user_id), do: :ok
+  defp owned(_athanor, _user_id), do: {:error, :not_standing}
 
   @doc """
   Whether the paired client a device context names still stands: its
@@ -874,7 +864,7 @@ defmodule Sanctum.DeviceCerts do
   # from what was verified here: the certificate (nil for a renewal, whose
   # certificate only located the client), the paired-client row, the
   # identity row an identity subject's person was resolved by (nil for a
-  # local subject), and its person, athanor and seat as just read, with the
+  # local subject), and its person and athanor as just read, with the
   # connection's request correlation and address. Nothing here builds a
   # context.
   defp established(row, standing, certificate, carried, identity \\ nil) do
@@ -884,7 +874,6 @@ defmodule Sanctum.DeviceCerts do
       identity: identity,
       user: standing.user,
       athanor: standing.athanor,
-      seat: standing.seat,
       platform_admin: standing.platform_admin
     }
 

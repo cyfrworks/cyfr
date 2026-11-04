@@ -1219,12 +1219,27 @@ fn args ->
     ["pair", root, token] ->
       {ctx, authenticator} = person.(root, token)
 
-      # Their first passkey, under the first-method rule, on their own
-      # session focused nowhere, as the console registers one.
-      session = %{ctx | athanor_id: nil}
-      {:ok, options} = Sanctum.Passkeys.register(session, %{})
+      # Their first passkey, as Settings registers one: setup made them
+      # with a protected device, which stands, so the registration waits on
+      # a fresh confirmation that device gives (the release fixture's
+      # `device_confirm`, which alone reads its seed from this cell), and
+      # is then repeated under it.
+      {:ok, options} = Sanctum.Passkeys.register(ctx, %{})
       credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
-      {:ok, %{status: "active"}} = Sanctum.Passkeys.register(session, %{credential: credential})
+
+      {:error, {:confirmation_required, %{id: id}}} =
+        Sanctum.Passkeys.register(ctx, %{credential: credential})
+
+      {release_fixture, _binding} =
+        Code.eval_file(Path.join(root, "tests/release-boot/fixture.exs"))
+
+      "FIXTURE=" <> confirmed =
+        release_fixture.(["device_confirm", Prima.Confirmation.ref(id)])
+
+      %{"ok" => %{"state" => "confirmed"}} = Jason.decode!(confirmed)
+
+      {:ok, %{status: "active"}} =
+        Sanctum.Passkeys.register(%{ctx | confirmation_id: id}, %{credential: credential})
 
       {public, private} = :crypto.generate_key(:eddsa, :ed25519)
       digest = Prima.Device.key_digest(public)

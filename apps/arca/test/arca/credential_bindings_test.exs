@@ -4,8 +4,8 @@
 defmodule Arca.CredentialBindingsTest do
   @moduledoc """
   The rows a derived credential names, read under lock: the caller's
-  policy is handed plain maps of the person, the athanor, the membership
-  and the source credential — nil where there is none — with the
+  policy is handed plain maps of the person, the athanor and the source
+  credential — nil where there is none — with the
   database's own time, and its answer is the check's. Only the identity
   domain calls it.
   """
@@ -43,7 +43,6 @@ defmodule Arca.CredentialBindingsTest do
                %{
                  user_id: "usr_bound",
                  athanor_id: Arca.Test.Actor.athanor!().id,
-                 membership_id: "mem_none",
                  source: {:session, hash}
                },
                verify: fn rows ->
@@ -53,16 +52,16 @@ defmodule Arca.CredentialBindingsTest do
              )
 
     assert_received {:rows, rows}
+    assert rows |> Map.keys() |> Enum.sort() == [:athanor, :now, :source, :user]
     assert rows.user == nil
     assert rows.athanor.id == "ath_test"
-    assert rows.membership == nil
     assert %{kind: :session, row: %{user_id: "usr_bound"}} = rows.source
     refute Map.has_key?(rows.source.row, :token_hash)
     assert %DateTime{} = rows.now
   end
 
   test "the policy's refusal is the answer, and a plain :ok passes through" do
-    binding = %{user_id: "usr_x", athanor_id: "ath_test", membership_id: nil, source: nil}
+    binding = %{user_id: "usr_x", athanor_id: "ath_test", source: nil}
 
     assert {:error, :not_standing} =
              CredentialBindings.check(server(), binding,
@@ -76,7 +75,7 @@ defmodule Arca.CredentialBindingsTest do
     assert {:error, :cross_tenant} =
              CredentialBindings.check(
                Prima.Actor.in_athanor("ath_test"),
-               %{user_id: "usr_x", athanor_id: "ath_test", membership_id: nil, source: nil},
+               %{user_id: "usr_x", athanor_id: "ath_test", source: nil},
                verify: fn _rows -> flunk("read under a tenant actor") end
              )
   end
@@ -109,7 +108,7 @@ defmodule Arca.CredentialBindingsLockTest do
 
   import Ecto.Query
 
-  alias Arca.Schemas.{Athanor, ExternalIdentity, Membership, Session, User}
+  alias Arca.Schemas.{Athanor, ExternalIdentity, Session, User}
   alias Ecto.Adapters.SQL.Sandbox
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
@@ -159,7 +158,6 @@ defmodule Arca.CredentialBindingsLockTest do
 
     on_exit(fn ->
       unboxed(fn ->
-        Arca.Repo.delete_all(where(Membership, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(Session, user_id: ^user_id))
         Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
@@ -175,11 +173,6 @@ defmodule Arca.CredentialBindingsLockTest do
     athanor_id: athanor_id
   } do
     test = self()
-
-    {:ok, seat} =
-      unboxed(fn ->
-        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
-      end)
 
     denier =
       Task.async(fn ->
@@ -205,7 +198,7 @@ defmodule Arca.CredentialBindingsLockTest do
         unboxed(fn ->
           Arca.CredentialBindings.check(
             server(),
-            %{user_id: user_id, athanor_id: athanor_id, membership_id: seat.id, source: nil},
+            %{user_id: user_id, athanor_id: athanor_id, source: nil},
             verify: fn rows -> {:ok, rows} end
           )
         end)
@@ -220,7 +213,6 @@ defmodule Arca.CredentialBindingsLockTest do
     assert rows.user.status == "denied"
     assert rows.user.security_generation == 2
     assert rows.athanor.status == "archived"
-    assert rows.membership == nil
     assert DateTime.compare(rows.now, released_at) != :lt
   end
 end

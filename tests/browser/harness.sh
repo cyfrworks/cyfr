@@ -258,6 +258,16 @@ asked() {
   field "$(cat "$1")" "${@:2}"
 }
 
+# The setup device's confirmation of the pending record the ask `$2` names
+# by its `ref`, on cell `$1` (the release fixture's `device_confirm`, which
+# alone reads the device's seed from the cell): made wrong on purpose when
+# the ask names a `tamper` (`digest`, `ref` or `key`).
+device_confirmed() {
+  local cell="$1" ask="$2" tamper
+  tamper="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("tamper") or "")' "$ask")"
+  server_fixture "$cell" device_confirm "$(asked "$ask" ref)" ${tamper:+"$tamper"}
+}
+
 # Each ask the proof has written into OUT, answered once. The proof's
 # dispatch `$1` is called in this shell, never a subshell, as `$1 ASK ID`,
 # so it may keep state between asks; it leaves its answer in ANSWER, and

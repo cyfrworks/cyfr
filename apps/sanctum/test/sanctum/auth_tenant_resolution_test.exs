@@ -3,7 +3,7 @@
 
 defmodule Sanctum.AuthTenantResolutionTest do
   @moduledoc """
-  Fresh login contexts must resolve membership with force: true before tenant-scoped operations.
+  Fresh login contexts must resolve the person's athanor with force: true before tenant-scoped operations.
 
   `Sanctum.Context.build/1` leaves `athanor_id` nil when none is supplied, so an
   unresolved context is rejected by the tenant gate — the auth path is
@@ -12,13 +12,13 @@ defmodule Sanctum.AuthTenantResolutionTest do
   # async: false — global :tenancy_resolver_override mutation.
   use ExUnit.Case, async: false
 
+  alias Arca.Schemas.User
   alias Sanctum.Context
   alias Sanctum.Tenancy
-  alias Sanctum.Tenancy.Members
 
   setup tags do
-    # Isolate from other tests' committed membership rows: resolve_status reads
-    # the memberships table.
+    # Isolate from other tests' committed rows: resolve_status reads the
+    # person's row and the athanor they own.
     Arca.Test.Sandbox.setup!(tags)
 
     original_override = Application.get_env(:sanctum, :tenancy_resolver_override)
@@ -55,7 +55,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       assert result.athanor_id == "ath_acme"
     end
 
-    test "with force and no membership, the athanor stays unresolved (nil)" do
+    test "with force and no person, the athanor stays unresolved (nil)" do
       Application.delete_env(:sanctum, :tenancy_resolver_override)
 
       ctx = oauth_shaped_context()
@@ -82,22 +82,22 @@ defmodule Sanctum.AuthTenantResolutionTest do
     end
   end
 
-  describe "the platform grant is the first person's, and resolution only reads it" do
+  describe "the platform administrator's mark is the first person's, and resolution only reads it" do
     test "the installation's first person holds the capability; resolution mints nothing" do
       Application.delete_env(:sanctum, :tenancy_resolver_override)
       ctx = oauth_shaped_context()
 
       # Resolution alone mints nothing.
       assert {:ok, %{platform_admin: false}} = Tenancy.resolve_status(ctx, force: true)
-      assert rows!(Members.list_by_user(ctx.user_id)) == []
+      assert {:error, :not_found} = Tenancy.Users.get(ctx.user_id)
 
-      # The setup admission's mint writes the grant with the first person.
+      # The setup admission's mint writes the mark on the first person's row.
       first = Sanctum.Test.People.first!()
 
       {:ok, result} = Tenancy.resolve_status(%{ctx | user_id: first.id}, force: true)
       assert result.platform_admin
       assert result.scope == :athanor
-      assert Enum.any?(rows!(Members.list_by_user(first.id)), &(&1.scope == "platform"))
+      assert %User{platform_admin_at: %DateTime{}} = Arca.Repo.get!(User, first.id)
 
       # Everyone after them is admitted without it.
       {:ok, later} =
@@ -110,17 +110,17 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
       {:ok, result} = Tenancy.resolve_status(%{ctx | user_id: later.id}, force: true)
       refute result.platform_admin
-      refute Enum.any?(rows!(Members.list_by_user(later.id)), &(&1.scope == "platform"))
+      assert %User{platform_admin_at: nil} = Arca.Repo.get!(User, later.id)
     end
 
-    test "an unmembered user stays unresolved with no membership row" do
+    test "a user with no person row stays unresolved, and resolution writes none" do
       Application.delete_env(:sanctum, :tenancy_resolver_override)
       ctx = oauth_shaped_context()
 
       {:ok, result} = Tenancy.resolve_status(ctx, force: true)
 
       assert result.athanor_id == nil
-      assert rows!(Members.list_by_user(ctx.user_id)) == []
+      assert {:error, :not_found} = Tenancy.Users.get(ctx.user_id)
     end
   end
 
@@ -134,11 +134,9 @@ defmodule Sanctum.AuthTenantResolutionTest do
       email: "tester@example.com",
       provider: "github",
       namespace: "testns",
-      # Athanor-less, as device flow and the OIDC provider build it — resolved via memberships.
+      # Athanor-less, as device flow and the OIDC provider build it — resolved from the person.
       athanor_id: nil,
       permissions: [:*]
     )
   end
-
-  defp rows!({:ok, rows}), do: rows
 end

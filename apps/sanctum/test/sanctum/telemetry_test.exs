@@ -149,10 +149,10 @@ defmodule Sanctum.TelemetryTest do
     test "a tray entry names its athanor, kind and payload, and the platform's names none" do
       capture([[:cyfr, :sanctum, :notify]])
 
-      :ok = Sanctum.Notify.broadcast("ath_1", :member_changed, %{name: "x"})
+      :ok = Sanctum.Notify.broadcast("ath_1", :athanor_changed, %{name: "x"})
 
       assert_receive {:announced, [:cyfr, :sanctum, :notify], %{count: 1},
-                      %{athanor_id: "ath_1", kind: :member_changed, payload: %{name: "x"}}}
+                      %{athanor_id: "ath_1", kind: :athanor_changed, payload: %{name: "x"}}}
 
       :ok = Sanctum.Notify.allowlist_changed()
 
@@ -162,7 +162,6 @@ defmodule Sanctum.TelemetryTest do
 
     test "the tray's vocabulary is closed and is the kind type's" do
       assert Sanctum.Notify.kinds() == [
-               :member_changed,
                :athanor_changed,
                :allowlist_request,
                :allowlist_changed,
@@ -174,15 +173,6 @@ defmodule Sanctum.TelemetryTest do
                :passkey_registered,
                :passkey_recovered
              ]
-    end
-
-    test "a membership change names the person, the athanor and the change" do
-      capture([[:cyfr, :sanctum, :membership, :changed]])
-
-      :ok = Telemetry.membership_changed("user_1", "ath_1", :joined)
-
-      assert_receive {:announced, [:cyfr, :sanctum, :membership, :changed], %{count: 1},
-                      %{user_id: "user_1", athanor_id: "ath_1", change: :joined}}
     end
 
     test "a session minted carries nothing, and a revocation names only the person" do

@@ -61,19 +61,20 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
       assert json_response(conn, 404)["code"] == "not_found"
     end
 
-    # Members of an athanor are interchangeable, so the read is gated by the
-    # credential's `storage_read`, not by who started the execution. An
-    # application key defaults to `execute`, `component_read` and
-    # `storage_read`; this one is narrowed to `execute`. The terminal row
-    # makes a controller that skipped the check end its stream at once
-    # rather than hang the test.
+    # The read is gated by the credential's `storage_read`: the person who
+    # started the execution, in their own athanor, reads nothing of it
+    # under a key without it. An application key defaults to `execute`,
+    # `component_read` and `storage_read`; this one is narrowed to
+    # `execute`. The terminal row makes a controller that skipped the check
+    # end its stream at once rather than hang the test.
     test "a key without storage_read in the execution's own athanor is a 404", %{conn: conn} do
-      ctx = Sanctum.TestContext.local()
+      {ctx, user} =
+        Sanctum.TestContext.person!(Sanctum.TestContext.local(), %{email: "testns@example.com"})
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
+      ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
       exec = admit!(ctx)
       terminal!(exec)
-
-      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "testns@example.com"})
-      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
 
       {:ok, key} =
         Sanctum.TestContext.create_key(ctx, %{

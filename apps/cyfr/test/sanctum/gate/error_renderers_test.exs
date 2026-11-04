@@ -232,7 +232,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     ":malformed_record" => [:malformed_record],
     ":untagged_tenant_resource" => [:untagged_tenant_resource],
     ":platform_admin_required" => [:platform_admin_required],
-    "{:missing_tenant, :no_membership}" => [{:missing_tenant, :no_membership}],
+    "{:missing_tenant, :no_athanor}" => [{:missing_tenant, :no_athanor}],
     "{:missing_permission, atom()}" => [
       {:missing_permission, :admin},
       {:missing_permission, :vault_read}

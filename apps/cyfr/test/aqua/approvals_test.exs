@@ -19,7 +19,7 @@ defmodule Aqua.ApprovalsTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Sanctum.Consent.{Bootstrap}
-  alias Sanctum.Tenancy.{Members, Users}
+  alias Sanctum.Tenancy.Users
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -45,6 +45,14 @@ defmodule Aqua.ApprovalsTest do
     end)
 
     ctx = Sanctum.TestContext.local(:prism)
+    {thread, pins} = ready!(ctx)
+    {:ok, ctx: ctx, thread: thread, pins: pins}
+  end
+
+  # The athanor `ctx` works in, made one a turn can run in: the shipped
+  # tree indexed and the soul's consent minted. Answers a thread there,
+  # subscribed to, and the pins a turn of the soul starts with.
+  defp ready!(ctx) do
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -67,7 +75,7 @@ defmodule Aqua.ApprovalsTest do
       agent_capability_digest: capability
     }
 
-    {:ok, ctx: ctx, thread: thread, pins: pins}
+    {thread, pins}
   end
 
   defp started!(ctx, thread, pins) do
@@ -629,11 +637,7 @@ defmodule Aqua.ApprovalsTest do
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, changed.id)
   end
 
-  test "an approved launch is consumed as its approver, or not at all", %{
-    ctx: ctx,
-    thread: thread,
-    pins: pins
-  } do
+  test "an approved launch is consumed as its approver, or not at all" do
     n = System.unique_integer([:positive])
 
     {:ok, approver} =
@@ -645,8 +649,15 @@ defmodule Aqua.ApprovalsTest do
         name: "Approver"
       })
 
-    {:ok, _} = Members.ensure(approver.id, scope: "athanor", athanor_id: ctx.athanor_id)
-    approver_ctx = %{ctx | user_id: approver.id}
+    # The approver is a person of their own athanor, the one the turn runs
+    # in: an approved launch continues as the person the approval names.
+    ctx = %{
+      Sanctum.TestContext.local(:prism)
+      | user_id: approver.id,
+        athanor_id: Sanctum.Test.People.athanor!(approver).id
+    }
+
+    {thread, pins} = ready!(ctx)
 
     # A launch continues under the origin its turn's row stores: this
     # turn was sent from the console.
@@ -662,14 +673,14 @@ defmodule Aqua.ApprovalsTest do
       card!(ctx, turn, launch, kind: "execute", step_kind: "launch")
 
     assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
-             Approvals.resolve(approver_ctx, approval.id, %{decision: :approved})
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
     assert {:ok, %{kind: "launch", dispatch_state: "proposed"} = step} = Tape.step(ctx, step.id)
     assert {:ok, %{decided_by: decided_by}} = Tape.approval(ctx, approval.id)
     assert decided_by == approver.id
 
     # The application is asked for as the approver: an unknown reference
-    # is the execution tool's own refusal, not a plane or a seat.
+    # is the execution tool's own refusal, not a plane or a standing.
     assert {:error, reason} = Launch.dispatch(ctx, step)
     refute match?({:approver_unavailable, _}, reason)
 
@@ -684,7 +695,7 @@ defmodule Aqua.ApprovalsTest do
     %{approval: approval_real, step: step_real} =
       card!(ctx, turn, real, kind: "execute", step_kind: "launch")
 
-    {:ok, _} = Approvals.resolve(approver_ctx, approval_real.id, %{decision: :approved})
+    {:ok, _} = Approvals.resolve(ctx, approval_real.id, %{decision: :approved})
     {:ok, step_real} = Tape.step(ctx, step_real.id)
     dispatched = Launch.dispatch(ctx, step_real)
 
@@ -713,7 +724,7 @@ defmodule Aqua.ApprovalsTest do
     %{approval: approval2, step: step2} =
       card!(ctx, turn, hand, kind: "execute", step_kind: "launch")
 
-    {:ok, _} = Approvals.resolve(approver_ctx, approval2.id, %{decision: :approved})
+    {:ok, _} = Approvals.resolve(ctx, approval2.id, %{decision: :approved})
     {:ok, step2} = Tape.step(ctx, step2.id)
     assert {:error, {:invalid_argument, msg}} = Launch.dispatch(ctx, step2)
     assert msg =~ "hand"
@@ -722,7 +733,7 @@ defmodule Aqua.ApprovalsTest do
     %{approval: approval4, step: step4} =
       card!(ctx, turn, launch, kind: "execute", step_kind: "launch")
 
-    {:ok, _} = Approvals.resolve(approver_ctx, approval4.id, %{decision: :approved})
+    {:ok, _} = Approvals.resolve(ctx, approval4.id, %{decision: :approved})
     {:ok, card} = Tape.message(ctx, approval4.message_id)
 
     rewritten =
@@ -745,7 +756,7 @@ defmodule Aqua.ApprovalsTest do
     %{step: step3} = card!(ctx, turn, launch, kind: "execute", step_kind: "launch")
     assert {:error, :not_approved} = Launch.dispatch(ctx, step3)
 
-    # A person no longer seated launches nothing either.
+    # A denied person launches nothing either.
     {:ok, _} = Users.deny(approver)
     assert {:error, {:approver_unavailable, :denied}} = Launch.dispatch(ctx, step)
   end

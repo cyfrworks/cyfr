@@ -22,7 +22,6 @@ defmodule Aqua.LaunchTest do
   alias Aqua.{Approvals, Launch, Tape}
   alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Consent.Bootstrap
-  alias Sanctum.Tenancy.Members
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -50,7 +49,7 @@ defmodule Aqua.LaunchTest do
       end
     end)
 
-    ctx = Sanctum.TestContext.local(:prism)
+    ctx = person!()
     Sanctum.TestContext.ready!(ctx.athanor_id)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -73,14 +72,15 @@ defmodule Aqua.LaunchTest do
       agent_capability_digest: capability
     }
 
-    {:ok, ctx: ctx, thread: thread, pins: pins, approver: approver!(ctx)}
+    {:ok, ctx: ctx, thread: thread, pins: pins, approver: %{ctx | origin: :interactive}}
   end
 
-  # A seated member other than the sender, whose approval the launch runs as.
-  defp approver!(ctx) do
+  # The person of their own athanor, signed in through Prism: who sends the
+  # turn and whose approval, given from the console, the launch runs as.
+  defp person! do
     n = System.unique_integer([:positive])
 
-    {:ok, approver} =
+    {:ok, person} =
       Sanctum.Test.People.linked(%{
         id: "github|https://github.com|launcher#{n}",
         provider: "github",
@@ -89,8 +89,11 @@ defmodule Aqua.LaunchTest do
         name: "Launcher"
       })
 
-    {:ok, _} = Members.ensure(approver.id, scope: "athanor", athanor_id: ctx.athanor_id)
-    %{ctx | user_id: approver.id, origin: :interactive}
+    %{
+      Sanctum.TestContext.local(:prism)
+      | user_id: person.id,
+        athanor_id: Sanctum.Test.People.athanor!(person).id
+    }
   end
 
   # A turn accepted from `sender`, whose context carries the origin its

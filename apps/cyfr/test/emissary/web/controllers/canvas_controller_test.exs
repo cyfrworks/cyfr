@@ -55,7 +55,6 @@ defmodule Emissary.Web.CanvasControllerTest do
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     :ok = own_storage(%{})
 
-    _athanor = Sanctum.TestContext.athanor!()
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)
@@ -542,17 +541,24 @@ defmodule Emissary.Web.CanvasControllerTest do
 
     test "a page for another person's frame, another athanor's, a revoked one, an expired one, or one of another version is 404",
          %{source: source, digest: digest, credential: credential} do
-      # Another person of the athanor opened the same version.
-      bystander =
-        Sanctum.TestContext.issuer!(%{
-          Sanctum.TestContext.local()
-          | user_id: "local|local|page-bystander",
-            namespace: "page-bystander"
-        })
+      # Another person's frame of the version in this athanor, under a
+      # session of theirs: no product path opens one in an athanor that is
+      # not theirs, so the row is written here.
+      theirs = "frm_page_theirs_#{System.unique_integer([:positive])}"
 
-      {:ok, session} = Sanctum.TestContext.create_session(bystander)
-      {:ok, theirs_ctx} = Sanctum.Caller.establish(session.token)
-      theirs = frame!(theirs_ctx, "page-canvas", digest)
+      {:ok, _} =
+        Arca.FrameCredentials.mint(Prima.Actor.in_athanor(source.athanor_id), %{
+          user_id: "usr_page_bystander",
+          publisher: "local",
+          name: "page-canvas",
+          version: @version,
+          version_digest: digest,
+          grant_revision: 0,
+          frame_id: theirs,
+          source_kind: "session",
+          source_id: "ses_page_bystander",
+          deadline: DateTime.add(DateTime.utc_now(), 600, :second)
+        })
 
       # The person's own frame of the version, in another athanor.
       elsewhere = "frm_page_elsewhere_#{System.unique_integer([:positive])}"
@@ -586,7 +592,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       another = frame!(source, "other-canvas", canvas!(source, "other-canvas"))
 
       for frame_id <- [
-            theirs.frame_id,
+            theirs,
             elsewhere,
             revoked.frame_id,
             expired.frame_id,

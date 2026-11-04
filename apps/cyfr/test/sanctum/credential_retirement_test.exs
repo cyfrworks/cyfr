@@ -6,13 +6,13 @@ defmodule Sanctum.CredentialRetirementTest do
   Retirement is permanent, and an issuance answers to the standing its
   context read.
 
-  A denial or a membership removal retires what it retires in one
-  transaction and announces only what that transaction committed; an
-  allow restores standing and nothing it retired. A context
-  read before a retirement — a signed-in identity, a session, a key —
-  carries the generations it read (`Sanctum.Context.credential_binding`),
-  and issuing a session or a key from it after the restore is refused,
-  because the issuance locks and rereads the rows it rests on.
+  A denial retires what it retires in one transaction and announces only
+  what that transaction committed; an allow restores standing and nothing
+  it retired. A context read before a retirement — a signed-in identity, a
+  session, a key — carries the generations it read
+  (`Sanctum.Context.credential_binding`), and issuing a session or a key
+  from it after the restore is refused, because the issuance locks and
+  rereads the rows it rests on.
   """
 
   use ExUnit.Case, async: false
@@ -20,7 +20,7 @@ defmodule Sanctum.CredentialRetirementTest do
   import Ecto.Query
 
   alias Sanctum.{ApiKey, Caller, Context, Session}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   setup tags do
     Arca.Cache.init()
@@ -44,7 +44,7 @@ defmodule Sanctum.CredentialRetirementTest do
     user
   end
 
-  # A person with their own athanor and a seat in it, as sign-in leaves them.
+  # A person with their own athanor, as sign-in leaves them.
   defp owner!(label) do
     user = person!(label)
     {user, Sanctum.Test.People.athanor!(user)}
@@ -87,21 +87,19 @@ defmodule Sanctum.CredentialRetirementTest do
              } = identity.credential_binding
 
       assert identity.athanor_id == own.id
-      assert {:ok, seat} = Members.active_seat(user.id, own.id)
-      assert identity.credential_binding.focus_basis == seat.id
 
       {session, ctx} = signed_in!(user)
       hash = Session.token_hash(session.token)
       assert ctx.session_token_hash == hash
       assert ctx.credential_binding.source_kind == :session
       assert ctx.credential_binding.source_id == Base.url_encode64(hash, padding: false)
-      assert ctx.credential_binding.focus_basis == seat.id
+      assert ctx.athanor_id == own.id
 
       {:ok, %{api_key: key}} = issue(ctx, %{name: "bound-#{uniq()}"})
       {:ok, key_ctx} = Caller.establish({:api_key, key})
       assert key_ctx.credential_binding.source_kind == :api_key
       assert key_ctx.credential_binding.source_id == key_ctx.api_key_id
-      assert key_ctx.credential_binding.focus_basis == :key
+      assert key_ctx.athanor_id == own.id
     end
 
     test "an issuing context without generations is refused, and so is a key with no person" do
@@ -120,9 +118,9 @@ defmodule Sanctum.CredentialRetirementTest do
       assert {:error, :missing_generation} = Session.create(bare)
       assert {:error, :missing_generation} = issue(bare, %{name: "unbound"})
 
-      # A person focused on an athanor through no membership has no standing
-      # to issue there, whatever generations the binding names; unfocused,
-      # the same binding issues.
+      # A person focused on an athanor that is not theirs has no standing to
+      # issue there, whatever generations the binding names; unfocused, the
+      # same binding issues.
       Sanctum.TestContext.athanor!()
       {:ok, snapshot} = Sanctum.Tenancy.generation_snapshot(user.id, bare.athanor_id)
 
@@ -131,14 +129,13 @@ defmodule Sanctum.CredentialRetirementTest do
         | credential_binding: %{
             source_kind: :identity,
             source_id: nil,
-            focus_basis: nil,
             user_generation: snapshot.user_generation,
             athanor_generation: snapshot.athanor_generation
           }
       }
 
-      assert {:error, :missing_generation} = Session.create(unbacked)
-      assert {:error, :missing_generation} = issue(unbacked, %{name: "unbacked"})
+      assert {:error, :unauthenticated} = Session.create(unbacked)
+      assert {:error, :unauthenticated} = issue(unbacked, %{name: "unbacked"})
 
       assert {:ok, _} =
                Session.create(%{
@@ -156,18 +153,18 @@ defmodule Sanctum.CredentialRetirementTest do
 
       # A key the server's own principal created stands as a key and can
       # issue nothing.
-      Sanctum.TestContext.athanor!()
+      own = Sanctum.Test.People.athanor!(user)
 
       system_key =
         Context.build(
           user_id: "system",
-          athanor_id: Sanctum.TestContext.athanor_id(),
+          athanor_id: own.id,
           permissions: [:*],
           auth_method: :oidc,
           authenticated: true
         )
 
-      {:ok, snapshot} = Sanctum.Tenancy.generation_snapshot(user.id, "ath_test")
+      {:ok, snapshot} = Sanctum.Tenancy.generation_snapshot(user.id, own.id)
 
       {:ok, %{api_key: raw}} =
         issue(%{system_key | user_id: user.id}, %{name: "orphan-#{uniq()}"},
@@ -480,8 +477,6 @@ defmodule Sanctum.CredentialRetirementLockTest do
         from(a in Arca.Schemas.Athanor, where: a.owner_user_id in ^user_ids, select: a.id)
       )
 
-    Arca.Repo.delete_all(where(Arca.Schemas.Membership, [m], m.user_id in ^user_ids))
-    Arca.Repo.delete_all(where(Arca.Schemas.Membership, [m], m.athanor_id in ^athanor_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.Session, [s], s.user_id in ^user_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.ApiKey, [k], k.created_by in ^user_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.ExternalIdentity, [i], i.user_id in ^user_ids))

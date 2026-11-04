@@ -102,7 +102,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   # `Arca.Shares.create/3` writes one but for its minted id.
   defp administrator_share! do
     admin = ShareFixtures.person!("Admin")
-    {:ok, _seat} = Sanctum.TestContext.ensure_platform(admin.user.id)
+    {:ok, _admin} = Sanctum.TestContext.ensure_platform(admin.user.id)
 
     attrs = %{
       kind: "api_key",

@@ -873,7 +873,7 @@ defmodule Opus.Provider do
   # the athanor in focus — other athanors' identifiers and activity levels are
   # not theirs to enumerate. A platform administrator is answered as any
   # person is: their capability is over the instance, whose slots the
-  # totals describe, and not a seat in the athanors holding them.
+  # totals describe, and not over the athanors holding them.
   defp scoped_slot_status(%Context{scope: :platform}, status), do: status
 
   defp scoped_slot_status(%Context{} = ctx, status) do

@@ -10,7 +10,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
   alias Sanctum.Refusals
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
   alias Sanctum.Test.DirectoryServer
   alias Sanctum.Test.RegistryStub
 
@@ -19,8 +19,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     n = System.unique_integer([:positive])
 
-    # Local people, each named by their own id; `ops` holds the platform
-    # grant.
+    # Local people, each named by their own id and with their own
+    # athanor; `ops` carries the platform administrator's mark.
     [alice, bob, ops] =
       for name <- ["alice", "bob", "ops"] do
         {:ok, user} =
@@ -67,12 +67,12 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     end
   end
 
-  test "door.* is the operator's: refused for a member, open to an admin; a local person is admitted unless denied",
+  test "door.* is the operator's: refused for a person, open to an admin; a local person is admitted unless denied",
        %{alice: alice, ops: ops, ctx: ctx, n: n} do
-    member = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    person = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
-             call(member, "door", %{"action" => "list"})
+             call(person, "door", %{"action" => "list"})
 
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
     assert {:ok, %{entries: []}} = call(admin, "door", %{"action" => "list"})
@@ -352,7 +352,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert Sanctum.Door.Store.list() == before
   end
 
-  test "athanor.get answers a caller without a seat the same for an open, an archived and a missing athanor; its person hears archived",
+  test "athanor.get answers a caller not its person the same for an open, an archived and a missing athanor; its person hears archived",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
     open = personal!(bob)
 
@@ -375,7 +375,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     for id <- [open.id, closed.id, missing] do
       assert {:error, {:not_found, "Athanor", ^id}} =
                call(a, "athanor", %{"action" => "get", "athanor" => id}),
-             "athanor.get told a caller with no seat something of #{id}"
+             "athanor.get told a caller not its person something of #{id}"
     end
 
     # Its person hears that it is archived, and still reads it.
@@ -392,7 +392,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
              })
   end
 
-  test "an archived athanor refuses every mutation by id, for its person and for an operator; its person reads it, and an operator with no seat is answered as for a missing athanor",
+  test "an archived athanor refuses every mutation by id, for its person and for an operator; its person reads it, and an operator not its person is answered as for a missing athanor",
        %{alice: alice, ops: ops, ctx: ctx} do
     personal = personal!(alice)
     %{status: "archived"} = Sanctum.TestContext.archive!(personal.id)
@@ -417,9 +417,10 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{status: "archived"}} =
              call(a, "athanor", %{"action" => "get", "athanor" => personal.id})
 
-    # An operator who holds no seat there hears nothing of it, not even that
-    # it is archived: their capability is over the instance, not a seat,
-    # and the read answers as it does for an athanor that does not exist.
+    # An operator who is not its person hears nothing of it, not even that
+    # it is archived: their capability is over the instance, not an
+    # athanor, and the read answers as it does for an athanor that does not
+    # exist.
     missing = "ath_" <> Prima.UUID7.generate()
 
     for named <- [personal.id, missing] do
@@ -433,7 +434,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     personal = personal!(alice)
 
     # The door verbs are the operator's platform-scope acts: they run under
-    # the server's own transitions and need no seat in the athanor they
+    # the server's own transitions and need no standing in the athanor they
     # close and reopen.
     operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
 
@@ -443,8 +444,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{status: "denied"}} = Users.get(alice)
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    # The operator holds no seat in it, so get refuses them as it refuses
-    # any non-member, as for an athanor that does not exist.
+    # The athanor is not the operator's, so get refuses them as it refuses
+    # anyone else, as for an athanor that does not exist.
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "get", "athanor" => personal.id})
 
@@ -452,21 +453,22 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    # Removing the deny at the door reopens it and seats her in it.
+    # Removing the deny at the door reopens it, and she focuses it again.
     assert {:ok, %{removed: true, restored: 1}} =
              call(operator, "door", %{"action" => "remove", "id" => deny_id})
 
     assert {:ok, %{status: "active"}} = Users.get(alice)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
-    assert Members.member?(alice, personal.id)
+    assert {:ok, %{athanor_id: focused}} = Context.focus(ctx.(alice, nil, []), personal.id)
+    assert focused == personal.id
   end
 
   describe "Sanctum.Providers.Athanor.resolve/3 returns a focused context" do
     # Every downstream act (provisioning above all) must run at
     # `scope: :athanor` with the resolved athanor bound — a platform
     # context's wider scope stops at resolve, not in the handler, and only
-    # a seat gets it there.
-    test "a member's context is rebound to the named athanor",
+    # the athanor's person gets it there.
+    test "a person's context is rebound to the athanor they name",
          %{alice: alice, ctx: ctx} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
       %{id: athanor_id} = personal!(alice)
@@ -479,9 +481,9 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       assert focused.scope == :athanor
     end
 
-    test "a platform context narrows to an athanor its person is seated in, and opens no other",
+    test "a platform context narrows to its person's own athanor, and opens no other",
          %{alice: alice, ops: ops} do
-      %{id: athanor_id} = personal!(alice)
+      %{id: theirs} = personal!(alice)
 
       operator =
         Sanctum.TestContext.platform(
@@ -491,13 +493,13 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
           platform_admin: true
         )
 
-      # No seat: the platform scope and the capability open nothing.
+      # Another person's: the platform scope and the capability open nothing.
       assert {:error, {:not_found, "Athanor", id}} =
-               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => athanor_id})
+               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => theirs})
 
-      assert id == athanor_id
+      assert id == theirs
 
-      {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: athanor_id)
+      %{id: athanor_id} = personal!(ops)
 
       assert {:ok, athanor, focused} =
                Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => athanor_id})
@@ -507,12 +509,12 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       assert focused.scope == :athanor
     end
 
-    test "a seat the store cannot read is unavailable, never not-a-member",
+    test "an athanor the store cannot read is unavailable, never not found",
          %{alice: alice, ctx: ctx} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
       %{id: athanor_id} = personal!(alice)
 
-      Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
+      Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
 
       assert {:error, {:unavailable, "Storage"}} =
                Sanctum.Providers.Athanor.resolve(a, %{"athanor" => athanor_id})

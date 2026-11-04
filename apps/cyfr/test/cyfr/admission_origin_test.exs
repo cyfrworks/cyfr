@@ -233,9 +233,10 @@ defmodule Cyfr.AdmissionOriginTest do
         email: "origin#{n}@example.com"
       })
 
-    # The key's context names its person's namespace, as a signed-in
-    # person's does.
+    # The key's context names its person's namespace and their own
+    # athanor, as a signed-in person's does.
     {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
+    ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
     {:ok, key} =
       Sanctum.TestContext.create_key(ctx, %{

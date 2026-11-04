@@ -55,7 +55,7 @@ defmodule PrismWeb.Focus do
       {:error, _not_member} ->
         {:halt,
          socket
-         |> put_flash(:error, "You are not a member of that athanor.")
+         |> put_flash(:error, "That athanor is not yours.")
          |> redirect(to: "/")}
     end
   end

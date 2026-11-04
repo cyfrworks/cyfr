@@ -24,7 +24,6 @@ defmodule Emissary.Web.FrameStreamSlotTest do
   setup do
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     Prima.Test.RateLimiter.reset!()
-    Sanctum.TestContext.athanor!()
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)

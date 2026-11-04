@@ -15,12 +15,11 @@ defmodule Sanctum.Caller do
   Credentials, and the standing each is held to:
 
     * `{:session, token}` — a person's session (the bare token is the
-      same credential). Memberships resolve the athanor, the users row
+      same credential). The person's own athanor is resolved, the users row
       supplies the namespace, and a person the door no longer admits is
       `{:denied, ctx}`.
     * `{:api_key, raw}` — an athanor's key (`client_ip:` for its
-      allowlist). The athanor is the key row's, never the creator's
-      current membership; the key stands while the athanor is open and
+      allowlist). The athanor is the key row's; the key stands while the athanor is open and
       its creator is not denied.
     * `{:frame_credential, bearer}` — the per-open credential of one
       frame the shell created (`Sanctum.TinctureAuth.verify_frame_credential/2`,
@@ -138,9 +137,9 @@ defmodule Sanctum.Caller do
   A paired device as `Sanctum.DeviceCerts` verified it: the certificate
   it stands under (nil for a renewal), its paired-client row, the
   identity row an identity subject's person was resolved by (`identity`,
-  absent or nil for a local subject), and its person's `users` row, the
-  athanor's row and the membership that seats them there, read for this
-  verification, and whether they hold the platform's.
+  absent or nil for a local subject), and its person's `users` row and
+  their athanor's row, read for this verification, and whether they hold
+  the platform administrator's mark.
   """
   @type device :: %{
           required(:certificate) => Prima.DeviceCert.t() | nil,
@@ -149,7 +148,6 @@ defmodule Sanctum.Caller do
           required(:client) => map(),
           required(:user) => map(),
           required(:athanor) => map(),
-          required(:seat) => map(),
           required(:platform_admin) => boolean()
         }
 
@@ -354,13 +352,13 @@ defmodule Sanctum.Caller do
   verified and read for it (`t:device/0`; `request_id:` and `client_ip:`
   for the connection): its one caller. It trusts that caller, which
   verified the device's proof of possession on its channel and its
-  certificate, and read the paired client and its person, athanor and
-  seat from the store. It reads nothing else from the store itself but
+  certificate, and read the paired client and its person and athanor
+  from the store. It reads nothing else from the store itself but
   the person's company sign-in, last, when this CYFR requires one
   (`Sanctum.CompanyLogin.standing/1`), and checks that the rows it is
   handed agree with each other: one active device client of that person
   in that athanor, the person and the
-  athanor active, the seat theirs, and the certificate, when there is
+  athanor active and theirs, and the certificate, when there is
   one, naming that client, athanor, person and device key: a local
   subject by the person's id, an identity subject by the identifier of
   the remote identity row the person was resolved by, which must be that
@@ -416,8 +414,8 @@ defmodule Sanctum.Caller do
 
   # The rows a device's verification read agree with each other, as they
   # were read (nothing is read here): one active device client of the
-  # person in the athanor, the person and the athanor active, the seat
-  # theirs there (a platform row is no seat), and the certificate,
+  # person in the athanor, the person and the athanor active, the athanor
+  # theirs, and the certificate,
   # when there is one, naming that client, athanor, person and device key:
   # a local subject by the person's id, an identity subject by the
   # identifier of the identity row the verifier resolved them by
@@ -434,21 +432,22 @@ defmodule Sanctum.Caller do
                source_kind: "device_cert"
              } = client,
            user: %{id: user_id, status: "active", security_generation: user_generation},
-           athanor: %{id: athanor_id, status: "active", security_generation: athanor_generation},
-           seat: %{id: seat_id, status: "active", user_id: user_id} = seat,
+           athanor: %{
+             id: athanor_id,
+             owner_user_id: user_id,
+             status: "active",
+             security_generation: athanor_generation
+           },
            platform_admin: platform_admin
          } = device
        )
        when is_binary(client_id) and is_binary(user_id) and is_binary(athanor_id) and
-              is_binary(seat_id) and is_integer(user_generation) and
-              is_integer(athanor_generation) and is_boolean(platform_admin) do
-    seated?(seat, athanor_id) and certifies?(certificate, client, Map.get(device, :identity))
+              is_integer(user_generation) and is_integer(athanor_generation) and
+              is_boolean(platform_admin) do
+    certifies?(certificate, client, Map.get(device, :identity))
   end
 
   defp device_stands?(_device), do: false
-
-  defp seated?(%{scope: "athanor", athanor_id: athanor_id}, athanor_id), do: true
-  defp seated?(_seat, _athanor_id), do: false
 
   defp certifies?(nil, _client, _identity), do: true
 
@@ -478,12 +477,12 @@ defmodule Sanctum.Caller do
 
   # What the device's context was read against
   # (`t:Sanctum.Context.credential_binding/0`): the person's and the
-  # athanor's generations and the seat that grants the athanor, and the
+  # athanor's generations, and the
   # paired client the context stands on, with the remote identity row an
   # identity subject's person was resolved by and the `key_epoch` its
   # certificate was verified under (both nil for a local subject). An
   # issuance from it locks and rereads them all, the client after the
-  # person, athanor and seat, so a revocation that commits after this
+  # person and athanor, so a revocation that commits after this
   # verification and before the issuance refuses it (`Sanctum.Issuance`).
   defp device_binding(device) do
     {identity, key_epoch} = binding_subject(device.certificate, Map.get(device, :identity))
@@ -491,7 +490,6 @@ defmodule Sanctum.Caller do
     %{
       source_kind: :device,
       source_id: device.client.id,
-      focus_basis: device.seat.id,
       user_generation: device.user.security_generation,
       athanor_generation: device.athanor.security_generation,
       identity: identity,
@@ -551,23 +549,19 @@ defmodule Sanctum.Caller do
   mint and at every use. Never answered from the establish memo.
 
   `claims` name the person, the athanor and their generations as read at
-  mint, the source credential (`:session` with its base64url token hash,
-  or `:api_key` with its row id) and the focus basis (the membership row
-  id, or `:key`). The rows are locked and reread in the standing order
-  (`Arca.CredentialBindings.check/3`), with the database's own time read
-  after the locks, and must hold:
+  mint and the source credential (`:session` with its base64url token
+  hash, or `:api_key` with its row id). The rows are locked and reread in
+  the standing order (`Arca.CredentialBindings.check/3`), with the
+  database's own time read after the locks, and must hold:
 
     * the person exists, is active, at the generation read — a person
       denied and allowed again is a new generation;
-    * the athanor exists, is active, at the generation read — an athanor
-      archived and reopened is a new generation;
+    * the athanor exists, is active, at the generation read, and is the
+      person's own (its `owner_user_id`) — an athanor archived and
+      reopened is a new generation;
     * a session source still exists for this person and has not
       expired; a key source is unrevoked, the athanor's, the person's,
-      and its allowlist admits `client_ip:`;
-    * the membership a session's focus rested on is still that active
-      seat, the person's in that athanor (a rejoin is a new row; a
-      platform row is no seat); a key's focus is the key, so its
-      creator leaving the athanor does not end it.
+      and its allowlist admits `client_ip:`.
 
   A session source of a remote person stands, as the session itself does
   (the module doc), only on that person's fresh identity head and while
@@ -582,7 +576,7 @@ defmodule Sanctum.Caller do
   credential derived from either outlives a lapse.
 
   `{:ok, %{now: now, source_expires_at: expiry | nil}}`, or a refusal:
-  `:not_standing`, `:not_member` (the focus membership is gone),
+  `:not_standing`, `:not_member` (the athanor is not the person's),
   `:ip_not_allowed`, `:identity_stale`, `:company_login_required`, or
   `:unavailable` when the store cannot answer — never read as either
   verdict.
@@ -600,7 +594,6 @@ defmodule Sanctum.Caller do
     binding = %{
       user_id: claims.user_id,
       athanor_id: claims.athanor_id,
-      membership_id: if(is_binary(claims.focus_basis), do: claims.focus_basis),
       source: source_row(claims)
     }
 
@@ -647,7 +640,7 @@ defmodule Sanctum.Caller do
   defp derived_policy(rows, claims, client_ip) do
     with :ok <- derived_person(rows.user, claims),
          :ok <- derived_athanor(rows.athanor, claims),
-         :ok <- derived_focus(rows.membership, claims),
+         :ok <- derived_focus(rows.athanor, claims),
          {:ok, expires_at} <- derived_source(rows.source, rows.now, claims, client_ip) do
       {:ok, %{now: rows.now, source_expires_at: expires_at}}
     end
@@ -667,19 +660,11 @@ defmodule Sanctum.Caller do
 
   defp derived_athanor(_athanor, _claims), do: {:error, :not_standing}
 
-  # Every derived credential names an athanor (`derived_athanor/2`), and a
-  # session's stands there on the person's seat in it alone: a platform
-  # row is the operator's capability, no seat in any athanor, so a
-  # credential resting on one is refused like a seat that is gone.
-  defp derived_focus(nil, %{focus_basis: :key, source_kind: :api_key}), do: :ok
-
-  defp derived_focus(
-         %{status: "active", user_id: user_id, scope: "athanor", athanor_id: athanor_id},
-         %{user_id: user_id, athanor_id: athanor_id, source_kind: :session}
-       ),
-       do: :ok
-
-  defp derived_focus(_membership, _claims), do: {:error, :not_member}
+  # Every derived credential names an athanor (`derived_athanor/2`), and
+  # stands there only while the athanor is the person's own: the platform
+  # administrator's capability reaches no other athanor.
+  defp derived_focus(%{owner_user_id: user_id}, %{user_id: user_id}), do: :ok
+  defp derived_focus(_athanor, _claims), do: {:error, :not_member}
 
   defp derived_source(
          %{kind: :session, row: %{user_id: user_id} = row},
@@ -755,7 +740,7 @@ defmodule Sanctum.Caller do
   end
 
   def establish_context(%Context{} = ctx, opts) do
-    # Distinguish a retryable membership-read failure from having no athanor membership.
+    # Distinguish a retryable read failure from having no athanor.
     with {:ok, ctx} <- resolve(ctx),
          ctx = ensure_namespace(ctx),
          :ok <- tenant_ok(ctx),
@@ -791,12 +776,12 @@ defmodule Sanctum.Caller do
   session row the context's hash names — it must exist, be unexpired and
   belong to the same person — and the person's standing, and the focused
   athanor's; then rebuilds the context from the stored session and the
-  person's current memberships (`Sanctum.Session.load_by_hash/1`) and
+  person's current row (`Sanctum.Session.load_by_hash/1`) and
   focuses it again on the athanor the caller had in focus
   (`Sanctum.Context.focus/2`). The result carries the caller's request
   correlation and plane, never more permission than the caller held, and
   a new `validated_at`. A focus refusal rereads session standing, so a
-  leave that ended the session during the rebuild is answered as a
+  denial that ended the session during the rebuild is answered as a
   retired session rather than only a lost focus.
 
   Refusals, each distinct:
@@ -1061,7 +1046,6 @@ defmodule Sanctum.Caller do
     binding = %{
       user_id: ctx.user_id,
       athanor_id: ctx.athanor_id,
-      membership_id: nil,
       source: {:session, hash}
     }
 
@@ -1104,7 +1088,7 @@ defmodule Sanctum.Caller do
   defp standing_athanor(_athanor, _athanor_id), do: {:error, :not_member}
 
   # A paired device's certificate deadline on this node's clock, then its
-  # paired client and its person's seat, read from the store. Nothing is
+  # paired client and its person's athanor, read from the store. Nothing is
   # rebuilt: everything the context carries is the client row's.
   defp revalidate_device(%Context{credential_deadline: deadline} = ctx) do
     if expired?(deadline) do
@@ -1167,7 +1151,6 @@ defmodule Sanctum.Caller do
     binding = %{
       user_id: ctx.user_id || "",
       athanor_id: ctx.athanor_id,
-      membership_id: nil,
       source: {:api_key, id}
     }
 
@@ -1269,8 +1252,8 @@ defmodule Sanctum.Caller do
         {:error, :unavailable}
 
       {:error, _refused} ->
-        # A leave can retire the seat and its bound session after the
-        # reload. That ended session takes precedence over a lost focus;
+        # A denial can retire the session after the reload. That ended
+        # session takes precedence over a lost focus;
         # rereading standing can only refine the refusal, never admit it.
         with :ok <- stored_standing(held, held.session_token_hash),
              do: {:error, :not_member}

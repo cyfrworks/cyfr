@@ -705,7 +705,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
     CellLease,
     DeviceCertificate,
     ExternalIdentity,
-    Membership,
     PairedClient,
     PendingConfirmation,
     User
@@ -738,7 +737,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
         Arca.Repo.delete_all(where(PendingConfirmation, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
-        Arca.Repo.delete_all(where(Membership, user_id: ^user_id))
         Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
         Arca.Repo.delete_all(where(User, id: ^user_id))
         Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))

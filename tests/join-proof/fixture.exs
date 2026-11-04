@@ -19,8 +19,8 @@
 #
 #   person IDENTIFIER
 #       The person this home admitted under IDENTIFIER: their row's
-#       provenance, their memberships here, their own athanor here by its
-#       route (`athanor_route`), the shared threads they sit in
+#       provenance, the athanors they own here (`athanors`), their own
+#       athanor here by its route (`athanor_route`), the shared threads they sit in
 #       (`threads`), their sessions (the athanor
 #       each is bound to and the `key_epoch` it records) and their
 #       passkeys here (state and the recovery epoch each is bound to), or
@@ -117,11 +117,11 @@ fn args ->
         {:ok, identity} ->
           user_id = identity.user_id
 
-          memberships =
+          athanors =
             Arca.Repo.all(
-              from(m in Arca.Schemas.Membership,
-                where: m.user_id == ^user_id and m.status == "active" and m.scope == "athanor",
-                select: m.athanor_id
+              from(a in Arca.Schemas.Athanor,
+                where: a.owner_user_id == ^user_id and a.status == "active",
+                select: a.id
               )
             )
 
@@ -161,7 +161,7 @@ fn args ->
           answer.(%{
             user_id: user_id,
             provenance: identity.provenance,
-            memberships: Enum.sort(memberships),
+            athanors: Enum.sort(athanors),
             athanor_route: athanor_route,
             threads: Enum.sort(threads),
             sessions: sessions,
@@ -282,7 +282,7 @@ fn args ->
           from(c in Arca.Schemas.PendingConfirmation,
             where: c.user_id in ^user_ids,
             order_by: c.opened_at,
-            select: %{operation: c.operation, state: c.state}
+            select: %{operation: c.operation, state: c.state, proof: c.proof}
           )
         )
 

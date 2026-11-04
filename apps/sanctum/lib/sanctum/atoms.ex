@@ -48,7 +48,7 @@ defmodule Sanctum.Atoms do
 
   @doc """
   The permissions a signed-in person holds: every declared permission. A
-  person is gated by membership, consent and policy, not by a permission
+  person is gated by their own athanor, consent and policy, not by a permission
   subset; a narrower credential (an API key, a webhook, an internal
   context) states its own set.
   """

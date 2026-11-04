@@ -56,7 +56,6 @@ defmodule Cyfr.Bus do
     FrameCredential,
     LayoutPublished,
     McpServers,
-    Membership,
     Notify,
     Ping,
     PolicyDecision,
@@ -382,16 +381,6 @@ defmodule Cyfr.Bus do
           "suspended or revoked frame credential ends at once on every member"
     },
     %{
-      key: :memberships,
-      scope: :global,
-      struct: Membership,
-      match: {:prefix, "sanctum:memberships:"},
-      template: "sanctum:memberships:<user_id>",
-      producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["CyfrWeb.ContextGuard", "PrismWeb.ChatLive"],
-      reason: "the subject is the person, not an athanor: which athanors they may now reach"
-    },
-    %{
       key: :shared_threads,
       scope: :global,
       struct: SharedThreadChanged,
@@ -711,11 +700,6 @@ defmodule Cyfr.Bus do
   @spec sessions() :: String.t()
   def sessions, do: "sanctum:sessions"
 
-  @doc "One person's seats (`Cyfr.Bus.Membership`)."
-  @spec memberships(String.t()) :: String.t()
-  def memberships(user_id) when is_binary(user_id) and user_id != "",
-    do: "sanctum:memberships:" <> user_id
-
   @doc "The shared threads one person sits in (`Cyfr.Bus.SharedThreadChanged`)."
   @spec shared_threads(String.t()) :: String.t()
   def shared_threads(user_id) when is_binary(user_id) and user_id != "",
@@ -897,25 +881,21 @@ defmodule Cyfr.Bus do
 
   @doc """
   Subscribe the calling process to every announcement that can end a
-  held context's standing: sessions, caller invalidation and archives,
-  and — for a person — their memberships. Each holder filters for its
-  own caller.
+  held context's standing: sessions, caller invalidation and archives.
+  Each holder filters for its own caller.
   """
-  @spec subscribe_standing(String.t() | nil) :: :ok
-  def subscribe_standing(user_id) do
-    Enum.each(standing_topics(user_id), &Phoenix.PubSub.subscribe(@pubsub, &1))
+  @spec subscribe_standing() :: :ok
+  def subscribe_standing do
+    Enum.each(standing_topics(), &Phoenix.PubSub.subscribe(@pubsub, &1))
   end
 
-  @doc "Undo `subscribe_standing/1` for the same person."
-  @spec unsubscribe_standing(String.t() | nil) :: :ok
-  def unsubscribe_standing(user_id) do
-    Enum.each(standing_topics(user_id), &Phoenix.PubSub.unsubscribe(@pubsub, &1))
+  @doc "Undo `subscribe_standing/0`."
+  @spec unsubscribe_standing() :: :ok
+  def unsubscribe_standing do
+    Enum.each(standing_topics(), &Phoenix.PubSub.unsubscribe(@pubsub, &1))
   end
 
-  defp standing_topics(user_id) do
-    person = if is_binary(user_id) and user_id != "", do: [memberships(user_id)], else: []
-    [sessions(), caller_invalidated_global(), athanor_archived_global()] ++ person
-  end
+  defp standing_topics, do: [sessions(), caller_invalidated_global(), athanor_archived_global()]
 
   # ---------------------------------------------------------------------------
   # Classification

@@ -339,7 +339,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       device = pair!(session_ctx)
       state = proven(device)
 
-      # The denial removes the person's seat in their own athanor.
+      # The denial archives the person's own athanor.
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
 
       assert_refused_answering(
@@ -1555,10 +1555,10 @@ defmodule Emissary.Web.DeviceChannelTest do
       state = proven(pair!(session_ctx))
       {grant_id, _grant, state} = open_stream!(state, "s1")
 
-      # The denial removes the person's seat in their own athanor.
+      # The denial archives the person's own athanor, and says so.
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
 
-      assert_receive %Cyfr.Bus.Membership{} = announcement, 2_000
+      assert_receive %Cyfr.Bus.AthanorArchived{} = announcement, 2_000
 
       assert {:stop, :normal, {4403, "forbidden"}, frames, _state} =
                DeviceChannel.handle_info(announcement, state)
@@ -2299,7 +2299,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     %{cert: DeviceCert.sign(cert, live_private), client_id: client_id, private: device_private}
   end
 
-  # A person seated in their own athanor, and the context their session
+  # A person in their own athanor, and the context their session
   # establishes there.
   defp seated(_context) do
     n = System.unique_integer([:positive])

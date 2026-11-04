@@ -27,7 +27,11 @@ defmodule Sanctum.ApiKeyCapabilityTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.issuer!(Sanctum.TestContext.local())}
+    # The person issues in their own athanor, the only one a key of theirs
+    # is minted into.
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    own = Sanctum.Test.People.athanor!(user)
+    {:ok, ctx: Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})}
   end
 
   defp future, do: DateTime.add(DateTime.utc_now(), 3600, :second)

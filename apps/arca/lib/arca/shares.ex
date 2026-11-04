@@ -60,7 +60,7 @@ defmodule Arca.Shares do
   `member?/3` (one seat, read at use), `get_for_source/2` (one share
   by id, with its source entry's binding facts), `administrator_shares/1`
   (the active shares to everyone of an owner who holds the platform
-  administrator's membership) and `head_profiles_referencing_share/2`
+  administrator's mark) and `head_profiles_referencing_share/2`
   (the profiles binding a share, platform scope only).
   """
 
@@ -68,7 +68,6 @@ defmodule Arca.Shares do
 
   alias Arca.Schemas.{
     Athanor,
-    Membership,
     Share,
     SharedThread,
     SharedThreadMember,
@@ -749,27 +748,23 @@ defmodule Arca.Shares do
 
   @doc """
   The active shares to `everyone` whose owner holds the platform
-  administrator's membership and is active, each with its active,
+  administrator's mark and is active, each with its active,
   attach-only source entry and its owner, newest first: the candidates a
   new person's first sign-in binds from.
   """
   @spec administrator_shares(Prima.Actor.t()) :: {:ok, [offered()]} | {:error, term()}
   # arca:unscoped-ok the administrator's shares are in their own athanor,
   # read for a person of another: every active share to everyone, kept by
-  # its owner's platform membership.
+  # its owner's platform administrator's mark.
   def administrator_shares(%Prima.Actor{}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Shares.administrator_shares", fn ->
-      administrators =
-        from(m in Membership,
-          where: m.scope == "platform" and m.status == "active",
-          select: m.user_id
-        )
-
       query =
         from([s, v, a] in offered_base(),
           join: u in User,
-          on: u.id == a.owner_user_id and u.status == "active",
-          where: s.audience == "everyone" and a.owner_user_id in subquery(administrators)
+          on:
+            u.id == a.owner_user_id and u.status == "active" and
+              not is_nil(u.platform_admin_at),
+          where: s.audience == "everyone"
         )
 
       {:ok, Enum.map(Arca.Repo.all(query), &offered/1)}

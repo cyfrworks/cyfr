@@ -393,19 +393,16 @@ defmodule Aqua.Providers.ThreadTest do
     end
 
     test "a refused standing answer is a sentence a person can read, not the runner's atom", %{
-      ctx: ctx,
-      thread: thread
+      ctx: ctx
     } do
-      # Deciding a card is held to a member's standing, like a send.
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id,
-          scope: "athanor",
-          athanor_id: ctx.athanor_id
-        )
+      # Deciding a card is held to the standing of the athanor's person,
+      # like a send: the decider is a person of their own, in their own.
+      {ctx, user} = Sanctum.TestContext.person!(ctx)
+      ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
       # One turn holds a thread at a time — that is what the thread's claim
-      # means — so each card is raised in a thread of its own, the first in
-      # the setup's and the second in one opened here.
+      # means — so each card is raised in a thread of its own.
+      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
       {:ok, second} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
       destructive =
@@ -495,8 +492,8 @@ defmodule Aqua.Providers.ThreadTest do
       end)
 
       # A person of their own (`Sanctum.TestContext.person!/1`), working in
-      # their own athanor, since aloud checks membership on the source too,
-      # and in a shared thread with someone else.
+      # their own athanor, since aloud checks the source is theirs too, and
+      # in a shared thread with someone else.
       {ctx, user} = Sanctum.TestContext.person!(ctx)
       ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
@@ -602,18 +599,40 @@ defmodule Aqua.Providers.ThreadTest do
 
       assert {:ok, []} = Sanctum.SharedThreads.messages(someone, theirs.id)
     end
+
+    test "a source in an athanor not the caller's own is refused in plain words", %{
+      ctx: ctx,
+      thread: thread,
+      shared: shared
+    } do
+      other = Cyfr.Test.ShareFixtures.person!("Other").athanor
+
+      assert {:error, {:invalid_argument, msg}} =
+               call(%{ctx | athanor_id: other.id}, %{
+                 "action" => "aloud",
+                 "thread" => thread.id,
+                 "message_ids" => ["msg_x"],
+                 "target_thread" => shared.id
+               })
+
+      assert msg == "aloud reads only threads of your own athanor"
+      refute msg =~ "member"
+      assert {:ok, []} = Sanctum.SharedThreads.messages(ctx.user_id, shared.id)
+    end
   end
 
   describe "the send envelope and the thread's own verbs" do
     setup %{ctx: ctx} do
-      # Every send starts a turn, which a filled athanor admits; each send
-      # here names its agent, and the turns it starts stop with the test.
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
-
+      # Every send starts a turn, which the sender's own filled athanor
+      # admits: the sender is a person of their own, working there. Each
+      # send here names its agent, and the turns it starts stop with the
+      # test.
+      {ctx, user} = Sanctum.TestContext.person!(ctx)
+      ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
       Sanctum.TestContext.ready!(ctx.athanor_id)
       Cyfr.Test.Sandbox.stop_work_on_exit()
-      :ok
+      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+      {:ok, ctx: ctx, thread: thread}
     end
 
     test "get answers the thread with its live state", %{ctx: ctx, thread: thread} do
@@ -743,14 +762,10 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, "again"} = Arca.get(Sanctum.Context.actor(ctx), blob)
     end
 
-    test "a shared thread beside the thread is read for the send and never stored", %{ctx: ctx} do
-      # The sender is a person of their own, working in their own athanor.
-      {ctx, user} = Sanctum.TestContext.person!(ctx)
-      athanor = Sanctum.Test.People.athanor!(user)
-      ctx = %{ctx | athanor_id: athanor.id}
-      Sanctum.TestContext.ready!(athanor.id)
-      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-
+    test "a shared thread beside the thread is read for the send and never stored", %{
+      ctx: ctx,
+      thread: thread
+    } do
       {:ok, beside} = Sanctum.SharedThreads.create(ctx.user_id, "Beside")
       {:ok, _} = Sanctum.SharedThreads.post(ctx.user_id, beside.id, "shared talk")
 

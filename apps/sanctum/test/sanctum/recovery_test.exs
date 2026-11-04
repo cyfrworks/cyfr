@@ -179,9 +179,9 @@ defmodule Sanctum.RecoveryTest do
     )
   end
 
-  # A person seated in their own athanor, and the context their session
+  # A person with their own athanor, and the context their session
   # establishes there.
-  defp seated! do
+  defp person! do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
@@ -214,7 +214,7 @@ defmodule Sanctum.RecoveryTest do
 
   # The enrollment the person's admission opens, as it opens it: at the
   # pinned directory, with a fresh identity, nothing sent.
-  defp opened!(context, person \\ seated!()) do
+  defp opened!(context, person \\ person!()) do
     identity = Newcomers.identity()
     :ok = Recovery.open_at_admission(person.user.id, identity, context.directory.url)
     Map.merge(person, %{identity: identity, seed: identity.recovery_secret})
@@ -569,7 +569,7 @@ defmodule Sanctum.RecoveryTest do
     end
 
     test "a person with no enrollment has nothing to advance or rename", context do
-      person = seated!()
+      person = person!()
 
       assert {:error, :no_attempt} = Recovery.advance(person.ctx, context.opts)
       assert {:error, :no_attempt} = Recovery.rename(person.ctx, "nova")
@@ -653,7 +653,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{phase: "completed"}} = Recovery.advance(person.ctx, context.opts)
 
       # Nobody else reaches it.
-      other = seated!()
+      other = person!()
 
       assert {:error, {:not_found, "recovery_code", ^attempt_id}} =
                Recovery.recovery_code(other.ctx, attempt_id)
@@ -977,11 +977,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, :allowed} = Sanctum.Door.admit_person(%{id: user_id})
       assert {:ok, []} = Arca.Users.identities(system(), user_id)
 
-      assert Arca.Repo.exists?(
-               from(m in Arca.Schemas.Membership,
-                 where: m.user_id == ^user_id and m.scope == "platform"
-               )
-             )
+      assert %User{platform_admin_at: %DateTime{}} = Arca.Repo.get!(User, user_id)
 
       # A plain retry issues no session.
       assert {:error, :restored} = Recovery.restore(identity.body, @token, context.opts)
@@ -1051,7 +1047,7 @@ defmodule Sanctum.RecoveryTest do
     end
 
     test "on a node with another person is refused before any write or outbound call", context do
-      _person = seated!()
+      _person = person!()
       reserved!()
       identity = elsewhere!(context.directory)
 
@@ -1327,7 +1323,7 @@ defmodule Sanctum.RecoveryTest do
       assert count(User) == 1
       assert sessions(user_id) == 0
 
-      # The admission wrote the person's athanor and their grant with them;
+      # The admission wrote the person's athanor and their mark with them;
       # superseded after it, the attempt asks for no fill and issues no
       # session.
       assert {:ok, _athanor} = Sanctum.Tenancy.Users.personal_athanor_id(user_id)

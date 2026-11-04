@@ -8,11 +8,11 @@
 // Each step is one row per browser of the record; the proof fails when a
 // row does not hold, and stops at the first row a later one rests on.
 //
-// Chromium runs every step, and the glass's steps once more at a 720×720
+// Chromium runs every step, and the cross-home confirmation's once more at a 720×720
 // touch viewport. Firefox and WebKit offer no virtual authenticator, so
 // they run the sign-in at H, the carry between the homes and a second
-// browser profile; each fresh confirmation those need is given on a glass
-// paired at A in Chromium (common.mjs, steps.mjs).
+// browser profile; each fresh confirmation those need is given in Chromium
+// at A with the passkey (common.mjs, steps.mjs).
 //
 // Usage: node proof.mjs HOMES_FILE OUT_DIR
 
@@ -39,9 +39,9 @@ async function main(proxy) {
   if (!(await resolution(home.identifier))) return;
 
   // Firefox and WebKit: signed in at A by the fixture's door, each
-  // confirmation given on the glass in Chromium; then a second profile.
+  // confirmation given at A in Chromium with the passkey; then a second profile.
   // They run one at a time, and the requests the proxy sees meanwhile are
-  // theirs but for the Chromium glass at A, whose requests never cross
+  // theirs but for the Chromium page at A, whose requests never cross
   // homes: each browser's cross-home requests are its window's.
   const windows = {};
   for (const name of BROWSERS.filter((b) => b !== "chromium")) {
@@ -52,7 +52,7 @@ async function main(proxy) {
       for (const step of ["sign_in", "second_profile"]) {
         const { cookie } = await ask({ op: "a_cookie" }, { secret: true });
         secrets.push(cookie);
-        const run = await signIn(browser, name, proxy, { home: A, identifier: home.identifier, glass: home.glass, cookie, step });
+        const run = await signIn(browser, name, proxy, { home: A, identifier: home.identifier, confirmer: home.confirmer, cookie, step });
         await run.context.close();
         if (!run.held) break;
       }
