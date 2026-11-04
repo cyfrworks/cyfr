@@ -173,8 +173,16 @@ defmodule Arca.PairingInvitationsTest do
     {invitation, Prima.Digest.sha256(secret), attrs.key_digest}
   end
 
+  # The devices a redemption issued in the athanor: a passkey that
+  # confirmed an invitation is its person's client too, its platform
+  # holder, and no device a redemption issued.
   defp clients(actor) do
-    Arca.Repo.aggregate(from(p in PairedClient, where: p.athanor_id == ^actor.athanor_id), :count)
+    Arca.Repo.aggregate(
+      from(p in PairedClient,
+        where: p.athanor_id == ^actor.athanor_id and p.source_kind != "passkey"
+      ),
+      :count
+    )
   end
 
   defp latch_open?(person), do: PersonIdentities.first_method_open?(server(), person.id)
@@ -1000,9 +1008,16 @@ defmodule Arca.PairingInvitationsRaceTest do
     {task, pid}
   end
 
+  # The devices a redemption issued, its confirmer passkey's platform
+  # holder apart.
   defp clients(actor) do
     unboxed(fn ->
-      Arca.Repo.aggregate(where(PairedClient, athanor_id: ^actor.athanor_id), :count)
+      Arca.Repo.aggregate(
+        from(p in PairedClient,
+          where: p.athanor_id == ^actor.athanor_id and p.source_kind != "passkey"
+        ),
+        :count
+      )
     end)
   end
 

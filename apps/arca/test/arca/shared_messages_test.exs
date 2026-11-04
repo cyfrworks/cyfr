@@ -15,7 +15,8 @@ defmodule Arca.SharedMessagesTest do
   refuses an athanor's actor.
   """
 
-  use ExUnit.Case, async: true
+  # A full page of appends holds SQLite's write lock until the sandbox ends.
+  use ExUnit.Case, async: false
 
   alias Arca.{SharedMessages, SharedThreadMembers, SharedThreads}
 

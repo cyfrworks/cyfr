@@ -213,14 +213,37 @@ defmodule Sanctum.PlatformHolderTest do
     assert Arca.Repo.get!(PairedClient, holder.id).standing == "active"
   end
 
+  test "a person deleted with their passkey and its session leaves no client of no one, and a declared restore after it runs",
+       %{ctx: ctx, user: user} do
+    {auth, passkey} = registered!(ctx)
+    _token = signed_in!(auth)
+    assert [_holder] = holders(user.id)
+
+    # The person goes, as a fixture's cleanup removes one: their passkey
+    # with them, and its platform holder with the passkey.
+    {1, _} = Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user.id))
+    assert Arca.Repo.get(Arca.Schemas.Passkey, passkey.id) == nil
+    assert holders(user.id) == []
+
+    # A declared restore records every method holder's person; none of
+    # them is gone.
+    {:ok, _} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    assert {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
+  end
+
   test "the store refuses a passkey's client that is not its platform holder, and a platform holder with a key",
-       %{user: user, athanor: athanor} do
+       %{ctx: ctx, user: user, athanor: athanor} do
+    {_auth, passkey} = registered!(ctx)
+    [holder] = holders(user.id)
+    Arca.Repo.delete_all(from(p in PairedClient, where: p.id == ^holder.id))
+
     base = %{
       id: Prima.UUID7.generate_id("pcl"),
       athanor_id: athanor.id,
       user_id: user.id,
       source_kind: "passkey",
-      source_id: "psk_x",
+      source_id: passkey.id,
+      passkey_id: passkey.id,
       standing: "active",
       inserted_at: DateTime.utc_now(),
       updated_at: DateTime.utc_now()
@@ -241,7 +264,9 @@ defmodule Sanctum.PlatformHolderTest do
           Map.put(base, :holder_kind, nil),
           Map.put(base, :holder_kind, "chip"),
           Map.merge(base, %{holder_kind: "platform", device_public_key: <<1::256>>}),
-          Map.merge(base, %{holder_kind: "platform", source_kind: "device_cert"})
+          Map.merge(base, %{holder_kind: "platform", source_kind: "device_cert"}),
+          Map.merge(base, %{holder_kind: "platform", passkey_id: nil}),
+          Map.merge(base, %{holder_kind: "platform", source_id: "psk_another"})
         ] do
       assert refused?.(row), inspect(Map.take(row, [:holder_kind, :source_kind]))
     end
