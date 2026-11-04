@@ -60,11 +60,13 @@ cat > "$scratch/bin/mix" <<'FAKE'
 #   MIX_ENV|CYFR_DATABASE|MIX_BUILD_PATH|MIX_TEST_PARTITION|directory|arguments
 # with `-` for an unset variable. A call is named by its key: in an island
 # copy `island_<app>_<task>`, elsewhere `<database>_<env>_<task>`. A key in
-# STUB_STALL stalls with a grandchild; in STUB_SLOW_STOP it stalls and
+# STUB_FAIL fails at once; in STUB_STALL it stalls with a grandchild; in STUB_SLOW_STOP it stalls and
 # takes eight seconds to exit on TERM; in STUB_HOLD it waits for
 # $TRACE/release; in STUB_DELAY it takes ten seconds. Each writes its pid
-# (and the grandchild's) to $TRACE first.
+# (and the grandchild's) to $TRACE first. A call given an object store
+# notes its endpoint in $TRACE/s3.endpoints.
 printf '%s|%s|%s|%s|%s|%s\n' "${MIX_ENV:--}" "${CYFR_DATABASE:--}" "${MIX_BUILD_PATH:--}" "${MIX_TEST_PARTITION:--}" "$PWD" "$*" >> "$TRACE/mix.calls"
+[ -z "${CYFR_TEST_S3_ENDPOINT:-}" ] || echo "$CYFR_TEST_S3_ENDPOINT" >> "$TRACE/s3.endpoints"
 case "$PWD" in
   */island_*/apps/*) app=${PWD##*/}; key="island_${app}_$1"
     [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock"
@@ -97,6 +99,7 @@ if [ "$1" = run ] && [ "${5:-}" = assign ]; then
   for unit in "$@"; do printf '%s\0' "$unit" >> "$dir/assign/p$((p % count + 1))"; p=$((p + 1)); done
   exit 0
 fi
+case " ${STUB_FAIL:-} " in *" $key "*) echo "stand-in: $key fails" >&2; exit 1 ;; esac
 case " ${STUB_STALL:-} " in *" $key "*)
   sleep 300 & echo "$!" > "$TRACE/grandchild.$key"
   echo "$$" > "$TRACE/stalled.$key"
@@ -149,6 +152,8 @@ chmod +x "$scratch/bin/mix"
 # it (as `docker rm -f` stops a running one) or two minutes pass, so a
 # container outlives the caller of the run; under STUB_DOCKER_WATCH each
 # call notes in docker.watch whether that path is there as it starts.
+# A detached run (`run -d`) lists its container under its --name, and
+# `port NAME` answers 127.0.0.1:49999 for a container it lists.
 cat > "$scratch/bin/go" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "$PWD" "${GOBIN:-}" "$*" >> "$TRACE/go.calls"
@@ -248,7 +253,13 @@ case "$1" in
       ls) ! fails volume-ls || exit 1; cat "$volumes" ;;
       rm) ! fails volume-rm || exit 1; take "$volumes" 1 "${!#}" volume-rm ;;
     esac ;;
+  port) awk -v c="$2" '$2 == c { f = 1 } END { exit !f }' "$containers" || exit 1; echo 127.0.0.1:49999 ;;
   run)
+    if [ "${2:-}" = -d ]; then
+      [ "${3:-}" = --name ] || exit 1
+      echo "d$$ $4" >> "$containers"
+      exit 0
+    fi
     if [ -n "${STUB_DOCKER_HOLD:-}" ] && [[ "${!#}" == *"$STUB_DOCKER_HOLD"* ]]; then
       cname="unnamed_$$" prev=
       for a in "$@"; do [ "$prev" != --name ] || cname=$a; prev=$a; done
@@ -295,8 +306,9 @@ FAKE
 chmod +x "$scratch/trivy-release/trivy"
 # curl serves trivy's release from the stand-in (an archive of the
 # trivy above and a checksums file naming its sha256, or under
-# STUB_TRIVY_BAD_SUM another), recording each URL in curl.calls, and
-# fetches anything else for real; npm records an audit in tools.calls and
+# STUB_TRIVY_BAD_SUM another), recording each of those URLs in curl.calls, answers
+# the stand-in object store's health URL, and fetches anything else for
+# real; npm records an audit in tools.calls and
 # runs anything else as itself.
 REAL_CURL=$(command -v curl) || fail 'no curl on PATH'
 REAL_NPM=$(command -v npm) || fail 'no npm on PATH'
@@ -306,6 +318,7 @@ cat > "$scratch/bin/curl" <<'FAKE'
 url=${!#} out= prev=
 for a in "$@"; do [ "$prev" != -o ] || out=$a; prev=$a; done
 case "$url" in
+  http://127.0.0.1:49999/minio/health/live) exit 0 ;;
   https://github.com/aquasecurity/trivy/releases/download/*)
     echo "$url" >> "$TRACE/curl.calls"
     name=${url##*/}
@@ -388,6 +401,20 @@ case "$0" in
 esac
 FAKE
 
+# rustup's settings, as the gate reads its default toolchain from them:
+# a RUSTUP_HOME of the test's whose default is rust-toolchain.toml's
+# channel (rustup_home NAME CHANNEL), its toolchains the host's, so the
+# toolchains the steps name run as they do. Every gate runs on the
+# channel's unless the case names another RUSTUP_HOME.
+channel=$(sed -n 's/^channel = "\([0-9][0-9.]*\)"$/\1/p' "$root/rust-toolchain.toml")
+[ -n "$channel" ] || fail 'rust-toolchain.toml names no channel'
+rustup_home() {
+  mkdir -p "$scratch/$1"
+  ln -s "${RUSTUP_HOME:-$HOME/.rustup}/toolchains" "$scratch/$1/toolchains"
+  printf 'version = "12"\ndefault_toolchain = "%s-%s-unknown-linux-gnu"\nprofile = "minimal"\n' "$2" "$(uname -m)" > "$scratch/$1/settings.toml"
+}
+rustup_home rustup "$channel"
+
 # start_gate NAME [VAR=value...] -- GATE ARGS...: starts the gate as every
 # harness test starts a wrapper, as the leader of a session of its
 # own, with SIGINT and SIGHUP at their defaults (an asynchronous command
@@ -406,6 +433,7 @@ start_gate() {
   contain_start -g 60 perl -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV or die "exec $ARGV[0]: $!\n"' \
     env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS \
     TRACE="$scratch/$name.trace" PATH="$scratch/bin:$PATH" REAL_MIX="$REAL_MIX" CYFR_DATABASE_URL='postgres://u:p@host/base' \
+    RUSTUP_HOME="$scratch/rustup" \
     REAL_PYTHON3="$REAL_PYTHON3" GATE_ROOT="$root" BASH_ENV="$scratch/stub.bash_env" TMPDIR="$scratch/$name.tmp" \
     REAL_CURL="$REAL_CURL" REAL_NPM="$REAL_NPM" TRIVY_RELEASE="$scratch/trivy-archive" \
     ${vars[@]+"${vars[@]}"} bash "$@" >"$scratch/$name.out" 2>"$scratch/$name.err" </dev/null
@@ -1058,11 +1086,15 @@ has_line "cargo-component is neither in $scratch/empty-cargo/bin nor on PATH" "$
   fail "a gate without cargo-component gave no reason naming where it looked: $(cat "$scratch/nocargo.err")"
 no_mix_ran nocargo || fail 'a gate without cargo-component went on to the legs'
 [ ! -e "$scratch/nocargo.log" ] || fail 'a gate without cargo-component made its log directory'
-# The same PATH with the tool in CARGO_HOME's bin passes the check: the
-# gate goes on to its log directory check, which refuses a file.
+# The same PATH with the tool in CARGO_HOME's bin, beside rustup, passes
+# the check: the gate goes on to its log directory check, which refuses a
+# file.
 mkdir -p "$scratch/stub-cargo/bin"
 printf '#!/bin/sh\nexit 0\n' > "$scratch/stub-cargo/bin/cargo-component"
 chmod +x "$scratch/stub-cargo/bin/cargo-component"
+real_rustup="${CARGO_HOME:-$HOME/.cargo}/bin/rustup"
+[ -x "$real_rustup" ] || real_rustup=$(command -v rustup) || fail 'no rustup for the gate to read its default toolchain with'
+ln -s "$real_rustup" "$scratch/stub-cargo/bin/rustup"
 run_gate cargo-home CARGO_HOME="$scratch/stub-cargo" PATH="$nocargo_path" -- "$gate" -l "$scratch/a-file"
 [ "$gate_rc" = 64 ] || fail "a gate finding cargo-component in CARGO_HOME exited $gate_rc: $(cat "$scratch/cargo-home.err")"
 no_line 'cargo-component' "$scratch/cargo-home.err" || fail "a gate refused cargo-component in CARGO_HOME's bin: $(cat "$scratch/cargo-home.err")"
@@ -1085,7 +1117,8 @@ path_without() {
   done
   echo "$out"
 }
-# No go, a go other than go.mod's, a docker with no daemon: each refused
+# No go, a go other than go.mod's, a docker with no daemon, a rustup whose
+# default toolchain is not rust-toolchain.toml's channel: each refused
 # with 69, naming it, before the log directory or any leg. No trivy is
 # asked for: the close installs its own (the close case runs without one).
 # refused_for NAME REASON VAR [GATE FLAG]
@@ -1104,7 +1137,10 @@ notrivy_path=$(path_without trivy)
 refused_for nogo 'go is not on PATH' "PATH=$nogo_path"
 refused_for goversion "go on PATH is go1.0.0 and apps/codex/go.mod names go1\\.[0-9.]+, which CI.s setup-go installs" STUB_GO_VERSION=go1.0.0
 refused_for nodaemon 'docker reaches no daemon' STUB_DOCKER_DOWN=1
-echo 'ok: go and docker missing, and go not the version go.mod names'
+rustup_home rustup-old 1.0.0
+refused_for rustdefault "rustup's default toolchain is 1.0.0-[^ ]* and rust-toolchain.toml names $channel, which CI's test job makes the default" \
+  RUSTUP_HOME="$scratch/rustup-old"
+echo 'ok: go and docker missing, go not the version go.mod names, rustup not on the channel'
 
 # --- a leg run alone ----------------------------------------------------------------
 # start_leg NAME LEG [VAR=value...]: the leg as the gate starts it, with a
@@ -1342,7 +1378,19 @@ done
 markers=$(sed -n 's/.*contain_start -g 240 env \(.*\) "\$SELF" --leg .*/\1/p' "$gate" | tr ' ' '\n' | sed -n 's/^\([A-Z_]*\)=.*/\1/p')
 [ -n "$markers" ] || fail 'the gate starts its legs with no marker'
 for m in $markers; do case "$m" in CYFR_*) fail "the legs' marker $m is a name a cyfr server refuses" ;; esac; done
-echo 'ok: a whole gate that passes, every suite with a result'
+# The deps are compiled into each build path a leg compiles in, one at a
+# time, before any leg's first Mix call: the first five calls are those.
+cat > "$scratch/pass.deps.want" <<WANT
+test|sqlite|_build/test|-|$root|deps.loadpaths
+dev|sqlite|-|-|$root|deps.loadpaths
+test|postgres|_build/test_pg|-|$root|deps.loadpaths
+dev|postgres|_build/dev_pg|-|$root|deps.loadpaths
+-|-|$root/_build/audit|-|$root|deps.loadpaths
+WANT
+[ "$(head -n 5 "$scratch/pass.trace/mix.calls")" = "$(cat "$scratch/pass.deps.want")" ] ||
+  fail "the gate did not compile the deps into every build path before its legs: $(head -n 6 "$scratch/pass.trace/mix.calls")"
+[ "$(grep -c '|deps.loadpaths$' "$scratch/pass.trace/mix.calls")" = 5 ] || fail 'a leg compiled the deps on its own'
+echo 'ok: a whole gate that passes, every suite with a result, the deps compiled first into every build path'
 
 # --- the go, audit and boot legs of the passing gate ----------------------------
 # What the legs make outside the log directory is named after the gate.
@@ -1382,12 +1430,12 @@ locks=$(cd "$root" && find seed/components -name package-lock.json -not -path '*
 [ -z "$(ls -A "$scratch/pass.tmp")" ] || fail "the passing gate left $(ls -A "$scratch/pass.tmp") in TMPDIR"
 # The Elixir audit's Mix under its own build path, in the environment
 # security.yml gives it.
-for want in "-|-|$root/_build/audit|-|$root|compile" "-|-|$root/_build/audit|-|$root|hex.audit" \
+for want in "-|-|$root/_build/audit|-|$root|deps.loadpaths" "-|-|$root/_build/audit|-|$root|compile" "-|-|$root/_build/audit|-|$root|hex.audit" \
   "-|-|$root/_build/audit|-|$root|deps.audit" "-|-|$root/_build/audit|-|$root|deps.unlock --check-unused" \
   "-|-|$root/_build/audit|-|$root/apps/cyfr|sobelow --config"; do
   grep -qxF -- "$want" "$pt/mix.calls" || fail "the audit leg did not run $want: $(grep _build/audit "$pt/mix.calls")"
 done
-[ "$(grep -c '_build/audit' "$pt/mix.calls")" = 5 ] || fail "the audit build path reached another Mix call: $(grep _build/audit "$pt/mix.calls")"
+[ "$(grep -c '_build/audit' "$pt/mix.calls")" = 6 ] || fail "the audit build path reached another Mix call: $(grep _build/audit "$pt/mix.calls")"
 # The boots: SQLite with no database URL, PostgreSQL on the database the
 # leg created and dropped, a name of its own.
 grep -qxF 'tests/release-boot/boot.sh sqlite|skip=unset browsers= join= db= case_image=' "$pt/harness.calls" ||
@@ -1451,6 +1499,15 @@ run_gate close PATH="$notrivy_path" -- "$gate" --close -n 2 -l "$scratch/close.l
 framed close "$gate_pid" 0
 ct="$scratch/close.trace" ns="cyfr-gate-$gate_pid"
 has_line '^==> harness +ok ' "$scratch/close.out" || fail "the harness leg did not pass: $(cat "$scratch/close.out")"
+# The cluster suite runs against an object store of the leg's own: CI's
+# pinned image under the gate's name, its port the one Docker published,
+# and none other.
+store_image=$(grep -oE 'pgsty/silo@sha256:[0-9a-f]{64}' "$root/.github/workflows/test.yml" | sort -u)
+[ "$(printf '%s\n' "$store_image" | wc -l)" = 1 ] || fail "test.yml names no one MinIO image: $store_image"
+has_line "^run -d --name $ns-cluster-minio -p 127\.0\.0\.1::9000 -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 $store_image server /data\$" "$ct/docker.calls" ||
+  fail "the cluster leg did not start CI's object store under the gate's name: $(grep -- '-d' "$ct/docker.calls")"
+[ "$(sort -u "$ct/s3.endpoints")" = http://127.0.0.1:49999 ] || fail "the cluster suite ran against another object store: $(sort -u "$ct/s3.endpoints" 2>&1)"
+has_line '^cluster=0$' "$scratch/close.log/cluster.summary" || fail "the cluster suite did not pass: $(cat "$scratch/close.log/cluster.summary")"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
   'backends_image: test.yml locus-backends-image: 22 steps' 'browser_a: test.yml browser shard=a: 6 steps' \
@@ -2332,6 +2389,33 @@ done
   fail "an island phase ran outside MIX_ENV=test: $(awk -F'|' '$5 ~ /\/island_/ && $1 != "test"' "$calls" | tr '\n' ' ')"
 echo 'ok: inherited build paths, the pg selection and its two partitions'
 
+# --- a failed leg ends the gate -----------------------------------------------------
+# The PostgreSQL test compile fails while the SQLite one holds: the gate
+# ends at once with 1, without waiting for the held step, stops every leg
+# still running (each its steps), reports them stopped, starts neither the
+# cluster nor the harness leg, and leaves nothing named after it.
+host_store failfast
+start_gate failfast STUB_FAIL=postgres_test_compile STUB_HOLD=sqlite_test_compile -- "$gate" --close -n 2 -l "$scratch/failfast.log"
+f=$gate_pid
+until_true 60 test -s "$scratch/failfast.trace/held.sqlite_test_compile" || fail "the fail-fast case's static step never started: $(cat "$scratch/failfast.err")"
+held=$(cat "$scratch/failfast.trace/held.sqlite_test_compile")
+until_true 30 has_line '^_EXIT=' "$scratch/failfast.out" || fail "a gate whose postgres leg failed did not end while the static leg ran: $(cat "$scratch/failfast.out")"
+gate_status "$f"; [ "$gate_rc" = 1 ] || fail "a gate whose postgres leg failed exited $gate_rc"
+framed failfast "$f" 1
+dead "$held" || fail 'the held static step outlived the gate that stopped at the failed leg'
+has_line '^==> postgres +FAILED .*compile_pg_test=1' "$scratch/failfast.out" || fail "the failed leg was not reported: $(cat "$scratch/failfast.out")"
+for leg in static islands go boot; do
+  has_line "^==> $leg +stopped" "$scratch/failfast.out" || fail "the $leg leg was not reported stopped: $(cat "$scratch/failfast.out")"
+done
+has_line '^==> the postgres leg failed: the gate stops' "$scratch/failfast.err" || fail "the gate did not say why it stopped: $(cat "$scratch/failfast.err")"
+for leg in cluster harness; do
+  [ ! -e "$scratch/failfast.log/$leg.summary" ] || fail "the $leg leg started after a failed leg"
+done
+no_line '/island_' "$scratch/failfast.trace/mix.calls" || fail 'an island ran after the gate stopped'
+host_kept failfast
+gate_free failfast
+echo 'ok: a failed leg ends the gate, its other legs stopped, no later leg started'
+
 # --- TERM: the gate stops its legs, each leg its steps, an island its own --------
 start_gate term STUB_SLOW_STOP=island_arca_test -- "$gate" -n 2 -l "$scratch/term.log"
 t=$gate_pid
@@ -2466,12 +2550,15 @@ e=$gate_pid
 until_true 60 test -s "$scratch/e.trace/held.sqlite_test_compile" || fail "the dead-leg case's step never started: $(cat "$scratch/e.err")"
 static_leg=$(pgrep -P "$e" -f -- '--leg static' | head -n 1)
 [ -n "$static_leg" ] && alive "$static_leg" || fail 'the static leg was not found running'
+# The PostgreSQL tests first, which a gate ended by the dead leg would stop.
+until_true 120 has_line '^pg_tests=' "$scratch/e.log/postgres.summary" || fail "the given PostgreSQL paths never ran: $(cat "$scratch/e.err")"
 kill -KILL "$static_leg"
-until_true 10 has_line '^await_static=1$' "$scratch/e.log/islands.summary" || fail 'the leg waiting on a dead leg did not fail within 10 s'
-touch "$scratch/e.trace/release"
 gate_status "$e"; [ "$gate_rc" = 1 ] || fail 'a gate whose leg died did not exit 1'
+touch "$scratch/e.trace/release"
 has_line '^==> static +FAILED' "$scratch/e.out" || fail 'the dead leg was not reported failed'
-has_line '^==> islands +FAILED .*await_static=1' "$scratch/e.out" || fail 'the waiting leg was not reported failed'
+# The waiting leg fails on its wait or is stopped by the gate, whichever
+# sees the dead leg first.
+has_line '^==> islands +(FAILED .*await_static=1|stopped)' "$scratch/e.out" || fail "the waiting leg was neither failed on its wait nor stopped: $(cat "$scratch/e.out")"
 [ ! -e "$scratch/e.log/static.done" ] || fail 'the dead leg left its marker'
 no_line '^_(START|EXIT)=' "$scratch/e.out" || fail 'a gate under heavy-check wrote a terminal line'
 [ -f "$scratch/registry-e" ] || fail "a nested gate removed heavy-check's registry"

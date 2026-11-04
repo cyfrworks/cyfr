@@ -343,6 +343,12 @@ second=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/refus
 [ "$logdir" != "$second" ] || fail 'failure logs reused'
 FAIL_CLEANUP=1 refuses -n 1 -a postgres
 grep -q 'database cleanup failed' "$scratch/refusal"
+# The database's receipt stands, and the URL that names its server stays
+# beside it, so scripts/janitor.sh can drop it later.
+failed_drop=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/refusal")
+[ -s "$failed_drop/p1/database-created" ] || fail 'a failed drop lost its receipt'
+grep -qF "/$(cat "$failed_drop/p1/database-created")" "$failed_drop/p1.env" ||
+  fail "a failed drop did not keep the URL its receipt's database is at: $(ls -A "$failed_drop")"
 
 
 # No helper/no-op/source failure may fall back to the caller's environment.
@@ -971,7 +977,8 @@ done
 [ -s "$scratch/nested-registry" ] || fail 'the nested runner did not register its sessions'
 
 # Eight hanging drops are stopped together, within 70 s (45 + 10 + 15) of
-# the partitions' end, and every environment file goes.
+# the partitions' end, and every environment file stays beside its
+# database's receipt, which the stopped drop left.
 : > "$TRACE/drop-leaders"
 : > "$TRACE/tests-ended"
 if HANG_DROP=1 "${clean[@]}" bash "$runner" -n 8 -a postgres >"$scratch/hung-drops" 2>&1; then fail 'a run whose drops hung passed'; else result=$?; fi
@@ -985,7 +992,8 @@ done < "$TRACE/drop-leaders"
 hung_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/hung-drops")
 [ -d "$hung_dir" ] || fail 'the hung drops kept no directory'
 for ((i=1; i<=8; i++)); do
-  [ ! -e "$hung_dir/p$i.env" ] || fail "partition $i's environment survived its hung drop"
+  [ -s "$hung_dir/p$i/database-created" ] && [ -s "$hung_dir/p$i.env" ] ||
+    fail "partition $i's receipt and environment did not both stay after its hung drop"
 done
 echo "eight hung drops stopped ${took}s after the partitions ended"
 

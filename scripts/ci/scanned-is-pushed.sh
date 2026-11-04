@@ -11,8 +11,10 @@
 # the build pushed, a single-platform image or an index holding one
 # platform image and its attestation manifest. The image IDs differ
 # between Docker's image stores; the layer diff IDs do not, so equal
-# layers prove one build result. An answer with no layers on either side
-# is a failure, never a match.
+# layers prove the pushed image holds the filesystem the scan read. The
+# image configuration is not compared: release.yml makes both from one
+# buildx build with two outputs, so it has no source of divergence there.
+# An answer with no layers on either side is a failure, never a match.
 #
 # Exit status: 0 the same image, 1 a different or unreadable one, 64 usage,
 # 69 docker buildx or jq missing.
