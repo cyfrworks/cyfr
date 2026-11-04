@@ -247,7 +247,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
   end
 
-  describe "by_route_slug/1 and list_for_user/1" do
+  describe "by_route_slug/1" do
     test "@namespace names an athanor, a bare slug nothing; archived athanors do not resolve" do
       n = System.unique_integer([:positive])
 
@@ -266,26 +266,6 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
       Sanctum.TestContext.archive!(person.id)
       assert {:error, :not_found} = Athanors.by_route_slug("@alice#{n}")
-    end
-
-    test "list_for_user lists the person's own athanor while it is active" do
-      n = System.unique_integer([:positive])
-      uid = "u-list-#{n}"
-
-      {:ok, person} =
-        Athanors.create(%{
-          name: "Me",
-          slug: "me#{n}",
-          owner_user_id: uid,
-          created_by: uid
-        })
-
-      assert [%{id: id}] = Athanors.list_for_user(uid)
-      assert id == person.id
-      assert [] = Athanors.list_for_user("u-nobody-#{n}")
-
-      Sanctum.TestContext.archive!(person.id)
-      assert [] = Athanors.list_for_user(uid)
     end
   end
 end

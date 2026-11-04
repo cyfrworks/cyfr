@@ -71,35 +71,6 @@ defmodule Sanctum.Tenancy do
 
   def resolve_status(%Context{} = ctx, _opts), do: do_resolve(ctx)
 
-  @doc """
-  The athanors the context may work in — the person's own, while it is
-  active. A platform admin works in their own like anyone else, and in no
-  other athanor.
-
-  A context an API key stands behind (`Sanctum.Context.key_bound?/1`) works
-  in the athanor the key was minted in alone, so its list is that athanor
-  while it is active. An outage lists fewer athanors, never more.
-  """
-  @spec list_athanors(Context.t()) :: [Sanctum.Tenancy.Athanors.athanor()]
-  def list_athanors(%Context{} = ctx) do
-    cond do
-      Context.key_bound?(ctx) -> key_athanor(ctx)
-      is_binary(ctx.user_id) -> Athanors.list_for_user(ctx.user_id)
-      true -> []
-    end
-  end
-
-  def list_athanors(_), do: []
-
-  defp key_athanor(%Context{athanor_id: id}) when is_binary(id) and id != "" do
-    case Athanors.get(id) do
-      {:ok, %{id: ^id, status: "active"} = athanor} -> [athanor]
-      _archived_absent_or_unreadable -> []
-    end
-  end
-
-  defp key_athanor(%Context{}), do: []
-
   # The resolution override is a test-only seam. `do_resolve/1` is
   # defined in two compile-time variants: a production release — compiled with
   # prod config, where the flag is false — gets the plain path with
@@ -269,9 +240,8 @@ defmodule Sanctum.Tenancy do
 
   A context an API key stands behind (`Sanctum.Context.key_bound?/1`)
   keeps the athanor the key was minted in, as `Sanctum.Context.focus/2`
-  and `list_athanors/1` do. Its
-  creator's denial drops it like any other; an athanor since archived or
-  removed leaves it athanor-less.
+  does. Its creator's denial drops it like any other; an athanor since
+  archived or removed leaves it athanor-less.
 
   Cost: one `users` read and one `athanors` read by owner per restored
   request (both indexed). It trades those for immediate revocation instead

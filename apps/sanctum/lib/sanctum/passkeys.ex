@@ -1259,7 +1259,7 @@ defmodule Sanctum.Passkeys do
         {:ok, row} ->
           Authz.consumed(ctx)
           announce(:passkey_registered, [personal_athanor(user_id)])
-          announce(:passkey_recovered, person_athanors(user_id))
+          announce(:passkey_recovered, [own_active_athanor(user_id)])
 
           {:ok,
            %{
@@ -1504,9 +1504,13 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  # The athanor the person works in: their own.
-  defp person_athanors(user_id),
-    do: user_id |> Sanctum.Tenancy.Athanors.list_for_user() |> Enum.map(& &1.id)
+  # The athanor the person works in: their own, while it is active.
+  defp own_active_athanor(user_id) do
+    case Sanctum.Tenancy.Athanors.get_by_owner(user_id) do
+      {:ok, %{id: athanor_id, status: "active"}} -> athanor_id
+      _none -> nil
+    end
+  end
 
   defp announce(kind, athanor_ids) do
     for athanor_id <- Enum.uniq(athanor_ids), is_binary(athanor_id) and athanor_id != "" do

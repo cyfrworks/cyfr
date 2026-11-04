@@ -64,7 +64,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     {:ok, user: user, a: a, b: b, raw: raw, key_ctx: key_ctx, session_ctx: session_ctx}
   end
 
-  test "a key minted in A neither lists, focuses nor reads B", %{
+  test "a key minted in A neither focuses nor reads B", %{
     a: a,
     b: b,
     raw: raw,
@@ -72,8 +72,6 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
   } do
     assert key_ctx.auth_method == :api_key
     assert key_ctx.athanor_id == a.id
-
-    assert Enum.map(Sanctum.Tenancy.list_athanors(key_ctx), & &1.id) == [a.id]
 
     assert {:error, _} =
              Gate.call_external("athanor", key_ctx, %{"action" => "get", "athanor" => b.id})
@@ -121,7 +119,6 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     assert run_ctx.credential_binding == key_ctx.credential_binding
     assert Context.key_bound?(run_ctx)
 
-    assert Enum.map(Sanctum.Tenancy.list_athanors(run_ctx), & &1.id) == [a.id]
     assert Context.focus(run_ctx, b.id) == {:error, :not_found}
     assert {:ok, %{athanor_id: athanor_id}} = Context.focus(run_ctx, a.id)
     assert athanor_id == a.id
@@ -144,12 +141,11 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     assert {:ok, %{athanor_id: nil}} = Sanctum.Tenancy.revalidate(key_ctx)
   end
 
-  test "an archived key athanor is refused as archived, and lists nothing", %{
+  test "an archived key athanor is refused as archived", %{
     a: a,
     key_ctx: key_ctx
   } do
     TestContext.archive!(a.id)
     assert Context.focus(key_ctx, a.id) == {:error, :archived}
-    assert Sanctum.Tenancy.list_athanors(key_ctx) == []
   end
 end

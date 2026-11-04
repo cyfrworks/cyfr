@@ -220,7 +220,7 @@ defmodule Sanctum.ProvisioningTest do
     # A person holds one: a second mint is refused, and a sign-in mints none.
     assert {:error, _} = Provisioning.mint_personal(user)
     assert :ok = Provisioning.after_sign_in(user.id)
-    assert [%{id: ^pid}] = Athanors.list_for_user(user.id)
+    assert {:ok, %{id: ^pid}} = Athanors.get_by_owner(user.id)
   end
 
   test "a person without a namespace is minted one under a slug of their own", %{
