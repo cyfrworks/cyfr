@@ -445,10 +445,18 @@ defmodule Cyfr.Cluster.Fixtures do
         Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       )
 
-  @doc "A person with a session of their own, in their own athanor."
+  @doc """
+  A new person with a session of their own, in their own athanor.
+
+  Their sign-in identity is taken from a fresh id, as `athanor!/1`'s slug
+  is: `Sanctum.Test.People.linked/1` answers an existing person for a key
+  it has seen, and a key from `System.unique_integer/1` repeats once the
+  member reboots, which would hand a case a person an earlier case
+  archived or denied.
+  """
   @spec person!() :: map()
   def person! do
-    n = System.unique_integer([:positive])
+    n = String.replace(Prima.UUID7.generate(), "-", "")
 
     {:ok, user} =
       Sanctum.Test.People.linked(%{
