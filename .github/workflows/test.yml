@@ -45,6 +45,8 @@ on:
       # image jobs rebuild on a change to it.
       - 'rust-toolchain.toml'
       - 'docker-compose.yml'
+      # The static job's dev stack check reads it (tests/dev-stack/compose-test.sh).
+      - 'docker-compose.dev.yml'
       - 'Caddyfile'
       - 'docker-entrypoint.sh'
       - '.env.example'
@@ -103,6 +105,8 @@ on:
       # image jobs rebuild on a change to it.
       - 'rust-toolchain.toml'
       - 'docker-compose.yml'
+      # The static job's dev stack check reads it (tests/dev-stack/compose-test.sh).
+      - 'docker-compose.dev.yml'
       - 'Caddyfile'
       - 'docker-entrypoint.sh'
       - '.env.example'
@@ -120,8 +124,14 @@ on:
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
-  # Expose this workflow for tag-triggered image and release jobs.
+  # Expose this workflow for tag-triggered image and release jobs, and for
+  # the nightly, whose input runs each test shard twice and keeps its runs
+  # (the test job's Run tests step says how).
   workflow_call:
+    inputs:
+      nightly:
+        type: boolean
+        default: false
 permissions:
   contents: read
 # A newer push to a pull request cancels the run it supersedes. Elsewhere a
@@ -685,44 +695,76 @@ jobs:
       # what it called back then: the test files would be type-checked
       # against signatures the tree no longer has. The runner's output is
       # kept in a file as well as the log: a failed run names the directory
-      # it kept in its own last lines, which the next step reads. The suite
-      # is split into sixteen partitions by weight, and each shard runs its
-      # four of them on the runner's four cores.
+      # it kept in its own last lines. The suite is split into sixteen
+      # partitions by weight, and each shard runs its four of them on the
+      # runner's four cores.
+      #
+      # Under the nightly input (.github/workflows/nightly.yml) the shard
+      # runs twice, each run keeping its directory and recording its
+      # timings (Prima.Test.TimingFormatter beside the CLI formatter), and
+      # each run's output, directory and timings go under
+      # $RUNNER_TEMP/nightly/<run>, for scripts/lib/nightly.py.
+      #
+      # A failed run's kept directory (each partition's log and scratch
+      # root, the compile and assignment logs, the failures record), or the
+      # nightly's runs, are uploaded. What could carry a credential never
+      # leaves the runner: the partitions' database URLs (p*.env, which the
+      # runner itself removes), hidden entries (a copied .git holds the
+      # checkout's token), anything but a plain file or directory (a
+      # symlink would be uploaded as its target), and, in what remains, this
+      # job's database URL and key base, a URL's password, an authorization
+      # header and a GitHub token.
       - name: Run tests
         id: run-tests
         env:
           MIX_BUILD_PATH: _build/test
+          NIGHTLY: ${{ inputs.nightly && 'true' || '' }}
         run: |
           set -o pipefail
-          scripts/test-partitioned.sh -n 16 --shard "${{ matrix.shard }}/4" -a "${{ matrix.db }}" -- --warnings-as-errors 2>&1 |
-            tee "$RUNNER_TEMP/run-tests.out"
-      # A failed run keeps its directory: each partition's log and scratch
-      # root, the compile and assignment logs, the failures record. That
-      # directory, and no other, is the one the runner's own 'kept' line
-      # names. What could carry a credential never leaves the runner: the
-      # partitions' database URLs (p*.env, which the runner itself removes),
-      # hidden entries (a copied .git holds the checkout's token), anything
-      # but a plain file or directory (a symlink would be uploaded as its
-      # target), and, in what remains, this job's database URL and key
-      # base, a URL's password, an authorization header and a GitHub token.
-      - name: Prepare the failed run's kept directory
-        id: kept
-        if: failure() && steps.run-tests.outcome == 'failure'
-        run: |
-          set -euo pipefail
-          mapfile -t kept < <(sed -n 's/^==> logs and disposable resources kept: //p' "$RUNNER_TEMP/run-tests.out")
-          if [ "${#kept[@]}" -ne 1 ]; then
-            echo "::warning::the runner named ${#kept[@]} kept directories, not one; nothing is uploaded"
-            exit 0
+          runs=1 formatters=() status=0
+          if [ -n "$NIGHTLY" ]; then
+            runs=2
+            formatters=(--formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter)
+            export CYFR_TEST_KEEP=1
           fi
-          dir=${kept[0]}
-          if ! [[ "$dir" =~ ^/tmp/cyfr-t\.[A-Za-z0-9]{6}$ ]] || [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -O "$dir" ]; then
-            echo "::warning::the runner's kept directory is not one it made: $dir; nothing is uploaded"
-            exit 0
+          for n in $(seq "$runs"); do
+            out="$RUNNER_TEMP/run-tests.out"
+            if [ -n "$NIGHTLY" ]; then
+              mkdir -p "$RUNNER_TEMP/nightly/$n"
+              out="$RUNNER_TEMP/nightly/$n/runner.out"
+              export CYFR_TEST_TIMINGS_DIR="$RUNNER_TEMP/nightly/$n/timings"
+            fi
+            scripts/test-partitioned.sh -n 16 --shard "${{ matrix.shard }}/4" -a "${{ matrix.db }}" -- --warnings-as-errors "${formatters[@]}" 2>&1 |
+              tee "$out" || status=1
+          done
+          # The one directory the runner's output $1 names as kept, in
+          # $kept, when the runner made it.
+          kept_dir() {
+            local named
+            mapfile -t named < <(sed -n 's/^==> logs and disposable resources kept: //p' "$1")
+            kept=
+            if [ "${#named[@]}" -ne 1 ]; then
+              echo "::warning::the runner named ${#named[@]} kept directories, not one, in $1; nothing of that run is uploaded"
+            elif ! [[ "${named[0]}" =~ ^/tmp/cyfr-t\.[A-Za-z0-9]{6}$ ]] || [ -L "${named[0]}" ] || [ ! -d "${named[0]}" ] || [ ! -O "${named[0]}" ]; then
+              echo "::warning::the runner's kept directory is not one it made: ${named[0]}; it is not uploaded"
+            else
+              kept=${named[0]}
+            fi
+            [ -n "$kept" ]
+          }
+          upload= output=
+          if [ -n "$NIGHTLY" ]; then
+            for n in $(seq "$runs"); do
+              if kept_dir "$RUNNER_TEMP/nightly/$n/runner.out"; then mv "$kept" "$RUNNER_TEMP/nightly/$n/run"; fi
+            done
+            upload="$RUNNER_TEMP/nightly" output=nightly
+          elif [ "$status" != 0 ] && kept_dir "$RUNNER_TEMP/run-tests.out"; then
+            upload=$kept output=kept
           fi
-          find "$dir" -mindepth 1 \( -name '.*' -o -name '*.env' \) -prune -exec rm -rf -- {} +
-          find "$dir" -mindepth 1 ! -type f ! -type d -delete
-          python3 -I - "$dir" <<'PY'
+          [ -n "$upload" ] || exit "$status"
+          find "$upload" -mindepth 1 \( -name '.*' -o -name '*.env' \) -prune -exec rm -rf -- {} +
+          find "$upload" -mindepth 1 ! -type f ! -type d -delete
+          if python3 -I - "$upload" <<'PY'
           import os, re, sys
 
           root = sys.argv[1]
@@ -760,15 +802,30 @@ jobs:
           if left:
               sys.exit("still carries a credential after redaction: " + ", ".join(left))
           PY
-          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          then
+            echo "$output=$upload" >> "$GITHUB_OUTPUT"
+          else
+            status=1
+          fi
+          exit "$status"
       - name: Upload the failed run's kept directory
-        if: failure() && steps.run-tests.outcome == 'failure' && steps.kept.outputs.dir != ''
+        if: failure() && steps.run-tests.outcome == 'failure' && steps.run-tests.outputs.kept != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-run-${{ matrix.db }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          path: ${{ steps.kept.outputs.dir }}
+          path: ${{ steps.run-tests.outputs.kept }}
           if-no-files-found: error
           retention-days: 14
+      # A rerun of a shard replaces its runs, so the nightly reads the last.
+      - name: Upload the nightly's runs
+        if: always() && steps.run-tests.outputs.nightly != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nightly-${{ matrix.db }}-shard-${{ matrix.shard }}
+          path: ${{ steps.run-tests.outputs.nightly }}
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
 
   cluster:
     name: One cell on two members (Postgres and MinIO)
