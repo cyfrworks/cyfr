@@ -179,20 +179,24 @@ async function askForEntry(desk, name, value) {
   }
 }
 
-// The phone's Prism, opened afresh, showing another client's request from
-// the home's record: the one whose ref `skip` does not name, with its
-// preview, asker, whether it is restricted, and its text, before any proof.
-async function phonePrompt(phone, skip = []) {
+// The phone's Prism, opened afresh, showing another client's request whose
+// preview names `operation` (an operation, or an entry's name) from the
+// home's record: the one whose ref `skip` does not
+// name, with its preview, asker, whether it is restricted, and its text,
+// before any proof. Another request still waiting (one asked while a
+// device slept) is left as it is.
+async function phonePrompt(phone, operation, skip = []) {
   await phone.goto(shell);
   await connected(phone);
   const other = `${layer} [data-test="confirmation"][data-own="false"]`;
   const ref = await waitFor(async () => {
     for (const panel of await phone.$$(other)) {
       const found = await panel.getAttribute("data-ref");
-      if (found && !skip.includes(found)) return found;
+      const preview = await panel.$eval('[data-test="confirmation-preview"]', (e) => e.textContent).catch(() => "");
+      if (found && !skip.includes(found) && preview.includes(operation)) return found;
     }
     return null;
-  }, { timeoutMs: 30_000, what: "another client's request in the phone's Prism" });
+  }, { timeoutMs: 30_000, what: `another client's ${operation} request in the phone's Prism` });
   const panel = `${other}[data-ref="${ref}"]`;
   const preview = (await phone.locator(`${panel} [data-test="confirmation-preview"]`).first().textContent()).trim();
   const asker = (await phone.locator(`${panel} [data-test="confirmation-asker"]`).textContent().catch(() => "")).trim();
@@ -225,7 +229,7 @@ async function beginFor(desk, code) {
 // confirmed on the phone: its invitation's secret.
 async function pairingFor(desk, phone, code) {
   await beginFor(desk, code);
-  const prompt = await phonePrompt(phone);
+  const prompt = await phonePrompt(phone, "pairing.begin");
   await confirmOnPhone(phone, prompt.ref);
   await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
   const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
@@ -252,7 +256,7 @@ async function passkey(phone, authenticator) {
 async function confirmEntry(desk, phone) {
   const name = "pairing-entry-1";
   await askForEntry(desk, name, "sk-pairing-1-not-shown");
-  const shown = await phonePrompt(phone);
+  const shown = await phonePrompt(phone, name);
   const confirmed = await confirmOnPhone(phone, shown.ref);
   const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
   record.confirm = {
@@ -404,7 +408,7 @@ async function commandLine(desk, phone) {
     // passkey of the person's, reads the request from the home's record
     // and confirms it.
     await beginFor(desk, code);
-    const prompt = await phonePrompt(phone);
+    const prompt = await phonePrompt(phone, "pairing.begin");
     await confirmOnPhone(phone, prompt.ref);
     try {
       await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
@@ -705,7 +709,7 @@ async function fresh(desk, phone, firstRef) {
   const name = "pairing-entry-2";
   const [first] = (await assertionsSent(phone)).filter((a) => a.ref === firstRef);
   await askForEntry(desk, name, "sk-pairing-2-not-shown");
-  const shown = await phonePrompt(phone, [firstRef]);
+  const shown = await phonePrompt(phone, name, [firstRef]);
 
   // The first assertion, replayed against this record through the
   // console's adapter under the phone's session: refused.
@@ -822,7 +826,7 @@ async function revoke(desk, phone, test) {
   await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
 
   // Revoking needs a fresh confirmation: the phone's Prism gives it.
-  const shown = await phonePrompt(phone);
+  const shown = await phonePrompt(phone, "pairing.revoke");
   const confirmed = await confirmOnPhone(phone, shown.ref);
   const closed = await Promise.race([ch.closed, sleep(30_000).then(() => "not closed")]);
   await desk.waitForSelector(client, { state: "detached", timeout: 30_000 }).catch(() => null);
@@ -863,7 +867,7 @@ async function handheld(browser, desk, phoneAuthenticator) {
   // read and confirmed in the handheld's Prism.
   const device = newDevice({ name: "pairing proof handheld test device" });
   await beginFor(desk, device.code);
-  const consent = await phonePrompt(hand);
+  const consent = await phonePrompt(hand, "pairing.begin");
   measured.consent_prompt = await measureScreen(hand, layer);
   const prismPage = await measureScreen(hand);
   const consentConfirmed = await confirmOnPhone(hand, consent.ref);
@@ -875,7 +879,7 @@ async function handheld(browser, desk, phoneAuthenticator) {
   // A credential entry read and confirmed there.
   const name = "pairing-entry-handheld";
   await askForEntry(desk, name, "sk-pairing-handheld-not-shown");
-  const shown = await phonePrompt(hand);
+  const shown = await phonePrompt(hand, name);
   measured.entry_prompt = await measureScreen(hand, layer);
   const entryConfirmed = await confirmOnPhone(hand, shown.ref);
   const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
@@ -885,7 +889,7 @@ async function handheld(browser, desk, phoneAuthenticator) {
   const client = `${layer} [data-test="pairing-client"][data-client="${device.clientId}"]`;
   await desk.waitForSelector(client, { timeout: 30_000 });
   await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
-  const revoking = await phonePrompt(hand);
+  const revoking = await phonePrompt(hand, "pairing.revoke");
   measured.revoke_prompt = await measureScreen(hand, layer);
   const revokeConfirmed = await confirmOnPhone(hand, revoking.ref);
   await desk.waitForSelector(client, { state: "detached", timeout: 30_000 }).catch(() => null);

@@ -153,8 +153,12 @@ async function firstPasskey(page, authenticator, base, segment, step) {
 // confirmed with the desktop's passkey, completed with the device's key,
 // and its channel standing under the certificate A answered. `page` is the
 // desktop's, or the handheld's, whose screens are measured when `measured`
-// is given. Answers the device.
-async function pairAtA(page, { name = "identity proof test device", measured = null } = {}) {
+// is given. `confirmer` is the page whose passkey confirms the pairing,
+// `page` unless named: the handheld shares the desktop's session, so its
+// request is the desktop's own too, and the desktop's passkey confirms it
+// there, its counter held by the one authenticator that uses it. Answers
+// the device.
+async function pairAtA(page, { name = "identity proof test device", measured = null, confirmer = null } = {}) {
   const device = newDevice({ name });
   await open(page, shellOf(A, segmentA));
   await page.locator("#shell-devices").click();
@@ -165,7 +169,23 @@ async function pairAtA(page, { name = "identity proof test device", measured = n
     await page.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"] [data-test="confirm-passkey"]`, { timeout: 30_000 });
     measured.consent_prompt = await measure(page, layer);
   }
-  await confirmHere(page);
+  if (confirmer) {
+    // The desktop shows the request as its own or as another client's,
+    // as the home names who asked: either is confirmed with the passkey.
+    await open(confirmer, shellOf(A, segmentA), { close: false });
+    const panel = `${layer} [data-test="confirmation"]`;
+    await confirmer.waitForFunction((selector) => [...document.querySelectorAll(selector)]
+      .some((p) => /pairing\.begin/.test(p.textContent) && p.querySelector('[data-test="confirm-passkey"]')), panel, { timeout: 30_000 });
+    const handles = await confirmer.$$(panel);
+    for (const handle of handles) {
+      if (/pairing\.begin/.test(await handle.textContent())) {
+        await (await handle.$('[data-test="confirm-passkey"]')).click();
+        break;
+      }
+    }
+  } else {
+    await confirmHere(page);
+  }
   await page.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
   const link = await page.locator(`${layer} [data-test="pairing-link"]`).inputValue();
   if (measured) measured.pairing_link = await measure(page, layer);
@@ -318,20 +338,19 @@ async function restoredHome(page, proxy, base, cell, token, code, step) {
 // ---------------------------------------------------------------------------
 
 // The handheld follows the desktop through a device's steps: its Prism,
-// signed in at A as the desktop is and holding the desktop's passkey,
-// pairs a second test device there, its consent prompt and link measured;
+// signed in at A in the desktop's session, pairs a second test device
+// there, its consent prompt and link measured, the desktop's passkey
+// confirming it;
 // after the rotation its Devices lists that device standing under a
 // renewed certificate; and that device's certificate opens nothing at C,
 // a home that holds no device of it. Each of those screens meets the
 // handheld's checks, which the `viewport` row holds.
-async function handheldPairs(browser, desk, deskAuthenticator) {
+async function handheldPairs(browser, desk) {
   const context = await browser.newContext(HANDHELD);
   await context.addCookies(await desk.context().cookies(A));
   const page = await context.newPage();
-  const authenticator = await virtualAuthenticator(page);
-  for (const credential of await deskAuthenticator.credentials()) await authenticator.add(credential);
   const hand = { context, page, measured: {}, facts: {} };
-  hand.device = await pairAtA(page, { name: "identity proof handheld device", measured: hand.measured });
+  hand.device = await pairAtA(page, { name: "identity proof handheld device", measured: hand.measured, confirmer: desk });
   hand.facts.paired_subject = hand.device && hand.device.certificate.subject.kind;
   return hand;
 }
@@ -376,7 +395,7 @@ async function main(browser, proxy) {
     row("rotate", false, "a test device paired at A stands", { device });
     return;
   }
-  const hand = await handheldPairs(browser, desk, deskAuthenticator);
+  const hand = await handheldPairs(browser, desk);
   const [added, code2] = await secondCode(desk, proxy, code1);
   if (!added) return;
   if (!(await rotate(desk, device))) return;
