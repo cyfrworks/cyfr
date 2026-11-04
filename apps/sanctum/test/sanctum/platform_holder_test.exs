@@ -274,4 +274,46 @@ defmodule Sanctum.PlatformHolderTest do
     assert refused?.(base) == true
     refute refused?.(Map.put(base, :holder_kind, "platform"))
   end
+
+  test "a passkey revoked after its credential was read mints no holderless session", %{ctx: ctx} do
+    {auth, passkey} = registered!(ctx)
+    held = Passkeys.sign_in_challenge()
+    assertion = Authenticator.assertion(auth, held.challenge)
+    test = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _, _, meta, _ ->
+          if self() == test and meta[:source] == "passkeys" and
+               String.starts_with?(meta[:query] || "", "SELECT") do
+            :telemetry.detach(handler)
+
+            send(
+              test,
+              {:revoked_during_sign_in, Arca.Passkeys.revoke(Context.actor(ctx), passkey.id)}
+            )
+          end
+        end,
+        nil
+      )
+
+    result = Passkeys.sign_in(held, assertion)
+    assert_receive {:revoked_during_sign_in, {:ok, %{passkey: %{state: "revoked"}}}}
+
+    verdict =
+      case result do
+        {:ok, %{session_token: token}} ->
+          row = Arca.Repo.get_by!(Session, token_hash: Sanctum.Session.token_hash(token))
+          {:minted_session, row.client_id, match?({:ok, %Context{}}, Sanctum.Session.load(token))}
+
+        refused ->
+          refused
+      end
+
+    assert {:error, _refusal} = verdict
+  end
 end

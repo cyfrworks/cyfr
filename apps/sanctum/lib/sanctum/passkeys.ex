@@ -1025,9 +1025,9 @@ defmodule Sanctum.Passkeys do
   # sign-in pauses as a directory read does and the retry verifies against
   # the new head.
   # The session names the credential's platform holder, its paired client
-  # (`Arca.PairedClients.project_passkey!/1`): revoking the passkey ends it
-  # wherever it synced. A person with no athanor of their own has none, and
-  # their session names no client.
+  # (`Arca.PairedClients.project_passkey!/1`), which the issuance reads again
+  # under its lock: revoking the passkey before the session commits refuses
+  # it, and after ends it, wherever it synced.
   defp session(user, head, passkey) do
     ctx =
       Context.build(
@@ -1048,18 +1048,28 @@ defmodule Sanctum.Passkeys do
       {:error, :identity_stale} -> {:error, :identity_stale}
       {:error, :stale_key_epoch} -> {:error, :identity_stale}
       {:error, :unavailable} -> {:error, :unavailable}
+      # The holder was revoked with its credential after the credential was
+      # read: the session's issuance, which reads the holder again under its
+      # lock, refuses it (`Arca.SessionStorage.create_session/3`).
+      {:error, :client_not_active} -> {:error, :assertion_refused}
+      {:error, :assertion_refused} -> {:error, :assertion_refused}
       {:error, _refused} -> {:error, :unavailable}
     end
   end
 
+  # The credential's platform holder, standing: a passkey that has none no
+  # longer stands (revoked since its credential was read), and signs no one
+  # in; a session never names no client for a passkey's sign-in.
   defp platform_holder(user_id, passkey_id) do
     case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
       {:ok, clients} ->
-        {:ok,
-         Enum.find_value(clients, fn
-           %{source_kind: "passkey", source_id: ^passkey_id, id: id} -> id
-           _other -> nil
-         end)}
+        case Enum.find_value(clients, fn
+               %{source_kind: "passkey", source_id: ^passkey_id, id: id} -> id
+               _other -> nil
+             end) do
+          nil -> {:error, :assertion_refused}
+          id -> {:ok, id}
+        end
 
       {:error, _unanswered} ->
         {:error, :unavailable}
