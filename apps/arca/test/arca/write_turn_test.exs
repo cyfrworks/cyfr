@@ -37,10 +37,10 @@ defmodule Arca.WriteTurnTest do
 
       refute_received {:issued, _, _}
       release(a, :a)
-      assert_receive {:issued, :b, _}
+      assert_receive {:issued, :b, _}, 1_000
       refute_received {:issued, :c, _}
       release(b, :b)
-      assert_receive {:issued, :c, _}
+      assert_receive {:issued, :c, _}, 1_000
       release(c, :c)
       await_status(server, &(&1.holder == nil and &1.waiting == %{audit: 0, control_plane: 0}))
     end
