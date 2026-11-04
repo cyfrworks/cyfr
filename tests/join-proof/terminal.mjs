@@ -455,3 +455,27 @@ export async function recertify(proxy, state) {
     if (t && t.exit === null) t.kill();
   }
 }
+
+// The command line paired at H, used there: unlocked by its passphrase,
+// which opens a session of its own, and `cyfr whoami` run through that
+// session, then locked. Answers whether it unlocked, whoami's exit, and
+// the end of what it printed when it did not act.
+export async function commandLineActs(proxy, state) {
+  let t = null;
+  try {
+    t = terminal(["login", "--url", H], state.terminal.cliHome, proxy);
+    await t.until(/Unlock this command line with its passphrase: /);
+    t.type(state.terminal.passH);
+    const unlocked = await t.until(UNLOCKED, 0, 60_000).then(() => true, () => false);
+    if (!unlocked) return { unlocked: false, said: t.out.slice(-600) };
+    const mark = t.out.length;
+    t.type(`cyfr whoami --url ${H}; echo "whoami=$?"`);
+    const whoami = Number((await t.until(/whoami=(\d+)/, mark))[1]);
+    const exit = await t.end();
+    return { unlocked: true, whoami_exit: whoami, exit };
+  } catch (error) {
+    return { unlocked: false, error: String(error && error.message).slice(0, 400), said: t && t.out.slice(-600) };
+  } finally {
+    if (t && t.exit === null) t.kill();
+  }
+}

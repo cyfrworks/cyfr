@@ -14,7 +14,9 @@ import { request as httpRequest } from "node:http";
 import { connect as tlsConnect } from "node:tls";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import { firstPasskey } from "../browser/lib.mjs";
-import { confirmAtHome, crossDevice, holdAssertion, recertify, terminalRenewal, terminalStep } from "./terminal.mjs";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { commandLineActs, confirmAtHome, crossDevice, holdAssertion, recertify, terminalRenewal, terminalStep } from "./terminal.mjs";
 import {
   A, A2, H, SETTINGS, addSession, admitted, assertions, ask, authenticatorWith, begin, captureAssertions, closePrompt,
   confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, flashed,
@@ -483,6 +485,19 @@ async function terminalStanding(state) {
   return found ? found.standing : null;
 }
 
+// The command line paired at H, observed usable as a person uses it: its
+// key record in its own directory, then unlocked there, a session of its
+// own opened at H, and `cyfr whoami` acting through it
+// (`commandLineActs`). No record, no unlock or a failed whoami is not
+// usable; H's standing for it, beside, is recorded and proves nothing alone.
+async function commandLineUsable(state) {
+  const dir = state.terminal ? join(state.terminal.cliHome, ".cyfr", "devices") : null;
+  const records = dir && existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json")) : [];
+  if (records.length === 0) return { usable: false, why: "no device record" };
+  const acted = await commandLineActs(state.proxy, state);
+  return { usable: acted.unlocked && acted.whoami_exit === 0 && acted.exit === 0, ...acted, standing: await terminalStanding(state) };
+}
+
 // A credential entry asked for on `page`'s vault at H: its own request,
 // waiting on its confirmation. Answers its ref.
 async function askEntryAtHub(page, name) {
@@ -522,14 +537,14 @@ async function removal(state) {
   const ownPage = !(await signedOut(hubPage, settingsAt(H, hubAthanor)));
   await open(home.desk, home.settings);
   const aUsable = new URL(home.desk.url()).pathname.endsWith("/settings");
-  const deviceAtHub = await terminalStanding(state);
+  const commandLine = await commandLineUsable(state);
   record.removal = {
     removed: removed.ok ? true : removed, threads: person.threads, post_in_household: inHousehold,
-    post_in_pair: !!inPair.message_id, own_page: ownPage, a_usable: aUsable, command_line_at_hub: deviceAtHub,
+    post_in_pair: !!inPair.message_id, own_page: ownPage, a_usable: aUsable, command_line_at_hub: commandLine,
   };
   return row("removal", "chromium",
     !!removed.ok && !person.threads.includes(hub.household) && person.threads.includes(state.pair) &&
-      !!inHousehold.refused && !!inPair.message_id && ownPage && aUsable && deviceAtHub === "active",
+      !!inHousehold.refused && !!inPair.message_id && ownPage && aUsable && commandLine.usable,
     "removed from H's Household thread, the person can no longer post there, while the pair thread, their own athanor at H, the command line paired there and A stay usable",
     record.removal);
 }
@@ -627,15 +642,23 @@ async function restore(chromium, state) {
   await passkeyPage.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 });
   state.passkeySession = { passkeyContext, passkeyPage };
 
-  // A is lost. H's work, a page of the person's there and the phone
-  // paired there, goes on, bound to H.
+  // The command line used at H once more while A answers, so the
+  // certificate A issued it is renewed if due and outlives A's loss for
+  // the check below: a remote device's session ends with its home's
+  // certificate, which no one renews once that home is gone.
+  const beforeDown = await commandLineUsable(state);
+
+  // A is lost. H's work, a page of the person's there and the command
+  // line paired there, goes on, bound to H.
   const down = await ask({ op: "a_down" });
   const hubPage = await state.hubContext.newPage();
   const hubUsable = !(await signedOut(hubPage, settingsAt(H, hubAthanor)));
   await hubPage.close();
-  const deviceAtHub = await terminalStanding(state);
-  record.lost_home = { a_down: down.down, hub_page: hubUsable, command_line_at_hub: deviceAtHub };
-  if (!row("lost_home", "chromium", down.down && hubUsable && deviceAtHub === "active",
+  const commandLine = await commandLineUsable(state);
+  record.lost_home = {
+    a_down: down.down, hub_page: hubUsable, command_line_before_a_down: beforeDown, command_line_at_hub: commandLine,
+  };
+  if (!row("lost_home", "chromium", down.down && hubUsable && commandLine.usable,
     "with A lost, the person's work at H, a page there and the command line paired there, goes on bound to H",
     record.lost_home)) return false;
 

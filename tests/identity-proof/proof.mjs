@@ -78,7 +78,9 @@ let proxyPort = null;
 
 // A connection of the test device's own under `certificate` (its current
 // one unless named): `connect`, the challenge signed with its key, and the
-// code the home closed it with, or "open" when it stood.
+// code the home closed it with, or "open" when it stood. A refusal is the
+// home's close code alone: no answer (null), a timeout or the device's own
+// refusal of a challenge is none.
 async function connectWith(device, base, certificate = device.certificate) {
   // The challenge is answered as the home the certificate names expects:
   // a certificate presented at another home is that home's to refuse.
@@ -376,7 +378,7 @@ async function handheldElsewhere(hand) {
   record.viewport = { viewport: HANDHELD.viewport, ...hand.facts, measured: hand.measured, failures };
   return row("viewport",
     hand.facts.paired_subject === "local" && hand.facts.renewed_after_rotation && hand.facts.listed_after_rotation &&
-      hand.facts.at_c !== "open" && failures.length === 0,
+      hand.facts.at_c === 4401 && failures.length === 0,
     "at 720×720: a device paired locally from the handheld's Prism, its consent and link read there, listed under its renewed certificate after the rotation, and refused at a home that holds no device of it, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);
 }
@@ -496,7 +498,7 @@ async function main(browser, proxy) {
   const people = await ask({ op: "people", cell: "c" });
   const atC = await connectWith(device, C);
   record.pair_again = { people: people.people, at_c: atC };
-  if (!row("pair_again", people.people.length === 1 && people.people[0].paired_clients === 0 && atC.code !== "open",
+  if (!row("pair_again", people.people.length === 1 && people.people[0].paired_clients === 0 && atC.code === 4401,
     "a restore without the old paired client's row: the device paired at A opens nothing at C and pairs again", record.pair_again)) return;
   if (!(await handheldElsewhere(hand))) return;
 
