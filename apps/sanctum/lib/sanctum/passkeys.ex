@@ -568,9 +568,13 @@ defmodule Sanctum.Passkeys do
   re-authenticate (`Sanctum.Auth.OIDC.reauth_available?/1`), a verified
   email a one-time code can reach
   (`Sanctum.Auth.EmailVerification.code_available?/1`), or a protected
-  device of theirs that stands, whose unlock proves a confirmation
-  (`Sanctum.DeviceUnlock`): a person a device's enrollment made registers
-  their passkey under it. The passkeys are read as the context's own. A remote person needs no passkey here: their
+  device of theirs that can still prove itself, its client standing and a
+  certificate of it current, a remote person's under the keys their head
+  names now, whose unlock proves a confirmation (`Sanctum.DeviceUnlock`): a
+  person a device's enrollment made registers their passkey under it, and
+  one whose device's certification their keys' rotation or recovery ended
+  holds no fresh method by it. The passkeys are read as the context's own.
+  A remote person needs no passkey here: their
   own home certifies their confirmations
   (`Sanctum.RemoteCertification.verify_confirmation/3`), so a passkey they
   register here anyway is the administrator's to authorize while they hold
@@ -1025,9 +1029,9 @@ defmodule Sanctum.Passkeys do
   # sign-in pauses as a directory read does and the retry verifies against
   # the new head.
   # The session names the credential's platform holder, its paired client
-  # (`Arca.PairedClients.project_passkey!/1`): revoking the passkey ends it
-  # wherever it synced. A person with no athanor of their own has none, and
-  # their session names no client.
+  # (`Arca.PairedClients.project_passkey!/1`), which the issuance reads again
+  # under its lock: revoking the passkey before the session commits refuses
+  # it, and after ends it, wherever it synced.
   defp session(user, head, passkey) do
     ctx =
       Context.build(
@@ -1048,18 +1052,28 @@ defmodule Sanctum.Passkeys do
       {:error, :identity_stale} -> {:error, :identity_stale}
       {:error, :stale_key_epoch} -> {:error, :identity_stale}
       {:error, :unavailable} -> {:error, :unavailable}
+      # The holder was revoked with its credential after the credential was
+      # read: the session's issuance, which reads the holder again under its
+      # lock, refuses it (`Arca.SessionStorage.create_session/3`).
+      {:error, :client_not_active} -> {:error, :assertion_refused}
+      {:error, :assertion_refused} -> {:error, :assertion_refused}
       {:error, _refused} -> {:error, :unavailable}
     end
   end
 
+  # The credential's platform holder, standing: a passkey that has none no
+  # longer stands (revoked since its credential was read), and signs no one
+  # in; a session never names no client for a passkey's sign-in.
   defp platform_holder(user_id, passkey_id) do
     case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
       {:ok, clients} ->
-        {:ok,
-         Enum.find_value(clients, fn
-           %{source_kind: "passkey", source_id: ^passkey_id, id: id} -> id
-           _other -> nil
-         end)}
+        case Enum.find_value(clients, fn
+               %{source_kind: "passkey", source_id: ^passkey_id, id: id} -> id
+               _other -> nil
+             end) do
+          nil -> {:error, :assertion_refused}
+          id -> {:ok, id}
+        end
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -1153,10 +1167,21 @@ defmodule Sanctum.Passkeys do
 
   defp leaves_a_way_in(_ctx, _user_id, _passkey, _was), do: :ok
 
+  # The person's protected devices that can still prove themselves
+  # (`Sanctum.DeviceCerts.proves_itself?/1`). A device whose certification a
+  # rotation or a recovery of the keys ended counts as nothing, neither as a
+  # way in nor as a fresh method.
   defp protected_devices(user_id) do
     case Arca.PairedClients.list(Prima.Actor.system(), user_id: user_id, standing: :active) do
-      {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.holder_kind in ["chip", "software"]))}
-      {:error, _unanswered} -> {:error, :unavailable}
+      {:ok, rows} ->
+        {:ok,
+         Enum.filter(
+           rows,
+           &(&1.holder_kind in ["chip", "software"] and Sanctum.DeviceCerts.proves_itself?(&1))
+         )}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 

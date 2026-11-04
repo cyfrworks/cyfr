@@ -540,14 +540,14 @@ defmodule Sanctum.Providers.Confirmation do
   end
 
   defp sign_in_window?(_row, _latched?, true = _restore?), do: true
-  defp sign_in_window?(row, false = _latched?, false), do: Pairing.addition?(row.operation)
+  defp sign_in_window?(row, false = _latched?, false), do: Pairing.first_method?(row.operation)
   defp sign_in_window?(_row, true, false), do: false
 
   # A person who never held a passkey or device, asked to confirm anything
   # but their first one, is offered that enrollment first: until then no
   # proof of theirs confirms it.
   defp enroll?(row, latched?, restore?),
-    do: not latched? and not restore? and not Pairing.addition?(row.operation)
+    do: not latched? and not restore? and not Pairing.first_method?(row.operation)
 
   # The record `ref` names, in the context's athanor, of the context's own
   # person: a ref of another person, another athanor or none is not found.

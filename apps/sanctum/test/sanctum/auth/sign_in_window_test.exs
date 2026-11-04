@@ -180,4 +180,69 @@ defmodule Sanctum.Auth.SignInWindowTest do
                client_id: "pcl_x"
              })
   end
+
+  test "before the first passkey or device, a code cannot confirm linking another sign-in method",
+       %{ctx: ctx, user: user} do
+    n = System.unique_integer([:positive])
+
+    identity = %{
+      key: "oidcc|https://idp.test|extra-#{n}",
+      provider: "oidcc",
+      email: "extra#{n}@idp.test",
+      verified: true
+    }
+
+    {:ok, ticket} = Sanctum.SignIn.link_ticket(ctx, identity)
+
+    {:error, {:confirmation_required, %{id: id, operation: "person.link_door"}}} =
+      Sanctum.SignIn.link_door(ctx, "oidcc", ticket)
+
+    ref = Prima.Confirmation.ref(id)
+    assert {:ok, true} = Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user.id)
+
+    assert {:error, %Prima.Refusal{reason: :enrollment_first}} =
+             EmailVerification.send_code(ctx, ref)
+
+    assert pending(ctx, ref).enroll
+    refute "email" in pending(ctx, ref).methods
+  end
+
+  test "a code held for linking a door cannot confirm it in the never-held window", %{
+    ctx: ctx,
+    user: user
+  } do
+    n = System.unique_integer([:positive])
+
+    identity = %{
+      key: "oidcc|https://idp.test|held-#{n}",
+      provider: "oidcc",
+      email: "held#{n}@idp.test",
+      verified: true
+    }
+
+    {:ok, ticket} = Sanctum.SignIn.link_ticket(ctx, identity)
+    {:error, {:confirmation_required, %{id: id}}} = Sanctum.SignIn.link_door(ctx, "oidcc", ticket)
+    ref = Prima.Confirmation.ref(id)
+
+    code =
+      case EmailVerification.send_code(ctx, ref) do
+        {:ok, %{method: "email"}} ->
+          assert_receive {:confirmation_code_mail, mail}
+          TestContext.MailSink.code(mail)
+
+        {:error, %Prima.Refusal{reason: :enrollment_first}} ->
+          "000000"
+      end
+
+    result = EmailVerification.verify_code(ctx, ref, code)
+
+    if match?({:ok, _}, result) do
+      assert {:ok, %{linked: true}} =
+               Sanctum.SignIn.link_door(%{ctx | confirmation_id: id}, "oidcc", ticket)
+
+      assert {:ok, true} = Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user.id)
+    end
+
+    assert {:error, %Prima.Refusal{reason: :enrollment_first}} = result
+  end
 end
