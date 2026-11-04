@@ -16,8 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { measure } from "../browser/handheld.mjs";
 import {
-  A, H, ask, closePrompt, confirmHere, connected, layer, open, outDir, passkeySignIn, pressInLayer, record, row,
-  secrets, sleep, waitFor,
+  A, H, ask, authenticatorWith, closePrompt, confirmHere, connected, credentialsFor, layer, open, outDir, passkeySignIn,
+  pressInLayer, record, row, secrets, sleep, waitFor,
 } from "./common.mjs";
 
 const shellAt = (base, slug) => `${base}/a/${encodeURIComponent(slug)}/canvas`;
@@ -216,6 +216,9 @@ export async function confirmAtHome(page, ref, home, { hold = false, measured = 
   await link.waitFor({ timeout: 30_000 });
   const href = await link.getAttribute("href");
   const tab = await page.context().newPage();
+  // A virtual authenticator is a page's: the tab is given the passkeys the
+  // page holds for the person's own CYFR, as a synced passkey reaches it.
+  await authenticatorWith(tab, await credentialsFor(page, new URL(home).host));
   const urls = [];
   tab.on("framenavigated", (frame) => { if (frame === tab.mainFrame()) urls.push(frame.url()); });
   if (hold) {
