@@ -57,7 +57,8 @@
 #
 #   people
 #       The person rows this installation holds, and for each its paired
-#       clients and passkeys.
+#       devices (its clients but the platform holders its passkeys are) and
+#       its passkeys.
 #
 #   segment USER_ID
 #       The route segment of the person's own athanor.
@@ -242,9 +243,15 @@ fn args ->
 
       people =
         for user <- users do
+          # A passkey is an entry of the one Devices list, a platform
+          # holder; the devices are the clients that hold a key of their own.
           clients =
             Arca.Repo.aggregate(
-              from(c in Arca.Schemas.PairedClient, where: c.user_id == ^user.id),
+              from(c in Arca.Schemas.PairedClient,
+                where:
+                  c.user_id == ^user.id and
+                    (is_nil(c.holder_kind) or c.holder_kind != "platform")
+              ),
               :count
             )
 
