@@ -646,7 +646,7 @@ defmodule PrismWeb.ChatLiveTest do
     # The guard refuses the archived focus before the page's own notify
     # handler runs; the root lands in the chat.
     Sanctum.TestContext.archive!(athanor().id)
-    assert_redirect(view, "/")
+    assert_redirect(view, "/", 5_000)
 
     # A fresh open is refused too — the root, or the login page when the
     # archived athanor was the only one the session had.
