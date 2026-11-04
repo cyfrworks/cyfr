@@ -319,6 +319,59 @@ func TestBusyNamesTheHolderWhoseRecordIsLate(t *testing.T) {
 	}
 }
 
+// A holder paused between taking the lock and writing its record, as a
+// loaded Windows runner pauses one in its record's durable write for
+// longer than 250 ms, is named by a taker refused meanwhile: the taker
+// waits for the record, and never answers that the lock's holder wrote
+// none.
+func TestBusyWaitsOutAHolderPausedBeforeItsRecord(t *testing.T) {
+	const pause = time.Second
+	if pause >= recordWait {
+		t.Fatalf("the pause %v must fall within recordWait %v", pause, recordWait)
+	}
+	h := newHome(t)
+	h.unlock()
+	holder, err := Open(h.dir, h.fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := make(chan struct{})
+	holder.failWrite = func(name, step string) error {
+		if filepath.Base(name) == holderFile && step == "write" {
+			close(locked)
+			holder.failWrite = nil
+			time.Sleep(pause)
+		}
+		return nil
+	}
+	type taken struct {
+		unlock func()
+		err    error
+	}
+	held := make(chan taken, 1)
+	go func() {
+		unlock, err := holder.Lock("paused")
+		held <- taken{unlock, err}
+	}()
+	<-locked
+
+	other, err := Open(h.dir, h.fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = other.Lock("next")
+	paused := <-held
+	if paused.err != nil {
+		t.Fatalf("the paused holder answered %v", paused.err)
+	}
+	defer paused.unlock()
+	var busy *ErrBusy
+	if !errors.As(err, &busy) || busy.PID != os.Getpid() || !strings.HasPrefix(busy.Holder, "cyfr paused on ") {
+		t.Fatalf("a taker refused while the holder was paused for %v answered %#v after %v", pause, err, time.Since(started))
+	}
+}
+
 // A lock another handle still holds while no live holder record names a
 // holder (one a holder that exited or closed holding it has not had
 // released by the kernel yet, as Windows releases such a lock some time

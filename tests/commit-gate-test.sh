@@ -353,7 +353,9 @@ chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scr
 cat > "$scratch/stub.bash_env" <<'FAKE'
 # The prebuilt binary fetch and its test download from GitHub and compile
 # with the real Mix, so they stand in too: the fetch records in
-# prebuilt-fetch.calls its arguments and how many Mix calls came before it.
+# prebuilt-fetch.calls its arguments and how many Mix calls came before it,
+# and with prebuilt_fetch in STUB_HOLD writes its pid to
+# $TRACE/held.prebuilt_fetch and waits for $TRACE/release.prebuilt_fetch.
 # The shipped canvas's check builds with Node 24, the builder's major, and
 # packages from the npm registry, which a runner of these tests does not
 # promise, so it stands in as well and records its arguments in
@@ -363,6 +365,11 @@ cat > "$scratch/stub.bash_env" <<'FAKE'
 case "$0" in
   *scripts/fetch-prebuilt-binaries.sh)
     printf 'fetch %s|mix_calls_before=%s\n' "$*" "$(cat "$TRACE/mix.calls" 2>/dev/null | wc -l | tr -d ' ')" >> "$TRACE/prebuilt-fetch.calls"
+    case " ${STUB_HOLD:-} " in *" prebuilt_fetch "*)
+      echo "$$" > "$TRACE/held.prebuilt_fetch"
+      n=0
+      until [ -e "$TRACE/release.prebuilt_fetch" ] || [ "$n" -ge 600 ]; do sleep 0.1; n=$((n + 1)); done ;;
+    esac
     exit 0 ;;
   *tests/fetch-prebuilt-binaries-test.sh) exit 0 ;;
   *scripts/check-seed-canvas.sh)
@@ -2458,25 +2465,80 @@ done
 echo 'ok: HUP, and an untrapped USR1 not reported as success'
 
 # --- SIGKILL: the watchdogs stop every leg and step ------------------------------
-start_gate kill STUB_HOLD='sqlite_test_compile postgres_test_compile' -- "$gate" -n 2 -l "$scratch/kill.log"
+# What a SIGKILLed gate leaves is read from the sessions its registry names,
+# each one the gate or a leg started (each leg and each step leads one),
+# read afresh at every poll, so a session a leg starts while it stops is
+# counted too. The gate's children read at one instant are not its legs:
+# read while the gate still starts them, they miss every leg not yet
+# started and name the gate's own children (its prebuilt fetch here, a
+# wait's sleep elsewhere), which are no leg and are gone a moment later.
+registry_of() { cat "$scratch/$1.tmp"/contain-registry.* 2>/dev/null | sort -un; }
+# The legs of case $1 that lead a session its gate's registry names, by name.
+registry_legs() {
+  local s
+  for s in $(registry_of "$1"); do ps -o args= -p "$s" 2>/dev/null | sed -n 's/.* --leg \([a-z]*\)$/\1/p'; done | sort -u | tr '\n' ' '
+}
+# The sessions of case $1's legs that still run, each as SESSION:LEG.
+leg_sessions() {
+  local s l
+  for s in $(registry_of "$1"); do
+    l=$(ps -o args= -p "$s" 2>/dev/null | sed -n 's/.* --leg \([a-z]*\)$/\1/p')
+    if [ -n "$l" ]; then echo "$s:$l"; fi
+  done | tr '\n' ' '
+}
+gate_legs='audit boot go islands postgres static vocab'
+# Every leg has started: it leads a live session the registry names, or it
+# has already ended and left its marker (the vocab and audit legs wait on
+# no held step, so either may end before the last leg starts).
+all_legs_started() {
+  local l live
+  live=" $(registry_legs "$1")"
+  for l in $gate_legs; do
+    case "$live" in *" $l "*) continue ;; esac
+    [ -e "$scratch/$1.log/$l.done" ] || return 1
+  done
+}
+# shellcheck disable=SC2046
+registry_empty() { sessions_empty $(registry_of "$1"); }
+start_gate kill STUB_HOLD='prebuilt_fetch sqlite_test_compile postgres_test_compile' -- "$gate" -n 2 -l "$scratch/kill.log"
 k=$gate_pid
+until_true 60 test -s "$scratch/kill.trace/held.prebuilt_fetch" || fail "the SIGKILL case's prebuilt fetch never started: $(cat "$scratch/kill.err")"
+fetch=$(cat "$scratch/kill.trace/held.prebuilt_fetch")
+children=$(pgrep -P "$k" | tr '\n' ' ')
+[ -z "$(registry_legs kill)" ] || fail "a leg started before the prebuilt fetch ended: $(registry_legs kill)"
+touch "$scratch/kill.trace/release.prebuilt_fetch"
+until_true 60 all_legs_started kill || fail "the SIGKILL case's gate did not start its seven legs: $(registry_legs kill)"
 until_true 60 test -s "$scratch/kill.trace/held.sqlite_test_compile" || fail "the SIGKILL case's static step never started: $(cat "$scratch/kill.err")"
 until_true 60 test -s "$scratch/kill.trace/held.postgres_test_compile" || fail "the SIGKILL case's postgres step never started: $(cat "$scratch/kill.err")"
-steps="$(cat "$scratch/kill.trace/held.sqlite_test_compile") $(cat "$scratch/kill.trace/held.postgres_test_compile")"
-legs=$(pgrep -P "$k" | tr '\n' ' ')
-[ -n "$legs" ] || fail 'the SIGKILL case found no leg to watch'
-alive_all() { local p; for p in "$@"; do alive "$p" || return 1; done; }
-# shellcheck disable=SC2086
-alive_all $steps || fail 'the held steps were not running before the SIGKILL'
+leg_pairs=$(leg_sessions kill)
+legs=$(for e in $leg_pairs; do printf '%s ' "${e%%:*}"; done)
+# Each held step leads a session the registry names, as each leg does.
+for p in $(cat "$scratch/kill.trace/held.sqlite_test_compile" "$scratch/kill.trace/held.postgres_test_compile"); do
+  case " $(registry_of kill | tr '\n' ' ') " in *" $p "*) ;; *) fail "the held step $p leads no session the gate's registry names" ;; esac
+done
+# The one-instant read named the fetch, which is no leg and is gone, and
+# none of the seven legs.
+case " $children " in *" $fetch "*) ;; *) fail "the gate's children, read while its fetch held, did not name the fetch: $children" ;; esac
+for p in $children; do case " $legs " in *" $p "*) fail "the gate's children, read before any leg started, named the leg $p" ;; esac; done
+dead "$fetch" || fail 'the released prebuilt fetch still runs'
+# Before the SIGKILL every leg's session shows a process, or its leg has
+# ended and left its marker (the vocab and audit legs wait on no held
+# step), and each held step shows a process, being held: the read after
+# it cannot pass on sessions it never saw.
+for e in $leg_pairs; do
+  ! sessions_empty "${e%%:*}" || [ -e "$scratch/kill.log/${e#*:}.done" ] ||
+    fail "the ${e#*:} leg's session ${e%%:*} showed no process before the SIGKILL and the leg left no marker"
+done
+for p in $(cat "$scratch/kill.trace/held.sqlite_test_compile" "$scratch/kill.trace/held.postgres_test_compile"); do
+  ! sessions_empty "$p" || fail "the held step $p showed no process before the SIGKILL"
+done
 kill -KILL "$k"
 # Its legs and steps answer TERM at once, so their watchdogs end them in
 # seconds, far inside the leg grace.
-# shellcheck disable=SC2086
-until_true 30 all_dead $legs $steps || fail "a leg or step outlived a SIGKILLed gate: $(for p in $legs $steps; do alive "$p" && echo "$p"; done | tr '\n' ' ')"
-# shellcheck disable=SC2086
-until_true 15 sessions_empty $legs $steps || fail 'a session of a SIGKILLed gate kept a process'
+until_true 30 registry_empty kill ||
+  fail "a session of a SIGKILLed gate kept a process: $(for s in $(registry_of kill); do pgrep -s "$s" | sed "s/^/$s:/"; done | tr '\n' ' ')"
 gate_status "$k"; [ "$gate_rc" = 137 ] || fail 'the SIGKILLed gate was not reaped'
-echo 'ok: SIGKILL'
+echo 'ok: SIGKILL: every session its registry names is empty, the seven legs and both held steps among them'
 
 # --- a leg that dies without its marker; under heavy-check; explicit paths -------
 # Run as heavy-check runs it: no terminal lines, and its sessions recorded

@@ -124,8 +124,11 @@ func (e *Engine) unlock() {
 // holder record names a holder: a holder writes its record right after it
 // takes the lock, so a taker refused in between reads it again before
 // naming the holder, and a lock a dead holder still holds is tried again
-// until the kernel lets it go.
-const recordWait = 250 * time.Millisecond
+// until the kernel lets it go. The record is a durable write (writeDurable),
+// which a loaded Windows runner has been seen to take longer than 250 ms
+// over for a holder's first record, so the bound is the seconds such a
+// runner needs, not the milliseconds an idle one does.
+const recordWait = 2 * time.Second
 
 // liveHolder is the lock's refusal from the holder record a live holder
 // wrote, and nil while the record is missing, empty or a dead holder's: a
