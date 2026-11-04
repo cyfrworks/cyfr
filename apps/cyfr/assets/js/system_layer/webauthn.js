@@ -84,11 +84,6 @@ export function assertionJSON(credential) {
   return answer
 }
 
-/** Whether this browser can hold a passkey ceremony at all. */
-export function supported(scope = globalThis) {
-  return Boolean(scope.PublicKeyCredential && scope.navigator?.credentials?.get && scope.isSecureContext !== false)
-}
-
 /**
  * Register: create a credential for the home's options (`publicKey`) and
  * answer it with the home's `registration` token.

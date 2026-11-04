@@ -15,7 +15,7 @@ import {
   RestorePage
 } from "./recovery.js"
 import {initial, transition} from "./state.js"
-import {assert as assertPasskey, register as registerPasskey, supported as passkeysSupported} from "./webauthn.js"
+import {assert as assertPasskey, register as registerPasskey} from "./webauthn.js"
 
 /**
  * SystemLayer hook — the browser half of the layer Prism alone draws above
