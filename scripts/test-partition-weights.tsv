@@ -2,8 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 # Seconds per test file for scripts/test-partitioned.sh's split: one `<seconds>\t<path>` row per file,
 # rows sorted by path (LC_ALL=C). A file missing here weighs the table's median.
-# Regenerate: two runs of the timing measurement in CONTRIBUTING.md with this table absent, then each
-# file's larger `elixir scripts/test-timings.exs weights` value, sorted by path under LC_ALL=C.
+# Regenerate: two runs of the timing measurement in CONTRIBUTING.md with this table in place (a file's
+# timing does not depend on the split), then each file's larger `elixir scripts/test-timings.exs
+# weights` value, sorted by path under LC_ALL=C.
 0.4	apps/arca/test/arca/adapters/adapter_contract_test.exs
 1.7	apps/arca/test/arca/adapters/local_test.exs
 1.0	apps/arca/test/arca/adapters/local_write_lock_test.exs

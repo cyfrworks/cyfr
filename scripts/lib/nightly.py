@@ -1,23 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The nightly stage's two reports, from what its suite rows left in the
-stage's log directory (scripts/stages.tsv):
+"""The nightly's two reports, from the log directory the nightly workflow's
+reports job lays out from the test job's artifacts
+(.github/workflows/nightly.yml):
 
     python3 -I scripts/lib/nightly.py flakes LOGDIR
     python3 -I scripts/lib/nightly.py weights LOGDIR
 
-flakes compares each adapter's two whole-suite invocations, the rows
-<adapter>-1 and <adapter>-2, and prints one line per test that failed in
-either: its verdict, the adapter, the app, the test and the runs it failed
-in. Its evidence is what the partition runner leaves: each row's log (the
-runner's output: `==> partition i/N` blocks, a `partition exited N` line
-for a partition that did not exit 0, the run directory it kept, and the
-heavy-check frame's `_EXIT=` line), and, in that run directory, each
-partition's assigned files (assign/p<i>) and its log (p<i>.log, where Mix
-heads each umbrella app's part with `==> <app>`, lists its failures as
-`N) test NAME (MODULE)` with the test's file under it, named from the
-umbrella's root as the assignment names it, and ends it with the app's
-`Result:` line). A partition completed when it exited 0, or 2
+flakes compares each adapter's two whole-suite invocations, <adapter>-1
+and <adapter>-2, and prints one line per test that failed in either: its
+verdict, the adapter, the app, the test and the runs it failed in. Its
+evidence is what the partition runner leaves: each invocation's log,
+LOGDIR/<adapter>-<n>.log (the runner's output, every shard's in turn:
+`==> partition i/N` blocks, a `partition exited N` line for a partition
+that did not exit 0, and the run directory it kept, the last such line
+naming the one directory that holds every shard's partitions), and, in
+that run directory, each partition's assigned files (assign/p<i>) and its
+log (p<i>.log, where Mix heads each umbrella app's part with `==> <app>`,
+lists its failures as `N) test NAME (MODULE)` with the test's file under
+it, named from the umbrella's root as the assignment names it, and ends it
+with the app's `Result:` line). A partition completed when it exited 0, or 2
 (`mix test`'s status for test failures alone), and every app with an
 assigned file has its `Result:` line. A test passed in an invocation only
 when the partition that ran its file completed and the test is not among
@@ -30,8 +32,8 @@ shows the same number of exclusions in both. The verdicts:
               did not complete proves nothing about its tests, and an
               exclusion count that differs cannot be attributed to a test.
 
-weights applies CONTRIBUTING.md's recipe to the two SQLite rows' timings
-(timings-1 and timings-2): each file's larger `elixir
+weights applies CONTRIBUTING.md's recipe to the two SQLite invocations'
+timings (LOGDIR/timings-1 and timings-2): each file's larger `elixir
 scripts/test-timings.exs weights` value, sorted by path in byte order
 under the tracked table's header. It writes LOGDIR/test-partition-
 weights.tsv, never the tracked table, and prints how many rows differ
