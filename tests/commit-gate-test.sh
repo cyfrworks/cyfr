@@ -306,7 +306,7 @@ FAKE
 chmod +x "$scratch/trivy-release/trivy"
 # curl serves trivy's release from the stand-in (an archive of the
 # trivy above and a checksums file naming its sha256, or under
-# STUB_TRIVY_BAD_SUM another), recording each URL in curl.calls, answers
+# STUB_TRIVY_BAD_SUM another), recording each of those URLs in curl.calls, answers
 # the stand-in object store's health URL, and fetches anything else for
 # real; npm records an audit in tools.calls and
 # runs anything else as itself.
@@ -318,7 +318,7 @@ cat > "$scratch/bin/curl" <<'FAKE'
 url=${!#} out= prev=
 for a in "$@"; do [ "$prev" != -o ] || out=$a; prev=$a; done
 case "$url" in
-  http://127.0.0.1:49999/minio/health/live) echo "$url" >> "$TRACE/curl.calls"; exit 0 ;;
+  http://127.0.0.1:49999/minio/health/live) exit 0 ;;
   https://github.com/aquasecurity/trivy/releases/download/*)
     echo "$url" >> "$TRACE/curl.calls"
     name=${url##*/}

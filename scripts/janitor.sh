@@ -134,7 +134,7 @@ failure() { echo "failed $1 $2: $3"; failed=1; }
 # listed KEY WHAT CMD...: CMD's standard output kept in $lists/KEY for the
 # rule that reads it, and 0; when CMD fails, $lists/KEY empty, a failure
 # naming WHAT and CMD's error, and 1.
-lists=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-janitor.XXXXXX") || exit 1
+lists=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-janitor.XXXXXX") || exit 1
 trap 'rm -rf "$lists"' EXIT
 listed() {
   local key=$1 what=$2 err status=0
