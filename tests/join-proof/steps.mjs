@@ -295,9 +295,11 @@ async function closedHops(chromium, { home, identifier }) {
     record.closed_hops);
 }
 
-async function forgedCompletion(chromium, { home, identifier, hubPage, hubContext }) {
+async function forgedCompletion(chromium, { home, identifier, hubContext }) {
   const savedAddress = (page) => page.evaluate(() => localStorage.getItem("cyfr:sign-in:your-cyfr"));
-  const addressesBefore = { a: await savedAddress(home.desk), h: await savedAddress(hubPage) };
+  const atH = await hubContext.newPage();
+  await atH.goto(`${H}/login`);
+  const addressesBefore = { a: await savedAddress(home.desk), h: await savedAddress(atH) };
   const before = { person: await atHub(identifier), receipts: await receiptRowsAtHub(identifier) };
   // A pending carry of the person's, never taken to H, and a return
   // fragment no home sent saying it was admitted.
@@ -325,8 +327,6 @@ async function forgedCompletion(chromium, { home, identifier, hubPage, hubContex
   await home.desk.locator('[data-test="carry-notice"]').waitFor({ timeout: 30_000 });
   // H's storage in the browser that signed in there: the one address it
   // remembers for its sign-in page, and LiveView's reload counters.
-  const atH = await hubContext.newPage();
-  await atH.goto(`${H}/login`);
   const stored = { h: await storageOf(atH), a: await storageOf(home.desk) };
   const addressesAfter = { a: await savedAddress(home.desk), h: await savedAddress(atH) };
   await atH.close();
