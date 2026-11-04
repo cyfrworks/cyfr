@@ -11,8 +11,7 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {describe, test} from "node:test"
 
-import DeviceAdd from "../../js/hooks/device_add.js"
-import {keyDigestFromFragment} from "../../js/system_layer/device_key.js"
+import DeviceAdd, {keyDigestFromFragment} from "../../js/hooks/device_add.js"
 
 const vectors = JSON.parse(
   readFileSync(new URL("../../../../../tests/fixtures/device_unlock.json", import.meta.url))

@@ -29,6 +29,10 @@ defmodule Sanctum.DeviceCertsTest do
   # node's, and some cases change the home's name: one case at a time.
   use ExUnit.Case, async: false
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.{PairedClient, PersonIdentity, RequestRateWindow}
@@ -123,7 +127,7 @@ defmodule Sanctum.DeviceCertsTest do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
     {:ok, invitation} = begin!(session_ctx, device_key)
     glass = Context.build(%{authenticated: false, client_ip: source})
-    submission = %{device_key: device_key}
+    submission = %{holder: @holder, device_key: device_key}
 
     {:ok, %{challenge: challenge}} =
       Pairing.complete(glass, invitation.invitation_secret, submission)
@@ -1486,7 +1490,7 @@ defmodule Sanctum.DeviceCertsTest do
       :ok = DirectoryServer.remote_person!(user.id, identity)
       certificate = remote_certificate(identity, invitation.client_id, device_key, athanor)
       glass = Context.build(%{authenticated: false, client_ip: @source})
-      submission = %{device_key: device_key, certificate: certificate}
+      submission = %{holder: @holder, device_key: device_key, certificate: certificate}
 
       {:ok, %{challenge: challenge}} =
         Pairing.complete(glass, invitation.invitation_secret, submission)
@@ -1673,11 +1677,15 @@ defmodule Sanctum.DeviceCertsTest do
       # Its pause is no failed proof: nothing is counted against the bounds.
       assert {:error, :identity_stale} = remote_connect(device)
 
-      assert {:ok, [%{standing: "active"}]} =
+      # The device stands, beside the platform holder of the passkey the
+      # fixture confirmed with.
+      assert {:ok, clients} =
                Arca.PairedClients.list(Prima.Actor.in_athanor(ctx.athanor_id),
                  user_id: ctx.user_id,
                  standing: :all
                )
+
+      assert [%{standing: "active"}] = Enum.filter(clients, &(&1.source_kind == "device_cert"))
     end
   end
 end

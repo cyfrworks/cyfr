@@ -55,17 +55,18 @@ defmodule Arca.SchemaVocabularyTest do
       {"shares", "shares_status_known", "status", Arca.StatusTransitions.statuses(:shares)},
       {"shares", "shares_audience_known", "audience", Arca.Schemas.Share.audiences()},
       # `Arca.PairingInvitations` writes the kind of the confirmer it reads
-      # from the consumed confirmation: a passkey or a paired device.
+      # from the consumed confirmation: a passkey, a paired device, or a
+      # remote person's own home that certified it.
       {"pairing_invitations", "pairing_invitations_confirmer_kind_known", "confirmer_kind",
-       ~w(passkey device)},
+       ~w(passkey device home)},
       {"consumer_receipts", "consumer_receipts_outcome_known", "outcome",
        Arca.ConsumerReceipts.outcomes()},
       # A declared restore suspends an active client or passkey
       # (`Arca.SecurityTransitions.restore/1`) until its person re-enables it.
       {"paired_clients", "paired_clients_standing_known", "standing",
        Arca.Schemas.PairedClient.standings()},
-      # What a protected device reports holds its key; a browser key holds
-      # none (NULL).
+      # What holds a client's key: a protected device's report, or the
+      # platform of a passkey's projected holder.
       {"paired_clients", "paired_clients_holder_kind_known", "holder_kind",
        Arca.Schemas.PairedClient.holder_kinds()},
       {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()},

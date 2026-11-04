@@ -5,8 +5,8 @@ defmodule Emissary.Web.CertificateRenewalController do
   @moduledoc """
   A certified device's renewal at its person's home
   (`Sanctum.RemoteCertification`): `POST /certify/v1/renew`, which the
-  device's page at the other home reaches with `fetch` and no
-  credentials.
+  device, a command line certified for the other home, asks with no
+  credential but its proof.
 
   The body is a JSON object of at most 16 KiB
   (`CyfrWeb.Plugs.RawBodyReader`): `certificate`, a certificate this home
@@ -22,9 +22,8 @@ defmodule Emissary.Web.CertificateRenewalController do
   (`CyfrWeb.ApiError`, `{"code", "message"}`) at its class's status:
   `404` no certification here, `409` a certification that ended (the
   person's keys changed) or was replaced, `401` a refused proof, `429` a
-  spent verification bound, `503` a store that could not answer. CORS
-  answers every origin `*` and never allows credentials, so no cookie
-  travels with it in either direction.
+  spent verification bound, `503` a store that could not answer. No CORS
+  answer is given: no page of another origin reads it.
   """
 
   use Emissary.Web, :controller

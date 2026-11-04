@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import {jcs} from "../../js/system_layer/device_key.js"
+import {jcs} from "../../js/system_layer/jcs.js"
 import SystemLayer from "../../js/system_layer/index.js"
 import {
   clearCode,

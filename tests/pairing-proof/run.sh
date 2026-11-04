@@ -95,12 +95,12 @@ answer_ask() {
   local ask="$1" op arguments
   op="$(asked "$ask" op)"
   case "$op" in
-    passkey_options)
-      ANSWER="$(server_fixture "$CELL" console "$phone_token" passkey/register '{}')"
-      ;;
-    passkey_register)
-      arguments="$(python3 -c "import json, sys; print(json.dumps({'credential': json.load(open(sys.argv[1]))['credential']}))" "$ask")"
-      ANSWER="$(server_fixture "$CELL" console "$phone_token" passkey/register "$arguments")"
+    device_confirm) ANSWER="$(device_confirmed "$CELL" "$ask")" ;;
+    replay_assertion)
+      # An assertion the phone gave for one record, presented for another
+      # through the console's adapter under the phone's session.
+      arguments="$(python3 -I -c "import json, sys; a = json.load(open(sys.argv[1])); print(json.dumps({'ref': a['ref'], 'assertion': a['credential']}))" "$ask")"
+      ANSWER="$(server_fixture "$CELL" console "$phone_token" confirmation/confirm "$arguments")"
       ;;
     cert_seconds)
       ANSWER="$(server_fixture "$CELL" console "$desktop_token" settings/set \

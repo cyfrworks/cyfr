@@ -77,7 +77,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "certify",
       "close_recovery",
       "renew_certificate",
-      "assert"
+      "assert",
+      "assert_confirmation"
     ],
     "pairing" => ["begin", "complete", "renew", "revoke", "list", "reenable"],
     "pin" => ["enroll"],

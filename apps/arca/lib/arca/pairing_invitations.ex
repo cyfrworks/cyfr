@@ -24,7 +24,9 @@ defmodule Arca.PairingInvitations do
   Its confirmer is read from the consumed confirmation itself, never
   taken from the caller: the passkey whose assertion proved it
   (`confirmed_passkey_id`), else the paired client the proof was given on
-  (`confirmed_client_id`). A confirmation attributed to neither opens an
+  (`confirmed_client_id`), else, for a remote person, the confirmation
+  their own home certified (`home`, the record's ref as its id). A
+  confirmation attributed to none of them opens an
   invitation only while the person's first-method latch is still open
   (`Arca.PersonIdentities.first_method_open?/2`, read under the person's
   lock the opening already holds): the bootstrap of a person who holds no
@@ -345,6 +347,11 @@ defmodule Arca.PairingInvitations do
   # first too, and a client's locks only its own row.
   defp confirmer_stands(%PairingInvitation{confirmer_kind: nil, confirmer_id: nil}), do: :ok
 
+  # A remote person's own home certified the confirmation, under the head
+  # read fresh when it was given; nothing here stands for it, and the
+  # completion reads that head live again before it records the client.
+  defp confirmer_stands(%PairingInvitation{confirmer_kind: "home"}), do: :ok
+
   defp confirmer_stands(%PairingInvitation{confirmer_kind: "device"} = invitation) do
     from(p in PairedClient,
       where:
@@ -406,7 +413,11 @@ defmodule Arca.PairingInvitations do
         c.athanor_id == ^athanor_id and c.ref == ^fields.confirmation_ref and
           c.user_id == ^fields.user_id and c.operation == "pairing.begin" and
           c.state == "consumed",
-      select: %{passkey_id: c.confirmed_passkey_id, client_id: c.confirmed_client_id}
+      select: %{
+        passkey_id: c.confirmed_passkey_id,
+        client_id: c.confirmed_client_id,
+        proof: c.proof
+      }
     )
     |> Arca.Repo.one()
     |> case do
@@ -418,6 +429,9 @@ defmodule Arca.PairingInvitations do
 
       %{client_id: client_id} when is_binary(client_id) ->
         {:ok, %{confirmer_kind: "device", confirmer_id: client_id}}
+
+      %{proof: "home"} ->
+        {:ok, %{confirmer_kind: "home", confirmer_id: fields.confirmation_ref}}
 
       %{} ->
         if Arca.Repo.exists?(

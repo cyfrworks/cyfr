@@ -39,8 +39,13 @@ defmodule Arca.Passkeys do
       records a use, and only `reenable/4` makes it active again, closing
       its person's restore in the same transaction. An administrator's
       activation of a pending credential (`activate/3`) closes it too.
+    * **Its platform holder.** A credential that stands is projected as
+      its person's paired client (`Arca.PairedClients.project_passkey!/1`),
+      in the same transaction as each move here: written once it first
+      stands, suspended, re-enabled and revoked with it.
     * **Revocation** is terminal, and voids the pending confirmations the
-      credential confirmed (`Arca.PendingConfirmations`). It locks the
+      credential confirmed (`Arca.PendingConfirmations`) and ends the
+      sessions its sign-ins made, through its platform holder. It locks the
       person's row first, as unlinking a door does, and runs the caller's
       `also:` check under that lock. A suspended credential may be
       revoked; a revoked one is never re-enabled.
@@ -54,7 +59,7 @@ defmodule Arca.Passkeys do
 
   import Ecto.Query
 
-  alias Arca.{PendingConfirmations, PersonIdentities}
+  alias Arca.{PairedClients, PendingConfirmations, PersonIdentities}
   alias Arca.Schemas.Passkey
 
   # Registering and activating a credential widen what the person may
@@ -67,7 +72,8 @@ defmodule Arca.Passkeys do
   @doc """
   Record a credential. `attrs`: `:user_id`, `:credential_id`, `:rp_id`,
   `:relying_home`, `:public_key`, `:registration_digest`,
-  `:possession_verified`, `:state` (`"pending"` or `"active"`),
+  `:possession_verified`, `:backup_eligible` (WebAuthn's flag: the
+  credential may sync), `:state` (`"pending"` or `"active"`),
   `:expires_at` (required while pending) and `:identity_recovery_epoch`
   (required for a remote person, refused for a local one). `opts`:
   `first_method: true` claims the local first-method exception, and
@@ -217,10 +223,17 @@ defmodule Arca.Passkeys do
   `%{passkey: row, was: state}`, the state the credential stood in under
   the lock; it answers `:ok` or `{:error, reason}`, which leaves the
   credential and its confirmations as they were and refuses with that
-  reason. Answers `{:ok, %{passkey: row, voided_confirmation_ids: ids}}`.
+  reason. Answers `{:ok, %{passkey: row, voided_confirmation_ids: ids,
+  revoked_session_hashes: hashes}}`, the hashes of the sessions its
+  sign-ins made, which the caller drops from every memo once it commits.
   """
   @spec revoke(Prima.Actor.t(), String.t(), keyword()) ::
-          {:ok, %{passkey: row(), voided_confirmation_ids: [String.t()]}}
+          {:ok,
+           %{
+             passkey: row(),
+             voided_confirmation_ids: [String.t()],
+             revoked_session_hashes: [binary()]
+           }}
           | {:error, :not_found | :cross_tenant | :database_error | term()}
   def revoke(%Prima.Actor{} = actor, id, opts \\ []) when is_binary(id) and is_list(opts) do
     also = Keyword.get(opts, :also, fn _revoked -> :ok end)
@@ -306,6 +319,10 @@ defmodule Arca.Passkeys do
       )
 
     PendingConfirmations.void_confirmed_by!(:passkey, ids)
+
+    for id <- ids,
+        do: _sessions = PairedClients.project_passkey!(Arca.Repo.get!(Passkey, id))
+
     ids
   end
 
@@ -318,6 +335,7 @@ defmodule Arca.Passkeys do
          :ok <- first_method(row, opts),
          :ok <- inserted(row) do
       passkey = Arca.Repo.get!(Passkey, row.id)
+      _none = PairedClients.project_passkey!(passkey)
 
       case also.(Arca.Data.project(passkey)) do
         :ok -> {:ok, closed_on_activation(passkey)}
@@ -392,6 +410,7 @@ defmodule Arca.Passkeys do
              :ok <- mark_first(passkey.user_id, Keyword.get(opts, :first_method, false)),
              :ok <- moved_active(passkey, now, Keyword.get(opts, :admin_confirmation_id)) do
           activated = Arca.Repo.get!(Passkey, passkey.id)
+          _none = PairedClients.project_passkey!(activated)
 
           # The administrator's activation, once admitted, ends the
           # person's recovery from a declared restore.
@@ -425,6 +444,7 @@ defmodule Arca.Passkeys do
            passkey
            |> Ecto.Changeset.change(state: "active", updated_at: Arca.ServerMetaStorage.now!())
            |> Arca.Repo.update() do
+      _none = PairedClients.project_passkey!(active)
       {:ok, closed_with(active, close_restore(active.user_id))}
     end
   end
@@ -447,10 +467,15 @@ defmodule Arca.Passkeys do
     ids = revoke_all(from(p in Passkey, where: p.id == ^passkey.id))
     voided = PendingConfirmations.void_confirmed_by!(:passkey, ids)
     revoked = Arca.Repo.get!(Passkey, passkey.id)
+    %{session_hashes: hashes} = PairedClients.project_passkey!(revoked)
 
     case also.(%{passkey: Arca.Data.project(revoked), was: was}) do
-      :ok -> {:ok, %{passkey: revoked, voided_confirmation_ids: voided}}
-      {:error, _reason} = refusal -> refusal
+      :ok ->
+        {:ok,
+         %{passkey: revoked, voided_confirmation_ids: voided, revoked_session_hashes: hashes}}
+
+      {:error, _reason} = refusal ->
+        refusal
     end
   end
 
@@ -537,6 +562,7 @@ defmodule Arca.Passkeys do
          state: state,
          registration_digest: attrs.registration_digest,
          possession_verified: true,
+         backup_eligible: attrs[:backup_eligible] == true,
          expires_at: if(state == "pending", do: usec(attrs.expires_at)),
          admin_confirmation_id: nil,
          activated_at: if(state == "active", do: now),

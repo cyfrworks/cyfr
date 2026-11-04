@@ -34,6 +34,12 @@ defmodule Sanctum.Auth.OIDCReauthTest do
 
   use CyfrWeb.ConnCase, async: false
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
+  require Ecto.Query
+
   alias Sanctum.Auth.OIDC
   alias Sanctum.Context
 
@@ -175,19 +181,18 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     {held, request}
   end
 
-  defp change(name \\ "prod-key") do
-    %{
-      operation: "vault.create",
-      arguments: %{name: name, kind: "api_key", fields: %{"KEY" => "sk-secret"}},
-      resource: name
-    }
-  end
+  # A re-authentication confirms only inside its windows
+  # (`Sanctum.Pairing.sign_in_may_confirm/2`): this person holds no passkey
+  # or device yet, so the change is their first device's pairing, one per
+  # `name`.
+  defp change(name \\ "prod-key"),
+    do: Sanctum.Pairing.invitation_change(Prima.Device.key_digest(:crypto.hash(:sha256, name)))
 
   # A change asked for with no proof: the signal's secret, and the ref
   # every other surface names its record by.
   defp asked!(ctx, change \\ change()) do
     {:error, {:confirmation_required, %{id: secret}}} =
-      Sanctum.Consent.Authz.check(ctx, :credential_entry, change)
+      Sanctum.Consent.Authz.check(ctx, :device_pairing, change)
 
     {secret, Prima.Confirmation.ref(secret)}
   end
@@ -324,10 +329,10 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       assert redeemed.nonce == request.nonce
       assert redeemed.pkce_verifier == request.pkce_verifier
 
-      assert %{ref: ^id, operation: "vault.create", preview: preview} = held
+      assert %{ref: ^id, operation: "pairing.begin", preview: preview} = held
       refute Map.has_key?(held, :id)
-      assert preview["resource"] == "prod-key"
-      assert preview["operation"] == "vault.create"
+      assert preview["resource"] == change().resource
+      assert preview["operation"] == "pairing.begin"
       refute inspect(held) =~ "sk-secret"
 
       assert record(ctx, id).state == "pending"
@@ -430,13 +435,13 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       assert {:error, {:confirmation_required, _}} =
                Sanctum.Consent.Authz.confirm(
                  %{ctx | confirmation_id: id},
-                 :credential_entry,
+                 :device_pairing,
                  change()
                )
 
       assert Sanctum.Consent.Authz.confirm(
                %{ctx | confirmation_id: secret},
-               :credential_entry,
+               :device_pairing,
                change()
              ) ==
                :ok
@@ -496,17 +501,17 @@ defmodule Sanctum.Auth.OIDCReauthTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Adding a device: a re-authentication a paired device began
+  # The first device, paired on a re-authentication
   # ---------------------------------------------------------------------------
 
-  # Asked by `ctx`, proven by a re-authentication `prover` began and the
-  # person approved from their own session: the record's secret.
-  defp reauth_confirmed!(ctx, prover, subject, token, change) do
+  # Asked by `ctx`, proven by a re-authentication it began and the person
+  # approved from their own session: the record's secret.
+  defp reauth_confirmed!(ctx, subject, token, change) do
     {:error, {:confirmation_required, %{id: secret}}} =
       Sanctum.Consent.Authz.check(%{ctx | confirmation_id: nil}, :device_pairing, change)
 
     ref = Prima.Confirmation.ref(secret)
-    {held, _request} = verified!(prover, subject, ref)
+    {held, _request} = verified!(ctx, subject, ref)
     assert {:ok, %{state: "confirmed"}} = OIDC.reauth_decide(held.ticket, token, :approve)
     secret
   end
@@ -518,10 +523,11 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     glass = Context.build(%{authenticated: false, client_ip: "198.51.100.30"})
 
     {:ok, %{challenge: challenge}} =
-      Sanctum.Pairing.complete(glass, secret, %{device_key: device_key})
+      Sanctum.Pairing.complete(glass, secret, %{holder: @holder, device_key: device_key})
 
     {:ok, paired} =
       Sanctum.Pairing.complete(glass, secret, %{
+        holder: @holder,
         device_key: device_key,
         proof: Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
       })
@@ -530,150 +536,72 @@ defmodule Sanctum.Auth.OIDCReauthTest do
   end
 
   # The person's first device, paired on a re-authentication from their
-  # session while they hold no passkey and no device, and the context its
-  # channel mints from a connect proof.
+  # session while they hold no passkey and no device: the bootstrap, which
+  # sets their first-method latch.
   defp first_device!(%{ctx: ctx, subject: subject, token: token}) do
-    {device_key, private} = key = :crypto.generate_key(:eddsa, :ed25519)
+    {device_key, _private} = key = :crypto.generate_key(:eddsa, :ed25519)
     digest = Prima.Device.key_digest(device_key)
-    secret = reauth_confirmed!(ctx, ctx, subject, token, pairing_change(digest))
+    secret = reauth_confirmed!(ctx, subject, token, pairing_change(digest))
 
     {:ok, invitation} =
       Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest})
 
-    paired = complete!(invitation.invitation_secret, key)
-    certificate = paired.certificate
-
-    {:ok, challenge} =
-      Prima.DeviceCert.Challenge.new(
-        purpose: :connect,
-        home: certificate.audience,
-        athanor: certificate.athanor,
-        client_id: paired.client_id,
-        device_key: device_key,
-        nonce: :crypto.strong_rand_bytes(Prima.DeviceCert.Challenge.nonce_bytes()),
-        now: System.system_time(:millisecond)
-      )
-
-    {:ok, device_ctx} =
-      Sanctum.DeviceCerts.verify_connect(
-        %{client_id: paired.client_id, certificate: certificate, source: "198.51.100.30"},
-        Prima.DeviceCert.Proof.sign(challenge, private),
-        challenge
-      )
-
-    %{client_id: paired.client_id, ctx: device_ctx}
+    %{client_id: complete!(invitation.invitation_secret, key).client_id}
   end
 
-  describe "a re-authentication begun from a paired device" do
-    test "confirms as that device: a device it confirmed is added, and the invitation names it",
-         %{ctx: ctx, subject: subject, token: token} = seated do
-      device = first_device!(seated)
-      {device_key, _private} = key = :crypto.generate_key(:eddsa, :ed25519)
-      digest = Prima.Device.key_digest(device_key)
-
-      secret = reauth_confirmed!(ctx, device.ctx, subject, token, pairing_change(digest))
-      row = record(ctx, Prima.Confirmation.ref(secret))
-      assert {row.proof, row.confirmed_client_id} == {"oidc_reauth", device.client_id}
-
-      assert {:ok, invitation} =
-               Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest})
-
-      assert %{confirmer_kind: "device", confirmer_id: confirmer} =
-               Arca.Repo.get_by!(Arca.Schemas.PairingInvitation,
-                 secret_hash: Prima.Digest.sha256(invitation.invitation_secret)
-               )
-
-      assert confirmer == device.client_id
-      assert %{client_id: _} = complete!(invitation.invitation_secret, key)
-    end
-
-    test "its state names the device; one begun from a session names none",
+  describe "outside its windows" do
+    test "once a device is paired, it is refused where it begins, for another device and any other change",
          %{ctx: ctx} = seated do
-      device = first_device!(seated)
-      ref = opened!(ctx)
-
-      {_url, from_device} = begun!(device.ctx, ref)
-      {_url, from_session} = begun!(ctx, ref)
-
-      decoded = fn state ->
-        [payload, _mac] = String.split(state, ".")
-        payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
-      end
-
-      assert %{"d" => client_id} = decoded.(from_device.state)
-      assert client_id == device.client_id
-      refute Map.has_key?(decoded.(from_session.state), "d")
-    end
-
-    test "from a session that names no client, a re-authentication adds no device once one is paired",
-         %{ctx: ctx, subject: subject, token: token} = seated do
       _device = first_device!(seated)
-      {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
-      digest = Prima.Device.key_digest(device_key)
 
-      secret = reauth_confirmed!(ctx, ctx, subject, token, pairing_change(digest))
-      assert record(ctx, Prima.Confirmation.ref(secret)).confirmed_client_id == nil
-
-      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest}) ==
-               {:error, Sanctum.Pairing.addition_refusal()}
+      for ref <- [opened!(ctx, change("second-device")), everyday!(ctx)] do
+        assert {:error, %Prima.Refusal{reason: :method_held}} = OIDC.reauth_url(ctx, ref)
+        refute_received {:authorize, _request}
+        assert record(ctx, ref).state == "pending"
+      end
     end
 
-    test "a device's state replayed against a later attempt begun from a session confirms nothing",
-         %{ctx: ctx, subject: subject, token: token} = seated do
-      device = first_device!(seated)
-      digest = Prima.Device.key_digest(elem(:crypto.generate_key(:eddsa, :ed25519), 0))
-
-      {:error, {:confirmation_required, %{id: secret}}} =
-        Sanctum.Consent.Authz.check(ctx, :device_pairing, pairing_change(digest))
-
-      ref = Prima.Confirmation.ref(secret)
-      {_url, from_device} = begun!(device.ctx, ref)
-      {_url, from_session} = begun!(ctx, ref)
-      refute from_device.nonce == from_session.nonce
-      refute from_device.pkce_verifier == from_session.pkce_verifier
-
-      # The device's state, read from its authorization URL, beside the
-      # code of the later login the session began: the record's nonce is
-      # the later attempt's, so the device's state names an attempt that no
-      # longer stands, and nothing is held to approve.
-      assert OIDC.reauth_callback(%{
-               "state" => from_device.state,
-               "code" => code(claims(from_session, subject))
-             }) == {:error, :reauth_refused}
-
-      row = record(ctx, ref)
-      assert {row.state, row.confirmed_client_id} == {"pending", nil}
-
-      # The session's own attempt confirms, given on no device, and adds
-      # nothing once a device is paired.
-      {:ok, %{ticket: ticket}} =
-        OIDC.reauth_callback(%{
-          "state" => from_session.state,
-          "code" => code(claims(from_session, subject))
-        })
-
-      assert {:ok, %{state: "confirmed"}} = OIDC.reauth_decide(ticket, token, :approve)
-      assert record(ctx, ref).confirmed_client_id == nil
-
-      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest}) ==
-               {:error, Sanctum.Pairing.addition_refusal()}
+    test "before the first device, it is refused for anything but that device", %{ctx: ctx} do
+      ref = everyday!(ctx)
+      assert {:error, %Prima.Refusal{reason: :enrollment_first}} = OIDC.reauth_url(ctx, ref)
     end
 
-    test "a device revoked between its login and the person's answer confirms nothing",
-         %{ctx: ctx, subject: subject, token: token} = seated do
-      device = first_device!(seated)
-      digest = Prima.Device.key_digest(elem(:crypto.generate_key(:eddsa, :ed25519), 0))
+    test "a login verified while the window was open confirms nothing once it closed",
+         %{ctx: ctx, subject: subject, token: token, user: user} do
+      id = opened!(ctx)
+      {held, _request} = verified!(ctx, subject, id)
 
-      {:error, {:confirmation_required, %{id: secret}}} =
-        Sanctum.Consent.Authz.check(ctx, :device_pairing, pairing_change(digest))
+      # A first method commits meanwhile, elsewhere.
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id),
+          set: [first_method_at: DateTime.utc_now()]
+        )
 
-      ref = Prima.Confirmation.ref(secret)
-      {held, _request} = verified!(device.ctx, subject, ref)
-      {:ok, _revoked} = Arca.PairedClients.revoke(Context.actor(ctx), device.client_id)
+      assert {:error, %Prima.Refusal{reason: :method_held}} =
+               OIDC.reauth_decide(held.ticket, token, :approve)
 
-      assert OIDC.reauth_decide(held.ticket, token, :approve) == {:error, :revoked}
-      assert record(ctx, ref).state == "pending"
+      assert record(ctx, id).state == "pending"
     end
+
+    test "its state names the record and the attempt alone", %{ctx: ctx} do
+      {_url, request} = begun!(ctx, opened!(ctx))
+      [payload, _mac] = String.split(request.state, ".")
+      keys = payload |> Base.url_decode64!(padding: false) |> Jason.decode!() |> Map.keys()
+      assert Enum.sort(keys) == ["a", "c", "n"]
+    end
+  end
+
+  # An everyday sensitive change, opened as a record: its ref.
+  defp everyday!(ctx) do
+    {:error, {:confirmation_required, %{id: secret}}} =
+      Sanctum.Consent.Authz.check(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: %{name: "prod-key", kind: "api_key", fields: %{"KEY" => "sk-secret"}},
+        resource: "prod-key"
+      })
+
+    Prima.Confirmation.ref(secret)
   end
 
   describe "GET and POST /auth/oidcc/reauth" do
@@ -703,8 +631,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       html = html_response(conn, 200)
 
       assert html =~ "Confirm this change?"
-      assert html =~ "vault.create"
-      assert html =~ "prod-key"
+      assert html =~ "pairing.begin"
       refute html =~ "sk-secret"
       assert html =~ ~s(name="decision" value="approve")
       assert html =~ ~s(name="decision" value="decline")

@@ -247,17 +247,16 @@ defmodule Emissary.Router do
       end
 
       # A certified device's renewal at its person's home
-      # (`Sanctum.RemoteCertification`), asked from a page of the other
-      # home the device is at: JSON, no session fetched and no CSRF token,
-      # since the device key's proof over this home's challenge is the only
-      # credential. So any origin may ask and no credential travels
-      # (`any_origin`). Metered per address here, before the operation
+      # (`Sanctum.RemoteCertification`), asked by the device itself, a
+      # command line, never a browser: JSON, no session fetched and no CSRF
+      # token, since the device key's proof over this home's challenge is
+      # the only credential, and no CORS answer, so no page of another
+      # origin reads it. Metered per address here, before the operation
       # counts it against the verification bounds.
       pipeline :certificate_renewal do
         plug CyfrWeb.Plugs.CallIdentity, tool: "person"
         plug :accepts, ["json"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
-        plug CyfrWeb.Plugs.CORS, methods: ~w(POST), any_origin: true
 
         plug CyfrWeb.Plugs.AuthRateLimit,
           bucket: :certificate_renewal,
@@ -403,15 +402,11 @@ defmodule Emissary.Router do
       end
 
       # A certified device's renewal (`person.renew_certificate`), from the
-      # page of the home it is at. A JSON body always preflights; the CORS
-      # plug answers the preflight before the controller.
+      # device itself.
       scope "/certify/v1", Emissary.Web do
         pipe_through :certificate_renewal
 
         post "/renew", CertificateRenewalController, :renew_certificate,
-          metadata: %{auth: :device_key_proof}
-
-        match :options, "/renew", CertificateRenewalController, :renew_certificate,
           metadata: %{auth: :device_key_proof}
       end
 

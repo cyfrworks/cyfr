@@ -162,13 +162,14 @@ func (d Dialer) url() string {
 // Open connects as device under key: connect, the home's connect challenge
 // checked and signed, then its standing. A certificate the home will not
 // take (4408) is renewed first on a new connection, located by the old
-// certificate and proven by the key the home stores; renewed receives
+// certificate and proven by the key the home stores, unless another home
+// issued it, which renews it (ErrRenew is answered); renewed receives
 // every certificate the home issues, to persist before it is used.
 // report is this box's capability list, sent once the channel stands and
 // every 30 seconds after.
 func (d Dialer) Open(ctx context.Context, device Device, key Signer, report func() []string, renewed func(json.RawMessage)) (*Channel, error) {
 	c, err := d.open(ctx, device, key, report, renewed, "connect")
-	if errors.Is(err, ErrRenew) {
+	if errors.Is(err, ErrRenew) && !readIssued(device.Certificate).elsewhere() {
 		c, err = d.open(ctx, device, key, report, renewed, "renew")
 	}
 	return c, err

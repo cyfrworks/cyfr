@@ -57,7 +57,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ask as askRunSh, launchBrowser, readHomes, startProxy, virtualAuthenticator } from "../browser/lib.mjs";
+import { ask as askRunSh, firstPasskey, launchBrowser, readHomes, startProxy } from "../browser/lib.mjs";
 
 const [homesFile, adminSegment, adminCookie, outDir, viewportName] = process.argv.slice(2);
 if (!homesFile || !adminSegment || !adminCookie || !outDir || !viewportName) {
@@ -551,16 +551,12 @@ async function entryIds(page, vault, count) {
 }
 
 // The administrator's first passkey, made by the virtual authenticator and
-// registered from the Settings page through the system layer's ceremony,
-// within the first-method window of the sign-in.
+// registered from the Settings page through the system layer's ceremony:
+// setup made them with a protected device, so the registration waits on a
+// fresh confirmation the setup device gives (`firstPasskey`).
 async function registerPasskey(page, settings) {
-  const authenticator = await virtualAuthenticator(page);
   await open(page, settings);
-  await page.locator('[data-test="passkey-register"]').click({ timeout: 30_000 });
-  const active = await page.waitForSelector('[data-test="passkey"][data-state="active"]', { timeout: 30_000 })
-    .then(() => true).catch(() => false);
-  const held = (await authenticator.credentials()).length;
-  return { active, held };
+  return firstPasskey(page, { ask, layer });
 }
 
 // The page's own request waiting on its record, proven with the passkey.
@@ -780,7 +776,7 @@ async function main() {
       state: made.compared,
     };
     if (!row("share_key",
-      passkey.active && madeAi.created && madeMail.created && !madeAi.disclosed && !madeMail.disclosed &&
+      passkey.ok && madeAi.created && madeMail.created && !madeAi.disclosed && !madeMail.disclosed &&
         !madeAi.key_on_page && !madeMail.key_on_page && Object.keys(shownIds).length === 2 &&
         sheetOpened(sharedAi) && sheetOpened(sharedMail) && sharedAi.shared && sharedMail.shared &&
         !sharedAi.key_on_page && !sharedMail.key_on_page && same(madeShares, linesMade) && made.held,

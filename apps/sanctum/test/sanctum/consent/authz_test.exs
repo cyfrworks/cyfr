@@ -28,6 +28,10 @@ defmodule Sanctum.Consent.AuthzTest do
   """
   use ExUnit.Case, async: true
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
   import Ecto.Query
 
   alias Sanctum.Consent.Authz
@@ -142,10 +146,14 @@ defmodule Sanctum.Consent.AuthzTest do
     {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{"key_digest" => digest})
 
     {:ok, %{challenge: challenge}} =
-      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{device_key: device_key})
+      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
+        holder: @holder,
+        device_key: device_key
+      })
 
     {:ok, %{client_id: client_id, certificate: certificate}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
+        holder: @holder,
         device_key: device_key,
         proof: Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
       })

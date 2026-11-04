@@ -76,6 +76,50 @@ defmodule Sanctum.RemoteCertification do
   confirmation. The other home records nothing for a renewal: it checks
   each certificate against the person's head (`Sanctum.DeviceCerts`).
 
+  ## Confirming at another home (`confirmation.confirm`'s `home_assertion`)
+
+  A remote person's passkeys answer only their own home's RP ID, so a
+  home they joined never checks one: their own home certifies the
+  confirmation instead (`Prima.ConfirmationAssertion`,
+  `tests/fixtures/confirmation_assertion.json`).
+
+  `assert_confirmation/2` (`person.assert_confirmation`) is the person's
+  home's half. Their browser brings what the deciding home's record
+  carries for it (`at_home`: that home as `audience`, the record's
+  `athanor`, `ref`, `digest`, `expires_at`, `preview` and
+  `preview_digest`). The record's `digest` covers a secret this home never
+  holds, so the preview is bound by its own digest: one whose
+  `Prima.ConfirmationAssertion.preview_digest/1` is not the carried
+  `preview_digest` is refused before anything is asked or signed, and the
+  assertion signs that `preview_digest`. The change is a sensitive one
+  here (`remote_confirmation`) whose preview names that home, the change
+  it shows and its details, so the person sees here what they confirm
+  there. Only a passkey's assertion or a protected device's
+  proof confirms it, whatever window is open: a sign-in method, an emailed
+  code or a session alone never vouches for the person at another home.
+  Then the person's live key signs the assertion, expiring 60 seconds on
+  or with the record, if sooner, and the confirmation is consumed; the
+  answer is the assertion and the deciding home's fixed `/confirm` page
+  with it in the fragment (`home_assertion=` and the unpadded base64url of
+  its JCS bytes), which the browser navigates to and never sends in a
+  request line. This home records nothing else: the deciding home's one
+  confirmation of the record is the replay bound.
+
+  `verify_confirmation/3` is the deciding home's half: the person this home holds as a remote
+  identity, their head read live from their directory
+  (`Sanctum.DeviceCerts.live_head/1`), and the assertion signed by that
+  head's live key under its `key_epoch`, for this home, the record's
+  athanor, ref and digest and the `preview_digest` of the preview the
+  record stores (`preview_digest/1`), unexpired on the database's clock,
+  all checked before the record is confirmed: an assertion over a preview
+  of another change confirms nothing. A head the
+  directory cannot answer refuses (`:identity_stale`), never trusts the
+  cache. The record's one confirmation is the replay bound: it is marked
+  `home`, attributed to nothing here, and counts as the person's own
+  method for an addition (`Sanctum.Pairing.confirmer/1`), so a remote
+  person with no device here bootstraps one without anyone else's
+  passkey.
+
   ## Bounds
 
   Both calls first read the source address's verification window without
@@ -118,7 +162,7 @@ defmodule Sanctum.RemoteCertification do
     * `:unavailable`.
   """
 
-  alias Prima.DeviceCert
+  alias Prima.{ConfirmationAssertion, DeviceCert}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Sanctum.{Context, DeviceCerts, Person}
@@ -268,6 +312,283 @@ defmodule Sanctum.RemoteCertification do
       {:error, :unknown_person} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Confirming at another home
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Sign, for the person of `ctx`, that they confirmed one record at another
+  home (the module doc). `args` carries `audience`, `athanor`, `ref`,
+  `digest`, `expires_at` (Unix milliseconds), `preview` and
+  `preview_digest`, the deciding home's record as its `at_home` names it.
+  Answers `%{assertion: map, callback: url}`.
+
+  Refusals: `{:invalid_argument, _}` (among them a preview whose digest is
+  not `preview_digest`, refused before anything is asked or signed),
+  `:expired` (the record's own expiry
+  has passed), `{:confirmation_required, _}` until a passkey or protected
+  device of the person's here confirms it, `:own_method_required` (it was
+  confirmed some other way), `:not_found` (the person's keys are at
+  another home), `:not_enrolled`, `:unavailable`.
+  """
+  @spec assert_confirmation(Context.t(), map()) ::
+          {:ok, %{assertion: map(), callback: String.t()}} | {:error, term()}
+  def assert_confirmation(%Context{user_id: user_id} = ctx, args)
+      when is_binary(user_id) and is_map(args) do
+    with {:ok, request} <- confirmation_request(args),
+         {:ok, now} <- db_now_ms(),
+         :ok <- if(request.expires_at > now, do: :ok, else: {:error, :expired}),
+         change = confirmation_change(request),
+         :ok <- Authz.check(ctx, :remote_confirmation, change),
+         :ok <- own_method(ctx),
+         {:ok, signed} <-
+           Person.sign_confirmation(user_id, %{
+             request
+             | expires_at: min(now + ConfirmationAssertion.lifetime_ms(), request.expires_at)
+           }),
+         :ok <- Authz.confirm(ctx, :remote_confirmation, change) do
+      encoded = ConfirmationAssertion.encode(signed)
+
+      {:ok,
+       %{
+         assertion: encoded,
+         callback:
+           request.audience <>
+             "/confirm#home_assertion=" <> (encoded |> Encoding.jcs!() |> Encoding.b64())
+       }}
+    end
+  end
+
+  def assert_confirmation(%Context{}, _args), do: {:error, :not_found}
+
+  # What confirming the assertion approves: vouching at that home for that
+  # record, its preview's change and details shown here as that home
+  # stored them.
+  defp confirmation_change(request) do
+    preview = request.preview
+
+    carried =
+      Map.new(preview.details, fn {name, value} -> {"change_" <> name, value} end)
+
+    %{
+      operation: "person.assert_confirmation",
+      arguments: %{
+        "audience" => request.audience,
+        "athanor" => request.athanor,
+        "ref" => request.ref,
+        "digest" => request.digest,
+        "preview_digest" => request.preview_digest
+      },
+      resource: request.audience,
+      details:
+        Map.merge(carried, %{
+          "audience" => request.audience,
+          "change" => preview.operation,
+          "change_resource" => preview.resource || "",
+          "change_athanor" => preview.athanor,
+          "effect" =>
+            "Confirms #{preview.operation} at #{request.audience} for you, as that CYFR " <>
+              "showed it. Confirm only if you asked for this change there."
+        })
+    }
+  end
+
+  # The record's confirmation here was given by a passkey or a protected
+  # device of the person's, never by a sign-in method or a code.
+  defp own_method(%Context{confirmation_id: id} = ctx) when is_binary(id) and id != "" do
+    case Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id)) do
+      {:ok, %{user_id: user_id, proof: proof}}
+      when user_id == ctx.user_id and proof in ["passkey", "device"] ->
+        :ok
+
+      {:ok, _other} ->
+        {:error, own_method_refusal()}
+
+      {:error, :not_found} ->
+        {:error, own_method_refusal()}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp own_method(%Context{}), do: {:error, own_method_refusal()}
+
+  defp own_method_refusal do
+    %Prima.Refusal{
+      class: :forbidden,
+      reason: :own_method_required,
+      message:
+        "Confirming a change at another CYFR needs your passkey or one of your devices here: " <>
+          "confirm with one of them"
+    }
+  end
+
+  defp confirmation_request(
+         %{
+           "audience" => audience,
+           "athanor" => athanor,
+           "ref" => ref,
+           "digest" => digest,
+           "expires_at" => expires_at,
+           "preview" => preview,
+           "preview_digest" => preview_digest
+         } = args
+       )
+       when map_size(args) == 7 do
+    with :ok <- other_home(audience),
+         :ok <- bound(Encoding.id?(athanor), "The athanor is that CYFR's athanor id"),
+         :ok <- bound(Prima.Confirmation.ref?(ref), "The ref is that confirmation's ref"),
+         :ok <- bound(Encoding.digest?(digest), "The digest is that confirmation's sha256 digest"),
+         :ok <-
+           bound(is_integer(expires_at) and expires_at > 0, "The expiry is Unix milliseconds"),
+         {:ok, preview} <- shown(preview, audience),
+         :ok <- named(preview, preview_digest) do
+      {:ok,
+       %{
+         audience: audience,
+         athanor: athanor,
+         ref: ref,
+         digest: digest,
+         expires_at: expires_at,
+         preview: preview,
+         preview_digest: preview_digest
+       }}
+    end
+  end
+
+  defp confirmation_request(_args),
+    do:
+      {:error,
+       {:invalid_argument,
+        "assert_confirmation needs the audience, athanor, ref, digest, expires_at, preview " <>
+          "and preview_digest"}}
+
+  defp other_home(audience) do
+    cond do
+      not Encoding.home?(audience) ->
+        {:error, {:invalid_argument, "The audience is a CYFR's origin, like https://hub.example"}}
+
+      audience == Person.home() ->
+        {:error, {:invalid_argument, "A change here is confirmed here, not vouched for"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp bound(true, _message), do: :ok
+  defp bound(_false, message), do: {:error, {:invalid_argument, message}}
+
+  # The deciding home's preview, of a change at that home, with room for
+  # this home's own details beside its own.
+  defp shown(preview, audience) do
+    case Prima.Confirmation.Preview.decode(preview) do
+      {:ok, %{home: ^audience, details: details} = preview} when map_size(details) <= 27 ->
+        if Enum.all?(Map.keys(details), &(byte_size(&1) <= 56)),
+          do: {:ok, preview},
+          else: {:error, {:invalid_argument, "The preview's details do not fit beside these"}}
+
+      {:ok, %{home: ^audience}} ->
+        {:error, {:invalid_argument, "The preview's details do not fit beside these"}}
+
+      {:ok, _another_home} ->
+        {:error, {:invalid_argument, "The preview is of a change at the audience"}}
+
+      {:error, _malformed} ->
+        {:error, {:invalid_argument, "The preview is that confirmation's stored preview"}}
+    end
+  end
+
+  # The carried preview is the one the deciding home's `preview_digest`
+  # names: its record's digest covers a secret this home never holds, so
+  # only this binds what the person is shown to the record they confirm.
+  defp named(preview, preview_digest) do
+    if ConfirmationAssertion.preview_digest(preview) == preview_digest,
+      do: :ok,
+      else:
+        {:error,
+         {:invalid_argument,
+          "The preview is not the change that confirmation's preview_digest names; " <>
+            "nothing was signed"}}
+  end
+
+  @doc """
+  The `preview_digest` of the preview a pending confirmation here stores
+  (`Prima.ConfirmationAssertion.preview_digest/1`): what a remote person's
+  record carries in its `at_home`, and what their home's assertion must
+  sign. `:unavailable` for a stored preview that does not read.
+  """
+  @spec preview_digest(%{required(:preview) => String.t(), optional(atom()) => term()}) ::
+          {:ok, String.t()} | {:error, :unavailable}
+  def preview_digest(%{preview: stored}) when is_binary(stored) do
+    with {:ok, map} <- Jason.decode(stored),
+         {:ok, preview} <- Prima.Confirmation.Preview.decode(map) do
+      {:ok, ConfirmationAssertion.preview_digest(preview)}
+    else
+      _damaged -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  Verify `assertion` (`Prima.ConfirmationAssertion`'s JSON map) as the
+  remote person of `ctx` confirming `record` (its `ref`, `digest`,
+  `athanor_id` and stored `preview`) here (the module doc). Refusals: `:not_remote` (a person
+  whose keys this home holds confirms with their own passkey or device),
+  `:proof_refused` (the assertion does not certify this record for this
+  person under their current head), `:identity_stale`, `:unavailable`.
+  """
+  @spec verify_confirmation(Context.t(), map(), term()) ::
+          :ok | {:error, :not_remote | :proof_refused | :identity_stale | :unavailable}
+  def verify_confirmation(
+        %Context{user_id: user_id},
+        %{ref: ref, digest: digest, athanor_id: athanor_id} = record,
+        assertion
+      )
+      when is_binary(user_id) do
+    with {:ok, identifier} <- remote_identifier(user_id),
+         {:ok, preview_digest} <- preview_digest(record),
+         {:ok, state} <- DeviceCerts.live_head(identifier),
+         {:ok, now} <- db_now_ms() do
+      case ConfirmationAssertion.verify(assertion, state,
+             audience: Person.home(),
+             athanor: athanor_id,
+             ref: ref,
+             digest: digest,
+             preview_digest: preview_digest,
+             now: now
+           ) do
+        {:ok, _assertion} -> :ok
+        {:error, _refused} -> {:error, :proof_refused}
+      end
+    end
+  end
+
+  def verify_confirmation(%Context{}, _record, _assertion), do: {:error, :proof_refused}
+
+  # The identifier of a person this home holds as a remote identity.
+  defp remote_identifier(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        {:ok, identifier}
+
+      {:ok, _local} ->
+        {:error, :not_remote}
+
+      {:error, :not_found} ->
+        {:error, :not_remote}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp db_now_ms do
+    {:ok, DateTime.to_unix(Arca.ServerMetaStorage.now!(), :millisecond)}
+  rescue
+    _unanswered -> {:error, :unavailable}
   end
 
   # ---------------------------------------------------------------------------

@@ -21,8 +21,11 @@ defmodule Sanctum.Providers.Confirmation do
       (`Sanctum.Passkeys.assert/3`), the one-time code emailed for it
       (`Sanctum.Auth.EmailVerification.verify_code/3`) or a protected
       device's `device_proof` over the `confirm` challenge `pending`
-      answered it (`Sanctum.DeviceUnlock.confirm_proof/3`), exactly one of
-      the three. A device proof is taken only on that device's own channel
+      answered it (`Sanctum.DeviceUnlock.confirm_proof/3`), or, for a
+      person whose keys are at another home, the `home_assertion` that home
+      certified after the person confirmed there
+      (`Sanctum.RemoteCertification.verify_confirmation/3`, recorded as
+      `home`), exactly one of the four. A device proof is taken only on that device's own channel
       (`auth_method: :device`, a client that reports a holder), for a
       record of the device's person in the athanor it is certified for,
       and records the device as the confirmer; the device's screen draws
@@ -41,14 +44,23 @@ defmodule Sanctum.Providers.Confirmation do
       another's; with the WebAuthn request options a passkey proves each
       with; and with `methods`, the proofs this person can give here, from
       `passkey` (a passkey of theirs is registered at this home), `oidc`
-      (a fresh sign-in at the identity provider of their linked door) and
-      `email` (a code can reach their verified email). A client offers only
-      those it can carry out. A record that adds a device, a passkey or a
-      door (`Sanctum.Pairing.addition?/1`), once a passkey or a paired
-      device ever existed for the person, is marked `restricted` and
-      offers only the proofs such an addition takes (`Sanctum.Pairing`):
-      on a paired device, every proof, each recorded as given on it (a
-      fresh sign-in it begins included); anywhere else, a `passkey`. To a
+      (a fresh sign-in at the identity provider of their linked door),
+      `email` (a code can reach their verified email) and `home` (their
+      keys are at another home, which certifies their confirmation). A
+      record of such a person carries `at_home`, what their browser
+      carries to their own home for it: this home as `audience`, the
+      record's `athanor`, `ref`, `digest`, `expires_at`, `preview` and its
+      `preview_digest` (`Sanctum.RemoteCertification.preview_digest/1`). A
+      client offers only those it can carry out. A sign-in and a code are
+      offered only inside their windows
+      (`Sanctum.Pairing.sign_in_may_confirm/2`): while the person recovers
+      from a declared restore, or, before their first passkey or device,
+      for that first one; a record of anything else for a person who never
+      held one is marked `enroll`, and its client offers adding a passkey
+      or a device first. A record that adds a device, a passkey or a door
+      (`Sanctum.Pairing.addition?/1`), once a passkey or a paired device
+      ever existed for the person, is marked `restricted` and offers only
+      a `passkey`, `home` or `device`. To a
       protected device's channel, `pending` with a `request` also answers
       that record's `challenge`, the `confirm` challenge its `device_proof`
       signs (the record's ref and stored digest, expiring no later than the
@@ -112,6 +124,10 @@ defmodule Sanctum.Providers.Confirmation do
             Arg.new("device_proof", :json,
               description:
                 "confirm: a protected device's proof over the confirm challenge pending answered it"
+            ),
+            Arg.new("home_assertion", :json,
+              description:
+                "confirm: your own CYFR's certified assertion that you confirmed this change there"
             )
           ],
           kind: :write,
@@ -156,7 +172,7 @@ defmodule Sanctum.Providers.Confirmation do
         )
       ],
       description:
-        "Your pending confirmations of sensitive changes: confirm one with a passkey, a fresh sign-in, an emailed code or a protected device's unlock, list them with what each would change and which client asked, or cancel one.",
+        "Your pending confirmations of sensitive changes: confirm one with a passkey, a fresh sign-in, an emailed code, a protected device's unlock or your own CYFR's confirmation, list them with what each would change and which client asked, or cancel one.",
       title: "Confirmations"
     )
   end
@@ -187,20 +203,23 @@ defmodule Sanctum.Providers.Confirmation do
 
   def handle(%Context{} = ctx, %{"action" => "confirm", "ref" => ref} = args)
       when is_binary(ref) do
-    case {args["assertion"], args["code"], args["device_proof"]} do
-      {assertion, nil, nil} when is_map(assertion) ->
+    case {args["assertion"], args["code"], args["device_proof"], args["home_assertion"]} do
+      {assertion, nil, nil, nil} when is_map(assertion) ->
         with :ok <- passkey_may_prove(ctx), do: answered(Passkeys.assert(ctx, ref, assertion))
 
-      {nil, code, nil} when is_binary(code) and code != "" ->
+      {nil, code, nil, nil} when is_binary(code) and code != "" ->
         answered(EmailVerification.verify_code(ctx, ref, code))
 
-      {nil, nil, proof} when is_map(proof) ->
+      {nil, nil, proof, nil} when is_map(proof) ->
         answered(device_confirm(ctx, ref, proof))
+
+      {nil, nil, nil, assertion} when is_map(assertion) ->
+        answered(home_confirm(ctx, ref, assertion))
 
       _none_or_more ->
         {:error,
          {:invalid_argument,
-          "Give exactly one proof: a passkey assertion, the emailed code or a device's proof"}}
+          "Give exactly one proof: a passkey assertion, the emailed code, a device's proof or your CYFR's assertion"}}
     end
   end
 
@@ -219,16 +238,23 @@ defmodule Sanctum.Providers.Confirmation do
          rows = requested(rows, args["request"]),
          {:ok, restore?} <- recovering(user_id),
          {:ok, credentials} <- credentials(ctx, user_id, restore?),
-         {:ok, latched?} <- latched(user_id) do
-      methods = methods(user_id, credentials)
+         {:ok, latched?} <- latched(user_id),
+         {:ok, remote?} <- remote(user_id) do
+      methods = methods(user_id, credentials) ++ if(remote?, do: ["home"], else: [])
 
       methods = if device?(ctx, args["request"]), do: methods ++ ["device"], else: methods
 
       with {:ok, confirmations} <-
              all_pending(rows, fn row ->
                with {:ok, record} <-
-                      {:ok,
-                       pending(row, credentials, offered(ctx, row, methods, latched?), restore?)},
+                      row
+                      |> pending(
+                        credentials,
+                        offered(ctx, row, methods, latched?, restore?),
+                        restore?
+                      )
+                      |> Map.put(:enroll, enroll?(row, latched?, restore?))
+                      |> at_home(row, remote?),
                     do: device_challenge(ctx, row, args["request"], record)
              end),
            do: {:ok, %{confirmations: confirmations}}
@@ -299,6 +325,35 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
+  # A remote person's confirmation their own home certified, then the
+  # record confirmed as `home`, attributed to nothing here.
+  defp home_confirm(%Context{} = ctx, ref, assertion) do
+    actor = Context.actor(ctx)
+
+    with {:ok, user_id} <- person(ctx),
+         {:ok, row} <- own(actor, ref, user_id),
+         :ok <-
+           home_verified(Sanctum.RemoteCertification.verify_confirmation(ctx, row, assertion)) do
+      case Arca.PendingConfirmations.confirm(actor, ref, %{proof: "home"}) do
+        {:ok, confirmed} ->
+          Sanctum.Consent.Authz.announce(:confirmed, confirmed)
+          {:ok, %{ref: confirmed.ref, state: confirmed.state, expires_at: confirmed.expires_at}}
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "confirmation", ref}}
+
+        {:error, reason} when reason in [:database_error, :not_owner] ->
+          {:error, :unavailable}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp home_verified({:error, :proof_refused}), do: {:error, :home_refused}
+  defp home_verified(verdict), do: verdict
+
   # A protected device's channel reading one record: the device offers its
   # own proof.
   defp device?(%Context{auth_method: :device}, request) when is_binary(request), do: true
@@ -329,7 +384,7 @@ defmodule Sanctum.Providers.Confirmation do
         {:ok, Map.put(record, :challenge, Prima.DeviceCert.Challenge.encode(challenge))}
 
       {:error, reason} ->
-        {:error, reason}
+        {:error, refusal(reason)}
     end
   end
 
@@ -344,6 +399,39 @@ defmodule Sanctum.Providers.Confirmation do
       do: {:ok, ctx.user_id},
       else: {:error, :unauthenticated}
   end
+
+  # Whether the person's keys are at another home: their identity row here
+  # is `remote`, so their own home certifies their confirmations.
+  defp remote(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: "remote"}} -> {:ok, true}
+      {:ok, _local} -> {:ok, false}
+      {:error, :not_found} -> {:ok, false}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # What a remote person's browser carries to their own home for one
+  # record (`Prima.ConfirmationAssertion`): the bindings that home signs
+  # over, and the preview it shows before it asks for its own proof.
+  defp at_home(record, row, true = _remote?) do
+    with {:ok, preview_digest} <- Sanctum.RemoteCertification.preview_digest(row) do
+      {:ok,
+       Map.put(record, :at_home, %{
+         audience: Sanctum.Person.home(),
+         athanor: row.athanor_id,
+         ref: row.ref,
+         digest: row.digest,
+         expires_at: DateTime.to_unix(row.expires_at, :millisecond),
+         preview: record.preview,
+         preview_digest: preview_digest
+       })}
+    else
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  defp at_home(record, _row, false), do: {:ok, record}
 
   # The records a `pending` read answers: the one its `request` names, or
   # every open one. While the storage reserve is depleted, only those of
@@ -439,25 +527,33 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
-  # The proofs a record offers, and whether they are restricted: an
-  # addition, once the latch is set, takes a proof a passkey or a paired
-  # client gives (`Sanctum.Pairing`). Every proof a paired device begins is
-  # recorded as given on it, a forced-fresh sign-in included
-  # (`Sanctum.Auth.OIDC.reauth_url/2`), so it offers them all; any other
-  # client offers a passkey alone.
-  defp offered(ctx, row, methods, latched?) do
-    if latched? and Pairing.addition?(row.operation) do
-      case ctx do
-        %Context{auth_method: :device, client_id: client_id} when is_binary(client_id) ->
-          {methods, true}
+  # The proofs a record offers, and whether they are restricted. A
+  # sign-in method's re-authentication and an emailed code are offered only
+  # inside their windows (`Sanctum.Pairing.sign_in_may_confirm/2`, which
+  # their owners ask again): while the person recovers from a declared
+  # restore, or, before their first passkey or device, for that first one.
+  # An addition, once the latch is set, takes a passkey's, a protected
+  # device's or the person's own home's proof (`Sanctum.Pairing`).
+  defp offered(_ctx, row, methods, latched?, restore?) do
+    methods =
+      if sign_in_window?(row, latched?, restore?),
+        do: methods,
+        else: methods -- ["oidc", "email"]
 
-        %Context{} ->
-          {Enum.filter(methods, &(&1 == "passkey")), true}
-      end
-    else
-      {methods, false}
-    end
+    if latched? and Pairing.addition?(row.operation),
+      do: {Enum.filter(methods, &(&1 in ["passkey", "home", "device"])), true},
+      else: {methods, false}
   end
+
+  defp sign_in_window?(_row, _latched?, true = _restore?), do: true
+  defp sign_in_window?(row, false = _latched?, false), do: Pairing.first_method?(row.operation)
+  defp sign_in_window?(_row, true, false), do: false
+
+  # A person who never held a passkey or device, asked to confirm anything
+  # but their first one, is offered that enrollment first: until then no
+  # proof of theirs confirms it.
+  defp enroll?(row, latched?, restore?),
+    do: not latched? and not restore? and not Pairing.first_method?(row.operation)
 
   # The record `ref` names, in the context's athanor, of the context's own
   # person: a ref of another person, another athanor or none is not found.
@@ -516,6 +612,30 @@ defmodule Sanctum.Providers.Confirmation do
         :unauthenticated,
         :proof_refused,
         "This device's proof does not confirm this change: unlock and confirm again"
+      )
+
+  defp refusal(:home_refused),
+    do:
+      refused(
+        :unauthenticated,
+        :home_refused,
+        "Your CYFR's answer does not confirm this change here: confirm it at your CYFR again"
+      )
+
+  defp refusal(:certification_ended),
+    do:
+      refused(
+        :forbidden,
+        :certification_ended,
+        "Your keys changed at your CYFR since this device was certified: certify it there again"
+      )
+
+  defp refusal(:not_remote),
+    do:
+      refused(
+        :forbidden,
+        :not_remote,
+        "Your keys are held here: confirm with your passkey or on one of your devices"
       )
 
   defp refusal(:no_holder),

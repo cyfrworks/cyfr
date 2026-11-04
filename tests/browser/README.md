@@ -148,13 +148,24 @@ helpers:
 | `framedRequest(page, proxy, parent, target, path)` | a page of one home framing a path of another, as the front saw the request |
 | `crossedCookies(seen, scripted)` | every request to one host that carried a cookie another host set |
 | `virtualAuthenticator(page)` | Chromium's virtual WebAuthn authenticator: resident keys, user verification, presence simulated; `add` gives it a credential another one listed, as a synced passkey reaches another device; Firefox and WebKit offer none to Playwright, so a passkey ceremony is Chromium's |
+| `firstPasskey(page, { ask })` | a device-first person's first passkey from the Settings page `page` is on: the registration's own request is read, seen waiting, confirmed by the setup device through run.sh (`device_confirmed` in `harness.sh`, the release fixture's `device_confirm`, which alone reads the device's seed from the cell), and repeated; with `refusals`, the device's proof over another digest, another ref and by another key is refused first |
+
+`device.mjs` is a test device: a client of a home's device channel a proof
+drives frame by frame, its key made in the proof's process and never sent
+anywhere. `newDevice()` makes the key and its code, `pair()` completes a
+pairing through `pairing.complete` with it, `connectDevice()` and
+`channel()` open the channel (renewing a certificate the home will not
+take), whose `intent()` sends one intent, and whose log holds every frame
+by type and each close with its code. A proof uses it where the channel
+itself is what a step proves; a person's own command line is the real
+`cyfr` binary.
 
 The front answers the harness's own pages under `/__harness/` on every
 home, and no cell serves them: `page`, an empty document under no policy,
 and `fragment`, the relay of the fragment fixture.
 
-**The handheld.** Every proof that drives a glass runs its glass's steps
-once more in Chromium at a proposed 720×720 CSS-pixel touch viewport,
+**The handheld.** Every proof that drives a device's confirmations runs
+those steps once more in Chromium at a proposed 720×720 CSS-pixel touch viewport,
 standing in for the square handheld until a board is chosen.
 `handheld.mjs` holds it for them: `HANDHELD`, the context's options;
 `measure(page, scope)`, each visible control under 24×24 CSS px, each

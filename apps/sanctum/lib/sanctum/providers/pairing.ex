@@ -43,9 +43,9 @@ defmodule Sanctum.Providers.Pairing do
       and that certificate is the answer; for anyone else it carries none.
       Such a person's first call without one is answered the challenge and
       `certify`, `{audience, athanor, client_id}`: what their home is to
-      certify (`person.certify` there). A protected device carries what it
-      reports of its holder, `holder_kind` and `display_name` together; a
-      browser's glass carries neither. Asked again after it committed, with
+      certify (`person.certify` there). It carries what the device reports
+      of its holder, `holder_kind` and `display_name`, with both calls: only
+      a device that keeps its key under a local unlock pairs. Asked again after it committed, with
       the same secret and a fresh proof of the same key, it answers the
       client it paired and its current certificate.
     * `renew` answers the client's id and its replacement certificate. It
@@ -63,7 +63,9 @@ defmodule Sanctum.Providers.Pairing do
       under its own, or renews it through its channel.
     * `list` answers the person's active paired clients; a protected
       device's carry what holds its key (`holder_kind`), the name it shows
-      (`display_name`) and what it last reported of its disks within the
+      (`display_name`), whether its key may sync (`synced`, a passkey's
+      platform holder WebAuthn registered backup eligible; the passkey
+      revoked wherever it synced) and what it last reported of its disks within the
       last minute (`storage`: `root` and `data`, each `encrypted`,
       `unencrypted` or `unknown`), information a person reads and never
       an input to a decision.
@@ -117,11 +119,11 @@ defmodule Sanctum.Providers.Pairing do
             ),
             Arg.new("holder_kind", :string,
               description:
-                "complete: a protected device's holder, chip or software, given with display_name; absent for a browser"
+                "complete: what holds the device's key under its local unlock, chip or software, given with display_name"
             ),
             Arg.new("display_name", :string,
               description:
-                "complete: the name a protected device shows, at most 64 bytes, given with holder_kind"
+                "complete: the name the device shows, at most 64 bytes, given with holder_kind"
             )
           ],
           auth: :anonymous,
@@ -227,7 +229,7 @@ defmodule Sanctum.Providers.Pairing do
     with {:ok, secret, device_key} <- pair_request(args),
          {:ok, proof} <- optional_proof(args),
          {:ok, certificate} <- optional_certificate(args),
-         {:ok, holder} <- optional_holder(args),
+         {:ok, holder} <- holder(args),
          {:ok, answer} <-
            Pairing.complete(ctx, secret, %{
              device_key: device_key,
@@ -318,11 +320,15 @@ defmodule Sanctum.Providers.Pairing do
 
   # A remote person's home's certificate, read as the device protocol reads
   # one (`Prima.DeviceCert`), or none.
-  # A protected device's holder, both fields or neither.
-  defp optional_holder(args) do
+  # The device's holder, both fields: a pairing without them is a browser's
+  # key, which `Sanctum.Pairing.complete/3` refuses.
+  defp holder(args) do
     case {args["holder_kind"], args["display_name"]} do
       {nil, nil} ->
-        {:ok, nil}
+        {:error,
+         {:invalid_argument,
+          "A pairing link is for a command line or a box's screen, which reports holder_kind " <>
+            "and display_name; a browser signs in with a passkey instead"}}
 
       {kind, name} ->
         case Sanctum.DeviceUnlock.holder(kind, name) do
@@ -382,6 +388,7 @@ defmodule Sanctum.Providers.Pairing do
       current: client.current,
       holder_kind: client.holder_kind,
       display_name: client.display_name,
+      synced: client.synced,
       storage: storage(client.storage)
     }
   end
@@ -430,6 +437,15 @@ defmodule Sanctum.Providers.Pairing do
         :remote_identity_unavailable,
         "A device of a person whose identity is at another CYFR renews its certificate " <>
           "there, not here"
+      )
+
+  defp refusal(:holder_required),
+    do:
+      refused(
+        :invalid_argument,
+        :holder_required,
+        "A pairing link is for a command line or a box's screen, which keeps its key under its " <>
+          "own PIN or passphrase; a browser signs in with a passkey instead"
       )
 
   defp refusal(:certificate_required),

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import SystemLayer, {drawAdmissionCode} from "../../js/system_layer/index.js"
+import SystemLayer, {clearAllMarked, clearForms, clearMarked, drawAdmissionCode, markForm, resubmit} from "../../js/system_layer/index.js"
 
 // A document with a frame in fullscreen and pointer lock. Every call the
 // hook makes on it, and on the dialog, is recorded in `calls`, in order.
@@ -841,5 +841,92 @@ describe("a newcomer page's recovery code", () => {
     await new Promise((resolve) => setImmediate(resolve))
     assert.deepEqual(written, [])
     assert.equal(copy.textContent, "Copy")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The system layer hook's part in a repeat
+// ---------------------------------------------------------------------------
+
+describe("a confirmed change's repeat in the browser", () => {
+  test("the form that typed it is submitted again, as typed", () => {
+    const submitted = []
+    const doc = {getElementById: (id) => (id === "system-layer-credential" ? {requestSubmit: () => submitted.push(id)} : null)}
+
+    resubmit(doc, "system-layer-credential")
+    resubmit(doc, "gone")
+    assert.deepEqual(submitted, ["system-layer-credential"])
+  })
+
+  test("every form in a prompt is emptied as it closes", () => {
+    const reset = []
+    const dialog = {querySelectorAll: (selector) => (selector === "form" ? [{reset: () => reset.push(1)}, {reset: () => reset.push(2)}] : [])}
+
+    clearForms(dialog)
+    assert.deepEqual(reset, [1, 2])
+  })
+})
+
+describe("a page's typed form, marked with its prompt", () => {
+  function fakeForms() {
+    const make = (id) => ({
+      id,
+      resets: 0,
+      reset() {
+        this.resets += 1
+      }
+    })
+    const forms = [make("vault-client-form"), make("vault-create-form"), make("vault-rotate-form")]
+    const doc = {getElementById: (id) => forms.find((form) => form.id === id) || null}
+    return {doc, forms}
+  }
+
+  test("is emptied when that prompt ends, and no other form is", () => {
+    const {doc, forms} = fakeForms()
+    const marks = new Map()
+    markForm(marks, "vault-client-form", "confirmation-cnr_a")
+    markForm(marks, "vault-create-form", "confirmation-cnr_b")
+    markForm(marks, "gone", "confirmation-cnr_c")
+
+    clearMarked(doc, marks, "confirmation-cnr_a", "vault-client-form")
+    assert.equal(forms[0].resets, 1)
+    assert.equal(forms[1].resets, 0)
+    assert.equal(marks.has("confirmation-cnr_a"), false)
+    assert.equal(marks.has("confirmation-cnr_b"), true)
+
+    // A form that is gone from the page is skipped.
+    clearMarked(doc, marks, "confirmation-cnr_c", "gone")
+    assert.equal(forms[1].resets, 0)
+  })
+
+  test("the mark is held apart from the form, so a re-render that drops the form's attributes keeps it", () => {
+    const {doc, forms} = fakeForms()
+    const marks = new Map()
+    markForm(marks, "vault-create-form", "confirmation-cnr_b")
+
+    // The form carries no mark of its own a LiveView patch could remove;
+    // the prompt's end clears it by the id the mark holds.
+    assert.equal(Object.keys(forms[1]).includes("attributes"), false)
+    clearMarked(doc, marks, "confirmation-cnr_b")
+    assert.equal(forms[1].resets, 1)
+  })
+
+  test("the form a prompt's end names is emptied even with no mark here", () => {
+    const {doc, forms} = fakeForms()
+    clearMarked(doc, new Map(), "confirmation-cnr_z", "vault-rotate-form")
+    assert.equal(forms[2].resets, 1)
+  })
+
+  test("a reconnect empties every marked form: its prompts ended with the old page process", () => {
+    const {doc, forms} = fakeForms()
+    const marks = new Map()
+    markForm(marks, "vault-client-form", "confirmation-cnr_a")
+    markForm(marks, "vault-rotate-form", "confirmation-cnr_b")
+
+    clearAllMarked(doc, marks)
+    assert.deepEqual(forms.map((form) => form.resets), [1, 0, 1])
+    assert.equal(marks.size, 0)
+
+    SystemLayer.reconnected.call({marks: undefined})
   })
 })

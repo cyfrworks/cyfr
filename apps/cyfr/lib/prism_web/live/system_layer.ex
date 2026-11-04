@@ -1158,7 +1158,14 @@ defmodule PrismWeb.SystemLayer do
   defp put_panel(socket, ref, panel) do
     panel =
       Map.merge(
-        %{status: :pending, form: nil, reauth_url: nil, code_sent: false, entry: nil},
+        %{
+          status: :pending,
+          form: nil,
+          reauth_url: nil,
+          home_url: nil,
+          code_sent: false,
+          entry: nil
+        },
         panel
       )
 
@@ -1594,6 +1601,22 @@ defmodule PrismWeb.SystemLayer do
       case open_panel(socket, ref) do
         {:ok, _panel} -> {:noreply, reauth(socket, ref, method)}
         :none -> {:noreply, socket}
+      end
+    end)
+  end
+
+  # A remote person confirms at their own home: the address they type, an
+  # origin and never this home, is where the record's `at_home` is carried,
+  # in the fragment of its `/carry` page, which no server sees.
+  def handle_event("confirm_at_home", %{"ref" => ref, "home" => home}, socket)
+      when is_binary(home) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open_panel(socket, ref) do
+        {:ok, %{entry: %{at_home: %{} = at_home}}} ->
+          {:noreply, at_home_url(socket, ref, String.trim(home), at_home)}
+
+        _none ->
+          {:noreply, socket}
       end
     end)
   end
@@ -2276,6 +2299,27 @@ defmodule PrismWeb.SystemLayer do
 
       {:error, reason} ->
         assign(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  defp at_home_url(socket, ref, home, at_home) do
+    home = String.trim_trailing(home, "/")
+
+    cond do
+      not Prima.Identity.Encoding.home?(home) ->
+        assign(socket, :error, "Type your CYFR's address, like https://cyfr.example.")
+
+      home == at_home[:audience] ->
+        assign(socket, :error, "Your keys are held at another CYFR: type its address.")
+
+      true ->
+        fragment = at_home |> Jason.encode!() |> Jason.decode!() |> Prima.Identity.Encoding.jcs!()
+
+        socket
+        |> update_panel(ref, %{
+          home_url: home <> "/carry#confirm=" <> Prima.Identity.Encoding.b64(fragment)
+        })
+        |> assign(:error, nil)
     end
   end
 
@@ -3005,12 +3049,12 @@ defmodule PrismWeb.SystemLayer do
   # says where to give one when this client offers none.
   defp restricted([]),
     do:
-      "Adding a device, a passkey or a sign-in is confirmed with your passkey or on a device " <>
-        "you paired: confirm it there."
+      "Adding a device, a passkey or a sign-in is confirmed with your passkey, on a device " <>
+        "of yours, or at your own CYFR: confirm it there."
 
   defp restricted(_methods),
     do:
-      "Adding a device, a passkey or a sign-in is confirmed with your passkey or on a device you paired."
+      "Adding a device, a passkey or a sign-in is confirmed with your passkey, on a device of yours, or at your own CYFR."
 
   attr :panel, :map, required: true
   attr :may, :boolean, required: true
@@ -3083,6 +3127,15 @@ defmodule PrismWeb.SystemLayer do
       </p>
 
       <p
+        :if={@open and @entry != nil and @entry[:enroll] == true}
+        class="text-sm text-gray-300"
+        data-test="confirmation-enroll"
+      >
+        Add a passkey or a device first: until you hold one, your sign-in confirms only that.
+        Then confirm this with it. <a href="/settings" class="underline">Settings</a>
+      </p>
+
+      <p
         :if={@open and @entry != nil and @entry[:restricted] == true}
         class="text-sm text-gray-300"
         data-test="confirmation-restricted"
@@ -3134,6 +3187,16 @@ defmodule PrismWeb.SystemLayer do
         >
           Open the sign-in in a new tab
         </a>
+        <a
+          :if={@panel.home_url}
+          href={@panel.home_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-test="confirm-at-home-open"
+          class={button_class(true)}
+        >
+          Open your CYFR to confirm
+        </a>
         <button
           :if={"email" in @methods and not @panel.code_sent}
           type="button"
@@ -3147,6 +3210,31 @@ defmodule PrismWeb.SystemLayer do
           Email me a code
         </button>
       </div>
+
+      <form
+        :if={@may and @open and "home" in @methods and is_nil(@panel.home_url)}
+        id={"#{@id}-home"}
+        phx-submit="confirm_at_home"
+        phx-target={@myself}
+        class="flex gap-2"
+        data-test="confirm-at-home"
+      >
+        <input type="hidden" name="ref" value={@panel.ref} />
+        <label for={"#{@id}-home-input"} class="sr-only">Your CYFR's address</label>
+        <input
+          id={"#{@id}-home-input"}
+          name="home"
+          type="text"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="Your CYFR, like https://cyfr.example"
+          data-test="confirm-at-home-address"
+          class="flex-1 rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm"
+        />
+        <button type="submit" data-test="confirm-at-home-submit" class={button_class(true)}>
+          Confirm at your CYFR
+        </button>
+      </form>
 
       <form
         :if={@may and @open and @panel.code_sent}

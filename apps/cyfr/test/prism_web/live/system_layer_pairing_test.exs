@@ -170,7 +170,9 @@ defmodule PrismWeb.SystemLayerPairingTest do
     submission = %{
       "invitation_secret" => secret,
       "device_key" => Encoding.b64(device_key),
-      "key_digest" => key.digest
+      "key_digest" => key.digest,
+      "holder_kind" => "software",
+      "display_name" => "Pi in the hall"
     }
 
     call = &Sanctum.Gate.call_external("pairing", glass, Map.merge(&1, %{"action" => "complete"}))
@@ -248,8 +250,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       # The link's code pairs the glass holding that key, as the person.
       client_id = complete!(url, key)
 
-      assert {:ok, %{clients: [%{client_id: ^client_id}]}} =
-               PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
+      assert client_id in listed(ctx)
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -405,25 +406,61 @@ defmodule PrismWeb.SystemLayerPairingTest do
       view = host!(conn, athanor)
       open_pairing!(view)
 
-      assert has_element?(view, ~s([data-test="pairing-client"][data-client="#{client_id}"]))
-      view |> element(~s([data-test="pairing-revoke"])) |> render_click()
+      device = ~s([data-test="pairing-client"][data-client="#{client_id}"])
+      assert has_element?(view, device)
+      view |> element(device <> ~s( [data-test="pairing-revoke"])) |> render_click()
 
       ref = open_record!(ctx, "pairing.revoke")
       assert render(view) =~ ~s(data-status="waiting")
-
-      assert {:ok, %{clients: [_still]}} = PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
+      assert client_id in listed(ctx)
 
       Sanctum.TestContext.prove!(ctx, ref)
 
       wait_until(
-        fn -> has_element?(view, ~s([data-test="pairing-none"])) end,
+        fn -> not has_element?(view, device) end,
         2_000,
         "the device revoked and listed again"
       )
 
-      assert {:ok, %{clients: []}} = PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
+      refute client_id in listed(ctx)
       Cyfr.Test.Sandbox.end_views()
     end
+  end
+
+  describe "a passkey in the one list" do
+    test "is listed as Passkey beside the devices, saying whether it may sync and what revoking ends",
+         %{conn: conn, athanor: athanor, ctx: ctx} do
+      # The person's passkey, registered as the fixtures register one: its
+      # platform holder is one entry of the list.
+      _authenticator = Sanctum.TestContext.passkey!(ctx.user_id)
+
+      {:ok, %{clients: clients}} = PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
+      assert [%{client_id: holder, holder_kind: "platform", synced: synced}] = clients
+
+      view = host!(conn, athanor)
+      open_pairing!(view)
+
+      entry = ~s([data-test="pairing-client"][data-client="#{holder}"])
+
+      assert view |> element(entry <> ~s( [data-test="pairing-client-name"])) |> render() =~
+               "Passkey"
+
+      scope = view |> element(entry <> ~s( [data-test="pairing-scope"])) |> render()
+
+      if synced,
+        do: assert(scope =~ "every one of them"),
+        else: assert(scope =~ "Revoking it ends it there")
+
+      assert has_element?(view, entry <> ~s( [data-test="pairing-revoke"]))
+      refute has_element?(view, entry <> ~s( [data-test="pairing-storage"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # The ids `pairing.list` answers for the person.
+  defp listed(ctx) do
+    {:ok, %{clients: clients}} = PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
+    Enum.map(clients, & &1.client_id)
   end
 
   describe "a fresh sign-in" do

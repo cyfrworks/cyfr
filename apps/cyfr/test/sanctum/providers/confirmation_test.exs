@@ -30,6 +30,10 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
   use ExUnit.Case, async: false
 
+  # What a device that keeps its key under a local unlock reports of it,
+  # with both calls of a pairing (`Sanctum.Pairing.complete/3`).
+  @holder %{holder_kind: "software", display_name: "Test device"}
+
   import ExUnit.CaptureLog
 
   alias Prima.DeviceCert.{Challenge, Proof}
@@ -106,10 +110,23 @@ defmodule Sanctum.Providers.ConfirmationTest do
     id
   end
 
-  # The record the secret `id` names, as `pending` lists it by its ref.
-  defp pending!(ctx, id) do
-    {:ok, %{confirmations: records}} = call(ctx, "pending", %{})
+  # The record the secret `id` names, as `pending` lists it by its ref, or
+  # as a device reads the one record `request` names.
+  defp pending!(ctx, id, request \\ nil) do
+    args = if request, do: %{"request" => request}, else: %{}
+    {:ok, %{confirmations: records}} = call(ctx, "pending", args)
     Enum.find(records, &(&1.ref == ref(id))) || flunk("#{ref(id)} is not pending")
+  end
+
+  # The person's first device asked for with no proof: the one record a
+  # sign-in or a code confirms before they ever held a passkey or device.
+  defp first_device!(ctx) do
+    {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+
+    assert {:error, {:confirmation_required, %{id: id, operation: "pairing.begin"}}} =
+             call(ctx, "pairing", "begin", %{"key_digest" => Prima.Device.key_digest(device_key)})
+
+    id
   end
 
   defp row!(ctx, id) do
@@ -319,16 +336,22 @@ defmodule Sanctum.Providers.ConfirmationTest do
       "sha256:" <> hex = row!(session_ctx, id).digest
       assert Encoding.b64(Base.decode16!(hex, case: :lower)) == webauthn["challenge"]
 
-      # The proofs this person can give: their passkey here and a code to
-      # their verified email; no identity provider signs them in here.
-      assert record.methods == ["passkey", "email"]
+      # The proofs this person can give: their passkey here. A code to
+      # their verified email proves no key held, and once a passkey exists it
+      # is offered only while they recover from a restore.
+      assert record.methods == ["passkey"]
       assert record.restore == false
+      assert record.enroll == false
     end
 
     test "pending names only the proofs the person can give", %{session_ctx: session_ctx} do
-      # No passkey yet: the emailed code alone.
-      id = asked!(session_ctx)
+      # No passkey or device yet: the emailed code confirms only the first
+      # one; anything else is marked to enroll one first.
+      everyday = pending!(session_ctx, asked!(session_ctx))
+      assert {everyday.methods, everyday.enroll} == {[], true}
+      id = first_device!(session_ctx)
       assert pending!(session_ctx, id).methods == ["email"]
+      assert pending!(session_ctx, id).enroll == false
 
       # No transport for the code: nothing this home can carry out.
       transport = Application.get_env(:sanctum, :confirmation_code_transport)
@@ -339,7 +362,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
       # A person with no verified email is offered no code.
       %{session_ctx: unverified} = signed_in!(verified: false)
-      other = asked!(unverified)
+      other = first_device!(unverified)
       assert pending!(unverified, other).methods == []
     end
 
@@ -377,9 +400,10 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
       athanor = Sanctum.Test.People.athanor!(user)
       ctx = session_ctx(user, athanor)
-      id = asked!(ctx)
 
-      assert pending!(ctx, id).methods == ["oidc", "email"]
+      # For their first device, before they ever held one: the window's.
+      assert pending!(ctx, first_device!(ctx)).methods == ["oidc", "email"]
+      assert pending!(ctx, asked!(ctx)).methods == []
     end
 
     test "two identical requests open two records, each listed with its own ref",
@@ -530,39 +554,35 @@ defmodule Sanctum.Providers.ConfirmationTest do
          %{oidc_user: user, oidc_ctx: session_ctx} do
       assert latch(user.id) == nil
 
-      # Before any passkey or device: the addition and any other record
-      # offer every proof the person can give, unrestricted.
+      # Before any passkey or device: the addition offers a sign-in or a
+      # code, unrestricted; any other record none, to enroll one first.
       assert {:error, {:confirmation_required, %{id: addition, operation: "pairing.begin"}}} =
                call(session_ctx, "pairing", "begin", %{"key_digest" => digest()})
 
       other = asked!(session_ctx)
 
-      for id <- [addition, other] do
-        record = pending!(session_ctx, id)
-        assert record.restricted == false, record.operation
-        assert record.methods == ["oidc", "email"], record.operation
-      end
+      assert %{restricted: false, methods: ["oidc", "email"], enroll: false} =
+               pending!(session_ctx, addition)
+
+      assert %{restricted: false, methods: [], enroll: true} = pending!(session_ctx, other)
 
       # A device paired, under the person's first passkey: the latch is set.
       device_ctx = device_ctx!(session_ctx)
       refute latch(user.id) == nil
       assert %Context{auth_method: :device, client_id: "pcl_" <> _} = device_ctx
 
-      # From the session, the addition offers a passkey alone; the other
-      # record every proof.
+      # Once a method exists a sign-in and a code confirm nothing: from the
+      # session, each record offers the passkey.
       assert %{restricted: true, methods: ["passkey"]} = pending!(session_ctx, addition)
+      assert %{restricted: false, methods: ["passkey"]} = pending!(session_ctx, other)
 
-      assert %{restricted: false, methods: ["passkey", "oidc", "email"]} =
-               pending!(session_ctx, other)
+      # From the paired device, its own proof beside the passkey; a sign-in
+      # it begins is no device's proof.
+      assert %{restricted: true, methods: ["passkey", "device"]} =
+               pending!(device_ctx, addition, ref(addition))
 
-      # From the paired device, the addition offers every proof, each
-      # recorded as given on it, a fresh sign-in it begins included; the
-      # other record every proof.
-      assert %{restricted: true, methods: ["passkey", "oidc", "email"]} =
-               pending!(device_ctx, addition)
-
-      assert %{restricted: false, methods: ["passkey", "oidc", "email"]} =
-               pending!(device_ctx, other)
+      assert %{restricted: false, methods: ["passkey", "device"]} =
+               pending!(device_ctx, other, ref(other))
     end
   end
 
@@ -594,7 +614,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       |> Sanctum.Pairing.begin(%{"key_digest" => key_digest})
 
     glass = Context.build(%{authenticated: false, client_ip: source})
-    submission = %{device_key: device_key}
+    submission = %{holder: @holder, device_key: device_key}
 
     {:ok, %{challenge: challenge}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
@@ -684,10 +704,11 @@ defmodule Sanctum.Providers.ConfirmationTest do
                  "passkey_id" => passkey_id
                })
 
-      # The recovery is over: the passkey is offered and proves again.
+      # The recovery is over: the passkey is offered and proves again, and
+      # the code, which proves no key held, is not.
       record = pending!(session_ctx, id)
       assert record.restore == false
-      assert record.methods == ["passkey", "email"]
+      assert record.methods == ["passkey"]
 
       assert {:ok, %{state: "confirmed"}} =
                call(session_ctx, "confirm", %{
@@ -702,7 +723,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       session_ctx: session_ctx,
       user: user
     } do
-      id = asked!(session_ctx)
+      id = first_device!(session_ctx)
 
       log =
         capture_log(fn ->
@@ -730,8 +751,8 @@ defmodule Sanctum.Providers.ConfirmationTest do
     end
 
     test "is used once, and never for another record", %{session_ctx: session_ctx} do
-      first = ref(asked!(session_ctx, "first"))
-      second = ref(asked!(session_ctx, "second"))
+      first = ref(first_device!(session_ctx))
+      second = ref(first_device!(session_ctx))
 
       {:ok, _} = call(session_ctx, "reauth", %{"ref" => first, "method" => "email"})
       assert_receive {:confirmation_code_mail, mail}
@@ -752,7 +773,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     test "sending again invalidates the old code and keeps the record's expiry", %{
       session_ctx: session_ctx
     } do
-      named = ref(asked!(session_ctx))
+      named = ref(first_device!(session_ctx))
 
       {:ok, %{expires_at: expires_at}} =
         call(session_ctx, "reauth", %{"ref" => named, "method" => "email"})
@@ -778,7 +799,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     test "five wrong codes cancel the record, and nothing confirms it after", %{
       session_ctx: session_ctx
     } do
-      id = asked!(session_ctx)
+      id = first_device!(session_ctx)
       {:ok, _} = call(session_ctx, "reauth", %{"ref" => ref(id), "method" => "email"})
       assert_receive {:confirmation_code_mail, mail}
       code = MailSink.code(mail)
@@ -797,7 +818,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
     test "with no transport configured, the method is unavailable" do
       %{session_ctx: session_ctx} = signed_in!()
-      id = asked!(session_ctx)
+      id = first_device!(session_ctx)
       transport = Application.get_env(:sanctum, :confirmation_code_transport)
       Application.delete_env(:sanctum, :confirmation_code_transport)
       on_exit(fn -> Application.put_env(:sanctum, :confirmation_code_transport, transport) end)
@@ -810,7 +831,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
     test "a person with no verified email is sent no code" do
       %{session_ctx: session_ctx} = signed_in!(verified: false)
-      id = asked!(session_ctx)
+      id = first_device!(session_ctx)
 
       assert %Prima.Refusal{reason: :email_unavailable} =
                refusal(call(session_ctx, "reauth", %{"ref" => ref(id), "method" => "email"}))

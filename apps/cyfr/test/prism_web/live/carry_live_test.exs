@@ -15,7 +15,6 @@ defmodule PrismWeb.CarryLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
-  import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
   alias Arca.Schemas.{CarryAction, PersonIdentity}
@@ -401,18 +400,29 @@ defmodule PrismWeb.CarryLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  describe "a device to certify" do
-    # What a glass at the hub asks its person's home to certify.
-    defp certify_fragment(overrides \\ %{}) do
-      {device_key, _} = :crypto.generate_key(:eddsa, :ed25519)
+  describe "a change to confirm at another home" do
+    # What the hub's record carries for its person here (`at_home`): a real
+    # record's bindings are the hub's own; these only need the shape.
+    defp confirm_fragment(overrides \\ %{}) do
+      {:ok, preview} =
+        Prima.Confirmation.Preview.new(
+          home: @hub,
+          athanor: "The hub",
+          operation: "pairing.begin",
+          resource: "the device showing ABCD",
+          details: %{"device" => "ABCD"}
+        )
 
       request =
         Map.merge(
           %{
             "audience" => @hub,
-            "athanor" => "ath_hub",
-            "client_id" => "pcl_hub",
-            "device_key" => Encoding.b64(device_key)
+            "athanor" => "ath_01a09fee-045b-770b-b745-a62792bb8798",
+            "ref" => "cnr_" <> String.duplicate("C", 43),
+            "digest" => "sha256:" <> String.duplicate("ab", 32),
+            "expires_at" => System.os_time(:millisecond) + 300_000,
+            "preview" => Prima.Confirmation.Preview.encode(preview),
+            "preview_digest" => Prima.ConfirmationAssertion.preview_digest(preview)
           },
           overrides
         )
@@ -420,79 +430,73 @@ defmodule PrismWeb.CarryLiveTest do
       {request |> Encoding.jcs!() |> Encoding.b64(), request}
     end
 
-    defp certifications(user) do
-      Arca.Repo.all(
-        from(c in Arca.Schemas.DeviceCertification, where: c.user_id == ^user.user_id)
-      )
-    end
-
-    test "is only shown until the person certifies it; then, after a fresh confirmation, the certificate goes to that home's /pair alone",
+    test "is only shown until the person confirms it; then, after their passkey here, the assertion goes to that home's /confirm alone",
          %{conn: conn} do
       %{conn: conn, user: user, ctx: ctx} = enrolled!(conn)
       {:ok, view, _html} = live(conn, ~p"/carry")
-      {fragment, request} = certify_fragment()
+      {fragment, request} = confirm_fragment()
 
-      html = render_hook(view, "carry_certify", %{"fragment" => fragment})
-      assert html =~ ~s(data-test="carry-certify")
+      html = render_hook(view, "carry_confirm", %{"fragment" => fragment})
+      assert html =~ ~s(data-test="carry-confirm")
       assert html =~ @hub
-      assert html =~ "ath_hub"
+      assert html =~ "pairing.begin"
+      assert html =~ "ABCD"
       assert open_confirmations(ctx) == []
-      assert certifications(user) == []
 
-      view |> element("[data-test=certify-continue]") |> render_click()
+      view |> element("[data-test=confirm-continue]") |> render_click()
 
-      assert [%{ref: ref, operation: "person.certify", preview: preview}] =
+      assert [%{ref: ref, operation: "person.assert_confirmation", preview: preview}] =
                open_confirmations(ctx)
 
       assert preview =~ @hub
-      assert certifications(user) == []
+      assert preview =~ "ABCD"
 
       Sanctum.TestContext.prove!(ctx, ref)
 
       assert_push_event(
         view,
         "carry:go",
-        %{to: "https://hub.example/pair#certificate=" <> encoded},
+        %{to: "https://hub.example/confirm#home_assertion=" <> encoded},
         2_000
       )
 
-      {:ok, certificate} = Prima.Carry.decode_object(encoded)
-      assert {:ok, cert} = Prima.DeviceCert.decode(certificate)
-      assert Encoding.b64(cert.device_key) == request["device_key"]
-      assert {cert.audience, cert.athanor, cert.client_id} == {@hub, "ath_hub", "pcl_hub"}
-      assert [%{key_epoch: epoch}] = certifications(user)
-      assert epoch == head(user)
-      refute has_element?(view, "[data-test=carry-certify]")
+      {:ok, assertion} = Prima.Carry.decode_object(encoded)
+      assert {:ok, signed} = Prima.ConfirmationAssertion.decode(assertion)
+
+      assert {signed.audience, signed.ref, signed.digest, signed.preview_digest} ==
+               {@hub, request["ref"], request["digest"], request["preview_digest"]}
+
+      assert signed.key_epoch == head(user)
+      refute has_element?(view, "[data-test=carry-confirm]")
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "Not now certifies nothing; a request that does not read, or for this home, certifies nothing",
+    test "Not now confirms nothing; a request that does not read, or for this home, confirms nothing",
          %{conn: conn} do
-      %{conn: conn, user: user, ctx: ctx} = enrolled!(conn)
+      %{conn: conn, ctx: ctx} = enrolled!(conn)
       {:ok, view, _html} = live(conn, ~p"/carry")
-      {fragment, _request} = certify_fragment()
+      {fragment, _request} = confirm_fragment()
 
-      render_hook(view, "carry_certify", %{"fragment" => fragment})
-      view |> element("[data-test=carry-certify] button", "Not now") |> render_click()
-      refute has_element?(view, "[data-test=carry-certify]")
+      render_hook(view, "carry_confirm", %{"fragment" => fragment})
+      view |> element("[data-test=carry-confirm] button", "Not now") |> render_click()
+      refute has_element?(view, "[data-test=carry-confirm]")
 
-      html = render_hook(view, "carry_certify", %{"fragment" => "not a request"})
+      html = render_hook(view, "carry_confirm", %{"fragment" => "not a request"})
       assert html =~ "could not be read"
 
-      {extra, _} = certify_fragment(%{"extra" => "field"})
-      assert render_hook(view, "carry_certify", %{"fragment" => extra}) =~ "could not be read"
+      {extra, _} = confirm_fragment(%{"extra" => "field"})
+      assert render_hook(view, "carry_confirm", %{"fragment" => extra}) =~ "could not be read"
 
       oversized = fragment <> String.duplicate("A", Prima.Carry.max_fragment_bytes())
-      assert render_hook(view, "carry_certify", %{"fragment" => oversized}) =~ "larger than"
+      assert render_hook(view, "carry_confirm", %{"fragment" => oversized}) =~ "larger than"
 
-      {here, _} = certify_fragment(%{"audience" => Sanctum.Person.home()})
-      render_hook(view, "carry_certify", %{"fragment" => here})
-      html = view |> element("[data-test=certify-continue]") |> render_click()
-      assert html =~ "through pairing"
+      # A preview of a change at another home than the one it names reads as
+      # nothing.
+      {other, _} = confirm_fragment(%{"audience" => "https://carol.example"})
+      assert render_hook(view, "carry_confirm", %{"fragment" => other}) =~ "could not be read"
+
       refute_push_event(view, "carry:go", %{})
-
       assert open_confirmations(ctx) == []
-      assert certifications(user) == []
       Cyfr.Test.Sandbox.end_views()
     end
   end

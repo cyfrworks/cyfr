@@ -370,6 +370,7 @@ defmodule PrismWeb.ShellPromptsTest do
       refute_push_event(view, "frame_credential", _payload, 50)
 
       view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      _ = render(view)
       assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: false} = payload)
       assert Map.keys(payload) |> Enum.sort() == [:frame, :saved]
     end

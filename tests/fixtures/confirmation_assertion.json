@@ -1,0 +1,723 @@
+{
+  "assertions": {
+    "after_rotation": {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "WBAS-HuQF9rxl4uBpxvFdUOzy0-0EHgrHLfdHK4m9iRx2ouNG9ZBCIKTh-4phCfoxFDAlSxkY_nOT5wAxzRnAg"
+      },
+      "signer": "alice_live_2"
+    },
+    "for_another_preview": {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:03307b4d2913042105cc5cf75a7db82e702687eb2329fd01a048877dc8b9dc97",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "R4hoNboJMYIZevc-bsdk5QAnAg9MG0DZOWO8xOaCvslgpk1DFkFePxZKgxzS8lFcFcDaZ7HQVnGgI9aBifjQAw"
+      },
+      "signer": "alice_live_1"
+    },
+    "for_bob": {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "cmp376XMwSOo4bIRDTS4IW0mV8Bz2LsBq-XEljuHbjQTC_X-xiOCZYj553gkeFvSg4DktXyFhWBHIjFrMreJCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    "forged": {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "IAY7jZeVTNG3jhlglbo3qYJFeEtdQuoKEF3metnjvEVZ1l1kjDTSKR9i82JzkOAZoyAW7vz8ZCQJPKo6LAYKCg"
+      },
+      "signer": "stranger"
+    },
+    "old_epoch_new_key": {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "g7cTr4fQpROq31MjqQ1-JuzCebL8u6Inr8wcV1u4R_EWUsSQEV1GIV8nXhc5foC8gVS2cP_Eq49pOdSDhcNJCg"
+      },
+      "signer": "alice_live_2"
+    },
+    "valid": {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "signer": "alice_live_1"
+    }
+  },
+  "comment": "The certified cross-home confirmation (Prima.ConfirmationAssertion): a remote person's own CYFR, after a fresh confirmation there by a passkey at its own RP ID or a protected device, signs with the person's live key that they confirmed one pending confirmation at the deciding CYFR; the deciding CYFR checks it under the person's head read fresh from their directory against the record it holds. keys and identity are person_assertion.json's. record is the deciding CYFR's pending confirmation the assertions name (ref = Prima.Confirmation.ref(id), digest = Prima.Confirmation.digest(record), preview_digest = Prima.ConfirmationAssertion.preview_digest(preview), the SHA-256 of the JCS bytes of the record's preview: the person's own CYFR signs only for a carried preview whose preview_digest is the one it was told, and the deciding CYFR refuses one over another preview). exchange is how it is carried and recorded, and what the one Devices list answers.",
+  "exchange": {
+    "deciding": {
+      "callback": {
+        "encoding": "base64url_unpadded_jcs",
+        "fragment": "home_assertion",
+        "path": "/confirm"
+      },
+      "confirmation.confirm": {
+        "args": [
+          "home_assertion",
+          "ref"
+        ],
+        "excludes": [
+          "assertion",
+          "code",
+          "device_proof"
+        ],
+        "records": {
+          "confirmed_client_id": null,
+          "confirmed_passkey_id": null,
+          "proof": "home"
+        }
+      },
+      "confirmation.pending": {
+        "at_home": [
+          "athanor",
+          "audience",
+          "digest",
+          "expires_at",
+          "preview",
+          "preview_digest",
+          "ref"
+        ],
+        "methods": {
+          "first_method": [
+            "oidc",
+            "email"
+          ],
+          "local": [
+            "passkey",
+            "device"
+          ],
+          "remote": [
+            "device",
+            "home"
+          ],
+          "restore": [
+            "oidc",
+            "email"
+          ]
+        },
+        "record_adds": {
+          "home": [
+            "at_home"
+          ]
+        }
+      },
+      "head": "live",
+      "refusals": {
+        "bad_signature": "proof_refused",
+        "directory": "identity_stale",
+        "expired": "proof_refused",
+        "local_person": "not_remote",
+        "malformed": "proof_refused",
+        "stale_key_epoch": "proof_refused",
+        "wrong_athanor": "proof_refused",
+        "wrong_audience": "proof_refused",
+        "wrong_digest": "proof_refused",
+        "wrong_identifier": "proof_refused",
+        "wrong_preview": "proof_refused",
+        "wrong_ref": "proof_refused"
+      }
+    },
+    "devices": {
+      "pairing.list": {
+        "holder_kinds": [
+          "chip",
+          "platform",
+          "software"
+        ],
+        "row": [
+          "certificate_expires_at",
+          "client_id",
+          "current",
+          "display_name",
+          "holder_kind",
+          "paired_at",
+          "source",
+          "storage",
+          "synced"
+        ],
+        "sources": {
+          "chip": "device_cert",
+          "platform": "passkey",
+          "software": "device_cert"
+        },
+        "synced": {
+          "chip": false,
+          "platform": "backup_eligible",
+          "software": false
+        }
+      },
+      "pairing.revoke": {
+        "args": [
+          "client_id"
+        ],
+        "scope": {
+          "chip": "device",
+          "platform": "credential",
+          "software": "device"
+        }
+      }
+    },
+    "home": {
+      "page": {
+        "encoding": "base64url_unpadded_jcs",
+        "fragment": "confirm",
+        "path": "/carry",
+        "request": [
+          "athanor",
+          "audience",
+          "digest",
+          "expires_at",
+          "preview",
+          "preview_digest",
+          "ref"
+        ]
+      },
+      "person.assert_confirmation": {
+        "args": [
+          "athanor",
+          "audience",
+          "digest",
+          "expires_at",
+          "preview",
+          "preview_digest",
+          "ref"
+        ],
+        "confirmation_action": "remote_confirmation",
+        "expires_at": "min(now + lifetime_ms, request.expires_at)",
+        "proofs": [
+          "passkey",
+          "device"
+        ],
+        "result": [
+          "assertion",
+          "callback"
+        ]
+      }
+    },
+    "terminal": {
+      "certificate": {
+        "binds": [
+          "athanor",
+          "audience",
+          "client_id",
+          "device_key",
+          "issuer"
+        ],
+        "protocol": "cyfr-device-cert/v1",
+        "subject": "identity"
+      },
+      "pairing.complete": {
+        "certify": [
+          "athanor",
+          "audience",
+          "client_id"
+        ],
+        "result_optional": [
+          "certify"
+        ]
+      },
+      "person.certify": {
+        "args": [
+          "athanor",
+          "audience",
+          "client_id",
+          "device_key"
+        ],
+        "confirmation_action": "device_pairing",
+        "result": [
+          "certificate"
+        ],
+        "session": "device_session"
+      }
+    }
+  },
+  "identity": {
+    "entries": {
+      "genesis": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+      },
+      "rotate": {
+        "kind": "rotate",
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "sig": "lhw0CzOMJbp7wolzNdMbXHwhmHIot00peCDY_XHx7pUfoJuE0PHniBEbnkjwfIzikqT6LSvOj89Ay77IRWEcBw"
+      }
+    },
+    "heads": {
+      "after_rotation": {
+        "entries": [
+          "genesis",
+          "rotate"
+        ],
+        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b"
+      },
+      "before_rotation": {
+        "entries": [
+          "genesis"
+        ],
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446"
+      }
+    }
+  },
+  "keys": {
+    "alice_live_1": {
+      "public": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+      "seed": "4vIF-wGusnX6R8S7SdjJjBxW6dBj3EU4QcOQUbcbIe4"
+    },
+    "alice_live_2": {
+      "public": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+      "seed": "3Qr8Wgo0gayyfmVRyc1AnQvPy6Sm-IO3J5IJr4PLBUk"
+    },
+    "stranger": {
+      "public": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
+      "seed": "ldiVKG7kxLyNRN_VHEKHfueVbbSQg6yAFDXkOpRuj8I"
+    }
+  },
+  "lifetime_ms": 60000,
+  "protocol": "cyfr-confirmation-assertion/v1",
+  "record": {
+    "confirmation": {
+      "action": "device_pairing",
+      "args_digest": "sha256:abababababababababababababababababababababababababababababababab",
+      "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "challenge": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY",
+      "expires_at": 1790000300000,
+      "home": "https://hub.example",
+      "id": "cnf_BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+      "operation": "pairing.begin",
+      "person": "usr_01a09fee-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+      "preview": {
+        "athanor": "Alice's athanor",
+        "details": {
+          "key_digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        },
+        "home": "https://hub.example",
+        "operation": "pairing.begin",
+        "resource": "a device"
+      },
+      "protocol": "cyfr-confirmation/v1",
+      "rp_id": "hub.example"
+    },
+    "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+    "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+    "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+  },
+  "refusals": [
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "challenge": "AAAA",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "unknown_field",
+      "name": "an unknown field"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-person-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "wrong_protocol",
+      "name": "another protocol"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "error": "missing_field",
+      "name": "no signature"
+    },
+    {
+      "assertion": {
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "missing_field",
+      "name": "no athanor"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnf_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "invalid_field",
+      "name": "a ref that is not a confirmation's"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha512:0000000000000000000000000000000000000000000000000000000000000000",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "invalid_field",
+      "name": "a digest that is not sha256"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example/confirm",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "invalid_field",
+      "name": "an audience that is not an origin"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "epoch-1",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "invalid_field",
+      "name": "a key_epoch that is not a digest"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "AAAA"
+      },
+      "error": "invalid_field",
+      "name": "a short signature"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "missing_field",
+      "name": "no preview_digest"
+    },
+    {
+      "assertion": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "expires_at": 1790000060000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "preview_digest": "md5:00",
+        "protocol": "cyfr-confirmation-assertion/v1",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4",
+        "sig": "OIEpGANsK30cvoNNiJ1A3QBAM9h4i8k7XfXC3smmSMTS_1diJfA45Dodz2fAhi6am8fDlP1QGr5G1z96KTnICQ"
+      },
+      "error": "invalid_field",
+      "name": "a preview_digest that is not sha256"
+    }
+  ],
+  "verify": [
+    {
+      "assertion": "valid",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion for its audience, athanor, ref and digest",
+      "result": "ok"
+    },
+    {
+      "assertion": "valid",
+      "error": "wrong_audience",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://carol.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion for another CYFR"
+    },
+    {
+      "assertion": "valid",
+      "error": "wrong_athanor",
+      "expect": {
+        "athanor": "ath_01a09fee-0000-7000-8000-000000000000",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion for another athanor"
+    },
+    {
+      "assertion": "valid",
+      "error": "wrong_ref",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "head": "before_rotation",
+      "name": "an assertion for another confirmation"
+    },
+    {
+      "assertion": "valid",
+      "error": "wrong_digest",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion over another digest of the same ref"
+    },
+    {
+      "assertion": "valid",
+      "error": "expired",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000060000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion at its expiry"
+    },
+    {
+      "assertion": "valid",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000059999,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion a millisecond before its expiry",
+      "result": "ok"
+    },
+    {
+      "assertion": "valid",
+      "error": "stale_key_epoch",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "after_rotation",
+      "name": "an assertion from a key_epoch the fresh head moved past"
+    },
+    {
+      "assertion": "after_rotation",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "after_rotation",
+      "name": "an assertion under the new epoch after rotation",
+      "result": "ok"
+    },
+    {
+      "assertion": "old_epoch_new_key",
+      "error": "bad_signature",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "the new live key claiming the old epoch"
+    },
+    {
+      "assertion": "forged",
+      "error": "bad_signature",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "a key the head does not name"
+    },
+    {
+      "assertion": "for_bob",
+      "error": "wrong_identifier",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion naming another person"
+    },
+    {
+      "assertion": "for_another_preview",
+      "error": "wrong_preview",
+      "expect": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "audience": "https://hub.example",
+        "digest": "sha256:62a53e19ce645757591dca3bf09564d5e0f26c59662c25d55d2d0a2682fa099b",
+        "now": 1790000001000,
+        "preview_digest": "sha256:ecd491fbecfe4a8d0cb372e9fa336fc334fb84ea4fb895c8fb5b3595d52a2093",
+        "ref": "cnr_9S_h4QC93FWrFMFKAx64DpjzgEPsdOccYVR_ensM5I4"
+      },
+      "head": "before_rotation",
+      "name": "an assertion over the preview of another change"
+    }
+  ]
+}

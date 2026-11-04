@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// The handheld, shared by every proof that drives a glass: a 720×720
+// The handheld, shared by every proof that measures its screens: a 720×720
 // CSS-pixel touch viewport in Chromium, standing in for the square
 // handheld, and the checks a screen meets there
 // (WCAG 2.2 AA): every control at least 24×24 CSS px, visible text at least

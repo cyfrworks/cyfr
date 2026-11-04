@@ -463,7 +463,8 @@ defmodule Cyfr.StorageReserveTest do
       request_id = Prima.UUID7.request_id()
       ctx = %{ctx | request_id: request_id}
 
-      assert {:ok, %{clients: [_device]}} = call(ctx, "pairing", "list", %{})
+      assert {:ok, %{clients: clients}} = call(ctx, "pairing", "list", %{})
+      assert [_device] = Enum.reject(clients, &(&1.holder_kind == "platform"))
       assert {:ok, _whoami} = call(ctx, "session", "whoami", %{})
 
       # Neither admission was written: the log refuses rather than spend.
@@ -585,7 +586,9 @@ defmodule Cyfr.StorageReserveTest do
     submission = %{
       "invitation_secret" => secret,
       "device_key" => Encoding.b64(key.public),
-      "key_digest" => key.digest
+      "key_digest" => key.digest,
+      "holder_kind" => "software",
+      "display_name" => "Test device"
     }
 
     {:ok, %{challenge: challenge}} = call(glass(), "pairing", "complete", submission)

@@ -82,6 +82,14 @@ code there. That device shows what is added and asks you to unlock it
 again; then it shows a link. Paste the link here, or type its code: the
 pairing completes with this key alone.
 
+Where your identity is kept by your own CYFR and not the one you pair
+with, the pairing asks for your CYFR's address: your CYFR certifies this
+command line for the other one, here in the terminal. This command line must
+be a device of yours at your CYFR already (cyfr login --url <your CYFR>
+first): its key there is unlocked with its PIN or passphrase, and the
+certification is confirmed like any change, here or on another device of
+yours there. The same is asked again when your CYFR's keys change.
+
 Unlocked, cyfr login starts your shell ($SHELL) with the session in its
 environment. Every cyfr command run in it acts as you, and the session
 lives only while this command line keeps reporting to CYFR: exiting the
@@ -162,6 +170,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if flagLoginPIN {
 		o.enrollPIN = func(ctx context.Context) (string, error) { return enrollPIN(ctx, address, session, console) }
 	}
+	o.certify = certifyAtHome(console)
 	if flagLoginSetup {
 		if o.setupToken, err = setupTokenHere(); err != nil {
 			return err

@@ -16,8 +16,8 @@ defmodule Arca.Schemas.PairedClient do
   @type t :: %__MODULE__{}
 
   @standings ~w(active suspended revoked)
-  @source_kinds ~w(session api_key device_cert)
-  @holder_kinds ~w(chip software)
+  @source_kinds ~w(session api_key device_cert passkey)
+  @holder_kinds ~w(chip software platform)
 
   @doc """
   The standings a paired client may hold: `suspended` while a declared
@@ -27,16 +27,19 @@ defmodule Arca.Schemas.PairedClient do
   def standings, do: @standings
 
   @doc """
-  The credentials a paired client may stand on: a session, an API key, or
-  a device certificate, whose client carries the device's public key.
+  The credentials a paired client may stand on: a session, an API key, a
+  device certificate, whose client carries the device's public key, or a
+  passkey, whose client is that credential's platform holder and carries
+  no key (`Arca.PairedClients.project_passkey!/1`).
   """
   @spec source_kinds() :: [String.t()]
   def source_kinds, do: @source_kinds
 
   @doc """
-  What may hold a protected device's key, as the device reports it: a TPM
-  `chip`, or a passphrase-wrapped `software` file. Information a person
-  reads, never an input to a decision; a browser key holds none.
+  What holds a client's key: a TPM `chip` or a passphrase-wrapped
+  `software` file, as a protected device reports it, or the `platform`
+  that keeps a passkey, which this home records for the credential it
+  projects. Information a person reads, never an input to a decision.
   """
   @spec holder_kinds() :: [String.t()]
   def holder_kinds, do: @holder_kinds
@@ -50,6 +53,7 @@ defmodule Arca.Schemas.PairedClient do
     field :standing, :string, default: "active"
     field :holder_kind, :string
     field :display_name, :string
+    field :passkey_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

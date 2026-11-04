@@ -26,6 +26,33 @@ defmodule Cyfr.Cluster.RevocationTest do
 
   use Cyfr.Cluster.Case, async: false
 
+  describe "people made after a member restarts" do
+    # The cluster database outlives a member's VM, and a case before this
+    # one may have archived the athanor of a person an earlier boot of the
+    # same member made. A boot's people are new ones all the same.
+    @people 24
+
+    test "are new people, never ones an earlier boot of that member made" do
+      :ok = Cell.stop(:a)
+      Cell.start(:a)
+
+      archived =
+        for _ <- 1..@people do
+          person = Cell.call(:a, Fixtures, :person!, [])
+          assert Cell.call(:a, Fixtures, :archive!, [person.athanor_id]) == "archived"
+          person.user_id
+        end
+
+      :ok = Cell.stop(:a)
+      Cell.start(:a)
+
+      for _ <- 1..@people do
+        person = Cell.call(:a, Fixtures, :person!, [])
+        refute person.user_id in archived
+      end
+    end
+  end
+
   describe "a revoked authority" do
     test "is dropped on the peer that heard the announcement" do
       person = Cell.call(:a, Cyfr.Cluster.Fixtures, :person!, [])

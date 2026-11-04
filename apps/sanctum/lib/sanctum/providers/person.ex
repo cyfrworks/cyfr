@@ -20,8 +20,9 @@ defmodule Sanctum.Providers.Person do
   and adding one touch recovery material; rotating changes
   the live key; linking and unlinking change the sign-in methods;
   certifying a device pairs it: each is a sensitive change Sanctum decides
-  where it is made (`Sanctum.Pairing`). `person.assert` is declared with
-  the tool by `Sanctum.Providers.Assertion`, which handles it.
+  where it is made (`Sanctum.Pairing`). `person.assert` and
+  `person.assert_confirmation` are declared with the tool by
+  `Sanctum.Providers.Assertion`, which handles them.
 
   A recovery secret the trusted form draws is the field `recovery_secret`
   wherever it appears, the added code's `holder` included; a recovery code
@@ -235,7 +236,8 @@ defmodule Sanctum.Providers.Person do
           ),
           Arg.new("athanor", :string,
             required: true,
-            description: "certify: the athanor at that CYFR the device joins"
+            description:
+              "The athanor at the other CYFR: the one a certified device joins, or the one a confirmed change is in"
           ),
           Arg.new("client_id", :string,
             required: true,
@@ -317,6 +319,9 @@ defmodule Sanctum.Providers.Person do
       )
 
   def handle(%Context{} = ctx, %{"action" => "assert"} = args), do: Assertion.handle(ctx, args)
+
+  def handle(%Context{} = ctx, %{"action" => "assert_confirmation"} = args),
+    do: Assertion.handle(ctx, args)
 
   def handle(%Context{} = ctx, %{"action" => "status"}), do: answer(Recovery.status(ctx))
 

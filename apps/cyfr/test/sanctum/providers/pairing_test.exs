@@ -96,12 +96,23 @@ defmodule Sanctum.Providers.PairingTest do
 
   # What `complete` takes from the glass holding `key` for the invitation
   # `secret`.
+  # What a device that keeps its key under a local unlock submits, its
+  # holder with both calls.
   defp submission(secret, key),
     do: %{
       "invitation_secret" => secret,
       "device_key" => Encoding.b64(key.public),
-      "key_digest" => key.digest
+      "key_digest" => key.digest,
+      "holder_kind" => "software",
+      "display_name" => "Test device"
     }
+
+  # The person's paired devices as `pairing.list` answers them, the
+  # platform holders of the passkeys the fixtures confirm with apart.
+  defp devices(ctx) do
+    with {:ok, %{clients: clients} = listed} <- call(ctx, "list", %{}),
+         do: {:ok, %{listed | clients: Enum.reject(clients, &(&1.holder_kind == "platform"))}}
+  end
 
   defp pair!(session_ctx, completing \\ glass()) do
     key = device_key!()
@@ -179,9 +190,9 @@ defmodule Sanctum.Providers.PairingTest do
 
     assert device.certificate.subject.user_id == user.id
 
-    assert {:ok, %{clients: [%{client_id: client_id}]}} = call(session_ctx, "list", %{})
+    assert {:ok, %{clients: [%{client_id: client_id}]}} = devices(session_ctx)
     assert client_id == device.client_id
-    assert {:ok, %{clients: []}} = call(stranger.session_ctx, "list", %{})
+    assert {:ok, %{clients: []}} = devices(stranger.session_ctx)
   end
 
   test "a code used once opens nothing again, and a malformed one is no code", %{
@@ -326,7 +337,7 @@ defmodule Sanctum.Providers.PairingTest do
       end
 
       assert {:ok, %{challenge: _}} = call(glass(), "complete", submission(secret, key))
-      assert {:ok, %{clients: []}} = call(session_ctx, "list", %{})
+      assert {:ok, %{clients: []}} = devices(session_ctx)
     end
 
     test "a second key presented first, with a valid proof over its own challenge, is refused and pairs nothing",
@@ -370,7 +381,7 @@ defmodule Sanctum.Providers.PairingTest do
       assert %Prima.Refusal{class: :forbidden, reason: :key_mismatch} =
                refusal(Sanctum.Gate.call_external("pairing", glass(), proven))
 
-      assert {:ok, %{clients: []}} = call(session_ctx, "list", %{})
+      assert {:ok, %{clients: []}} = devices(session_ctx)
 
       # The key the invitation names still completes it.
       submission = submission(secret, key)
@@ -383,7 +394,7 @@ defmodule Sanctum.Providers.PairingTest do
 
       assert {:ok, %DeviceCert{device_key: device_key}} = DeviceCert.decode(certificate)
       assert device_key == key.public
-      assert {:ok, %{clients: [%{client_id: ^reserved}]}} = call(session_ctx, "list", %{})
+      assert {:ok, %{clients: [%{client_id: ^reserved}]}} = devices(session_ctx)
     end
   end
 
@@ -391,7 +402,7 @@ defmodule Sanctum.Providers.PairingTest do
     first = pair!(session_ctx)
     second = pair!(session_ctx)
 
-    assert {:ok, %{clients: clients}} = call(session_ctx, "list", %{})
+    assert {:ok, %{clients: clients}} = devices(session_ctx)
     assert Enum.map(clients, & &1.client_id) == [first.client_id, second.client_id]
 
     assert Enum.all?(clients, fn client ->
@@ -404,7 +415,7 @@ defmodule Sanctum.Providers.PairingTest do
 
     assert revoked == first.client_id
 
-    assert {:ok, %{clients: [%{client_id: remaining}]}} = call(session_ctx, "list", %{})
+    assert {:ok, %{clients: [%{client_id: remaining}]}} = devices(session_ctx)
     assert remaining == second.client_id
 
     assert %Prima.Refusal{class: :not_found} =
@@ -434,7 +445,7 @@ defmodule Sanctum.Providers.PairingTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
     {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
-    assert {:ok, %{clients: []}} = call(ctx, "list", %{})
+    assert {:ok, %{clients: []}} = devices(ctx)
     {:ok, _} = Arca.PairedClients.revoke(Context.actor(ctx), revoked_id)
 
     assert %Prima.Refusal{class: :conflict, reason: :revoked} =
@@ -452,7 +463,7 @@ defmodule Sanctum.Providers.PairingTest do
     assert {:ok, %{client_id: ^client_id, standing: "active", recovery_closed: true}} =
              call(%{ctx | confirmation_id: id}, "reenable", %{"client_id" => client_id})
 
-    assert {:ok, %{clients: [%{client_id: ^client_id}]}} = call(ctx, "list", %{})
+    assert {:ok, %{clients: [%{client_id: ^client_id}]}} = devices(ctx)
 
     assert {:ok, nil} = Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user.id)
 

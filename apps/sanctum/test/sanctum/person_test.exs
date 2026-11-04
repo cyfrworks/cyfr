@@ -612,6 +612,163 @@ defmodule Sanctum.PersonTest do
 
   # ---- assertions --------------------------------------------------------------
 
+  describe "assert_confirmation/2, a confirmation vouched for at another home" do
+    setup %{user: user} do
+      ctx = %{Sanctum.TestContext.local() | user_id: user.id}
+
+      {:ok, preview} =
+        Prima.Confirmation.Preview.new(
+          home: "https://hub.example",
+          athanor: "The hub",
+          operation: "pairing.begin",
+          resource: "the device showing ABCD",
+          details: %{"device" => "ABCD"}
+        )
+
+      args = %{
+        "audience" => "https://hub.example",
+        "athanor" => "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "ref" => "cnr_" <> String.duplicate("B", 43),
+        "digest" => "sha256:" <> String.duplicate("ab", 32),
+        "expires_at" => System.os_time(:millisecond) + 300_000,
+        "preview" => Prima.Confirmation.Preview.encode(preview),
+        "preview_digest" => Prima.ConfirmationAssertion.preview_digest(preview)
+      }
+
+      {:ok, ctx: ctx, args: args}
+    end
+
+    defp vouch(ctx, args), do: Sanctum.RemoteCertification.assert_confirmation(ctx, args)
+
+    test "a session alone signs nothing, and the preview shows that home's change", %{
+      ctx: ctx,
+      args: args,
+      user: user
+    } do
+      enroll!(user.id)
+
+      assert {:error,
+              {:confirmation_required, %{id: id, operation: "person.assert_confirmation"}}} =
+               vouch(ctx, args)
+
+      {:ok, row} =
+        Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), Prima.Confirmation.ref(id))
+
+      assert row.action == "remote_confirmation"
+      preview = Jason.decode!(row.preview)
+      assert preview["resource"] == "https://hub.example"
+
+      assert %{
+               "audience" => "https://hub.example",
+               "change" => "pairing.begin",
+               "change_resource" => "the device showing ABCD",
+               "change_athanor" => "The hub",
+               "change_device" => "ABCD"
+             } = preview["details"]
+    end
+
+    test "under its passkey's proof here, signs for exactly that record, under the head it holds",
+         %{ctx: ctx, args: args, user: user} do
+      {row, _genesis} = enroll!(user.id)
+      Sanctum.TestContext.passkey!(user.id)
+      {:error, {:confirmation_required, %{id: id}}} = vouch(ctx, args)
+      Sanctum.TestContext.prove!(ctx, id)
+
+      assert {:ok, %{assertion: map, callback: callback}} =
+               vouch(%{ctx | confirmation_id: id}, args)
+
+      assert {:ok, assertion} = Prima.ConfirmationAssertion.decode(map)
+      assert assertion.identifier == row.identifier
+      assert assertion.key_epoch == row.head_hash
+      assert assertion.audience == args["audience"]
+      assert assertion.athanor == args["athanor"]
+      assert assertion.ref == args["ref"]
+      assert assertion.digest == args["digest"]
+      assert assertion.preview_digest == args["preview_digest"]
+      assert assertion.expires_at <= System.os_time(:millisecond) + 60_000
+      assert Prima.Identity.Encoding.verify(map, row.live_public_key)
+
+      fragment = Prima.Identity.Encoding.b64(Prima.Identity.Encoding.jcs!(map))
+      assert callback == "https://hub.example/confirm#home_assertion=" <> fragment
+
+      # Consumed: the same confirmation signs nothing again.
+      assert {:error, _} = vouch(%{ctx | confirmation_id: id}, args)
+    end
+
+    test "a confirmation a sign-in method or a code gave signs nothing and stays unconsumed",
+         %{ctx: ctx, args: args, user: user} do
+      enroll!(user.id)
+      {:error, {:confirmation_required, %{id: id}}} = vouch(ctx, args)
+      ref = Prima.Confirmation.ref(id)
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = Arca.PendingConfirmations.confirm(actor, ref, %{proof: "oidc_reauth"})
+
+      assert {:error, %Prima.Refusal{reason: :own_method_required}} =
+               vouch(%{ctx | confirmation_id: id}, args)
+
+      assert {:ok, %{state: "confirmed"}} = Arca.PendingConfirmations.get(actor, ref)
+    end
+
+    test "a carried preview that is not the one its preview_digest names asks nothing and signs nothing",
+         %{ctx: ctx, args: args, user: user} do
+      enroll!(user.id)
+      Sanctum.TestContext.passkey!(user.id)
+
+      # The change the deciding home's record holds: another one than the
+      # preview carried beside its digest shows.
+      {:ok, actual_preview} =
+        Prima.Confirmation.Preview.new(
+          home: args["audience"],
+          athanor: "The hub",
+          operation: "pairing.revoke",
+          resource: "the laptop you still use",
+          details: %{"client_id" => "pcl_laptop"}
+        )
+
+      carried = %{
+        args
+        | "preview_digest" => Prima.ConfirmationAssertion.preview_digest(actual_preview)
+      }
+
+      assert carried["preview"]["operation"] == "pairing.begin"
+
+      assert {:error, {:invalid_argument, message}} = vouch(ctx, carried)
+      assert message =~ "nothing was signed"
+
+      # Not even under a confirmation this home's own passkey gave: the
+      # refusal comes first, and the confirmation is still there to spend.
+      {:error, {:confirmation_required, %{id: id}}} = vouch(ctx, args)
+      Sanctum.TestContext.prove!(ctx, id)
+      assert {:error, {:invalid_argument, _}} = vouch(%{ctx | confirmation_id: id}, carried)
+      assert {:ok, %{assertion: _}} = vouch(%{ctx | confirmation_id: id}, args)
+    end
+
+    test "never expires after the record, refuses a past one, this home and a preview of another home",
+         %{ctx: ctx, args: args, user: user} do
+      enroll!(user.id)
+      soon = System.os_time(:millisecond) + 10_000
+      Sanctum.TestContext.passkey!(user.id)
+      soon_args = %{args | "expires_at" => soon}
+      {:error, {:confirmation_required, %{id: id}}} = vouch(ctx, soon_args)
+      Sanctum.TestContext.prove!(ctx, id)
+      {:ok, %{assertion: map}} = vouch(%{ctx | confirmation_id: id}, soon_args)
+      assert map["expires_at"] == soon
+
+      assert {:error, :expired} =
+               vouch(ctx, %{args | "expires_at" => System.os_time(:millisecond) - 1})
+
+      assert {:error, {:invalid_argument, _}} = vouch(ctx, %{args | "audience" => Person.home()})
+
+      assert {:error, {:invalid_argument, _}} =
+               vouch(ctx, %{
+                 args
+                 | "preview" => %{args["preview"] | "home" => "https://carol.example"}
+               })
+
+      assert {:error, {:invalid_argument, _}} = vouch(ctx, Map.put(args, "extra", 1))
+    end
+  end
+
   describe "sign_assertion/3" do
     setup %{user: user} do
       ctx = %{Sanctum.TestContext.local() | user_id: user.id}

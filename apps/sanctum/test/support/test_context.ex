@@ -809,7 +809,8 @@ defmodule Sanctum.TestContext do
     @doc """
     The browser's answer to `options` (`Sanctum.Passkeys.register/2`'s
     answer without a credential). `opts`: `:origin`, `:rp_id`, `:uv`
-    (default `true`), `:count` (default `0`), `:challenge` (in place of the
+    (default `true`), `:backup_eligible` (default `false`: a credential
+    that may sync), `:count` (default `0`), `:challenge` (in place of the
     options').
     """
     def registration(
@@ -890,11 +891,13 @@ defmodule Sanctum.TestContext do
       }
     end
 
-    # User presence always; user verification unless `uv: false`; and the
-    # attested-credential flag a registration adds.
+    # User presence always; user verification unless `uv: false`; backup
+    # eligibility when asked; and the attested-credential flag a
+    # registration adds.
     defp flags(opts, extra) do
       uv = if Keyword.get(opts, :uv, true), do: 0x04, else: 0
-      Bitwise.bor(Bitwise.bor(0x01, uv), extra)
+      be = if Keyword.get(opts, :backup_eligible, false), do: 0x08, else: 0
+      0x01 |> Bitwise.bor(uv) |> Bitwise.bor(be) |> Bitwise.bor(extra)
     end
 
     defp b64(bytes), do: Base.url_encode64(bytes, padding: false)

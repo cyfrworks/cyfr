@@ -46,6 +46,7 @@ defmodule PrismWeb do
       FileController,
       FilesLive,
       Focus,
+      HomeConfirmLive,
       InviteLive,
       Layouts,
       LegalLive,

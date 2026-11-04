@@ -925,6 +925,7 @@ defmodule Sanctum.DeviceUnlock do
         %{ref: ref, digest: digest} = record
       ) do
     with {:ok, client} <- holder(ctx),
+         :ok <- current_head(ctx),
          {:ok, now} <- db_now_ms(),
          {:ok, challenge} <-
            fresh(:confirm, ctx, client, now,
@@ -944,19 +945,45 @@ defmodule Sanctum.DeviceUnlock do
 
   @doc """
   Verify a device's proof over the `confirm` challenge it holds for the
-  record `ref` with the stored `digest`, consuming the challenge. Refusals:
-  `:not_a_device`, `:no_holder`, `:proof_refused` and `:unavailable`.
+  record `ref` with the stored `digest`, consuming the challenge; a remote
+  person's device only while the head its certificate was verified under
+  is the one their directory names now, read live. Refusals:
+  `:not_a_device`, `:no_holder`, `:proof_refused`, `:certification_ended`,
+  `:identity_stale` and `:unavailable`.
   """
   @spec confirm_proof(Context.t(), map(), term()) ::
           :ok | {:error, atom()}
   def confirm_proof(%Context{} = ctx, %{ref: ref, digest: digest}, proof) do
     with {:ok, _client} <- holder(ctx),
-         {:ok, held} <- take_proven({:device_confirm, ctx.client_id}, proof) do
-      if held.challenge.ref == ref and held.challenge.digest == digest,
-        do: :ok,
-        else: {:error, :proof_refused}
+         {:ok, held} <- take_proven({:device_confirm, ctx.client_id}, proof),
+         :ok <-
+           if(held.challenge.ref == ref and held.challenge.digest == digest,
+             do: :ok,
+             else: {:error, :proof_refused}
+           ) do
+      current_head(ctx)
     end
   end
+
+  # A remote person's device confirms for them only under the head its
+  # certificate was verified under while that is still the head their
+  # directory names, read live rather than within the request's freshness
+  # bound: a rotation or recovery at their home since ends what the device
+  # may prove (`:certification_ended`), and a directory that cannot answer
+  # pauses it (`:identity_stale`). A device this home certified reads no
+  # directory.
+  defp current_head(%Context{
+         credential_binding: %{identity: %{identifier: identifier}, key_epoch: epoch}
+       })
+       when is_binary(identifier) and is_binary(epoch) do
+    case Sanctum.DeviceCerts.live_head(identifier) do
+      {:ok, %{key_epoch: ^epoch}} -> :ok
+      {:ok, _moved} -> {:error, :certification_ended}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp current_head(%Context{}), do: :ok
 
   # ===========================================================================
   # Challenges

@@ -3,11 +3,21 @@
 
 defmodule Sanctum.Providers.Assertion do
   @moduledoc """
-  The `person.assert` action of the `person` tool, declared apart from
-  the tool's other actions: the assertion the person's signing home signs
-  for the `cyfr` door at another home, over that home's audience and
-  challenge, the pending carry it serves and the current `key_epoch`.
-  Issuing one is a sensitive change (`remote_sign_in`).
+  The `person` tool's assertions for other homes, declared apart from the
+  tool's other actions.
+
+  `person.assert`: the assertion the person's signing home signs for the
+  `cyfr` door at another home, over that home's audience and challenge,
+  the pending carry it serves and the current `key_epoch`. Issuing one is
+  a sensitive change (`remote_sign_in`).
+
+  `person.assert_confirmation`: the person's own home certifying that they
+  confirmed one pending confirmation at another home
+  (`Sanctum.RemoteCertification.assert_confirmation/2`), over the bindings
+  that home's record carries for it (`at_home`). Issuing one is a
+  sensitive change (`remote_confirmation`) only a passkey or a protected
+  device of the person's here confirms. The answer is the assertion and
+  `callback`, that home's `/confirm` page with it in the fragment.
 
   `Sanctum.Providers.Person` carries this declaration in its tool and
   hands the action here. The work is `Sanctum.Person.sign_assertion/3`'s:
@@ -59,6 +69,47 @@ defmodule Sanctum.Providers.Assertion do
         kind: :write,
         planes: [:external],
         consent: :interactive
+      ),
+      Operation.new(
+        "person",
+        "assert_confirmation",
+        "Confirm a change at another CYFR, as your own CYFR",
+        [
+          Arg.new("audience", :string,
+            required: true,
+            description:
+              "The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to"
+          ),
+          Arg.new("athanor", :string,
+            required: true,
+            description:
+              "The athanor at the other CYFR: the one a certified device joins, or the one a confirmed change is in"
+          ),
+          Arg.new("ref", :string,
+            required: true,
+            description: "assert_confirmation: the other CYFR's pending confirmation, by its ref"
+          ),
+          Arg.new("digest", :string,
+            required: true,
+            description: "assert_confirmation: that confirmation's stored digest (sha256:<hex>)"
+          ),
+          Arg.new("expires_at", :integer,
+            required: true,
+            description: "assert_confirmation: when that confirmation expires, in Unix ms"
+          ),
+          Arg.new("preview", :json,
+            required: true,
+            description: "assert_confirmation: the change as the other CYFR stored it"
+          ),
+          Arg.new("preview_digest", :string,
+            required: true,
+            description:
+              "assert_confirmation: the digest of that preview the other CYFR names (sha256:<hex>)"
+          )
+        ],
+        kind: :write,
+        planes: [:external],
+        consent: :interactive
       )
     ]
   end
@@ -97,6 +148,13 @@ defmodule Sanctum.Providers.Assertion do
          callback: assertion.audience <> "/login#cyfr=" <> fragment(encoded, genesis)
        }}
     else
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "assert_confirmation"} = args) do
+    case Sanctum.RemoteCertification.assert_confirmation(ctx, Map.delete(args, "action")) do
+      {:ok, answer} -> {:ok, answer}
       {:error, reason} -> {:error, refusal(reason)}
     end
   end

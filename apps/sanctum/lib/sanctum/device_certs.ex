@@ -76,8 +76,10 @@ defmodule Sanctum.DeviceCerts do
   is refused `:remote_identity_unavailable`. The glass renews it at the
   person's home by a proof of its device key
   (`Sanctum.RemoteCertification`), and connects here again under the
-  replacement, which this home checks as it checks any certificate and
-  records nothing for.
+  replacement, which this home checks as it checks any certificate and,
+  once it verifies, records on the client's row, so what stands on the
+  client's recorded certificate (a confirmation it gives and its
+  consumption) stands on the one it holds.
 
   ## Verification bounds
 
@@ -185,6 +187,7 @@ defmodule Sanctum.DeviceCerts do
 
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
+  alias Prima.Identity.Encoding
   alias Sanctum.{Context, Person}
 
   @window_ms 60_000
@@ -344,8 +347,8 @@ defmodule Sanctum.DeviceCerts do
 
     with :ok <- device_bound(named_room(:device_connect, name)) do
       case checked_request(certificate, %{client_id: client_id}, now, client_ip: source) do
-        {:ok, _ctx} = verified ->
-          verified
+        {:ok, ctx} ->
+          with :ok <- remembered(row, certificate), do: {:ok, ctx}
 
         # A store or a directory that could not answer is no failed proof.
         {:error, reason} = unanswered when reason in [:unavailable, :identity_stale] ->
@@ -614,6 +617,43 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
+  @doc """
+  Whether the paired client `client` (an `Arca.PairedClients` row) can
+  still prove itself here: the row active, and the newest certificate this
+  home recorded for it current and verified now as a request's is
+  (`subject/2`): a local subject's under the live key this home stores for
+  them, an identity subject's under the head their directory names within
+  its freshness bound, so one a rotation or a recovery of the person's
+  keys retired proves nothing. A store or directory that cannot answer
+  proves nothing either.
+  """
+  @spec proves_itself?(map()) :: boolean()
+  def proves_itself?(%{standing: "active", athanor_id: athanor_id, id: client_id})
+      when is_binary(athanor_id) and is_binary(client_id) do
+    with {:ok, %{certificate: bytes}} <-
+           Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor_id), client_id),
+         {:ok, map} <- Jason.decode(bytes),
+         {:ok, %DeviceCert{client_id: ^client_id} = certificate} <- DeviceCert.decode(map),
+         {:ok, _subject} <- subject(certificate, System.system_time(:millisecond)) do
+      true
+    else
+      _ended_or_unanswered -> false
+    end
+  end
+
+  def proves_itself?(_client), do: false
+
+  @doc """
+  The head `identifier`'s directory names now, read live whatever the
+  cache says (`Sanctum.IdentityFreshness.fresh!/2`), as its verified
+  state: for a remote person's proof that must stand on their keys as they
+  are, a confirmation's. Refusals: `:identity_stale` (the directory cannot
+  answer) and `:unavailable`.
+  """
+  @spec live_head(String.t()) ::
+          {:ok, Prima.Identity.State.t()} | {:error, :identity_stale | :unavailable}
+  def live_head(identifier) when is_binary(identifier), do: head_state(identifier, :live)
+
   defp head_state(identifier, freshness) do
     answer =
       case freshness do
@@ -844,6 +884,60 @@ defmodule Sanctum.DeviceCerts do
       {:ok, ctx} -> {:ok, ctx}
       {:error, :company_login_required} -> {:error, :company_login_required}
       {:error, _refused} -> {:error, :not_standing}
+    end
+  end
+
+  # A remote person's device renews its certificate at their own home,
+  # which this home never sees: the replacement it connects under, verified
+  # just now against their head, is recorded here once, so what stands on
+  # this client's recorded certificates (a confirmation it gives, its
+  # consumption, an issuance) stands on the certificate it holds. A
+  # certificate this home issued was recorded when it was issued.
+  defp remembered(row, %DeviceCert{subject: %{kind: :identity}} = certificate) do
+    case record(Prima.Actor.in_athanor(row.athanor_id), row, certificate) do
+      {:ok, _recorded} -> :ok
+      {:error, :conflict} -> :ok
+      {:error, :certificate_refused} -> {:error, :bad_signature}
+      {:error, :not_standing} -> {:error, :not_standing}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp remembered(_row, %DeviceCert{}), do: :ok
+
+  @doc """
+  Record `certificate` on the paired client `client`'s row, as signed: its
+  JCS bytes and their digest, under the member's live ownership and the
+  client's lock (`Arca.DeviceCertificates.record/2`). An identity
+  subject's names its identifier and `key_epoch`, which the store binds to
+  the cached head's under the person's lock. Refusals: `:not_standing`,
+  `:certificate_refused` (a remote person's head moved between the
+  certificate's check and its record), `:conflict` (already recorded),
+  `:unavailable`, and the store's own.
+  """
+  @spec record(Prima.Actor.t(), map(), DeviceCert.t()) :: {:ok, map()} | {:error, term()}
+  def record(actor, client, %DeviceCert{} = certificate) do
+    bytes = Encoding.jcs!(DeviceCert.encode(certificate))
+
+    case Arca.DeviceCertificates.record(actor, %{
+           paired_client_id: client.id,
+           user_id: client.user_id,
+           subject_kind: Atom.to_string(certificate.subject.kind),
+           identifier: Map.get(certificate.subject, :identifier),
+           key_epoch: Map.get(certificate.subject, :key_epoch),
+           device_public_key: certificate.device_key,
+           issuing_home: certificate.issuer,
+           audience_home: certificate.audience,
+           not_before: DateTime.from_unix!(certificate.not_before, :millisecond),
+           expires_at: DateTime.from_unix!(certificate.expires_at, :millisecond),
+           certificate: bytes,
+           digest: Prima.Digest.sha256(bytes)
+         }) do
+      {:ok, row} -> {:ok, row}
+      {:error, :client_not_active} -> {:error, :not_standing}
+      {:error, :database_error} -> {:error, :unavailable}
+      {:error, :stale_key_epoch} -> {:error, :certificate_refused}
+      {:error, reason} -> {:error, reason}
     end
   end
 

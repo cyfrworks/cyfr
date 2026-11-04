@@ -25,7 +25,6 @@
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.CORS",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
         "directory" => [
@@ -245,15 +244,6 @@
           auth: "public_oauth_state",
           live_view: nil,
           pipe_through: ["oauth_callback", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "OPTIONS",
-          path: "/certify/v1/renew",
-          plug: "Emissary.Web.CertificateRenewalController",
-          plug_opts: ":renew_certificate",
-          auth: "device_key_proof",
-          live_view: nil,
-          pipe_through: ["certificate_renewal"]
         },
         %{
           verb: "POST",
@@ -499,7 +489,6 @@
         ],
         "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "device_unlock_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "glass" => ["CyfrWeb.Plugs.BrowserCSP"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "passkey_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
@@ -868,6 +857,15 @@
         },
         %{
           verb: "GET",
+          path: "/confirm",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":index",
+          auth: "browser_authenticated",
+          live_view: "PrismWeb.HomeConfirmLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
           path: "/devices/add",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
@@ -900,7 +898,7 @@
           plug_opts: ":pair",
           auth: "browser_public_login",
           live_view: "PrismWeb.PairLive",
-          pipe_through: ["browser", "glass"]
+          pipe_through: ["browser"]
         },
         %{
           verb: "GET",

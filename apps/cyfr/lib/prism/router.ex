@@ -259,24 +259,11 @@ defmodule Prism.Router do
         live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
         live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
         live "/invite", InviteLive, :invite, metadata: %{auth: :browser_public_login}
+        # Where a pairing link opens in a browser: it says the link is for a
+        # command line or a box's screen, and holds no key.
+        live "/pair", PairLive, :pair, metadata: %{auth: :browser_public_login}
 
         live "/company-login", CompanyLoginLive, :index, metadata: %{auth: :browser_company_login}
-      end
-
-      # The glass's page alone may reach other homes by `fetch`: a device
-      # certified by its person's own home renews its certificate there
-      # (`/certify/v1/renew`), and the page cannot know that home before it
-      # loads. It holds no session, and the device key never leaves the
-      # browser, so a script there reaches nothing the device channel does
-      # not already give it.
-      pipeline :glass do
-        plug CyfrWeb.Plugs.BrowserCSP, connect: :https
-      end
-
-      scope "/", PrismWeb do
-        pipe_through [:browser, :glass]
-
-        live "/pair", PairLive, :pair, metadata: %{auth: :browser_public_login}
       end
 
       scope "/a/:athanor", PrismWeb do
@@ -324,6 +311,10 @@ defmodule Prism.Router do
           # digest in its fragment. Session-only, so a person not signed in is
           # sent through `/login`, whose script clears the fragment.
           live "/devices/add", DeviceAddLive, :index, metadata: %{auth: :browser_authenticated}
+          # Coming back from confirming a change at the person's own home: its
+          # certified assertion in the fragment. Session-only, as the record
+          # it confirms is this session's person's.
+          live "/confirm", HomeConfirmLive, :index, metadata: %{auth: :browser_authenticated}
 
           scope "/a/:athanor" do
             # Forward to /chat with the athanor selected.

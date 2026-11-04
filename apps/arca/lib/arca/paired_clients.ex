@@ -111,7 +111,9 @@ defmodule Arca.PairedClients do
   restores it closed (none when the person had no open row).
 
   Refusals: `:not_found` (no such row of that person in the athanor),
-  `:revoked` (never revived), `:not_suspended`, `:no_athanor`,
+  `:revoked` (never revived), `:passkey_holder` (a passkey's platform
+  holder moves with its credential, `Arca.Passkeys.reenable/4`),
+  `:not_suspended`, `:no_athanor`,
   `:not_owner`, `:database_error`, or the verifier's reason.
   """
   @spec reenable(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
@@ -274,10 +276,13 @@ defmodule Arca.PairedClients do
   certificates, the confirmations it confirmed and the sessions its unlock
   created, whose token hashes the row answers as `revoked_session_hashes`
   for the caller to drop from every memo; revoking a revoked row answers
-  it as it is, with none.
+  it as it is, with none. A passkey's platform holder is refused
+  `:passkey_holder`: it is revoked with its credential
+  (`Arca.Passkeys.revoke/3`).
   """
   @spec revoke(Prima.Actor.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found | :no_athanor | :database_error}
+          {:ok, row()}
+          | {:error, :not_found | :passkey_holder | :no_athanor | :database_error}
   def revoke(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.PairedClients.revoke", fn ->
@@ -293,6 +298,11 @@ defmodule Arca.PairedClients do
 
           %PairedClient{standing: "revoked"} = row ->
             {:ok, Map.put(row, :revoked_session_hashes, [])}
+
+          # A passkey's platform holder is revoked with its credential
+          # (`Arca.Passkeys.revoke/3`), never apart from it.
+          %PairedClient{source_kind: "passkey"} ->
+            {:error, :passkey_holder}
 
           row ->
             retire(row)
@@ -363,6 +373,89 @@ defmodule Arca.PairedClients do
     }
   end
 
+  @doc false
+  @spec project_passkey!(map()) :: %{session_hashes: [binary()]}
+  # The passkey `passkey` projected as its platform holder, in the caller's
+  # transaction, after the credential's own write and under its person's
+  # lock: one row per credential, in the person's own athanor, with
+  # `holder_kind` `platform`, `source_kind` `passkey`, the credential's id
+  # as `source_id` and as `passkey_id`, a reference that takes the row
+  # with the credential, and no key, so it is listed beside the person's devices
+  # and a passkey sign-in's session names it, and never signs as a device.
+  # Its standing follows the credential's: written `active` when the
+  # credential first stands, moved to `suspended` or `active` with it, and
+  # revoked with it, terminally, with what a client's revocation takes
+  # (`retire_dependents!/1`), whose session hashes the caller drops once it
+  # commits. A pending credential has none yet; a person with no athanor
+  # of their own has none at all.
+  # arca:unscoped-ok one person's row, named by the credential it projects.
+  # arca:db-raise-ok a transaction step: its callers rescue around it.
+  def project_passkey!(%{id: passkey_id, user_id: user_id, state: state}) do
+    existing =
+      from(p in PairedClient,
+        where: p.user_id == ^user_id and p.source_kind == "passkey" and p.source_id == ^passkey_id
+      )
+      |> QueryHelpers.for_update()
+      |> Arca.Repo.one()
+
+    now = Arca.ServerMetaStorage.now!()
+
+    case {existing, state} do
+      {nil, "active"} ->
+        insert_platform!(passkey_id, user_id, now)
+        %{session_hashes: []}
+
+      {nil, _not_standing} ->
+        %{session_hashes: []}
+
+      {%PairedClient{standing: "revoked"}, _any} ->
+        %{session_hashes: []}
+
+      {%PairedClient{} = row, "revoked"} ->
+        set_standing!(row, "revoked", now)
+        %{session_hashes: retire_dependents!([row.id]).session_hashes}
+
+      {%PairedClient{} = row, standing} when standing in ["active", "suspended"] ->
+        if row.standing != standing, do: set_standing!(row, standing, now)
+        %{session_hashes: []}
+
+      {%PairedClient{}, "pending"} ->
+        %{session_hashes: []}
+    end
+  end
+
+  defp insert_platform!(passkey_id, user_id, now) do
+    case Arca.Repo.one(
+           from(u in Arca.Schemas.User, where: u.id == ^user_id, select: u.personal_athanor_id)
+         ) do
+      athanor_id when is_binary(athanor_id) and athanor_id != "" ->
+        Arca.Repo.insert_all(PairedClient, [
+          %{
+            id: Prima.UUID7.generate_id("pcl"),
+            athanor_id: athanor_id,
+            user_id: user_id,
+            source_kind: "passkey",
+            source_id: passkey_id,
+            passkey_id: passkey_id,
+            standing: "active",
+            holder_kind: "platform",
+            display_name: "Passkey",
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      _none ->
+        :ok
+    end
+  end
+
+  # arca:unscoped-ok one person's row, the platform holder `project_passkey!/1` read locked by its credential.
+  defp set_standing!(row, standing, now) do
+    from(p in PairedClient, where: p.id == ^row.id)
+    |> Arca.Repo.update_all(set: [standing: standing, updated_at: now])
+  end
+
   # ---- internals -------------------------------------------------------------
 
   # arca:unscoped-ok the caller's query carries its scope: the actor's athanor, or one person (`list/2`).
@@ -391,6 +484,7 @@ defmodule Arca.PairedClients do
   # restore row, then the kit's.
   defp reenabled(nil, _verify), do: {:error, :not_found}
   defp reenabled(%PairedClient{standing: "revoked"}, _verify), do: {:error, :revoked}
+  defp reenabled(%PairedClient{source_kind: "passkey"}, _verify), do: {:error, :passkey_holder}
 
   # arca:unscoped-ok the row was read and locked under the actor's athanor (`reenable/4`).
   defp reenabled(%PairedClient{standing: "suspended"} = row, verify) do
@@ -466,7 +560,12 @@ defmodule Arca.PairedClients do
   defp validate_holder(changeset) do
     changeset =
       changeset
-      |> Ecto.Changeset.validate_inclusion(:holder_kind, PairedClient.holder_kinds())
+      # A passkey's platform holder is projected from its credential
+      # (`project_passkey!/1`), never recorded as a device.
+      |> Ecto.Changeset.validate_inclusion(
+        :holder_kind,
+        PairedClient.holder_kinds() -- ["platform"]
+      )
       |> Ecto.Changeset.validate_length(:display_name, min: 1, max: @max_display_name)
       |> Ecto.Changeset.validate_format(:display_name, ~r/\A[^\p{Cc}]+\z/u)
 

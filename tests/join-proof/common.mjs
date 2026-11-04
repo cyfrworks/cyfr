@@ -8,11 +8,11 @@
 // Each step is one row per browser of the record; the proof fails when a
 // row does not hold, and stops at the first row a later one rests on.
 //
-// Chromium runs every step, and the glass's steps once more at the
+// Chromium runs every step, and the cross-home confirmation's once more at the
 // handheld's 720×720 touch viewport (../browser/handheld.mjs). Firefox and
 // WebKit offer no virtual authenticator, so they run the sign-in at H, the
 // carry between the homes and a second browser profile; each fresh
-// confirmation those need is given on a glass paired at A in Chromium.
+// confirmation those need is given at A in Chromium, with the passkey.
 //
 // The homes' part of a step — a fixture's answer, a cell stopped, the
 // directory broken on purpose — is run.sh's, asked for through OUT_DIR
@@ -27,10 +27,10 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  admit, ask as askRunSh, instrumentDevice, readCode, readHomes, redact as redactKnown, saveAdmissionCode, saveCode,
+  admit, ask as askRunSh, readCode, readHomes, redact as redactKnown, saveAdmissionCode, saveCode,
   sleep, waitFor,
 } from "../browser/lib.mjs";
-export { instrumentDevice, sleep, waitFor };
+export { sleep, waitFor };
 
 export const [homesFile, outDir] = process.argv.slice(2);
 if (!homesFile || !outDir) {
@@ -220,61 +220,26 @@ export function crossSiteHeld(seen) {
 }
 
 // ---------------------------------------------------------------------------
-// The glass, watched from inside its own page (lib.mjs `instrumentDevice`)
+// Another of the person's clients, confirming with their passkey
 // ---------------------------------------------------------------------------
 
-export const deviceLog = (page) => page.evaluate(() => (window.__device ? window.__device.log.slice() : []));
-
-export const storedDevice = (page) => page.evaluate(() => new Promise((resolve, reject) => {
-  const open = indexedDB.open("cyfr-glass", 1);
-  open.onupgradeneeded = () => open.result.createObjectStore("glass");
-  open.onerror = () => reject(open.error);
-  open.onsuccess = () => {
-    const tx = open.result.transaction("glass", "readonly");
-    const read = tx.objectStore("glass").get("device");
-    const pending = tx.objectStore("glass").get("pending");
-    tx.oncomplete = () => resolve({
-      device: read.result ? { clientId: read.result.clientId, certificate: read.result.certificate } : null,
-      pending: pending.result ? { at: pending.result.at, certify: pending.result.certify } : null,
-    });
-    tx.onerror = () => reject(tx.error);
-  };
-}));
-
-export const glassState = (page) => page.locator('[data-test="glass-status"]').getAttribute("data-state").catch(() => null);
-
-// The glass's prompt for the record `ref`, or for the first it shows.
-export async function glassPrompt(page, ref = null) {
-  const handle = await waitFor(async () => {
-    for (const prompt of await page.$$('[data-test="glass-prompt"]')) {
-      const shown = await prompt.getAttribute("data-ref");
-      if (!ref || shown === ref) return { prompt, ref: shown };
-    }
-    return null;
-  }, { timeoutMs: 60_000, stepMs: 250, what: `the glass's prompt for ${ref || "a record"}` });
-  const preview = await handle.prompt.$eval('[data-test="glass-preview"]', (e) => e.textContent);
-  const asker = await handle.prompt.$eval('[data-test="glass-asker"]', (e) => e.textContent);
-  return { ref: handle.ref, preview, asker };
-}
-
-// Confirm, on a glass, the pending change `ref` naming `operation`.
-export async function confirmOnGlass(glass, operation, ref = null) {
-  const shown = await glassPrompt(glass, ref);
-  if (!shown.preview.includes(operation)) throw new Error(`the glass shows ${shown.preview}, not ${operation}`);
-  await ready(glass);
-  await glass.locator(`[data-test="glass-prompt"][data-ref="${shown.ref}"] [data-test="glass-passkey"]`).click();
-  // Confirmed, the record leaves the pending list the glass reads again,
-  // and its prompt with it; a refused proof says so in its outcome.
-  const prompt = `[data-test="glass-prompt"][data-ref="${shown.ref}"]`;
-  const ended = await glass.waitForFunction((selector) => {
-    const shownPrompt = document.querySelector(selector);
-    if (!shownPrompt) return "gone";
-    const outcome = shownPrompt.querySelector('[data-test="glass-outcome"]');
-    return outcome ? outcome.getAttribute("data-ok") : null;
-  }, prompt, { timeout: 30_000 }).then((handle) => handle.jsonValue());
-  if (ended === "false") throw new Error(`the glass's proof for ${shown.ref} was refused`);
+// Confirm, on `confirmer` (a Chromium page at A whose authenticator holds
+// the person's passkey there), the pending change `ref` naming `operation`
+// that another client of theirs asked for: A's Prism shows it from A's
+// record, and the passkey proves it; the panel leaves once it is confirmed.
+export async function confirmOnPasskeyPage(confirmer, operation, ref) {
+  await confirmer.goto(`${A}/`);
+  await connected(confirmer);
+  const panel = `${layer} [data-test="confirmation"][data-own="false"][data-ref="${ref}"]`;
+  await confirmer.waitForSelector(panel, { timeout: 60_000 });
+  const preview = await confirmer.locator(`${panel} [data-test="confirmation-preview"]`).first().innerText();
+  const asker = await confirmer.locator(`${panel} [data-test="confirmation-asker"]`).innerText().catch(() => "");
+  if (!preview.includes(operation)) throw new Error(`A's Prism shows ${preview}, not ${operation}`);
+  await ready(confirmer);
+  await confirmer.locator(`${panel} [data-test="confirm-passkey"]`).click();
+  await confirmer.waitForFunction((selector) => !document.querySelector(selector), panel, { timeout: 30_000 });
   await counted();
-  return shown;
+  return { ref, preview, asker };
 }
 
 // The first press after a prompt opens, on the control `selector` names in
@@ -418,17 +383,18 @@ export async function continueAtHub(page) {
 }
 
 // Back at the home, its confirmation of the sign-in: here with the
-// passkey, or on the glass.
-export async function confirmSignIn(page, home, glass) {
+// passkey, or, for a browser with no authenticator, on `confirmer`, a
+// Chromium page at A that holds the passkey.
+export async function confirmSignIn(page, home, confirmer) {
   await page.waitForURL((url) => url.origin === home && url.pathname === "/carry", { timeout: 60_000 });
   await connected(page);
-  if (glass) {
+  if (confirmer) {
     const own = `${layer} [data-test="confirmation"][data-own="true"]`;
     await page.waitForSelector(own, { timeout: 60_000 });
     const ref = await page.locator(own).first().getAttribute("data-ref");
     const preview = await page.locator(`${own} [data-test="confirmation-preview"]`).first().innerText().catch(() => "");
-    const shown = await confirmOnGlass(glass, "person.assert", ref);
-    return { preview: `${preview} ${shown.preview}`, on: "glass" };
+    const shown = await confirmOnPasskeyPage(confirmer, "person.assert", ref);
+    return { preview: `${preview} ${shown.preview}`, on: "another client" };
   }
   return { preview: await confirmHere(page), on: "here" };
 }
@@ -440,12 +406,12 @@ export async function admitted(page) {
 }
 
 // The whole sign-in at H from a fresh profile, naming `home`.
-export async function signInAtHub(page, { home = A, cookie = null, glass = null } = {}) {
+export async function signInAtHub(page, { home = A, cookie = null, confirmer = null } = {}) {
   await nameHome(page, home);
   const kept = await signInAtHome(page, home, { cookie });
   await begin(page, home);
   const code = await continueAtHub(page);
-  const confirmed = await confirmSignIn(page, home, glass);
+  const confirmed = await confirmSignIn(page, home, confirmer);
   const landed = await admitted(page);
   return { kept, code, confirmed, landed };
 }
@@ -484,25 +450,11 @@ export async function setUpHome(chromium, proxy) {
   const code2 = await readCode(desk, secrets);
   await saveCode(desk);
 
-  // A glass paired at A, which confirms what Firefox and WebKit ask for:
-  // it makes its key first on A's /pair page and shows its code, which the
-  // desktop's pairing is begun for.
-  const glassContext = await freshContext(chromium, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await glassContext.addInitScript(instrumentDevice);
-  const glass = await glassContext.newPage();
-  await authenticatorWith(glass, await credentialsFor(desk, new URL(A).host));
-  const code = await shownCode(glass, A);
-  await open(desk, `${A}/a/${encodeURIComponent(segment)}/canvas`);
-  await desk.locator("#shell-devices").click();
-  await desk.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
-  await desk.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
-  await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
-  await confirmHere(desk);
-  await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
-  const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
-  await closePrompt(desk);
-  await glass.goto(link);
-  await glass.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
+  // A second page of the desktop's, at A, holding the passkey: it
+  // confirms what Firefox and WebKit ask for there, as another client of
+  // the person's (`confirmOnPasskeyPage`).
+  const confirmer = await deskContext.newPage();
+  await authenticatorWith(confirmer, await credentialsFor(desk, new URL(A).host));
 
   const head = await ask({ op: "a_head" });
   record.home = {
@@ -510,25 +462,16 @@ export async function setUpHome(chromium, proxy) {
     same_identifier: code2.identifier === code1.identifier,
     distinct_codes: code2.secret !== code1.secret, enrollment: head.enrollment,
     a_credentials: (await credentialsFor(desk, new URL(A).host)).length,
-    glass: (await storedDevice(glass)).device?.certificate?.subject?.kind,
   };
   const held = row("home", "chromium",
     person.people === 1 && person.admission === "setup" && head.enrollment === "enrolled" &&
       code1.identifier === head.identifier && record.home.same_identifier && record.home.distinct_codes &&
-      record.home.a_credentials === 1 && record.home.glass === "local",
-    `the person is set up at A through its two screens as @${NAME} with a passkey, registered at dir.test, adds a second recovery code (person/recovery_code_add), and pairs a glass there`,
+      record.home.a_credentials === 1,
+    `the person is set up at A through its two screens as @${NAME} with a passkey, registered at dir.test, and adds a second recovery code (person/recovery_code_add)`,
     record.home);
-  return { held, desk, deskContext, segment, settings, glass, code1, code2, identifier: code1.identifier };
+  return { held, desk, deskContext, segment, settings, confirmer, code1, code2, identifier: code1.identifier };
 }
 
-// The code a new device's /pair page at `base` shows: the digest of the
-// key it made before any invitation, which a pairing is begun for.
-export async function shownCode(page, base) {
-  await page.goto(`${base}/pair`);
-  const shown = page.locator('[data-test="pair-key-code"]');
-  await shown.waitFor({ timeout: 30_000 });
-  return (await shown.textContent()).trim();
-}
 
 export async function setUpHub(identifier) {
   const hub = await ask({ op: "h_setup", identifier });
@@ -551,7 +494,7 @@ export function captureAssertions(page) {
   });
 }
 
-export async function signIn(browser, name, proxy, { home, identifier, glass, cookie = null, passkeysFrom = null, step = "sign_in" }) {
+export async function signIn(browser, name, proxy, { home, identifier, confirmer, cookie = null, passkeysFrom = null, step = "sign_in" }) {
   const context = await freshContext(browser);
   const page = await context.newPage();
   captureAssertions(page);
@@ -559,7 +502,7 @@ export async function signIn(browser, name, proxy, { home, identifier, glass, co
   const mark = proxy.seen.length;
   const before = (await ask({ op: "h_receipts", identifier })).receipts.length;
   const startStorage = await page.goto(`${H}/login`).then(() => storageOf(page));
-  const flow = await signInAtHub(page, { home, cookie, glass });
+  const flow = await signInAtHub(page, { home, cookie, confirmer });
   const after = await waitFor(async () => {
     const receipts = (await ask({ op: "h_receipts", identifier })).receipts;
     return receipts.length > before ? receipts : null;

@@ -36,16 +36,19 @@ defmodule PrismWeb.CarryLive do
       the navigation outcome, recorded once through `person.carry_complete`.
       An admitted one then goes to the destination this home's row records,
       never to an address the fragment named; a refused one says so.
-    * **A device to certify** (`#certify=<…>`, from a glass at another
-      home whose pairing names this person): that home as `audience`, its
-      `athanor`, the `client_id` it reserved and the glass's `device_key`.
-      It only shows what the device would be certified for; nothing
-      happens until the person presses Certify, which calls
-      `person.certify` under a fresh `device_pairing` confirmation through
-      the system layer. The certificate then goes to that home's `/pair`
-      page alone (`<audience>/pair#certificate=<…>`), and only when it
-      names that home: the glass there completes its pairing, or keeps
-      its pairing under the new certificate.
+    * **A change to confirm at another home** (`#confirm=<…>`, from a
+      home the person joined, whose pending confirmation is theirs): that
+      home's record as its `at_home` names it, its origin as `audience`,
+      the `athanor`, `ref`, `digest`, `expires_at`, the `preview` it
+      stored and that preview's `preview_digest`
+      (`tests/fixtures/confirmation_assertion.json`). It only
+      shows the change; nothing happens until the person presses Confirm,
+      which calls `person.assert_confirmation` under a fresh
+      `remote_confirmation` confirmation, which only their passkey or a
+      device of theirs here gives, through the system layer. The
+      assertion then goes to that home's `/confirm` page alone, the
+      callback the answer names (`<audience>/confirm#home_assertion=<…>`),
+      and only when it names that home.
 
   It lists the person's own unexpired pending actions, from
   `person.carry_list`, for Resume or Cancel, telling a carry sent and not
@@ -84,9 +87,9 @@ defmodule PrismWeb.CarryLive do
      # A challenge for an action this tab did not begin, until the person
      # continues.
      |> assign(:continue, nil)
-     # A device at another home to certify, until the person certifies it
-     # or says not now.
-     |> assign(:certify, nil)
+     # A change at another home to confirm, until the person confirms it or
+     # says not now.
+     |> assign(:confirm, nil)
      |> assign(:finished, nil)
      |> assign(:notice, nil)}
   end
@@ -96,8 +99,8 @@ defmodule PrismWeb.CarryLive do
   def system_layer_repeat({:assert, _action_id}, _tool, args, socket),
     do: {:noreply, assert(socket, args)}
 
-  def system_layer_repeat({:certify, _client_id}, _tool, args, socket),
-    do: {:noreply, certify(socket, args)}
+  def system_layer_repeat({:confirm, _ref}, _tool, args, socket),
+    do: {:noreply, confirm(socket, args)}
 
   @impl true
   def handle_info(:load, socket), do: {:noreply, load(socket)}
@@ -161,15 +164,15 @@ defmodule PrismWeb.CarryLive do
     end
   end
 
-  # A glass at another home asks to be certified: shown, never certified,
-  # until the person's click.
-  def handle_event("carry_certify", %{"fragment" => fragment}, socket) when is_binary(fragment) do
-    case read_certify(fragment) do
+  # A home the person joined asks them to confirm a change of theirs there:
+  # shown, never confirmed, until the person's click.
+  def handle_event("carry_confirm", %{"fragment" => fragment}, socket) when is_binary(fragment) do
+    case read_confirm(fragment) do
       {:ok, request} ->
-        {:noreply, assign(socket, certify: request, notice: nil, finished: nil)}
+        {:noreply, assign(socket, confirm: request, notice: nil, finished: nil)}
 
       {:error, message} ->
-        {:noreply, socket |> assign(:certify, nil) |> notice(:error, message)}
+        {:noreply, socket |> assign(:confirm, nil) |> notice(:error, message)}
     end
   end
 
@@ -215,15 +218,15 @@ defmodule PrismWeb.CarryLive do
 
   def handle_event("dismiss", _params, socket), do: {:noreply, assign(socket, :continue, nil)}
 
-  def handle_event("certify", _params, socket) do
-    case socket.assigns.certify do
-      %{} = request -> {:noreply, certify(socket, request.args)}
+  def handle_event("confirm", _params, socket) do
+    case socket.assigns.confirm do
+      %{} = request -> {:noreply, confirm(socket, request.args)}
       nil -> {:noreply, socket}
     end
   end
 
-  def handle_event("certify_dismiss", _params, socket),
-    do: {:noreply, assign(socket, :certify, nil)}
+  def handle_event("confirm_dismiss", _params, socket),
+    do: {:noreply, assign(socket, :confirm, nil)}
 
   def handle_event("resume", %{"action_id" => action_id}, socket) when is_binary(action_id) do
     case {Map.fetch(socket.assigns.asserts, action_id), listed(socket, action_id)} do
@@ -293,69 +296,64 @@ defmodule PrismWeb.CarryLive do
     end
   end
 
-  # The certificate, asked through the system layer: a session alone is
+  # The assertion, asked through the system layer: a session alone is
   # answered `confirmation_required`, which the layer shows as this page's
-  # own request and reports once confirmed. It goes only to the `/pair`
-  # page of the home it names, which is the home the person certified it
-  # for.
-  defp certify(socket, %{"audience" => audience} = args) do
-    case SystemLayer.call(socket, {:certify, args["client_id"]}, "person/certify", args) do
-      {:ok, %{certificate: %{"audience" => ^audience} = certificate}, socket} ->
-        socket
-        |> assign(certify: nil, notice: {:info, "Certified. Taking you back to #{audience}…"})
-        |> push_event("carry:go", %{
-          to: audience <> "/pair#certificate=" <> encode_object(certificate)
-        })
+  # own request and reports once confirmed. It goes only to the `/confirm`
+  # page of the home it names, which is the home whose change the person
+  # confirmed.
+  defp confirm(socket, %{"audience" => audience} = args) do
+    case SystemLayer.call(socket, {:confirm, args["ref"]}, "person/assert_confirmation", args) do
+      {:ok, %{assertion: %{"audience" => ^audience}, callback: callback}, socket} ->
+        if String.starts_with?(callback, audience <> "/confirm#home_assertion=") do
+          socket
+          |> assign(confirm: nil, notice: {:info, "Confirmed. Taking you back to #{audience}…"})
+          |> push_event("carry:go", %{to: callback})
+        else
+          notice(socket, :error, "The answer named another page; nothing was sent.")
+        end
 
       {:ok, _another, socket} ->
-        notice(socket, :error, "The certificate came back for another CYFR; nothing was sent.")
+        notice(socket, :error, "The answer came back for another CYFR; nothing was sent.")
 
       {:asked, socket} ->
-        assign(
-          socket,
-          :notice,
-          {:info, "Confirm certifying this device for #{audience}."}
-        )
+        assign(socket, :notice, {:info, "Confirm this change for #{audience} here."})
 
       {:error, reason, socket} ->
         notice(socket, :error, error_message(reason))
     end
   end
 
-  # What the glass asks to be certified for: `{audience, athanor,
-  # client_id, device_key}`, an unpadded base64url JSON object, bounded
-  # before it is decoded. The home and ids are checked here only to show
-  # them; `person.certify` checks them again, and refuses this home.
-  defp read_certify(fragment) do
+  # What the home the person joined asks confirmed: its record's `at_home`,
+  # an unpadded base64url JSON object, bounded before it is decoded. Its
+  # bindings and preview are read here only to show them;
+  # `person.assert_confirmation` checks them again, and refuses this home.
+  defp read_confirm(fragment) do
     with {:ok, fragment} <- Prima.Carry.bounded(fragment),
          {:ok,
           %{
             "audience" => audience,
             "athanor" => athanor,
-            "client_id" => client_id,
-            "device_key" => device_key
+            "ref" => ref,
+            "digest" => digest,
+            "expires_at" => expires_at,
+            "preview" => preview,
+            "preview_digest" => preview_digest
           } = object}
-         when map_size(object) == 4 <- Prima.Carry.decode_object(fragment),
-         true <- Encoding.home?(audience),
-         true <- Encoding.id?(athanor) and Encoding.id?(client_id),
-         {:ok, _key} <- Encoding.unb64(device_key, Encoding.key_bytes()) do
-      {:ok,
-       %{
-         audience: audience,
-         athanor: athanor,
-         client_id: client_id,
-         args: object
-       }}
+         when map_size(object) == 7 <- Prima.Carry.decode_object(fragment),
+         true <- Encoding.home?(audience) and Encoding.id?(athanor),
+         true <- Prima.Confirmation.ref?(ref) and Encoding.digest?(digest),
+         true <- Encoding.digest?(preview_digest),
+         true <- is_integer(expires_at),
+         {:ok, %{home: ^audience} = shown} <- Prima.Confirmation.Preview.decode(preview) do
+      {:ok, %{audience: audience, preview: shown, args: object}}
     else
       {:error, :carry_too_large} ->
-        {:error, "That request is larger than a carry may be, so nothing was certified."}
+        {:error, "That request is larger than a carry may be, so nothing was confirmed."}
 
       _unread ->
-        {:error, "That device's request could not be read; nothing was certified."}
+        {:error, "That change could not be read; nothing was confirmed."}
     end
   end
-
-  defp encode_object(map), do: map |> Encoding.jcs!() |> Encoding.b64()
 
   defp complete(socket, action_id, outcome) do
     case call_tool(socket, "person/carry_complete", %{
@@ -472,23 +470,35 @@ defmodule PrismWeb.CarryLive do
       </div>
 
       <div
-        :if={@certify}
-        data-test="carry-certify"
+        :if={@confirm}
+        data-test="carry-confirm"
         class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 space-y-3"
       >
         <p class="text-sm text-gray-200">
-          A device at <span class="font-mono">{@certify.audience}</span>
-          asks to act for you there, in its athanor <span class="font-mono">{@certify.athanor}</span>, as its client <span class="font-mono">{@certify.client_id}</span>.
+          <span class="font-mono">{@confirm.audience}</span>
+          asks you to confirm a change of yours there, in {@confirm.preview.athanor}:
         </p>
+        <dl class="grid grid-cols-3 gap-1 text-sm" data-test="carry-confirm-preview">
+          <dt class="text-gray-400">Change</dt>
+          <dd class="col-span-2 font-mono">{@confirm.preview.operation}</dd>
+          <%= if @confirm.preview.resource do %>
+            <dt class="text-gray-400">On</dt>
+            <dd class="col-span-2">{@confirm.preview.resource}</dd>
+          <% end %>
+          <%= for {name, value} <- Enum.sort(@confirm.preview.details) do %>
+            <dt class="text-gray-400">{name}</dt>
+            <dd class="col-span-2">{if is_list(value), do: Enum.join(value, ", "), else: value}</dd>
+          <% end %>
+        </dl>
         <p class="text-sm text-gray-200">
-          Certify it only if you are pairing a device there now. It renews its
-          certificate here by proving its key until your keys change.
+          Confirm it only if you asked for this change there. Your passkey or a device of
+          yours here confirms it, and that CYFR learns only that you did.
         </p>
         <div class="flex gap-2 justify-end">
-          <button type="button" phx-click="certify_dismiss" class="px-4 py-2 text-sm text-gray-400">
+          <button type="button" phx-click="confirm_dismiss" class="px-4 py-2 text-sm text-gray-400">
             Not now
           </button>
-          <.button phx-click="certify" data-test="certify-continue">Certify</.button>
+          <.button phx-click="confirm" data-test="confirm-continue">Confirm</.button>
         </div>
       </div>
 
