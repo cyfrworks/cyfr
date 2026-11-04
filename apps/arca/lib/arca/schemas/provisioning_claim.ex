@@ -19,7 +19,7 @@ defmodule Arca.Schemas.ProvisioningClaim do
   `entry_kind` names the provisioning entry point the
   attempt came through:
 
-    * `sign_in` — the personal fill and group retries of `after_sign_in/1`.
+    * `sign_in` — the personal fill of `after_sign_in/1`.
     * `first_need` — `start_provisioning/1` and `ready/1` on an unfilled
       athanor.
     * `provision` — the explicit `provision/2` behind `athanor.provision`.

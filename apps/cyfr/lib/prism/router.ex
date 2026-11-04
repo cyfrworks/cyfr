@@ -312,8 +312,7 @@ defmodule Prism.Router do
           ] do
           live "/", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
           live "/a", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
-          # The chat is one zone across every athanor the person belongs to; it
-          # names its athanor in the query, not the path, and mounts under the
+          # The chat names its athanor in the query, not the path, and mounts under the
           # session's default (`PrismWeb.Focus` passes a bare mount through).
           live "/chat", ChatLive, :index, metadata: %{auth: :browser_authenticated}
           # The sign-in carry at the person's own home: a person signed in

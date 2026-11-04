@@ -163,9 +163,9 @@ defmodule Sanctum.Provisioning do
 
   @doc """
   Mint the person's own athanor inside their admission's transaction
-  (`Sanctum.Newcomer`): kind person, a slug of this server's — their
-  namespace when they have one and it is free, otherwise derived from
-  their name — the person its only member, recorded on their row. Writes
+  (`Sanctum.Newcomer`): a slug of this server's — their namespace when
+  they have one and it is free, otherwise derived from their name —
+  owned by the person and recorded on their row. Writes
   only through Arca and makes no network call; its refusal rolls the
   admission back.
 

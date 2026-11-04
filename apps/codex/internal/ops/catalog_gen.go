@@ -461,7 +461,7 @@ type AquaCreateArgs struct {
 	CatalystRef Field[string] `json:"catalyst_ref,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[string] `json:"model,omitzero"`
-	// Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist.
+	// Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's.
 	ToolPolicy Field[map[string]string] `json:"tool_policy,omitzero"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
@@ -527,7 +527,7 @@ func (args AquaListArgs) MarshalJSON() ([]byte, error) {
 type AquaResetArgs struct {
 	// Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
 	Name Field[string] `json:"name,omitzero"`
-	// For reset: also DELETE member-created roles and scrolls, so the tree becomes exactly the shipped set (default false keeps them)
+	// For reset: also DELETE the roles and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)
 	All Field[bool] `json:"all,omitzero"`
 }
 
@@ -661,15 +661,15 @@ type AquaUpdateArgs struct {
 	CatalystRef Field[*string] `json:"catalyst_ref,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[*string] `json:"model,omitzero"`
-	// Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist.
+	// Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's.
 	ToolPolicy Field[*map[string]string] `json:"tool_policy,omitzero"`
-	// update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two members editing different keys at once keep both. Not with tool_policy.
+	// update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two edits of different keys at once keep both. Not with tool_policy.
 	ToolPolicyPatch Field[map[string]*string] `json:"tool_policy_patch,omitzero"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
 	// Take a role out of the closet without deleting its file (for update; shipped roles cannot be deleted — disable them instead)
 	Disabled Field[*bool] `json:"disabled,omitzero"`
-	// update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one member's edit never writes over another's.
+	// update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one edit never writes over another.
 	ExpectedDigest Field[string] `json:"expected_digest,omitzero"`
 }
 

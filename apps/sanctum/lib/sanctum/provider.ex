@@ -13,8 +13,7 @@ defmodule Sanctum.Provider do
   - `session` - The caller's own session, its sign-ins and its athanor
   - `key` - API keys
   - `tincture_visibility` - Whether a tincture is public
-  - `athanor` - The athanors a person belongs to
-  - `member` - Who is in an athanor
+  - `athanor` - The caller's own athanor
   - `shared_thread` - Threads people talk in, which no athanor holds
   - `invitation` - Invitations to become a person here
   - `door` - The server allowlist, platform admins only

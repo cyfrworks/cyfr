@@ -19,7 +19,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   Only actions a running chain can reach are offered: the agent's allowlist
   is what it may do *during a turn*, and an action outside that plane could
   be ticked, proposed, approved, and then refused at the call. Those live on
-  their own pages, where a member does them as themselves.
+  their own pages, where the person does them as themselves.
 
   Returns `[{tool, [{action, kind}]}]` merged across MCP tools, AQUA
   virtual tools, and external server tools. Every entry has a kind atom

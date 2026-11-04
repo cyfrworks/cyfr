@@ -17,7 +17,7 @@ defmodule Compendium.AquaTemplate do
   install's template well-formed — provisioning fails loud on a mount
   with no soul), `files/0` (what the seed ships), `status/1` (each unit's
   provenance, from the overlay), and `reset/2` (restore edited copies of
-  shipped units and pull shipped units the athanor lacks; member-created
+  shipped units and pull shipped units the athanor lacks; athanor-made
   roles and scrolls are kept unless `all: true` deletes them too).
   """
 
@@ -73,7 +73,7 @@ defmodule Compendium.AquaTemplate do
   Each aqua unit the athanor holds, in the one provenance vocabulary
   (`Compendium.Provenance`): `:bundled` (a copy of what ships, byte for
   byte), `:bundled_modified` (the athanor wrote into its copy), `:user`
-  (member-created). A shipped unit the athanor does not hold is not the
+  (athanor-made). A shipped unit the athanor does not hold is not the
   athanor's and is not listed.
   """
   @spec status(Context.t()) ::
@@ -110,7 +110,7 @@ defmodule Compendium.AquaTemplate do
   @doc """
   Reset the aqua tree to what ships: every edited copy of a shipped unit
   is restored to the shipped bytes, and every shipped unit the athanor
-  does not hold is copied in. By default member-created agents and skills
+  does not hold is copied in. By default athanor-made agents and skills
   are KEPT and reported; `all: true` deletes them too, so the tree is
   exactly the shipped set. Either way the template's presence is checked
   before anything changes: a broken install refuses rather than destroys.

@@ -14,8 +14,8 @@ defmodule Arca.SharedThreads do
 
   Every function matches `scope: :platform` and refuses any other actor
   with `{:error, :cross_tenant}`: a shared thread is no athanor's, so no
-  athanor-scoped actor can name one, and its people are read across every
-  athanor they hold.
+  athanor-scoped actor can name one, and its people are read across
+  athanors.
 
   ## Writes
 

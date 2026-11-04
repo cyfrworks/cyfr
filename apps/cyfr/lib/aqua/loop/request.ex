@@ -40,7 +40,7 @@ defmodule Aqua.Loop.Request do
   @hand_schemas %{
     "files" => %{
       "description" =>
-        "Workspace file operations. Use action=read to view files (returns line-numbered content), " <>
+        "File operations on the athanor's files. Use action=read to view files (returns line-numbered content), " <>
           "write to create or overwrite, edit to apply line edits, search for a glob, grep for a regex, " <>
           "tree or list to browse, delete to remove.",
       "properties" => %{

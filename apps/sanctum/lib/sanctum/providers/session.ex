@@ -97,7 +97,7 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — logout, get local identity, focus another athanor, or unlock and lock a protected device's session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, or unlock and lock a protected device's session. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
   end

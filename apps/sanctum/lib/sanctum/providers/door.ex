@@ -26,7 +26,7 @@ defmodule Sanctum.Providers.Door do
   when it was an allow, ejects everyone the door would now refuse
   (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered,
   since it names nobody; `list` shows the door; `requests` what is
-  waiting on the operator — an identifier a member invited, or one whose
+  waiting on the operator — an identifier someone invited into a thread, or one whose
   sign-in the door refused; `resolve` approves or drops one.
   """
 

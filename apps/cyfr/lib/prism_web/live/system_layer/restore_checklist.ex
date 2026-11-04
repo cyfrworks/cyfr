@@ -17,7 +17,7 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
       with a link to the athanor's Components page, which opens the
       default profile's grant.
     * Vault entries to rotate at their destination and enter again: those
-      of the athanors the person sits in.
+      of the person's athanor.
 
   Each re-enable is the operation `key.reenable`, `webhook.reenable`,
   `pairing.reenable` or `passkey.reenable` (`request/4`). The layer

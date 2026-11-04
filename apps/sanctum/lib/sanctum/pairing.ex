@@ -1055,8 +1055,8 @@ defmodule Sanctum.Pairing do
   while the person's restore is open, a confirmation a passkey or a paired
   client gave is refused (`restore_confirmed/1`), so no suspended method
   approves its own return. With `{:kit, %{user_id:, credential_digest:}}`
-  the kit ingress has verified the person's recovery kit; the client may
-  be in any athanor of theirs, and the write admits it only while the
+  the kit ingress has verified the person's recovery kit; the client is
+  one of theirs, and the write admits it only while the
   credential stands under their open restore (`kit_confirmed/2`).
 
   No certificate is issued: the device reconnects under its certificate

@@ -900,7 +900,7 @@ defmodule Sanctum.Recovery do
   The person's restore checklist while they recover from a declared
   restore (`ARCHITECTURE.md` §6.9): every key, webhook, paired device and
   passkey of theirs held suspended, and every profile to re-consent and
-  every vault entry to rotate in the athanors they sit in
+  every vault entry to rotate in their athanor
   (`Arca.SecurityTransitions.restore_checklist/2`). `{:ok, nil}` for a
   person no declared restore found, whose blocked profiles and entries are
   none of a restore's doing, and for one who has recovered with nothing
