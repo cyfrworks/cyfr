@@ -821,62 +821,6 @@ defmodule Emissary.External.BackendsTest do
     refute_receive {:control, "sync", _sync, _fields}, 200
   end
 
-  test "the rows one person created hold at most a quarter of the pool across every athanor",
-       %{ctx: ctx, fake: fake} do
-    Scripted.set(fake, :pool, 8)
-    start_controller(fake)
-    literal = %{"NODE_ENV" => "production"}
-
-    for athanor <- ["ath_test", "ath_a"] do
-      in_athanor = %{ctx | athanor_id: athanor}
-      connect(in_athanor, stdio_row(in_athanor, "mine", literal))
-      assert_receive {:control, "sync", _sync, _fields}, 2_000
-    end
-
-    in_third = %{ctx | athanor_id: "ath_b"}
-    third = stdio_row(in_third, "mine", literal)
-
-    assert {:error, {:person_share, 2}} =
-             Backends.sync(%{athanor_id: "ath_b", server_id: third.id, epoch: 1})
-
-    refute_receive {:control, "sync", _sync, _fields}, 200
-
-    # Another person's row in that athanor fits.
-    someone = %{in_third | user_id: "usr_someone_else"}
-    connect(someone, stdio_row(someone, "theirs", literal))
-    assert_receive {:control, "sync", _sync, _fields}, 2_000
-  end
-
-  test "rows the server's synthetic principal created hold one person's share across every athanor",
-       %{ctx: ctx, fake: fake} do
-    Scripted.set(fake, :pool, 8)
-    start_controller(fake)
-    literal = %{"NODE_ENV" => "production"}
-    system = &Sanctum.Context.internal(athanor_id: &1, scope: :athanor)
-
-    for athanor <- ["ath_test", "ath_a"] do
-      as_system = system.(athanor)
-      assert as_system.user_id == "system"
-      row = stdio_row(as_system, "unattributed", literal)
-      assert row.created_by == "system"
-      connect(as_system, row)
-      assert_receive {:control, "sync", _sync, _fields}, 2_000
-    end
-
-    third = stdio_row(system.("ath_b"), "unattributed", literal)
-
-    assert {:error, {:person_share, 2}} =
-             Backends.sync(%{athanor_id: "ath_b", server_id: third.id, epoch: 1})
-
-    refute_receive {:control, "sync", _sync, _fields}, 200
-
-    # A person's row in that athanor fits: the synthetic principal's share is
-    # its own, not the athanor's.
-    person = %{ctx | athanor_id: "ath_b"}
-    connect(person, stdio_row(person, "theirs", literal))
-    assert_receive {:control, "sync", _sync, _fields}, 2_000
-  end
-
   test "an env template that does not resolve refuses the sync and sends nothing", %{
     ctx: ctx,
     fake: fake

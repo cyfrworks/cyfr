@@ -851,11 +851,6 @@ defmodule Emissary.External.Server do
   defp backends_reason({:pool_share, limit}),
     do: "this athanor already runs its share of the backends service (#{limit} backends)"
 
-  defp backends_reason({:person_share, limit}),
-    do:
-      "the person who created this server already runs their share of the backends service " <>
-        "(#{limit} backends)"
-
   defp backends_reason({:control_too_large, limit}),
     do: "this server's backends and their env exceed what one sync may carry (#{limit} bytes)"
 
