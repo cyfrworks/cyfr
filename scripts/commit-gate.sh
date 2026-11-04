@@ -52,11 +52,13 @@
 #             suite in N partitions instead, started once the SQLite
 #             suite's partitions have exited (four pools across the
 #             adapter jobs)
-#   cluster   with --close only, after every other leg: the real-member
-#             suite alone on its own database, against an object store
-#             the gate does not start (CYFR_CLUSTER=on refuses local
-#             storage): the one at CYFR_TEST_S3_ENDPOINT, by default
-#             http://127.0.0.1:9000, as CI's cluster job starts MinIO there
+#   cluster   with --close only, once every other leg has passed: the
+#             real-member suite alone on its own database, against an
+#             object store of its own (CYFR_CLUSTER=on refuses local
+#             storage): the image and credentials CI's cluster job starts
+#             MinIO from (read from test.yml), as a container named after
+#             the gate, its port published on 127.0.0.1 at one Docker
+#             picks
 #   vocab     the CI vocabulary job's own script, read from test.yml
 #   islands   prima, arca and sanctum compiled and tested under
 #             MIX_ENV=test, as CI's island jobs are, so each island's
@@ -80,8 +82,9 @@
 #             SQLite, then on PostgreSQL on a database the leg creates
 #             empty on the gate's server and drops once the boot has ended,
 #             once both adapters' suites have exited
-#   harness   with --close only, after the cluster leg: trivy installed at
-#             the version the workflows pin (scripts/lib/trivy-install.sh),
+#   harness   with --close only, once the cluster leg has passed: trivy
+#             installed at the version the workflows pin
+#             (scripts/lib/trivy-install.sh),
 #             both images built from the tree (Dockerfile.locus as
 #             test.yml's locus-image job builds it, Dockerfile as its
 #             locus-backends-image job does), every image tag those jobs
@@ -106,6 +109,12 @@
 # cluster build in _build/test_pg (postgres its dev compile in
 # _build/dev_pg), an island builds inside its copy, the Elixir audit in
 # _build/audit and each release boot under boot.sh's own build path.
+# Before any leg starts, the gate compiles the deps into each of the
+# static, postgres and audit build paths in turn (`mix deps.loadpaths`,
+# logged in gate.deps.log): a dep's own compile writes under deps/, which
+# every build path shares (libsodium's C build in deps/libsodium/c_deps,
+# erlex's generated parser), so two cold builds started together race
+# there. Warm, each finds nothing to do.
 # Every leg runs with ${CARGO_HOME:-$HOME/.cargo}/bin ahead on its PATH,
 # where rustup and `cargo install` put their tools, so the tests tagged
 # :requires_cargo_component, which the test helpers exclude where
@@ -113,8 +122,11 @@
 # that finds no cargo-component there or on PATH is refused with 69,
 # naming where it looked, before any leg starts: passing with those tests
 # excluded would hold a commit to less than CI does. So is a gate without
-# go, a go other than the version both go.mod files name (what CI's
-# setup-go installs) or a docker that reaches no daemon, each named. The
+# rustup or whose `rustup default` is not rust-toolchain.toml's channel
+# (what CI's test job makes the default, which a component build outside
+# the checkout takes), without go, with a go other than the version both
+# go.mod files name (what CI's setup-go installs) or a docker that reaches
+# no daemon, each named. The
 # close's trivy and the audit's govulncheck are installed per run at CI's
 # pins, so no host copy is asked for.
 # What a gate makes outside its log directory carries its own name, and
@@ -162,7 +174,12 @@
 # deadline, several times what it takes on a quiet host: a step that
 # reaches it is stopped with everything it started, recorded as
 # `name=124`, and fails its leg, so a stalled check ends the gate instead
-# of keeping the host. GATE_STEP_DEADLINE=SECONDS (positive, at most six
+# of keeping the host. A leg that fails ends the gate at once: the legs
+# still running are stopped, each its steps first, what they made is
+# removed, each is reported `stopped`, no later leg starts, and the gate
+# exits 1, or with the status a refused step's leg exits with. Nothing
+# continues past a failure: it is fixed before anything after it is read.
+# GATE_STEP_DEADLINE=SECONDS (positive, at most six
 # decimal digits, as the containment library takes) gives every step that
 # one deadline. Each leg is this script run in a session of its own, so a
 # gate that is killed outright still has its legs and their steps stopped
@@ -644,10 +661,30 @@ leg_islands() {
 }
 
 # The cluster suite runs alone: real members on their own database, after
-# every other leg's pools have exited.
+# every other leg's pools have exited, against CI's object store: the
+# image and credentials of test.yml's "Start MinIO" step, its port
+# published where Docker picks on 127.0.0.1, so no store the host already
+# runs on :9000 answers in its place. The container is the leg's, removed
+# by name with the rest of what the leg made.
 leg_cluster() {
+  local image store="${PROOF_RUN_PREFIX}minio" port n=0 log="$LOGDIR/cluster.docker.log"
   export MIX_BUILD_PATH=_build/test_pg
-  step cluster cluster env CYFR_DATABASE_URL="$PG_SERVER/cyfr_cluster_test" \
+  image=$(ci_step 'Start MinIO' | grep -oE '[a-z0-9./_-]+@sha256:[0-9a-f]{64}' | head -n 1)
+  [ -n "$image" ] || { echo 'cluster_store_image=1' >> "$LOGDIR/cluster.summary"; return 1; }
+  step cluster store docker run -d --name "$store" -p 127.0.0.1::9000 \
+    -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 "$image" server /data || return
+  docker_call "$log" port "$store" 9000/tcp && port=${DOCKER_OUT##*:} || port=
+  case $port in ''|*[!0-9]*) echo 'cluster_store_port=1' >> "$LOGDIR/cluster.summary"; return 1 ;; esac
+  until curl -sf --max-time 2 "http://127.0.0.1:$port/minio/health/live" >/dev/null; do
+    n=$((n + 1))
+    [ "$n" -lt 30 ] || { echo 'cluster_store_live=1' >> "$LOGDIR/cluster.summary"; return 1; }
+    sleep 1
+  done
+  # The suite's own defaults for the rest, which are CI's credentials.
+  step cluster cluster env -u CYFR_TEST_S3_BUCKET -u CYFR_TEST_S3_REGION -u CYFR_TEST_S3_ACCESS_KEY_ID \
+    -u CYFR_TEST_S3_SECRET_ACCESS_KEY -u CYFR_TEST_S3_PATH_STYLE -u CYFR_TEST_S3_CREATE_BUCKET \
+    CYFR_TEST_S3_ENDPOINT="http://127.0.0.1:$port" \
+    CYFR_DATABASE_URL="$PG_SERVER/cyfr_cluster_test" \
     CYFR_CLUSTER_DATABASE_URL="$PG_SERVER/cyfr_cluster_test" \
     CYFR_SECRET_KEY_BASE="${CYFR_SECRET_KEY_BASE:-JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk}" \
     scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster
@@ -1341,6 +1378,14 @@ if ! docker version --format '{{.Server.Version}}' >/dev/null 2>&1; then
   echo "==> docker reaches no daemon: the go leg's Compose tests, the release boots and the close's image jobs need one" >&2
   exit 69
 fi
+need_tool rustup "the tests tagged :requires_cargo_component build components with rustup's default toolchain"
+channel=$(sed -n 's/^channel = "\([0-9][0-9.]*\)"$/\1/p' "$ROOT/rust-toolchain.toml")
+default=$(rustup default 2>/dev/null) || default=
+default=${default%% *}
+if [ -z "$channel" ] || [ "${default%%-*}" != "$channel" ]; then
+  echo "==> rustup's default toolchain is ${default:-unreadable} and rust-toolchain.toml names ${channel:-no channel}, which CI's test job makes the default: rustup toolchain install $channel --target wasm32-wasip1 --target wasm32-wasip2 && rustup default $channel" >&2
+  exit 69
+fi
 # What a gate that is gone left, removed before anything else runs: on
 # a host a gate takes alone, everything named after a gate is an orphan.
 DOCKER_SCRATCH="${TMPDIR:-/tmp}/cyfr-gate-$$-gate"
@@ -1419,6 +1464,28 @@ if [ "$s" -ne 0 ]; then
   [ "$s" -eq 124 ] && exit 124
   exit 1
 fi
+# The deps compiled into each build path a leg compiles in, one at a time,
+# before any leg starts (the header says why).
+gate_deps() {
+  local s=0
+  if contain_start -g 30 env -u MIX_BUILD_PATH "$@" mix deps.loadpaths >>"$LOGDIR/gate.deps.log" 2>&1 </dev/null; then
+    contain_wait "$CONTAIN_PID" "$(deadline_for compile_deps)" 30 || s=$?
+  else
+    s=$?
+    echo '==> the deps compile could not start' >&2
+    exit "$s"
+  fi
+  if [ "$s" -ne 0 ]; then
+    echo "==> the deps could not be compiled ($*): $s, see $LOGDIR/gate.deps.log" >&2
+    [ "$s" -eq 124 ] && exit 124
+    exit 1
+  fi
+}
+gate_deps MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test
+gate_deps CYFR_DATABASE=sqlite MIX_ENV=dev
+gate_deps MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres MIX_ENV=test
+gate_deps MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev
+gate_deps MIX_BUILD_PATH="$ROOT/_build/audit"
 start=$SECONDS
 echo "==> commit gate at $(git rev-parse --short HEAD) ($(uname -s)), logs in $LOGDIR"
 
@@ -1437,8 +1504,9 @@ start_leg() {
   fi
   eval "pid_$1=\$CONTAIN_PID"
 }
-# The islands compile from deps the static leg's compile has already
-# fetched; nothing else is shared, so the four legs run at once.
+# The deps are compiled into every build path above; the islands compile
+# into their copies' own once the static leg has ended, when what the deps
+# generate under deps/ is there to read, so the legs start at once.
 start_leg static
 export GATE_LEG_PEER_STATIC="$pid_static"
 start_leg postgres
@@ -1479,10 +1547,34 @@ leg_result() {
   fi
   printf '==> %-9s %-7s %s\n' "$leg" "$r" "$(tr '\n' ' ' < "$LOGDIR/$leg.summary" 2>/dev/null)"
 }
-for leg in static postgres vocab islands go audit boot; do leg_result "$leg"; done
-if $CLOSE; then
+# The legs end in any order, each reported as it ends. The first that
+# fails ends the gate: the legs still running are stopped (each stops its
+# steps and removes what it made), reported stopped, and no later leg
+# starts.
+running="static postgres vocab islands go audit boot" failed_leg=
+while [ -n "$running" ] && [ -z "$failed_leg" ]; do
+  still=
+  for leg in $running; do
+    pid_var="pid_$leg"
+    if leg_alive "${!pid_var}"; then still="$still $leg"; continue; fi
+    leg_result "$leg"
+    [ "$status" -eq 0 ] || [ -n "$failed_leg" ] || failed_leg=$leg
+  done
+  running=$still
+  [ -z "$running" ] || [ -n "$failed_leg" ] || sleep 1
+done
+if [ -n "$running" ]; then
+  echo "==> the $failed_leg leg failed: the gate stops$running" >&2
+  contain_stop_all 240 || echo "==> a stopped leg left $CONTAIN_SURVIVORS after KILL" >&2
+  for leg in $running; do
+    printf '==> %-9s %-7s %s\n' "$leg" stopped "$(tr '\n' ' ' < "$LOGDIR/$leg.summary" 2>/dev/null)"
+  done
+fi
+if $CLOSE && [ "$status" -eq 0 ]; then
   start_leg cluster
   leg_result cluster
+fi
+if $CLOSE && [ "$status" -eq 0 ]; then
   start_leg harness
   leg_result harness
 fi
