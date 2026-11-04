@@ -170,6 +170,7 @@ row per field of each row of each step's objects:
 | setup:a.passkeys[row] | state | exact | `"active"` |
 | setup:a.passkeys[row] | registration_digest | captured | the registration's digest: a new sha256: digest |
 | setup:a.passkeys[row] | possession_verified | exact | `1` |
+| setup:a.passkeys[row] | backup_eligible | exact | `0` |
 | setup:a.passkeys[row] | expires_at | exact | `null` |
 | setup:a.passkeys[row] | admin_confirmation_id | exact | `null` |
 | setup:a.passkeys[row] | activated_at | bound | a time inside setup at A |
@@ -339,6 +340,7 @@ row per field of each row of each step's objects:
 | allow:b.passkeys[row] | state | exact | `"active"` |
 | allow:b.passkeys[row] | registration_digest | captured | the registration's digest: a new sha256: digest |
 | allow:b.passkeys[row] | possession_verified | exact | `1` |
+| allow:b.passkeys[row] | backup_eligible | exact | `0` |
 | allow:b.passkeys[row] | expires_at | exact | `null` |
 | allow:b.passkeys[row] | admin_confirmation_id | exact | `null` |
 | allow:b.passkeys[row] | activated_at | bound | a time inside setup at B |
@@ -583,6 +585,7 @@ row per field of each row of each step's objects:
 | ban:registry.request_nonces[a][a nonce read at sync 3] | expires_at | exact | as read at sync |
 | held:a.passkeys[row] | activated_at | exact | as read at setup |
 | held:a.passkeys[row] | admin_confirmation_id | exact | as read at setup |
+| held:a.passkeys[row] | backup_eligible | exact | as read at setup |
 | held:a.passkeys[row] | credential_id | exact | as read at setup |
 | held:a.passkeys[row] | expires_at | exact | as read at setup |
 | held:a.passkeys[row] | id | exact | as read at setup |
@@ -705,7 +708,6 @@ row per field of each row of each step's objects:
 | held:registry.namespaces[proof][row] | created_at | exact | as read at setup |
 | held:registry.namespaces[proof][row] | updated_at | exact | as read at setup |
 | held:registry.namespaces[proof][row] | owner_identifier | exact | as read at setup |
-| held:registry.namespaces[proof][row] | address | exact | as read at setup |
 | held:registry.namespaces[proof][row] | reserved_reason | exact | as read at setup |
 | held:registry.identity_heads[a][row] | identifier | exact | as read at setup |
 | held:registry.identity_heads[a][row] | head | exact | as read at setup |
@@ -750,6 +752,7 @@ row per field of each row of each step's objects:
 | held:registry.banned_identities[row] | former_identity | exact | as read at ban |
 | held:b.passkeys[row] | activated_at | exact | as read at allow |
 | held:b.passkeys[row] | admin_confirmation_id | exact | as read at allow |
+| held:b.passkeys[row] | backup_eligible | exact | as read at allow |
 | held:b.passkeys[row] | credential_id | exact | as read at allow |
 | held:b.passkeys[row] | expires_at | exact | as read at allow |
 | held:b.passkeys[row] | id | exact | as read at allow |

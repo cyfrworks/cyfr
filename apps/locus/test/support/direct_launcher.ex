@@ -305,22 +305,22 @@ defmodule Locus.DirectLauncher do
   end
 
   @doc false
-  # A process group's signal and its leader's: a port's child leads its
-  # own group, so the group signal reaches what it started, and the direct
-  # one covers a child that does not. The group is named after `--`:
-  # procps-ng's kill, Linux's, reads a negative number after the signal as
-  # nothing it can signal and still exits 0, and only past `--` as a
-  # process group, which BSD's kill reads the same way.
+  # A process group's signal, or its leader's when it leads none: a port's
+  # child leads its own group, so the group signal reaches what it started,
+  # and only a child that does not is signalled directly. Each process takes
+  # the signal once, as cyfr-locus's kill of the group sends it: a shell
+  # running a trap takes a second signal that arrives mid-trap as a second
+  # run of the trap (dash), so its leader must not be signalled twice. The
+  # group is named after `--`: procps-ng's kill, Linux's, reads a negative
+  # number after the signal as nothing it can signal and still exits 0, and
+  # only past `--` as a process group, which BSD's kill reads the same way;
+  # either exits non-zero when no such group is left.
   @spec signal_group(non_neg_integer() | nil, String.t()) :: :ok
   def signal_group(nil, _signal), do: :ok
 
   def signal_group(os_pid, signal) do
-    for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]] do
-      System.cmd(@kill, ["-#{signal}" | target],
-        stderr_to_stdout: true,
-        env: Locus.Test.ProcessFamily.no_env()
-      )
-    end
+    with {_, status} when status != 0 <- send_signal(signal, ["--", "-#{os_pid}"]),
+         do: send_signal(signal, ["#{os_pid}"])
 
     :ok
   rescue
@@ -411,6 +411,13 @@ defmodule Locus.DirectLauncher do
   end
 
   defp kill(os_pid), do: signal_group(os_pid, "KILL")
+
+  defp send_signal(signal, target) do
+    System.cmd(@kill, ["-#{signal}" | target],
+      stderr_to_stdout: true,
+      env: Locus.Test.ProcessFamily.no_env()
+    )
+  end
 end
 
 defmodule Locus.DirectLauncher.Child do
