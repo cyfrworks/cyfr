@@ -4,9 +4,9 @@
 # and the rules: stage, check, lane, hold, when, command, separated by tabs.
 # The handoff runs no exclusive row: the harness self-tests that need the whole
 # machine, and go test -race, run on the pull request's run on GitHub
-# (CONTRIBUTING.md says how to run one here by name). Every self-test a handoff
-# row runs is one a pull-request workflow runs too, which tests/stage-test.sh
-# holds to the workflows.
+# (CONTRIBUTING.md says how to run one here by name). tests/stage-test.sh holds
+# that, and that every self-test a handoff row runs is one a pull-request
+# workflow runs too.
 save	format	scoped	600	always	mix format --check-formatted
 save	credo	scoped	600	apps/**,config/**	mix credo --strict
 save	compile	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors

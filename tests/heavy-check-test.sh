@@ -1030,17 +1030,25 @@ t_queue() {
 # scripts/stage.sh queues each row with its hold alone (-t), so a row queued
 # behind another waits heavy-check's default queue deadline: one at or under
 # a row's hold would let a row behind that one give up unrun, exit 75.
+# await-task.sh's default queue deadline is the same, so an await does not
+# give up on a check that still waits.
+default_queue() {
+  sed -n 's/^MODE=exclusive; HOLD=[0-9]*; QUEUE=\([1-9][0-9]*\); STATUS=false$/\1/p' "$check"
+}
 # unheld TABLE: each row of TABLE whose hold the default does not outlast.
 unheld() {
   local queue
-  queue=$(sed -n 's/^MODE=exclusive; HOLD=[0-9]*; QUEUE=\([1-9][0-9]*\); STATUS=false$/\1/p' "$check")
+  queue=$(default_queue)
   [ "$(printf '%s\n' "$queue" | grep -c .)" = 1 ] || { echo "no one QUEUE default in $check"; return; }
   awk -F'\t' -v queue="$queue" '!/^#/ && NF == 6 && $4 + 0 >= queue + 0 { print $1 "/" $2 " holds " $4 }' "$1"
 }
 t_queue_default() {
-  local left
+  local left awaits
   left=$(unheld "$root/scripts/stages.tsv")
   [ -z "$left" ] || fail "the default queue deadline does not outlast: $left"
+  awaits=$(sed -n 's/^queue_deadline=${AWAIT_QUEUE_SECONDS:-\([1-9][0-9]*\)}$/\1/p' "$await")
+  [ -n "$awaits" ] && [ "$awaits" = "$(default_queue)" ] ||
+    fail "await-task's default queue deadline is '$awaits', not heavy-check's $(default_queue)"
   # The control: a row that holds as long as the default is caught.
   { cat "$root/scripts/stages.tsv"; printf 'release\tlong\texclusive\t14400\talways\ttrue\n'; } >"$scratch/stages.tsv"
   [ "$(unheld "$scratch/stages.tsv")" = 'release/long holds 14400' ] || fail "a row holding the default was not caught: $(unheld "$scratch/stages.tsv")"

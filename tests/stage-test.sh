@@ -368,10 +368,18 @@ printf '# header\n1.5\tapps/a_test.exs\n0.4\tapps/b_test.exs\n3.0\tapps/c_test.e
 [ "$(cat "$S/wroot/scripts/test-partition-weights.tsv")" = "$(printf '# header\n1.5\tapps/a_test.exs\n0.2\tapps/b_test.exs')" ] ||
   fail 'the tracked table changed'
 
-begin 'the real table reads whole, and every self-test a handoff row runs is one a pull-request workflow runs'
+begin 'the real table reads whole, no handoff row is exclusive, and every self-test a handoff row runs is one a pull-request workflow runs'
 status=0; (cd "$ROOT" && scripts/stage.sh -n release) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
 grep -qF 'would run close (exclusive): scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"' "$S/real.out" || fail "$(cat "$S/real.out")"
+# What needs the whole machine is the pull request's run's: the handoff
+# queues in the scoped and proof lanes alone.
+exclusive_rows() { # TABLE: prints each handoff row of TABLE in the exclusive lane
+  awk -F'\t' '!/^#/ && $1 == "handoff" && $3 == "exclusive" { print $2 }' "$1"
+}
+[ -z "$(exclusive_rows "$ROOT/scripts/stages.tsv")" ] || fail "a handoff row is exclusive: $(exclusive_rows "$ROOT/scripts/stages.tsv" | tr '\n' ' ')"
+{ cat "$ROOT/scripts/stages.tsv"; printf 'handoff\tprobe-proof\tproof\t60\talways\ttrue\nhandoff\tprobe\texclusive\t60\talways\ttrue\n'; } >"$S/stages-exclusive.tsv"
+[ "$(exclusive_rows "$S/stages-exclusive.tsv")" = probe ] || fail "an exclusive handoff row was not caught alone: $(exclusive_rows "$S/stages-exclusive.tsv")"
 guard() { # TABLE [WORKFLOWS]: prints each self-test a handoff row of TABLE runs that no pull-request workflow runs
   python3 -I - "${2:-$ROOT/.github/workflows}" "$1" <<'PY'
 import glob, os, re, sys, yaml

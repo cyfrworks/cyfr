@@ -197,10 +197,10 @@ same worktree refuses, naming the run that holds it.
   `scripts/janitor.sh --dry-run` lists what the nightly janitor would
   remove.
 - The nightly runs on GitHub (`.github/workflows/nightly.yml`), each day
-  at 02:37 Taipei time and on demand: the Test workflow on main's head
-  under its `nightly` input, which runs each test shard's suite twice
-  with the timing formatter, then a job that runs `scripts/lib/nightly.py`
-  over every shard's runs. Its summary and artifacts carry the flake list
+  at 02:37 Taipei time and on demand: one run of the Test workflow on
+  main's head under its `nightly` input, in which each test shard runs
+  its suite twice with the timing formatter, then a job that runs
+  `scripts/lib/nightly.py` over every shard's two runs. Its summary and artifacts carry the flake list
   (each test that failed in one run and passed in the other, or failed in
   both) and the regenerated `scripts/test-partition-weights.tsv`. When
   the table differs from the tracked one, the job force-pushes it, on
@@ -249,8 +249,8 @@ same worktree refuses, naming the run that holds it.
   it reaches PostgreSQL's only with
   `MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres`. The split
   weighs each file by `scripts/test-partition-weights.tsv`, which the
-  nightly regenerates; to regenerate it by hand, move it aside, make two
-  runs of
+  nightly regenerates; to regenerate it by hand, with the table in place
+  (a file's timing does not depend on the split), make two runs of
   `CYFR_TEST_TIMINGS_DIR=<absolute dir> scripts/test-partitioned.sh -n 8 -- --formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter`,
   each into a fresh directory, and keep each file's larger
   `elixir scripts/test-timings.exs weights <dir>` value, as its header
