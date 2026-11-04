@@ -1368,6 +1368,20 @@ defmodule Sanctum.Pairing do
   @spec addition?(String.t()) :: boolean()
   def addition?(operation) when is_binary(operation), do: operation in @additions
 
+  # The additions that are a first method, a passkey or a device, which set
+  # the first-method latch: a sign-in method linked is no method held.
+  @first_methods ~w(pairing.begin person.certify passkey.register)
+
+  @doc """
+  Whether the operation `operation` adds a first method, a passkey or a
+  device (a pairing, a remote certification or a passkey's registration):
+  what a sign-in method or an emailed code confirms before any passkey or
+  device existed for the person (`sign_in_may_confirm/2`). Linking another
+  sign-in method, or giving a device a PIN, is no first method.
+  """
+  @spec first_method?(String.t()) :: boolean()
+  def first_method?(operation) when is_binary(operation), do: operation in @first_methods
+
   @doc """
   Who gave the confirmation `ctx.confirmation_id` names (`t:confirmer/0`),
   read from its record in the context's athanor: the passkey whose
@@ -1441,7 +1455,8 @@ defmodule Sanctum.Pairing do
   recovery from a declared restore is open (`Arca.SecurityTransitions`),
   any record; before any passkey or device ever existed for them (their
   first-method latch open, `Arca.PersonIdentities`), only their first
-  method itself (`addition?/1`). The OpenID Connect re-authentication and
+  method itself, a passkey or a device (`first_method?/1`), never another
+  sign-in method's link. The OpenID Connect re-authentication and
   the emailed code ask it where each begins and where each confirms
   (`Sanctum.Auth.OIDC`, `Sanctum.Auth.EmailVerification`). Revoking every
   passkey and device never reopens the latch.
@@ -1457,7 +1472,9 @@ defmodule Sanctum.Pairing do
       {:ok, nil} ->
         case Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user_id) do
           {:ok, true} ->
-            if addition?(operation), do: :ok, else: {:error, sign_in_refusal(:enrollment_first)}
+            if first_method?(operation),
+              do: :ok,
+              else: {:error, sign_in_refusal(:enrollment_first)}
 
           {:ok, false} ->
             {:error, sign_in_refusal(:method_held)}

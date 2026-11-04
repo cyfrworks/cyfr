@@ -850,6 +850,60 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert {:ok, %{confirmations: []}} = remote_challenge(device_ctx, ref)
     end
 
+    test "once their home replaced the keys it is certified under, it is no fresh method and their passkey waits for the administrator",
+         %{
+           session_ctx: session_ctx,
+           user: user,
+           athanor: athanor,
+           identity: identity,
+           directory: directory
+         } do
+      # No passkey here and no email a code could reach: the device is the
+      # only fresh method.
+      {1, _} = Arca.Repo.delete_all(from(p in Arca.Schemas.Passkey, where: p.user_id == ^user.id))
+
+      {1, _} =
+        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user.id),
+          set: [email_verified: false]
+        )
+
+      assert Sanctum.Passkeys.fresh_method?(session_ctx)
+
+      _rotated = Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
+      {:ok, _moved} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
+
+      # A session of theirs under the head as it is now; the pairing still
+      # stands, only its certification ended.
+      {:ok, session} =
+        Sanctum.TestContext.create_session(
+          Context.build(
+            user_id: user.id,
+            email: user.email,
+            provider: "github",
+            athanor_id: athanor.id,
+            permissions: [:*],
+            auth_method: :oidc,
+            authenticated: true
+          )
+        )
+
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+
+      assert {:ok, clients} =
+               Arca.PairedClients.list(Prima.Actor.system(), user_id: user.id, standing: :all)
+
+      assert [%{standing: "active"}] = Enum.filter(clients, &(&1.holder_kind == "software"))
+
+      refute Sanctum.Passkeys.fresh_method?(ctx)
+
+      authenticator = Sanctum.TestContext.Authenticator.new("replaced-#{user.id}")
+      {:ok, options} = Sanctum.Passkeys.register(ctx, %{})
+      credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
+
+      assert {:ok, %{status: "awaiting_administrator"}} =
+               Sanctum.Passkeys.register(ctx, %{credential: credential})
+    end
+
     test "confirms under the certificate their home renewed, once the one paired here expired", %{
       device: device,
       identity: identity,
