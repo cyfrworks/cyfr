@@ -642,16 +642,7 @@ defmodule PrismWeb.ChatLiveTest do
        %{conn: conn} do
     # The guard uses the mount's context as it is while it is fresh, so the
     # owner read is the first the patch makes.
-    previous = Application.fetch_env(:sanctum, :caller_memo_ttl_ms)
-
-    on_exit(fn ->
-      case previous do
-        {:ok, value} -> Application.put_env(:sanctum, :caller_memo_ttl_ms, value)
-        :error -> Application.delete_env(:sanctum, :caller_memo_ttl_ms)
-      end
-    end)
-
-    Application.put_env(:sanctum, :caller_memo_ttl_ms, 600_000)
+    Prima.Test.Env.put_app_env(:sanctum, :caller_memo_ttl_ms, 600_000)
 
     conn = log_in_user(conn, person())
     {view, _html} = mount_chat(conn)
