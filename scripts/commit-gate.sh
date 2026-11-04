@@ -708,7 +708,7 @@ run_job() {
     case "$prev:$a" in --*:*) ;; *:[a-z]*=*) picks="$picks $a" ;; esac
     prev=$a
   done
-  dir="$LOGDIR/$leg.$slug.plan" temp="${TMPDIR:-/tmp}/cyfr-gate-$GATE_ID-$leg.$slug.temp"
+  dir="$LOGDIR/$leg.$slug.plan" temp="${TMPDIR:-/tmp}/$(run_names_gate "$GATE_ID" "-$leg.$slug.temp")"
   if ! python3 -I "$ROOT/scripts/lib/workflow_plan.py" "$ROOT" "$wf" "$job" "$dir" "$temp" "$@" --artifacts "$LOGDIR/artifacts" \
     >"$LOGDIR/$leg.$slug.log" 2>&1 </dev/null; then
     echo "==> $leg.$slug: $wf $job$picks could not be planned: $(tail -n 1 "$LOGDIR/$leg.$slug.log")" >&2
@@ -877,7 +877,7 @@ PY
 # nothing is removed: what would have been is named, and it fails, unless
 # there is nothing to remove.
 gate_clean() {
-  local scope=$1 leg= log id legre own sids sid s=0 kind pass passes name rest d dbre gone= unread= found=0 named image
+  local scope=$1 leg= log id legre own sids sid s=0 kind pass passes name name_gate d dbre gone= unread= found=0
   if [ "$scope" = leg ]; then leg=$2; log=$3; else log=$2; fi
   case "$scope" in
     leg) id=$GATE_ID; legre=$leg ;;
@@ -886,15 +886,27 @@ gate_clean() {
     *) echo "gate_clean: no scope $scope" >&2; return 64 ;;
   esac
   [ "$scope" != orphans ] || gone=gone
-  # What a leg names after its run is cyfr-gate-G-LEG-...; the harness leg
+  # A gate's names are its stem and what follows (scripts/lib/run-names.sh):
+  # what a leg names after its run is cyfr-gate-G-LEG-...; the harness leg
   # also builds and tags the namespace's images, cyfr-gate-G/....
-  named="^cyfr-gate-($id)-"
-  image="^cyfr-gate-($id)(/[^:]+|-[^/:]+):.+\$"
-  if [ "$scope" = leg ]; then
-    named="^cyfr-gate-($id)-$leg-"
-    image="^cyfr-gate-($id)-$leg-[^/:]+:.+\$"
-    [ "$leg" != harness ] || image="^cyfr-gate-($id)(/[^:]+|-$leg-[^/:]+):.+\$"
-  fi
+  # in_scope KIND NAME: whether NAME is a gate's name of KIND that SCOPE
+  # covers, with its gate's pid in name_gate.
+  in_scope() {
+    local rest
+    [[ $2 =~ $RUN_NAMES_GATE_PATTERN ]] || return 1
+    name_gate=${BASH_REMATCH[1]} rest=${BASH_REMATCH[2]}
+    [ "$scope" = orphans ] || [ "$name_gate" = "$GATE_ID" ] || return 1
+    case $1 in
+      image) [[ $rest =~ ^(/[^:]+|-[^/:]+):.+$ ]] || return 1 ;;
+      *) case $rest in -*) ;; *) return 1 ;; esac ;;
+    esac
+    [ "$scope" = leg ] || return 0
+    case $1:$rest in
+      image:/*) [ "$leg" = harness ] ;;
+      directory:-"$leg".*|*:-"$leg"-*) ;;
+      *) return 1 ;;
+    esac
+  }
   own=$(ps -o sid= -p "$$" | tr -d ' ')
   # The sessions first, each stopped with everything it started, and none
   # left before anything they might use is removed.
@@ -924,7 +936,7 @@ gate_clean() {
       directory) echo "==> removing the directory $2" >&2; rm -rf "$2" ;;
       database)
         echo "==> dropping the database $2" >&2
-        docker_call "$log" run --rm --name "${PROOF_RUN_PREFIX:-cyfr-gate-$$-gate-}psql-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
+        docker_call "$log" run --rm --name "${PROOF_RUN_PREFIX:-$(run_names_gate $$ -gate-)}psql-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
           --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
           psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "DROP DATABASE IF EXISTS \"$2\" WITH (FORCE)" ;;
       *)
@@ -956,11 +968,8 @@ gate_clean() {
         image) docker_call "$log" image ls --format '{{.Repository}}:{{.Tag}}' ;;
       esac || { echo "==> the ${kind}s could not be listed" >&2; stop_here; return 1; }
       while IFS= read -r name; do
-        case $kind in
-          image) [[ "$name" =~ $image ]] || continue ;;
-          *) [[ "$name" =~ $named ]] || continue ;;
-        esac
-        [ -z "$gone" ] || ! gate_running "${BASH_REMATCH[1]}" || continue
+        in_scope "$kind" "$name" || continue
+        [ -z "$gone" ] || ! gate_running "$name_gate" || continue
         if [ "$pass" = verify ]; then
           echo "==> the $kind $name is still there" >&2
           s=1
@@ -977,7 +986,7 @@ gate_clean() {
     [ "$id" != '[0-9]+' ] || dbre='[0-9]+'
     dbre=${dbre:-$id}
     for pass in $passes; do
-      if ! docker_call "$log" run --rm --name "${PROOF_RUN_PREFIX:-cyfr-gate-$$-gate-}psql-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
+      if ! docker_call "$log" run --rm --name "${PROOF_RUN_PREFIX:-$(run_names_gate $$ -gate-)}psql-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
         --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
         psql -v ON_ERROR_STOP=1 -qAt "$PG_SERVER/postgres" \
         -c "SELECT datname FROM pg_database WHERE datname ~ '^cyfr_gate_boot_$dbre(_|\$)' ORDER BY 1"; then
@@ -1000,13 +1009,10 @@ gate_clean() {
     done
   fi
   for pass in $passes; do
-    for d in "${TMPDIR:-/tmp}"/cyfr-gate-*; do
+    for d in "${TMPDIR:-/tmp}/$(run_names_gate '')"*; do
       [ -e "$d" ] || [ -L "$d" ] || continue
-      name=${d##*/}
-      rest=${name#cyfr-gate-}
-      [[ "$rest" =~ ^($id)-(.+)$ ]] || continue
-      [ -z "$gone" ] || ! gate_running "${BASH_REMATCH[1]}" || continue
-      case "$scope" in leg) case "${BASH_REMATCH[2]}" in "$leg".*|"$leg"-*) ;; *) continue ;; esac ;; esac
+      in_scope directory "${d##*/}" || continue
+      [ -z "$gone" ] || ! gate_running "$name_gate" || continue
       # The cleaner's own scratch is the gate's while it runs.
       [ "$d" != "${DOCKER_SCRATCH:-}" ] || continue
       if [ "$pass" = verify ]; then
@@ -1046,7 +1052,7 @@ leg_go() {
 # builds; npm audit reads every shipped tincture lockfile.
 leg_audit() {
   local status=0 gobin
-  gobin="${TMPDIR:-/tmp}/cyfr-gate-$GATE_ID-audit.gobin"
+  gobin="${TMPDIR:-/tmp}/$(run_names_gate "$GATE_ID" -audit.gobin)"
   run_job audit spdx license-lint.yml spdx-headers || status=1
   [ -z "$REFUSED" ] || return 1
   run_job audit govuln_codex security.yml go-audit tree=apps/codex --env "GOBIN=$gobin" --env "PATH=$gobin:$PATH" || status=1
@@ -1100,8 +1106,9 @@ leg_boot() {
 # project and container they start from the gate's prefix
 # (PROOF_RUN_PREFIX), and what a suite left is removed after its job.
 leg_harness() {
-  local status=0 log="$LOGDIR/harness.docker.log" ns="cyfr-gate-$GATE_ID" tools version
-  tools="${TMPDIR:-/tmp}/cyfr-gate-$GATE_ID-harness.tools"
+  local status=0 log="$LOGDIR/harness.docker.log" ns tools version
+  ns=$(run_names_gate "$GATE_ID")
+  tools="${TMPDIR:-/tmp}/$(run_names_gate "$GATE_ID" -harness.tools)"
   if version=$(python3 -I "$ROOT/scripts/lib/workflow_plan.py" --trivy-version "$ROOT" 2>>"$log"); then
     step harness trivy_install scripts/lib/trivy-install.sh "$version" "$tools" || status=1
   else
@@ -1149,7 +1156,7 @@ harness_sweep() {
         volume) docker_call "$log" volume ls --format '{{.Name}}' ;;
       esac || { echo "==> the ${kind}s could not be listed" >&2; s=1; continue; }
       while IFS= read -r name; do
-        [[ "$name" =~ ^cyfr-gate-$GATE_ID-harness- ]] || continue
+        [[ "$name" == "$(run_names_gate "$GATE_ID" -harness-)"* ]] || continue
         if [ "$pass" = verify ]; then
           echo "==> the $kind $name is still there" >&2
           s=1
@@ -1214,6 +1221,8 @@ await_leg() {
 SELF="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")" || exit 1
 ROOT=$(dirname "$(dirname "$SELF")")
 . "$ROOT/scripts/lib/contain.sh" || exit 69
+# shellcheck source=lib/run-names.sh
+. "$ROOT/scripts/lib/run-names.sh" || exit 69
 
 # --- a leg: "$SELF" --leg NAME, started by the gate ------------------------
 # It takes the gate's parsed options and its peers' pids from the
@@ -1235,11 +1244,12 @@ if [ "${1:-}" = --leg ]; then
   [ -d "$LOGDIR" ] && [[ "${COMMIT_GATE:-}" =~ ^[0-9]+$ ]] && [ "${COMMIT_GATE_LEG:-}" = "$leg" ] ||
     { echo 'a leg runs only under the gate' >&2; exit 64; }
   GATE_ID=$COMMIT_GATE
-  DOCKER_SCRATCH="${TMPDIR:-/tmp}/cyfr-gate-$GATE_ID-$leg.scratch"
+  DOCKER_SCRATCH="${TMPDIR:-/tmp}/$(run_names_gate "$GATE_ID" "-$leg.scratch")"
   # What the scripts the leg runs name after their own run (a compose
   # project, a container, an image, a directory) is named after the gate
   # and the leg too: they put PROOF_RUN_PREFIX before those names.
-  export PROOF_RUN_PREFIX="cyfr-gate-$GATE_ID-$leg-"
+  PROOF_RUN_PREFIX=$(run_names_gate "$GATE_ID" "-$leg-")
+  export PROOF_RUN_PREFIX
   cd "$ROOT" || exit 1
   unset MIX_BUILD_PATH
   # What the leg made outside its steps is removed by name once its steps
@@ -1291,7 +1301,8 @@ case "${HEAVY_CHECK_HELD:-}" in
 esac
 # The gate's own names, whatever prefix heavy-check gave it: its sweeps
 # find what it made by these, and each leg sets its own below.
-export PROOF_RUN_PREFIX="cyfr-gate-$$-gate-"
+PROOF_RUN_PREFIX=$(run_names_gate $$ -gate-)
+export PROOF_RUN_PREFIX
 
 # The terminal lines are heavy-check's when it runs the gate.
 TERMINAL=false
@@ -1388,7 +1399,7 @@ if [ -z "$channel" ] || [ "${default%%-*}" != "$channel" ]; then
 fi
 # What a gate that is gone left, removed before anything else runs: on
 # a host a gate takes alone, everything named after a gate is an orphan.
-DOCKER_SCRATCH="${TMPDIR:-/tmp}/cyfr-gate-$$-gate"
+DOCKER_SCRATCH="${TMPDIR:-/tmp}/$(run_names_gate $$ -gate)"
 (umask 077 && mkdir -p "$DOCKER_SCRATCH") || exit 1
 orphans_log="$DOCKER_SCRATCH/orphans.log"
 if ! gate_clean orphans "$orphans_log"; then

@@ -18,15 +18,17 @@
 #      record naming the pid shows a live process in its group (group=),
 #      or a live watchdog (watchdog=), or no group, as heavy-check wrote
 #      before it recorded one. Containers go with `docker rm -f -v`, then
-#      networks, volumes and tags, then the directories. Another
+#      networks, volumes and tags, then the directories, in that order of
+#      dependence: a kind whose listing fails stops the rule there,
+#      nothing after it touched, and a run whose object could not be
+#      removed keeps everything of its own after that object. Another
 #      directory named under a run prefix is not touched, since a run may
 #      keep its own on purpose. What a commit gate that is gone left goes
-#      the same way, by the gate's pid (scripts/commit-gate.sh names what a
-#      gate makes): its containers, networks and volumes named
-#      cyfr-gate-<pid>-..., its image tags cyfr-gate-<pid>/... and
-#      cyfr-gate-<pid>-..., and its $JANITOR_TMP/cyfr-gate-<pid>-* scratch
-#      directories of this user. The databases a gate's boot leg names stay
-#      the next gate's to drop.
+#      the same way, by the gate's pid: its containers, networks, volumes,
+#      image tags and $JANITOR_TMP scratch directories of this user whose
+#      names match RUN_NAMES_GATE_PATTERN (run-names.sh), the one grammar
+#      of the names a gate gives. The databases a gate's boot leg names
+#      stay the next gate's to drop.
 #   2. Old images. An image tagged cyfr-locus:in-<h> or cyfr:in-<h>
 #      (scripts/image.sh), or cyfr-install-screen:in-<h> (the
 #      install-screen proof's, tests/install-screen-proof/prepare.sh),
@@ -206,10 +208,12 @@ remove_object() {
     image) docker image rm "$2" ;;
   esac
 }
-# A gate's names: cyfr-gate-<pid>- for what its legs name after their
-# run, cyfr-gate-<pid>/ for its image namespace.
-GATE_NAMES_PATTERN='^cyfr-gate-([0-9]+)[-/]'
 declare -A why_kept=()
+# The pids whose run or gate kept an object it could not remove: what
+# depends on it, the later kinds and the directories, stays.
+declare -A left=()
+# False once a listing of rule 1 failed: nothing after it is touched.
+listed_all=true
 # Sets reason to why the run or gate pid $1 names is not finished,
 # remembered per pid.
 kept_for() {
@@ -218,38 +222,49 @@ kept_for() {
 }
 sweep_run_objects() {
   local kind=$1 name pid reason
-  listed "$kind" "${kind}s" list_objects "$kind" || return 0
+  listed "$kind" "${kind}s" list_objects "$kind" || { listed_all=false; return 0; }
   while IFS= read -r name; do
     if [[ $name =~ $RUN_NAMES_PATTERN ]]; then pid=${BASH_REMATCH[2]}
-    elif [[ $name =~ $GATE_NAMES_PATTERN ]]; then pid=${BASH_REMATCH[1]}
+    elif [[ $name =~ $RUN_NAMES_GATE_PATTERN ]]; then pid=${BASH_REMATCH[1]}
     else continue
     fi
     kept_for "$pid"
     if [ -n "$reason" ]; then kept "$kind" "$name" "$reason"; continue; fi
+    if [ -n "${left[$pid]+set}" ]; then kept "$kind" "$name" "an object of its run before it could not be removed"; continue; fi
     if $dry; then removed "$kind" "$name"; continue; fi
-    if out=$(remove_object "$kind" "$name" 2>&1); then removed "$kind" "$name"; else failure "$kind" "$name" "$out"; fi
+    if out=$(remove_object "$kind" "$name" 2>&1); then removed "$kind" "$name"; else failure "$kind" "$name" "$out"; left[$pid]=1; fi
   done <"$lists/$kind"
 }
-for kind in container network volume image; do sweep_run_objects "$kind"; done
+for kind in container network volume image; do
+  $listed_all || break
+  sweep_run_objects "$kind"
+done
+# Whether the directory $1 of the run or gate pid $2 may go now: its run
+# finished (reason empty) and every object it depends on gone. It says why
+# it keeps one.
+directory_free() {
+  kept_for "$2"
+  if [ -n "$reason" ]; then kept directory "$1" "$reason"; return 1; fi
+  if ! $listed_all; then kept directory "$1" "the Docker objects could not all be listed"; return 1; fi
+  if [ -n "${left[$2]+set}" ]; then kept directory "$1" "its run's Docker objects could not all be removed"; return 1; fi
+}
 scratch_pattern=${RUN_NAMES_PATTERN}'install-screen\.[^/]+$'
 listed scratch 'install-screen scratch directories' \
   find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name 'cyfr-*-install-screen.*' -type d -print0
 while IFS= read -r -d '' dir; do
   [[ ${dir##*/} =~ $scratch_pattern ]] || continue
   [ -O "$dir" ] || continue
-  kept_for "${BASH_REMATCH[2]}"
-  if [ -n "$reason" ]; then kept directory "$dir" "$reason"; continue; fi
+  directory_free "$dir" "${BASH_REMATCH[2]}" || continue
   if $dry; then removed directory "$dir"
   elif rm -rf -- "$dir"; then removed directory "$dir"
   else failure directory "$dir" 'rm -rf failed'
   fi
 done <"$lists/scratch"
-listed gates 'gate scratch directories' find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name 'cyfr-gate-[0-9]*-*' -print0
+listed gates 'gate scratch directories' find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -name "$(run_names_gate '')*" -print0
 while IFS= read -r -d '' dir; do
-  [[ ${dir##*/} =~ ^cyfr-gate-([0-9]+)- ]] || continue
+  [[ ${dir##*/} =~ $RUN_NAMES_GATE_PATTERN ]] || continue
   [ -O "$dir" ] || continue
-  kept_for "${BASH_REMATCH[1]}"
-  if [ -n "$reason" ]; then kept directory "$dir" "$reason"; continue; fi
+  directory_free "$dir" "${BASH_REMATCH[1]}" || continue
   if $dry; then removed directory "$dir"
   elif rm -rf -- "$dir"; then removed directory "$dir"
   else failure directory "$dir" 'rm -rf failed'

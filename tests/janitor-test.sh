@@ -431,6 +431,11 @@ EOF
 chmod +x "$S/list-bin/docker" "$S/list-bin/git"
 dl=$(dead_pid)
 plant_container "cyfr-$seed-$dl-listing"
+# A gone gate's network and scratch directory, which a container of the
+# gate the failed listing did not show could still hold.
+gl=$(dead_pid)
+touch "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"
+mkdir -p "$S/tmp/cyfr-gate-$gl-harness.tools"
 sum8=8888888888888888888888888888888888888888888888888888888888888888
 mkdir -p "$S/cache/$sum8"; age 30 "$S/cache/$sum8"
 there "$(image_file "$t0")"
@@ -439,8 +444,38 @@ status=0; PATH="$S/list-bin:$PATH" janitor listing --keep-build-cache || status=
 has listing 'failed listing containers: stub: ps fails'
 has listing 'failed listing worktrees: stub: worktree list fails'
 there "$DOCKER_STUB/containers/cyfr-$seed-$dl-listing"
+there "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"; lacks listing "network cyfr-gate-$gl-harness-net"
+there "$S/tmp/cyfr-gate-$gl-harness.tools"
+has listing "kept directory $S/tmp/cyfr-gate-$gl-harness.tools: the Docker objects could not all be listed"
 there "$(image_file "$t0")"; lacks listing "$t0"
 there "$S/cache/$sum8"; lacks listing "$sum8"
+janitor listing-after --keep-build-cache || fail "the next run exited $?"
+gone "$DOCKER_STUB/networks/cyfr-gate-$gl-harness-net"; gone "$S/tmp/cyfr-gate-$gl-harness.tools"
+
+begin "a gone gate whose container cannot be removed keeps its network, image and scratch directory"
+mkdir -p "$S/rm-container-bin"
+cat >"$S/rm-container-bin/docker" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = rm ]; then echo 'stub: rm fails' >&2; exit 1; fi
+exec $(command -v docker) "\$@"
+EOF
+chmod +x "$S/rm-container-bin/docker"
+gr=$(dead_pid)
+plant_container "cyfr-gate-$gr-boot-psql"
+touch "$DOCKER_STUB/networks/cyfr-gate-$gr-harness-net"
+plant_image "cyfr-gate-$gr/cyfr:push" '' "$OLD"
+mkdir -p "$S/tmp/cyfr-gate-$gr-gate"
+status=0; PATH="$S/rm-container-bin:$PATH" janitor rm-container --keep-build-cache || status=$?
+[ "$status" = 1 ] || fail "exited $status, not 1"
+has rm-container "failed container cyfr-gate-$gr-boot-psql: stub: rm fails"
+there "$DOCKER_STUB/containers/cyfr-gate-$gr-boot-psql"
+there "$DOCKER_STUB/networks/cyfr-gate-$gr-harness-net"
+has rm-container "kept network cyfr-gate-$gr-harness-net: an object of its run before it could not be removed"
+there "$(image_file "cyfr-gate-$gr/cyfr:push")"
+there "$S/tmp/cyfr-gate-$gr-gate"
+has rm-container "kept directory $S/tmp/cyfr-gate-$gr-gate: its run's Docker objects could not all be removed"
+janitor rm-container-after --keep-build-cache || fail "the next run exited $?"
+gone "$DOCKER_STUB/containers/cyfr-gate-$gr-boot-psql"; gone "$S/tmp/cyfr-gate-$gr-gate"
 
 # The interleavings of a janitor and an image.sh call for one tag, from a
 # clone, which no worktree of the repository speaks for.
