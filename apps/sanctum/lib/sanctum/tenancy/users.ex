@@ -137,25 +137,6 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc """
-  The person's own athanor — `{:ok, id}` once one has been minted, else
-  `:none`.
-
-  `:none` covers a person the server does not know, one whose furnace has
-  not been minted yet, and an unanswerable read alike: every caller asks
-  so it may open something (a cross-athanor note read, a copy out of a
-  private thread), and "could not tell" must read as "not yours" there.
-  """
-  @spec personal_athanor_id(String.t() | nil) :: {:ok, String.t()} | :none
-  def personal_athanor_id(user_id) when is_binary(user_id) do
-    case get(user_id) do
-      {:ok, %{personal_athanor_id: id}} when is_binary(id) and id != "" -> {:ok, id}
-      _ -> :none
-    end
-  end
-
-  def personal_athanor_id(_), do: :none
-
-  @doc """
   Whether `athanor_id` is this person's own athanor: the athanor row's
   `owner_user_id` names them.
 
@@ -218,12 +199,6 @@ defmodule Sanctum.Tenancy.Users do
       Sanctum.Namespace.invalidate(updated.id)
       {:ok, updated}
     end
-  end
-
-  @doc "Record the person's own athanor once minted."
-  @spec set_personal_athanor(user(), String.t()) :: {:ok, user()} | {:error, term()}
-  def set_personal_athanor(%{id: _} = user, athanor_id) when is_binary(athanor_id) do
-    update(user, %{personal_athanor_id: athanor_id})
   end
 
   @doc """

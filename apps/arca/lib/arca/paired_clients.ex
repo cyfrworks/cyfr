@@ -426,7 +426,7 @@ defmodule Arca.PairedClients do
 
   defp insert_platform!(passkey_id, user_id, now) do
     case Arca.Repo.one(
-           from(u in Arca.Schemas.User, where: u.id == ^user_id, select: u.personal_athanor_id)
+           from(a in Arca.Schemas.Athanor, where: a.owner_user_id == ^user_id, select: a.id)
          ) do
       athanor_id when is_binary(athanor_id) and athanor_id != "" ->
         Arca.Repo.insert_all(PairedClient, [

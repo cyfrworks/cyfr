@@ -80,8 +80,8 @@ fn args ->
       )
 
     {:ok, ctx} = Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true)
-    {:ok, own} = Sanctum.Tenancy.Users.personal_athanor_id(user.id)
-    {:ok, ctx} = Sanctum.Context.focus(ctx, own)
+    {:ok, own} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
+    {:ok, ctx} = Sanctum.Context.focus(ctx, own.id)
     ctx
   end
 

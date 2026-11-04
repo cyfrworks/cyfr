@@ -146,9 +146,7 @@ defmodule PrismWeb.SignInTraceTest do
   # nothing here performing it, and the console mounted from the cookie.
   defp assert_console_on_filled_athanor(signed_in, identity) do
     {:ok, user} = Users.get_by_identity(identity)
-    athanor_id = user.personal_athanor_id
-    assert {:ok, %{owner_user_id: owner}} = Athanors.get(athanor_id)
-    assert owner == user.id
+    assert {:ok, %{id: athanor_id}} = Athanors.get_by_owner(user.id)
 
     wait_until(
       fn ->

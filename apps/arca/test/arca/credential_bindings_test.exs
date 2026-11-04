@@ -152,8 +152,6 @@ defmodule Arca.CredentialBindingsLockTest do
           owner_user_id: user_id,
           created_by: user_id
         })
-
-      {:ok, _} = Arca.Users.update(server(), user_id, %{personal_athanor_id: athanor_id})
     end)
 
     on_exit(fn ->

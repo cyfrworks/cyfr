@@ -199,11 +199,8 @@ defmodule PrismWeb.AuthControllerTest do
       token = Plug.Conn.get_session(conn, :sanctum_session_token)
       assert is_binary(token)
 
-      assert {:ok, %{namespace: nil, personal_athanor_id: pid}} =
-               Sanctum.Tenancy.Users.get(user.id)
-
-      assert {:ok, %{owner_user_id: owner}} = Sanctum.Tenancy.Athanors.get(pid)
-      assert owner == user.id
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user.id)
+      assert {:ok, %{id: pid}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
       assert {:ok, %{user_id: user_id, athanor_id: ^pid}} = Sanctum.Session.load(token)
       assert user_id == user.id
     end
@@ -394,8 +391,8 @@ defmodule PrismWeb.AuthControllerTest do
       refute Enum.any?(Map.keys(conn.resp_cookies), &(&1 =~ "probe"))
       refute inspect(conn.resp_cookies) =~ "gho_never_sent"
 
-      assert {:ok, %{personal_athanor_id: pid, namespace: nil}} =
-               Sanctum.Tenancy.Users.get(person_id(user_id))
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(person_id(user_id))
+      assert {:ok, %{id: pid}} = Sanctum.Tenancy.Athanors.get_by_owner(person_id(user_id))
 
       assert {:ok, %{authenticated: true, namespace: nil, athanor_id: ^pid}} =
                Sanctum.Session.load(session_of(conn))
@@ -927,8 +924,7 @@ defmodule PrismWeb.AuthControllerTest do
       # Admitted with an athanor of their own, as everyone admitted here is,
       # and they land in its chat.
       {:ok, person} = Sanctum.Tenancy.Users.get_by_identifier(identity.identifier)
-      {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(person.id)
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(person.id)
       route = Sanctum.Tenancy.Athanors.route_slug(athanor)
 
       landed = get(recycle(signed_in), "/")

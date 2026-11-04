@@ -286,7 +286,6 @@ defmodule Arca.ExecutionStandingLockTest do
           Prima.Actor.system(),
           %{
             id: owner_id,
-            personal_athanor_id: athanor_id,
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,

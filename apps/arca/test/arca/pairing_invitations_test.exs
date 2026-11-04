@@ -108,7 +108,6 @@ defmodule Arca.PairingInvitationsTest do
 
     athanor = "ath_pin_#{n}"
     Arca.Test.Actor.ensure_athanor_row(athanor, owner_user_id: person.id)
-    {:ok, person} = Arca.Users.update(server(), person.id, %{personal_athanor_id: athanor})
 
     {person, %{Prima.Actor.in_athanor(athanor) | user_id: person.id}}
   end
@@ -795,7 +794,6 @@ defmodule Arca.PairingInvitationsRaceTest do
         )
 
       Arca.Test.Actor.ensure_athanor_row(athanor_id, owner_user_id: user_id)
-      {:ok, _} = Arca.Users.update(server(), user_id, %{personal_athanor_id: athanor_id})
     end)
 
     actor = %{Prima.Actor.in_athanor(athanor_id) | user_id: user_id}

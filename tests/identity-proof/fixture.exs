@@ -268,8 +268,7 @@ fn args ->
       answer.(%{people: people})
 
     ["segment", user_id] ->
-      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(user.personal_athanor_id)
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)
       answer.(%{segment: "@" <> athanor.slug})
 
     ["link_ticket", cookie, key] ->

@@ -531,7 +531,7 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert {:ok, %{user_id: user_id, athanor_id: athanor_id}} = Sanctum.Session.load(token)
       assert user_id == user.id
-      assert {:ok, %{personal_athanor_id: ^athanor_id}} = Sanctum.Tenancy.Users.get(user.id)
+      assert {:ok, %{id: ^athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user.id)
     end
 
     test "a boot that lost the control plane stops a waiting sign-in at its next poll, asking no provider",

@@ -465,7 +465,7 @@ defmodule Sanctum.PasskeysTest do
       assert_receive {:announced, [:cyfr, :sanctum, :notify], _,
                       %{kind: :passkey_registered, athanor_id: personal}}
 
-      assert personal == user.personal_athanor_id
+      assert personal == Sanctum.Test.People.athanor!(user).id
     end
 
     test "a denial committing between the first-method check and the write keeps no passkey" do
@@ -1241,12 +1241,12 @@ defmodule Sanctum.PasskeysTest do
       assert_receive {:announced, [:cyfr, :sanctum, :notify], _,
                       %{kind: :passkey_registered, athanor_id: registered}}
 
-      assert registered == person.personal_athanor_id
+      assert registered == Sanctum.Test.People.athanor!(person).id
 
       assert_receive {:announced, [:cyfr, :sanctum, :notify], _,
                       %{kind: :passkey_recovered, athanor_id: recovered}}
 
-      assert recovered == person.personal_athanor_id
+      assert recovered == Sanctum.Test.People.athanor!(person).id
 
       admin_athanor = context.admin_athanor.id
 

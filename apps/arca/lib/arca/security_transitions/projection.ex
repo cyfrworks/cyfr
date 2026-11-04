@@ -13,7 +13,7 @@ defmodule Arca.SecurityTransitions.Projection do
 
   alias Arca.Schemas.{ApiKey, Athanor, Session, User}
 
-  @user ~w(id email email_verified status denied_at platform_admin_at personal_athanor_id security_generation)a
+  @user ~w(id email email_verified status denied_at platform_admin_at security_generation)a
   @athanor ~w(id name owner_user_id created_by status archived_at security_generation)a
   @session ~w(id user_id athanor_id expires_at)a
   @api_key ~w(id name athanor_id created_by revoked suspended ip_allowlist)a

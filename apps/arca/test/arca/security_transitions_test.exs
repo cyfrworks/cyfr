@@ -60,7 +60,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
         created_by: user.id
       })
 
-    {:ok, user} = Arca.Users.update(server(), user.id, %{personal_athanor_id: athanor.id})
     {user, athanor}
   end
 
@@ -791,35 +790,20 @@ defmodule Arca.SecurityTransitionsTest do
       assert {:ok, %{archived_athanor_ids: []}} =
                SecurityTransitions.deny_user(server(), plain.id, verify: admit())
 
-      # Owned, and the personal pointer unset or naming no row: the owner
-      # is what selects the athanor, for the denial and for the allow.
-      for pointer <- [nil, "ath_nowhere"] do
-        owner = person!()
-        n = uniq()
+      # The owner is what selects the athanor, for the denial and for the
+      # allow.
+      {owner, own} = owner!()
+      own_id = own.id
 
-        {:ok, own} =
-          Arca.Athanors.insert(server(), %{
-            name: "Owned #{n}",
-            slug: "owned-#{n}",
-            owner_user_id: owner.id,
-            created_by: owner.id
-          })
+      assert {:ok, %{archived_athanor_ids: [^own_id]}} =
+               SecurityTransitions.deny_user(server(), owner.id, verify: admit())
 
-        if pointer,
-          do: {:ok, _} = Arca.Users.update(server(), owner.id, %{personal_athanor_id: pointer})
+      assert athanor(own.id).status == "archived"
 
-        own_id = own.id
+      assert {:ok, %{reopened_athanor_ids: [^own_id]}} =
+               SecurityTransitions.allow_user(server(), owner.id, verify: admit())
 
-        assert {:ok, %{archived_athanor_ids: [^own_id]}} =
-                 SecurityTransitions.deny_user(server(), owner.id, verify: admit())
-
-        assert athanor(own.id).status == "archived"
-
-        assert {:ok, %{reopened_athanor_ids: [^own_id]}} =
-                 SecurityTransitions.allow_user(server(), owner.id, verify: admit())
-
-        assert athanor(own.id).status == "active"
-      end
+      assert athanor(own.id).status == "active"
     end
 
     test "the caller's refusal rolls back everything, with its reason" do
@@ -1274,7 +1258,6 @@ defmodule Arca.SecurityTransitionsLockTest do
             provider: "github",
             email: "stl#{n}@example.com",
             email_verified: true,
-            personal_athanor_id: own_id,
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,

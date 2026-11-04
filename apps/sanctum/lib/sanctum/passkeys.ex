@@ -1498,9 +1498,9 @@ defmodule Sanctum.Passkeys do
   end
 
   defp personal_athanor(user_id) do
-    case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
-      {:ok, athanor_id} -> athanor_id
-      :none -> nil
+    case Sanctum.Tenancy.Athanors.get_by_owner(user_id) do
+      {:ok, %{id: athanor_id}} -> athanor_id
+      _none -> nil
     end
   end
 

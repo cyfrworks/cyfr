@@ -2103,6 +2103,7 @@ defmodule Cyfr.Boundaries do
       active?: 1,
       by_route_slug: 1,
       get: 1,
+      get_by_owner: 1,
       list_active: 0,
       provisioning_failure: 1,
       route_slug: 1,
@@ -2113,7 +2114,6 @@ defmodule Cyfr.Boundaries do
       get: 1,
       list_by_id: 1,
       own_athanor?: 2,
-      personal_athanor_id: 1,
       prefs: 1,
       put_prefs: 2
     ],

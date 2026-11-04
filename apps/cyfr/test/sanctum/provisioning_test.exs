@@ -199,7 +199,7 @@ defmodule Sanctum.ProvisioningTest do
     user
   end
 
-  test "a person's own athanor is minted once, under their namespace when it is free, and recorded",
+  test "a person's own athanor is minted once, under their namespace when it is free, and found by its owner",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
@@ -209,7 +209,7 @@ defmodule Sanctum.ProvisioningTest do
     assert personal.slug == "prov#{n}"
     assert personal.owner_user_id == user.id
     assert personal.name == "Prov #{n}"
-    assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
+    assert {:ok, %{id: pid}} = Athanors.get_by_owner(user.id)
     assert pid == personal.id
 
     # The mint fills nothing; the sign-in after it asks for the fill.
@@ -233,7 +233,7 @@ defmodule Sanctum.ProvisioningTest do
     assert {:ok, personal} = Provisioning.mint_personal(user)
     assert personal.slug == "prov-#{n}"
     assert personal.owner_user_id == user.id
-    assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
+    assert {:ok, %{id: pid}} = Athanors.get_by_owner(user.id)
     assert pid == personal.id
 
     # A namespace recorded later is a credential, not a new address.

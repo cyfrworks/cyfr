@@ -102,7 +102,7 @@ defmodule Sanctum.Provisioning do
 
   alias Arca.ProvisioningClaims, as: Claims
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   # How long a claim stands without its keeper renewing it, and how often
   # the keeper does. A claim nobody renews is takeable one lease after the
@@ -165,9 +165,8 @@ defmodule Sanctum.Provisioning do
   Mint the person's own athanor inside their admission's transaction
   (`Sanctum.Newcomer`): a slug of this server's — their namespace when
   they have one and it is free, otherwise derived from their name —
-  owned by the person and recorded on their row. Writes
-  only through Arca and makes no network call; its refusal rolls the
-  admission back.
+  owned by the person. Writes only through Arca and makes no network
+  call; its refusal rolls the admission back.
 
   It counts no cap: the admission asked `personal_admissible/0` before
   the person's row, or made the installation's administrator.
@@ -183,10 +182,8 @@ defmodule Sanctum.Provisioning do
     attrs = %{name: name, owner_user_id: user_id, created_by: user_id}
     attrs = if is_binary(athanor_id), do: Map.put(attrs, :id, athanor_id), else: attrs
 
-    with {:ok, slugs} <- Athanors.person_slugs(user[:namespace], name),
-         {:ok, athanor} <- Athanors.create_personal(attrs, slugs),
-         {:ok, _user} <- Users.set_personal_athanor(user, athanor.id) do
-      {:ok, athanor}
+    with {:ok, slugs} <- Athanors.person_slugs(user[:namespace], name) do
+      Athanors.create_personal(attrs, slugs)
     end
   end
 

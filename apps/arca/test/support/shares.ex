@@ -70,8 +70,6 @@ defmodule Arca.Test.Shares do
         created_by: user.id
       })
 
-    {:ok, user} = Arca.Users.update(server(), user.id, %{personal_athanor_id: athanor.id})
-
     %{
       user: user,
       athanor: athanor,

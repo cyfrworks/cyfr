@@ -61,7 +61,6 @@ defmodule PrismWeb.ChatLive do
      # opens when the address names none. The page's context moves with
      # the athanor it has open.
      |> assign(:session_athanor_id, socket.assigns.context.athanor_id)
-     |> assign(:mine, personal_athanor(socket.assigns.context))
      |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
      |> assign(:room, nil)
      |> assign(:page_title, "Chat")
@@ -217,7 +216,7 @@ defmodule PrismWeb.ChatLive do
          # someone reloaded.
          |> assign(:athanor, reread(athanor))
          |> assign(:athanor_route, Athanors.route_slug(athanor))
-         |> assign(:athanor_label, athanor_label(athanor, socket.assigns.mine, ctx))
+         |> assign(:athanor_label, PrismWeb.Athanors.label(athanor, ctx))
          |> assign(:threads, threads)
          |> update(:expanded, &MapSet.put(&1, athanor.id))
          |> select(target)
@@ -385,7 +384,7 @@ defmodule PrismWeb.ChatLive do
   # The person's athanor, entered through `Context.focus/2` for its own
   # list, and the shared threads with the people in them, for a pair.
   defp build_rail(socket, athanors) do
-    %{context: ctx, mine: mine} = socket.assigns
+    ctx = socket.assigns.context
 
     rows =
       for athanor <- athanors,
@@ -393,7 +392,8 @@ defmodule PrismWeb.ChatLive do
         %{
           athanor: athanor,
           route: Athanors.route_slug(athanor),
-          label: athanor_label(athanor, mine, ctx),
+          # Your own athanor is "You" (`PrismWeb.Athanors.label/2`).
+          label: PrismWeb.Athanors.label(athanor, ctx),
           threads: athanor_threads(focus)
         }
       end
@@ -419,7 +419,7 @@ defmodule PrismWeb.ChatLive do
 
   # The athanor in view was renamed or reconfigured: its row, re-labelled.
   defp patch_athanor(socket, athanor) do
-    label = athanor_label(athanor, socket.assigns.mine, socket.assigns.context)
+    label = PrismWeb.Athanors.label(athanor, socket.assigns.context)
 
     socket
     |> assign(:athanor, athanor)
@@ -430,16 +430,6 @@ defmodule PrismWeb.ChatLive do
       end)
     end)
   end
-
-  defp personal_athanor(%{user_id: user_id}) do
-    case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
-      {:ok, id} -> id
-      :none -> nil
-    end
-  end
-
-  # Your own athanor is "You" (`PrismWeb.Athanors.label/2`).
-  defp athanor_label(athanor, _mine, ctx), do: PrismWeb.Athanors.label(athanor, ctx)
 
   # The active shared threads the person sits in, pairs first by the other
   # person's name, then the rest by title, and the people they share one

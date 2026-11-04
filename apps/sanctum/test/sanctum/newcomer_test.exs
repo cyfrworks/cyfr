@@ -231,8 +231,7 @@ defmodule Sanctum.NewcomerTest do
       assert %PersonIdentity{provenance: "local", live_public_key: <<_::binary>>} =
                Arca.Repo.get_by(PersonIdentity, user_id: person.id)
 
-      assert {:ok, athanor} = Athanors.get_by_owner(person.id)
-      assert person.personal_athanor_id == athanor.id
+      assert {:ok, _athanor} = Athanors.get_by_owner(person.id)
 
       assert Sanctum.Tenancy.platform_admin?(person.id)
       assert administrators() == 1
@@ -890,7 +889,8 @@ defmodule Sanctum.NewcomerTest do
       assert {:ok, %{person: person}} =
                Newcomer.admit({:invitation, code}, {:passkey, registration(), identity()})
 
-      assert person.personal_athanor_id == Sanctum.Test.People.athanor!(person).id
+      assert %{owner_user_id: owner} = Sanctum.Test.People.athanor!(person)
+      assert owner == person.id
       assert {:ok, []} = SharedThreads.list(person.id)
     end
 
@@ -1161,14 +1161,9 @@ defmodule Sanctum.NewcomerTest do
       assert [%ExternalIdentity{provider: "cyfr"}] =
                Arca.Repo.all(from(i in ExternalIdentity, where: i.user_id == ^person.id))
 
-      # Their own athanor, owned by them and recorded on their row; its
-      # fill asked once the admission committed.
-      assert {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(person.id)
-
-      assert {:ok, %{id: ^athanor_id, owner_user_id: owner}} =
-               Athanors.get_by_owner(person.id)
-
-      assert owner == person.id
+      # Their own athanor, owned by them; its fill asked once the
+      # admission committed.
+      assert {:ok, %{id: athanor_id}} = Athanors.get_by_owner(person.id)
       assert_received {:fill_asked, ^athanor_id, "sign_in"}
       refute Sanctum.Tenancy.platform_admin?(person.id)
 
@@ -1246,7 +1241,7 @@ defmodule Sanctum.NewcomerTest do
       assert person.admission == "remote"
       assert %SharedThreadMember{added_by: seated_by} = seat(person.id, thread.id)
       assert seated_by == first.id
-      assert {:ok, _own} = Sanctum.Tenancy.Users.personal_athanor_id(person.id)
+      assert {:ok, _own} = Athanors.get_by_owner(person.id)
       assert Arca.Repo.get!(Invitation, invitation.id).redeemed_by == person.id
       note = "invitation " <> invitation.id
       added_by = first.id

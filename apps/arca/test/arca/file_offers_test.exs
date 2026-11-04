@@ -1842,10 +1842,6 @@ defmodule Arca.FileOffersLockOrderTest do
         {:ok, _} =
           Arca.SharedThreadMembers.seat(Prima.Actor.system(), thread.id, recipient.id, sender.id)
 
-        # The sender's athanor is their own: their denial archives it.
-        {:ok, _} =
-          Arca.Users.update(Prima.Actor.system(), sender.id, %{personal_athanor_id: home.id})
-
         {home, recipient_home, thread, sender, recipient}
       end)
 

@@ -126,7 +126,7 @@ unchecked.
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
 | `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `resolved_policy`, `blob_digest`, `activation`, `shape_digest`, `commit_digest`: what the bootstrap derives (`derived_head`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
 | `consent_vault_refs` | `binding_key`, `vault_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `share_id`: its row's under Shared by you |
-| `users` | `email`, `email_verified`, `admission`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`, `personal_athanor_id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `platform_admin_at`, `created_at`, `updated_at`: times (`platform_admin_at` none for anyone but the installation's first person) |
+| `users` | `email`, `email_verified`, `admission`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `platform_admin_at`, `created_at`, `updated_at`: times (`platform_admin_at` none for anyone but the installation's first person) |
 
 The bounds:
 
