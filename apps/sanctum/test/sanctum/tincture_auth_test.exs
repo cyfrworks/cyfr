@@ -143,9 +143,21 @@ defmodule Sanctum.TinctureAuthTest do
 
     test "the window is the setting's: a shorter one set is a shorter lifetime", %{source: ctx} do
       settings!(60, 3_600)
-      {:ok, %{credential: short}} = TinctureAuth.mint_asset_credential(ctx, @digest)
+      before = System.system_time(:second)
+
+      {:ok, %{credential: short, expires_at: expiry}} =
+        TinctureAuth.mint_asset_credential(ctx, @digest)
+
+      after_mint = System.system_time(:second)
+
+      assert DateTime.to_unix(expiry) > before + 30
+      assert DateTime.to_unix(expiry) <= after_mint + 60
+
+      before_verify = System.system_time(:second)
       {:ok, %{remaining_s: left}} = TinctureAuth.verify_asset_credential(short)
-      assert left > 30 and left <= 60
+      after_verify = System.system_time(:second)
+      assert left >= DateTime.to_unix(expiry) - after_verify
+      assert left <= DateTime.to_unix(expiry) - before_verify
     end
 
     test "never outlives its source's remaining life", %{source: ctx, session: session} do

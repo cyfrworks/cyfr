@@ -167,8 +167,11 @@ finish() {
         echo "partition $i database creation has an uncertain outcome; inspect $out_dir/p$i/database-name; no unreceipted database was dropped" >&2
         result=1
       fi
-      # The disposable database URL goes whatever its drop did.
-      rm -f "$out_dir/p$i.env" || result=1
+      # The disposable database URL goes once its database is dropped. While
+      # the receipt stands (a drop that failed) it stays beside it, so
+      # scripts/janitor.sh can read the server it names and drop the
+      # database later; the run has failed, so its directory stays too.
+      [ -f "$out_dir/p$i/database-created" ] || rm -f "$out_dir/p$i.env" || result=1
     done
     if [ "$result" -eq 0 ] && [ "$keep" != 1 ]; then
       rm -rf "$out_dir" || { echo "temporary resource cleanup failed: $out_dir" >&2; result=1; }
@@ -582,7 +585,8 @@ fi
 
 # A run its runner could not clean up (SIGKILLed) keeps its directory and
 # the disposable database URLs in its p*.env files; a finished run removes
-# those files whatever its result.
+# each file but one whose partition's drop failed, which stays beside the
+# database's receipt for scripts/janitor.sh.
 name_stopped_runs() {
   local directory pid
   for directory in /tmp/cyfr-t.*; do

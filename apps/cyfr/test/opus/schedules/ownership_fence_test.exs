@@ -691,6 +691,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
         %{state | tasks: %{monitor => task}, recovery_ref: nil, recovery_due: nil}
       end)
 
+      wait_until(fn -> :sys.get_state(scheduler).tasks == %{} end)
       state = :sys.get_state(scheduler)
       assert state.tasks == %{}
       assert is_reference(state.recovery_ref)

@@ -21,6 +21,17 @@
 #       The extended regular expression a name made from a prefix matches,
 #       capturing the seed and the pid. It is the one definition a cleanup
 #       matches: the gate's own names (cyfr-gate-<pid>-...) do not match it.
+#   run_names_gate PID [REST]
+#       Prints `cyfr-gate-PID`, the stem of every name commit gate PID
+#       (scripts/commit-gate.sh) gives what it makes, then REST. REST
+#       begins with `-`, for what the gate and its legs name after their
+#       run (cyfr-gate-PID-LEG-...) and their scratch directories
+#       (cyfr-gate-PID-LEG.SLUG...), or with `/`, for an image repository
+#       in the gate's namespace (cyfr-gate-PID/cyfr).
+#   RUN_NAMES_GATE_PATTERN
+#       The extended regular expression a gate's name matches, capturing
+#       the gate's pid and REST. A prefix's names do not match it, nor do
+#       the gate's log directories, cyfr-gate.XXXXXX.
 #   run_names_free_port
 #       Prints a port between RUN_NAMES_PORT_FIRST and RUN_NAMES_PORT_LAST
 #       (20000 and 29999, set when this file is sourced; a test narrows
@@ -35,6 +46,7 @@
 #       every port it tried is held; 69 when python3 is missing.
 
 RUN_NAMES_PATTERN='^cyfr-([0-9a-f]{10})-([0-9]+)-'
+RUN_NAMES_GATE_PATTERN='^cyfr-gate-([0-9]+)([-/].+)$'
 RUN_NAMES_PORT_FIRST=20000
 RUN_NAMES_PORT_LAST=29999
 
@@ -77,6 +89,8 @@ run_names_prefix() {
   seed=$(run_names_seed "${1:-.}") || return
   printf 'cyfr-%s-%s-\n' "$seed" "$$"
 }
+
+run_names_gate() { printf 'cyfr-gate-%s%s\n' "$1" "${2:-}"; }
 
 run_names_free_port() {
   local status=0 tries=$((RUN_NAMES_PORT_LAST - RUN_NAMES_PORT_FIRST + 1))

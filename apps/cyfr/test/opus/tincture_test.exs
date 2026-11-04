@@ -36,13 +36,8 @@ defmodule Opus.TinctureTest do
     base = Path.join(System.tmp_dir!(), "tincture_#{System.unique_integer([:positive])}")
     keys = [cyfr: :locus_runtime_workers, arca: :base_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
-    Application.put_env(:arca, :base_path, base)
-
-    ctx = Sanctum.TestContext.local(:prism)
-    _athanor = Sanctum.TestContext.athanor!()
 
     on_exit(fn ->
-      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(base)
 
       for {{app, key}, value} <- prev do
@@ -51,6 +46,11 @@ defmodule Opus.TinctureTest do
           else: Application.delete_env(app, key)
       end
     end)
+
+    Application.put_env(:arca, :base_path, base)
+    ctx = Sanctum.TestContext.local(:prism)
+    _athanor = Sanctum.TestContext.athanor!()
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     {:ok, dep} =
       Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
@@ -312,8 +312,8 @@ defmodule Opus.TinctureTest do
       # A pattern applies only to a loaded module, so it is loaded first, and
       # a pattern that matched nothing fails here rather than tracing nothing.
       Code.ensure_loaded!(Opus)
-      assert :erlang.trace_pattern({Opus, :run_root_edge, 5}, true, [:global]) == 1
       on_exit(fn -> :erlang.trace_pattern({Opus, :run_root_edge, 5}, false, [:global]) end)
+      assert :erlang.trace_pattern({Opus, :run_root_edge, 5}, true, [:global]) == 1
       :erlang.trace(self(), true, [:call, {:tracer, collector}])
 
       result =
