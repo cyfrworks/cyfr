@@ -24,11 +24,15 @@
 #       certificate and the first-method mark the enrollment set all stand.
 #       The seed is written to `setup-device.json` in the server's working
 #       directory (a release cell's own; an image's temporary directory
-#       where its working directory is not the server's to write), created
-#       once with mode 0600, beside the
-#       device's client, athanor, home and certificate, and is never
-#       answered, taken as an argument or logged: `device_confirm` alone
-#       reads it. Their enrollment is then finished through Arca with no
+#       where its working directory is not the server's to write), with
+#       mode 0600, beside the device's client, athanor, home and
+#       certificate, and is never answered, taken as an argument or logged:
+#       `device_confirm` alone reads it. A record already there is that
+#       device: a first person made again where it is kept (an
+#       installation started over in the same directory) is enrolled with
+#       its seed, client and athanor, and the record is written back with
+#       the new certificate; one that does not read, or names another
+#       home, refuses the person. Their enrollment is then finished through Arca with no
 #       network: accepted as the directory's answer is recorded, its
 #       recovery code saved and its name recorded on their row, so every
 #       proof gets a finished person, and their first passkey is one the
@@ -137,7 +141,7 @@ fn args ->
   end
 
   # The setup device's record: the seed its key is drawn from and what it
-  # was certified as, created once and readable by this user alone, in the
+  # was certified as, readable by this user alone, in the
   # server's working directory, a release cell's own, or, where that is not
   # this user's to write (an image's /app), the server's temporary one.
   device_path =
@@ -163,7 +167,24 @@ fn args ->
     :ok = File.close(file)
   end
 
-  keep_device = fn enrollment, seed ->
+  # The device a record already kept names, to be made again: its seed,
+  # client and athanor, for this home alone; nil where no record is kept.
+  kept_device = fn ->
+    if File.exists?(device_path) do
+      with {:ok, text} <- File.read(device_path),
+           {:ok, %{"seed" => seed, "client_id" => client_id, "athanor_id" => athanor_id} = kept} <-
+             Jason.decode(text),
+           {:ok, <<_::binary-size(32)>> = seed} <- Base.url_decode64(seed, padding: false),
+           true <- kept["home"] == Sanctum.Person.home() do
+        %{seed: seed, client_id: client_id, athanor_id: athanor_id}
+      else
+        _another ->
+          raise "#{device_path} names no device of this home's setup; remove it to make a new one"
+      end
+    end
+  end
+
+  keep_device = fn enrollment, seed, create? ->
     actor = Prima.Actor.in_athanor(enrollment.athanor_id)
     {:ok, row} = Arca.DeviceCertificates.current(actor, enrollment.client_id)
 
@@ -175,7 +196,7 @@ fn args ->
         home: Sanctum.Person.home(),
         certificate: Jason.decode!(row.certificate)
       },
-      true
+      create?
     )
   end
 
@@ -196,12 +217,13 @@ fn args ->
       request_id: "req_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
     }
 
-    seed = :crypto.strong_rand_bytes(32)
+    kept = kept_device.()
+    seed = if kept, do: kept.seed, else: :crypto.strong_rand_bytes(32)
     {device_key, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
 
     enrollment = %{
-      athanor_id: Prima.UUID7.generate_id("ath"),
-      client_id: Prima.UUID7.generate_id("pcl"),
+      athanor_id: if(kept, do: kept.athanor_id, else: Prima.UUID7.generate_id("ath")),
+      client_id: if(kept, do: kept.client_id, else: Prima.UUID7.generate_id("pcl")),
       device_key: device_key,
       request_id: identity.request_id,
       holder_kind: "software",
@@ -212,7 +234,7 @@ fn args ->
     try do
       with {:ok, admitted} <-
              Sanctum.Newcomer.admit({:setup, token}, {:device, enrollment, identity}) do
-        :ok = keep_device.(enrollment, seed)
+        :ok = keep_device.(enrollment, seed, is_nil(kept))
         {:ok, admitted}
       end
     after
