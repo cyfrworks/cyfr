@@ -162,8 +162,9 @@ same worktree refuses, naming the run that holds it.
 
   The self-tests that need the whole machine, those a workflow runs and
   no handoff row does, and `go test ./... -race` are the pull request's
-  run's alone: a defect in one shows there. To have one's answer before the pull request, run it
-  here by name in the exclusive lane, as its workflow step runs it:
+  run's alone: a defect in one shows there. To have one's answer before
+  the pull request, run it here by name in the exclusive lane, as its
+  workflow step runs it:
   `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or
   `scripts/heavy-check.sh bash -c 'cd apps/codex && go test ./... -race'`.
 - A release tag is cut on a tree its run on GitHub proved green, and
@@ -172,10 +173,10 @@ same worktree refuses, naming the run that holds it.
   holding the version lines alone, which the tag's own workflow checks
   again before it publishes. `--gate` is the fallback for a HEAD with no
   run: it runs the release stage, the gate's close, here first. Right
-  before it tags it runs the
-  dependency audits again (`scripts/dependency-audit.sh`, the same ones CI
-  runs), because the advisory feeds they read change independently of the
-  tree, and a tag whose own run fails them publishes nothing. The gate's
+  before it tags it runs the dependency audits again
+  (`scripts/dependency-audit.sh`, the same ones CI runs), because the
+  advisory feeds they read change independently of the tree, and a tag
+  whose own run fails them publishes nothing. The gate's
   header lists what it runs and which of CI's checks stay CI's alone.
   Besides `cargo-component` it needs `go` at the version both `go.mod`
   files name and a running Docker daemon, and it refuses to run without
