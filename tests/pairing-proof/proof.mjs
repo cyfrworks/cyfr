@@ -225,6 +225,18 @@ async function beginFor(desk, code) {
   await desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 });
 }
 
+// The Revoke of the client `client` names in the desktop's Devices, pressed
+// until the desktop's own request for it waits: a press made while the
+// layer is still settling may land elsewhere, and is made once more.
+async function pressRevoke(desk, client) {
+  const waiting = `${layer} [data-test="confirmation"][data-own="true"]`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
+    if (await desk.waitForSelector(waiting, { timeout: 15_000 }).then(() => true).catch(() => false)) return;
+  }
+  throw new Error(`the desktop's revocation asked no confirmation: ${JSON.stringify(await layerText(desk))}`);
+}
+
 // The pairing link the desktop shows once its pairing for `code` is
 // confirmed on the phone: its invitation's secret.
 async function pairingFor(desk, phone, code) {
@@ -777,7 +789,7 @@ async function connectAsHeld(device) {
   return { code: outcome, seen: ch.log.filter((e) => e.dir === "in").map((e) => e.type) };
 }
 
-async function sleepBeyondExpiry(desk, test) {
+async function sleepBeyondExpiry(desk, phone, test) {
   const { device, ch } = test;
   const grant = ch.log.findLast((e) => e.dir === "in" && e.type === "grant");
   const expiresAt = ch.standing && ch.standing.expires_at;
@@ -809,6 +821,14 @@ async function sleepBeyondExpiry(desk, test) {
     asked_while_asleep_read: !!asked,
   };
   test.ch = next;
+  // The request asked while the device slept, read, is cancelled: the
+  // desktop's next request is then the only one it waits on.
+  const asleepRequest = await phonePrompt(phone, "pairing-entry-3").catch(() => null);
+  if (asleepRequest) {
+    await phone.locator(`${layer} [data-test="confirmation"][data-ref="${asleepRequest.ref}"] [data-test="confirm-cancel"]`).click().catch(() => null);
+    await phone.waitForSelector(`${layer} [data-test="confirmation"][data-ref="${asleepRequest.ref}"]`, { state: "detached", timeout: 30_000 }).catch(() => null);
+  }
+  record.sleep.asleep_request_cancelled = !!asleepRequest;
   return row("sleep",
     grantRevoked && closed === 4408 && expired.code === 4408 && !!next && record.sleep.renewed.first_sent === "renew" &&
       record.sleep.renewed.certificate_moved && record.sleep.renewed.granted_anew && record.sleep.asked_while_asleep_read,
@@ -823,7 +843,7 @@ async function revoke(desk, phone, test) {
   await openDevices(desk);
   const client = `${layer} [data-test="pairing-client"][data-client="${device.clientId}"]`;
   await desk.waitForSelector(client, { timeout: 30_000 });
-  await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
+  await pressRevoke(desk, client);
 
   // Revoking needs a fresh confirmation: the phone's Prism gives it.
   const shown = await phonePrompt(phone, "pairing.revoke");
@@ -888,7 +908,7 @@ async function handheld(browser, desk, phoneAuthenticator) {
   await openDevices(desk);
   const client = `${layer} [data-test="pairing-client"][data-client="${device.clientId}"]`;
   await desk.waitForSelector(client, { timeout: 30_000 });
-  await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
+  await pressRevoke(desk, client);
   const revoking = await phonePrompt(hand, "pairing.revoke");
   measured.revoke_prompt = await measureScreen(hand, layer);
   const revokeConfirmed = await confirmOnPhone(hand, revoking.ref);
@@ -940,7 +960,7 @@ try {
     if (confirmed && await fresh(desk, phone, firstRef)) {
       const test = await testDevice(desk, phone);
       await measure(test.ch);
-      if (await sleepBeyondExpiry(desk, test)) await revoke(desk, phone, test);
+      if (await sleepBeyondExpiry(desk, phone, test)) await revoke(desk, phone, test);
       await handheld(browser, desk, authenticator);
     }
   }

@@ -173,12 +173,14 @@ function frame(opcode, payload) {
 }
 
 // A device channel: `purpose` `connect` (or `renew`) under the device's
-// certificate, answered when the home stands it (`opened`) or closes it
+// certificate, its challenge held to the home `home` names (`base` unless
+// named: a proof that presents a certificate at another home names the one
+// it was issued for, so that home's verdict is the one recorded), answered when the home stands it (`opened`) or closes it
 // (`closed`, the close code). `intent` sends one and answers `{ok, result,
 // error, ms}`; `asleep` stops reading frames, so nothing is answered,
 // until `wake`. `log` holds every frame by direction and type, and each
 // close and wake.
-export function channel(device, { proxyPort, base, purpose = "connect" }) {
+export function channel(device, { proxyPort, base, purpose = "connect", home = base }) {
   const log = [];
   const waiting = new Map();
   let socket = null;
@@ -203,7 +205,15 @@ export function channel(device, { proxyPort, base, purpose = "connect" }) {
     log.push({ at: at(), dir: "in", type: m.type, code: m.code, grant_id: m.grant_id, expires_at: m.expires_at });
     switch (m.type) {
       case "challenge":
-        send({ type: "proof", proof: prove(device, m.challenge, { purpose, home: base, client_id: device.clientId }) });
+        // A challenge this device would not sign ends the connection here,
+        // as a device that refuses it closes its own.
+        try {
+          send({ type: "proof", proof: prove(device, m.challenge, { purpose, home, client_id: device.clientId }) });
+        } catch (error) {
+          log.push({ at: at(), event: "challenge_refused", error: error.message });
+          socket.end();
+          closedWith("challenge refused");
+        }
         break;
       case "certificate":
         device.certificate = m.certificate;

@@ -80,7 +80,9 @@ let proxyPort = null;
 // one unless named): `connect`, the challenge signed with its key, and the
 // code the home closed it with, or "open" when it stood.
 async function connectWith(device, base, certificate = device.certificate) {
-  const ch = channel({ ...device, certificate }, { proxyPort, base, purpose: "connect" });
+  // The challenge is answered as the home the certificate names expects:
+  // a certificate presented at another home is that home's to refuse.
+  const ch = channel({ ...device, certificate }, { proxyPort, base, purpose: "connect", home: certificate.audience });
   const outcome = await Promise.race([ch.opened.then(() => "open"), ch.closed, sleep(20_000).then(() => "timed out")]);
   if (outcome === "open") ch.close();
   return { code: outcome, seen: ch.log.filter((e) => e.dir === "in").map((e) => e.type) };
