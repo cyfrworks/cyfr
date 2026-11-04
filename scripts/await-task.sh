@@ -46,7 +46,8 @@
 # A check started through scripts/heavy-check.sh may first queue for the
 # host. The deadline (default 2400 s) is for the check's run: while the
 # output shows it queued and not yet running, the queue deadline
-# (AWAIT_QUEUE_SECONDS, default 7200) is the one that counts.
+# (AWAIT_QUEUE_SECONDS, default 14400, heavy-check's own queue deadline)
+# is the one that counts.
 # AWAIT_POLL_SECONDS (default 10) is the interval between reads. An
 # AWAIT_PID that is set but empty counts as unset.
 set -uo pipefail
@@ -72,7 +73,7 @@ file=$1
 pattern=${2:-}
 deadline=${3:-2400}
 poll=${AWAIT_POLL_SECONDS:-10}
-queue_deadline=${AWAIT_QUEUE_SECONDS:-7200}
+queue_deadline=${AWAIT_QUEUE_SECONDS:-14400}
 producer=${AWAIT_PID:-}
 seconds_ok "$deadline" || { echo "the deadline is positive decimal seconds: $deadline" >&2; usage; exit 64; }
 seconds_ok "$poll" || { echo "AWAIT_POLL_SECONDS is positive decimal seconds: $poll" >&2; exit 64; }
