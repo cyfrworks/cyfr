@@ -61,6 +61,7 @@
 // Usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR [CERT_SECONDS]
 // (OUT_DIR/bin/cyfr is the command line run.sh built for the run)
 
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -101,6 +102,21 @@ function row(step, held, what, detail) {
 
 // The home's part of a step, asked of run.sh (lib.mjs `ask`).
 const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 90_000, ...options });
+
+// run.sh's console fixture serializes the product refusal with inspect/1.
+const replayError = `%Prima.Refusal{class: :unauthenticated, reason: :assertion_refused, message: "The passkey's answer does not prove this confirmation here", stage: :execution}`;
+const replayRefused = (answer) => Object.keys(answer).length === 1 && answer.error === replayError;
+assert.equal(replayRefused({ error: "the fixture answered nothing" }), false);
+assert.equal(replayRefused({ error: replayError }), true);
+
+async function replayAssertion(ref, credential) {
+  try {
+    return await ask({ op: "replay_assertion", ref, credential }, { refuseError: true });
+  } catch (error) {
+    if (error.message !== `run.sh: replay_assertion: ${replayError}`) throw error;
+    return { error: replayError };
+  }
+}
 
 // Before any script of the phone's pages: each WebAuthn result its system
 // layer sends to the home for a confirmation (`webauthn_result`), as sent,
@@ -725,7 +741,8 @@ async function fresh(desk, phone, firstRef) {
 
   // The first assertion, replayed against this record through the
   // console's adapter under the phone's session: refused.
-  const replay = first ? await ask({ op: "replay_assertion", ref: shown.ref, credential: first.credential }) : { error: "none captured" };
+  assert.ok(first, "the first confirmation captured no assertion");
+  const replay = await replayAssertion(shown.ref, first.credential);
   // The desktop's session alone, asking again: still waiting, nothing made.
   // (submitted behind the open prompt, which takes every click)
   await desk.locator("#vault-create-form").evaluate((form) => form.requestSubmit());
@@ -741,7 +758,7 @@ async function fresh(desk, phone, firstRef) {
     second.credential.response.signature !== first.credential.response.signature &&
     second.credential.response.clientDataJSON !== first.credential.response.clientDataJSON;
   record.fresh = {
-    replay: { refused: !replay.ok && !!replay.error, error: replay.error || null },
+    replay: { refused: replayRefused(replay), error: replay.error || null },
     waiting_after_session_repeat: waiting, made_before_proof: before, confirmed, fresh_assertion: freshAssertion, completed,
   };
   return row("fresh", record.fresh.replay.refused && waiting === 1 && !before && freshAssertion && confirmed && completed,

@@ -138,12 +138,15 @@ defmodule Arca.McpLogTest do
     end
 
     test "respects limit" do
+      now = DateTime.utc_now()
+
       for i <- 1..5 do
-        {:ok, _} = seed(log_attrs(%{id: "req_lim_#{i}"}))
+        {:ok, _} =
+          seed(log_attrs(%{id: "req_lim_#{i}", timestamp: DateTime.add(now, i, :second)}))
       end
 
       {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), limit: 2)
-      assert length(logs) <= 2
+      assert Enum.map(logs, & &1.id) == ["req_lim_5", "req_lim_4"]
     end
   end
 

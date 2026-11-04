@@ -36,6 +36,9 @@ const seconds = (ms) => Math.round(ms / 100) / 10;
 const atHub = (identifier) => ask({ op: "h_person", identifier });
 const receiptsAtHub = async (identifier) => (await ask({ op: "h_receipts", identifier })).receipts.length;
 const carryActions = async (cell, identifier) => (await ask({ op: "carry_actions", cell, identifier })).actions;
+const receiptRowsAtHub = async (identifier) => (await ask({ op: "h_receipts", identifier })).receipts;
+const sameRows = (before, after) =>
+  JSON.stringify(before.map((row) => JSON.stringify(row)).sort()) === JSON.stringify(after.map((row) => JSON.stringify(row)).sort());
 
 // A page at H that a signed-out session lands back on.
 async function signedOut(page, url) {
@@ -96,7 +99,7 @@ async function cancelOthers(page) {
 // ---------------------------------------------------------------------------
 
 async function crafted(chromium, { home, identifier }) {
-  const before = { receipts: await receiptsAtHub(identifier), person: await atHub(identifier), actions: (await carryActions("a", identifier)).length };
+  const before = { receipts: await receiptRowsAtHub(identifier), person: await atHub(identifier), actions: await carryActions("a", identifier) };
 
   // At A, a link naming a challenge for no action of the person's, and a
   // carry meant for a destination's page.
@@ -112,22 +115,23 @@ async function crafted(chromium, { home, identifier }) {
   await page.goto(`${H}/login#carry=${b64url({ envelope: { source: A }, payload: {} })}`);
   await connected(page);
   await page.waitForFunction(() => /did not ask for/.test(document.body.innerText), null, { timeout: 30_000 });
+  // The carry hook consumes a fragment only when it mounts.
+  await page.goto("about:blank");
   await page.goto(`${H}/login#cyfr=${b64url({ assertion: {}, genesis: {} })}`);
-  await page.waitForURL((url) => url.pathname === "/login" && !url.hash, { timeout: 30_000 }).catch(() => null);
-  await sleep(2_000);
+  await flashed(page, "This browser no longer holds the sign-in you began here");
   const signedIn = !(await signedOut(page, settingsAt(H, hubAthanor)));
   await context.close();
 
-  const after = { receipts: await receiptsAtHub(identifier), person: await atHub(identifier), actions: (await carryActions("a", identifier)).length };
+  const after = { receipts: await receiptRowsAtHub(identifier), person: await atHub(identifier), actions: await carryActions("a", identifier) };
   const confirmations = (await ask({ op: "confirmations", cell: "a", identifier })).confirmations.filter((c) => c.state === "pending");
   record.crafted = {
     at_a: atA.trim(), signed_in_at_h: signedIn, receipts: [before.receipts, after.receipts],
-    sessions: [before.person.sessions.length, after.person.sessions.length], actions: [before.actions, after.actions],
+    sessions: [before.person.sessions, after.person.sessions], actions: [before.actions, after.actions],
     pending_confirmations_at_a: confirmations.length,
   };
   return row("crafted", "chromium",
-    !signedIn && after.receipts === before.receipts && after.person.sessions.length === before.person.sessions.length &&
-      after.actions === before.actions && confirmations.length === 0,
+    !signedIn && sameRows(before.receipts, after.receipts) && sameRows(before.person.sessions, after.person.sessions) &&
+      sameRows(before.actions, after.actions) && confirmations.length === 0,
     "a crafted carry link at A or H writes nothing: no action, confirmation, receipt or session",
     record.crafted);
 }
@@ -151,7 +155,7 @@ async function copiedSession(chromium, { home, identifier }) {
   const own = `${layer} [data-test="confirmation"][data-own="true"]`;
   await page.waitForSelector(`${own} [data-test="confirm-passkey"]`, { timeout: 60_000 });
   await page.locator(`${own} [data-test="confirm-passkey"]`).click();
-  await sleep(3_000);
+  await flashed(page, "The passkey did not answer. Nothing was confirmed.");
   const actions = await carryActions("a", identifier);
   const last = actions[actions.length - 1];
 
@@ -283,38 +287,51 @@ async function closedHops(chromium, { home, identifier }) {
     record.closed_hops);
 }
 
-async function forgedCompletion(chromium, { home, identifier, hub, hubContext }) {
-  const before = { person: await atHub(identifier), receipts: await receiptsAtHub(identifier) };
+async function forgedCompletion(chromium, { home, identifier, hubPage, hubContext }) {
+  const savedAddress = (page) => page.evaluate(() => localStorage.getItem("cyfr:sign-in:your-cyfr"));
+  const addressesBefore = { a: await savedAddress(home.desk), h: await savedAddress(hubPage) };
+  const before = { person: await atHub(identifier), receipts: await receiptRowsAtHub(identifier) };
   // A pending carry of the person's, never taken to H, and a return
   // fragment no home sent saying it was admitted.
   await open(home.desk, `${A}/carry`);
   await home.desk.locator("#carry-destination").fill(H);
   await home.desk.route(`${H}/**`, (route) => route.abort());
+  const blocked = home.desk.waitForEvent("requestfailed", {
+    predicate: (request) => request.isNavigationRequest() && request.url().startsWith(`${H}/login`), timeout: 30_000,
+  });
   await home.desk.locator('#carry-begin button[type="submit"]').click();
-  await sleep(2_000);
+  await blocked;
   await home.desk.unroute(`${H}/**`);
-  const pending = (await carryActions("a", identifier)).filter((a) => a.phase === "pending").pop();
+  const pending = await waitFor(async () => (await carryActions("a", identifier)).filter((a) => a.phase === "pending").pop(),
+    { timeoutMs: 30_000, what: "the pending carry" });
   const forged = b64url({ protocol: "cyfr-carry/v1", action_id: pending.action_id, outcome: "admitted" });
-  await open(home.desk, `${A}/carry#${forged}`).catch(() => null);
-  await sleep(3_000);
+  await open(home.desk, `${A}/carry#${forged}`);
+  await waitFor(async () =>
+    (await carryActions("a", identifier)).some((action) => action.action_id === pending.action_id && action.phase === "completed") ||
+      await home.desk.locator('[data-test="carry-notice"]').isVisible(),
+    { timeoutMs: 30_000, what: "the forged completion's handled or refused outcome" });
   const unknown = b64url({ protocol: "cyfr-carry/v1", action_id: "car_nobody", outcome: "admitted" });
+  await home.desk.goto("about:blank");
   await open(home.desk, `${A}/carry#${unknown}`);
-  await sleep(2_000);
+  await home.desk.locator('[data-test="carry-notice"]').waitFor({ timeout: 30_000 });
   // H's storage in the browser that signed in there: the one address it
   // remembers for its sign-in page, and LiveView's reload counters.
   const atH = await hubContext.newPage();
   await atH.goto(`${H}/login`);
   const stored = { h: await storageOf(atH), a: await storageOf(home.desk) };
+  const addressesAfter = { a: await savedAddress(home.desk), h: await savedAddress(atH) };
   await atH.close();
-  const after = { person: await atHub(identifier), receipts: await receiptsAtHub(identifier) };
+  const after = { person: await atHub(identifier), receipts: await receiptRowsAtHub(identifier) };
   const ownKeysAtH = stored.h.local.filter((key) => !/consecutive-reloads/.test(key));
   record.forged_completion = {
     athanors: [before.person.athanors, after.person.athanors], receipts: [before.receipts, after.receipts],
-    sessions: [before.person.sessions.length, after.person.sessions.length], storage_at_a: stored.a, storage_at_h: stored.h,
+    sessions: [before.person.sessions, after.person.sessions], saved_addresses: [addressesBefore, addressesAfter],
+    storage_at_a: stored.a, storage_at_h: stored.h,
   };
   return row("forged_completion", "chromium",
     JSON.stringify(after.person.athanors) === JSON.stringify(before.person.athanors) &&
-      after.receipts === before.receipts && after.person.sessions.length === before.person.sessions.length &&
+      sameRows(before.receipts, after.receipts) && sameRows(before.person.sessions, after.person.sessions) &&
+      JSON.stringify(addressesAfter) === JSON.stringify(addressesBefore) &&
       stored.a.local.every((key) => /consecutive-reloads/.test(key)) && stored.a.indexeddb.length === 0 &&
       JSON.stringify(ownKeysAtH) === JSON.stringify(["cyfr:sign-in:your-cyfr"]) && stored.h.indexeddb.length === 0,
     "a forged completion writes no athanor, admission or saved address at either home; H's storage holds only cyfr:sign-in:your-cyfr",
@@ -706,20 +723,20 @@ async function retired(chromium, state) {
   await connected(passkeyPage);
   await ready(passkeyPage);
   await passkeyPage.locator("#passkey-sign-in [data-webauthn-start]").click();
-  await sleep(3_000);
+  await flashed(passkeyPage, "That passkey did not sign you in here.");
   const oldPasskeyIn = new URL(passkeyPage.url()).pathname !== "/login";
   await passkeyContext.close();
 
   // An old home's assertion, replayed at H, admits nobody.
-  const before = { receipts: await receiptsAtHub(identifier), sessions: (await atHub(identifier)).sessions.length };
+  const before = { receipts: await receiptRowsAtHub(identifier), sessions: (await atHub(identifier)).sessions };
   const replay = await freshContext(chromium);
   const replayPage = await replay.newPage();
   const old = assertions[0];
   await replayPage.goto(`${H}/login#cyfr=${old}`);
-  await sleep(4_000);
+  await replayPage.locator('[data-test="sign-in-error"]').waitFor({ timeout: 30_000 });
   const replayedIn = !(await signedOut(replayPage, settingsAt(H, hubAthanor)));
   await replay.close();
-  const after = { receipts: await receiptsAtHub(identifier), sessions: (await atHub(identifier)).sessions.length };
+  const after = { receipts: await receiptRowsAtHub(identifier), sessions: (await atHub(identifier)).sessions };
 
   // The person signs in at H naming their new home, A2.
   const fresh = await signIn(chromium, "chromium", state.proxy, { home: A2, identifier, passkeysFrom: state.a2.page, step: "a2_sign_in" });
@@ -737,7 +754,7 @@ async function retired(chromium, state) {
   return row("retired", "chromium",
     retiredMs !== null && person.passkeys.length > 0 && person.passkeys.every((p) => p.state === "revoked") &&
       waiting.length > 0 && waiting.every((c) => c.state !== "pending") &&
-      !oldPasskeyIn && !replayedIn && after.receipts === before.receipts && fresh.held,
+      !oldPasskeyIn && !replayedIn && sameRows(before.receipts, after.receipts) && sameRows(before.sessions, after.sessions) && fresh.held,
     "after the recovery H retires every old-epoch session, the H passkey's included, within its bound; the old passkey and confirmation are retired, an old assertion replays nothing, and the person signs in naming A2",
     record.retired);
 }

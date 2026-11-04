@@ -4,15 +4,15 @@
 defmodule Arca.SubtreeReadRevisionTest.ParkRead do
   use Arca.Storage.TestDouble
   @gate {__MODULE__, :gate}
-  def arm(parent, prefix), do: :persistent_term.put(@gate, {parent, prefix})
+  def arm(parent, path), do: :persistent_term.put(@gate, {parent, path})
   def disarm, do: :persistent_term.erase(@gate)
 
   def get(actor, path) do
     answer = Arca.Adapters.Local.get(actor, path)
 
     case :persistent_term.get(@gate, nil) do
-      {parent, prefix} ->
-        if List.starts_with?(path, prefix) do
+      {parent, leaf} ->
+        if path == leaf do
           disarm()
           send(parent, {:read_first, self(), path, answer})
 
@@ -80,7 +80,7 @@ defmodule Arca.SubtreeReadRevisionTest do
     assert {:ok, _} = Arca.Overlay.commit_unit(actor, unit, {:files, files.("V1")}, cap: :exempt)
     {root, key} = UnitLocator.unit_key(unit)
     assert {:ok, %{current_revision: one}} = Arca.StorageUnits.current(actor, root, key)
-    ParkRead.arm(self(), UnitLocator.revision_prefix(unit, one))
+    ParkRead.arm(self(), UnitLocator.revision_prefix(unit, one) ++ ["a.txt"])
     reader = Task.async(fn -> Arca.read_subtree(actor, unit) end)
     on_exit(fn -> if Process.alive?(reader.pid), do: Process.exit(reader.pid, :kill) end)
     assert_receive {:read_first, leaf, _path, {:ok, "V1"}}, 5_000

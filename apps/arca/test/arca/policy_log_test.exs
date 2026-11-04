@@ -98,12 +98,17 @@ defmodule Arca.PolicyLogTest do
     end
 
     test "respects limit" do
+      now = DateTime.utc_now()
+
       for i <- 1..5 do
-        {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_lim_#{i}"}))
+        {:ok, _} =
+          PolicyLog.record(
+            log_attrs(%{id: "pl_lim_#{i}", timestamp: DateTime.add(now, i, :second)})
+          )
       end
 
       {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), limit: 2)
-      assert length(logs) <= 2
+      assert Enum.map(logs, & &1.id) == ["pl_lim_5", "pl_lim_4"]
     end
 
     test "the athanor is the actor's, whatever the options name" do
