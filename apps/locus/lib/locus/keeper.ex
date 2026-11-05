@@ -65,6 +65,24 @@ defmodule Locus.Keeper do
   channel closes every spawn is already retired, and every owner hears
   `:released`.
 
+  ## Kept homes
+
+  cyfr-locus given `--kept-homes <root>:<first>-<last>` names that root
+  and uid range in this node's `KEEPER_KEPT_HOMES`, read at start. A kept
+  home is `<root>/<id>`, 0700, owned by a uid of the range that is its own
+  for its life: the uid is the folder's owner, read with a stat, and no
+  index of it is kept. `home_ensure/2` answers a made home's uid, or draws
+  the lowest uid of the range that no folder under the root owns and no
+  home request in flight is making (this node's group lists the root),
+  and asks cyfr-locus to make the home under it; `home_measure/2`,
+  `home_reset/2` (a retirement, then a make under the same uid) and
+  `home_retire/2` ask cyfr-locus, which acts as the home's uid. A spec
+  naming a made kept `home` spawns there under the home's uid, with its
+  `home_max_bytes` and `pty`; one naming a home not made is refused
+  `home_absent` before cyfr-locus is asked. Without a kept-homes root,
+  every home call and every spec naming a home is refused `unavailable`;
+  a range every uid of which a home owns, `capacity`.
+
   ## A spawn with a control channel
 
   A spec with `control: true` asks for a spawn whose fd 3 is a control
@@ -147,6 +165,12 @@ defmodule Locus.Keeper do
 
   @channel_fd 3
   @channel_env "KEEPER_CHANNEL"
+  @kept_homes_env "KEEPER_KEPT_HOMES"
+  # A kept home's id: a login entry's, a plain file name.
+  @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
+  # A home request runs a helper as the home's uid; a retirement ends every
+  # process of the uid with a grace and scrubs it, which takes passes.
+  @home_timeout_ms 120_000
   @pool "build"
   @attach_dir "/run/locus"
 
@@ -180,7 +204,9 @@ defmodule Locus.Keeper do
   @doc """
   Starts the client. Options: `:channel`, a connected `:socket` to use in
   place of fd 3; `:attach_dir`, a directory only this node's user can
-  enter (default `#{@attach_dir}`); `:name`.
+  enter (default `#{@attach_dir}`); `:kept_homes`, the kept-homes root and
+  uid range as `KEEPER_KEPT_HOMES` names them (default that variable, which
+  cyfr-locus sets for a keeper given `--kept-homes`); `:name`.
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -189,6 +215,31 @@ defmodule Locus.Keeper do
   @doc "The environment variable cyfr-locus names the inherited channel in."
   @spec channel_env() :: String.t()
   def channel_env, do: @channel_env
+
+  @doc "The environment variable cyfr-locus names its kept-homes root and uid range in."
+  @spec kept_homes_env() :: String.t()
+  def kept_homes_env, do: @kept_homes_env
+
+  @doc """
+  The kept-homes root and uid range `<root>:<first>-<last>` names, or
+  `:error` for any other text.
+  """
+  @spec parse_kept_homes(term()) ::
+          {:ok, %{root: String.t(), first: pos_integer(), last: pos_integer()}} | :error
+  def parse_kept_homes(text) when is_binary(text) do
+    with [root, range] <- String.split(text, ":", parts: 2),
+         true <- Path.type(root) == :absolute and Path.expand(root) == root and root != "/",
+         [first, last] <- String.split(range, "-", parts: 2),
+         {first, ""} <- Integer.parse(first),
+         {last, ""} <- Integer.parse(last),
+         true <- first >= 1 and first <= last and last < 2_147_483_648 do
+      {:ok, %{root: root, first: first, last: last}}
+    else
+      _ -> :error
+    end
+  end
+
+  def parse_kept_homes(_text), do: :error
 
   @doc "Whether fd 3 is the channel cyfr-locus handed this node."
   @spec channel_inherited?() :: boolean()
@@ -297,7 +348,10 @@ defmodule Locus.Keeper do
       pool: pool,
       memory_bytes: memory_bytes,
       control: Map.get(spec, :control, false) == true,
-      isolation: Map.get(spec, :isolation)
+      isolation: Map.get(spec, :isolation),
+      home: Map.get(spec, :home),
+      home_max_bytes: Map.get(spec, :home_max_bytes),
+      pty: Map.get(spec, :pty, false) == true
     }
 
     try do
@@ -359,6 +413,35 @@ defmodule Locus.Keeper do
   @impl Locus.Launcher
   def pool_stats(server, pool) when is_binary(pool) do
     GenServer.call(server, {:pool, pool}, @pool_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @doc """
+  Make the kept home `id` if it is absent and answer its uid. A home's uid
+  is its folder's owner, read with a stat; a new home draws the lowest uid
+  of the range no home under the root owns, which cyfr-locus's helper,
+  running as that uid, then makes it under. `{:refused, "unavailable"}`
+  without a kept-homes root, `{:refused, "capacity"}` with every uid of the
+  range taken.
+  """
+  @impl Locus.Launcher
+  def home_ensure(server, id) when is_binary(id), do: home_call(server, {:home_ensure, id})
+
+  @doc "The bytes the kept home `id` holds, measured as its uid; `:absent` for a home not made."
+  @impl Locus.Launcher
+  def home_measure(server, id) when is_binary(id), do: home_call(server, {:home_measure, id})
+
+  @doc "End every process of the kept home `id`'s uid and make the home again empty, under that uid."
+  @impl Locus.Launcher
+  def home_reset(server, id) when is_binary(id), do: home_call(server, {:home_reset, id})
+
+  @doc "End every process of the kept home `id`'s uid and remove the home, freeing its uid."
+  @impl Locus.Launcher
+  def home_retire(server, id) when is_binary(id), do: home_call(server, {:home_retire, id})
+
+  defp home_call(server, request) do
+    GenServer.call(server, request, @home_timeout_ms)
   catch
     :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
   end
@@ -583,10 +666,30 @@ defmodule Locus.Keeper do
          spawns: %{},
          tokens: %{},
          conns: %{},
-         pools: %{}
+         pools: %{},
+         homes: %{},
+         kept: kept_homes(opts)
        }}
     else
       {:error, reason} -> {:stop, {:keeper_unavailable, reason}}
+    end
+  end
+
+  # The kept-homes root and range cyfr-locus named, or nil for a keeper that
+  # keeps none, or a name that does not read.
+  defp kept_homes(opts) do
+    text = Keyword.get_lazy(opts, :kept_homes, fn -> System.get_env(@kept_homes_env) end)
+
+    case text && parse_kept_homes(text) do
+      {:ok, kept} ->
+        kept
+
+      :error ->
+        Logger.error("[Locus.Keeper] #{@kept_homes_env} does not read; no home is kept")
+        nil
+
+      nil ->
+        nil
     end
   end
 
@@ -696,33 +799,55 @@ defmodule Locus.Keeper do
   end
 
   def handle_call({:spawn_handle, ref, argv, env, opts}, {owner, _tag} = from, state) do
-    request =
-      %{pool: opts.pool, argv: argv, env: env, memory_bytes: opts.memory_bytes}
-      |> put_given(:isolation, opts.isolation)
-      |> put_given(:control, opts.control || nil)
+    case kept_spawn(state, opts) do
+      {:ok, home} -> spawn_handle(ref, argv, env, opts, home, from, owner, state)
+      {:error, code} -> {:reply, {:error, {:refused, code}}, state}
+    end
+  end
 
-    # A spawn with a control channel is answered once its request is
-    # written; a long-lived spawn once cyfr-locus reports it spawned.
-    control? = opts.control
+  def handle_call({:home_ensure, id}, from, state) do
+    with {:ok, kept, path} <- home_path(state, id) do
+      case home_uid(kept, path) do
+        {:ok, uid} ->
+          {:reply, {:ok, uid}, state}
 
-    extra =
-      if control?,
-        do: %{kind: :control, owner: owner, from: nil, ref: ref},
-        else: %{kind: :handle, owner: owner, from: from, ref: ref}
+        :absent ->
+          case free_uid(state, kept) do
+            {:ok, uid} -> home_request(state, :home_make, path, uid, {:ensure, from, uid})
+            :error -> {:reply, {:error, {:refused, "capacity"}}, state}
+          end
 
-    case start_spawn(state, request, extra) do
-      {:ok, ref, state} when control? ->
-        {:reply, {:ok, handle(ref, nil, nil, nil)}, state}
+        :error ->
+          {:reply, {:error, {:refused, "bad_request"}}, state}
+      end
+    else
+      {:error, code} -> {:reply, {:error, {:refused, code}}, state}
+    end
+  end
 
-      {:ok, _ref, state} ->
-        {:noreply, state}
+  def handle_call({op, id}, from, state) when op in [:home_measure, :home_reset, :home_retire] do
+    with {:ok, kept, path} <- home_path(state, id) do
+      case {op, home_uid(kept, path)} do
+        {:home_measure, :absent} ->
+          {:reply, :absent, state}
 
-      {:error, :unencodable} ->
-        {:reply, {:error, {:spawn_failed, :unencodable_command}}, state}
+        {_op, :absent} ->
+          {:reply, :ok, state}
 
-      {:error, reason} ->
-        {:stop, {:shutdown, {:channel_lost, reason}},
-         {:error, {:launcher_unavailable, :channel_lost}}, state}
+        {_op, :error} ->
+          {:reply, {:error, {:refused, "bad_request"}}, state}
+
+        {:home_measure, {:ok, uid}} ->
+          home_request(state, :home_measure, path, uid, {:measure, from})
+
+        {:home_reset, {:ok, uid}} ->
+          home_request(state, :home_retire, path, uid, {:reset, from, uid})
+
+        {:home_retire, {:ok, uid}} ->
+          home_request(state, :home_retire, path, uid, {:retire, from})
+      end
+    else
+      {:error, code} -> {:reply, {:error, {:refused, code}}, state}
     end
   end
 
@@ -895,6 +1020,9 @@ defmodule Locus.Keeper do
     for {_id, from} <- state.pools,
         do: GenServer.reply(from, {:error, {:launcher_unavailable, :channel_lost}})
 
+    for {_id, %{pending: pending}} <- state.homes,
+        do: GenServer.reply(elem(pending, 1), {:error, {:launcher_unavailable, :channel_lost}})
+
     {:stop, {:shutdown, :channel_lost}, state}
   end
 
@@ -1041,8 +1169,170 @@ defmodule Locus.Keeper do
   defp redacted(data) when is_binary(data), do: {:redacted, byte_size(data)}
   defp redacted(_data), do: :redacted
 
+  defp spawn_handle(ref, argv, env, opts, home, from, owner, state) do
+    request =
+      %{pool: opts.pool, argv: argv, env: env, memory_bytes: opts.memory_bytes}
+      |> put_given(:isolation, opts.isolation)
+      |> put_given(:control, opts.control || nil)
+      |> Map.merge(home)
+      |> put_given(:pty, opts.pty || nil)
+
+    # A spawn with a control channel is answered once its request is
+    # written; a long-lived spawn once cyfr-locus reports it spawned.
+    control? = opts.control
+
+    extra =
+      if control?,
+        do: %{kind: :control, owner: owner, from: nil, ref: ref},
+        else: %{kind: :handle, owner: owner, from: from, ref: ref}
+
+    case start_spawn(state, request, extra) do
+      {:ok, ref, state} when control? ->
+        {:reply, {:ok, handle(ref, nil, nil, nil)}, state}
+
+      {:ok, _ref, state} ->
+        {:noreply, state}
+
+      {:error, :unencodable} ->
+        {:reply, {:error, {:spawn_failed, :unencodable_command}}, state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:channel_lost, reason}},
+         {:error, {:launcher_unavailable, :channel_lost}}, state}
+    end
+  end
+
   defp put_given(map, _key, nil), do: map
   defp put_given(map, key, value), do: Map.put(map, key, value)
+
+  # ————— kept homes —————
+
+  # A spec naming a kept home spawns in that made home under its uid; one
+  # naming none spawns as it always has.
+  defp kept_spawn(_state, %{home: nil}), do: {:ok, %{}}
+
+  defp kept_spawn(state, %{home: id} = opts) do
+    with {:ok, kept, path} <- home_path(state, id) do
+      case home_uid(kept, path) do
+        {:ok, uid} ->
+          {:ok,
+           put_given(
+             %{home_mode: "kept", home_path: path, home_uid: uid},
+             :home_max_bytes,
+             opts.home_max_bytes
+           )}
+
+        _absent_or_not_a_home ->
+          {:error, "home_absent"}
+      end
+    end
+  end
+
+  defp home_path(%{kept: nil}, _id), do: {:error, "unavailable"}
+
+  defp home_path(%{kept: kept}, id) do
+    if is_binary(id) and Regex.match?(@home_id, id),
+      do: {:ok, kept, Path.join(kept.root, id)},
+      else: {:error, "bad_request"}
+  end
+
+  # A home's uid is its folder's owner, read without following a link: a
+  # folder of a uid outside the range, or anything else there, is no home.
+  defp home_uid(kept, path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory, uid: uid}} when uid >= kept.first and uid <= kept.last ->
+        {:ok, uid}
+
+      {:ok, _other} ->
+        :error
+
+      {:error, :enoent} ->
+        :absent
+
+      {:error, _reason} ->
+        :error
+    end
+  end
+
+  # The lowest uid of the range no home under the root owns and no home
+  # request in flight is making: the client lists the root, which its group
+  # may, and reads each entry's owner.
+  defp free_uid(state, kept) do
+    with {:ok, names} <- File.ls(kept.root) do
+      owned =
+        for name <- names,
+            {:ok, %File.Stat{uid: uid}} <- [File.lstat(Path.join(kept.root, name))],
+            into: MapSet.new(),
+            do: uid
+
+      making = for {_id, %{uid: uid}} <- state.homes, into: MapSet.new(), do: uid
+      taken = MapSet.union(owned, making)
+
+      case Enum.find(kept.first..kept.last, &(not MapSet.member?(taken, &1))) do
+        nil -> :error
+        uid -> {:ok, uid}
+      end
+    else
+      {:error, reason} ->
+        Logger.error("[Locus.Keeper] listing the kept-homes root: #{inspect(reason)}")
+        :error
+    end
+  end
+
+  # Asks cyfr-locus for `type` on the home at `path` of `uid`, answered when
+  # its reply arrives (on_reply/2) by what `pending` says.
+  defp home_request(state, type, path, uid, pending) do
+    id = "home-" <> Integer.to_string(state.next_id + 1)
+
+    with {:ok, line} <- encode(%{type: type, id: id, path: path, uid: uid}),
+         :ok <- send_line(state, line) do
+      entry = %{pending: pending, path: path, uid: uid}
+      {:noreply, %{state | next_id: state.next_id + 1, homes: Map.put(state.homes, id, entry)}}
+    else
+      {:error, :unencodable} ->
+        {:reply, {:error, {:refused, "bad_request"}}, state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:channel_lost, reason}},
+         {:error, {:launcher_unavailable, :channel_lost}}, state}
+    end
+  end
+
+  # A reset retires the home and makes it again under the same uid; every
+  # other request is answered at its one reply.
+  defp home_done(state, %{pending: {:reset, from, uid}, path: path}, :retired) do
+    case home_request(state, :home_make, path, uid, {:made, from}) do
+      {:noreply, state} ->
+        state
+
+      {:reply, answer, state} ->
+        GenServer.reply(from, answer)
+        state
+
+      {:stop, _reason, answer, state} ->
+        GenServer.reply(from, answer)
+        state
+    end
+  end
+
+  defp home_done(state, %{pending: pending}, outcome) do
+    GenServer.reply(elem(pending, 1), home_answer(pending, outcome))
+    state
+  end
+
+  defp home_answer({:ensure, _from, uid}, :made), do: {:ok, uid}
+  defp home_answer({:made, _from}, :made), do: :ok
+  defp home_answer({:measure, _from}, {:measured, bytes}), do: {:ok, bytes}
+  defp home_answer({:retire, _from}, :retired), do: :ok
+  defp home_answer(_pending, {:refused, code}), do: {:error, {:refused, code}}
+  defp home_answer(_pending, _outcome), do: {:error, {:refused, "internal"}}
+
+  defp home_reply(state, id, outcome) do
+    case Map.pop(state.homes, id) do
+      {nil, _homes} -> state
+      {entry, homes} -> home_done(%{state | homes: homes}, entry, outcome)
+    end
+  end
 
   defp handle(ref, spawn_id, uid, pid),
     do: %{ref: ref, spawn_id: spawn_id, uid: uid, pid: pid, server: self()}
@@ -1124,6 +1414,10 @@ defmodule Locus.Keeper do
     end)
   end
 
+  defp on_reply({:error, id, _spawn_id, code}, state)
+       when is_binary(id) and is_map_key(state.homes, id),
+       do: home_reply(state, id, {:refused, code})
+
   defp on_reply({:error, id, _spawn_id, code}, state) when is_binary(id) do
     case Map.pop(state.pools, id) do
       {nil, _pools} ->
@@ -1161,6 +1455,10 @@ defmodule Locus.Keeper do
         %{state | pools: pools}
     end
   end
+
+  defp on_reply({:home_made, id}, state), do: home_reply(state, id, :made)
+  defp on_reply({:home_measured, id, bytes}, state), do: home_reply(state, id, {:measured, bytes})
+  defp on_reply({:home_retired, id}, state), do: home_reply(state, id, :retired)
 
   # An `error` for a spawn this client does not follow is ignored.
   defp on_reply(_reply, state), do: state

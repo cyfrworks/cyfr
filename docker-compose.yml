@@ -3,11 +3,12 @@
 #                 tinctures; its host API (:4300) takes the runtime's host
 #                 calls, signed with a runtime worker's key, on cyfr's own
 #                 address of the locus-runtime network alone
-#   locus-backends — runs the stdio/npx MCP servers CYFR registers with
-#                 transport `stdio`, one owner per server row, each backend
-#                 under a uid and a memory bound of its own. Every request
-#                 between cyfr and the service is signed under
-#                 CYFR_LOCUS_BACKENDS_KEY; the service keeps no state.
+#   locus-backends — runs the programs CYFR registers (`mcp_servers` rows
+#                 with transport `stdio` or `pipe`), one owner per row,
+#                 each process under a uid and a memory bound of its own.
+#                 Every request between cyfr and the service is signed
+#                 under CYFR_LOCUS_BACKENDS_KEY; its one state is the
+#                 kept homes on its `homes` volume, which no backup holds.
 #   locus-runtime — the runtime: runs WASM components as CYFR assigns
 #                 them, on the `locus-runtime` network. Every request
 #                 between cyfr and the runtime is signed under the worker
@@ -452,8 +453,13 @@ services:
       context: .
       dockerfile: Dockerfile.locus
     # The image's entrypoint serves builds; this service runs the backend
-    # pool instead: 32 uids, each backend under one of its own.
-    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    # pool instead: 32 uids, each program's process under one of its own.
+    # --kept-homes names the kept homes' root, the `homes` volume below,
+    # and the uids they own: a kept home, one per login entry, holds one
+    # uid of 40001-49999 for its life, which no pool and no other home is
+    # given. The range lies outside the image's users and every pool; the
+    # keeper refuses one that does not.
+    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--client-user", "locus", "--", "/app/bin/locus", "start"]
     # The release's settings from .env.locus, one file for every role. The
     # service never sees the rest of .env: not the keyring, not the
     # database, not the runtime's root, not the builds key, and refuses to
@@ -498,13 +504,22 @@ services:
     tmpfs:
       - /var/lib/locus/homes:mode=1733,exec,size=2g
       - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
+    # Kept homes: a program's home that outlives its process, one 0700
+    # folder per login entry under a uid of its own. The volume is the
+    # homes' whole disk and their only bound beside a row's own
+    # home_max_bytes; it is never under data/ and no backup carries it.
+    # The image makes its root root's and the locus group's, 1773, which a
+    # new volume takes: the release lists it to draw a free uid, and a
+    # home's uid makes its own folder without listing the others.
+    volumes:
+      - homes:/var/lib/locus/kept
     # Shutdown retires every backend and drains in-flight requests;
     # compose's default 10s is tight when several backends are up.
     stop_grace_period: 15s
     # The backends wire's health operation, answered without a key
     # (Prima.LocusBackends), in place of the image's builds probe.
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -X POST -H 'content-type: application/json' -d '{\"version\":1}' http://localhost:4101/locus/v1/backends/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -X POST -H 'content-type: application/json' -d '{\"version\":2}' http://localhost:4101/locus/v1/backends/health || exit 1"]
       interval: 10s
       timeout: 3s
       start_period: 20s
@@ -741,6 +756,7 @@ networks:
           ip_range: 172.16.231.128/25
 
 volumes:
+  homes:
   caddy_data:
   caddy_config:
   tailscale_state:
