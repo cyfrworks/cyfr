@@ -1007,6 +1007,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
+        <span :if={match?({:needs_sign_in, _}, @model_status)} class="text-amber-300">
+          Not signed in — its program signs in on the Programs page
+        </span>
         <%!-- A consent that exists but is damaged, or could not be read, is
              no key to connect: no Connect button is offered over it. --%>
         <span :if={match?({:consent_damaged, _}, @model_status)} class="text-red-300">
@@ -1035,7 +1038,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {if @installing, do: "Installing…", else: "Install"}
         </button>
         <button
-          :if={match?({status, _} when status in [:ready, :needs_key], @model_status)}
+          :if={match?({status, _} when status in [:ready, :needs_key, :needs_sign_in], @model_status)}
           type="button"
           phx-click="open_consent"
           phx-value-ref={elem(@model_status, 1)}

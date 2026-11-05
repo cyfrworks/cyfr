@@ -916,7 +916,16 @@ defmodule Aqua.Runner do
 
   # A request to a crew member: the row with the outbox record that
   # delivers it, and no turn here.
+  # A person's ask of a crew member is held to the member's readiness
+  # (`Aqua.Crew.ready/2`) before anything is written.
   defp accept_request(state, ctx, member, text, opts) do
+    case Aqua.Crew.ready(ctx, member) do
+      :ok -> write_request(state, ctx, member, text, opts)
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp write_request(state, ctx, member, text, opts) do
     attrs =
       crew_attrs(
         %{

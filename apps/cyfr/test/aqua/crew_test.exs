@@ -216,6 +216,95 @@ defmodule Aqua.CrewTest do
     assert good_at =~ "web research"
   end
 
+  # Readiness holds at every way a job reaches a member, not only in the
+  # index: the shipped explorer has no key bound here, and claude-code's
+  # catalyst is not installed.
+  @unready [
+    {"explorer", :no_key, "no key bound"},
+    {"claude-code", :not_installed, "not installed"}
+  ]
+
+  test "a person's @name of a member that is not ready is refused with why, and writes nothing",
+       %{ctx: ctx, room: room} do
+    for {member, reason, words} <- @unready do
+      assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
+               Runner.send_message(ctx, room.id, "@#{member} look into this")
+
+      assert Aqua.Ops.render_refusal(refusal) =~ words
+    end
+
+    assert rows(ctx, room.id) == []
+    assert Threads.children(actor(ctx), room.id) == []
+    assert pending_records(ctx) == []
+  end
+
+  test "the soul's crew.ask of a member that is not ready is refused with why, and asks nobody",
+       %{ctx: ctx, room: room} do
+    asks =
+      for {{member, _reason, _words}, n} <- Enum.with_index(@unready) do
+        %{
+          "type" => "tool_call",
+          "id" => "c#{n}",
+          "name" => "crew",
+          "arguments" => %{"action" => "ask", "member" => member, "task" => "look into this"}
+        }
+      end
+
+    script!([
+      %{
+        "content" => asks,
+        "stop_reason" => "tool_call",
+        "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+      },
+      reply("Nobody could take it.")
+    ])
+
+    {:ok, %{turn_id: soul}} = Runner.send_message(ctx, room.id, "who can look into this?")
+    await_status(ctx, soul, "completed")
+
+    {:ok, steps} = Tape.steps(ctx, elem(Tape.turn(ctx, soul), 1))
+    refused = Enum.filter(steps, &(&1.tool == "crew" and &1.action == "ask"))
+    assert length(refused) == 2
+
+    for {member, _reason, words} <- @unready do
+      assert Enum.any?(
+               refused,
+               &(&1.outcome != "ok" and &1.error =~ member and &1.error =~ words)
+             ),
+             "no refused ask of #{member} says #{words}: #{inspect(Enum.map(refused, & &1.error))}"
+    end
+
+    refute Enum.any?(rows(ctx, room.id), &(&1.addressee in ["explorer", "claude-code"]))
+    assert Threads.children(actor(ctx), room.id) == []
+    assert pending_records(ctx) == []
+  end
+
+  test "a request whose member became unready while it waited is answered failed with why",
+       %{ctx: ctx, room: room} do
+    request = soul_request!(ctx, room, "planner", "check the logs")
+
+    # The planner's brain leaves the athanor before the delivery comes.
+    {:ok, planner} = Compendium.AquaAgent.get(ctx, "planner")
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.crew_file("planner"),
+        Compendium.AquaAgent.serialize(%{planner | catalyst_ref: "catalyst:local.nowhere"})
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    assert {:ok, %{"refused" => 1}} = drain(ctx)
+    assert Threads.children(actor(ctx), room.id) == []
+
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+    assert %{sent_by: "planner", outcome: "failed"} = reply
+    assert reply.content =~ "not installed"
+    assert %{status: "answered"} = row(ctx, request.id)
+    assert pending_records(ctx) == []
+  end
+
   test "a person's @name is a request their member answers in its own thread, and the reply lands under it, waking nobody",
        %{ctx: ctx, room: room} do
     script!([reply("Plan: read, then write.")])

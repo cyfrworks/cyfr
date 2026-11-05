@@ -30,7 +30,9 @@ defmodule Aqua.Models do
 
     * `:ready` — the agent runs it with a bound key, or a bound login
       entry for a brain that mounts a program's own sign-in;
-    * `:needs_key` — a key (or a login) to connect;
+    * `:needs_key` — a key to connect;
+    * `:needs_sign_in` — a brain whose every required need mounts a
+      program's own sign-in, with no signed-in login entry bound;
     * `:consent_damaged`, `:consent_unavailable` — a consent it runs
       under is damaged, or the store could not answer it;
     * `:missing` — the athanor's catalysts, read, hold no such model, or
@@ -42,6 +44,7 @@ defmodule Aqua.Models do
   @type status ::
           {:ready
            | :needs_key
+           | :needs_sign_in
            | :consent_damaged
            | :consent_unavailable
            | :missing
@@ -289,7 +292,7 @@ defmodule Aqua.Models do
   For each agent given (the roster's string-keyed projection: `"name"`
   and `"catalyst_ref"`), its brain: the installed release its catalyst
   resolves to and whether the consent it runs under is complete —
-  `%{name => t:status/0}`: `{:ready | :needs_key | :consent_damaged |
+  `%{name => t:status/0}`: `{:ready | :needs_key | :needs_sign_in | :consent_damaged |
   :consent_unavailable, resolved_ref}`, or `{:missing |
   :model_unavailable, catalyst_ref}`. An agent that names no catalyst
   has no entry. Each agent is read on its own consent, the soul's or the
@@ -356,7 +359,7 @@ defmodule Aqua.Models do
          }) do
       {:ok, plan} ->
         if plan.ready == true,
-          do: agent_status(ctx, name, ref, resolved),
+          do: agent_status(ctx, name, ref, resolved, plan),
           else: unready(plan, resolved)
 
       {:error, {:not_found, {:component, _reference}}} ->
@@ -372,21 +375,21 @@ defmodule Aqua.Models do
   # damage (the agent's head, a lender, a stored grant that fails its
   # checks) or because the store could not answer is said as such, never
   # as a key to connect; every other refusal, and an edge that binds
-  # nothing, is a key to connect.
-  defp agent_status(ctx, name, catalyst_ref, resolved) do
+  # nothing, is a key (or a sign-in) to connect.
+  defp agent_status(ctx, name, catalyst_ref, resolved, plan) do
     source = Prima.AgentRef.ref(name)
 
     case Opus.authority_for(ctx, :default, source) do
       {:ok, authority} ->
         if lent?(authority, source, catalyst_ref),
           do: {:ready, resolved},
-          else: {:needs_key, resolved}
+          else: {to_connect(plan), resolved}
 
       {:error, reason} ->
         case Aqua.ConsentStatus.classify_refusal(reason) do
           {:error, :corrupt} -> {:consent_damaged, resolved}
           {:error, :unavailable} -> {:consent_unavailable, resolved}
-          _absent_stale_or_forbidden -> {:needs_key, resolved}
+          _absent_stale_or_forbidden -> {to_connect(plan), resolved}
         end
     end
   end
@@ -408,8 +411,19 @@ defmodule Aqua.Models do
     case head_state(plan) do
       "damaged" -> {:consent_damaged, resolved}
       "unavailable" -> {:consent_unavailable, resolved}
-      _missing_or_ungranted -> {:needs_key, resolved}
+      _missing_or_ungranted -> {to_connect(plan), resolved}
     end
+  end
+
+  # What connecting a brain asks of the person: a brain whose every
+  # required need mounts a program's own sign-in needs that program signed
+  # in and its login entry bound; any other a key.
+  defp to_connect(plan) do
+    required = for need <- plan[:needs] || [], need[:required] != false, do: need
+
+    if required != [] and Enum.all?(required, &(&1[:kind] == "login")),
+      do: :needs_sign_in,
+      else: :needs_key
   end
 
   defp head_state(%{consent: %{head_state: state}}), do: state

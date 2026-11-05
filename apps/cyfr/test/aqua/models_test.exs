@@ -228,7 +228,9 @@ defmodule Aqua.ModelsTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     member = [%{"name" => "harness", "catalyst_ref" => ref}]
 
-    assert %{"harness" => {:needs_key, resolved}} = Aqua.model_status(ctx, member)
+    # A brain whose one need is a program's own sign-in asks for that, not
+    # for a key.
+    assert %{"harness" => {:needs_sign_in, resolved}} = Aqua.model_status(ctx, member)
     assert resolved =~ ref
 
     {:ok, entry} =

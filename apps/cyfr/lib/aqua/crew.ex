@@ -16,9 +16,13 @@ defmodule Aqua.Crew do
   `index/2` is the crew the soul is told of, in its prompt and by
   `crew.list`: each member whose brain is ready (`Aqua.Models.model_status/2`),
   by name, brain, what it is good at and what to avoid. A member whose
-  brain is not installed or not yet bound is left out, so the soul never
-  hands a job to one that cannot take it; an `@name` still reaches it, and
-  its child turn answers why it could not.
+  brain is not installed, has no key bound or whose program is not signed
+  in is left out, and every way a job reaches a member holds it to the
+  same readiness (`ready/2`): `crew.ask` and a person's `@name` are
+  refused `{:crew_unready, member, reason}` before anything is written,
+  and a request whose member became unready while it waited is answered
+  `failed` with that reason when its delivery comes (an outage of the
+  reads waits for the next drain instead).
 
   ## The hand-off
 
@@ -133,6 +137,7 @@ defmodule Aqua.Crew do
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          :ok <- Admission.request(thread, turn.agent, member, roster),
+         :ok <- asker_ready(ctx, turn, roster, member),
          {:ok, origin} <- Prima.Origin.from_wire(turn.origin),
          {:ok, %{message: row}} <-
            Tape.accept(ctx, thread.id, %{
@@ -204,6 +209,59 @@ defmodule Aqua.Crew do
       }
     end
   end
+
+  @typedoc """
+  Why a crew member cannot take a job: no brain named, its catalyst not
+  installed, no key bound, its program not signed in, a consent it runs
+  under damaged, or the reads that would tell unavailable.
+  """
+  @type unready ::
+          :no_brain | :not_installed | :no_key | :not_signed_in | :consent_damaged | :unavailable
+
+  @doc """
+  Whether crew member `member` can take a job now: `:ok` when its brain
+  reads ready (`Aqua.Models.model_status/2`), else `{:error,
+  {:crew_unready, member, t:unready/0}}`, the refusal the person reads
+  (`Prima.Refusal`); `:not_addressable` for a name that is no crew
+  member. The one readiness rule a hand-off, a mention and a delivery all
+  apply, and the index's.
+  """
+  @spec ready(Context.t(), String.t()) :: :ok | {:error, term()}
+  def ready(%Context{} = ctx, member) when is_binary(member) do
+    with {:ok, roster} <- Aqua.AgentConfig.roster(ctx), do: ready(ctx, roster, member)
+  end
+
+  # A chain's ask runs on the guest plane, where the component reads
+  # readiness needs are not served: the member's readiness is read as the
+  # person behind the turn, on their own plane, as the soul's prompt index
+  # reads it (`Aqua.Loop.Turn`), and only decides whether the ask is
+  # refused; nothing is written under that context.
+  defp asker_ready(ctx, turn, roster, member) do
+    with {:ok, person} <-
+           Sanctum.Tenancy.continuation(turn.requested_by, Context.athanor!(ctx), turn.origin) do
+      ready(person, roster, member)
+    end
+  end
+
+  defp ready(ctx, roster, member) do
+    if Admission.member?(roster, member) do
+      entry = Enum.find(roster, &(&1["name"] == member))
+
+      case Aqua.Models.model_status(ctx, [entry])[member] do
+        {:ready, _} -> :ok
+        status -> {:error, {:crew_unready, member, unready(status)}}
+      end
+    else
+      {:error, :not_addressable}
+    end
+  end
+
+  defp unready(nil), do: :no_brain
+  defp unready({:missing, _}), do: :not_installed
+  defp unready({:needs_key, _}), do: :no_key
+  defp unready({:needs_sign_in, _}), do: :not_signed_in
+  defp unready({:consent_damaged, _}), do: :consent_damaged
+  defp unready({_unread, _}), do: :unavailable
 
   # A brain as a reader names it: the catalyst's name and the model.
   defp brain(%{"catalyst_ref" => ref, "model" => model}) do
@@ -455,19 +513,22 @@ defmodule Aqua.Crew do
   defp work(%Prima.OutboxRecord{kind: "crew_request", snapshot: snapshot} = record, held) do
     with {:ok, ctx} <- continuation(record),
          {:ok, request} <- request_row(ctx, snapshot["request_id"]) do
-      case Tape.crew_thread(ctx, snapshot["room_thread_id"], snapshot["member"]) do
-        {:ok, child} ->
-          ctx
-          |> Runner.send_message(child.id, request.content,
-            sent_by: request.sent_by,
-            request: request,
-            crew: %{tools: snapshot["tools"], options: snapshot["options"]},
-            attachments: Tape.payload(request)["attachments"] || [],
-            payload: delivered_payload(request),
-            receipt: receipt(record, held, "applied")
-          )
-          |> delivered("applied", fn reason -> failed(ctx, record, request, reason, held) end)
-
+      # The member is held to readiness again: one that became unready
+      # while the request waited answers it failed, before any child
+      # thread or turn is made for it.
+      with :ok <- ready(ctx, snapshot["member"]),
+           {:ok, child} <- Tape.crew_thread(ctx, snapshot["room_thread_id"], snapshot["member"]) do
+        ctx
+        |> Runner.send_message(child.id, request.content,
+          sent_by: request.sent_by,
+          request: request,
+          crew: %{tools: snapshot["tools"], options: snapshot["options"]},
+          attachments: Tape.payload(request)["attachments"] || [],
+          payload: delivered_payload(request),
+          receipt: receipt(record, held, "applied")
+        )
+        |> delivered("applied", fn reason -> failed(ctx, record, request, reason, held) end)
+      else
         {:error, reason} ->
           if undeliverable?(reason),
             do: failed(ctx, record, request, reason, held),
@@ -555,6 +616,10 @@ defmodule Aqua.Crew do
 
   defp undeliverable?(reason) when reason in @undeliverable, do: true
   defp undeliverable?({:limit_reached, _cap, _value}), do: true
+
+  # An unready member cannot take the job until a person acts; the reads
+  # that would tell are an outage that may pass.
+  defp undeliverable?({:crew_unready, _member, reason}), do: reason != :unavailable
   defp undeliverable?(_reason), do: false
 
   defp continuation(%Prima.OutboxRecord{athanor_id: athanor_id, snapshot: snapshot}),
