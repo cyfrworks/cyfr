@@ -162,7 +162,8 @@ def main():
 
         # ————— stale_boot across a restart —————
         expect(c.release([fill])[0] == 200, "the second owner is released")
-        eventually(lambda: c.hello()[1]["pool"]["free"] == 1, "its uids to return to the pool")
+        # Its two uids come back; the main owner's one session keeps its own.
+        eventually(lambda: c.hello()[1]["pool"]["free"] == 2, "its uids to return to the pool")
         status, answer, old_boot, captured = c.session(MAIN, {**OPEN, "key": "captured"})
         expect(status == 200, "an open is captured", answer)
         run("docker", "restart", stack.container)
