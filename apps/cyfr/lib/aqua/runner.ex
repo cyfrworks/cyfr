@@ -710,35 +710,59 @@ defmodule Aqua.Runner do
       user_id: ctx.user_id,
       sent_by: Keyword.get(opts, :sent_by, Admission.person()),
       agent: name,
-      origin: ctx.origin
+      origin: ctx.origin,
+      job: job(Keyword.get(opts, :crew))
     }
   end
 
   @doc """
   Whether a send steers `turn`, the running or paused turn as the runner
   holds it from its row: only when the send's user, sender (`sent_by`),
-  agent and origin all equal the turn's (`turns.requested_by`,
-  `turns.sent_by`, `turns.agent`, `turns.origin`), so a paused or
-  recovered turn steers by the same rule as a running one. Any other send
-  is a turn of its own, judged by its own grant: an API key's
-  `programmatic` line never acts inside an `interactive` turn, and a
-  request from the soul never joins one a person opened.
+  agent, origin and job all equal the turn's (`turns.requested_by`,
+  `turns.sent_by`, `turns.agent`, `turns.origin`, and the tools and brain
+  options its options name), so a paused or recovered turn steers by the
+  same rule as a running one. Any other send is a turn of its own, judged
+  by its own grant: an API key's `programmatic` line never acts inside an
+  `interactive` turn, a request from the soul never joins one a person
+  opened, and a turn keeps the one policy it opened with, never widened
+  or narrowed by a request that steers it.
   """
   @spec steer?(map(), %{
           user_id: String.t(),
           sent_by: String.t(),
           agent: String.t(),
-          origin: atom()
+          origin: atom(),
+          job: job()
         }) ::
           boolean()
   def steer?(
-        %{user_id: user_id, sent_by: sent_by, agent: agent} = turn,
-        %{user_id: user_id, sent_by: sent_by, agent: agent, origin: origin}
+        %{user_id: user_id, sent_by: sent_by, agent: agent, job: job} = turn,
+        %{user_id: user_id, sent_by: sent_by, agent: agent, origin: origin, job: job}
       )
       when is_binary(sent_by),
       do: same_origin?(origin, turn)
 
   def steer?(_turn, _send), do: false
+
+  @typedoc """
+  What a turn was asked to work under beyond its agent: the tools a crew
+  request narrowed it to (nil for all its agent holds) and the brain
+  options it set.
+  """
+  @type job :: %{tools: [String.t()] | nil, options: map()}
+
+  # The job a send carries, or a turn's row names in its options.
+  defp job(nil), do: %{tools: nil, options: %{}}
+  defp job(%{} = crew), do: %{tools: crew[:tools], options: crew[:options] || %{}}
+
+  defp job_of(%{options: json}) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{} = options} -> %{tools: options["tools"], options: options["brain_options"] || %{}}
+      _ -> job(nil)
+    end
+  end
+
+  defp job_of(_turn), do: job(nil)
 
   # Whether a line's admission origin is the one the turn's row records
   # (its wire spelling). A context with no origin drives nothing.
@@ -790,7 +814,10 @@ defmodule Aqua.Runner do
   defp acknowledge(state, _ctx), do: state
 
   defp entry_of(paused),
-    do: paused |> Map.take([:turn_id, :user_id, :sent_by, :agent, :origin]) |> Map.put(:ctx, nil)
+    do:
+      paused
+      |> Map.take([:turn_id, :user_id, :sent_by, :agent, :origin, :job])
+      |> Map.put(:ctx, nil)
 
   defp accept_turn(state, ctx, name, text, opts) do
     attrs =
@@ -816,6 +843,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: ctx.user_id,
           sent_by: turn.sent_by,
+          job: job_of(turn),
           ctx: ctx,
           agent: name,
           # What a continuation of this turn resumes under: the origin its
@@ -1191,6 +1219,7 @@ defmodule Aqua.Runner do
               turn_id: live.turn_id,
               user_id: live.user_id,
               sent_by: live.sent_by,
+              job: live.job,
               agent: live.agent,
               origin: live.origin,
               reason: reason,
@@ -1231,6 +1260,7 @@ defmodule Aqua.Runner do
           turn_id: live.turn_id,
           user_id: live.user_id,
           sent_by: live.sent_by,
+          job: live.job,
           agent: live.agent,
           origin: turn.origin,
           reason: pause_reason(turn),
@@ -1508,6 +1538,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           sent_by: turn.sent_by,
+          job: job_of(turn),
           ctx: nil,
           agent: turn.agent,
           origin: turn.origin
@@ -1520,6 +1551,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           sent_by: turn.sent_by,
+          job: job_of(turn),
           agent: turn.agent,
           origin: turn.origin,
           reason: pause_reason(turn),
@@ -1533,6 +1565,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           sent_by: turn.sent_by,
+          job: job_of(turn),
           ctx: nil,
           agent: turn.agent,
           origin: turn.origin
@@ -1547,6 +1580,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           sent_by: turn.sent_by,
+          job: job_of(turn),
           ctx: nil,
           agent: turn.agent,
           origin: turn.origin

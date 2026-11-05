@@ -601,6 +601,11 @@ defmodule Prima.Refusal do
   defp row(:thread_archived),
     do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
 
+  defp row({:child_awaits_card, member}) when is_binary(member),
+    do:
+      {:conflict,
+       "#{member}'s thread waits on a card — decide it there before deleting this thread"}
+
   # A shared thread's rules (`Sanctum.SharedThreads`).
   defp row({:shared_thread, :archived}),
     do: {:forbidden, "This thread is archived — reopen it to talk or add people"}

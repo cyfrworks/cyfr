@@ -104,7 +104,7 @@ defmodule Aqua.CrewTest do
   end
 
   # A request as `crew.ask` writes it, committed and never broadcast.
-  defp soul_request!(ctx, room, member, task) do
+  defp soul_request!(ctx, room, member, task, job \\ %{}) do
     {:ok, %{message: row}} =
       TurnStorage.accept_message(actor(ctx), room.id, %{
         message: %{
@@ -117,14 +117,19 @@ defmodule Aqua.CrewTest do
         request: %{
           member: member,
           task: task,
-          tools: nil,
-          options: %{},
+          tools: Map.get(job, :tools),
+          options: Map.get(job, :options, %{}),
           person_id: ctx.user_id,
           origin: :interactive
         }
       })
 
     row
+  end
+
+  defp replies_of(ctx, turn_id) do
+    {:ok, records} = Arca.Outbox.pending(actor(ctx), "crew_delivery", "crew_reply")
+    Enum.filter(records, &(&1.source_id == turn_id))
   end
 
   defp room_turns(ctx, room) do
@@ -438,6 +443,169 @@ defmodule Aqua.CrewTest do
     assert {:ok, _} = drain(ctx)
     assert {:ok, "applied"} = outcome(ctx, "message", last)
     await_status(ctx, delivered_turn(ctx, child, last), "completed")
+  end
+
+  describe "a delivery that steers a turn a direct post opened" do
+    test "gives the running turn its reply address, and the turn's end answers it",
+         %{ctx: ctx, room: room} do
+      script!([{:probe, self()}, reply("started"), reply("started, and more")])
+      {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
+      {:ok, %{turn_id: direct}} = Runner.send_message(ctx, child.id, "start on the plan")
+      assert_receive {:scripted_probe, worker, _}, 60_000
+
+      {:ok, %{message_id: request}} = Runner.send_message(ctx, room.id, "@planner and more")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert delivered_turn(ctx, child, request) == direct
+
+      assert {:ok, %{asking_thread_id: asking, request_id: ^request}} = Tape.turn(ctx, direct)
+      assert asking == room.id
+
+      send(worker, :continue)
+      await_status(ctx, direct, "completed")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request))
+      assert %{outcome: "done", content: "started, and more"} = reply
+      assert %{status: "answered"} = row(ctx, request)
+    end
+
+    test "gives the paused turn its reply address, and the turn's end answers it",
+         %{ctx: ctx, room: room} do
+      planner_asks!(ctx)
+
+      script!([
+        call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
+        reply("kept, and more")
+      ])
+
+      {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
+      {:ok, %{turn_id: direct}} = Runner.send_message(ctx, child.id, "keep the plan")
+      await_status(ctx, direct, "paused")
+
+      {:ok, %{message_id: request}} = Runner.send_message(ctx, room.id, "@planner and more")
+      assert {:ok, %{"applied" => _}} = drain(ctx)
+      assert delivered_turn(ctx, child, request) == direct
+
+      {:ok, paused} = Tape.turn(ctx, direct)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      assert {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      await_status(ctx, direct, "completed")
+
+      assert {:ok, %{"applied" => _}} = drain(ctx)
+      reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request and &1.outcome == "done"))
+      assert %{content: "kept, and more"} = reply
+      assert %{status: "answered"} = row(ctx, request)
+    end
+  end
+
+  test "a request with other tools or brain options queues as its own turn, never steering one with another job",
+       %{ctx: ctx, room: room} do
+    script!([{:probe, self()}, reply("open"), reply("narrowed")])
+
+    open = soul_request!(ctx, room, "planner", "look at everything")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert_receive {:scripted_probe, worker, _}, 60_000
+    child = child!(ctx, room, "planner")
+    first = delivered_turn(ctx, child, open.id)
+
+    narrowed = soul_request!(ctx, room, "planner", "read only", %{tools: ["files.read"]})
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    second = delivered_turn(ctx, child, narrowed.id)
+    assert second != first
+    assert %{running: true, queued: 1} = Runner.state(child.id, ctx.athanor_id)
+
+    send(worker, :continue)
+    await_status(ctx, first, "completed")
+    await_status(ctx, second, "completed")
+    assert {:ok, %{options: options}} = Tape.turn(ctx, second)
+    assert %{"tools" => ["files.read"]} = Jason.decode!(options)
+  end
+
+  test "a narrowed job is refused a call outside its tools before any card, and goes on",
+       %{ctx: ctx, room: room} do
+    planner_asks!(ctx)
+
+    script!([
+      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
+      reply("read only, as asked")
+    ])
+
+    request = soul_request!(ctx, room, "planner", "read the plan", %{tools: ["files.read"]})
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    turn_id = delivered_turn(ctx, child!(ctx, room, "planner"), request.id)
+    await_status(ctx, turn_id, "completed")
+
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert %{outcome: "denied", approval_id: nil} = Enum.find(steps, &(&1.action == "keep"))
+    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
+  end
+
+  test "archiving cancels every open turn in its own transaction, the suspended one included, and leaves none to recover",
+       %{ctx: ctx, room: room} do
+    script!([{:probe, self()}])
+    request = soul_request!(ctx, room, "planner", "take a while")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert_receive {:scripted_probe, _worker, _}, 60_000
+    child = child!(ctx, room, "planner")
+    turn_id = delivered_turn(ctx, child, request.id)
+
+    assert {:ok, %{suspended: true}} = Runner.suspend_turn(ctx, child.id, turn: turn_id)
+    assert {:ok, %{status: "paused", paused_reason: "suspended"}} = Tape.turn(ctx, turn_id)
+
+    # The store's write alone, as a crash before the runner's stop leaves it.
+    assert {:ok, %{archived_at: %DateTime{}}} = Tape.archive(ctx, child.id)
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
+    assert {:ok, []} = Tape.open_turns(ctx, child.id)
+    assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
+    assert {:error, :not_open} = Runner.recover_turn(ctx, child.id, turn_id)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert %{status: "answered"} = row(ctx, request.id)
+  end
+
+  test "a delivered request carries the request's attachments to the member's turn",
+       %{ctx: ctx, room: room} do
+    script!([reply("I see a square.")])
+    message_id = Prima.UUID7.generate_id("msg")
+
+    {:ok, refs} =
+      Aqua.Attachments.store(ctx, room.id, message_id, [
+        %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+      ])
+
+    {:ok, %{admitted: :request}} =
+      Runner.send_message(ctx, room.id, "@planner what is this?",
+        id: message_id,
+        attachments: refs
+      )
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    await_status(ctx, delivered_turn(ctx, child, message_id), "completed")
+
+    [delivered | _] = rows(ctx, child.id)
+    assert Tape.payload(delivered)["attachments"] == refs
+
+    %{input: %{"params" => %{"messages" => messages}}} =
+      Enum.find(
+        ScriptedWorker.calls(),
+        &(&1.input["operation"] == "chat" and hd(&1.authority.chain) == "agent:local.planner")
+      )
+
+    blocks = Enum.flat_map(messages, &List.wrap(&1["content"]))
+
+    assert Enum.any?(
+             blocks,
+             &(&1["type"] == "image" and &1["data"] == Base.encode64("PNGBYTES"))
+           )
+  end
+
+  test "crew.ask refuses brain options that are not named scalars", %{ctx: ctx} do
+    assert {:error, {:invalid_argument, _}} =
+             Crew.ask(ctx, %{"member" => "planner", "task" => "x", "options" => %{"a" => %{}}})
+
+    assert {:error, {:invalid_argument, _}} =
+             Crew.ask(ctx, %{"member" => "planner", "task" => "x", "options" => %{"" => 1}})
   end
 
   test "a dead member's claim is taken over once its lease lapsed", %{ctx: ctx, room: room} do

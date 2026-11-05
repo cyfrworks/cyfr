@@ -341,6 +341,90 @@ defmodule Arca.CrewStorageTest do
     end
   end
 
+  describe "the end of a member's work" do
+    test "a reply is recorded under the identity of the request it answers, a damaged child row notwithstanding",
+         %{actor: actor, room: room} do
+      request = request!(actor, room, "planner", "go")
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      turn = delivered!(actor, room, child, request)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [origin: "hand-edited", requested_by: "usr_someone_else"]
+        )
+
+      {:ok, _} = TurnStorage.finish(actor, turn.id, "cancelled", %{fence: turn.fence})
+      [record] = Enum.filter(replies(actor), &(&1.source_id == turn.id))
+
+      assert %{"outcome" => "cancelled", "origin" => "interactive", "person_id" => person} =
+               record.snapshot
+
+      assert person == actor.user_id
+    end
+
+    test "recovery refuses a turn of an archived thread", %{actor: actor, room: room} do
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      turn = delivered!(actor, room, child, request!(actor, room, "planner", "go"))
+
+      # Archived around the turn, as a write that never ran its cancel would
+      # leave it.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Thread, where: c.id == ^child.id),
+          set: [archived_at: DateTime.utc_now()]
+        )
+
+      assert {:error, :thread_archived} =
+               TurnStorage.recover(actor, turn.id, %{
+                 fence: turn.fence,
+                 recovery_limit: 3,
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1
+               })
+    end
+
+    test "deleting a room cancels its children's open turns and deletes them, writing no reply, and waits for a card",
+         %{actor: actor, room: room} do
+      {:ok, planner} = Threads.crew_thread(actor, room.id, "planner")
+      {:ok, builder} = Threads.crew_thread(actor, room.id, "builder")
+      waiting = delivered!(actor, room, planner, request!(actor, room, "planner", "plan"))
+
+      working =
+        actor
+        |> delivered!(room, builder, request!(actor, room, "builder", "build"))
+        |> then(&start!(actor, &1))
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Turn, where: t.id == ^waiting.id),
+          set: [status: "paused", paused_reason: "approval"]
+        )
+
+      assert {:error, {:child_awaits_card, "planner"}} = Threads.delete(actor, room.id)
+      assert {:ok, _} = Threads.get(actor, planner.id)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Turn, where: t.id == ^waiting.id),
+          set: [status: "accepted", paused_reason: nil]
+        )
+
+      assert :ok =
+               Threads.delete(actor, room.id, %{grant: :stored, verify: &Arca.Test.Actor.admits/1})
+
+      for gone <- [room, planner, builder] do
+        assert {:error, :not_found} = Threads.get(actor, gone.id)
+        assert Threads.messages(actor, gone.id) == []
+      end
+
+      assert replies(actor) == []
+
+      assert %{status: "cancelled"} =
+               Arca.Repo.get!(Arca.Schemas.Execution, working.root_execution_id)
+    end
+  end
+
   describe "the consumer's receipt" do
     test "lands with the row it delivers, and a claim lost writes neither", %{
       actor: actor,
@@ -516,9 +600,9 @@ defmodule Arca.CrewStorageTest do
       {:ok, %{id: other}} = Threads.crew_thread(actor, room.id, "builder")
       assert other != child.id
 
-      {:ok, archived} = Threads.archive(actor, child.id)
+      {:ok, %{thread: archived, cancelled: []}} = Threads.archive(actor, child.id)
       assert archived.archived_at
-      assert {:ok, ^archived} = Threads.archive(actor, child.id)
+      assert {:ok, %{thread: ^archived, cancelled: []}} = Threads.archive(actor, child.id)
       {:ok, fresh} = Threads.crew_thread(actor, room.id, "planner")
       assert fresh.id not in [child.id, other]
 

@@ -733,15 +733,16 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A thread is deleted whole — its rows and its blobs —
-  # and never under a running turn.
+  # A thread is deleted whole — its rows and its blobs, and a room's crew
+  # threads with it, their open turns cancelled — and never under a
+  # running turn, nor while a crew thread of the room waits on a card.
   defp act("delete", ctx, id, _args) do
     cond do
       Runner.turn_running?(ctx, id) ->
         {:error, {:conflict, "a turn is running in this thread — stop it first"}}
 
       true ->
-        case Arca.ThreadStorage.delete(Sanctum.Context.actor(ctx), id) do
+        case Tape.delete_thread(ctx, id) do
           :ok -> {:ok, %{deleted: true, thread: id}}
           {:error, :not_found} -> {:error, {:not_found, "thread", id}}
           {:error, reason} -> {:error, refusal(reason, id)}
@@ -749,9 +750,10 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A crew member's thread is retired: it admits nothing more, its work is
-  # stopped (each request it held is answered cancelled), and the next
-  # request to the member opens a new one.
+  # A crew member's thread is retired: it admits nothing more, its open
+  # turns end cancelled with their replies in the archive's own
+  # transaction, the runtime still holding them is stopped after, and the
+  # next request to the member opens a new one.
   defp act("archive", ctx, id, _args) do
     with {:ok, archived} <- Tape.archive(ctx, id),
          :ok <- stopped(Runner.stop_turn(ctx, id)) do

@@ -93,13 +93,45 @@ defmodule Aqua.Loop.Policy do
   """
   @spec decide(Call.t(), map(), keyword()) :: decision()
   def decide(%Call{} = call, policy, opts) do
-    if Keyword.get(opts, :restricted?, false) and not replay_safe?(call),
-      do:
+    cond do
+      not within?(call, Keyword.get(opts, :narrowed)) ->
+        {:deny, outside(call)}
+
+      Keyword.get(opts, :restricted?, false) and not replay_safe?(call) ->
         {:deny,
          "#{key(call)} may not run: an earlier call's outcome is unknown, and until a new turn " <>
-           "starts only replay-safe reads run"},
-      else: decide_open(call, policy, opts)
+           "starts only replay-safe reads run"}
+
+      true ->
+        decide_open(call, policy, opts)
+    end
   end
+
+  @doc """
+  Whether `call` is among the tools a crew request narrowed its job to
+  (`names`, each a tool or a `tool.action`; nil when nothing was
+  narrowed): a bound on every kind of call, hands, catalog actions,
+  external tools and launches alike, judged when the call is decided and
+  again when it dispatches, so an approval never reopens it. The `ui`
+  event and `request_setup` are the console's and are never narrowed away.
+  """
+  @spec within?(Call.t(), [String.t()] | nil) :: boolean()
+  def within?(_call, nil), do: true
+  def within?(%Call{kind: :ui}, _names), do: true
+  def within?(%Call{kind: :hand, tool: "request_setup"}, _names), do: true
+
+  def within?(%Call{kind: :external, tool: tool}, names) when is_list(names),
+    do: tool in names
+
+  def within?(%Call{tool: tool} = call, names) when is_list(names),
+    do: tool in names or key(call) in names
+
+  @doc "The sentence a call outside its job's tools is refused with."
+  @spec outside(Call.t()) :: String.t()
+  def outside(%Call{kind: :external, tool: tool}),
+    do: "#{tool} is outside the tools this job was narrowed to"
+
+  def outside(%Call{} = call), do: "#{key(call)} is outside the tools this job was narrowed to"
 
   @doc """
   Whether `call` is reviewed as safe to run again after an uncertain

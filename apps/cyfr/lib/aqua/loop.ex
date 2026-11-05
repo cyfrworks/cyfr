@@ -1343,9 +1343,16 @@ defmodule Aqua.Loop do
   # answered is their decision about this exact call, and a standing grant's
   # withdrawal does not retract it. A call a bounded allow let run is asked
   # again whether the allow still covers it, from the rows as they stand.
-  defp still_granted(_state, %{approval: %{}}, _call), do: :ok
+  # A call outside the tools its job was narrowed to runs on no answer.
+  defp still_granted(%State{spec: spec} = state, item, %Call{} = call) do
+    cond do
+      not Policy.within?(call, spec.narrowed) -> {:denied, Policy.outside(call)}
+      match?(%{approval: %{}}, item) -> :ok
+      true -> still_allowed(state, call)
+    end
+  end
 
-  defp still_granted(%State{} = state, _item, %Call{} = call) do
+  defp still_allowed(%State{} = state, %Call{} = call) do
     case Turn.current_policy(state.spec) do
       {:ok, policy} ->
         if Policy.auto?(call, policy, place(state)),
@@ -1366,6 +1373,7 @@ defmodule Aqua.Loop do
   # (`Aqua.Loop.Policy`), so a source a concurrent call joined counts.
   defp place(%State{spec: spec, turn: turn}) do
     [
+      narrowed: spec.narrowed,
       ctx: spec.ctx,
       agent: spec.agent["name"],
       thread_id: turn.thread_id,
@@ -1702,7 +1710,20 @@ defmodule Aqua.Loop do
   # Launches: the root is let go around the application's own root
   # ---------------------------------------------------------------------------
 
-  defp run_launch(%State{} = state, %{step: step, call: call}) do
+  # A launch outside the tools its job was narrowed to is refused as it
+  # dispatches, its approval notwithstanding.
+  defp run_launch(%State{spec: spec} = state, %{step: step, call: {:ok, %Call{} = launch}} = item) do
+    if Policy.within?(launch, spec.narrowed) do
+      launch_within(state, item)
+    else
+      close(state, step, launch, {:error, {:denied, Policy.outside(launch)}})
+      {:ok, state}
+    end
+  end
+
+  defp run_launch(%State{} = state, item), do: launch_within(state, item)
+
+  defp launch_within(%State{} = state, %{step: step, call: call}) do
     guest = guest(state)
 
     case Tape.mark_dispatched(guest, state.turn, step) do

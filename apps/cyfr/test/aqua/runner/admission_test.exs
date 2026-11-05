@@ -40,9 +40,24 @@ defmodule Aqua.Runner.AdmissionTest do
     refute Admission.member?(@roster, nil)
   end
 
-  test "a send steers a turn only with the turn's user, sender, agent and origin" do
-    turn = %{user_id: "usr_a", sent_by: "person", agent: "planner", origin: "interactive"}
-    send = %{user_id: "usr_a", sent_by: "person", agent: "planner", origin: :interactive}
+  test "a send steers a turn only with the turn's user, sender, agent, origin and job" do
+    job = %{tools: nil, options: %{}}
+
+    turn = %{
+      user_id: "usr_a",
+      sent_by: "person",
+      agent: "planner",
+      origin: "interactive",
+      job: job
+    }
+
+    send = %{
+      user_id: "usr_a",
+      sent_by: "person",
+      agent: "planner",
+      origin: :interactive,
+      job: job
+    }
 
     assert Runner.steer?(turn, send)
     refute Runner.steer?(turn, %{send | user_id: "usr_b"})
@@ -50,6 +65,11 @@ defmodule Aqua.Runner.AdmissionTest do
     refute Runner.steer?(turn, %{send | agent: "builder"})
     refute Runner.steer?(turn, %{send | origin: :programmatic})
     refute Runner.steer?(turn, %{send | origin: nil})
+
+    # One policy per turn: a request narrowed otherwise, or setting other
+    # brain options, is a turn of its own.
+    refute Runner.steer?(turn, %{send | job: %{job | tools: ["files.read"]}})
+    refute Runner.steer?(turn, %{send | job: %{job | options: %{"effort" => "high"}}})
 
     # A turn whose row names no sender is steered by nobody.
     refute Runner.steer?(%{turn | sent_by: nil}, %{send | sent_by: nil})

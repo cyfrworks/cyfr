@@ -41,6 +41,37 @@ defmodule Aqua.Loop.PolicyTest do
     assert :ask = Policy.decide(resolve!("github__search", %{}), @policy, [])
   end
 
+  test "a job narrowed to some tools refuses every other call before any card, whatever its kind" do
+    policy = Map.merge(@policy, %{"github:search" => "ask", "notes.keep" => "ask"})
+    narrowed = [narrowed: ["files.read"]]
+
+    assert :auto =
+             Policy.decide(
+               resolve!("files", %{"action" => "read", "path" => "a"}),
+               policy,
+               narrowed
+             )
+
+    for {name, args} <- [
+          {"files", %{"action" => "write", "path" => "a"}},
+          {"notes", %{"action" => "keep"}},
+          {"github__search", %{}},
+          {"execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"}}
+        ] do
+      assert {:deny, sentence} = Policy.decide(resolve!(name, args), policy, narrowed)
+      assert sentence =~ "outside the tools this job was narrowed to"
+    end
+
+    assert :ask =
+             Policy.decide(resolve!("github__search", %{}), policy, narrowed: ["github:search"])
+
+    assert :ask =
+             Policy.decide(resolve!("notes", %{"action" => "keep"}), policy, narrowed: ["notes"])
+
+    assert :auto = Policy.decide(resolve!("ui", %{"kind" => "ui.navigate"}), policy, narrowed)
+    assert Policy.within?(resolve!("request_setup.open", %{}), ["files.read"])
+  end
+
   test "a launch always asks, consented or not, touched or not, unless it is denied or no component" do
     launch =
       resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})

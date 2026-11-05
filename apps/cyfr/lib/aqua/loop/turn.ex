@@ -52,6 +52,7 @@ defmodule Aqua.Loop.Turn do
     :approval_ttl_s,
     :options,
     :brain_options,
+    :narrowed,
     :excerpt,
     :attachments,
     soul?: true,
@@ -120,6 +121,7 @@ defmodule Aqua.Loop.Turn do
         approval_ttl_s: Aqua.Approvals.ttl_seconds(ctx),
         options: options,
         brain_options: options["brain_options"],
+        narrowed: options["tools"],
         excerpt: if(Keyword.get(opts, :excerpt?, true), do: excerpt(ctx, options), else: nil),
         attachments: attachments(ctx, turn),
         soul?: soul?
@@ -409,12 +411,13 @@ defmodule Aqua.Loop.Turn do
 
   defp excerpt(_ctx, _options), do: nil
 
-  # The initiating message's attachments as typed blocks.
+  # The initiating message's attachments as typed blocks. A delivered
+  # request's are the request's own, stored under its row in its room.
   defp attachments(ctx, %{message_id: message_id, thread_id: thread_id})
        when is_binary(message_id) do
     case Tape.message(ctx, message_id) do
       {:ok, row} ->
-        refs = Aqua.Attachments.attachments_of([row])
+        {thread_id, refs} = stored_under(row, thread_id, Aqua.Attachments.attachments_of([row]))
 
         ctx
         |> Aqua.Attachments.load(thread_id, refs)
@@ -434,4 +437,15 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp attachments(_ctx, _turn), do: []
+
+  defp stored_under(row, thread_id, refs) do
+    case Tape.payload(row) do
+      %{"request_id" => request_id, "from_thread" => room}
+      when is_binary(request_id) and is_binary(room) ->
+        {room, Enum.map(refs, &%{&1 | message_id: request_id})}
+
+      _ ->
+        {thread_id, refs}
+    end
+  end
 end

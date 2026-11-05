@@ -582,10 +582,34 @@ defmodule Aqua.Tape do
   def children(%Context{} = ctx, room_id),
     do: Threads.children(Sanctum.Context.actor(ctx), room_id)
 
-  @doc "Retire a child thread (`Arca.ThreadStorage.archive/2`)."
+  @doc """
+  Retire a child thread, its open turns cancelled with their replies in
+  the same transaction (`Arca.ThreadStorage.archive/3`), under the stamp
+  each root's attempt stores: a cancel retires work. Viewers hear the
+  turns end and the crew's delivery consumer is woken after the commit;
+  the local runtime is the caller's to stop.
+  """
   @spec archive(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def archive(%Context{} = ctx, thread_id),
-    do: Threads.archive(Sanctum.Context.actor(ctx), thread_id)
+  def archive(%Context{} = ctx, thread_id) do
+    with {:ok, %{thread: thread, cancelled: cancelled}} <-
+           Threads.archive(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring)) do
+      if cancelled != [] do
+        broadcast(ctx, thread_id, :turn_finished, nil)
+        wake_crew(ctx)
+      end
+
+      {:ok, thread}
+    end
+  end
+
+  @doc """
+  Delete a thread, and with a room its crew members' child threads, their
+  open turns cancelled in the same transaction (`Arca.ThreadStorage.delete/3`)
+  under the stamp each root's attempt stores.
+  """
+  @spec delete_thread(Context.t(), String.t()) :: :ok | {:error, term()}
+  def delete_thread(%Context{} = ctx, thread_id),
+    do: Threads.delete(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring))
 
   @doc "The requests of a thread still waiting on a crew member's reply, oldest first."
   @spec pending_requests(Context.t(), String.t()) :: [row()] | {:error, term()}

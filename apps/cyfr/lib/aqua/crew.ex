@@ -184,8 +184,21 @@ defmodule Aqua.Crew do
 
   defp tools(_names), do: {:error, {:invalid_argument, "crew.ask takes 'tools' as tool names"}}
 
+  # A brain option is a named value of one of the kinds a brain declares
+  # (`Prima.Model`); which names and values the member's brain takes is
+  # checked when the job's turn opens (`Aqua.Loop.Turn`).
   defp options(nil), do: {:ok, %{}}
-  defp options(%{} = options), do: {:ok, options}
+
+  defp options(%{} = options) do
+    if Enum.all?(options, fn {name, value} ->
+         is_binary(name) and name != "" and
+           (is_binary(value) or is_integer(value) or is_boolean(value))
+       end),
+       do: {:ok, options},
+       else:
+         {:error,
+          {:invalid_argument, "crew.ask takes 'options' as named strings, integers or booleans"}}
+  end
 
   defp options(_options),
     do: {:error, {:invalid_argument, "crew.ask takes 'options' as an object"}}
@@ -400,6 +413,7 @@ defmodule Aqua.Crew do
             sent_by: request.sent_by,
             request: request,
             crew: %{tools: snapshot["tools"], options: snapshot["options"]},
+            attachments: Tape.payload(request)["attachments"] || [],
             payload: delivered_payload(request),
             receipt: receipt(record, held, "applied")
           )
@@ -516,7 +530,8 @@ defmodule Aqua.Crew do
 
   # The delivered row names the request it carries, which the child
   # turn's reply answers, and the soul's turn it came from, whose sources
-  # the member's turn reads with it.
+  # the member's turn reads with it; it references the request's
+  # attachments, which stay stored under the request's own row.
   defp delivered_payload(request) do
     from_turn =
       case Tape.payload(request) do
