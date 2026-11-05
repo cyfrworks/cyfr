@@ -92,15 +92,16 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 ### Aqua: the assistant
 
-- A person's own threads, turns and their loop, approvals (§10), notes and memory (§11), and saying a line aloud into a shared thread (`Aqua.Aloud`), the one deliberate copy out of an athanor.
+- A person's own threads, the crew's child threads, turns and their loop, approvals (§10), notes and memory (§11), and saying a line aloud into a shared thread (`Aqua.Aloud`), the one deliberate copy out of an athanor.
 - Agent configuration and model orchestration: one turn under one grant, whatever the model. *Not built yet:* Aqua's model policy, which chooses a model per step.
+- The crew, agents whose turns run on a brain, hand-offs that run as turns of their own and reply on every exit. A brain is a catalyst that speaks the model contract, an API's or a harness's adapter alike; a crew member is who does a job and a scroll is how, so every member runs under the soul's tools, which a hand-off may narrow for its one job. A program a harness runs keeps its own tools inside its box under its own permission mode. *Not built yet:* cards for a program's own tools.
 
 ### Opus: execution
 
 - Admission of executions, attempts and accounting, schedules and feeds.
 - The HostAPI server and listener and the WorkerAPI client.
 - Guest storage, guest egress (§5.6), the attached request (§5.5) and output masking.
-- The programs controller: what the backends service runs, its sessions and kept homes, one owner table and lease per box.
+- The programs controller: what the backends service runs, its sessions and kept homes, one owner table and lease per box. *Not built yet:* boxes beyond the local one.
 
 ### Emissary: external application protocols
 
@@ -124,7 +125,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Locus: where untrusted things run
 
 - The runtime's OS runners, with no network of their own, and the build and backend services, each signed with its own key.
-- The backends service runs programs, each a process whose lines go to and from one owner; a program's home is scratch, scrubbed at retirement, or kept, one folder per login entry under a uid of its own that no other owner is ever given and no backup carries.
+- The backends service runs programs, each a process whose lines go to and from one owner; a program's home is scratch, scrubbed at retirement, or kept, one folder per login entry under a uid of its own that no other owner is ever given and no backup carries. *Not built yet:* the VM level and the computer per athanor.
 - The keeper, `cyfr-locus`, which runs every child under a uid and bounds of its own and scrubs it on release.
 - Perception bodies on a device. *Not built yet:* perception bodies.
 - Opus, Compendium and Emissary decide what runs; Locus only runs it.
@@ -213,7 +214,7 @@ Guest egress is a HostAPI operation: Opus decides it under the attempt's authori
 
 ### 5.7 Isolation of untrusted processes
 
-Untrusted processes run apart from the control plane and from each other, with restricted privileges, bounded resources and full cleanup before reuse; a runner holds no route, and its traffic with the control plane is signed and versioned. A kept home's uid is never given to another owner: no pool holds it, and only the processes of that home's own sessions run under it. *Not built yet:* perception bodies.
+Untrusted processes run apart from the control plane and from each other, with restricted privileges, bounded resources and full cleanup before reuse; a runner holds no route, and its traffic with the control plane is signed and versioned. A kept home's uid is never given to another owner: no pool holds it, and only the processes of that home's own sessions run under it. *Not built yet:* perception bodies; a program's network list, the hosts its row names.
 
 ### 5.8 Separate meanings
 
