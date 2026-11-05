@@ -9,8 +9,9 @@ defmodule Cyfr.Test.ScriptedBackends do
   named process.
 
   Everything but the programs is the wire's (`Prima.LocusBackends`). It is
-  served by Bypass on a loopback port (`url`), at the wire's `control` and
-  `session` routes. A control message's `x-cyfr-auth` header is verified
+  served by an HTTP listener of its own on a loopback port (`url`), at the
+  wire's `control` and `session` routes; `down/1` and `up/1` stop and start
+  it on the same port. A control message's `x-cyfr-auth` header is verified
   under the control key, its lifetime and its `(generation, seq)` against the
   high-water mark, and its body read strictly (`read_control/1`); a session
   message's header is verified under the key of the owner it names, its
@@ -44,8 +45,6 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   @doc "Start the service for the calling test, reporting to `test` and keyed by `root`."
   def start(test, root) do
-    bypass = Bypass.open()
-
     agent =
       ExUnit.Callbacks.start_supervised!(
         {Agent,
@@ -72,29 +71,76 @@ defmodule Cyfr.Test.ScriptedBackends do
         id: :scripted_backends
       )
 
-    Bypass.stub(
-      bypass,
-      "POST",
-      LocusBackends.route(:control),
-      &serve(&1, fn conn -> control(conn, agent) end)
-    )
-
-    Bypass.stub(
-      bypass,
-      "POST",
-      LocusBackends.route(:session),
-      &serve(&1, fn conn -> session(conn, agent) end)
-    )
-
-    %{bypass: bypass, agent: agent, url: "http://127.0.0.1:#{bypass.port}"}
+    port = listen(agent, 0)
+    %{agent: agent, port: port, url: "http://127.0.0.1:#{port}"}
   end
 
-  defp serve(conn, handler) do
-    Process.flag(:trap_exit, true)
-    handler.(conn)
-  catch
-    :exit, _reason -> resp(conn, 503, "")
+  # A plain listener, not Bypass: a request whose client goes away mid-way
+  # (a reader the server kills while its recv waits, as it may) ends with
+  # its connection, and no end-of-test check counts it as a failure.
+  @listener :scripted_backends_listener
+
+  defp listen(agent, port) do
+    pid =
+      ExUnit.Callbacks.start_supervised!(
+        Supervisor.child_spec(
+          {Bandit,
+           plug: {__MODULE__.Router, agent},
+           scheme: :http,
+           ip: {127, 0, 0, 1},
+           port: port,
+           startup_log: false},
+          id: @listener
+        )
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+    port
   end
+
+  @doc "Stop the service's listener: every request is refused at connect, as a service that is down."
+  def down(%{}), do: ExUnit.Callbacks.stop_supervised!(@listener)
+
+  @doc "Start the service's listener again on its port."
+  def up(%{agent: agent, port: port}) do
+    ^port = listen(agent, port)
+    :ok
+  end
+
+  defmodule Router do
+    @moduledoc false
+    import Plug.Conn
+
+    def init(agent), do: agent
+
+    def call(%{method: "POST", request_path: path} = conn, agent) do
+      cond do
+        path == LocusBackends.route(:control) ->
+          serve(conn, &Cyfr.Test.ScriptedBackends.control_request(&1, agent))
+
+        path == LocusBackends.route(:session) ->
+          serve(conn, &Cyfr.Test.ScriptedBackends.session_request(&1, agent))
+
+        true ->
+          send_resp(conn, 404, "")
+      end
+    end
+
+    def call(conn, _agent), do: send_resp(conn, 404, "")
+
+    # A store the test already stopped answers a late request 503.
+    defp serve(conn, handler) do
+      handler.(conn)
+    catch
+      :exit, _reason -> send_resp(conn, 503, "")
+    end
+  end
+
+  @doc false
+  def control_request(conn, agent), do: control(conn, agent)
+
+  @doc false
+  def session_request(conn, agent), do: session(conn, agent)
 
   @doc "A new lifetime: every owner and session forgotten and the high-water mark reset, as a restarted service."
   def restart(%{agent: agent}, boot),

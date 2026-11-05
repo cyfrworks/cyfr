@@ -737,6 +737,55 @@ defmodule Opus.ProgramsTest do
     refute_receive {:invoke, "tools/call", _twice}, 200
   end
 
+  test "a server that fails is not restarted, and its failures take no other server down",
+       %{ctx: ctx, fake: fake} do
+    start_controller(fake)
+    failing = stdio_row(ctx, "failing", %{"NODE_ENV" => "production"})
+    bystander_row = stdio_row(ctx, "bystander", %{"NODE_ENV" => "production"})
+    bystander = connect(ctx, bystander_row)
+    supervisor = Process.whereis(Emissary.External.ServerSupervisor)
+
+    # More failures within the supervisor's restart window than its
+    # intensity allows: each server is started again by its use alone.
+    for _failure <- 1..5 do
+      pid = connect(ctx, failing)
+      down = Process.monitor(pid)
+      capture_log(fn -> catch_exit(GenServer.call(pid, :no_such_call)) end)
+      assert_receive {:DOWN, ^down, :process, ^pid, _crash}, 2_000
+
+      assert Registry.lookup(Emissary.External.ServerRegistry, {failing.name, ctx.athanor_id}) ==
+               []
+    end
+
+    assert Process.whereis(Emissary.External.ServerSupervisor) == supervisor
+    assert Process.alive?(bystander)
+
+    assert {:ok, %{"content" => _}} =
+             Emissary.External.Server.call_tool(bystander, "github__search", %{})
+  end
+
+  test "a reader killed while its recv waits fails nothing of the service's", %{
+    ctx: ctx,
+    fake: fake
+  } do
+    # The server kills a session's reader whenever the session is dropped
+    # (a refusal, a new grant), which may be while its recv still waits on
+    # the service: a request whose client went away is no failure of the
+    # service's, here or once the HTTP server has given up on it.
+    start_controller(fake)
+    row = stdio_row(ctx, "abandoned", %{"NODE_ENV" => "production"})
+    pid = connect(ctx, row)
+    %{grant: grant, sessions: sessions} = :sys.get_state(pid)
+    [%{session: session}] = Map.values(sessions)
+
+    reader = spawn(fn -> Opus.Programs.Session.recv(grant, session, 1_000_000, 25_000) end)
+    assert_receive {:session, "recv", %{"after" => 1_000_000}, _fields}, 2_000
+    Process.exit(reader, :kill)
+
+    # Past the HTTP server's own wait for a request whose client is gone.
+    Process.sleep(6_000)
+  end
+
   test "a call refused as stale_epoch after the row moved leaves the server in error",
        %{ctx: ctx, fake: fake} do
     start_controller(fake)
@@ -1447,10 +1496,10 @@ defmodule Opus.ProgramsTest do
       Scripted.refuse_once(fake, "status", "status_too_large")
       assert {:error, :status_too_large} = Programs.status(ctx.athanor_id, row.id)
 
-      Bypass.down(fake.bypass)
+      Scripted.down(fake)
       assert {:error, :backends_unavailable} = Programs.status(ctx.athanor_id, row.id)
 
-      Bypass.up(fake.bypass)
+      Scripted.up(fake)
       assert {:ok, %{"e" => 1}} = Programs.status(ctx.athanor_id, row.id)
     end
 
