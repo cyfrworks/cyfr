@@ -345,12 +345,15 @@ defmodule PrismWeb.ProgramsLiveTest do
       }
     }
 
-    {:ok, _} =
-      Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "harness", "1.0.0",
+    # Laid in this athanor alone, never in the run's shared seed tree, so
+    # no other test's athanor reads it through.
+    unit =
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
         manifest: manifest,
         wasm: Cyfr.Test.Guests.wasm(:catalyst)
       )
 
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
     "catalyst:local.harness:1.0.0"
   end
 
@@ -401,5 +404,213 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert Terminal.text("\e]0;title\aPaste code: ") == "Paste code: "
     assert Terminal.text("\e[?25lplain\e(B") == "plain"
     assert Terminal.max_lines() == 500
+  end
+
+  alias Cyfr.Test.ScriptedBackends, as: Scripted
+
+  # The programs controller on a scripted backends service, put back
+  # however the test ends.
+  defp controller! do
+    on_exit(fn ->
+      :persistent_term.erase({Arca.ControlPlane, :generation})
+      Arca.ControlPlane.record(:unclaimed)
+    end)
+
+    fake = Scripted.start(self(), @root)
+    Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
+    assert_receive {:control, "reconcile", _reconcile, _fields}, 2_000
+    fake
+  end
+
+  defp person(user, athanor),
+    do:
+      Sanctum.Context.build(
+        user_id: user.user_id,
+        athanor_id: athanor.id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+  defp pipe_row!(athanor) do
+    {:ok, row} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "claude",
+        transport: "pipe",
+        url: nil,
+        home: "kept",
+        login_command: "claude auth login",
+        config_json:
+          Jason.encode!(%{
+            "backends" => [
+              %{"name" => "claude", "command" => "npx -y @anthropic-ai/claude-code", "env" => %{}}
+            ]
+          })
+      })
+
+    row
+  end
+
+  defp login!(user, athanor, name, program) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(person(user, athanor), %{
+        name: name,
+        kind: "login",
+        program: program
+      })
+
+    entry.id
+  end
+
+  # Until `fun` holds, or a bound passes.
+  defp eventually(fun, tries \\ 50) do
+    cond do
+      fun.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(50) && eventually(fun, tries - 1)
+    end
+  end
+
+  test "a kept program signs in through the terminal: its lines in, the person's out, its end said",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = pipe_row!(athanor)
+    entry = login!(user, athanor, "claude-login", "claude")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+    assert has_element?(view, ~s([data-test="program-settings"]), "claude auth login")
+
+    view
+    |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => entry})
+    |> render_submit()
+
+    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^entry}, _}, 2_000
+    assert has_element?(view, ~s([data-test="sign-in-terminal"]))
+
+    # The program's line, with the colour a terminal draws it in, shows as text.
+    Scripted.write(fake, row.id, "\e[1mPaste code here:\e[0m")
+
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-lines"]), "Paste code here:")
+           end)
+
+    refute render(view) =~ "\e[1m"
+
+    view |> form("#sign-in-input", %{"line" => "code-1234"}) |> render_submit()
+    assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
+
+    Scripted.end_sessions(fake, row.id, 0)
+
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-ended"]), "Signed in.")
+           end)
+
+    refute has_element?(view, "#sign-in-input")
+  end
+
+  test "Reset home empties the chosen login entry's home", %{
+    conn: conn,
+    athanor: athanor,
+    user: user
+  } do
+    controller!()
+    pipe_row!(athanor)
+    entry = login!(user, athanor, "claude-login", "claude")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+
+    view
+    |> form(~s([data-test="home-actions"] form[phx-submit="reset_home"]), %{"entry" => entry})
+    |> render_submit()
+
+    assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _fields}, 2_000
+    assert flash(view, "info") == "The home is empty again."
+  end
+
+  test "the program form defines a kept pipe row with its bounds, and makes its login entry once confirmed",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("button", "Add program") |> render_click()
+
+    view
+    |> form("form#add-pipe", %{
+      "name" => "claude",
+      "command" => "npx -y @anthropic-ai/claude-code",
+      "login_command" => "claude auth login",
+      "home" => "kept",
+      "memory_mib" => "1024",
+      "disk_mib" => "2048"
+    })
+    |> render_submit()
+
+    assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "claude")
+    assert row.transport == "pipe"
+    assert row.home == "kept"
+    assert row.memory_bytes == 1024 * 1_048_576
+    assert row.home_max_bytes == 2048 * 1_048_576
+    assert row.login_command == "claude auth login"
+
+    # The login entry is a sensitive change: it is made once the person
+    # confirms it, and the sign-in opens on it.
+    assert {:ok, []} = Sanctum.Mount.login_entries(athanor.id)
+    refute has_element?(view, ~s([data-test="sign-in-terminal"]))
+    person = person(user, athanor)
+
+    assert {:ok, [%{ref: ref, operation: "vault.create"}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(person), user.user_id)
+
+    Sanctum.TestContext.prove!(person, ref)
+    assert eventually(fn -> has_element?(view, ~s([data-test="sign-in-terminal"])) end)
+
+    assert {:ok, [entry]} = Sanctum.Mount.login_entries(athanor.id)
+    assert {:ok, %{name: "claude-login"}} = Arca.VaultStorage.get(ctx(athanor), entry)
+
+    assert_receive {:session, "open", %{"mode" => "sign_in"}, _fields}, 2_000
+  end
+
+  test "a kept stdio server names its login entry", %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    entry = login!(user, athanor, "gh-login", "gh")
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("button", "Add stdio server") |> render_click()
+
+    view
+    |> form("form#add-stdio", %{
+      "name" => "gh",
+      "backend" => "github",
+      "command" => "gh mcp",
+      "login_command" => "gh auth login",
+      "home" => "kept",
+      "login_entry" => entry
+    })
+    |> render_submit()
+
+    assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "gh")
+    assert row.transport == "stdio"
+    assert row.home == "kept"
+    assert row.login_entry_id == entry
+  end
+
+  test "the list says each row's transport and home", %{conn: conn, athanor: athanor} do
+    pipe_row!(athanor)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "webby",
+        url: "https://127.0.0.1:9/mcp",
+        enabled: false
+      })
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+    assert has_element?(view, ~s(tr[data-name="claude"] [data-test="transport"]), "pipe")
+    assert has_element?(view, ~s(tr[data-name="claude"] [data-test="home"]), "kept")
+    assert has_element?(view, ~s(tr[data-name="webby"] [data-test="transport"]), "http")
   end
 end

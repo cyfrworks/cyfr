@@ -40,7 +40,10 @@ defmodule PrismWeb.ProgramsLive do
 
   use PrismWeb, :live_view
 
-  alias PrismWeb.SignInTerminalComponent
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
+  alias PrismWeb.{SignInTerminalComponent, SystemLayer}
 
   @mib 1_048_576
 
@@ -245,6 +248,7 @@ defmodule PrismWeb.ProgramsLive do
   def handle_event("sign_in", %{"name" => name} = params, socket) do
     case sign_in_entry(socket, name, params["entry"]) do
       {:ok, entry} -> {:noreply, open_terminal(socket, name, entry)}
+      :new -> {:noreply, new_login(socket, name)}
       {:error, sentence} -> {:noreply, put_flash(socket, :error, sentence)}
     end
   end
@@ -359,10 +363,7 @@ defmodule PrismWeb.ProgramsLive do
         |> warnings_flash(result)
 
       if config["home"] == "kept" and present?(config["login_command"]) do
-        case new_login(socket, name) do
-          {:ok, entry} -> {:noreply, socket |> refresh_logins() |> open_terminal(name, entry)}
-          {:error, sentence} -> {:noreply, put_flash(socket, :error, sentence)}
-        end
+        {:noreply, new_login(socket, name)}
       else
         {:noreply, socket}
       end
@@ -471,16 +472,17 @@ defmodule PrismWeb.ProgramsLive do
 
   defp sign_in_entry(socket, name, entry) do
     server = Enum.find(socket.assigns.servers, &(&1[:name] == name)) || %{}
+    named = config(socket.assigns.detail)["login_entry_id"]
 
     cond do
-      server[:transport] == "stdio" and present?(server[:login_entry_id]) ->
-        {:ok, server[:login_entry_id]}
+      server[:transport] == "stdio" and present?(named) ->
+        {:ok, named}
 
       server[:transport] == "stdio" ->
         {:error, "This server names no login entry; edit it to name one, then sign in."}
 
       entry in [nil, "", "new"] ->
-        new_login(socket, name)
+        :new
 
       true ->
         {:ok, entry}
@@ -488,25 +490,31 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   # A new login entry for `program`, named for it, its home the box makes
-  # at the first sign-in.
+  # at the first sign-in; the sign-in opens on it once it is made. Making a
+  # vault entry is a sensitive change: the system layer asks for its
+  # confirmation, and `system_layer_repeat/4` makes it again once given.
   defp new_login(socket, program) do
     name = unused_name(socket.assigns.logins, program <> "-login")
+    args = %{"name" => name, "kind" => "login", "program" => program}
+    made_login(SystemLayer.call(socket, {:login, program}, "vault/create", args), program)
+  end
 
-    case call_tool(socket, "vault/create", %{
-           "name" => name,
-           "kind" => "login",
-           "program" => program
-         }) do
-      {:ok, result} ->
-        case field(field(result, :entry) || %{}, :id) do
-          id when is_binary(id) -> {:ok, id}
-          _ -> {:error, "The login entry was made, but its id was not answered."}
-        end
-
-      {:error, reason} ->
-        {:error, "Could not make a login entry: #{error_message(reason)}"}
+  defp made_login({:ok, result, socket}, program) do
+    case field(field(result, :entry) || %{}, :id) do
+      id when is_binary(id) -> socket |> refresh_logins() |> open_terminal(program, id)
+      _ -> put_flash(socket, :error, "The login entry was made, but its id was not answered.")
     end
   end
+
+  defp made_login({:asked, socket}, _program), do: socket
+
+  defp made_login({:error, reason, socket}, _program),
+    do: put_flash(socket, :error, "Could not make a login entry: #{error_message(reason)}")
+
+  # The login entry a person confirmed is made, once, and its sign-in opens.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat({:login, program} = tag, tool, args, socket),
+    do: {:noreply, made_login(SystemLayer.call(socket, tag, tool, args), program)}
 
   defp unused_name(logins, base) do
     taken = MapSet.new(logins, & &1.name)
@@ -637,6 +645,8 @@ defmodule PrismWeb.ProgramsLive do
           </.button>
         </:actions>
       </.page_header>
+
+      <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
 
       <.live_component
         :if={@terminal}
@@ -818,15 +828,19 @@ defmodule PrismWeb.ProgramsLive do
                         data-test="program-settings"
                       >
                         <dt class="text-gray-500">Memory bound</dt>
-                        <dd class="text-gray-300">{bytes(server[:memory_bytes], "the service's")}</dd>
+                        <dd class="text-gray-300">
+                          {bytes(config(@detail)["memory_bytes"], "the service's")}
+                        </dd>
                         <dt class="text-gray-500">Disk bound</dt>
                         <dd class="text-gray-300">
                           {if server[:home] == "kept",
-                            do: bytes(server[:home_max_bytes], "the homes volume"),
+                            do: bytes(config(@detail)["home_max_bytes"], "the homes volume"),
                             else: "scratch home"}
                         </dd>
                         <dt class="text-gray-500">Sign-in command</dt>
-                        <dd class="font-mono text-gray-300">{server[:login_command] || "none"}</dd>
+                        <dd class="font-mono text-gray-300">
+                          {config(@detail)["login_command"] || "none"}
+                        </dd>
                         <dt
                           :if={server[:transport] == "stdio" and server[:home] == "kept"}
                           class="text-gray-500"
@@ -837,7 +851,7 @@ defmodule PrismWeb.ProgramsLive do
                           :if={server[:transport] == "stdio" and server[:home] == "kept"}
                           class="font-mono text-gray-300"
                         >
-                          {entry_name(@logins, server[:login_entry_id]) || "none named"}
+                          {entry_name(@logins, config(@detail)["login_entry_id"]) || "none named"}
                         </dd>
                       </dl>
                       <div :if={@detail && programs(@detail) != []} class="space-y-2">
@@ -879,7 +893,7 @@ defmodule PrismWeb.ProgramsLive do
                           </div>
                         </div>
                       </div>
-                      <.home_actions server={server} logins={@logins} />
+                      <.home_actions server={server} config={config(@detail)} logins={@logins} />
                       <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
                         <.button
                           variant="ghost"
@@ -1003,6 +1017,7 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   attr :server, :map, required: true
+  attr :config, :map, required: true
   attr :logins, :list, required: true
 
   # Sign-in and reset for a kept row.
@@ -1020,7 +1035,7 @@ defmodule PrismWeb.ProgramsLive do
       class="flex flex-wrap items-end gap-3 pt-2 border-t border-gray-800"
       data-test="home-actions"
     >
-      <form :if={@server[:login_command]} phx-submit="sign_in" class="flex items-end gap-2">
+      <form :if={@config["login_command"]} phx-submit="sign_in" class="flex items-end gap-2">
         <input type="hidden" name="name" value={@server[:name]} />
         <select
           :if={@server[:transport] == "pipe"}
@@ -1051,7 +1066,11 @@ defmodule PrismWeb.ProgramsLive do
     """
   end
 
-  defp programs(detail), do: detail[:programs] || detail[:backends] || []
+  defp programs(detail), do: detail[:programs] || []
+
+  # The expanded row's settings, as `mcp_servers.get` answers them.
+  defp config(%{config: %{} = config}), do: config
+  defp config(_detail), do: %{}
 
   defp entry_name(_logins, nil), do: nil
   defp entry_name(logins, id), do: Enum.find_value(logins, id, &(&1.id == id && &1.name))

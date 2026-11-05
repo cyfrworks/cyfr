@@ -29,6 +29,10 @@ defmodule PrismWeb.SignInTerminalComponent do
   # frame of text does not.
   @control ~r/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)|\e[()][0-9A-Za-z]|\e[=>78]|\r/
 
+  @doc "What the frame says when a sign-in ends for `reason`."
+  @spec ended_text(term()) :: String.t()
+  def ended_text(reason), do: sentence(reason)
+
   @doc "A line of a terminal as text: its control sequences removed."
   @spec text(String.t()) :: String.t()
   def text(line) when is_binary(line), do: String.replace(line, @control, "")
@@ -111,10 +115,25 @@ defmodule PrismWeb.SignInTerminalComponent do
   defp ended(socket, reason),
     do: socket |> assign(:state, :ended) |> assign(:reason, sentence(reason))
 
-  defp sentence(:normal), do: "The sign-in command ended."
-  defp sentence(:exited), do: "The sign-in command ended."
+  # What the relay's end says: signed in, or the end it names.
+  defp sentence(:signed_in), do: "Signed in."
+  defp sentence({:exited, nil}), do: "The sign-in command ended."
+  defp sentence({:exited, code}), do: "The sign-in command exited with status #{code}."
+
+  defp sentence({:not_signed_in, why}),
+    do: "The command ended, but the login entry is not signed in: #{reason_text(why)}"
+
+  defp sentence(:closed), do: "The sign-in was closed."
+  defp sentence(:unattended), do: "The sign-in ended: nothing was attached to it."
+  defp sentence(:stand_down), do: "The sign-in ended: another server took the program over."
+  defp sentence(:owner_moved), do: "The sign-in ended: the program's definition changed."
+  defp sentence(:lost), do: "The sign-in ended: the backends service was lost."
+  defp sentence(:not_yours), do: "This sign-in belongs to another session."
   defp sentence(text) when is_binary(text), do: text
   defp sentence(reason), do: "The sign-in ended: #{error_message(reason)}"
+
+  defp reason_text(text) when is_binary(text), do: text
+  defp reason_text(reason), do: error_message(reason)
 
   @impl true
   def render(assigns) do
