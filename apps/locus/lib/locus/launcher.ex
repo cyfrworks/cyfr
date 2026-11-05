@@ -4,13 +4,30 @@
 defmodule Locus.Launcher do
   @moduledoc """
   A long-lived process started for an owner and held until the owner
-  releases it: the shape a stdio MCP backend runs in, beside the one-round
-  `Locus.Executor` a build runs in.
+  releases it: the shape a program of the backends service runs in,
+  beside the one-round `Locus.Executor` a build runs in.
 
   `c:spawn/2` starts `argv` with `env` as its whole environment beyond the
   launcher's own `HOME`, `TMPDIR`, `USER`, `LOGNAME` and `PATH`, in the uid
   pool `pool`, under `memory_bytes`, and answers
-  the process's `t:handle/0`. The process that called it is the process's
+  the process's `t:handle/0`. A spec naming a kept `home` runs the process
+  in that home, under the home's own uid, and takes no uid of the pool;
+  `pty: true` gives the process a pseudo-terminal as its stdin, stdout and
+  stderr, so its stdout carries what it writes to the terminal and no
+  stderr is heard.
+
+  ## Kept homes
+
+  A kept home is one folder per id under the launcher's kept-homes root,
+  owned by a uid of its own drawn from the launcher's kept-home range: no
+  other home and no pool is ever given that uid while the home lives.
+  `c:home_ensure/2` makes the home when it is absent, drawing its uid, and
+  answers the uid; `c:home_measure/2` answers the bytes it holds;
+  `c:home_reset/2` ends every process of its uid and empties it, keeping
+  its uid; `c:home_retire/2` ends every process of its uid, removes it and
+  frees its uid. Each acts as a helper under the home's uid, since nothing
+  else can read a home. A launcher with no kept-homes root refuses each,
+  and a spawn naming a home, `{:refused, "unavailable"}`. The process that called it is the process's
   owner: every event of the process reaches it as
   `{launcher_module, handle.ref, event}` (`t:event/0`), in order, until
   `:released`, the last. An owner that dies has its process released with
@@ -48,7 +65,10 @@ defmodule Locus.Launcher do
           required(:pool) => String.t(),
           required(:memory_bytes) => pos_integer(),
           optional(:control) => boolean(),
-          optional(:isolation) => String.t()
+          optional(:isolation) => String.t(),
+          optional(:home) => String.t(),
+          optional(:home_max_bytes) => pos_integer(),
+          optional(:pty) => boolean()
         }
 
   @typedoc """
@@ -137,6 +157,20 @@ defmodule Locus.Launcher do
   @callback pool_stats(GenServer.server() | keyword(), String.t()) ::
               {:ok, pool_stats()} | {:error, error()}
 
+  @doc "Make the kept home `id` if it is absent, drawing its uid; answer its uid."
+  @callback home_ensure(GenServer.server() | keyword(), String.t()) ::
+              {:ok, non_neg_integer()} | {:error, error()}
+
+  @doc "The bytes the kept home `id` holds; `:absent` for a home not made."
+  @callback home_measure(GenServer.server() | keyword(), String.t()) ::
+              {:ok, non_neg_integer()} | :absent | {:error, error()}
+
+  @doc "End every process of the kept home `id`'s uid and empty the home, keeping its uid."
+  @callback home_reset(GenServer.server() | keyword(), String.t()) :: :ok | {:error, error()}
+
+  @doc "End every process of the kept home `id`'s uid, remove the home and free its uid."
+  @callback home_retire(GenServer.server() | keyword(), String.t()) :: :ok | {:error, error()}
+
   @doc "Write `data` to the control channel of a process started with `control: true`."
   @callback send_control(handle(), iodata()) :: :ok | {:error, term()}
 
@@ -146,5 +180,11 @@ defmodule Locus.Launcher do
   @doc "End the relay of a process started with `control: true`: nothing more is written to it."
   @callback close_relay(handle()) :: :ok
 
-  @optional_callbacks send_control: 2, send_relay: 2, close_relay: 1
+  @optional_callbacks send_control: 2,
+                      send_relay: 2,
+                      close_relay: 1,
+                      home_ensure: 2,
+                      home_measure: 2,
+                      home_reset: 2,
+                      home_retire: 2
 end

@@ -3,102 +3,167 @@
 
 defmodule Prima.LocusBackends do
   @moduledoc """
-  The wire between CYFR's backends controller (`Emissary.External.Backends`
-  and the servers it runs, `Emissary.External.Server`) and the backends
-  service Locus serves: the stdio MCP servers CYFR registers, one owner per
-  athanor and server row. The second service of the `cyfr-locus/v1` domain
-  beside `Prima.BuilderProtocol`. Data and codec only — no process and no
-  HTTP live here. `tests/fixtures/locus_backends.json` holds the vectors
-  every end reproduces.
+  The wire between CYFR's programs controller (`Opus.Programs`, and the
+  owners that speak over its sessions, such as `Emissary.External.Server`)
+  and the backends service Locus serves: the programs CYFR registers, one
+  owner per athanor and `mcp_servers` row. The second service of the
+  `cyfr-locus/v1` domain beside `Prima.BuilderProtocol`. Data and codec
+  only — no process and no HTTP live here.
+  `tests/fixtures/locus_backends.json` holds the vectors every end
+  reproduces.
+
+  The wire carries processes and lines, never what the lines mean: a
+  program is a process whose lines go to and from one owner, and the owner
+  speaks whatever protocol it speaks over them (Emissary MCP to a `stdio`
+  server, a catalyst a harness's protocol to a `pipe` program).
 
   ## Routes
 
   | Operation | Route | Body | Answer |
   |---|---|---|---|
-  | `:health` | `/locus/v1/backends/health` | none | unauthenticated |
+  | `:health` | `/locus/v1/backends/health` | `{"version": 2}` | unauthenticated |
   | `:control` | `/locus/v1/backends/control` | a control message | its answer, or a refusal |
-  | `:mcp` | `/locus/v1/backends/mcp` | one JSON-RPC message | a JSON-RPC answer, or a refusal |
+  | `:session` | `/locus/v1/backends/session` | a session message | its answer, or a refusal |
 
   Every answer carries `x-cyfr-boot` (`boot_header/0`), the service's
   lifetime, which a control message names back.
 
   ## Control messages (`encode_control/1`, `read_control/1`)
 
-  Every control body and every control answer carries `"version"`
-  (`version/0`); a body at another version, or without one, is read as
-  `{:error, {:version, presented}}` before its `type` is, and refused
-  `version` (`refusal_for/1`). Each type has exactly its members:
+  Every body and every answer, the health probe's included, carries
+  `"version"` (`version/0`); a body at another version, or without one, is
+  read as `{:error, {:version, presented}}` before its `type` is, and
+  refused `version` (`refusal_for/1`). Each type has exactly its members:
 
   | Type | Members | Answer (`encode_answer/2`, `read_answer/2`) |
   |---|---|---|
   | `hello` | `g`, `cyfr_boot` | `boot`, `pool{size, free}` |
   | `reconcile` | `keep[{athanor, server, e}]` | `released[{athanor, server, g, e}]` |
-  | `sync` | `owner{athanor, server}`, `e`, `lease_ms`, `idle_ms`, `backends[{name, command, env_names}]`, `sealed` | `status`, `rev`, `backends[{name, status, tools}]` |
-  | `renew` | `lease_ms`, `owners[{athanor, server, e}]` | `renewed[{athanor, server, e, state, rev}]`, `unknown[{athanor, server, e}]` |
+  | `sync` | `owner{athanor, server}`, `e`, `lease_ms`, `idle_ms`, `programs[]`, `sealed` | `status`, `programs[{name, status}]` |
+  | `renew` | `lease_ms`, `owners[{athanor, server, e}]` | `renewed[{athanor, server, e, state}]`, `unknown[{athanor, server, e}]` |
   | `release` | `owners[{athanor, server, e}]` | `released[{athanor, server, g, e}]` |
-  | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, rev, lease_ms_left, backends[{name, status, restarts, tools, error, stderr_tail}]}]` |
+  | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, lease_ms_left, programs[]}]` |
+  | `home` | `op`, `athanor`, `home_id` | `home_id`, `state` |
+
+  A sync's program is `{name, command, login_command, env_names, home,
+  memory_bytes, home_max_bytes}`: a `name` of lowercase letters, digits
+  and hyphens, a `command` and an optional `login_command` (`null` when
+  absent) each meeting `check_command/1`, the `env_names` its sealed
+  environment carries (each an uppercase variable name, none reserved:
+  `reserved_env_names/0`, `reserved_env_prefixes/0`), its `home`
+  (`"scratch"`, scrubbed at retirement, or `"kept"`, one folder per login
+  entry that survives retirement), its `memory_bytes` (`null`: the
+  service's own bound, `LOCUS_BACKENDS_MEMORY_BYTES`, bounds each process)
+  and, for a kept home only, its `home_max_bytes` (`null`: the homes
+  volume is the only bound). `sealed` is the environment `seal/5` sealed
+  to the owner and the service's lifetime.
+
+  A status reports each program as `{name, status, restarts, error,
+  stderr_tail, home, home_bytes, over_cap, sessions}`: its status
+  (`program_statuses/0`: `idle` with no process running, `running` with
+  one, `failed` once `max_crashes/0` processes crashed within
+  `crash_window_ms/0`), the processes that crashed since its sync, the
+  last crash, the masked tail of its stderr, its home mode, the bytes its
+  kept homes last measured (`null` for a scratch home or one never
+  measured), whether one of them is over its cap, and its running
+  sessions.
+
+  A `home` message acts on one kept home of one athanor: `op` `reset` ends
+  every session in the home `home_id` names and makes it again empty under
+  the same uid (`state` `empty`); `op` `retire` ends them and removes the
+  home, freeing its uid (`state` `absent`). The box that holds a home
+  draws its uid, from the kept-home range its keeper is given, when the
+  home is first made, at the first `open` that names it.
 
   An owner's `athanor` and `server` are signed field text
   (`Prima.MacEnvelope`); a generation `g` and an epoch `e` are positive
   integers. `lease_ms` is at most `max_lease_ms/0` and `idle_ms` at most
-  `max_idle_ms/0`, each at least 1. A sync names 1 to `max_backends/0`
-  backends, each a `name` of lowercase letters, digits and hyphens, a
-  `command` of at most `max_command_bytes/0` bytes that names no `vault:`
-  reference, and the `env_names` its sealed environment carries: each an
-  uppercase variable name, none reserved (`reserved_env_names/0`,
-  `reserved_env_prefixes/0`). `sealed` is the environment `seal/5` sealed
-  to the owner and the service's lifetime. A status names at most
-  `max_status_owners/0` owners, and its answer is at most
-  `max_status_answer_bytes/0` bytes, refused whole past either bound.
+  `max_idle_ms/0`, each at least 1. A sync names 1 to `max_programs/0`
+  programs. A status names at most `max_status_owners/0` owners, and its
+  answer is at most `max_status_answer_bytes/0` bytes, refused whole past
+  either bound.
 
-  ## MCP
+  ## Session messages (`encode_session/1`, `read_session/1`)
 
-  The MCP body is not this module's: it is one JSON-RPC message versioned
-  by its own `mcp-protocol-version` header and `_meta` keys, as
-  `Prima.MCP.Protocol` defines them. This module names the conformance
-  headers and `_meta` keys an invoke carries through (`mcp_headers/0`,
-  `mcp_meta_keys/0`) and the body's bound, `max_mcp_bytes/0`.
+  A session is one running process of one program, for one
+  `(program, home_id, key)`, with a sequence-numbered buffer of the lines
+  its stdout writes. Each message names its owner and epoch, which must be
+  the ones its signature names:
+
+  | Type | Members | Answer (`encode_session_answer/2`, `read_session_answer/2`) |
+  |---|---|---|
+  | `open` | `owner`, `e`, `program`, `home_id`, `key`, `mode`, `argv[]` | `status`, `session`, `resumed`, `pty` |
+  | `send` | `owner`, `e`, `session`, `lines[]` | `status` |
+  | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running` |
+  | `close` | `owner`, `e`, `session` | `status` |
+
+  An `open` in mode `run` attaches to the session running for its key
+  (`resumed: true`) or starts the program's `command` with `argv` appended
+  as its arguments (`resumed: false`): the administrator allowed the
+  program, and its arguments shape only what runs inside its box. An open
+  in mode `sign_in` runs the program's `login_command` on a
+  pseudo-terminal (`pty: true`), takes no `argv`, and is one session per
+  key. `home_id` names the kept home the process runs in (the login
+  entry's id: `home_id_pattern/0`), required for a program whose home is
+  kept and `null` for any other. A `sign_in` open needs a kept home.
+
+  A line is at most `max_line_bytes/0` bytes; a process that writes a
+  longer one is killed. The buffer keeps every line until a later `recv`
+  names an `after` at or above its sequence number, and at most
+  `max_buffer_bytes/0` bytes: past that the oldest lines are dropped and
+  counted, and a `recv` answers in `dropped` how many lines between its
+  `after` and its first line were dropped. A `recv` waits up to
+  `max_wait_ms` (at most `max_recv_wait_ms/0`) for a line past `after` or
+  the process's end, and is idempotent: a lost answer is replayed by the
+  same `after`. A session whose process ended answers `running: false` on
+  every later `recv`, and the next `open` with its key answers `resumed:
+  false`; an owner that speaks a protocol over a session starts it again
+  then. A `send` to an ended session answers `status` `ended`, and one to
+  a running session `running`. `close` ends the session's process and
+  answers `closed`. A session's idle period is the owner's `idle_ms`: a
+  session with no `send` and no `recv` within it is ended.
 
   ## Refusals
 
   A refusal is answered at its code's HTTP status (`status/1`) as
-  `{"version": 1, "error": <code>}` (`encode_refusal/1`).
+  `{"version": 2, "error": <code>}` (`encode_refusal/1`).
 
   ## Authentication
 
   One 32-byte service key (64 hexadecimal digits,
-  `Prima.MacEnvelope.decode_root/1`) is shared by CYFR and the service. From it, over the label `cyfr-locus/v1/backends`, derive the
-  **control key** (`<label>/control`), which signs control messages; the
-  **seal key** (`<label>/seal`), which seals a sync's environment; and one
+  `Prima.MacEnvelope.decode_root/1`) is shared by CYFR and the service.
+  From it, over the label `cyfr-locus/v1/backends`, derive the **control
+  key** (`<label>/control`), which signs control messages; the **seal
+  key** (`<label>/seal`), which seals a sync's environment; and one
   **owner key** per athanor, server row, generation and epoch
-  (`<label>/owner` and those four fields), which signs that owner's MCP
-  requests and is the only key the owner holds. A signature is
+  (`<label>/owner` and those four fields), which signs that owner's
+  session messages and is the only key the owner holds. A signature is
   `Prima.MacEnvelope`'s with the label as its prefix, carried in the
-  `x-cyfr-auth` header (`auth_header/0`); the header names the body's hash,
-  so it verifies before the body is read (`verify_header/4`, then
+  `x-cyfr-auth` header (`auth_header/0`); the header names the body's
+  hash, so it verifies before the body is read (`verify_header/4`, then
   `verify_body/3`). The kinds are `control` (`generation`, `seq`,
   `cyfr_boot`, `boot`, `ts`) and `invoke` (`athanor`, `server`,
   `generation`, `epoch`, `boot`, `ts`, `nonce`), in that order, with
-  `generation` written `gen` in the header. A listener refuses, in order,
-  `:unknown_version` (a version token other than `v1`, such as `v2`), `:malformed`,
+  `generation` written `gen` in the header; a session message is signed
+  as an `invoke`. A listener refuses, in order, `:unknown_version` (a
+  version token other than `v1`, such as `v2`), `:malformed`,
   `:outside_window` (`ts` further than `window_ms/0` from its clock) and
-  `:bad_mac`. Neither the builds key nor a header of the builds
-  service verifies here. The fences — lifetime, sequence, owner version and
-  nonce — are the service's, against state this module does not hold.
+  `:bad_mac`. Neither the builds key nor a header of the builds service
+  verifies here. The fences — lifetime, sequence, owner version and nonce
+  — are the service's, against state this module does not hold.
 
   ## Masking
 
-  Everything an owner's backends produce that leaves the service passes
-  through `mask/2`, which replaces each of the owner's credential values of
-  at least eight bytes, whole and after a scheme prefix (`Bearer <token>`),
-  with `[REDACTED]`. Only the variables `literal_env_names/0` names hold a
-  literal value rather than a credential.
+  Everything an owner's programs produce that leaves the service passes
+  through `mask/2`, which replaces each of the owner's credential values
+  of at least eight bytes, whole and after a scheme prefix (`Bearer
+  <token>`), with `[REDACTED]`. Only the variables `literal_env_names/0`
+  names hold a literal value rather than a credential.
   """
 
   alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
-  alias Prima.MCP.Protocol, as: MCPProtocol
 
-  @version 1
+  @version 2
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
@@ -108,22 +173,27 @@ defmodule Prima.LocusBackends do
   @routes %{
     health: "/locus/v1/backends/health",
     control: "/locus/v1/backends/control",
-    mcp: "/locus/v1/backends/mcp"
+    session: "/locus/v1/backends/session"
   }
 
-  # A control message is at most a sync of sixteen backends
-  # and its sealed environment; an MCP request is one call's arguments, at
-  # most the platform's request ceiling, and its JSON-RPC envelope.
+  # A control message is at most a sync of sixteen programs and its sealed
+  # environment. A session body or answer is at most a buffer's worth of
+  # lines escaped as JSON escapes them, which a line of control bytes can
+  # grow up to six times; a `recv` answers as many whole lines as fit.
   @max_control_bytes 1_048_576
-  @max_mcp_bytes Prima.Limits.Ceiling.lowered([]).max_request_size + 65_536
+  @max_line_bytes 1_048_576
+  @max_buffer_bytes 8_388_608
+  @max_session_bytes 16_777_216
+  @max_recv_wait_ms 30_000
   @max_status_owners 64
   @max_status_answer_bytes @max_control_bytes
-  @max_backends 16
-  @max_in_flight 32
+  @max_programs 16
+  @max_sessions 16
+  @max_argv 64
+  @max_key_bytes 128
   @max_command_bytes 4_096
   @max_nonces 8_192
   @nonce_window_ms @window_ms
-  @max_frame_bytes 10_485_760
   @stderr_tail_bytes 65_536
   @stderr_tail_slack_bytes 4_096
   @restart_backoff_ms [1_000, 2_000, 4_000, 8_000, 16_000]
@@ -135,15 +205,19 @@ defmodule Prima.LocusBackends do
 
   @bounds %{
     max_control_bytes: @max_control_bytes,
-    max_mcp_bytes: @max_mcp_bytes,
+    max_line_bytes: @max_line_bytes,
+    max_buffer_bytes: @max_buffer_bytes,
+    max_session_bytes: @max_session_bytes,
+    max_recv_wait_ms: @max_recv_wait_ms,
     max_status_owners: @max_status_owners,
     max_status_answer_bytes: @max_status_answer_bytes,
-    max_backends: @max_backends,
-    max_in_flight: @max_in_flight,
+    max_programs: @max_programs,
+    max_sessions: @max_sessions,
+    max_argv: @max_argv,
+    max_key_bytes: @max_key_bytes,
     max_command_bytes: @max_command_bytes,
     max_nonces: @max_nonces,
     nonce_window_ms: @nonce_window_ms,
-    max_frame_bytes: @max_frame_bytes,
     stderr_tail_bytes: @stderr_tail_bytes,
     stderr_tail_slack_bytes: @stderr_tail_slack_bytes,
     restart_backoff_ms: @restart_backoff_ms,
@@ -163,6 +237,10 @@ defmodule Prima.LocusBackends do
     lapsed: 409,
     epoch_ahead: 409,
     unknown_owner: 409,
+    unknown_program: 409,
+    unknown_session: 409,
+    program_failed: 409,
+    home_over_cap: 409,
     replay: 409,
     capacity: 409,
     status_too_large: 409,
@@ -176,30 +254,52 @@ defmodule Prima.LocusBackends do
   }
   @classes Map.keys(@statuses) |> Enum.sort()
 
-  @control_types [:hello, :reconcile, :sync, :renew, :release, :status]
-  @owner_states [:starting, :running, :draining]
-  @backend_statuses [:spawning, :initializing, :ready, :crashed, :failed, :idle]
+  @control_types [:hello, :reconcile, :sync, :renew, :release, :status, :home]
+  @session_types [:open, :send, :recv, :close]
+  @owner_states [:running, :draining]
+  @program_statuses [:idle, :running, :failed]
+  @homes [:scratch, :kept]
+  @modes [:run, :sign_in]
+  @home_ops [:reset, :retire]
+  @home_states [:empty, :absent]
 
   @control_fields %{
     hello: ~w(version type g cyfr_boot),
     reconcile: ~w(version type keep),
-    sync: ~w(version type owner e lease_ms idle_ms backends sealed),
+    sync: ~w(version type owner e lease_ms idle_ms programs sealed),
     renew: ~w(version type lease_ms owners),
     release: ~w(version type owners),
-    status: ~w(version type owners)
+    status: ~w(version type owners),
+    home: ~w(version type op athanor home_id)
   }
   @answer_fields %{
     hello: ~w(version boot pool),
     reconcile: ~w(version released),
-    sync: ~w(version status rev backends),
+    sync: ~w(version status programs),
     renew: ~w(version renewed unknown),
     release: ~w(version released),
-    status: ~w(version owners)
+    status: ~w(version owners),
+    home: ~w(version home_id state)
   }
-  @backend_fields ~w(name command env_names)
-  @backend_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
+  @session_fields %{
+    open: ~w(version type owner e program home_id key mode argv),
+    send: ~w(version type owner e session lines),
+    recv: ~w(version type owner e session after max_wait_ms),
+    close: ~w(version type owner e session)
+  }
+  @session_answer_fields %{
+    open: ~w(version status session resumed pty),
+    send: ~w(version status),
+    recv: ~w(version lines dropped running),
+    close: ~w(version status)
+  }
+  @program_fields ~w(name command login_command env_names home memory_bytes home_max_bytes)
+  @program_report_fields ~w(name status restarts error stderr_tail home home_bytes over_cap sessions)
+  @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
+  @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
+  @session_id ~r/\Ass_[0-9a-f]{32}\z/
+  @key_text ~r/\A[A-Za-z0-9][A-Za-z0-9._:@-]*\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/
-  @vault_reference "vault:"
 
   @min_masked_bytes 8
   @mask_marker "[REDACTED]"
@@ -231,11 +331,17 @@ defmodule Prima.LocusBackends do
     }
   }
 
-  @type operation :: :health | :control | :mcp
+  @type operation :: :health | :control | :session
   @type kind :: :invoke | :control
-  @type control_type :: :hello | :reconcile | :sync | :renew | :release | :status
-  @type owner_state :: :starting | :running | :draining
-  @type backend_status :: :spawning | :initializing | :ready | :crashed | :failed | :idle
+  @type control_type :: :hello | :reconcile | :sync | :renew | :release | :status | :home
+  @type session_type :: :open | :send | :recv | :close
+  @type owner_state :: :running | :draining
+  @type program_status :: :idle | :running | :failed
+  @type home :: :scratch | :kept
+  @type mode :: :run | :sign_in
+  @type home_op :: :reset | :retire
+  @type session_status :: :running | :ended | :closed
+  @type home_state :: :empty | :absent
 
   @typedoc "The owner a key or a sealed environment is bound to."
   @type owner :: %{
@@ -279,8 +385,16 @@ defmodule Prima.LocusBackends do
           e: pos_integer()
         }
 
-  @typedoc "One backend a sync defines."
-  @type backend :: %{name: String.t(), command: String.t(), env_names: [String.t()]}
+  @typedoc "One program a sync defines."
+  @type program :: %{
+          name: String.t(),
+          command: String.t(),
+          login_command: String.t() | nil,
+          env_names: [String.t()],
+          home: home(),
+          memory_bytes: pos_integer() | nil,
+          home_max_bytes: pos_integer() | nil
+        }
 
   @typedoc "A control message by its `type`."
   @type control_message ::
@@ -292,21 +406,25 @@ defmodule Prima.LocusBackends do
               e: pos_integer(),
               lease_ms: pos_integer(),
               idle_ms: pos_integer(),
-              backends: [backend()],
+              programs: [program()],
               sealed: String.t()
             }
           | %{type: :renew, lease_ms: pos_integer(), owners: [owner_epoch()]}
           | %{type: :release, owners: [owner_epoch()]}
           | %{type: :status, owners: [owner_ref()]}
+          | %{type: :home, op: home_op(), athanor: String.t(), home_id: String.t()}
 
-  @typedoc "A backend as a status answer reports it."
-  @type backend_report :: %{
+  @typedoc "A program as a status answer reports it."
+  @type program_report :: %{
           name: String.t(),
-          status: backend_status(),
+          status: program_status(),
           restarts: non_neg_integer(),
-          tools: non_neg_integer(),
           error: String.t() | nil,
-          stderr_tail: String.t()
+          stderr_tail: String.t(),
+          home: home(),
+          home_bytes: non_neg_integer() | nil,
+          over_cap: boolean(),
+          sessions: non_neg_integer()
         }
 
   @typedoc "An owner as a status answer reports it."
@@ -316,33 +434,61 @@ defmodule Prima.LocusBackends do
           g: pos_integer(),
           e: pos_integer(),
           state: owner_state(),
-          rev: non_neg_integer(),
           lease_ms_left: non_neg_integer(),
-          backends: [backend_report()]
+          programs: [program_report()]
         }
 
   @typedoc "A control answer, by the type of the message it answers."
   @type answer ::
           %{boot: String.t(), pool: %{size: non_neg_integer(), free: non_neg_integer()}}
           | %{released: [owner_version()]}
-          | %{
-              status: owner_state(),
-              rev: non_neg_integer(),
-              backends: [%{name: String.t(), status: backend_status(), tools: non_neg_integer()}]
-            }
+          | %{status: owner_state(), programs: [%{name: String.t(), status: program_status()}]}
           | %{
               renewed: [
-                %{
-                  athanor: String.t(),
-                  server: String.t(),
-                  e: pos_integer(),
-                  state: owner_state(),
-                  rev: non_neg_integer()
-                }
+                %{athanor: String.t(), server: String.t(), e: pos_integer(), state: owner_state()}
               ],
               unknown: [owner_epoch()]
             }
           | %{owners: [owner_report()]}
+          | %{home_id: String.t(), state: home_state()}
+
+  @typedoc "A session message by its `type`."
+  @type session_message ::
+          %{
+            type: :open,
+            owner: owner_ref(),
+            e: pos_integer(),
+            program: String.t(),
+            home_id: String.t() | nil,
+            key: String.t(),
+            mode: mode(),
+            argv: [String.t()]
+          }
+          | %{
+              type: :send,
+              owner: owner_ref(),
+              e: pos_integer(),
+              session: String.t(),
+              lines: [String.t()]
+            }
+          | %{
+              type: :recv,
+              owner: owner_ref(),
+              e: pos_integer(),
+              session: String.t(),
+              after: non_neg_integer(),
+              max_wait_ms: non_neg_integer()
+            }
+          | %{type: :close, owner: owner_ref(), e: pos_integer(), session: String.t()}
+
+  @typedoc "One buffered line, by its sequence number."
+  @type line :: %{seq: pos_integer(), text: String.t()}
+
+  @typedoc "A session answer, by the type of the message it answers."
+  @type session_answer ::
+          %{status: :running, session: String.t(), resumed: boolean(), pty: boolean()}
+          | %{status: session_status()}
+          | %{lines: [line()], dropped: non_neg_integer(), running: boolean()}
 
   @type code ::
           :unauthorized
@@ -353,6 +499,10 @@ defmodule Prima.LocusBackends do
           | :lapsed
           | :epoch_ahead
           | :unknown_owner
+          | :unknown_program
+          | :unknown_session
+          | :program_failed
+          | :home_over_cap
           | :replay
           | :capacity
           | :status_too_large
@@ -374,9 +524,9 @@ defmodule Prima.LocusBackends do
   @typedoc """
   Why a body does not read: not a JSON object; another protocol version (or
   none); a type that is none; a member the shape does not have, lacks or
-  does not accept (named by its path, `backends[1].command`); a bound passed
-  (what, the size seen, the bound); a lease or idle period past its bound; a
-  backend or variable named twice; a command naming a vault reference; a
+  does not accept (named by its path, `programs[1].command`); a bound
+  passed (what, the size seen, the bound); a period past its bound; a
+  program or variable named twice; a command naming a vault reference; a
   reserved variable.
   """
   @type read_error ::
@@ -386,9 +536,9 @@ defmodule Prima.LocusBackends do
           | {:unknown_field, String.t()}
           | {:missing_field, String.t()}
           | {:invalid_field, String.t()}
-          | {:too_large, :control | :answer | :status_answer | :command, non_neg_integer(),
-             pos_integer()}
-          | {:too_many, :owners | :backends, non_neg_integer(), pos_integer()}
+          | {:too_large, :control | :answer | :status_answer | :session | :command | :line,
+             non_neg_integer(), pos_integer()}
+          | {:too_many, :owners | :programs | :argv, non_neg_integer(), pos_integer()}
           | {:out_of_range, String.t(), integer(), pos_integer()}
           | {:duplicate, String.t()}
           | {:vault_reference, String.t()}
@@ -401,7 +551,7 @@ defmodule Prima.LocusBackends do
 
   # ————— the protocol as data —————
 
-  @doc "The protocol this release speaks, carried in every control body and answer."
+  @doc "The protocol this release speaks, carried in every body and answer."
   @spec version() :: pos_integer()
   def version, do: @version
 
@@ -463,6 +613,30 @@ defmodule Prima.LocusBackends do
   @spec control_types() :: [control_type()]
   def control_types, do: @control_types
 
+  @doc "The session message types."
+  @spec session_types() :: [session_type()]
+  def session_types, do: @session_types
+
+  @doc "What a status reports a program as: `idle`, `running` or `failed`."
+  @spec program_statuses() :: [program_status()]
+  def program_statuses, do: @program_statuses
+
+  @doc "A program's home modes: `scratch`, scrubbed at retirement, and `kept`."
+  @spec homes() :: [home()]
+  def homes, do: @homes
+
+  @doc "An open's modes: `run` and `sign_in`."
+  @spec modes() :: [mode()]
+  def modes, do: @modes
+
+  @doc "The form a kept home's id takes: a login entry's id."
+  @spec home_id_pattern() :: Regex.t()
+  def home_id_pattern, do: @home_id
+
+  @doc "Whether `id` is a kept home's id."
+  @spec home_id?(term()) :: boolean()
+  def home_id?(id), do: is_binary(id) and Regex.match?(@home_id, id)
+
   @doc "Every bound of the wire by name."
   @spec bounds() :: %{atom() => pos_integer() | [pos_integer()] | [String.t()]}
   def bounds, do: @bounds
@@ -471,9 +645,21 @@ defmodule Prima.LocusBackends do
   @spec max_control_bytes() :: pos_integer()
   def max_control_bytes, do: @max_control_bytes
 
-  @doc "The bytes an MCP body may be: the platform's request ceiling and 64 KiB of envelope."
-  @spec max_mcp_bytes() :: pos_integer()
-  def max_mcp_bytes, do: @max_mcp_bytes
+  @doc "The bytes one line of a session may be, its newline excluded."
+  @spec max_line_bytes() :: pos_integer()
+  def max_line_bytes, do: @max_line_bytes
+
+  @doc "The bytes of lines a session's buffer holds before it drops the oldest."
+  @spec max_buffer_bytes() :: pos_integer()
+  def max_buffer_bytes, do: @max_buffer_bytes
+
+  @doc "The bytes a session body or a session answer may be."
+  @spec max_session_bytes() :: pos_integer()
+  def max_session_bytes, do: @max_session_bytes
+
+  @doc "The longest a `recv` may wait for a line, in milliseconds."
+  @spec max_recv_wait_ms() :: pos_integer()
+  def max_recv_wait_ms, do: @max_recv_wait_ms
 
   @doc "The owners one status may name."
   @spec max_status_owners() :: pos_integer()
@@ -483,15 +669,23 @@ defmodule Prima.LocusBackends do
   @spec max_status_answer_bytes() :: pos_integer()
   def max_status_answer_bytes, do: @max_status_answer_bytes
 
-  @doc "The backends one sync may define."
-  @spec max_backends() :: pos_integer()
-  def max_backends, do: @max_backends
+  @doc "The programs one sync may define."
+  @spec max_programs() :: pos_integer()
+  def max_programs, do: @max_programs
 
-  @doc "The calls awaiting one backend at a time."
-  @spec max_in_flight() :: pos_integer()
-  def max_in_flight, do: @max_in_flight
+  @doc "The sessions one owner may hold at once, running or ended."
+  @spec max_sessions() :: pos_integer()
+  def max_sessions, do: @max_sessions
 
-  @doc "The bytes a backend's command may be."
+  @doc "The arguments one `open` may append to its program's command."
+  @spec max_argv() :: pos_integer()
+  def max_argv, do: @max_argv
+
+  @doc "The bytes an `open`'s key may be."
+  @spec max_key_bytes() :: pos_integer()
+  def max_key_bytes, do: @max_key_bytes
+
+  @doc "The bytes a program's command, or one argument of an `open`, may be."
   @spec max_command_bytes() :: pos_integer()
   def max_command_bytes, do: @max_command_bytes
 
@@ -501,7 +695,7 @@ defmodule Prima.LocusBackends do
   bytes, with no NUL byte and no `vault:` in any case, since every process
   on the service can read a command line, so a credential never goes in
   one. Refused `:not_a_string`, `:empty`, `:too_long`, `:nul` or
-  `:vault_reference`. A stdio server's backend
+  `:vault_reference`. A program's command and login command
   (`Emissary.External.BackendDefinition`) and the program a manifest's
   login need suggests (`Prima.Manifest.Needs`) are held to it.
   """
@@ -527,11 +721,7 @@ defmodule Prima.LocusBackends do
   @spec nonce_window_ms() :: pos_integer()
   def nonce_window_ms, do: @nonce_window_ms
 
-  @doc "The bytes one stdout frame of a backend may be, its newline excluded."
-  @spec max_frame_bytes() :: pos_integer()
-  def max_frame_bytes, do: @max_frame_bytes
-
-  @doc "The bytes of a backend's stderr a status reports: its tail."
+  @doc "The bytes of a program's stderr a status reports: its tail."
   @spec stderr_tail_bytes() :: pos_integer()
   def stderr_tail_bytes, do: @stderr_tail_bytes
 
@@ -539,15 +729,15 @@ defmodule Prima.LocusBackends do
   @spec stderr_tail_slack_bytes() :: pos_integer()
   def stderr_tail_slack_bytes, do: @stderr_tail_slack_bytes
 
-  @doc "The waits before each restart of a crashed backend, in milliseconds."
+  @doc "The waits before each start of a program after a crash, in milliseconds."
   @spec restart_backoff_ms() :: [pos_integer()]
   def restart_backoff_ms, do: @restart_backoff_ms
 
-  @doc "The period, in milliseconds, within which `max_crashes/0` exits mark a backend failed."
+  @doc "The period, in milliseconds, within which `max_crashes/0` crashes mark a program failed."
   @spec crash_window_ms() :: pos_integer()
   def crash_window_ms, do: @crash_window_ms
 
-  @doc "The exits within `crash_window_ms/0` that mark a backend failed."
+  @doc "The crashes within `crash_window_ms/0` that mark a program failed."
   @spec max_crashes() :: pos_integer()
   def max_crashes, do: @max_crashes
 
@@ -561,34 +751,19 @@ defmodule Prima.LocusBackends do
 
   @doc """
   The variables whose values are literal rather than credentials: a
-  backend's value for one of these is not masked. Every other value is a
+  program's value for one of these is not masked. Every other value is a
   credential from the vault.
   """
   @spec literal_env_names() :: [String.t()]
   def literal_env_names, do: @literal_env_names
 
-  @doc "The variable names no backend may define: the keeper's (`Prima.KeeperProtocol`)."
+  @doc "The variable names no program may define: the keeper's (`Prima.KeeperProtocol`)."
   @spec reserved_env_names() :: [String.t()]
   def reserved_env_names, do: KeeperProtocol.reserved_env_names()
 
-  @doc "The variable name prefixes no backend may define: the keeper's (`Prima.KeeperProtocol`)."
+  @doc "The variable name prefixes no program may define: the keeper's (`Prima.KeeperProtocol`)."
   @spec reserved_env_prefixes() :: [String.t()]
   def reserved_env_prefixes, do: KeeperProtocol.reserved_env_prefixes()
-
-  @doc "The MCP conformance headers an invoke carries through, as `Prima.MCP.Protocol` names them."
-  @spec mcp_headers() :: [String.t()]
-  def mcp_headers do
-    [
-      MCPProtocol.protocol_version_header(),
-      MCPProtocol.method_header(),
-      MCPProtocol.name_header()
-    ]
-  end
-
-  @doc "The `_meta` keys an invoke's body carries through, as `Prima.MCP.Protocol` names them."
-  @spec mcp_meta_keys() :: [String.t()]
-  def mcp_meta_keys,
-    do: [MCPProtocol.meta_protocol_version_key(), MCPProtocol.meta_client_capabilities_key()]
 
   # ————— authentication —————
 
@@ -601,12 +776,12 @@ defmodule Prima.LocusBackends do
   @spec seal_key(binary()) :: binary()
   def seal_key(key) when byte_size(key) == 32, do: MacEnvelope.derive(key, @label <> "/seal")
 
-  @doc "The key one owner, at one generation and epoch, signs its requests with."
+  @doc "The key one owner, at one generation and epoch, signs its session messages with."
   @spec owner_key(binary(), owner()) :: {:ok, binary()} | {:error, MacEnvelope.invalid_field()}
   def owner_key(key, owner) when byte_size(key) == 32 and is_map(owner),
     do: MacEnvelope.derive(key, @label <> "/owner", @owner_fields, owner)
 
-  @doc "The `x-cyfr-auth` header for an invoke of `body`, signed with the owner's key."
+  @doc "The `x-cyfr-auth` header for a session message of `body`, signed with the owner's key."
   @spec invoke_header(binary(), invoke(), binary()) ::
           {:ok, String.t()} | {:error, MacEnvelope.invalid_field()}
   def invoke_header(owner_key, invoke, body)
@@ -629,9 +804,10 @@ defmodule Prima.LocusBackends do
 
   @doc """
   A request's authenticated fields under the service `key`, or the first
-  refusal: `:unknown_version`, `:malformed`, `:outside_window`, `:bad_mac`. A control message
-  verifies under the control key, an invoke under the key of the owner its
-  header names. `now` is in Unix milliseconds.
+  refusal: `:unknown_version`, `:malformed`, `:outside_window`, `:bad_mac`.
+  A control message verifies under the control key, a session message (an
+  invoke) under the key of the owner its header names. `now` is in Unix
+  milliseconds.
   """
   @spec verify(kind(), binary(), term(), binary(), integer()) ::
           {:ok, map()} | {:error, auth_refusal()}
@@ -731,6 +907,26 @@ defmodule Prima.LocusBackends do
         sealed
       )
 
+  # ————— the health probe —————
+
+  @doc "The health probe's body: `{\"version\": 2}`."
+  @spec health_body() :: binary()
+  def health_body, do: Jason.encode!(%{"version" => @version})
+
+  @doc """
+  A health probe's body, read strictly: exactly `{"version": 2}`. Another
+  version, or none, is `{:error, {:version, presented}}`; anything else
+  `:not_json` or `{:unknown_field, name}`.
+  """
+  @spec read_health(binary()) :: :ok | {:error, read_error()}
+  def read_health(body) when is_binary(body) do
+    with {:ok, wire} <- object(body),
+         :ok <- current_version(wire),
+         :ok <- exact(wire, ~w(version), "") do
+      :ok
+    end
+  end
+
   # ————— control messages —————
 
   @doc "The body of a control message, checked as `read_control/1` will check it."
@@ -756,16 +952,16 @@ defmodule Prima.LocusBackends do
 
   defp read_control_wire(wire) do
     with :ok <- current_version(wire),
-         {:ok, type} <- control_type(wire),
+         {:ok, type} <- typed(wire, @control_types),
          :ok <- exact(wire, Map.fetch!(@control_fields, type), "") do
       read_control_typed(type, wire)
     end
   end
 
-  defp control_type(wire) do
+  defp typed(wire, types) do
     case Map.fetch(wire, "type") do
       {:ok, value} ->
-        case Enum.find(@control_types, &(is_binary(value) and Atom.to_string(&1) == value)) do
+        case Enum.find(types, &(is_binary(value) and Atom.to_string(&1) == value)) do
           nil -> {:error, {:unknown_type, value}}
           type -> {:ok, type}
         end
@@ -792,7 +988,7 @@ defmodule Prima.LocusBackends do
          {:ok, e} <- positive(wire, "e", ""),
          {:ok, lease_ms} <- period(wire, "lease_ms", @max_lease_ms),
          {:ok, idle_ms} <- period(wire, "idle_ms", @max_idle_ms),
-         {:ok, backends} <- backends(wire["backends"]),
+         {:ok, programs} <- programs(wire["programs"]),
          {:ok, sealed} <- sealed(wire["sealed"]) do
       {:ok,
        %{
@@ -801,7 +997,7 @@ defmodule Prima.LocusBackends do
          e: e,
          lease_ms: lease_ms,
          idle_ms: idle_ms,
-         backends: backends,
+         programs: programs,
          sealed: sealed
        }}
     end
@@ -824,6 +1020,22 @@ defmodule Prima.LocusBackends do
          do: {:ok, %{type: :status, owners: owners}}
   end
 
+  defp read_control_typed(:home, wire) do
+    with {:ok, op} <- roster(wire, "op", @home_ops, ""),
+         {:ok, athanor} <- field_text(wire, "athanor", ""),
+         {:ok, home_id} <- home_id_member(wire, "home_id", "", false) do
+      {:ok, %{type: :home, op: op, athanor: athanor, home_id: home_id}}
+    end
+  end
+
+  # A home id, or `null` where `nullable?`.
+  defp home_id_member(wire, name, at, nullable?) do
+    case wire[name] do
+      nil when nullable? -> {:ok, nil}
+      value -> if home_id?(value), do: {:ok, value}, else: {:error, {:invalid_field, at <> name}}
+    end
+  end
+
   defp period(wire, name, max) do
     case wire[name] do
       value when is_integer(value) and value > max -> {:error, {:out_of_range, name, value, max}}
@@ -841,56 +1053,94 @@ defmodule Prima.LocusBackends do
 
   defp sealed(_value), do: {:error, {:invalid_field, "sealed"}}
 
-  # A sync's backends: the count first, then each definition in order.
-  defp backends(list) when is_list(list) and list != [] do
-    if length(list) > @max_backends do
-      {:error, {:too_many, :backends, length(list), @max_backends}}
+  # A sync's programs: the count first, then each definition in order.
+  defp programs(list) when is_list(list) and list != [] do
+    if length(list) > @max_programs do
+      {:error, {:too_many, :programs, length(list), @max_programs}}
     else
       list
       |> Enum.with_index()
-      |> reduce_ok(MapSet.new(), fn {backend, index}, seen ->
-        at = "backends[#{index}]"
+      |> reduce_ok(MapSet.new(), fn {program, index}, seen ->
+        at = "programs[#{index}]"
 
-        with {:ok, backend} <- backend(backend, at),
-             false <- MapSet.member?(seen, backend.name) && {:error, {:duplicate, at <> ".name"}} do
-          {:ok, backend, MapSet.put(seen, backend.name)}
+        with {:ok, program} <- program(program, at),
+             false <- MapSet.member?(seen, program.name) && {:error, {:duplicate, at <> ".name"}} do
+          {:ok, program, MapSet.put(seen, program.name)}
         end
       end)
     end
   end
 
-  defp backends(_list), do: {:error, {:invalid_field, "backends"}}
+  defp programs(_list), do: {:error, {:invalid_field, "programs"}}
 
-  defp backend(%{} = wire, at) do
-    with :ok <- exact(wire, @backend_fields, at <> "."),
-         {:ok, name} <- backend_name(wire["name"], at <> ".name"),
+  defp program(%{} = wire, at) do
+    with :ok <- exact(wire, @program_fields, at <> "."),
+         {:ok, name} <- program_name(wire["name"], at <> ".name"),
          {:ok, command} <- command(wire["command"], at <> ".command"),
-         {:ok, env_names} <- env_names(wire["env_names"], at <> ".env_names") do
-      {:ok, %{name: name, command: command, env_names: env_names}}
+         {:ok, login_command} <-
+           nullable(wire["login_command"], &command(&1, at <> ".login_command")),
+         {:ok, env_names} <- env_names(wire["env_names"], at <> ".env_names"),
+         {:ok, home} <- roster(wire, "home", @homes, at <> "."),
+         {:ok, memory_bytes} <-
+           nullable(wire["memory_bytes"], &memory_bytes(&1, at <> ".memory_bytes")),
+         {:ok, home_max_bytes} <-
+           home_max_bytes(wire["home_max_bytes"], home, at <> ".home_max_bytes") do
+      {:ok,
+       %{
+         name: name,
+         command: command,
+         login_command: login_command,
+         env_names: env_names,
+         home: home,
+         memory_bytes: memory_bytes,
+         home_max_bytes: home_max_bytes
+       }}
     end
   end
 
-  defp backend(_wire, at), do: {:error, {:invalid_field, at}}
+  defp program(_wire, at), do: {:error, {:invalid_field, at}}
 
-  defp backend_name(name, at) do
-    if is_binary(name) and Regex.match?(@backend_name, name),
+  defp nullable(nil, _read), do: {:ok, nil}
+  defp nullable(value, read), do: read.(value)
+
+  defp memory_bytes(value, at) do
+    if is_integer(value) and value >= KeeperProtocol.min_memory_bytes() and
+         value <= KeeperProtocol.max_memory_bytes(),
+       do: {:ok, value},
+       else: {:error, {:invalid_field, at}}
+  end
+
+  # A disk bound is a kept home's alone.
+  defp home_max_bytes(nil, _home, _at), do: {:ok, nil}
+
+  defp home_max_bytes(value, :kept, at) do
+    if is_integer(value) and value >= 1 and
+         value <= KeeperProtocol.request_bounds().max_home_bytes,
+       do: {:ok, value},
+       else: {:error, {:invalid_field, at}}
+  end
+
+  defp home_max_bytes(_value, _home, at), do: {:error, {:invalid_field, at}}
+
+  defp program_name(name, at) do
+    if is_binary(name) and Regex.match?(@program_name, name),
       do: {:ok, name},
       else: {:error, {:invalid_field, at}}
   end
 
-  defp command(command, at) when is_binary(command) and command != "" do
-    cond do
-      byte_size(command) > @max_command_bytes ->
+  defp command(command, at) when is_binary(command) do
+    case check_command(command) do
+      :ok ->
+        {:ok, command}
+
+      {:error, :too_long} ->
         {:error, {:too_large, :command, byte_size(command), @max_command_bytes}}
 
-      String.contains?(command, <<0>>) ->
-        {:error, {:invalid_field, at}}
-
-      String.contains?(command, @vault_reference) ->
+      {:error, :vault_reference} ->
         {:error, {:vault_reference, at}}
 
-      true ->
-        {:ok, command}
+      {:error, _invalid} ->
+        {:error, {:invalid_field, at}}
     end
   end
 
@@ -920,7 +1170,7 @@ defmodule Prima.LocusBackends do
 
   defp env_names(_names, at), do: {:error, {:invalid_field, at}}
 
-  # ————— answers —————
+  # ————— control answers —————
 
   @doc "The body of the answer to a control message of `type`, checked as `read_answer/2` will check it."
   @spec encode_answer(control_type(), answer()) :: {:ok, binary()} | {:error, read_error()}
@@ -963,14 +1213,13 @@ defmodule Prima.LocusBackends do
 
   defp read_answer_typed(:sync, wire) do
     with {:ok, status} <- roster(wire, "status", @owner_states, ""),
-         {:ok, rev} <- count(wire, "rev", ""),
-         {:ok, backends} <- list(wire, "backends", :backends, @max_backends, &backend_summary/2) do
-      {:ok, %{status: status, rev: rev, backends: backends}}
+         {:ok, programs} <- list(wire, "programs", :programs, @max_programs, &program_summary/2) do
+      {:ok, %{status: status, programs: programs}}
     end
   end
 
   defp read_answer_typed(:renew, wire) do
-    with {:ok, renewed} <- owners(wire, "renewed", [:e, :state, :rev], nil),
+    with {:ok, renewed} <- owners(wire, "renewed", [:e, :state], nil),
          {:ok, unknown} <- owners(wire, "unknown", [:e], nil) do
       {:ok, %{renewed: renewed, unknown: unknown}}
     end
@@ -981,10 +1230,17 @@ defmodule Prima.LocusBackends do
            owners(
              wire,
              "owners",
-             [:g, :e, :state, :rev, :lease_ms_left, :backends],
+             [:g, :e, :state, :lease_ms_left, :programs],
              @max_status_owners
            ),
          do: {:ok, %{owners: owners}}
+  end
+
+  defp read_answer_typed(:home, wire) do
+    with {:ok, home_id} <- home_id_member(wire, "home_id", "", false),
+         {:ok, state} <- roster(wire, "state", @home_states, "") do
+      {:ok, %{home_id: home_id, state: state}}
+    end
   end
 
   defp pool(%{} = wire) do
@@ -997,38 +1253,45 @@ defmodule Prima.LocusBackends do
 
   defp pool(_wire), do: {:error, {:invalid_field, "pool"}}
 
-  defp backend_summary(%{} = wire, at) do
-    with :ok <- exact(wire, ~w(name status tools), at <> "."),
-         {:ok, name} <- backend_name(wire["name"], at <> ".name"),
-         {:ok, status} <- roster(wire, "status", @backend_statuses, at <> "."),
-         {:ok, tools} <- count(wire, "tools", at <> ".") do
-      {:ok, %{name: name, status: status, tools: tools}}
+  defp program_summary(%{} = wire, at) do
+    with :ok <- exact(wire, ~w(name status), at <> "."),
+         {:ok, name} <- program_name(wire["name"], at <> ".name"),
+         {:ok, status} <- roster(wire, "status", @program_statuses, at <> ".") do
+      {:ok, %{name: name, status: status}}
     end
   end
 
-  defp backend_summary(_wire, at), do: {:error, {:invalid_field, at}}
+  defp program_summary(_wire, at), do: {:error, {:invalid_field, at}}
 
-  defp backend_report(%{} = wire, at) do
-    with :ok <- exact(wire, ~w(name status restarts tools error stderr_tail), at <> "."),
-         {:ok, name} <- backend_name(wire["name"], at <> ".name"),
-         {:ok, status} <- roster(wire, "status", @backend_statuses, at <> "."),
-         {:ok, restarts} <- count(wire, "restarts", at <> "."),
-         {:ok, tools} <- count(wire, "tools", at <> "."),
-         {:ok, error} <- nullable_text(wire, "error", at <> "."),
-         {:ok, stderr_tail} <- text(wire, "stderr_tail", at <> ".") do
+  defp program_report(%{} = wire, at) do
+    p = at <> "."
+
+    with :ok <- exact(wire, @program_report_fields, p),
+         {:ok, name} <- program_name(wire["name"], p <> "name"),
+         {:ok, status} <- roster(wire, "status", @program_statuses, p),
+         {:ok, restarts} <- count(wire, "restarts", p),
+         {:ok, error} <- nullable_text(wire, "error", p),
+         {:ok, stderr_tail} <- text(wire, "stderr_tail", p),
+         {:ok, home} <- roster(wire, "home", @homes, p),
+         {:ok, home_bytes} <- nullable_count(wire, "home_bytes", p),
+         {:ok, over_cap} <- boolean(wire, "over_cap", p),
+         {:ok, sessions} <- count(wire, "sessions", p) do
       {:ok,
        %{
          name: name,
          status: status,
          restarts: restarts,
-         tools: tools,
          error: error,
-         stderr_tail: stderr_tail
+         stderr_tail: stderr_tail,
+         home: home,
+         home_bytes: home_bytes,
+         over_cap: over_cap,
+         sessions: sessions
        }}
     end
   end
 
-  defp backend_report(_wire, at), do: {:error, {:invalid_field, at}}
+  defp program_report(_wire, at), do: {:error, {:invalid_field, at}}
 
   # ————— owners —————
 
@@ -1073,32 +1336,231 @@ defmodule Prima.LocusBackends do
   defp owner_member(member, wire, at) when member in [:g, :e],
     do: positive(wire, Atom.to_string(member), at)
 
-  defp owner_member(member, wire, at) when member in [:rev, :lease_ms_left],
-    do: count(wire, Atom.to_string(member), at)
-
+  defp owner_member(:lease_ms_left, wire, at), do: count(wire, "lease_ms_left", at)
   defp owner_member(:state, wire, at), do: roster(wire, "state", @owner_states, at)
 
-  defp owner_member(:backends, wire, at) do
-    case wire["backends"] do
-      list when is_list(list) and length(list) <= @max_backends ->
+  defp owner_member(:programs, wire, at) do
+    case wire["programs"] do
+      list when is_list(list) and length(list) <= @max_programs ->
         list
         |> Enum.with_index()
         |> reduce_ok(nil, fn {entry, index}, nil ->
-          with {:ok, report} <- backend_report(entry, "#{at}backends[#{index}]"),
+          with {:ok, report} <- program_report(entry, "#{at}programs[#{index}]"),
                do: {:ok, report, nil}
         end)
 
       list when is_list(list) ->
-        {:error, {:too_many, :backends, length(list), @max_backends}}
+        {:error, {:too_many, :programs, length(list), @max_programs}}
 
       _ ->
-        {:error, {:invalid_field, at <> "backends"}}
+        {:error, {:invalid_field, at <> "programs"}}
     end
   end
 
+  # ————— session messages —————
+
+  @doc "The body of a session message, checked as `read_session/1` will check it."
+  @spec encode_session(session_message()) :: {:ok, binary()} | {:error, read_error()}
+  def encode_session(%{type: type} = message) when type in @session_types do
+    wire = message |> wire() |> Map.put("version", @version)
+
+    with {:ok, _message} <- read_session_wire(wire),
+         body = Jason.encode!(wire),
+         :ok <- admit(byte_size(body), :session, @max_session_bytes) do
+      {:ok, body}
+    end
+  end
+
+  @doc "A session message's body, read strictly: its size, its version, its type, then every member."
+  @spec read_session(binary()) :: {:ok, session_message()} | {:error, read_error()}
+  def read_session(body) when is_binary(body) do
+    with :ok <- admit(byte_size(body), :session, @max_session_bytes),
+         {:ok, wire} <- object(body) do
+      read_session_wire(wire)
+    end
+  end
+
+  defp read_session_wire(wire) do
+    with :ok <- current_version(wire),
+         {:ok, type} <- typed(wire, @session_types),
+         :ok <- exact(wire, Map.fetch!(@session_fields, type), ""),
+         {:ok, owner} <- owner(wire["owner"], "owner", []),
+         {:ok, e} <- positive(wire, "e", "") do
+      read_session_typed(type, wire, %{type: type, owner: owner, e: e})
+    end
+  end
+
+  defp read_session_typed(:open, wire, message) do
+    with {:ok, program} <- program_name(wire["program"], "program"),
+         {:ok, home_id} <- home_id_member(wire, "home_id", "", true),
+         {:ok, key} <- key(wire["key"]),
+         {:ok, mode} <- roster(wire, "mode", @modes, ""),
+         {:ok, argv} <- argv(wire["argv"], mode) do
+      {:ok,
+       Map.merge(message, %{program: program, home_id: home_id, key: key, mode: mode, argv: argv})}
+    end
+  end
+
+  defp read_session_typed(:send, wire, message) do
+    with {:ok, session} <- session_id(wire["session"]),
+         {:ok, lines} <- lines(wire["lines"]) do
+      {:ok, Map.merge(message, %{session: session, lines: lines})}
+    end
+  end
+
+  defp read_session_typed(:recv, wire, message) do
+    with {:ok, session} <- session_id(wire["session"]),
+         {:ok, after_seq} <- count(wire, "after", ""),
+         {:ok, max_wait_ms} <- wait(wire["max_wait_ms"]) do
+      {:ok, Map.merge(message, %{session: session, after: after_seq, max_wait_ms: max_wait_ms})}
+    end
+  end
+
+  defp read_session_typed(:close, wire, message) do
+    with {:ok, session} <- session_id(wire["session"]),
+         do: {:ok, Map.put(message, :session, session)}
+  end
+
+  defp key(key) do
+    if is_binary(key) and byte_size(key) <= @max_key_bytes and Regex.match?(@key_text, key),
+      do: {:ok, key},
+      else: {:error, {:invalid_field, "key"}}
+  end
+
+  defp session_id(id) do
+    if is_binary(id) and Regex.match?(@session_id, id),
+      do: {:ok, id},
+      else: {:error, {:invalid_field, "session"}}
+  end
+
+  # A sign-in runs its program's login command with no arguments of the
+  # opener's.
+  defp argv([], :sign_in), do: {:ok, []}
+  defp argv(_argv, :sign_in), do: {:error, {:invalid_field, "argv"}}
+
+  defp argv(argv, :run) when is_list(argv) do
+    if length(argv) > @max_argv do
+      {:error, {:too_many, :argv, length(argv), @max_argv}}
+    else
+      argv
+      |> Enum.with_index()
+      |> reduce_ok(nil, fn {arg, index}, nil ->
+        if is_binary(arg) and byte_size(arg) <= @max_command_bytes and
+             not String.contains?(arg, <<0>>),
+           do: {:ok, arg, nil},
+           else: {:error, {:invalid_field, "argv[#{index}]"}}
+      end)
+    end
+  end
+
+  defp argv(_argv, _mode), do: {:error, {:invalid_field, "argv"}}
+
+  defp lines(lines) when is_list(lines) do
+    lines
+    |> Enum.with_index()
+    |> reduce_ok(nil, fn {line, index}, nil ->
+      cond do
+        not is_binary(line) or String.contains?(line, ["\n", <<0>>]) ->
+          {:error, {:invalid_field, "lines[#{index}]"}}
+
+        byte_size(line) > @max_line_bytes ->
+          {:error, {:too_large, :line, byte_size(line), @max_line_bytes}}
+
+        true ->
+          {:ok, line, nil}
+      end
+    end)
+  end
+
+  defp lines(_lines), do: {:error, {:invalid_field, "lines"}}
+
+  defp wait(value) when is_integer(value) and value > @max_recv_wait_ms,
+    do: {:error, {:out_of_range, "max_wait_ms", value, @max_recv_wait_ms}}
+
+  defp wait(value) when is_integer(value) and value >= 0, do: {:ok, value}
+  defp wait(_value), do: {:error, {:invalid_field, "max_wait_ms"}}
+
+  # ————— session answers —————
+
+  @doc "The body of the answer to a session message of `type`, checked as `read_session_answer/2` will check it."
+  @spec encode_session_answer(session_type(), session_answer()) ::
+          {:ok, binary()} | {:error, read_error()}
+  def encode_session_answer(type, answer) when type in @session_types and is_map(answer) do
+    wire = answer |> wire() |> Map.put("version", @version)
+
+    with :ok <- exact(wire, Map.fetch!(@session_answer_fields, type), ""),
+         {:ok, _answer} <- read_session_answer_typed(type, wire),
+         body = Jason.encode!(wire),
+         :ok <- admit(byte_size(body), :session, @max_session_bytes) do
+      {:ok, body}
+    end
+  end
+
+  @doc "The answer to a session message of `type`, read strictly: its size, its version, then every member."
+  @spec read_session_answer(session_type(), binary()) ::
+          {:ok, session_answer()} | {:error, read_error()}
+  def read_session_answer(type, body) when type in @session_types and is_binary(body) do
+    with :ok <- admit(byte_size(body), :session, @max_session_bytes),
+         {:ok, wire} <- object(body),
+         :ok <- current_version(wire),
+         :ok <- exact(wire, Map.fetch!(@session_answer_fields, type), "") do
+      read_session_answer_typed(type, wire)
+    end
+  end
+
+  defp read_session_answer_typed(:open, wire) do
+    with {:ok, status} <- roster(wire, "status", [:running], ""),
+         {:ok, session} <- session_id(wire["session"]),
+         {:ok, resumed} <- boolean(wire, "resumed", ""),
+         {:ok, pty} <- boolean(wire, "pty", "") do
+      {:ok, %{status: status, session: session, resumed: resumed, pty: pty}}
+    end
+  end
+
+  defp read_session_answer_typed(:send, wire) do
+    with {:ok, status} <- roster(wire, "status", [:running, :ended], ""),
+         do: {:ok, %{status: status}}
+  end
+
+  defp read_session_answer_typed(:close, wire) do
+    with {:ok, status} <- roster(wire, "status", [:closed], ""),
+         do: {:ok, %{status: status}}
+  end
+
+  defp read_session_answer_typed(:recv, wire) do
+    with {:ok, lines} <- seq_lines(wire["lines"]),
+         {:ok, dropped} <- count(wire, "dropped", ""),
+         {:ok, running} <- boolean(wire, "running", "") do
+      {:ok, %{lines: lines, dropped: dropped, running: running}}
+    end
+  end
+
+  # Lines in rising sequence, each at most a line's bound.
+  defp seq_lines(list) when is_list(list) do
+    list
+    |> Enum.with_index()
+    |> reduce_ok(0, fn {entry, index}, last ->
+      at = "lines[#{index}]"
+
+      with %{} <- entry,
+           :ok <- exact(entry, ~w(seq text), at <> "."),
+           {:ok, seq} <- positive(entry, "seq", at <> "."),
+           true <- seq > last || {:error, {:invalid_field, at <> ".seq"}},
+           {:ok, text} <- text(entry, "text", at <> "."),
+           true <- byte_size(text) <= @max_line_bytes || {:error, {:invalid_field, at <> ".text"}} do
+        {:ok, %{seq: seq, text: text}, seq}
+      else
+        {:error, _} = error -> error
+        _ -> {:error, {:invalid_field, at}}
+      end
+    end)
+  end
+
+  defp seq_lines(_list), do: {:error, {:invalid_field, "lines"}}
+
   # ————— refusals —————
 
-  @doc "The body a refusal is answered with: `{\"version\": 1, \"error\": <code>}`."
+  @doc "The body a refusal is answered with: `{\"version\": 2, \"error\": <code>}`."
   @spec encode_refusal(refusal()) :: binary()
   def encode_refusal(refusal),
     do: Jason.encode!(%{"version" => @version, "error" => Atom.to_string(code(refusal))})
@@ -1116,16 +1578,19 @@ defmodule Prima.LocusBackends do
 
   @doc """
   The refusal a body that does not read is answered with: `version` naming
-  both versions for a body at another version, `too_large` for a control
-  body past its bound, `too_many_owners` and `status_too_large` for a status
-  past its bounds, and `bad_request` for anything else.
+  both versions for a body at another version, `too_large` for a control or
+  session body past its bound, `too_many_owners` and `status_too_large`
+  for a status past its bounds, and `bad_request` for anything else.
   """
   @spec refusal_for(read_error()) :: refusal()
   def refusal_for({:version, presented}) when is_integer(presented) and presented > 0,
     do: {:protocol_mismatch, @version, presented}
 
   def refusal_for({:version, _presented}), do: {:protocol_mismatch, @version, nil}
-  def refusal_for({:too_large, :control, _bytes, _max}), do: :too_large
+
+  def refusal_for({:too_large, what, _bytes, _max}) when what in [:control, :session],
+    do: :too_large
+
   def refusal_for({:too_large, :status_answer, _bytes, _max}), do: :status_too_large
   def refusal_for({:too_many, :owners, _count, _max}), do: :too_many_owners
   def refusal_for(_error), do: :bad_request
@@ -1138,13 +1603,16 @@ defmodule Prima.LocusBackends do
   def describe({:version, presented}),
     do: "the body speaks protocol #{inspect(presented)}, not #{@version}"
 
-  def describe({:unknown_type, type}), do: "#{inspect(type)} is not a control message type"
+  def describe({:unknown_type, type}), do: "#{inspect(type)} is not a message type"
   def describe({:unknown_field, name}), do: "#{name} is not a field of this message"
   def describe({:missing_field, name}), do: "#{name} is required"
   def describe({:invalid_field, name}), do: "#{name} is not of the form this message takes"
 
   def describe({:too_large, :command, bytes, max}),
     do: "a command is #{bytes} bytes; at most #{max} are accepted"
+
+  def describe({:too_large, :line, bytes, max}),
+    do: "a line is #{bytes} bytes; at most #{max} are accepted"
 
   def describe({:too_large, what, bytes, max}),
     do: "the #{what} body is #{bytes} bytes; at most #{max} are read"
@@ -1159,7 +1627,7 @@ defmodule Prima.LocusBackends do
   def describe({:vault_reference, name}), do: "#{name} names a vault reference"
 
   def describe({:reserved_env_name, name}),
-    do: "#{name} is a variable name no backend may define"
+    do: "#{name} is a variable name no program may define"
 
   # ————— masking —————
 
@@ -1247,6 +1715,20 @@ defmodule Prima.LocusBackends do
     if MacEnvelope.valid_value?(:integer, value),
       do: {:ok, value},
       else: {:error, {:invalid_field, at <> name}}
+  end
+
+  defp nullable_count(wire, name, at) do
+    case wire[name] do
+      nil -> {:ok, nil}
+      _value -> count(wire, name, at)
+    end
+  end
+
+  defp boolean(wire, name, at) do
+    case wire[name] do
+      value when is_boolean(value) -> {:ok, value}
+      _ -> {:error, {:invalid_field, at <> name}}
+    end
   end
 
   defp roster(wire, name, roster, at) do
