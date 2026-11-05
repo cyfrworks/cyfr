@@ -213,14 +213,16 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   # The bindings the component reads itself: the bound entries whose edge
-  # carries no attach rule. An unreadable policy names none, which leaves
-  # every row to its own check.
+  # carries no attach rule, apart from a login entry, which is mounted into
+  # its program and read by nobody (`Sanctum.Mount`). An unreadable policy
+  # names none, which leaves every row to its own check.
   defp read_itself_keys(consent) do
     case Prima.Authority.Blob.parse(consent.resolved_policy) do
       {:ok, %Prima.Authority.Blob{nodes: nodes}} ->
         for {_node, %{edges: edges}} <- nodes,
             {_key, %{vault: %{entry_id: _, attach: nil} = vault}} <- edges,
             bound <- [vault | Map.values(Map.get(vault, :named, %{}))],
+            not mounted?(bound),
             into: MapSet.new(),
             do: bound.binding_key
 
@@ -228,6 +230,11 @@ defmodule Compendium.ConsentSetupPlan do
         MapSet.new()
     end
   end
+
+  defp mounted?(%{destination: %Prima.Destination{program: program}}) when is_binary(program),
+    do: true
+
+  defp mounted?(_bound), do: false
 
   defp remedy(ctx, binding_key) do
     with {:ok, {node, edge_key, _slot}} <- Prima.Authority.Blob.parse_binding_key(binding_key),

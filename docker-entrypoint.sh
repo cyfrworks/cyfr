@@ -18,7 +18,7 @@ fi
 # Seed /app/seed/aqua from /app/aqua-defaults when the soul file is absent.
 # This supports both image filesystems and host mounts. A start leaves a
 # mount that holds the soul file as it is; `cyfr update` replaces the
-# shipped AQUA files in ./aqua (the soul, roles and scrolls) with the
+# shipped AQUA files in ./aqua (the soul, crew and scrolls) with the
 # release's, and keeps the ones it replaced in its snapshot's scaffold part.
 if [ -d /app/aqua-defaults ] && [ ! -f /app/seed/aqua/aqua.md ]; then
     mkdir -p /app/seed/aqua

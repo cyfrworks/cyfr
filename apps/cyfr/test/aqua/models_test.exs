@@ -63,9 +63,9 @@ defmodule Aqua.ModelsTest do
   end
 
   # A catalyst listing that cannot be read is not an empty one: whether
-  # any soul's model is installed is not known, so none reads as a model
+  # any agent's brain is installed is not known, so none reads as a model
   # to install.
-  test "a catalyst listing that cannot be read leaves every soul's model unread" do
+  test "a catalyst listing that cannot be read leaves every agent's brain unread" do
     n = System.unique_integer([:positive])
     user = "local|idp|models-unread-#{n}"
 
@@ -77,16 +77,16 @@ defmodule Aqua.ModelsTest do
 
     {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
-    soul = Compendium.agent_soul_type()
 
     agents = [
-      %{"type" => soul, "catalyst_ref" => "catalyst:local.claude"},
-      %{"type" => soul, "catalyst_ref" => "catalyst:local.other"}
+      %{"name" => "aqua", "catalyst_ref" => "catalyst:local.claude"},
+      %{"name" => "explorer", "catalyst_ref" => "catalyst:local.other"},
+      %{"name" => "brainless", "catalyst_ref" => nil}
     ]
 
     assert Aqua.model_status(ctx, agents) == %{
-             "catalyst:local.claude" => {:missing, "catalyst:local.claude"},
-             "catalyst:local.other" => {:missing, "catalyst:local.other"}
+             "aqua" => {:missing, "catalyst:local.claude"},
+             "explorer" => {:missing, "catalyst:local.other"}
            }
 
     {:ok, _pending} =
@@ -99,13 +99,13 @@ defmodule Aqua.ModelsTest do
     assert {:error, :catalyst_lookup_failed} = Aqua.AgentConfig.catalyst_listing(ctx)
 
     assert Aqua.model_status(ctx, agents) == %{
-             "catalyst:local.claude" => {:model_unavailable, "catalyst:local.claude"},
-             "catalyst:local.other" => {:model_unavailable, "catalyst:local.other"}
+             "aqua" => {:model_unavailable, "catalyst:local.claude"},
+             "explorer" => {:model_unavailable, "catalyst:local.other"}
            }
   end
 
   test "a model status needs a context" do
-    assert Aqua.model_status(nil, [%{"type" => "soul", "catalyst_ref" => "catalyst:local.x"}]) ==
+    assert Aqua.model_status(nil, [%{"name" => "aqua", "catalyst_ref" => "catalyst:local.x"}]) ==
              %{}
   end
 
@@ -184,6 +184,93 @@ defmodule Aqua.ModelsTest do
     assert {:consent_unavailable, ^resolved} = status.()
   end
 
+  # A brain that mounts a program's own sign-in reads ready as a keyed one
+  # does: once its login entry is bound on the catalyst's own consent and
+  # on the crew member's edge into it. Before the binding it is one to
+  # connect.
+  test "a crew member whose brain mounts a login reads ready once its login entry is bound" do
+    ctx = storage_root!("models_login")
+    ref = "catalyst:local.loginbrain"
+
+    # The athanor's own catalyst, under the test's own storage root.
+    unit =
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "loginbrain", "0.1.0",
+        manifest: %{
+          "name" => "loginbrain",
+          "type" => "catalyst",
+          "version" => "0.1.0",
+          "publisher" => "local",
+          "needs" => %{
+            "claude" => %{
+              "type" => "login",
+              "program" => "claude",
+              "reason" => "to run the harness on your own plan",
+              "required" => true
+            }
+          }
+        },
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+      )
+
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+
+    # A soul with no tools, so the member's closure is its brain alone.
+    :ok =
+      Arca.put(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file(), "---\n---\n\nsoul\n")
+
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        Compendium.AquaPath.crew_file("harness"),
+        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n\nYou run the harness.\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    member = [%{"name" => "harness", "catalyst_ref" => ref}]
+
+    assert %{"harness" => {:needs_key, resolved}} = Aqua.model_status(ctx, member)
+    assert resolved =~ ref
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "login-claude",
+        kind: "login",
+        program: "claude"
+      })
+
+    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry.id}]})
+
+    commit!(ctx, Prima.AgentRef.ref("harness"), %{
+      selections: [%{dep: ref, need: "claude", entry_id: entry.id}]
+    })
+
+    assert Aqua.model_status(ctx, member) == %{"harness" => {:ready, resolved}}
+  end
+
+  # A person's walk, from their own page.
+  defp commit!(ctx, ref, over) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = Map.merge(%{ref: ref}, over)
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  # A context whose storage root is the test's own, removed when it ends.
+  defp storage_root!(prefix) do
+    test_path = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(test_path) end)
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
+    %{Sanctum.TestContext.local() | origin: :interactive}
+  end
+
   # A model catalyst whose one need is a key, published under a storage
   # root of the test's own: the context, its ref, the id its owner
   # profile takes, and a read of its status as the soul names it.
@@ -225,7 +312,7 @@ defmodule Aqua.ModelsTest do
           })
       })
 
-    soul = [%{"type" => Compendium.agent_soul_type(), "catalyst_ref" => ref}]
-    {ctx, ref, "prof_statusmodel", fn -> Map.fetch!(Aqua.model_status(ctx, soul), ref) end}
+    soul = [%{"name" => "aqua", "type" => Compendium.agent_soul_type(), "catalyst_ref" => ref}]
+    {ctx, ref, "prof_statusmodel", fn -> Map.fetch!(Aqua.model_status(ctx, soul), "aqua") end}
   end
 end

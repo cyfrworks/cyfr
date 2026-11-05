@@ -13,14 +13,15 @@ defmodule Aqua.Prompt do
       `"prompt"`, required) and its policy.
     * `authority` — what the consent edge grants. The only source for what
       the prompt may claim the agent can reach.
-    * `crew` — the crew members the agent may ask with `crew.ask`, by
-      name, title and description; none when its policy offers no ask.
+    * `crew` — the crew index (`Aqua.Crew.index/2`): the members the
+      soul may hand a job to with `crew.ask`, by name, brain, what each
+      is good at and what to avoid; none for a crew member's own turn.
     * `requests` — the thread's requests still waiting on a reply, which
       are listed with their age.
 
   Orders stable sections before the clock to preserve a reusable prompt
   prefix: authored prompt, granted capabilities, tool prelude, scroll
-  index, athanor notes and the crew; then the open requests, whose ages
+  index, athanor notes and the crew index; then the open requests, whose ages
   move. A room excerpt is never part of it: the request carries it as a
   transient block (`Aqua.Loop.Request`).
 
@@ -101,29 +102,31 @@ defmodule Aqua.Prompt do
     ]
   end
 
-  # Who the agent may hand a job to.
+  # Who the soul may hand a job to: the crew index, one line a member.
   defp crew([]), do: []
 
   defp crew(members) do
     [
-      "\n\n---\n\n## Crew\n\nHand a job to one of these with `crew.ask`. Each works it in a " <>
-        "thread of its own under this one and replies here when it is done, failed or stopped, " <>
-        "or when it needs the person; nothing waits for the reply.\n",
+      "\n\n---\n\n## Crew\n\nHand a job to one of these with `crew.ask` when it is what the " <>
+        "member is good at. Each works it in a thread of its own under this one, with every " <>
+        "tool you hold unless the ask narrows them, and replies here when it is done, failed " <>
+        "or stopped, or when it needs the person; nothing waits for the reply.\n",
       Enum.map(members, fn member ->
-        title = member["title"] || member["name"]
-        description = member["description"] || ""
-
         [
           "- ",
           member["name"],
-          " — ",
-          title,
-          if(description == "", do: [], else: [": ", description]),
+          " — brain: ",
+          member["brain"],
+          line(". Good at: ", member["description"]),
+          line(". Avoid: ", member["avoid"]),
           "\n"
         ]
       end)
     ]
   end
+
+  defp line(_label, text) when text in [nil, ""], do: []
+  defp line(label, text), do: [label, String.trim_trailing(text, ".")]
 
   # The thread's requests still waiting on a reply, oldest first, with
   # their age: what was asked stays in view however long the thread

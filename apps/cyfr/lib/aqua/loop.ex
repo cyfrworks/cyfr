@@ -489,7 +489,7 @@ defmodule Aqua.Loop do
 
   defp pinned_authority(_ctx, _turn), do: {:error, :no_pin}
 
-  # The source a turn runs as: the soul, or the role a person addressed.
+  # The source a turn runs as: the soul, or the crew member it runs.
   defp source_ref(%{agent: name}) do
     if Prima.AgentRef.soul?(name),
       do: Prima.AgentRef.soul_ref(),

@@ -5,12 +5,13 @@ defmodule Compendium.AgentIndex do
   @moduledoc """
   The `agents` rows: a derived index of the athanor's `aqua/` tree.
 
-  The tree is the source. After a write to it — a role created, edited
-  or dropped, the seed synced — the index is rewritten from what the
-  overlay serves before it is read again: one row per soul or role, with
-  the digest of the
-  file's bytes (its revision) and of its security-relevant subset
-  (`Compendium.AquaAgent.to_manifest/1`, its capability). Every revision's
+  The tree is the source. After a write to it — a crew member created,
+  edited or dropped, the soul edited, the seed synced — the index is
+  rewritten from what the overlay serves before it is read again: one row
+  per soul or crew member, with the digest of the file's bytes (its
+  revision) and of its security-relevant subset as it runs
+  (`Compendium.AquaAgent.to_manifest/1`, its capability: a crew member's
+  names the soul's policy it runs under). Every revision's
   bytes are kept by digest (`Arca.AgentRevisions`) before the row names
   it, so a turn that pins a revision can always retrieve it. A file that
   fails to parse leaves no row and is reported; the index is never a
@@ -42,7 +43,7 @@ defmodule Compendium.AgentIndex do
   and then the rows are written in the same transaction that holds it
   (`Arca.AgentStorage.replace_projection/4`): a sync whose claim a
   successor took publishes nothing and answers `{:error, :claim_lost}`. A
-  sync with no claim — a person editing a role — has none to lose.
+  sync with no claim — a person editing a crew member — has none to lose.
   `{:error, :projection_unavailable}` when a unit under `aqua/` is still
   pending or three rewrites conflicted.
   """
@@ -64,7 +65,7 @@ defmodule Compendium.AgentIndex do
   end
 
   @doc """
-  The athanor's rows, the soul first, then the roles by name — once the
+  The athanor's rows, the soul first, then the crew by name — once the
   index reflects every change of the tree, else
   `{:error, :projection_unavailable}`.
   """
@@ -77,8 +78,10 @@ defmodule Compendium.AgentIndex do
   end
 
   @doc """
-  One read of the agent's file: keep the bytes, parse the same bytes,
-  and answer the revision and capability digests a turn pins.
+  One read of the agent's file: keep the bytes, resolve the same bytes
+  as the agent runs (`Compendium.AquaAgent.resolve/3`, a crew member
+  under the soul's policy), and answer the revision and capability
+  digests a turn pins.
   """
   @spec snapshot(Context.t(), String.t()) ::
           {:ok,
@@ -91,7 +94,7 @@ defmodule Compendium.AgentIndex do
   def snapshot(%Context{} = ctx, name) when is_binary(name) do
     with {:ok, bytes} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file(name)),
          {:ok, revision} <- Arca.AgentRevisions.put(Context.actor(ctx), bytes),
-         {:ok, agent} <- AquaAgent.parse(name, bytes),
+         {:ok, agent} <- AquaAgent.resolve(ctx, name, bytes),
          {:ok, capability} <- AquaAgent.capability_digest(agent) do
       {:ok, %{agent: agent, revision_digest: revision, capability_digest: capability}}
     end

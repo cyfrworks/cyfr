@@ -83,6 +83,36 @@ defmodule Aqua.RunnerTest do
     {:ok, ctx: ctx, user: user, thread: thread}
   end
 
+  # A crew member the athanor made, on the scripted model, consented as a
+  # person consents one: it runs under the soul's policy as a source of its
+  # own, its edge into the model selecting the key bound on the model's
+  # default profile.
+  defp member!(ctx, name) do
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        Compendium.AquaPath.crew_file(name),
+        "---\ntitle: #{String.capitalize(name)}\ndescription: Plans.\navoid: Building.\n" <>
+          "catalyst_ref: #{@model}\nmodel: claude-sonnet-5-5\n---\n\nYou are the #{name}.\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    ref = Prima.AgentRef.ref(name)
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = %{ref: ref, selections: [%{dep: @model, label: "default"}]}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
   # The athanor's tree under the partition's storage root, which no earlier
   # test may have left behind: an athanor whose tree already exists is not
   # this test's alone.
@@ -271,6 +301,7 @@ defmodule Aqua.RunnerTest do
 
   test "the sender's line to a crew member is a request beside the running turn, never a steer of it",
        %{ctx: ctx, thread: thread} do
+    member!(ctx, "planner")
     script!([{:probe, self()}, reply("first")])
 
     {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
@@ -602,6 +633,8 @@ defmodule Aqua.RunnerTest do
        %{ctx: ctx, thread: thread} do
     entry =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+
+    member!(ctx, "planner")
 
     script!([reply("Step one.")])
 

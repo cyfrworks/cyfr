@@ -12,8 +12,9 @@ defmodule Aqua do
     model rounds, the dispatch, the cards (`Aqua.Loop.Turn`,
     `Aqua.Loop.Binding`, `Aqua.Loop.Request`, `Aqua.Loop.Planner`,
     `Aqua.Loop.Policy`).
-  - `Aqua.Crew` — the soul's hand-off to a crew member, worked in a child
-    thread of the room, and the delivery of requests and replies.
+  - `Aqua.Crew` — the crew index, the soul's hand-off to a crew member,
+    worked in a child thread of the room, and the delivery of requests
+    and replies.
   - `Aqua.Tape` — the one persistence port of the runner and the loop.
   - `Aqua.Approvals` — a card decided once, from its own rows;
     `Aqua.Standing` — what may stand for later calls; `Aqua.Launch` — an
@@ -24,10 +25,10 @@ defmodule Aqua do
     agent's declared `tool_policy`.
   - `Aqua.Hands` — the pseudo-tools that run on the bundled catalysts, and
     the console intents (`Aqua.Intents`).
-  - `Aqua.AgentConfig` — the soul's and the roles' definitions and their catalysts;
+  - `Aqua.AgentConfig` — the soul's and the crew's definitions and their catalysts;
     `Aqua.Roster` — who may be addressed.
-  - `Aqua.Models` — what a model can do, the model listing and whether
-    each soul's model has a key; `Aqua.ConsentStatus` — whether what the
+  - `Aqua.Models` — what a model can do, the model listing, an agent's
+    brain options and whether each agent's brain is ready; `Aqua.ConsentStatus` — whether what the
     athanor consented to still covers its sources.
   - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
     schedule asked for it.
@@ -63,9 +64,13 @@ defmodule Aqua do
   @spec models(Context.t()) :: {:ok, map()} | {:error, :forbidden | :unavailable}
   defdelegate models(ctx), to: Models, as: :catalogue
 
-  @doc "Whether each soul's model has a key. See `Aqua.Models.model_status/2`."
+  @doc "Whether each agent's brain is ready, by name. See `Aqua.Models.model_status/2`."
   @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
   defdelegate model_status(ctx, agents), to: Models
+
+  @doc "The options an agent's brain declares. See `Aqua.Models.brain_options/2`."
+  @spec brain_options(Context.t(), map()) :: {:ok, [map()]} | {:error, term()}
+  defdelegate brain_options(ctx, agent), to: Models
 
   @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
   @spec stale_consent_refs(Context.t()) ::

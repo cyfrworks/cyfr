@@ -169,37 +169,38 @@ func ReplaceFile(name string, data []byte, mode os.FileMode) error {
 }
 
 // The AQUA files the scaffold ships and owns, so `cyfr update` refreshes
-// them with each release: the soul at aqua/aqua.md, the shipped roles at
-// aqua/roles/<name>.md, and every file under a shipped scroll's directory
+// them with each release: the soul at aqua/aqua.md, the shipped crew at
+// aqua/crew/<name>.md, and every file under a shipped scroll's directory
 // aqua/skills/<name>/. Each kind is an explicit roster of the names the
-// seed tree ships, so a member's own aqua/roles/custom.md or
+// seed tree ships, so a member's own aqua/crew/custom.md or
 // aqua/skills/mine/SKILL.md matches neither and is preserved on update.
 // TestBundledPromptsMatchSeed binds both rosters to the seed tree the
 // tarball is packed from.
 const aquaSoul = "aqua/aqua.md"
 
-var shippedRoles = map[string]bool{
-	"artisan":  true,
-	"builder":  true,
-	"explorer": true,
-	"planner":  true,
-	"web":      true,
+var shippedCrew = map[string]bool{
+	"claude-code": true,
+	"explorer":    true,
 }
 
 var shippedScrolls = map[string]bool{
+	"artisan":                true,
+	"builder":                true,
 	"canvas":                 true,
 	"capability-acquisition": true,
+	"planner":                true,
+	"web":                    true,
 }
 
 // isManagedAqua reports whether path is one of the AQUA files the scaffold
-// ships: the soul, a shipped role, or a file inside a shipped scroll.
+// ships: the soul, a shipped crew member, or a file inside a shipped scroll.
 func isManagedAqua(path string) bool {
 	if path == aquaSoul {
 		return true
 	}
-	if rest, ok := strings.CutPrefix(path, "aqua/roles/"); ok {
+	if rest, ok := strings.CutPrefix(path, "aqua/crew/"); ok {
 		name, isMarkdown := strings.CutSuffix(rest, ".md")
-		return isMarkdown && shippedRoles[name]
+		return isMarkdown && shippedCrew[name]
 	}
 	if rest, ok := strings.CutPrefix(path, "aqua/skills/"); ok {
 		name, _, inside := strings.Cut(rest, "/")
@@ -229,7 +230,7 @@ var Guides = []string{
 
 // IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an update (guides, WIT interface definitions, the
-// keeper's seccomp profile, and the shipped AQUA soul, roles and scrolls).
+// keeper's seccomp profile, and the shipped AQUA soul, crew and scrolls).
 // It is the one policy for what `cyfr update` overwrites, snapshots and
 // `cyfr restore` puts back.
 func IsManaged(path string) bool {
@@ -240,8 +241,8 @@ func IsManaged(path string) bool {
 	if strings.HasPrefix(path, "wit/") || path == "wit" {
 		return true
 	}
-	// The shipped AQUA files are managed; a member's own roles and scrolls
-	// are preserved.
+	// The shipped AQUA files are managed; a member's own crew files and
+	// scrolls are preserved.
 	return isManagedAqua(path)
 }
 

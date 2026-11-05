@@ -1,6 +1,6 @@
 ---
 name: "capability-acquisition"
-description: "Find or build the component a task needs — installed first, then the registry, then the builder — and get it set up without ever asking for a secret in chat"
+description: "Find or build the component a task needs — installed first, then the registry, then building one by the builder scroll — and get it set up without ever asking for a secret in chat"
 ---
 
 # Capability Acquisition
@@ -14,7 +14,7 @@ description: "Find or build the component a task needs — installed first, then
 2. If a matching component is installed but needs setup: `request_setup(component_ref: "...")`
 3. If not installed: `component(action: "search", query: "...")` — results include a `component_ref` field
 4. If found: `component(action: "pull", reference: "<component_ref from search>")` then `request_setup(component_ref: "<component_ref>")`
-5. If nothing found in the registry: ask the builder — `crew.ask(member: "builder", task: "...")` — to scaffold a new component; it handles setup and verification and replies when it is done
+5. If nothing found in the registry: build a new component by the `builder` scroll (`aqua.skill_get(name: "builder")`) — scaffold, compile, set up and verify it — or hand the build to a crew member good at coding, naming the `builder` scroll in its task
 
 ### Component Types
 

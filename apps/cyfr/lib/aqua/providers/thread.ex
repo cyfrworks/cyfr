@@ -415,7 +415,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in. A send in your own thread starts a turn of the athanor's assistant, or with @<role> asks that crew member, who works in a thread of its own under yours and replies here; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in. A send in your own thread starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under yours and replies here; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -523,7 +523,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Hand a job to a crew member: ask sends it, and the member works it in a thread of its own under this one and replies here when it is done, failed or stopped, or when it needs the person; nothing waits for the reply, which arrives as a message of its own. list names the members and what each is for.",
+        "Hand a job to a crew member: ask sends it, and the member works it in a thread of its own under this one and replies here when it is done, failed or stopped, or when it needs the person; nothing waits for the reply, which arrives as a message of its own. list names the members whose brain is ready, with what each is good at and what to avoid.",
       title: "Crew"
     )
   end

@@ -3,10 +3,13 @@
 
 defmodule PrismWeb.AquaLive.AgentsComponent do
   @moduledoc """
-  The soul and its roles — each with a prompt, a model and a capability
-  allowlist — and the form a new role starts from. Every write
-  goes through the `aqua` tool, the gate a card in chat goes through; a
-  write that changes a file's provenance asks the page to re-read it
+  The soul and its crew. The soul has a prompt, a brain and the
+  capability allowlist every crew member runs under too; a crew member
+  has a prompt, a brain, what it is good at and what to avoid. Each
+  brain's models come from the model catalogue and its options from the
+  brain's own `describe` (`Aqua.brain_options/2`). Every write goes
+  through the `aqua` tool, the gate a card in chat goes through; a write
+  that changes a file's provenance asks the page to re-read it
   (`{:refresh, :agents}`), since the chips and the removal verbs come off
   that read.
   """
@@ -22,7 +25,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # An unconstrained key could shadow the "action" verb (a later duplicate
   # key wins in a map literal) or write any field, the system prompt
   # included, from an event the templates never send.
-  @editable_fields ~w(title description)
+  @editable_fields ~w(title description avoid)
 
   @impl true
   def mount(socket) do
@@ -32,10 +35,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:agents, [])
      |> assign(:soul, nil)
      |> assign(:agents_unread, false)
-     |> assign(:roles, [])
-     |> assign(:default_start, nil)
+     |> assign(:crew, [])
      |> assign(:tool_actions, nil)
      |> assign(:model_status, %{})
+     |> assign(:brain_options, %{})
      |> assign(:program_offers, %{})
      |> assign(:installing, nil)
      |> assign(:editor_editing_prompt, nil)
@@ -46,7 +49,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   @impl true
   # The install this section is showing ended — the parent says so when the
   # fetch answers, landed or refused. Named by its ref, because an ordinary
-  # section reload (an edit, a role created) must not re-enable a button
+  # section reload (an edit, a member created) must not re-enable a button
   # whose download is still running and invite a second one.
   def update(%{installed: ref}, socket) do
     {:ok,
@@ -97,37 +100,29 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # A new role gets its hands in the same flow: the policy it starts from
-  # (a role in the roster, or none).
-  #
-  # Before the roster is read there is no role to start from: a submit
-  # that arrives first is refused, not half-done.
-  def handle_event("editor_create_role", _params, %{assigns: %{loading: true}} = socket) do
+  # A new crew member starts with a name and nothing else: it holds the
+  # soul's hands like every member, and its brain is picked on its card.
+  def handle_event("editor_create_member", _params, %{assigns: %{loading: true}} = socket) do
     {:noreply, put_flash(socket, :error, "Still loading — try again in a moment.")}
   end
 
-  def handle_event("editor_create_role", %{"name" => name} = params, socket)
-      when name != "" do
+  def handle_event("editor_create_member", %{"name" => name}, socket) when name != "" do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      ctx = socket.assigns.context
-      # The role a new one starts from is read again NOW — its hands as
-      # another page may have edited them since this one loaded — the
-      # same rule every allowlist edit on this page follows.
-      start = fresh_role(ctx, params["start_from"])
-      policy = if start, do: start.tool_policy, else: %{}
-
-      case call_aqua(ctx, %{
+      case call_aqua(socket.assigns.context, %{
              "action" => "create",
              "name" => name,
              "title" => name,
-             "description" => "Ask #{name} for…",
-             "content" => "# #{name}\n\nYou are AQUA in the #{name} role.",
-             "tool_policy" => policy
+             "content" => "# #{name}\n\nYou are #{name}, a crew member of this athanor's AQUA."
            }) do
         {:ok, _created} ->
-          hands = if start, do: "the #{start.title} role's hands", else: "no hands yet"
           send(self(), {:refresh, :agents})
-          {:noreply, put_flash(socket, :info, "Created the role '#{name}' with #{hands}.")}
+
+          {:noreply,
+           put_flash(
+             socket,
+             :info,
+             "Added '#{name}' to the crew — pick its brain and say what it is good at."
+           )}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
@@ -135,7 +130,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  def handle_event("editor_create_role", _params, socket), do: {:noreply, socket}
+  def handle_event("editor_create_member", _params, socket), do: {:noreply, socket}
 
   def handle_event(
         "editor_update_field",
@@ -159,7 +154,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_event("editor_update_field", _params, socket), do: {:noreply, socket}
 
-  # The tool owns the disposition: a role this athanor made is deleted, an
+  # The tool owns the disposition: a member this athanor made is deleted, an
   # edited copy of a shipped one is restored. The card offers the verb
   # only where one of those applies (`removal/1`).
   def handle_event("editor_delete", %{"name" => name}, socket) do
@@ -167,7 +162,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       case call_aqua(socket.assigns.context, %{"action" => "delete", "name" => name}) do
         {:ok, _} ->
           send(self(), {:refresh, :agents})
-          {:noreply, put_flash(socket, :info, "Deleted the role '#{name}'.")}
+          {:noreply, put_flash(socket, :info, "Deleted the crew member '#{name}'.")}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
@@ -190,9 +185,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # Taking a role out of the closet — and putting it back — without
-  # touching its file's content. This is how a shipped role is set aside,
-  # since the athanor does not own it and cannot delete it.
+  # Taking a crew member out of the crew — and putting it back — without
+  # touching its file's content. This is how a shipped member is set
+  # aside, since the athanor does not own it and cannot delete it.
   def handle_event("editor_set_disabled", %{"name" => name, "disabled" => flag}, socket)
       when flag in ["true", "false"] do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -206,7 +201,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         {:ok, _} ->
           send(self(), {:refresh, :agents})
           verb = if disabled?, do: "Disabled", else: "Enabled"
-          {:noreply, put_flash(socket, :info, "#{verb} the role '#{name}'.")}
+          {:noreply, put_flash(socket, :info, "#{verb} the crew member '#{name}'.")}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
@@ -368,6 +363,43 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
+  # One brain option set, or taken off (an empty value: the brain's own
+  # default). The value is cast to the kind the brain declares — the
+  # declaration the page read, never the wire's word — and the options
+  # are read again NOW and written whole, so the write changes this one.
+  def handle_event(
+        "editor_set_option",
+        %{"name" => name, "option" => option, "value" => value},
+        socket
+      ) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
+      declared = declared_option(socket, name, option)
+
+      with {:ok, cast} <- cast_option(declared, value),
+           {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => name}),
+           options = put_option(agent[:options] || %{}, option, cast),
+           {:ok, _} <-
+             call_aqua(ctx, %{"action" => "update", "name" => name, "options" => options}) do
+        send(self(), {:refresh, :agents})
+        {:noreply, socket}
+      else
+        {:refused, sentence} ->
+          {:noreply, put_flash(socket, :error, sentence)}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+      end
+    end)
+  end
+
+  @impl true
+  def handle_async(:brain_options, {:ok, {tag, options}}, socket) do
+    CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, assign(&1, :brain_options, options)})
+  end
+
+  def handle_async(:brain_options, {:exit, _reason}, socket), do: {:noreply, socket}
+
   # ============================================================================
   # The roster
   # ============================================================================
@@ -375,13 +407,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp load_agents(socket) do
     ctx = socket.assigns.context
     provenance = socket.assigns.provenance
-    types = [Compendium.agent_soul_type(), Compendium.agent_role_type()]
+    types = [Compendium.agent_soul_type(), Compendium.agent_crew_type()]
 
     # One call: list with detail carries every field the cards show, and
-    # the roles set aside — `list` leaves them out of the closet; a role
+    # the members set aside — `list` leaves them out of the crew; a member
     # disabled from this page must stay on it to be put back.
     # A list that cannot be read is not a room with no agents: the page
-    # says so in place of the agent cards, the new-role form and the
+    # says so in place of the agent cards, the new-member form and the
     # missing soul's note, and no model can be installed or connected.
     {listed, unread?} =
       case call_aqua(ctx, %{"action" => "list", "detail" => true, "include_disabled" => true}) do
@@ -401,8 +433,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           "title" => g.title || g.name,
           "type" => g.type,
           "description" => g.description || "",
+          "avoid" => g[:avoid] || "",
           "model" => g.model,
           "catalyst_ref" => g.catalyst_ref,
+          "options" => g[:options] || %{},
           "tool_policy" => g.tool_policy || %{},
           "disabled" => g.disabled == true,
           "provenance" => Map.get(provenance, Enum.join(Compendium.agent_file_path(g.name), "/"))
@@ -411,17 +445,44 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
     soul_type = Compendium.agent_soul_type()
     soul = Enum.find(agents, &(&1["type"] == soul_type))
-    roles = agents |> Enum.reject(&(&1["type"] == soul_type)) |> Enum.sort_by(& &1["name"])
+    crew = agents |> Enum.reject(&(&1["type"] == soul_type)) |> Enum.sort_by(& &1["name"])
+    status = Aqua.model_status(ctx, agents)
 
     socket
     |> assign(:agents, agents)
     |> assign(:agents_unread, unread?)
     |> assign(:soul, soul)
-    |> assign(:roles, roles)
-    |> assign(:default_start, default_start(roles))
-    |> assign(:model_status, Aqua.model_status(ctx, agents))
+    |> assign(:crew, crew)
+    |> assign(:model_status, status)
     |> assign(:program_offers, program_offers(ctx, agents))
+    |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
+  end
+
+  # Each ready brain's options, from its own `describe` — a catalyst run
+  # each, so read off the page's process and delivered for the focus they
+  # were read under. A brain that is not ready, or whose `describe` does
+  # not answer, offers none.
+  defp load_brain_options(socket, agents, status) do
+    case Enum.filter(agents, &match?({:ready, _}, status[&1["name"]])) do
+      [] -> assign(socket, :brain_options, %{})
+      ready -> describe_brains(socket, ready)
+    end
+  end
+
+  defp describe_brains(socket, ready) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(socket)
+
+    start_async(socket, :brain_options, fn ->
+      {tag,
+       Map.new(ready, fn agent ->
+         case Aqua.brain_options(ctx, agent) do
+           {:ok, options} -> {agent["name"], options}
+           {:error, _unread} -> {agent["name"], []}
+         end
+       end)}
+    end)
   end
 
   # For each agent's catalyst, the programs its login needs suggest and
@@ -540,30 +601,36 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  defp fresh_role(_ctx, name) when not is_binary(name) or name == "", do: nil
+  # The option as the brain's `describe` declared it on this page's read.
+  defp declared_option(socket, name, option) do
+    socket.assigns.brain_options
+    |> Map.get(name, [])
+    |> Enum.find(&(&1["name"] == option))
+  end
 
-  defp fresh_role(ctx, name) do
-    case call_aqua(ctx, %{"action" => "get", "name" => name}) do
-      {:ok, %{type: type} = agent} -> if type == Compendium.agent_role_type(), do: agent
-      _ -> nil
+  # An empty value takes the option off; any other is cast to its kind.
+  defp cast_option(nil, _value), do: {:refused, "The brain does not declare that option"}
+  defp cast_option(_declared, ""), do: {:ok, nil}
+
+  defp cast_option(%{"kind" => "boolean"}, value) when value in ["true", "false"],
+    do: {:ok, value == "true"}
+
+  defp cast_option(%{"kind" => "integer"}, value) do
+    case Integer.parse(value) do
+      {n, ""} -> {:ok, n}
+      _ -> {:refused, "That option takes a whole number"}
     end
   end
 
-  # Where a new role starts from: the role with the fewest hands that can
-  # change anything — a read-only one when the roster has it — so a role
-  # made in a hurry cannot do more than look until someone widens it.
-  defp default_start(roles) do
-    roles
-    |> Enum.reject(& &1["disabled"])
-    |> Enum.sort_by(fn role -> {acting_count(role["tool_policy"]), role["name"]} end)
-    |> List.first()
-    |> then(&(&1 && &1["name"]))
+  defp cast_option(%{"kind" => "enum", "values" => values}, value) do
+    if value in values, do: {:ok, value}, else: {:refused, "Pick one of the brain's values"}
   end
 
-  defp acting_count(policy) when is_map(policy),
-    do: Enum.count(policy, fn {key, _} -> resolved_kind(key) != :read end)
+  defp cast_option(%{"kind" => "string"}, value), do: {:ok, value}
+  defp cast_option(_declared, _value), do: {:refused, "That value does not fit the option"}
 
-  defp acting_count(_), do: 0
+  defp put_option(options, option, nil), do: Map.delete(options, option)
+  defp put_option(options, option, value), do: Map.put(options, option, value)
 
   defp agent_provider_for_select(agent) do
     detect_provider_from_ref(agent["catalyst_ref"])
@@ -584,20 +651,20 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # The one removal verb a card may offer — label, confirm prefix, event —
-  # read from its provenance: the athanor's own role is deleted, an edited
-  # copy of a shipped one is restored, an unedited shipped role and the
-  # soul offer nothing. A provenance the page could not read offers
-  # nothing either.
+  # read from its provenance: the athanor's own member is deleted, an
+  # edited copy of a shipped one is restored, an unedited shipped member
+  # and the soul offer nothing. A provenance the page could not read
+  # offers nothing either.
   defp removal(agent) do
     cond do
       agent["type"] == Compendium.agent_soul_type() ->
         nil
 
       agent["provenance"] == "user" ->
-        {"Delete", "Delete the role '", "editor_delete"}
+        {"Delete", "Delete the crew member '", "editor_delete"}
 
       agent["provenance"] == "bundled_modified" ->
-        {"Revert to shipped", "Revert the role '", "editor_revert"}
+        {"Revert to shipped", "Revert the crew member '", "editor_revert"}
 
       true ->
         nil
@@ -670,45 +737,29 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     <div id="aqua-agents" phx-target={@myself} class="space-y-6">
       <.section_flash flash={@flash} target={@myself} />
 
-      <%!-- Offered once the roster is read: the roles to start from are
-            what the form is about. --%>
+      <%!-- Offered once the roster is read: a new member is a name, then
+            its card. --%>
       <div class="flex justify-end">
         <form
           :if={@loaded and not @agents_unread}
-          phx-submit="editor_create_role"
+          phx-submit="editor_create_member"
           phx-target={@myself}
-          class="flex flex-col items-end gap-1"
+          class="flex items-center gap-2"
         >
-          <div class="flex items-center gap-2">
-            <input
-              type="text"
-              name="name"
-              placeholder="new-role"
-              pattern="[a-z0-9_-]+"
-              required
-              class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-blue-500 w-44 font-mono"
-            />
-            <select
-              name="start_from"
-              title="Which role's hands the new one starts with"
-              class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:border-blue-500"
-            >
-              <option value="">start with no hands</option>
-              <option
-                :for={role <- @roles}
-                value={role["name"]}
-                selected={role["name"] == @default_start}
-              >
-                start from {role["title"]}
-              </option>
-            </select>
-            <button
-              type="submit"
-              class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white"
-            >
-              + New role
-            </button>
-          </div>
+          <input
+            type="text"
+            name="name"
+            placeholder="new-member"
+            pattern="[a-z0-9_-]+"
+            required
+            class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-blue-500 w-44 font-mono"
+          />
+          <button
+            type="submit"
+            class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white"
+          >
+            + New crew member
+          </button>
         </form>
       </div>
 
@@ -734,26 +785,30 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         models_by_provider={@models_by_provider}
         tool_actions={@tool_actions || []}
         is_soul={true}
-        model_status={Map.get(@model_status, @soul["catalyst_ref"])}
+        model_status={Map.get(@model_status, @soul["name"])}
+        brain_options={Map.get(@brain_options, @soul["name"], [])}
         installing={@installing}
         athanor={@athanor}
         offers={Map.get(@program_offers, @soul["catalyst_ref"], [])}
       />
 
-      <div :if={@roles != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
+      <div :if={@crew != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
         <.agent_card
-          :for={role <- @roles}
+          :for={member <- @crew}
           myself={@myself}
-          agent={role}
+          agent={member}
           models_by_provider={@models_by_provider}
           tool_actions={@tool_actions || []}
           is_soul={false}
+          model_status={Map.get(@model_status, member["name"])}
+          brain_options={Map.get(@brain_options, member["name"], [])}
+          installing={@installing}
           athanor={@athanor}
-          offers={Map.get(@program_offers, role["catalyst_ref"], [])}
+          offers={Map.get(@program_offers, member["catalyst_ref"], [])}
         />
       </div>
 
-      <!-- Prompt editor modal — shared by the soul and the roles -->
+      <!-- Prompt editor modal — shared by the soul and the crew -->
       <.modal
         id="prompt-editor"
         show={not is_nil(@editor_editing_prompt)}
@@ -812,6 +867,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :tool_actions, :list, required: true
   attr :is_soul, :boolean, default: false
   attr :model_status, :any, default: nil
+  attr :brain_options, :list, default: []
   attr :installing, :any, default: nil
   attr :athanor, :any, default: nil
   attr :offers, :list, default: []
@@ -865,7 +921,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             <span
               :if={@disabled?}
               class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-800 text-gray-400"
-              title="Out of the closet — the soul does not see this role until it is enabled"
+              title="Out of the crew — the soul does not see this member until it is enabled"
             >
               disabled
             </span>
@@ -907,21 +963,27 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       </div>
 
       <form
+        :for={
+          {field, label, placeholder} <- [
+            {"description", "Good at", "What the soul hands this member…"},
+            {"avoid", "Avoid", "What the soul should never hand it…"}
+          ]
+        }
         :if={!@is_soul}
-        id={"aqua-card-#{@agent["name"]}-description"}
+        id={"aqua-card-#{@agent["name"]}-#{field}"}
         phx-change="editor_update_field"
         phx-target={@myself}
         class="space-y-1"
       >
         <input type="hidden" name="name" value={@agent["name"]} />
-        <input type="hidden" name="field" value="description" />
-        <label class="block text-[10px] uppercase tracking-wider text-gray-500">Description</label>
+        <input type="hidden" name="field" value={field} />
+        <label class="block text-[10px] uppercase tracking-wider text-gray-500">{label}</label>
         <input
           type="text"
           name="value"
-          value={@agent["description"]}
+          value={@agent[field]}
           phx-debounce="blur"
-          placeholder="One line the soul reads when choosing this role…"
+          placeholder={placeholder}
           class="w-full rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
         />
       </form>
@@ -938,10 +1000,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </.link>
       </div>
 
-      <div
-        :if={@is_soul and @model_status}
-        class="flex flex-wrap items-center gap-2 text-[11px]"
-      >
+      <div :if={@model_status} class="flex flex-wrap items-center gap-2 text-[11px]">
         <span :if={match?({:ready, _}, @model_status)} class="text-emerald-400">
           Model connected
         </span>
@@ -1003,7 +1062,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           class="w-full md:w-1/2 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
         >
           <option value="" selected={is_nil(@agent["model"])}>
-            Inherit from parent
+            No model
           </option>
           <%= for {provider, models} <- @models_by_provider, models != [] do %>
             <optgroup label={provider}>
@@ -1019,7 +1078,35 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </select>
       </form>
 
-      <div>
+      <div :if={@brain_options != []} id={"aqua-card-#{@agent["name"]}-options"}>
+        <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">
+          Brain options
+          <span class="normal-case text-gray-600">
+            — what the brain lets every request set; empty keeps its default.
+          </span>
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <form
+            :for={option <- @brain_options}
+            id={"aqua-card-#{@agent["name"]}-option-#{option["name"]}"}
+            phx-change="editor_set_option"
+            phx-auto-recover="ignore"
+            phx-target={@myself}
+            class="flex items-center gap-2"
+          >
+            <input type="hidden" name="name" value={@agent["name"]} />
+            <input type="hidden" name="option" value={option["name"]} />
+            <label class="text-[11px] font-mono text-gray-400 w-32 shrink-0">{option["name"]}</label>
+            <.option_input option={option} value={Map.get(@agent["options"] || %{}, option["name"])} />
+          </form>
+        </div>
+      </div>
+
+      <p :if={!@is_soul} class="text-[11px] text-gray-500">
+        Runs under the soul's capabilities; a hand-off may narrow them for one job.
+      </p>
+
+      <div :if={@is_soul}>
         <div class="flex items-center justify-between mb-1">
           <p class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
@@ -1105,6 +1192,51 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     </div>
     """
   end
+
+  attr :option, :map, required: true
+  attr :value, :any, default: nil
+
+  # One option's input, by the kind the brain declares: a choice for an
+  # enum or a boolean, a field for a string or an integer. Empty is the
+  # brain's own default.
+  defp option_input(%{option: %{"kind" => kind}} = assigns) when kind in ["enum", "boolean"] do
+    assigns =
+      assign(
+        assigns,
+        :choices,
+        if(kind == "enum", do: assigns.option["values"], else: ["true", "false"])
+      )
+
+    ~H"""
+    <select
+      name="value"
+      aria-label={@option["name"]}
+      class="flex-1 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+    >
+      <option value="" selected={is_nil(@value)}>default{default_label(@option)}</option>
+      <option :for={choice <- @choices} value={choice} selected={to_string(@value) == choice}>
+        {choice}
+      </option>
+    </select>
+    """
+  end
+
+  defp option_input(assigns) do
+    ~H"""
+    <input
+      type={if @option["kind"] == "integer", do: "number", else: "text"}
+      name="value"
+      value={@value}
+      phx-debounce="blur"
+      aria-label={@option["name"]}
+      placeholder={"default" <> default_label(@option)}
+      class="flex-1 rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+    />
+    """
+  end
+
+  defp default_label(%{"default" => default}), do: " (#{default})"
+  defp default_label(_option), do: ""
 
   attr :myself, :any, required: true
   attr :agent, :string, required: true

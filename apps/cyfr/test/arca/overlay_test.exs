@@ -202,12 +202,12 @@ defmodule Arca.OverlayTest do
     Arca.OverlayTest.GatedStagingAdapter.arm(self())
   end
 
-  # Lay a shipped role file in the seed tree.
-  defp ship_role!(seed, name, body) do
-    roles = Path.join(seed, "aqua/roles")
-    File.mkdir_p!(roles)
-    File.write!(Path.join(roles, name), body)
-    ["aqua", "roles", name]
+  # Lay a shipped crew file in the seed tree.
+  defp ship_member!(seed, name, body) do
+    crew = Path.join(seed, "aqua/crew")
+    File.mkdir_p!(crew)
+    File.write!(Path.join(crew, name), body)
+    ["aqua", "crew", name]
   end
 
   # Lay a shipped component version in the seed tree.
@@ -273,24 +273,24 @@ defmodule Arca.OverlayTest do
 
     test "a file unit's one object is listed and read from above it, as a directory unit's are",
          %{actor: actor, seed_dir: seed} do
-      role = ship_role!(seed, "listed.md", "shipped")
-      :ok = Arca.Overlay.pull_shipped(actor, role)
-      mine = ["aqua", "roles", "mine.md"]
+      member = ship_member!(seed, "listed.md", "shipped")
+      :ok = Arca.Overlay.pull_shipped(actor, member)
+      mine = ["aqua", "crew", "mine.md"]
       :ok = own_unit!(actor, mine, "mine")
 
       assert {:ok, leaves} = Arca.list_recursive(actor, ["aqua"])
-      assert Enum.sort(leaves) == Enum.sort([role, mine])
-      assert {:ok, [{"roles", :dir}]} = Arca.list_typed(actor, ["aqua"])
+      assert Enum.sort(leaves) == Enum.sort([member, mine])
+      assert {:ok, [{"crew", :dir}]} = Arca.list_typed(actor, ["aqua"])
 
-      assert {:ok, entries} = Arca.list_typed(actor, ["aqua", "roles"])
+      assert {:ok, entries} = Arca.list_typed(actor, ["aqua", "crew"])
       assert Enum.sort(entries) == [{"listed.md", :file}, {"mine.md", :file}]
 
-      assert {:ok, pairs} = Arca.read_subtree(actor, ["aqua", "roles"])
+      assert {:ok, pairs} = Arca.read_subtree(actor, ["aqua", "crew"])
       assert Enum.sort(pairs) == [{["listed.md"], "shipped"}, {["mine.md"], "mine"}]
 
       # Dropped, it is listed no more.
       assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, mine)
-      assert {:ok, [^role]} = Arca.list_recursive(actor, ["aqua"])
+      assert {:ok, [^member]} = Arca.list_recursive(actor, ["aqua"])
     end
 
     test "a path outside the seeded roots is untouched", %{actor: actor} do
@@ -519,10 +519,10 @@ defmodule Arca.OverlayTest do
       assert {:ok, %{removed: [["catalyst.wasm"]]}} =
                Arca.Overlay.diff_unit(actor, @version_dir)
 
-      role = ship_role!(seed, "a.md", "shipped")
-      :ok = Arca.Overlay.pull_shipped(actor, role)
-      assert {:error, :bundled} = Arca.delete(actor, role)
-      assert {:ok, "shipped"} = Arca.get(actor, role)
+      member = ship_member!(seed, "a.md", "shipped")
+      :ok = Arca.Overlay.pull_shipped(actor, member)
+      assert {:error, :bundled} = Arca.delete(actor, member)
+      assert {:ok, "shipped"} = Arca.get(actor, member)
     end
 
     test "the athanor's own unit deletes plainly", %{actor: actor} do
@@ -672,7 +672,7 @@ defmodule Arca.OverlayTest do
       actor: actor,
       seed_dir: seed
     } do
-      file = ship_role!(seed, "a.md", "shipped body")
+      file = ship_member!(seed, "a.md", "shipped body")
       :ok = Arca.Overlay.pull_shipped(actor, file)
 
       assert {:ok, %{added: [], removed: [], changed: []}} =
@@ -794,7 +794,7 @@ defmodule Arca.OverlayTest do
     end
 
     test "file-shaped units follow the same rule", %{actor: actor, seed_dir: seed} do
-      shipped = ship_role!(seed, "shipped.md", "shipped body")
+      shipped = ship_member!(seed, "shipped.md", "shipped body")
       :ok = Arca.Overlay.pull_shipped(actor, shipped)
       assert Arca.Overlay.unit_status(actor, shipped) == {:ok, :shipped}
 
@@ -804,10 +804,10 @@ defmodule Arca.OverlayTest do
 
       # An agent the athanor wrote first is a shipped copy once a release
       # ships the same name: it no longer deletes, and a restore replaces it.
-      mine = ["aqua", "roles", "mine.md"]
+      mine = ["aqua", "crew", "mine.md"]
       :ok = own_unit!(actor, mine, "my body")
       assert Arca.Overlay.unit_status(actor, mine) == {:ok, :own}
-      _ = ship_role!(seed, "mine.md", "shipped later")
+      _ = ship_member!(seed, "mine.md", "shipped later")
 
       assert Arca.Overlay.unit_status(actor, mine) == {:ok, :shipped}
       assert {:error, :bundled} = Arca.delete(actor, mine)
@@ -992,9 +992,9 @@ defmodule Arca.OverlayTest do
       actor: actor,
       seed_dir: seed
     } do
-      role = ship_role!(seed, "a.md", "shipped")
-      :ok = Arca.Overlay.pull_shipped(actor, role)
-      :ok = Arca.put(actor, role, "edited")
+      member = ship_member!(seed, "a.md", "shipped")
+      :ok = Arca.Overlay.pull_shipped(actor, member)
+      :ok = Arca.put(actor, member, "edited")
 
       # The wholesale form would clear units without retiring their rows;
       # a populated tree refuses at every level above the unit, and the
@@ -1003,9 +1003,9 @@ defmodule Arca.OverlayTest do
       assert {:error, :above_unit} = Arca.delete_tree(actor, ["aqua"])
 
       assert {:error, :above_unit} =
-               Arca.delete_tree(actor, ["aqua", "roles"])
+               Arca.delete_tree(actor, ["aqua", "crew"])
 
-      assert {:ok, "edited"} = Arca.get(actor, role)
+      assert {:ok, "edited"} = Arca.get(actor, member)
 
       # The internal-write scope keeps the wholesale form.
       assert :ok =
@@ -1013,16 +1013,16 @@ defmodule Arca.OverlayTest do
                  Arca.delete_tree(actor, ["aqua"])
                end)
 
-      assert Arca.Overlay.unit_status(actor, role) == {:ok, :available}
+      assert Arca.Overlay.unit_status(actor, member) == {:ok, :available}
     end
 
     test "a tree above units holding no unit deletes plainly", %{actor: actor} do
       # Plain storage a unit grammar never claims — nothing a lock would
       # cover, so the tidy the registry does on an emptied name dir keeps
       # working.
-      :ok = Arca.put(actor, ["aqua", "roles", "notes.txt"], "stray")
+      :ok = Arca.put(actor, ["aqua", "crew", "notes.txt"], "stray")
       assert :ok = Arca.delete_tree(actor, ["aqua"])
-      refute Arca.exists?(actor, ["aqua", "roles", "notes.txt"])
+      refute Arca.exists?(actor, ["aqua", "crew", "notes.txt"])
     end
   end
 
@@ -1144,17 +1144,17 @@ defmodule Arca.OverlayTest do
 
     test "a held shipped copy refuses; a shipped unit not yet pulled is not the athanor's",
          %{actor: actor, seed_dir: seed} do
-      role = ship_role!(seed, "a.md", "shipped role")
+      member = ship_member!(seed, "a.md", "shipped crew member")
       scroll_dir = Path.join(seed, "aqua/skills/s")
       File.mkdir_p!(scroll_dir)
       File.write!(Path.join(scroll_dir, @skill_manifest), "shipped scroll")
       scroll = ["aqua", "skills", "s"]
 
-      :ok = Arca.Overlay.pull_shipped(actor, role)
+      :ok = Arca.Overlay.pull_shipped(actor, member)
       :ok = Arca.Overlay.pull_shipped(actor, scroll)
-      assert {:error, :exists} = create(actor, role, "mine", if_absent: true)
+      assert {:error, :exists} = create(actor, member, "mine", if_absent: true)
       assert {:error, :exists} = create(actor, scroll, "mine", if_absent: true)
-      assert {:ok, "shipped role"} = Arca.get(actor, role)
+      assert {:ok, "shipped crew member"} = Arca.get(actor, member)
 
       assert {:ok, "shipped scroll"} =
                Arca.get(actor, scroll ++ [@skill_manifest])
@@ -1168,23 +1168,23 @@ defmodule Arca.OverlayTest do
     test "the athanor's own unit refuses and keeps its bytes; an absent one lands", %{
       actor: actor
     } do
-      role = ["aqua", "roles", "b.md"]
+      member = ["aqua", "crew", "b.md"]
       scroll = ["aqua", "skills", "t"]
 
-      assert {:ok, [[]]} = create(actor, role, "first", if_absent: true)
+      assert {:ok, [[]]} = create(actor, member, "first", if_absent: true)
       assert {:ok, [[@skill_manifest]]} = create(actor, scroll, "first scroll", if_absent: true)
 
-      assert {:error, :exists} = create(actor, role, "second", if_absent: true)
+      assert {:error, :exists} = create(actor, member, "second", if_absent: true)
       assert {:error, :exists} = create(actor, scroll, "second scroll", if_absent: true)
-      assert {:ok, "first"} = Arca.get(actor, role)
+      assert {:ok, "first"} = Arca.get(actor, member)
 
       assert {:ok, "first scroll"} =
                Arca.get(actor, scroll ++ [@skill_manifest])
 
       # Without the option a commit replaces, as it always has.
-      assert {:ok, _} = create(actor, role, "second")
+      assert {:ok, _} = create(actor, member, "second")
       assert {:ok, _} = create(actor, scroll, "second scroll")
-      assert {:ok, "second"} = Arca.get(actor, role)
+      assert {:ok, "second"} = Arca.get(actor, member)
 
       assert {:ok, "second scroll"} =
                Arca.get(actor, scroll ++ [@skill_manifest])
@@ -1195,10 +1195,10 @@ defmodule Arca.OverlayTest do
       # finds the draft held by another or, holding it, finds the unit
       # there — a probe outside the draft would let several pass it and
       # each replace the last.
-      role = ["aqua", "roles", "c.md"]
+      member = ["aqua", "crew", "c.md"]
       scroll = ["aqua", "skills", "u"]
 
-      for unit <- [role, scroll] do
+      for unit <- [member, scroll] do
         results =
           1..8
           |> Enum.map(fn i ->
@@ -1378,7 +1378,7 @@ defmodule Arca.OverlayTest do
 
       refute Arca.exists?(actor, @manifest)
 
-      for path <- [["data", "x.txt"], ["aqua", "roles"], ["aqua", "roles", "notes.txt"]] do
+      for path <- [["data", "x.txt"], ["aqua", "crew"], ["aqua", "crew", "notes.txt"]] do
         assert {:error, :not_overlaid} =
                  Arca.Overlay.update(actor, path, fn _ -> {:ok, "x"} end)
       end
@@ -1689,7 +1689,7 @@ defmodule Arca.OverlayTest do
             @built,
             @built ++ ["cyfr-manifest.json"],
             ["components", "tinctures", "local", "built"],
-            ["aqua", "roles", "a.md"]
+            ["aqua", "crew", "a.md"]
           ] do
         assert {:error, :invalid_path} =
                  Arca.replace_tree(actor, path, [{["x"], "x"}], cap: :exempt),
@@ -1894,7 +1894,7 @@ defmodule Arca.OverlayTest do
     end
 
     test "a file unit is one plain put — sentinel refused", %{actor: actor} do
-      agent = ["aqua", "roles", "mine.md"]
+      agent = ["aqua", "crew", "mine.md"]
 
       assert {:ok, [[]]} =
                Arca.Overlay.commit_unit(

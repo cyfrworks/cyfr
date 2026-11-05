@@ -50,6 +50,7 @@ defmodule Aqua.CrewTest do
     )
 
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
+    member!(ctx, "planner")
 
     {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(room.id, ctx.athanor_id)
@@ -147,35 +148,72 @@ defmodule Aqua.CrewTest do
         do: record
   end
 
-  # The planner asks before it keeps a note, so its turn raises a card.
-  defp planner_asks!(ctx) do
-    {:ok, agent} = Compendium.AquaAgent.get(ctx, "planner")
-
+  # A crew member the athanor made, on the scripted model: it runs under
+  # the soul's policy, so it asks before it keeps a note as the soul does,
+  # and a member the athanor made is the person's to consent to.
+  defp member!(ctx, name) do
     :ok =
       Arca.put(
         actor(ctx),
-        Compendium.AquaPath.agent_file("planner"),
-        Compendium.AquaAgent.serialize(%{
-          agent
-          | tool_policy: Map.put(agent.tool_policy, "notes.keep", "ask")
-        })
+        Compendium.AquaPath.crew_file(name),
+        "---\ntitle: #{name}\ndescription: Plans.\navoid: Building.\n" <>
+          "catalyst_ref: #{@model}\nmodel: claude-sonnet-5-5\n---\n\nYou are the #{name}.\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
-    # An edited file is the person's to consent to again.
-    ref = "agent:local.planner"
+    # Its brain's key is the one the model's own profile binds, selected as
+    # a person's consent selects it.
+    ref = Prima.AgentRef.ref(name)
+    decisions = %{ref: ref, selections: [%{dep: @model, label: "default"}]}
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
     {:ok, _} =
       Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: %{ref: ref},
+        decisions: decisions,
         plan_token: plan.plan_token,
         proof: preview.proof,
         commit_digest: preview.commit_digest,
         expected_consent_revision: plan.expected_consent_revision
       })
+  end
+
+  test "the crew index names the members whose brain is ready, by brain, good at and avoid",
+       %{ctx: ctx} do
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+
+    assert roster |> Enum.map(& &1["name"]) |> Enum.sort() ==
+             ~w(aqua claude-code explorer planner)
+
+    # The harness's catalyst ships later, and the explorer's key is not
+    # bound: neither is told of.
+    status = Aqua.Models.model_status(ctx, roster)
+    assert status["claude-code"] == {:missing, "catalyst:local.claude-code"}
+    assert {:needs_key, _} = status["explorer"]
+
+    assert Crew.index(ctx, roster) == [
+             %{
+               "name" => "planner",
+               "brain" => "claude (claude-sonnet-5-5)",
+               "description" => "Plans.",
+               "avoid" => "Building."
+             }
+           ]
+
+    # Bound, the explorer joins, and crew.list answers the same index.
+    Sanctum.Test.ConsentFixtures.bind_key!(
+      ctx,
+      "catalyst:local.gemini",
+      %{"GEMINI_API_KEY" => "g-test"},
+      origins: [:interactive, :programmatic]
+    )
+
+    assert Crew.index(ctx, roster) |> Enum.map(& &1["name"]) == ~w(explorer planner)
+
+    assert {:ok, %{count: 2, members: [explorer, _planner]}} = Crew.list(ctx)
+    assert %{name: "explorer", brain: "gemini (gemini-pro-latest)", good_at: good_at} = explorer
+    assert good_at =~ "web research"
   end
 
   test "a person's @name is a request their member answers in its own thread, and the reply lands under it, waking nobody",
@@ -366,8 +404,6 @@ defmodule Aqua.CrewTest do
 
   test "a card in a child turn writes a notice on the room; its sender steers the paused turn, and the person's decision continues it",
        %{ctx: ctx, room: room} do
-    planner_asks!(ctx)
-
     script!([
       call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
       reply("kept, and the rest")
@@ -405,7 +441,6 @@ defmodule Aqua.CrewTest do
     # The soul's request holds the member's thread on a card; the
     # person's requests, another sender's, queue behind it until the queue
     # is full. Every model call here is a plain answer but the card's.
-    planner_asks!(ctx)
 
     script!([
       call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"})
@@ -470,8 +505,6 @@ defmodule Aqua.CrewTest do
 
     test "gives the paused turn its reply address, and the turn's end answers it",
          %{ctx: ctx, room: room} do
-      planner_asks!(ctx)
-
       script!([
         call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
         reply("kept, and more")
@@ -522,8 +555,6 @@ defmodule Aqua.CrewTest do
 
   test "a narrowed job is refused a call outside its tools before any card, and goes on",
        %{ctx: ctx, room: room} do
-    planner_asks!(ctx)
-
     script!([
       call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
       reply("read only, as asked")
@@ -575,10 +606,10 @@ defmodule Aqua.CrewTest do
        ]}
     )
 
-    request = soul_request!(ctx, room, "web", "fetch x")
+    request = soul_request!(ctx, room, "planner", "fetch x")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert_receive {:scripted_probe, _call, _}, 60_000
-    child = child!(ctx, room, "web")
+    child = child!(ctx, room, "planner")
     turn_id = delivered_turn(ctx, child, request.id)
     runner = Runner.whereis(child.id)
     %{live: %{task: %Aqua.Loop.Worker.Handle{pid: loop}}} = :sys.get_state(runner)
@@ -710,14 +741,14 @@ defmodule Aqua.CrewTest do
 
     assert {:error, :not_addressable} =
              Runner.send_message(ctx, room.id, "posted as another",
-               sent_by: "builder",
+               sent_by: "explorer",
                reply: %{request: request, outcome: "done", answers: [request.id]}
              )
 
     {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
 
     assert {:error, :not_addressable} =
-             Runner.send_message(ctx, child.id, "@builder over there")
+             Runner.send_message(ctx, child.id, "@explorer over there")
 
     # A member's turn asks nobody: crew.ask from a child thread is refused.
     {:ok, %{turn: turn}} =
@@ -728,7 +759,7 @@ defmodule Aqua.CrewTest do
 
     assert {:error, :not_addressable} =
              Crew.ask(ctx, %{
-               "member" => "builder",
+               "member" => "explorer",
                "task" => "help",
                "thread_id" => child.id,
                "root_execution_id" => turn.root_execution_id || "none"

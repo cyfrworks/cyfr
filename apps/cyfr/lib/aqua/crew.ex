@@ -5,8 +5,20 @@ defmodule Aqua.Crew do
   @moduledoc """
   The crew: the soul hands a job to a crew member, the member works it in
   a child thread of the room, and its answer comes back to the room as a
-  reply row. Until crew files exist, the crew members are the athanor's
-  roles (every agent of the roster but the soul).
+  reply row. A crew member is a file under `aqua/crew/` (every agent of
+  the roster but the soul): who does a job, on a brain of its own, with
+  what it is good at and what to avoid; how a job is done is a skill any
+  of them reads. Every member runs under the soul's tool policy, which a
+  request may narrow for its one job.
+
+  ## The index
+
+  `index/2` is the crew the soul is told of, in its prompt and by
+  `crew.list`: each member whose brain is ready (`Aqua.Models.model_status/2`),
+  by name, brain, what it is good at and what to avoid. A member whose
+  brain is not installed or not yet bound is left out, so the soul never
+  hands a job to one that cannot take it; an `@name` still reaches it, and
+  its child turn answers why it could not.
 
   ## The hand-off
 
@@ -154,17 +166,54 @@ defmodule Aqua.Crew do
   def ask(_ctx, _args),
     do: {:error, {:invalid_argument, "crew.ask takes a 'member' and a 'task'"}}
 
-  @doc "`crew.list`: the crew members a turn may ask, with what each is for."
+  @doc "`crew.list`: the crew index (`index/2`), the members a turn may hand a job to."
   @spec list(Context.t()) :: {:ok, map()} | {:error, term()}
   def list(%Context{} = ctx) do
     with {:ok, roster} <- Aqua.AgentConfig.roster(ctx) do
       members =
-        for %{"name" => name} = agent <- roster, Admission.member?(roster, name) do
-          %{name: name, title: agent["title"], description: agent["description"]}
+        for member <- index(ctx, roster) do
+          %{
+            name: member["name"],
+            brain: member["brain"],
+            good_at: member["description"],
+            avoid: member["avoid"]
+          }
         end
 
       {:ok, %{members: members, count: length(members)}}
     end
+  end
+
+  @doc """
+  The crew index of `roster`: every crew member whose brain reads ready
+  (`Aqua.Models.model_status/2`), by name, as `%{"name", "brain",
+  "description", "avoid"}` — the brain its catalyst and model, what it is
+  good at and what to avoid — in the roster's order.
+  """
+  @spec index(Context.t(), [map()]) :: [map()]
+  def index(%Context{} = ctx, roster) when is_list(roster) do
+    members = Enum.filter(roster, &Admission.member?(roster, &1["name"]))
+    status = Aqua.Models.model_status(ctx, members)
+
+    for %{"name" => name} = member <- members, match?({:ready, _}, status[name]) do
+      %{
+        "name" => name,
+        "brain" => brain(member),
+        "description" => member["description"] || "",
+        "avoid" => member["avoid"] || ""
+      }
+    end
+  end
+
+  # A brain as a reader names it: the catalyst's name and the model.
+  defp brain(%{"catalyst_ref" => ref, "model" => model}) do
+    catalyst =
+      case Prima.ComponentRef.parse(ref || "") do
+        {:ok, %{name: name}} -> name
+        _ -> ref
+      end
+
+    if is_binary(model) and model != "", do: "#{catalyst} (#{model})", else: catalyst
   end
 
   defp task(""), do: {:error, {:invalid_argument, "crew.ask requires a non-empty 'task'"}}

@@ -3,9 +3,11 @@
 
 defmodule PrismWeb.AquaLive do
   @moduledoc """
-  The athanor's AQUA, at `/a/<athanor>/aqua`: the soul and the roles it
-  hands work to — each with a prompt, a model and a capability allowlist,
-  the athanor's own (`Compendium.AquaTemplate` seeds them), edited by its
+  The athanor's AQUA, at `/a/<athanor>/aqua`: the soul and the crew it
+  hands jobs to — each with a prompt and a brain, the soul with the
+  capability allowlist the crew runs under too, a crew member with what
+  it is good at and what to avoid — the athanor's own
+  (`Compendium.AquaTemplate` seeds them), edited by its
   person through the `aqua` tool — beside the page the soul reads first
   (`about-you`, pinned through the `notes` tool), the notes kept here, and the scrolls it can
   read on demand. Every write from this page goes through the tool a
@@ -43,7 +45,7 @@ defmodule PrismWeb.AquaLive do
 
   # Each section reloads on its own message, so a write refreshes what it
   # changed and nothing else: a note kept here does not re-read the
-  # roster, a role renamed does not re-index the scrolls.
+  # roster, a crew member renamed does not re-index the scrolls.
   @sections [:agents, :about, :notes, :skills]
 
   @impl true
@@ -361,7 +363,7 @@ defmodule PrismWeb.AquaLive do
       <div>
         <h3 class="text-sm font-medium text-gray-200">AQUA</h3>
         <p class="text-[11px] text-gray-500 mt-0.5">
-          One assistant — the soul — and the roles it hands work to: a stance and a set of hands for one kind of work.
+          One assistant — the soul — and its crew: who it hands a job to, each on a brain of its own. How a job is done is a scroll any of them reads.
         </p>
       </div>
 

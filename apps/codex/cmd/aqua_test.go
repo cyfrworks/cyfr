@@ -41,7 +41,7 @@ func TestAquaCommandTree(t *testing.T) {
 }
 
 // TestAquaHelpVocabulary keeps the help in the athanor's words — the soul,
-// its roles, the scrolls, the guides — across every string cobra prints.
+// its crew, the scrolls, the guides — across every string cobra prints.
 func TestAquaHelpVocabulary(t *testing.T) {
 	banned := []string{"agent", "orchestrator", "sub-agent"}
 	var walk func(c *cobra.Command)
@@ -63,7 +63,7 @@ func TestAquaHelpVocabulary(t *testing.T) {
 	walk(findCommand(t, "aqua"))
 
 	long := findCommand(t, "aqua").Long
-	for _, word := range []string{"soul", "roles", "scrolls", "guides"} {
+	for _, word := range []string{"soul", "crew", "scrolls", "guides"} {
 		if !strings.Contains(long, word) {
 			t.Errorf("aqua's Long should name the %s it manages, got:\n%s", word, long)
 		}
@@ -74,7 +74,7 @@ func TestRenderAquaList(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
 			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
-			map[string]any{"name": "builder", "title": "Builder", "type": "role", "description": "Builds components"},
+			map[string]any{"name": "explorer", "title": "Explorer", "type": "crew", "description": "Researches the web"},
 			map[string]any{"name": "component-guide", "title": "Component Guide", "type": "doc", "description": "Building WASM components"},
 		},
 		"skills": []any{
@@ -87,7 +87,7 @@ func TestRenderAquaList(t *testing.T) {
 	// Sections in the server's order, each entry under its own heading.
 	ordered := []string{
 		"Soul", "aqua ", "AQUA — The athanor's assistant",
-		"Roles", "builder", "Builder — Builds components",
+		"Crew", "explorer", "Explorer — Researches the web",
 		"Guides", "component-guide", "Component Guide — Building WASM components",
 		"Scrolls", "release-notes", "How to write release notes",
 	}
@@ -118,7 +118,7 @@ func TestRenderAquaList_NoScrolls(t *testing.T) {
 
 	out := captureStdout(t, func() { renderAquaList(result) })
 
-	for _, want := range []string{"Scrolls\n  none yet", "Roles\n  none"} {
+	for _, want := range []string{"Scrolls\n  none yet", "Crew\n  none"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)
 		}
@@ -132,14 +132,14 @@ func TestRenderAquaList_ScrollsUnavailable(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
 			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
-			map[string]any{"name": "builder", "title": "Builder", "type": "role", "description": "Builds components"},
+			map[string]any{"name": "explorer", "title": "Explorer", "type": "crew", "description": "Researches the web"},
 		},
 		"skills_error": "connection reset",
 	}
 
 	out := captureStdout(t, func() { renderAquaList(result) })
 
-	for _, want := range []string{"Soul", "aqua ", "Roles", "builder", "Guides\n  none", "Scrolls: unavailable (connection reset)"} {
+	for _, want := range []string{"Soul", "aqua ", "Crew", "explorer", "Guides\n  none", "Scrolls: unavailable (connection reset)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)
 		}
@@ -208,7 +208,7 @@ func TestRenderAquaStatus(t *testing.T) {
 	result := map[string]any{
 		"files": []any{
 			map[string]any{"path": "aqua/aqua.md", "state": "bundled_modified"},
-			map[string]any{"path": "aqua/roles/builder.md", "state": "bundled"},
+			map[string]any{"path": "aqua/crew/explorer.md", "state": "bundled"},
 			map[string]any{"path": "aqua/skills/release-notes", "state": "user"},
 		},
 		"count": float64(3),
@@ -216,7 +216,7 @@ func TestRenderAquaStatus(t *testing.T) {
 
 	out := captureStdout(t, func() { renderAquaStatus(result) })
 
-	for _, want := range []string{"PATH", "STATE", "aqua/aqua.md", "edited", "aqua/roles/builder.md", "bundled", "aqua/skills/release-notes", "yours"} {
+	for _, want := range []string{"PATH", "STATE", "aqua/aqua.md", "edited", "aqua/crew/explorer.md", "bundled", "aqua/skills/release-notes", "yours"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)
 		}
@@ -239,7 +239,7 @@ func TestRenderAquaReset(t *testing.T) {
 	result := map[string]any{
 		"reset":    true,
 		"reverted": []any{"aqua/aqua.md"},
-		"kept":     []any{"aqua/roles/mine.md", "aqua/skills/release-notes"},
+		"kept":     []any{"aqua/crew/mine.md", "aqua/skills/release-notes"},
 	}
 
 	out := captureStdout(t, func() { renderAquaReset(result, false) })
@@ -247,7 +247,7 @@ func TestRenderAquaReset(t *testing.T) {
 	for _, want := range []string{
 		"Reverted to shipped:\n  aqua/aqua.md",
 		"Kept (yours",
-		"  aqua/roles/mine.md\n  aqua/skills/release-notes",
+		"  aqua/crew/mine.md\n  aqua/skills/release-notes",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)
@@ -260,13 +260,13 @@ func TestRenderAquaReset(t *testing.T) {
 func TestRenderAquaReset_All(t *testing.T) {
 	result := map[string]any{
 		"reset":    true,
-		"reverted": []any{"aqua/aqua.md", "aqua/roles/mine.md", "aqua/skills/release-notes"},
+		"reverted": []any{"aqua/aqua.md", "aqua/crew/mine.md", "aqua/skills/release-notes"},
 		"kept":     []any{},
 	}
 
 	out := captureStdout(t, func() { renderAquaReset(result, true) })
 
-	want := "Reverted or deleted:\n  aqua/aqua.md\n  aqua/roles/mine.md\n  aqua/skills/release-notes\n"
+	want := "Reverted or deleted:\n  aqua/aqua.md\n  aqua/crew/mine.md\n  aqua/skills/release-notes\n"
 	if !strings.Contains(out, want) {
 		t.Errorf("expected %q in output, got:\n%s", want, out)
 	}

@@ -42,8 +42,8 @@ defmodule Compendium.AquaTemplateTest do
   end
 
   defp write_seed!(template, marker) do
-    roles = Path.join(template, "roles")
-    File.mkdir_p!(roles)
+    crew = Path.join(template, "crew")
+    File.mkdir_p!(crew)
 
     File.write!(Path.join(template, "aqua.md"), """
     ---
@@ -54,7 +54,7 @@ defmodule Compendium.AquaTemplateTest do
     soul prompt #{marker}
     """)
 
-    File.write!(Path.join(roles, "scribe.md"), """
+    File.write!(Path.join(crew, "scribe.md"), """
     ---
     title: Scribe
     description: writes things
@@ -94,7 +94,7 @@ defmodule Compendium.AquaTemplateTest do
     assert Enum.map(agents, & &1.name) == ["aqua", "scribe"]
     assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
 
-    # Real units of the athanor's own: the soul and the role.
+    # Real units of the athanor's own: the soul and the crew member.
     assert {:ok, [_, _]} = Arca.list_recursive(Sanctum.Context.actor(ctx), ["aqua"])
   end
 
@@ -120,8 +120,8 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, %{prompt: "ours"}} = AquaAgent.get(ctx, "scribe")
 
     # A reset restores every copy that differs from what NOW ships — the
-    # edited role and the soul the release changed alike.
-    assert {:ok, %{reverted: ["aqua/aqua.md", "aqua/roles/scribe.md"], kept: []}} =
+    # edited crew member and the soul the release changed alike.
+    assert {:ok, %{reverted: ["aqua/aqua.md", "aqua/crew/scribe.md"], kept: []}} =
              AquaTemplate.reset(ctx)
 
     assert {:ok, %{prompt: "scribe prompt v2"}} = AquaAgent.get(ctx, "scribe")
@@ -173,14 +173,14 @@ defmodule Compendium.AquaTemplateTest do
         AquaAgent.serialize(%{scribe | name: "mine"})
       )
 
-    # A role the seed ships later is not the athanor's until pulled.
-    File.write!(Path.join([template, "roles", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
+    # A crew member the seed ships later is not the athanor's until pulled.
+    File.write!(Path.join([template, "crew", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
 
     assert {:ok,
             [
               %{path: "aqua/aqua.md", state: :bundled},
-              %{path: "aqua/roles/mine.md", state: :user},
-              %{path: "aqua/roles/scribe.md", state: :bundled_modified},
+              %{path: "aqua/crew/mine.md", state: :user},
+              %{path: "aqua/crew/scribe.md", state: :bundled_modified},
               %{path: "aqua/skills/pdf", state: :bundled}
             ]} = AquaTemplate.status(ctx)
   end
@@ -206,12 +206,12 @@ defmodule Compendium.AquaTemplateTest do
         AquaAgent.serialize(%{scribe | name: "mine"})
       )
 
-    File.write!(Path.join([template, "roles", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
+    File.write!(Path.join([template, "crew", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
 
     assert {:ok,
             %{
-              reverted: ["aqua/roles/later.md", "aqua/roles/scribe.md"],
-              kept: ["aqua/roles/mine.md"]
+              reverted: ["aqua/crew/later.md", "aqua/crew/scribe.md"],
+              kept: ["aqua/crew/mine.md"]
             }} = AquaTemplate.reset(ctx)
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
@@ -240,7 +240,7 @@ defmodule Compendium.AquaTemplateTest do
       )
 
     assert {:ok, %{reverted: reverted, kept: []}} = AquaTemplate.reset(ctx, all: true)
-    assert Enum.sort(reverted) == ["aqua/roles/mine.md", "aqua/roles/scribe.md"]
+    assert Enum.sort(reverted) == ["aqua/crew/mine.md", "aqua/crew/scribe.md"]
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
     assert {:error, :not_found} = AquaAgent.get(ctx, "mine")

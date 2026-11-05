@@ -14,9 +14,9 @@ defmodule Compendium.AquaPathTest do
 
   test "paths compose from the root" do
     assert AquaPath.soul_file() == AquaPath.root() ++ ["aqua.md"]
-    assert AquaPath.role_file("scribe") == AquaPath.roles_root() ++ ["scribe.md"]
+    assert AquaPath.crew_file("scribe") == AquaPath.crew_root() ++ ["scribe.md"]
     assert AquaPath.skill_manifest("pdf") == AquaPath.skill_dir("pdf") ++ ["SKILL.md"]
-    assert AquaPath.roles_root() == AquaPath.root() ++ ["roles"]
+    assert AquaPath.crew_root() == AquaPath.root() ++ ["crew"]
     assert AquaPath.skills_root() == AquaPath.root() ++ ["skills"]
   end
 
@@ -24,15 +24,15 @@ defmodule Compendium.AquaPathTest do
     assert AquaPath.soul?("aqua")
     refute AquaPath.soul?("web")
     assert AquaPath.agent_file("aqua") == AquaPath.soul_file()
-    assert AquaPath.agent_file("web") == AquaPath.role_file("web")
-    # A role file named like the soul is not the soul: the router never
+    assert AquaPath.agent_file("web") == AquaPath.crew_file("web")
+    # A crew file named like the soul is not the soul: the router never
     # points at it, so it can only be a stray.
-    refute AquaPath.role_file("aqua") == AquaPath.soul_file()
+    refute AquaPath.crew_file("aqua") == AquaPath.soul_file()
   end
 
-  test "locate/1 speaks the unit grammars — the soul and roles are files, skills are dirs" do
+  test "locate/1 speaks the unit grammars — the soul and the crew are files, skills are dirs" do
     assert AquaPath.locate(AquaPath.soul_file()) == {:file, AquaPath.soul_file()}
-    assert AquaPath.locate(AquaPath.role_file("x")) == {:file, AquaPath.role_file("x")}
+    assert AquaPath.locate(AquaPath.crew_file("x")) == {:file, AquaPath.crew_file("x")}
 
     assert AquaPath.locate(AquaPath.skill_manifest("pdf")) ==
              {:dir, AquaPath.skill_dir("pdf"), AquaPath.skill_manifest_name()}
@@ -41,19 +41,21 @@ defmodule Compendium.AquaPathTest do
              {:dir, AquaPath.skill_dir("pdf"), AquaPath.skill_manifest_name()}
 
     assert AquaPath.locate(AquaPath.root()) == :above_unit
-    assert AquaPath.locate(AquaPath.roles_root()) == :above_unit
+    assert AquaPath.locate(AquaPath.crew_root()) == :above_unit
     assert AquaPath.locate(AquaPath.skills_root()) == :above_unit
   end
 
-  test "a file outside the soul, the roles and the scrolls is plain storage" do
+  test "a file outside the soul, the crew and the scrolls is plain storage" do
     assert AquaPath.locate(["aqua", "drafts", "old.md"]) == :above_unit
+    # The roles are gone: their old folder is plain storage.
+    assert AquaPath.locate(["aqua", "roles", "builder.md"]) == :above_unit
     assert AquaPath.locate(["aqua", "drafts"]) == :above_unit
   end
 
   test "only the grammar mints a unit — junk names and non-.md files stay plain storage" do
-    assert AquaPath.locate(AquaPath.roles_root() ++ ["notes.txt"]) == :above_unit
-    assert AquaPath.locate(AquaPath.roles_root() ++ ["bad name.md"]) == :above_unit
-    assert AquaPath.locate(AquaPath.roles_root() ++ [".md"]) == :above_unit
+    assert AquaPath.locate(AquaPath.crew_root() ++ ["notes.txt"]) == :above_unit
+    assert AquaPath.locate(AquaPath.crew_root() ++ ["bad name.md"]) == :above_unit
+    assert AquaPath.locate(AquaPath.crew_root() ++ [".md"]) == :above_unit
     assert AquaPath.locate(AquaPath.skills_root() ++ ["bad name", "SKILL.md"]) == :above_unit
 
     refute AquaPath.valid_name?("../escape")

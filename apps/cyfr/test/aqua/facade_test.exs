@@ -16,6 +16,7 @@ defmodule Aqua.FacadeTest do
     attachment_limits: 0,
     attachment_refs: 1,
     auto_permitted?: 2,
+    brain_options: 2,
     describe_note_result: 1,
     model_status: 2,
     models: 1,

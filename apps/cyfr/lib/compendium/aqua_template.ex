@@ -11,14 +11,16 @@ defmodule Compendium.AquaTemplate do
   Provisioning copies the shipped tree into the athanor's `aqua/`
   (`Arca.Overlay`); from then on the athanor's files are its own, and the
   seed is the default a reset copies in again. A release that ships new
-  roles or scrolls changes nothing until a reset asks for them.
+  crew members or scrolls changes nothing until a reset asks for them.
 
   This module is the seed-side surface: `seed_check/0` (is the
   install's template well-formed — provisioning fails loud on a mount
   with no soul), `files/0` (what the seed ships), `status/1` (each unit's
-  provenance, from the overlay), and `reset/2` (restore edited copies of
+  provenance, from the overlay), `reset/2` (restore edited copies of
   shipped units and pull shipped units the athanor lacks; athanor-made
-  roles and scrolls are kept unless `all: true` deletes them too).
+  crew members and scrolls are kept unless `all: true` deletes them too)
+  and `shipped_agent/1` (a seed agent as it runs, which the consent
+  bootstrap vouches for).
   """
 
   require Logger
@@ -31,23 +33,42 @@ defmodule Compendium.AquaTemplate do
 
   @doc """
   Whether the install ships a well-formed template: a soul file that
-  parses, and roles (optional) that each parse. Fails loud with a reason,
-  so an operator who mounted a broken tree learns it at boot, not from an
-  empty roster.
+  parses, and crew members (optional) that each parse. Fails loud with a
+  reason, so an operator who mounted a broken tree learns it at boot, not
+  from an empty roster.
   """
   @spec seed_check() :: :ok | {:error, term()}
   def seed_check do
     ctx = Sanctum.system_context()
 
     with {:ok, _soul} <- seed_soul(ctx),
-         {:ok, _roles} <- seed_roles(ctx) do
+         {:ok, _crew} <- seed_crew(ctx) do
       :ok
     end
   end
 
   @doc """
+  The seed's agent `name` as it runs: the shipped file parsed, a crew
+  member under the shipped soul's policy (`Compendium.AquaAgent.under_soul/2`).
+  `{:error, :not_found}` when the seed ships no such agent.
+  """
+  @spec shipped_agent(String.t()) :: {:ok, AquaAgent.t()} | {:error, term()}
+  def shipped_agent(name) when is_binary(name) do
+    ctx = Sanctum.system_context()
+
+    if AquaPath.soul?(name) do
+      seed_soul(ctx)
+    else
+      with {:ok, member} <- seed_member(ctx, name),
+           {:ok, soul} <- seed_soul(ctx) do
+        {:ok, AquaAgent.under_soul(member, if(soul.disabled, do: %{}, else: soul.tool_policy))}
+      end
+    end
+  end
+
+  @doc """
   The files the seed ships, as paths relative to the aqua root — only what
-  the tree's grammar recognises as a unit (the soul, `roles/*.md`, the
+  the tree's grammar recognises as a unit (the soul, `crew/*.md`, the
   scrolls). A seed that cannot be listed answers
   nothing, and says so in the log — a silent empty list reads as "the
   install ships no files", which is never true.
@@ -139,7 +160,7 @@ defmodule Compendium.AquaTemplate do
   end
 
   @doc """
-  Restore one shipped unit — the soul, a role or a scroll — to the
+  Restore one shipped unit — the soul, a crew member or a scroll — to the
   shipped bytes, whatever the athanor wrote into its copy; a shipped unit
   the athanor lacks is copied in. `{:error, :not_a_copy}` when the
   athanor made the unit itself, `{:error, :not_found}` when neither the
@@ -193,10 +214,10 @@ defmodule Compendium.AquaTemplate do
   defp outcome(:ok), do: :reverted
   defp outcome({:error, _} = error), do: error
 
-  # The seed's soul and roles, parsed with the same format module the
+  # The seed's soul and crew, parsed with the same format module the
   # athanor's union reads them with. No roster rule beyond "each file
-  # parses": there is one soul by construction, and a role has no parent
-  # to resolve.
+  # parses": there is one soul by construction, and a crew member names
+  # only its own brain.
   defp seed_soul(ctx) do
     case Arca.get(Sanctum.Context.actor(ctx), @seed_prefix ++ [List.last(AquaPath.soul_file())]) do
       {:ok, binary} ->
@@ -213,22 +234,16 @@ defmodule Compendium.AquaTemplate do
     end
   end
 
-  defp seed_roles(ctx) do
-    case Arca.list_typed(Sanctum.Context.actor(ctx), @seed_prefix ++ [AquaPath.roles_dirname()]) do
+  defp seed_crew(ctx) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), @seed_prefix ++ [AquaPath.crew_dirname()]) do
       {:ok, entries} ->
         entries
         |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
         |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
         |> Enum.reduce_while({:ok, []}, fn name, {:ok, acc} ->
-          with {:ok, binary} <-
-                 Arca.get(
-                   Sanctum.Context.actor(ctx),
-                   @seed_prefix ++ [AquaPath.roles_dirname(), name <> ".md"]
-                 ),
-               {:ok, role} <- AquaAgent.parse(name, binary) do
-            {:cont, {:ok, [role | acc]}}
-          else
-            {:error, reason} -> {:halt, {:error, {:seed_role_invalid, name, reason}}}
+          case seed_member(ctx, name) do
+            {:ok, member} -> {:cont, {:ok, [member | acc]}}
+            {:error, reason} -> {:halt, {:error, {:seed_crew_invalid, name, reason}}}
           end
         end)
 
@@ -237,6 +252,14 @@ defmodule Compendium.AquaTemplate do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp seed_member(ctx, name) do
+    path = @seed_prefix ++ [AquaPath.crew_dirname(), name <> ".md"]
+
+    with {:ok, binary} <- Arca.get(Sanctum.Context.actor(ctx), path) do
+      AquaAgent.parse(name, binary)
     end
   end
 end

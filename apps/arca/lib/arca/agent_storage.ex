@@ -45,7 +45,7 @@ defmodule Arca.AgentStorage do
   rewrite whose claim a successor took, or whose member lost that slot,
   writes nothing and answers `{:error, :claim_lost}`. A claim that names
   no slot names `:none`, which holds only where no claimant runs. Without
-  a claim the caller has no claim to lose — a person editing a role
+  a claim the caller has no claim to lose — a person editing a crew member
   through the console — and the rewrite stands on its own. The guard is
   inside the transaction and not before it, because a provisioning
   attempt's claim can lapse, and its member's slot be taken over, while a

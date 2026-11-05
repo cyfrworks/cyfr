@@ -57,10 +57,10 @@ defmodule Arca.FilesTest do
       wasm: @valid_wasm
     )
 
-    roles = Path.join([seed, "aqua", "roles"])
-    File.mkdir_p!(roles)
+    crew = Path.join([seed, "aqua", "crew"])
+    File.mkdir_p!(crew)
     File.write!(Path.join([seed, "aqua", "aqua.md"]), "---\ntitle: A\n---\n\nsoul\n")
-    File.write!(Path.join(roles, "scribe.md"), "---\ntitle: Scribe\n---\n\nscribe\n")
+    File.write!(Path.join(crew, "scribe.md"), "---\ntitle: Scribe\n---\n\nscribe\n")
 
     on_exit(fn ->
       Application.put_env(:arca, :base_path, prev_base)
@@ -291,12 +291,12 @@ defmodule Arca.FilesTest do
     assert row.description == "edited here"
   end
 
-  test "an edit of a role is what the agent index answers next, with nothing delivered", %{
+  test "an edit of a crew member is what the agent index answers next, with nothing delivered", %{
     ctx: ctx,
     actor: actor
   } do
     assert {:ok, _} =
-             Files.write(actor, "aqua/roles/courier.md", "---\ntitle: Courier\n---\n\ncourier\n")
+             Files.write(actor, "aqua/crew/courier.md", "---\ntitle: Courier\n---\n\ncourier\n")
 
     assert {:ok, rows} = Compendium.AgentIndex.list(ctx)
     courier = Enum.find(rows, &(&1.name == "courier"))
@@ -305,7 +305,7 @@ defmodule Arca.FilesTest do
     assert {:ok, _} =
              Files.write(
                actor,
-               "aqua/roles/courier.md",
+               "aqua/crew/courier.md",
                "---\ntitle: Courier\ndisabled: true\n---\n\ncourier\n"
              )
 
@@ -313,36 +313,36 @@ defmodule Arca.FilesTest do
     assert %{disabled: true} = Enum.find(rows, &(&1.name == "courier"))
   end
 
-  test "aqua/ is shaped: the soul, a role and a scroll are edited in place; nothing else lands",
+  test "aqua/ is shaped: the soul, a crew member and a scroll are edited in place; nothing else lands",
        %{actor: actor} do
     assert {:ok, %{tier: :shaped, entries: entries}} = Files.list(actor, "aqua")
-    assert Enum.map(entries, & &1.name) == ["roles", "aqua.md"]
+    assert Enum.map(entries, & &1.name) == ["crew", "aqua.md"]
 
     assert {:ok, %{content: "---\ntitle: Scribe\n---\n\nscribe\n"}} =
-             Files.read(actor, "aqua/roles/scribe.md")
+             Files.read(actor, "aqua/crew/scribe.md")
 
     assert {:ok, _} =
-             Files.write(actor, "aqua/roles/scribe.md", "---\ntitle: Scribe\n---\n\nours\n")
+             Files.write(actor, "aqua/crew/scribe.md", "---\ntitle: Scribe\n---\n\nours\n")
 
     assert {:ok, %{content: "---\ntitle: Scribe\n---\n\nours\n"}} =
-             Files.read(actor, "aqua/roles/scribe.md")
+             Files.read(actor, "aqua/crew/scribe.md")
 
-    assert {:error, {:invalid_argument, msg}} = Files.write(actor, "aqua/roles/notes.txt", "x")
+    assert {:error, {:invalid_argument, msg}} = Files.write(actor, "aqua/crew/notes.txt", "x")
     assert msg =~ "outside any AQUA unit"
 
     assert {:error, {:invalid_argument, _}} =
-             Files.write(actor, "aqua/roles/scribe.md/inner.txt", "x")
+             Files.write(actor, "aqua/crew/scribe.md/inner.txt", "x")
 
-    assert {:error, {:invalid_argument, msg}} = Files.delete(actor, "aqua/roles/scribe.md")
+    assert {:error, {:invalid_argument, msg}} = Files.delete(actor, "aqua/crew/scribe.md")
     assert msg =~ "ships with the server"
 
-    # The athanor's own role and scroll go by the same door.
-    assert {:ok, _} = Files.write(actor, "aqua/roles/mine.md", "---\ntitle: Mine\n---\n\nmine\n")
+    # The athanor's own crew member and scroll go by the same door.
+    assert {:ok, _} = Files.write(actor, "aqua/crew/mine.md", "---\ntitle: Mine\n---\n\nmine\n")
 
     assert {:ok, _} =
              Files.write(actor, "aqua/skills/pdf/SKILL.md", "---\nname: pdf\n---\n\npdf\n")
 
-    assert {:ok, %{deleted: "aqua/roles/mine.md"}} = Files.delete(actor, "aqua/roles/mine.md")
+    assert {:ok, %{deleted: "aqua/crew/mine.md"}} = Files.delete(actor, "aqua/crew/mine.md")
     assert {:ok, %{deleted: "aqua/skills/pdf"}} = Files.delete(actor, "aqua/skills/pdf")
   end
 

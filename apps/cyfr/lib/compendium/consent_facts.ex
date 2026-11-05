@@ -116,10 +116,7 @@ defmodule Compendium.ConsentFacts do
   # athanor's copy leaves this digest alone, a policy, model or catalyst
   # edit of the seed file moves it.
   defp seed_agent_digest(name) do
-    path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit(name), 1)
-
-    with {:ok, bytes} <- Arca.get(Prima.Actor.system(), path),
-         {:ok, row} <- AgentSource.shipped_row(name, bytes) do
+    with {:ok, row} <- AgentSource.shipped_row(name) do
       {:ok, Map.get(row, :release_digest)}
     end
   end

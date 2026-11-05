@@ -8,11 +8,13 @@ defmodule Aqua.Models do
 
     * `capabilities/5` — what one model can do and the options it lets a
       caller set, read from its catalyst's `describe` and cached under the
-      key the reading ran with;
+      key the reading ran with; `brain_options/2` is the options of an
+      agent's brain, read as a person on the AQUA page;
     * `catalogue/1` — the listing the console's pickers show, every
       installed catalyst that speaks the contract asked for its models;
-    * `model_status/2` — whether each agent's model has a key the
-      assistant runs it with (`t:status/0`).
+    * `model_status/2` — whether each agent's brain is ready: installed,
+      and bound to a key or a login the agent runs it with
+      (`t:status/0`).
 
   The component facts come from `Compendium.model_catalysts/1`; running a
   catalyst goes through the gate like any other call, under the caller's
@@ -22,12 +24,13 @@ defmodule Aqua.Models do
   alias Sanctum.Context
 
   @typedoc """
-  A soul's model as `model_status/2` reads it. The first four carry the
-  release the soul's ref resolves to; `:missing` and `:model_unavailable`
-  carry the ref the soul names, whether or not the listing resolved it:
+  An agent's brain as `model_status/2` reads it. The first four carry the
+  release the agent's ref resolves to; `:missing` and `:model_unavailable`
+  carry the ref the agent names, whether or not the listing resolved it:
 
-    * `:ready` — the assistant runs it with a bound key;
-    * `:needs_key` — a key to connect;
+    * `:ready` — the agent runs it with a bound key, or a bound login
+      entry for a brain that mounts a program's own sign-in;
+    * `:needs_key` — a key (or a login) to connect;
     * `:consent_damaged`, `:consent_unavailable` — a consent it runs
       under is damaged, or the store could not answer it;
     * `:missing` — the athanor's catalysts, read, hold no such model, or
@@ -161,6 +164,40 @@ defmodule Aqua.Models do
   defp list_of_strings(_), do: []
 
   @doc """
+  The options `agent`'s brain lets a caller set — the roster's
+  string-keyed projection, its `"catalyst_ref"` and `"model"` — as the
+  brain's `describe` of that model declares them (`capabilities/5`), read
+  as the caller through the catalog like `catalogue/1`'s listing, within
+  30 seconds. An agent that names no brain declares none;
+  a catalyst the athanor does not hold is `{:error, :catalyst_not_found}`,
+  and a `describe` that fails is `capabilities/5`'s refusal.
+  """
+  @spec brain_options(Context.t(), map()) :: {:ok, [map()]} | {:error, term()}
+  def brain_options(%Context{} = ctx, %{"catalyst_ref" => ref, "model" => model})
+      when is_binary(ref) and ref != "" and is_binary(model) and model != "" do
+    with {:ok, listing} <- Aqua.AgentConfig.catalyst_listing(ctx),
+         {:ok, resolved} <- Aqua.AgentConfig.resolve_catalyst(listing, ref),
+         {:ok, caps} <-
+           capabilities(ctx, resolved, model, nil,
+             run: &run_as_caller(ctx, resolved, &1),
+             timeout: @listing_timeout_ms
+           ) do
+      {:ok, caps.options}
+    end
+  end
+
+  def brain_options(%Context{}, _agent), do: {:ok, []}
+
+  defp run_as_caller(ctx, resolved, input) do
+    Aqua.Ops.call_tool("execution", ctx, %{
+      "action" => "run",
+      "reference" => resolved,
+      "type" => "catalyst",
+      "input" => input
+    })
+  end
+
+  @doc """
   The model listing the console shows: every installed catalyst that
   declares the contract, at its newest version, asked for `models`
   through the catalog (so consent applies: a catalyst with no key answers
@@ -231,13 +268,7 @@ defmodule Aqua.Models do
   end
 
   defp list_models(ctx, ref) do
-    run =
-      Aqua.Ops.call_tool("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "type" => "catalyst",
-        "input" => %{"operation" => "models", "params" => %{}}
-      })
+    run = run_as_caller(ctx, ref, %{"operation" => "models", "params" => %{}})
 
     with {:ok, result} <- run,
          {:ok, %{"models" => models}} when is_list(models) <- Prima.Model.decode_envelope(result) do
@@ -255,23 +286,34 @@ defmodule Aqua.Models do
   defp refusal_text(reason), do: Sanctum.Refusals.render(reason)
 
   @doc """
-  For each soul's catalyst: the installed release it resolves to and
-  whether its consent is complete — `%{catalyst_ref => t:status/0}`,
-  keyed by the catalyst ref the agent names: `{:ready | :needs_key |
-  :consent_damaged | :consent_unavailable, resolved_ref}`, or
-  `{:missing | :model_unavailable, catalyst_ref}`. A consent the model
-  runs under that is damaged, or that the store could not answer, is
-  `:consent_damaged` or `:consent_unavailable`, never a key to connect
-  over a consent that exists: the model's own consent, as its setup plan
-  reads it, and, once that reads ready, the assistant's own load
+  For each agent given (the roster's string-keyed projection: `"name"`
+  and `"catalyst_ref"`), its brain: the installed release its catalyst
+  resolves to and whether the consent it runs under is complete —
+  `%{name => t:status/0}`: `{:ready | :needs_key | :consent_damaged |
+  :consent_unavailable, resolved_ref}`, or `{:missing |
+  :model_unavailable, catalyst_ref}`. An agent that names no catalyst
+  has no entry. Each agent is read on its own consent, the soul's or the
+  crew member's (`Compendium.AgentSource`), so a member whose brain is
+  not installed or not bound reads so while the soul reads ready.
+
+  A brain is ready on a bound need of either kind: a key the catalyst's
+  requests carry, or a login entry it mounts into its program
+  (`Sanctum.Mount`) — the setup plan and the edge read both the same
+  way. A consent the brain runs under that is damaged, or that the
+  store could not answer, is `:consent_damaged` or
+  `:consent_unavailable`, never a key to connect over a consent that
+  exists: the brain's own consent, as its setup plan reads it, and, once
+  that reads ready, the agent's own load
   (`Aqua.ConsentStatus.classify_refusal/1`). A catalyst listing that
   cannot be read is not an empty one, and a setup plan refused for any
   reason but the component's absence (`{:not_found, {:component, _}}`,
   `Compendium.Component.resolve_component/2`'s one absence) is not an
   absence: each is `:model_unavailable`, never a model to install.
 
-  A model with no key is the one thing that keeps a fresh athanor's AQUA
-  silent, so both the AQUA page and the chat's own empty state ask here.
+  A soul with no key is the one thing that keeps a fresh athanor's AQUA
+  silent, so both the AQUA page and the chat's own empty state ask here;
+  the crew index (`Aqua.Crew.index/2`) names only the members that read
+  ready.
   """
   @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => status()}
   def model_status(nil, _agents), do: %{}
@@ -281,26 +323,23 @@ defmodule Aqua.Models do
     # resolves a model against no catalysts.
     listing = Aqua.AgentConfig.catalyst_listing(ctx)
 
-    soul_type = Compendium.agent_soul_type()
-
-    agents
-    |> Enum.filter(&(&1["type"] == soul_type))
-    |> Enum.map(& &1["catalyst_ref"])
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> Enum.uniq()
-    |> Map.new(fn ref -> {ref, catalyst_status(ctx, listing, ref)} end)
+    for %{"name" => name, "catalyst_ref" => ref} <- agents,
+        is_binary(name) and is_binary(ref) and ref != "",
+        into: %{} do
+      {name, catalyst_status(ctx, listing, name, ref)}
+    end
   end
 
-  # A model is ready when its own profile binds a key AND the assistant's
-  # consent selects that profile on its edge to the catalyst — the key
-  # the assistant actually runs it with, resolved as a turn would resolve
-  # it. A bound key the assistant's edge does not select is still a key
-  # to connect.
-  defp catalyst_status(_ctx, {:error, _unread}, ref), do: {:model_unavailable, ref}
+  # A brain is ready when its own profile binds what it needs AND the
+  # agent's consent selects that profile on its edge to the catalyst —
+  # what the agent actually runs it with, resolved as a turn would resolve
+  # it. A bound key the agent's edge does not select is still one to
+  # connect.
+  defp catalyst_status(_ctx, {:error, _unread}, _name, ref), do: {:model_unavailable, ref}
 
-  defp catalyst_status(ctx, {:ok, listing}, ref) do
+  defp catalyst_status(ctx, {:ok, listing}, name, ref) do
     case Aqua.AgentConfig.resolve_catalyst(listing, ref) do
-      {:ok, resolved} -> planned_status(ctx, ref, resolved)
+      {:ok, resolved} -> planned_status(ctx, name, ref, resolved)
       {:error, _no_such_catalyst} -> {:missing, ref}
     end
   end
@@ -310,14 +349,14 @@ defmodule Aqua.Models do
   # every other refusal (a store that could not answer, which the
   # component domain answers as a sentence, a damaged row, a timeout, a
   # forbidden call, anything else) leaves whether it is installed unknown.
-  defp planned_status(ctx, ref, resolved) do
+  defp planned_status(ctx, name, ref, resolved) do
     case Aqua.Ops.call_tool("component", ctx, %{
            "action" => "setup_plan",
            "reference" => resolved
          }) do
       {:ok, plan} ->
         if plan.ready == true,
-          do: assistant_status(ctx, ref, resolved),
+          do: agent_status(ctx, name, ref, resolved),
           else: unready(plan, resolved)
 
       {:error, {:not_found, {:component, _reference}}} ->
@@ -328,18 +367,18 @@ defmodule Aqua.Models do
     end
   end
 
-  # The assistant's own load, as a turn would make it, read through
+  # The agent's own load, as a turn would make it, read through
   # `Aqua.ConsentStatus.classify_refusal/1`: a load that refuses for
-  # damage (the assistant's head, a lender, a stored grant that fails its
+  # damage (the agent's head, a lender, a stored grant that fails its
   # checks) or because the store could not answer is said as such, never
-  # as a key to connect; every other refusal, and an edge that binds no
-  # key, is a key to connect.
-  defp assistant_status(ctx, catalyst_ref, resolved) do
-    soul = Prima.AgentRef.soul_ref()
+  # as a key to connect; every other refusal, and an edge that binds
+  # nothing, is a key to connect.
+  defp agent_status(ctx, name, catalyst_ref, resolved) do
+    source = Prima.AgentRef.ref(name)
 
-    case Opus.authority_for(ctx, :default, soul) do
+    case Opus.authority_for(ctx, :default, source) do
       {:ok, authority} ->
-        if lent?(authority, soul, catalyst_ref),
+        if lent?(authority, source, catalyst_ref),
           do: {:ready, resolved},
           else: {:needs_key, resolved}
 
@@ -352,8 +391,10 @@ defmodule Aqua.Models do
     end
   end
 
-  defp lent?(authority, soul, catalyst_ref) do
-    case Prima.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
+  # A bound vault is an entry, a key or a login alike
+  # (`Prima.Authority.Blob.bound_vault?/1`).
+  defp lent?(authority, source, catalyst_ref) do
+    case Prima.Authority.Blob.lookup_edge(authority.policy, source, catalyst_ref, "") do
       {:ok, edge} -> Prima.Authority.Blob.bound_vault?(edge.vault)
       _no_edge -> false
     end

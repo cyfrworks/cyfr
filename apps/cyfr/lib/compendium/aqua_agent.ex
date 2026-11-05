@@ -4,41 +4,48 @@
 defmodule Compendium.AquaAgent do
   @moduledoc """
   The AQUA agent file format and the tree's roster: the soul at
-  `aqua/aqua.md` and one frontmatter-markdown file per role under
-  `aqua/roles/`, served through the seed overlay like every other aqua
+  `aqua/aqua.md` and one frontmatter-markdown file per crew member under
+  `aqua/crew/`, served through the seed overlay like every other aqua
   path, so an unedited file tracks the shipped seed and an edited one
   shadows only itself.
 
   The format is deliberately portable — the shape Claude Code speaks for
   its subagents (`.claude/agents/*.md`): YAML frontmatter carrying the
-  metadata, the system prompt as the markdown body. CYFR's additions are
-  `catalyst_ref` (which LLM catalyst executes the agent — defaultable),
-  `tool_policy` (the per-action allowlist, richer than a flat tools list)
-  and `disabled: true` (how a shipped role is taken out of the roster —
-  shipped files revert, they don't delete). Which file is the soul and
-  which are roles is the tree's to say (`Compendium.AquaPath`), never the
-  frontmatter's.
+  metadata, the system prompt as the markdown body. Which file is the
+  soul and which is a crew member is the tree's to say
+  (`Compendium.AquaPath`), never the frontmatter's; the wire `type` is
+  `"soul"` or `"crew"` accordingly.
 
       ---
-      title: Artisan
-      description: Put on the Artisan role to …
-      catalyst_ref: catalyst:local.claude
-      model: claude-sonnet-4-6
-      tool_policy:
-        files.read: auto
-        build.compile: ask
+      title: Explorer
+      description: Deep web research — several searches, cross-checked
+      avoid: Changing the athanor's files or components
+      catalyst_ref: catalyst:local.gemini
+      model: gemini-pro-latest
+      options:
+        effort: high
       ---
-      You are AQUA in the Artisan role …
+      You are the explorer …
+
+  The keys: `title`; `description`, what the member is good at, which the
+  soul reads when it hands a job; `avoid`, what to hand it never;
+  `catalyst_ref` and `model`, the brain its turns run on; `options`, the
+  brain options its every request sets (a flat map of strings, integers
+  and booleans, which the brain's `describe` declares); `disabled: true`,
+  how a shipped member is taken out of the crew (shipped files revert,
+  they don't delete); and on the soul alone `tool_policy`, the per-action
+  allowlist. A crew member has no policy of its own: it runs under the
+  soul's (`under_soul/2`), narrowed only by the request that asks it, so a
+  `tool_policy` in a crew file refuses the file.
 
   The frontmatter grammar is restricted on purpose: string and boolean
-  scalars plus the one flat string→string map (`tool_policy`) — enough for
+  scalars plus two flat maps (`tool_policy`, `options`) — enough for
   portability, small enough that `serialize/1` can emit it byte-stably.
   The policy's own grammar — keys `tool.action`, `tool.*` or
   `native_search`, values `ask` or `auto` — is the one rule the file
   parser and the `aqua` tool door both apply, so a value the runtime would
-  otherwise have to reinterpret never lands; both also refuse a key that
-  has no effect on the agent that holds it. What an authored policy may
-  say on top of that is `validate_tool_policy/2`, the door's rule alone.
+  otherwise have to reinterpret never lands. What an authored policy may
+  say on top of that is `validate_tool_policy/1`, the door's rule alone.
   `parse_frontmatter/1` is shared with the scrolls (`SKILL.md` files under
   `aqua/skills/` follow the open Agent Skills convention: `name` +
   `description` frontmatter, instructions as the body).
@@ -48,13 +55,17 @@ defmodule Compendium.AquaAgent do
   alias Sanctum.VirtualTools
   alias Sanctum.Context
 
+  @type option_value :: String.t() | integer() | boolean()
+
   @type t :: %{
           name: String.t(),
           title: String.t(),
           description: String.t(),
+          avoid: String.t(),
           disabled: boolean(),
           catalyst_ref: String.t() | nil,
           model: String.t() | nil,
+          options: %{String.t() => option_value()},
           tool_policy: %{String.t() => String.t()},
           prompt: String.t()
         }
@@ -64,40 +75,96 @@ defmodule Compendium.AquaAgent do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Parse one agent file. The name comes from the filename (`<name>.md`),
-  never from the frontmatter — the tree is the roster. A `tool_policy`
-  outside the grammar, or holding a key with no effect on the agent the
-  name makes it, refuses the whole file with its typed reason
-  (`t:tool_policy_error/0`) rather than parsing to something the runtime
+  Parse one agent file as it is written. The name comes from the filename
+  (`<name>.md`), never from the frontmatter — the tree is the roster. A
+  `tool_policy` outside the grammar, a `tool_policy` in a crew member's
+  file (`:crew_has_no_tool_policy`), or `options` that are not a flat map
+  of strings, integers and booleans (`:options_invalid`) refuse the whole
+  file with its typed reason rather than parsing to something the runtime
   would have to guess at.
+
+  A crew member parsed here holds no policy; the one it runs under is the
+  soul's (`resolve/3`, `under_soul/2`).
   """
   @spec parse(String.t(), binary()) :: {:ok, t()} | {:error, term()}
   def parse(name, binary) when is_binary(name) and is_binary(binary) do
     with {:ok, meta, body} <- parse_frontmatter(binary),
-         policy = policy_or_empty(meta["tool_policy"]),
-         :ok <- check_tool_policy(policy),
-         :ok <- check_effect(policy, type_of_name(name)) do
+         {:ok, policy} <- policy_of(name, meta),
+         {:ok, options} <- options_of(meta["options"]) do
       {:ok,
        %{
          name: name,
          title: string_or(meta["title"], name),
          description: string_or(meta["description"], ""),
+         avoid: string_or(meta["avoid"], ""),
          disabled: meta["disabled"] == true,
          catalyst_ref: blank_to_nil(meta["catalyst_ref"]),
          model: blank_to_nil(meta["model"]),
+         options: options,
          tool_policy: policy,
          prompt: body
        }}
     end
   end
 
-  @doc "Serialize an agent back to its file — the inverse of `parse/2`."
+  @doc """
+  An agent file as it runs: parsed (`parse/2`), and a crew member put
+  under the soul the tree holds now (`under_soul/2`). The one read every
+  runtime view of an agent's bytes goes through — the roster, the index's
+  capability digest and a turn's pinned revision alike — so a crew
+  member's capability always names the policy it runs under.
+  """
+  @spec resolve(Context.t(), String.t(), binary()) :: {:ok, t()} | {:error, term()}
+  def resolve(%Context{} = ctx, name, binary) when is_binary(name) and is_binary(binary) do
+    with {:ok, agent} <- parse(name, binary) do
+      if AquaPath.soul?(name) do
+        {:ok, agent}
+      else
+        with {:ok, policy} <- soul_policy(ctx), do: {:ok, under_soul(agent, policy)}
+      end
+    end
+  end
+
+  @doc """
+  A crew member under the soul's tool policy: every member gets the
+  soul's whole allowlist, and a request that asks it may narrow that for
+  one job (`Aqua.Loop.Turn`). The soul itself is answered as it is.
+  """
+  @spec under_soul(t(), %{String.t() => String.t()}) :: t()
+  def under_soul(%{name: name} = agent, soul_policy) when is_map(soul_policy) do
+    if AquaPath.soul?(name), do: agent, else: %{agent | tool_policy: soul_policy}
+  end
+
+  # The soul's policy as the tree holds it now; an athanor with no soul, a
+  # soul set aside or one that does not parse gives its crew none, as
+  # `list/1` does. A store that cannot answer is its refusal.
+  defp soul_policy(ctx) do
+    case Arca.get(Sanctum.Context.actor(ctx), AquaPath.soul_file()) do
+      {:ok, bytes} ->
+        case parse(AquaPath.soul_name(), bytes) do
+          {:ok, %{disabled: false} = soul} -> {:ok, soul.tool_policy}
+          _set_aside_or_unparsed -> {:ok, %{}}
+        end
+
+      {:error, :not_found} ->
+        {:ok, %{}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Serialize an agent back to its file — the inverse of `parse/2`. A crew
+  member's file carries no policy, whatever the agent map holds.
+  """
   @spec serialize(t()) :: binary()
-  def serialize(%{name: _} = agent) do
+  def serialize(%{name: name} = agent) do
     fields =
       [
         {"title", agent.title},
         {"description", blank_to_nil(agent.description)},
+        {"avoid", blank_to_nil(Map.get(agent, :avoid))},
         {"catalyst_ref", agent.catalyst_ref},
         {"model", agent.model},
         {"disabled", if(agent.disabled, do: true)}
@@ -105,8 +172,14 @@ defmodule Compendium.AquaAgent do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Enum.map(fn {k, v} -> "#{k}: #{scalar(v)}\n" end)
 
+    options =
+      case Enum.sort(Map.get(agent, :options) || %{}) do
+        [] -> []
+        pairs -> ["options:\n" | Enum.map(pairs, fn {k, v} -> "  #{key(k)}: #{option(v)}\n" end)]
+      end
+
     policy =
-      case Enum.sort(agent.tool_policy || %{}) do
+      case if(AquaPath.soul?(name), do: Enum.sort(agent.tool_policy || %{}), else: []) do
         [] ->
           []
 
@@ -117,6 +190,7 @@ defmodule Compendium.AquaAgent do
     IO.iodata_to_binary([
       "---\n",
       fields,
+      options,
       policy,
       "---\n\n",
       String.trim_trailing(agent.prompt || ""),
@@ -155,37 +229,45 @@ defmodule Compendium.AquaAgent do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The soul and every role under `aqua/` — the overlay union, so shipped and
-  athanor-made roles list alike. Disabled agents are included (flagged);
+  The soul and every crew member under `aqua/` — the overlay union, so
+  shipped and athanor-made members list alike, each crew member under the
+  soul's policy (`under_soul/2`). Disabled agents are included (flagged);
   the callers that build a surface drop them. A file that fails to parse
-  is skipped with its error in the second element — one broken role must
-  not take the roster down. The soul comes first when the tree has one,
-  then the roles by name.
+  is skipped with its error in the second element — one broken member
+  must not take the roster down; a soul that fails to parse gives the
+  crew no policy. The soul comes first when the tree has one, then the
+  crew by name.
   """
   @spec list(Context.t()) :: {:ok, [t()], [{String.t(), term()}]} | {:error, term()}
   def list(%Context{} = ctx) do
-    case Arca.list_typed(Sanctum.Context.actor(ctx), AquaPath.roles_root()) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), AquaPath.crew_root()) do
       {:ok, entries} ->
-        {roles, errors} =
+        {soul, errors} =
+          case get(ctx, AquaPath.soul_name()) do
+            {:ok, agent} -> {[agent], []}
+            {:error, :not_found} -> {[], []}
+            {:error, reason} -> {[], [{AquaPath.soul_name(), reason}]}
+          end
+
+        policy =
+          case soul do
+            [%{disabled: false, tool_policy: policy}] -> policy
+            _none_or_disabled -> %{}
+          end
+
+        {crew, errors} =
           entries
           |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
           |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
           |> Enum.reject(&AquaPath.soul?/1)
-          |> Enum.reduce({[], []}, fn name, {ok, errs} ->
-            case get(ctx, name) do
-              {:ok, agent} -> {[agent | ok], errs}
+          |> Enum.reduce({[], errors}, fn name, {ok, errs} ->
+            case read(ctx, name) do
+              {:ok, member} -> {[under_soul(member, policy) | ok], errs}
               {:error, reason} -> {ok, [{name, reason} | errs]}
             end
           end)
 
-        {soul, errors} =
-          case get(ctx, AquaPath.soul_name()) do
-            {:ok, agent} -> {[agent], errors}
-            {:error, :not_found} -> {[], errors}
-            {:error, reason} -> {[], [{AquaPath.soul_name(), reason} | errors]}
-          end
-
-        {:ok, soul ++ Enum.sort_by(roles, & &1.name), Enum.reverse(errors)}
+        {:ok, soul ++ Enum.sort_by(crew, & &1.name), Enum.reverse(errors)}
 
       {:error, reason} ->
         {:error, reason}
@@ -193,7 +275,7 @@ defmodule Compendium.AquaAgent do
   end
 
   @soul_type "soul"
-  @role_type "role"
+  @crew_type "crew"
 
   @doc """
   The `type` a soul carries on the wire — what the `aqua` tool's `list` and
@@ -203,31 +285,35 @@ defmodule Compendium.AquaAgent do
   @spec soul_type() :: String.t()
   def soul_type, do: @soul_type
 
-  @doc "The `type` a role carries on the wire — see `soul_type/0`."
-  @spec role_type() :: String.t()
-  def role_type, do: @role_type
+  @doc "The `type` a crew member carries on the wire — see `soul_type/0`."
+  @spec crew_type() :: String.t()
+  def crew_type, do: @crew_type
 
   @doc """
   An agent's wire `type`, decided by the tree: the reserved name is the
-  soul (`Compendium.AquaPath.soul?/1`), every other name a role.
+  soul (`Compendium.AquaPath.soul?/1`), every other name a crew member.
   """
   @spec type_of(t()) :: String.t()
   def type_of(%{name: name}), do: type_of_name(name)
 
-  defp type_of_name(name), do: if(AquaPath.soul?(name), do: @soul_type, else: @role_type)
+  defp type_of_name(name), do: if(AquaPath.soul?(name), do: @soul_type, else: @crew_type)
 
   @doc """
   The security-relevant subset of an agent, as a manifest: what it is
-  (soul or role), which catalyst and model run it, whether it is
-  disabled, and its tool policy. Nothing else — not the prompt, the title
-  or the description, which change what the agent says and never what it
-  may do. Pure: the same agent projects to the same map, so a digest of
-  it is the agent's capability revision.
+  (soul or crew), which catalyst and model run it with which options,
+  whether it is disabled, and the tool policy it runs under (a crew
+  member's is the soul's). Nothing else — not the prompt, the title, the
+  description or what to avoid, which change what the agent says and
+  never what it may do. Pure: the same agent projects to the same map, so
+  a digest of it is the agent's capability revision.
   """
   @spec to_manifest(t()) :: map()
   def to_manifest(%{name: name} = agent) do
-    # An unset catalyst or model is absent, never a null: the projection
-    # names what the agent declares, and its digest is canonical JSON.
+    # An unset catalyst or model, and no options, are absent, never a
+    # null: the projection names what the agent declares, and its digest
+    # is canonical JSON.
+    options = Map.get(agent, :options) || %{}
+
     %{
       "name" => name,
       "type" => type_of(agent),
@@ -236,15 +322,26 @@ defmodule Compendium.AquaAgent do
     }
     |> Prima.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
     |> Prima.MapUtil.put_present("model", agent.model)
+    |> Prima.MapUtil.put_present("options", if(options == %{}, do: nil, else: options))
   end
 
   @doc "The digest of `to_manifest/1`: the agent's capability revision."
   @spec capability_digest(t()) :: {:ok, String.t()} | {:error, term()}
   def capability_digest(agent), do: Prima.JCS.hash(to_manifest(agent))
 
-  @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
+  @doc """
+  One agent by name — the soul or a crew member, whichever the name is —
+  through the overlay union, as it runs (`resolve/3`).
+  """
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, name) when is_binary(name) do
+    with {:ok, binary} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file(name)) do
+      resolve(ctx, name, binary)
+    end
+  end
+
+  # One file as it is written, for a list that composes the crew itself.
+  defp read(ctx, name) do
     with {:ok, binary} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file(name)) do
       parse(name, binary)
     end
@@ -254,10 +351,34 @@ defmodule Compendium.AquaAgent do
   # Internals
   # ---------------------------------------------------------------------------
 
-  # An absent `tool_policy` is the empty allowlist; anything present is
-  # checked as written.
-  defp policy_or_empty(nil), do: %{}
-  defp policy_or_empty(policy), do: policy
+  # The soul's policy is checked as written, an absent one the empty
+  # allowlist; a crew member's file holds none.
+  defp policy_of(name, meta) do
+    case {AquaPath.soul?(name), Map.fetch(meta, "tool_policy")} do
+      {true, :error} -> {:ok, %{}}
+      {true, {:ok, nil}} -> {:ok, %{}}
+      {true, {:ok, policy}} -> with :ok <- check_tool_policy(policy), do: {:ok, policy}
+      {false, :error} -> {:ok, %{}}
+      {false, {:ok, _policy}} -> {:error, :crew_has_no_tool_policy}
+    end
+  end
+
+  # A brain's options as the file holds them: a flat map of non-empty
+  # names to strings, integers and booleans, the kinds `Prima.Model`
+  # declares. Which names and values the brain takes is the brain's to
+  # say, checked when a turn opens on it.
+  defp options_of(nil), do: {:ok, %{}}
+
+  defp options_of(options) when is_map(options) do
+    if Enum.all?(options, fn {name, value} ->
+         is_binary(name) and name != "" and
+           (is_binary(value) or is_integer(value) or is_boolean(value))
+       end),
+       do: {:ok, options},
+       else: {:error, :options_invalid}
+  end
+
+  defp options_of(_options), do: {:error, :options_invalid}
 
   defp string_or(value, _fallback) when is_binary(value) and value != "", do: value
   defp string_or(_value, fallback), do: fallback
@@ -267,15 +388,13 @@ defmodule Compendium.AquaAgent do
 
   @typedoc """
   Why a `tool_policy` is refused: not a map at all, a key that is neither
-  `tool.action`, `tool.*` nor `native_search`, a value that is neither
-  `"ask"` nor `"auto"`, or (at a write door only, `validate_tool_policy/2`)
-  a key that has no effect on the agent that would hold it.
+  `tool.action`, `tool.*` nor `native_search`, or a value that is neither
+  `"ask"` nor `"auto"`.
   """
   @type tool_policy_error ::
           :tool_policy_not_a_map
           | {:tool_policy_invalid_key, term()}
           | {:tool_policy_invalid_value, String.t(), term()}
-          | {:tool_policy_no_effect, String.t()}
 
   # A `tool_policy` map against the grammar the runtime reads: every key is
   # `tool.action`, `tool.*` or the bare `native_search`, every value exactly
@@ -297,19 +416,17 @@ defmodule Compendium.AquaAgent do
   defp check_tool_policy(_policy), do: {:error, :tool_policy_not_a_map}
 
   @doc """
-  What an AUTHORED `tool_policy` may say: the grammar first, then the
-  rules a write door applies on
-  top of it. A door refuses what a person must not be able to write: a
+  What an AUTHORED `tool_policy` may say — the soul's, the one policy an
+  athanor writes: the grammar first, then the rules a write door applies
+  on top of it. A door refuses what a person must not be able to write: a
   UI event held at anything but `auto`, an automatic destructive or
-  external action on any agent, a `tool.*` glob at `auto` whose actions
-  include one of those, and, at any value, a key that has no effect on a
-  role (`{:tool_policy_no_effect, key}`): `execution.run`, because a role
-  launches nothing and every launch asks.
+  external action, and a `tool.*` glob at `auto` whose actions include one
+  of those.
 
-  The parser holds a file to the grammar and to the no-effect rule only, so
-  a hand-edited file that says more than a door would allow still loads;
-  the assistant's runtime ceiling demotes whatever loaded, so a file
-  written past this door reaches the guest already demoted.
+  The parser holds a file to the grammar only, so a hand-edited file that
+  says more than a door would allow still loads; the assistant's runtime
+  ceiling demotes whatever loaded, so a file written past this door
+  reaches the guest already demoted.
 
   An action's kind is the gate's classification (`Sanctum.Catalog.tool_kind/2`:
   a virtual hand's from `Sanctum.VirtualTools`, `:external` for a
@@ -319,34 +436,15 @@ defmodule Compendium.AquaAgent do
   and an action whose kind is unknown is left to that ceiling.
 
   `:ok`, a typed refusal, or `{:error, sentence}` — the sentence is the
-  person's. A key with no effect on a role is refused at any value, the
-  grammar's own value rule included.
+  person's.
   """
-  @spec validate_tool_policy(term(), String.t()) ::
-          :ok | {:error, tool_policy_error() | String.t()}
-  def validate_tool_policy(policy, agent_type) do
-    with :ok <- check_effect(policy, agent_type),
-         :ok <- check_tool_policy(policy),
+  @spec validate_tool_policy(term()) :: :ok | {:error, tool_policy_error() | String.t()}
+  def validate_tool_policy(policy) do
+    with :ok <- check_tool_policy(policy),
          :ok <- check_auto_only(policy) do
       check_authored(policy)
     end
   end
-
-  # Keys that have no effect on a role at any value: only the soul
-  # launches, and a launch always asks (the runtime ceiling holds
-  # `execution.run` at ask however it is written). Checked ahead of the
-  # grammar's value rule, so whatever the key is held at, the refusal
-  # names why it is there for nothing rather than how to hold it.
-  @no_effect_on_roles ["execution.run"]
-
-  defp check_effect(policy, @role_type) when is_map(policy) do
-    case Enum.find(@no_effect_on_roles, &Map.has_key?(policy, &1)) do
-      nil -> :ok
-      key -> {:error, {:tool_policy_no_effect, key}}
-    end
-  end
-
-  defp check_effect(_policy, _agent_type), do: :ok
 
   defp check_authored(policy) do
     Enum.find_value(policy, :ok, fn
@@ -431,6 +529,12 @@ defmodule Compendium.AquaAgent do
       inspect(value)
     end
   end
+
+  # An option's value keeps its kind through the round trip: an integer
+  # or a boolean bare, a string always JSON-quoted, so "true" or "8"
+  # written as a string is read back as one.
+  defp option(value) when is_boolean(value) or is_integer(value), do: to_string(value)
+  defp option(value) when is_binary(value), do: Jason.encode!(value)
 
   defp key(k) do
     if k =~ ~r/\A[A-Za-z0-9_.\-]+(\.\*)?\z/ or k =~ ~r/\A[A-Za-z0-9_\-]+\z/,

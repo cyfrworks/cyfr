@@ -517,7 +517,7 @@ defmodule Compendium.Provisioning do
   end
 
   # The shipped AQUA tree, checked well-formed first (a mount with no soul,
-  # or a soul or role that does not parse, fails loud here, at the one
+  # or a soul or crew member that does not parse, fails loud here, at the one
   # moment an operator is watching, instead of as an empty roster later),
   # then copied into the athanor's `aqua/` — every shipped unit it does not
   # yet hold, under the attempt's claim and slot.

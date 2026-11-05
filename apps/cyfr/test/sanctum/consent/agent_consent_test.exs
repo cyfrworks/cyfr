@@ -4,12 +4,13 @@
 defmodule Sanctum.Consent.AgentConsentTest do
   @moduledoc """
   The athanor's agents consent as sources, each its own: the fill mints
-  the shipped soul and roles with each agent's edge into its model
-  selecting the model's default profile and no edge from one agent into
-  another; the shape reads the model target and never the prompt; a role
-  a member authors is not machine-minted — it consents through the walk
-  and leaves the soul's consent alone — and the loaded authority carries
-  the tools the policy names, never a pattern no catalogued action
+  the shipped soul and the crew whose brain is installed, each agent's
+  edge into its model selecting the model's default profile, a crew
+  member's tools the soul's it runs under, and no edge from one agent into
+  another; the shape reads the model target and never the prompt; a crew
+  member a person makes is not machine-minted — it consents through the
+  walk and leaves the soul's consent alone — and the loaded authority
+  carries the tools the policy names, never a pattern no catalogued action
   matches.
   """
 
@@ -106,17 +107,22 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
-  test "the fill mints the shipped soul and roles after their models, with their edges", %{
+  test "the fill mints the shipped soul and crew after their models, with their edges", %{
     ctx: ctx
   } do
     {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
     assert @soul in minted
+    assert "agent:local.explorer" in minted
 
-    for role <- ~w(artisan builder explorer planner web),
-        do: assert("agent:local.#{role}" in minted)
+    assert Enum.find_index(minted, &(&1 == "catalyst:local.gemini")) <
+             Enum.find_index(minted, &(&1 == "agent:local.explorer"))
 
-    assert Enum.find_index(minted, &(&1 == "catalyst:local.claude")) <
-             Enum.find_index(minted, &(&1 == "agent:local.web"))
+    # The harness's catalyst is not installed: its member has no consent,
+    # and the soul's is whole without it.
+    refute "agent:local.claude-code" in minted
+
+    assert {"agent:local.claude-code", {:activation_unresolvable, _}} =
+             List.keyfind(skipped, "agent:local.claude-code", 0)
 
     refute Enum.any?(skipped, &match?({_, :not_vouched}, &1))
 
@@ -139,8 +145,8 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert Enum.all?(refs, &(&1.vault_entry_id == nil and &1.share_id == nil))
 
     # The soul's edge into its model selects the model's default profile;
-    # its edges into its hands carry the hands' own grants; no role is a
-    # node of its graph.
+    # its edges into its hands carry the hands' own grants; no crew member
+    # is a node of its graph.
     assert %{via: %{label: "default"}} =
              edge!(head.resolved_policy, @soul, "catalyst:local.claude").vault
 
@@ -158,41 +164,46 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert "component.list" in ingress.tools and "aqua.list" in ingress.tools
     refute Enum.any?(ingress.tools, &String.starts_with?(&1, "files."))
 
-    # A role's edge into its own model — the explorer runs on gemini.
+    # A crew member's edge into its own model — the explorer runs on
+    # gemini — beside the soul's tools and hands, which it runs under.
     {_, explorer, _} = head!(ctx, "agent:local.explorer")
 
     assert %{via: %{label: "default"}} =
              edge!(explorer.resolved_policy, "agent:local.explorer", "catalyst:local.gemini").vault
 
+    assert edge!(explorer.resolved_policy, "agent:local.explorer", "@ingress").tools ==
+             ingress.tools
+
+    assert edge!(explorer.resolved_policy, "agent:local.explorer", "catalyst:local.files").storage.paths ==
+             ["data/"]
+
+    refute Map.has_key?(
+             Jason.decode!(explorer.resolved_policy)["nodes"]["agent:local.explorer"]["edges"],
+             "catalyst:local.claude"
+           )
+
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
   end
 
-  test "ask-to-auto and native_search move the shape; a gemini agent with files names gemini",
+  test "ask-to-auto and native_search on the soul move the crew's shape; a gemini member with files names gemini",
        %{ctx: ctx} do
-    {:ok, before} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+    # The explorer runs under the soul's policy, so an edit of the soul's
+    # is an edit of the explorer's shape.
+    {:ok, before} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
 
-    write_agent!(ctx, "web", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "ask")})
-    {:ok, asked} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "ask")})
+    {:ok, asked} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
     refute asked == before
 
-    write_agent!(ctx, "web", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "auto")})
-    {:ok, restored} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "auto")})
+    {:ok, restored} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
     assert restored == before
 
-    write_agent!(
-      ctx,
-      "web",
-      &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "auto")}
-    )
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.delete(&1.tool_policy, "native_search")})
+    {:ok, unsearched} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
+    refute unsearched == before
 
-    {:ok, searched} = ShapeDerivation.live_digest(ctx, "agent:local.web")
-    refute searched == before
-
-    write_agent!(
-      ctx,
-      "explorer",
-      &%{&1 | tool_policy: Map.put(&1.tool_policy, "files.read", "ask")}
-    )
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "files.read", "ask")})
 
     {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.explorer")
     assert input.model_target == "catalyst:local.gemini#gemini-pro-latest"
@@ -201,25 +212,25 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   test "the shape reads the model target and never the prompt", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
-    {_, head, _} = head!(ctx, "agent:local.web")
-    assert ShapeDerivation.live_digest(ctx, "agent:local.web") == {:ok, head.shape_digest}
+    {_, head, _} = head!(ctx, "agent:local.explorer")
+    assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, head.shape_digest}
 
-    write_agent!(ctx, "web", &%{&1 | prompt: &1.prompt <> "\n\nBe terse."})
-    assert ShapeDerivation.live_digest(ctx, "agent:local.web") == {:ok, head.shape_digest}
+    write_agent!(ctx, "explorer", &%{&1 | prompt: &1.prompt <> "\n\nBe terse."})
+    assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, head.shape_digest}
 
-    write_agent!(ctx, "web", &%{&1 | model: "another-model"})
-    {:ok, retargeted} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+    write_agent!(ctx, "explorer", &%{&1 | model: "another-model"})
+    {:ok, retargeted} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
     refute retargeted == head.shape_digest
-    {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.web")
-    assert input.model_target == "catalyst:local.claude#another-model"
+    {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.explorer")
+    assert input.model_target == "catalyst:local.gemini#another-model"
 
-    # A role's retargeting leaves the soul's shape alone: the soul holds
-    # no edge into it.
+    # A crew member's retargeting leaves the soul's shape alone: the soul
+    # holds no edge into it.
     {_, soul_head, _} = head!(ctx, @soul)
     assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, soul_head.shape_digest}
   end
 
-  test "a member's role is not machine-minted, consents through the walk, and leaves the soul alone",
+  test "a crew member a person makes is not machine-minted, consents through the walk, and leaves the soul alone",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, soul_head, _} = head!(ctx, @soul)
@@ -235,7 +246,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert {:ok, []} =
              Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.scout")
 
-    # The walk: the role consents as any source does.
+    # The walk: the member consents as any source does.
     {:ok, plan} = Plan.plan(ctx, %{ref: "agent:local.scout"})
     decisions = %{ref: "agent:local.scout"}
     assert {:ok, preview} = Commit.preview(ctx, decisions)
@@ -256,10 +267,10 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert soul_still.revision == soul_head.revision
   end
 
-  test "a role's glob left on the soul asks for nothing: no tool, no edge into the role",
+  test "a glob naming a crew member left on the soul asks for nothing: no tool, no edge into the member",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "builder.*", "auto")})
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "explorer.*", "auto")})
 
     # The soul consents through the walk: it selects the key the member
     # bound on claude — a selection needs a bound lender.
@@ -278,23 +289,36 @@ defmodule Sanctum.Consent.AgentConsentTest do
              })
 
     {_, head, _} = head!(ctx, @soul)
-    refute Map.has_key?(Jason.decode!(head.resolved_policy)["nodes"], "agent:local.builder")
+    refute Map.has_key?(Jason.decode!(head.resolved_policy)["nodes"], "agent:local.explorer")
     ingress = edge!(head.resolved_policy, @soul, "@ingress")
     assert "component.list" in ingress.tools
-    refute Enum.any?(ingress.tools, &String.starts_with?(&1, "builder."))
+    refute Enum.any?(ingress.tools, &String.starts_with?(&1, "explorer."))
   end
 
-  test "an edited shipped role is not re-minted", %{ctx: ctx} do
+  test "an edited shipped crew member is not re-minted, nor is one whose soul's policy moved",
+       %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
-    {_, first, _} = head!(ctx, "agent:local.web")
+    {_, first, _} = head!(ctx, "agent:local.explorer")
 
-    write_agent!(ctx, "web", fn agent ->
-      %{agent | tool_policy: Map.put(agent.tool_policy, "files.read", "auto")}
+    write_agent!(ctx, "explorer", &%{&1 | model: "another-model"})
+
+    {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
+    assert {"agent:local.explorer", :shape_moved} in skipped
+    {_, still, _} = head!(ctx, "agent:local.explorer")
+    assert still.revision == first.revision
+
+    # Back to the shipped model, an edit of the soul's policy moves the
+    # member's shape with the soul's: neither is re-minted.
+    write_agent!(ctx, "explorer", &%{&1 | model: "gemini-pro-latest"})
+
+    write_agent!(ctx, "aqua", fn agent ->
+      %{agent | tool_policy: Map.put(agent.tool_policy, "storage.write", "ask")}
     end)
 
     {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
-    assert {"agent:local.web", :shape_moved} in skipped
-    {_, still, _} = head!(ctx, "agent:local.web")
+    assert {"agent:local.explorer", :shape_moved} in skipped
+    assert {@soul, :shape_moved} in skipped
+    {_, still, _} = head!(ctx, "agent:local.explorer")
     assert still.revision == first.revision
 
     assert {:ok, []} =

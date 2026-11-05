@@ -10,7 +10,7 @@ defmodule PrismWeb.AquaLive.Section do
   it to (`load: true` in `send_update/3`), reloads itself after a write
   that changes only what it shows, and asks the page for a wider refresh
   (`send(self(), {:refresh, section})`) when a write changes what another
-  section shows — a restore, a role's provenance. What every section
+  section shows — a restore, a crew member's provenance. What every section
   wears is here: the provenance chip a card and a scroll both carry, and
   the flash a section shows beside what it changed (a component's flash
   never reaches the page's, so each shows its own).
