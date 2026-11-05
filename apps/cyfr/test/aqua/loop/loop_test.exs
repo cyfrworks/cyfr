@@ -155,7 +155,7 @@ defmodule Aqua.LoopTest do
   defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: text},
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -912,7 +912,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "actually, never mind"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "actually, never mind"},
         steer_turn_id: turn.id
       })
 
@@ -952,7 +952,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "one more thing"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "one more thing"},
         steer_turn_id: turn.id
       })
 
@@ -976,7 +976,7 @@ defmodule Aqua.LoopTest do
 
     assert {:error, :turn_over} =
              Tape.accept(ctx, elsewhere.id, %{
-               message: %{author: ctx.user_id, content: "wrong room"},
+               message: %{author: ctx.user_id, sent_by: "person", content: "wrong room"},
                steer_turn_id: turn.id
              })
 
@@ -1029,7 +1029,7 @@ defmodule Aqua.LoopTest do
     # write is refused until a new turn starts.
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "carry on, carefully"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "carry on, carefully"},
         steer_turn_id: turn.id
       })
 
@@ -1071,7 +1071,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua what did they say?"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua what did they say?"},
         turn: %{
           agent: "aqua",
           requested_by: ctx.user_id,

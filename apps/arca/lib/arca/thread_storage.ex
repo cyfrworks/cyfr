@@ -899,7 +899,7 @@ defmodule Arca.ThreadStorage do
         seq =
           Repo.one(
             from(m in Message,
-              where: m.thread_id == ^thread.id,
+              where: m.thread_id == ^thread.id and m.athanor_id == ^actor.athanor_id,
               select: coalesce(max(m.seq), 0)
             )
           ) + 1

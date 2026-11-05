@@ -506,7 +506,7 @@ defmodule Cyfr.Test.StepBench do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: message},
+        message: %{author: ctx.user_id, sent_by: "person", content: message},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 

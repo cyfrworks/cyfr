@@ -110,6 +110,7 @@ defmodule Cyfr.Cluster.Fixtures do
       Arca.TurnStorage.accept_message(actor(athanor_id), thread_id, %{
         message: %{
           author: "usr_cluster",
+          sent_by: "person",
           kind: "text",
           content: text,
           # Unique across the cell: the counter restarts on every member.
@@ -273,6 +274,7 @@ defmodule Cyfr.Cluster.Fixtures do
       Arca.ThreadStorage.append(actor(athanor_id), thread_id, %{
         id: id,
         author: "usr_cluster",
+        sent_by: "person",
         kind: "approval",
         status: "pending",
         content: "may I?",

@@ -42,6 +42,7 @@ defmodule Aqua.AloudTest do
     {:ok, msg} =
       Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
         author: ctx.user_id,
+        sent_by: "person",
         kind: "text",
         content: text
       })
@@ -144,6 +145,7 @@ defmodule Aqua.AloudTest do
     {:ok, answer} =
       Threads.append(Sanctum.Context.actor(ctx), private.id, %{
         author: "aqua",
+        sent_by: "aqua",
         kind: "text",
         content: "Try BA117."
       })
@@ -163,6 +165,7 @@ defmodule Aqua.AloudTest do
     {:ok, note} =
       Threads.append(Sanctum.Context.actor(ctx), private.id, %{
         author: "system",
+        sent_by: "aqua",
         kind: "system",
         content: "📝"
       })
@@ -181,10 +184,20 @@ defmodule Aqua.AloudTest do
     {:ok, thread} = Threads.create(owner)
 
     {:ok, answer} =
-      Threads.append(owner, thread.id, %{author: "aqua", kind: "text", content: "Sure."})
+      Threads.append(owner, thread.id, %{
+        author: "aqua",
+        sent_by: "aqua",
+        kind: "text",
+        content: "Sure."
+      })
 
     {:ok, hers} =
-      Threads.append(owner, thread.id, %{author: alice.user.id, kind: "text", content: "Mine."})
+      Threads.append(owner, thread.id, %{
+        author: alice.user.id,
+        sent_by: "person",
+        kind: "text",
+        content: "Mine."
+      })
 
     in_other = %{alice.ctx | athanor_id: other.id}
 
@@ -199,6 +212,7 @@ defmodule Aqua.AloudTest do
     {:ok, other} =
       Threads.append(Sanctum.Context.actor(ctx), private.id, %{
         author: "local|idp|somebody-else",
+        sent_by: "person",
         kind: "text",
         content: "their line"
       })
@@ -258,6 +272,7 @@ defmodule Aqua.AloudTest do
       Threads.append(Sanctum.Context.actor(ctx), private.id, %{
         id: message_id,
         author: ctx.user_id,
+        sent_by: "person",
         kind: "text",
         content: "see attached",
         payload: %{"attachments" => refs}
@@ -296,6 +311,7 @@ defmodule Aqua.AloudTest do
       Threads.append(Sanctum.Context.actor(ctx), private.id, %{
         id: message_id,
         author: ctx.user_id,
+        sent_by: "person",
         kind: "text",
         content: "see attached",
         payload: %{"attachments" => refs}

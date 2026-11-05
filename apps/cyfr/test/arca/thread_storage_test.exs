@@ -49,7 +49,7 @@ defmodule Arca.ThreadStorageTest do
     assert {:error, :not_found} = Threads.get(other, thread.id)
 
     assert {:error, :not_found} =
-             Threads.append(other, thread.id, %{author: "x", content: "hi"})
+             Threads.append(other, thread.id, %{author: "x", sent_by: "person", content: "hi"})
   end
 
   test "an athanor-less actor is refused before any query, nil and empty alike", %{ctx: ctx} do
@@ -72,6 +72,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, m1} =
       Threads.append(ctx, thread.id, %{
         author: ctx.user_id,
+        sent_by: "person",
         content: "Plan my week\nplease"
       })
 
@@ -97,6 +98,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, msg} =
       Threads.append(ctx, thread.id, %{
         author: "aqua",
+        sent_by: "aqua",
         payload: %{"intent" => %{"title" => "t"}}
       })
 
@@ -112,6 +114,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, apr} =
       Threads.append(ctx, thread.id, %{
         author: "aqua",
+        sent_by: "aqua",
         kind: "approval",
         content: "Send it",
         status: "pending"
@@ -166,7 +169,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, thread} = Threads.create(ctx)
 
     {:ok, msg} =
-      Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+      Threads.append(ctx, thread.id, %{author: "aqua", sent_by: "aqua", content: "x"})
 
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
@@ -181,7 +184,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, thread} = Threads.create(ctx)
 
     {:ok, msg} =
-      Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+      Threads.append(ctx, thread.id, %{author: "aqua", sent_by: "aqua", content: "x"})
 
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
@@ -235,7 +238,7 @@ defmodule Arca.ThreadStorageTest do
     for n <- 1..4,
         do:
           {:ok, _} =
-            Threads.append(ctx, thread.id, %{author: "u", content: "m#{n}"})
+            Threads.append(ctx, thread.id, %{author: "u", sent_by: "person", content: "m#{n}"})
 
     seqs = fn opts ->
       Threads.messages(ctx, thread.id, opts) |> Enum.map(& &1.seq)
@@ -266,6 +269,7 @@ defmodule Arca.ThreadStorageTest do
       {:ok, _} =
         Threads.append(ctx, thread.id, %{
           author: author,
+          sent_by: "person",
           kind: "text",
           content: "not a title"
         })
@@ -281,6 +285,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, msg} =
       Threads.append(ctx, thread.id, %{
         author: "u",
+        sent_by: "person",
         content: "@aqua what's the plan?"
       })
 
@@ -296,14 +301,14 @@ defmodule Arca.ThreadStorageTest do
     {:ok, fresh} = Threads.create(ctx)
 
     {:ok, _} =
-      Threads.append(ctx, fresh.id, %{author: "aqua", content: "recent"})
+      Threads.append(ctx, fresh.id, %{author: "aqua", sent_by: "aqua", content: "recent"})
 
     old = DateTime.add(DateTime.utc_now(), -400 * 86_400, :second)
     {:ok, _} = Threads.update(ctx, stale.id, %{last_message_at: old})
 
     {:ok, _} =
       Arca.TurnStorage.accept_message(ctx, running.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 

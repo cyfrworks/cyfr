@@ -52,7 +52,7 @@ defmodule Aqua.Providers.ThreadTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua do a thing"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua do a thing"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -302,6 +302,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, a} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: ctx.user_id,
+          sent_by: "person",
           kind: "text",
           content: "one"
         })
@@ -309,6 +310,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, _b} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: "aqua",
+          sent_by: "aqua",
           kind: "text",
           content: "two"
         })
@@ -345,6 +347,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, apr} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: "aqua",
+          sent_by: "aqua",
           kind: "approval",
           status: "pending",
           content: "Pull component",
@@ -360,6 +363,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, line} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: ctx.user_id,
+          sent_by: "person",
           kind: "text",
           content: "hi"
         })
@@ -536,6 +540,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, mine} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: ctx.user_id,
+          sent_by: "person",
           kind: "text",
           content: "hi"
         })
@@ -543,6 +548,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, other} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: "local|idp|someone-else",
+          sent_by: "person",
           kind: "text",
           content: "not yours"
         })
@@ -583,6 +589,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, mine} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: ctx.user_id,
+          sent_by: "person",
           kind: "text",
           content: "hi"
         })
@@ -807,6 +814,7 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, _} =
         Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: ctx.user_id,
+          sent_by: "person",
           content: "bye"
         })
 

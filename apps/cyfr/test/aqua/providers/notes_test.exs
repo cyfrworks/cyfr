@@ -255,7 +255,7 @@ defmodule Aqua.Providers.NotesTest do
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: actor.user_id, content: "@aqua go"},
+        message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 

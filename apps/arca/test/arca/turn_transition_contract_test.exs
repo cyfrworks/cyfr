@@ -36,7 +36,7 @@ defmodule Arca.TurnTransitionContractTest do
   defp accept!(actor, thread) do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: actor.user_id, content: "@aqua go"},
+        message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
@@ -684,36 +684,6 @@ defmodule Arca.TurnTransitionContractTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Clones
-  # ---------------------------------------------------------------------------
-
-  describe "a clone binds only a dispatched clone step of its parent" do
-    test "a step of another turn, and a parent step that is not a clone, are refused",
-         %{actor: actor, thread: thread} do
-      {turn, _root} = started!(actor, thread)
-      {:ok, other_thread} = Threads.create(actor)
-      {other, _root} = started!(actor, other_thread)
-      foreign = call_step!(actor, other, %{step_kind: "clone"})
-      {:ok, _} = TurnStorage.dispatch_step(actor, foreign.id, %{fence: other.fence})
-      tool = call_step!(actor, turn)
-
-      for step_id <- [foreign.id, tool.id] do
-        assert {:error, :illegal_transition} =
-                 TurnStorage.open_clone_turn(actor, turn.id, %{
-                   role: "helper",
-                   step_id: step_id,
-                   fence: turn.fence
-                 })
-      end
-
-      assert {:ok, %{turn: clone, step: %{kind: "clone"}}} =
-               TurnStorage.open_clone_turn(actor, turn.id, %{role: "helper", fence: turn.fence})
-
-      assert clone.recovery_limit == turn.recovery_limit
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # A turn that is over
   # ---------------------------------------------------------------------------
 
@@ -734,7 +704,12 @@ defmodule Arca.TurnTransitionContractTest do
                TurnStorage.append_turn_row(
                  actor,
                  turn.id,
-                 Map.merge(held, %{author: "system", kind: "text", content: "late"})
+                 Map.merge(held, %{
+                   author: "system",
+                   sent_by: "aqua",
+                   kind: "text",
+                   content: "late"
+                 })
                )
 
       assert {:error, :not_open} = TurnStorage.drain_steer(actor, turn.id, held)

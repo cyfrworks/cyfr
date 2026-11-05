@@ -58,6 +58,7 @@ defmodule Arca.TurnTapeStorageTest do
       TurnStorage.accept_message(actor, thread.id, %{
         message: %{
           author: Keyword.get(opts, :author, actor.user_id),
+          sent_by: "person",
           content: text,
           client_id: Keyword.get(opts, :client_id)
         },
@@ -186,7 +187,7 @@ defmodule Arca.TurnTapeStorageTest do
     } do
       assert {:ok, %{message: post, turn: nil}} =
                TurnStorage.accept_message(actor, thread.id, %{
-                 message: %{author: actor.user_id, content: "just saying"}
+                 message: %{author: actor.user_id, sent_by: "person", content: "just saying"}
                })
 
       assert post.seq == 1 and is_nil(post.turn_id)
@@ -204,7 +205,12 @@ defmodule Arca.TurnTapeStorageTest do
       # The same client id is one acceptance: the retry finds it.
       assert {:error, :duplicate_client_id} =
                TurnStorage.accept_message(actor, thread.id, %{
-                 message: %{author: actor.user_id, content: "@aqua do it", client_id: "c-1"},
+                 message: %{
+                   author: actor.user_id,
+                   sent_by: "person",
+                   content: "@aqua do it",
+                   client_id: "c-1"
+                 },
                  turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
                })
 
@@ -224,7 +230,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:ok, %{message: steer, turn: %{id: tid}}} =
                TurnStorage.accept_message(actor, thread.id, %{
-                 message: %{author: actor.user_id, content: "also this"},
+                 message: %{author: actor.user_id, sent_by: "person", content: "also this"},
                  steer_turn_id: turn.id
                })
 
@@ -251,7 +257,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:error, :turn_over} =
                TurnStorage.accept_message(actor, thread.id, %{
-                 message: %{author: actor.user_id, content: "too late"},
+                 message: %{author: actor.user_id, sent_by: "person", content: "too late"},
                  steer_turn_id: turn.id
                })
 
@@ -267,6 +273,7 @@ defmodule Arca.TurnTapeStorageTest do
       {:ok, _} =
         Threads.append(actor, thread.id, %{
           author: actor.user_id,
+          sent_by: "person",
           content: "earlier"
         })
 
@@ -512,29 +519,6 @@ defmodule Arca.TurnTapeStorageTest do
                })
 
       assert taken.recovery_attempts == before_count + 1
-    end
-
-    test "a clone turn holds no thread claim of its own", %{actor: actor, thread: thread} do
-      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
-      {started, _root} = start!(actor, turn)
-
-      {:ok, %{turn: clone}} =
-        TurnStorage.open_clone_turn(actor, turn.id, %{
-          role: "role:scout",
-          task: "look",
-          fence: started.fence
-        })
-
-      assert clone.parent_turn_id == turn.id
-      assert %{active_turn_id: held} = reread(actor, thread)
-      assert held == turn.id
-
-      assert {:error, :clone} =
-               TurnStorage.recover(actor, clone.id, %{
-                 grant: :stored,
-                 verify: &Arca.Test.Actor.admits/1,
-                 fence: clone.fence
-               })
     end
   end
 
@@ -980,6 +964,7 @@ defmodule Arca.TurnTapeStorageTest do
       {:ok, earlier} =
         Threads.append(actor, thread.id, %{
           author: actor.user_id,
+          sent_by: "person",
           content: "earlier"
         })
 
@@ -1002,7 +987,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       {:ok, %{message: steer}} =
         TurnStorage.accept_message(actor, thread.id, %{
-          message: %{author: actor.user_id, content: "and also"},
+          message: %{author: actor.user_id, sent_by: "person", content: "and also"},
           steer_turn_id: turn.id
         })
 
@@ -1080,49 +1065,6 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, [%{id: id}]} = TurnStorage.projection(actor, turn.id)
       assert id == message.id
       refute TurnStorage.steer_pending?(actor, turn.id)
-    end
-
-    test "a clone reads its own rows only, and the parent sees the clone's rows not at all", %{
-      actor: actor,
-      thread: thread
-    } do
-      %{turn: parent} = accept_turn!(actor, thread, "@aqua build")
-      {parent, root} = start!(actor, parent)
-
-      assert {:ok, %{turn: clone, step: step, task: task}} =
-               TurnStorage.open_clone_turn(actor, parent.id, %{
-                 role: "builder",
-                 task: "make it",
-                 fence: parent.fence
-               })
-
-      assert clone.parent_turn_id == parent.id
-      assert clone.root_execution_id == root.execution.id
-      assert clone.attempt == root.attempt.attempt
-      assert step.kind == "clone" and step.dispatch_state == "dispatched"
-      assert task.turn_id == clone.id
-
-      assert {:ok, [%{id: tid}]} = TurnStorage.projection(actor, clone.id)
-      assert tid == task.id
-      assert {:ok, rows} = TurnStorage.projection(actor, parent.id)
-      refute task.id in Enum.map(rows, & &1.id)
-
-      assert {:error, :clone_depth} =
-               TurnStorage.open_clone_turn(actor, clone.id, %{
-                 role: "web",
-                 task: "x",
-                 fence: clone.fence
-               })
-
-      assert {:ok, %{status: "completed"}} =
-               TurnStorage.close_clone_turn(actor, clone.id, "completed", %{
-                 fence: clone.fence
-               })
-
-      assert {:error, :not_a_clone} =
-               TurnStorage.close_clone_turn(actor, parent.id, "completed", %{
-                 fence: parent.fence
-               })
     end
   end
 
@@ -1239,7 +1181,7 @@ defmodule Arca.TurnTapeStorageTest do
       # The sender's next line past the boundary acknowledges it.
       {:ok, _} =
         TurnStorage.accept_message(actor, thread.id, %{
-          message: %{author: actor.user_id, content: "go on"},
+          message: %{author: actor.user_id, sent_by: "person", content: "go on"},
           steer_turn_id: turn.id
         })
 

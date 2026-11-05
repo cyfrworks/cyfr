@@ -414,7 +414,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua keep it"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua keep it"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -474,7 +474,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -505,7 +505,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -514,7 +514,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "go on"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "go on"},
         steer_turn_id: turn.id
       })
 
@@ -559,7 +559,7 @@ defmodule Aqua.RunnerTest do
   } do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -582,7 +582,7 @@ defmodule Aqua.RunnerTest do
   } do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@ghost go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@ghost go"},
         turn: %{agent: "ghost", requested_by: ctx.user_id}
       })
 
@@ -722,7 +722,7 @@ defmodule Aqua.RunnerTest do
     # A turn accepted by a runner that is gone.
     {:ok, %{turn: accepted}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua later"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua later"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -740,7 +740,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, other_thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua carry on"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua carry on"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -1126,7 +1126,7 @@ defmodule Aqua.RunnerTest do
 
       assert {:error, :no_origin} =
                Tape.accept(%{ctx | origin: nil}, thread.id, %{
-                 message: %{author: ctx.user_id, content: "@aqua never"},
+                 message: %{author: ctx.user_id, sent_by: "person", content: "@aqua never"},
                  turn: %{agent: "aqua", requested_by: ctx.user_id}
                })
 
@@ -1136,7 +1136,7 @@ defmodule Aqua.RunnerTest do
       # writer stores, as a hand edit or a restored row carries it.
       {:ok, %{turn: accepted}} =
         Tape.accept(ctx, thread.id, %{
-          message: %{author: ctx.user_id, content: "@aqua later"},
+          message: %{author: ctx.user_id, sent_by: "person", content: "@aqua later"},
           turn: %{agent: "aqua", requested_by: ctx.user_id}
         })
 
@@ -1162,7 +1162,7 @@ defmodule Aqua.RunnerTest do
       # the vocabulary holds.
       {:ok, %{turn: turn}} =
         Tape.accept(ctx, thread.id, %{
-          message: %{author: ctx.user_id, content: "@aqua keep it"},
+          message: %{author: ctx.user_id, sent_by: "person", content: "@aqua keep it"},
           turn: %{agent: "aqua", requested_by: ctx.user_id}
         })
 
@@ -1515,7 +1515,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua held"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua held"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -1776,7 +1776,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 

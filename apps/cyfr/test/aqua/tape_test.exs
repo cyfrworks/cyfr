@@ -48,7 +48,7 @@ defmodule Aqua.TapeTest do
   defp started!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: text},
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -72,7 +72,7 @@ defmodule Aqua.TapeTest do
          thread: thread
        } do
     send_attrs = %{
-      message: %{author: ctx.user_id, content: "@aqua go", client_id: "c-1"},
+      message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go", client_id: "c-1"},
       turn: %{
         agent: "aqua",
         requested_by: ctx.user_id,
@@ -105,7 +105,13 @@ defmodule Aqua.TapeTest do
     id = Prima.UUID7.generate_id("msg")
 
     attrs = %{
-      message: %{author: ctx.user_id, content: "@aqua go", id: id, client_id: "c-id"},
+      message: %{
+        author: ctx.user_id,
+        sent_by: "person",
+        content: "@aqua go",
+        id: id,
+        client_id: "c-id"
+      },
       turn: %{agent: "aqua", requested_by: ctx.user_id}
     }
 

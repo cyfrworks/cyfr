@@ -240,7 +240,11 @@ defmodule Aqua.CanvasWriteTest do
   defp asked!(ctx, thread) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua make me a canvas of my runs"},
+        message: %{
+          author: ctx.user_id,
+          sent_by: "person",
+          content: "@aqua make me a canvas of my runs"
+        },
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 

@@ -133,6 +133,7 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
         author: ctx.user_id,
+        sent_by: "person",
         content: String.duplicate("lorem ipsum ", 7_000)
       })
 
@@ -140,7 +141,7 @@ defmodule Aqua.Loop.FlushTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua what did they say?"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua what did they say?"},
         turn: %{
           agent: "aqua",
           requested_by: ctx.user_id,
@@ -432,7 +433,7 @@ defmodule Aqua.Loop.FlushTest do
   defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: text},
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
         turn: %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
       })
 

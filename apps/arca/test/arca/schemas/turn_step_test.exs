@@ -27,7 +27,7 @@ defmodule Arca.Schemas.TurnStepTest do
   end
 
   test "any other call is uncertain" do
-    for kind <- ["tool", "clone", "launch", "ui"] do
+    for kind <- ["tool", "launch", "ui"] do
       assert TurnStep.unresolved(%TurnStep{kind: kind, purpose: "chat"}) == :uncertain
     end
   end

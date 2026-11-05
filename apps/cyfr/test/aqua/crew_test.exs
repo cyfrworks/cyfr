@@ -1,0 +1,449 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Aqua.CrewTest do
+  @moduledoc """
+  The crew on the thread layer: a request in a room is delivered into its
+  member's child thread, the member's turn there replies on the room on
+  every exit, and who may post where is the admission rule's. The
+  delivery consumer is off in the suite (`:crew_delivery_enabled`), so
+  each case drains by hand, which is what its wake and its tick do.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
+
+  alias Aqua.{Approvals, Crew, Runner, Tape}
+  alias Arca.ThreadStorage, as: Threads
+  alias Arca.TurnStorage
+  alias Cyfr.Bus.ThreadEvent
+  alias Cyfr.Test.ScriptedWorker
+  alias Sanctum.Consent.Bootstrap
+
+  @seed_root Path.expand("../../../../seed", __DIR__)
+  @model "catalyst:local.claude"
+
+  setup do
+    Arca.Cache.init()
+    Cyfr.Test.Sandbox.setup!()
+
+    {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+    ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id, origin: :interactive}
+    segments = Arca.Storage.physical_segments(Sanctum.Context.actor(ctx), [])
+    tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
+    previous = Application.get_env(:arca, :seed_path)
+
+    on_exit(fn ->
+      File.rm_rf!(tree)
+
+      if previous,
+        do: Application.put_env(:arca, :seed_path, previous),
+        else: Application.delete_env(:arca, :seed_path)
+    end)
+
+    Application.put_env(:arca, :seed_path, @seed_root)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, _} = Bootstrap.run(ctx)
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
+      origins: [:interactive, :programmatic]
+    )
+
+    ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
+
+    {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
+    :ok = Runner.subscribe(room.id, ctx.athanor_id)
+    {:ok, ctx: ctx, room: room}
+  end
+
+  defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})
+
+  defp reply(text),
+    do: %{
+      "content" => [%{"type" => "text", "text" => text}],
+      "stop_reason" => "end_turn",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+    }
+
+  defp call(id, name, args),
+    do: %{
+      "content" => [%{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}],
+      "stop_reason" => "tool_call",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+    }
+
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
+  defp drain(ctx), do: Crew.drain(ctx.athanor_id)
+  defp rows(ctx, thread_id), do: Threads.messages(actor(ctx), thread_id)
+  defp row(ctx, id), do: elem(Tape.message(ctx, id), 1)
+
+  defp child!(ctx, room, member) do
+    [child] = Enum.filter(Threads.children(actor(ctx), room.id), &(&1.agent == member))
+    child
+  end
+
+  # The turn a delivered request opened or joined, by the request it carries.
+  defp delivered_turn(ctx, child, request_id) do
+    row =
+      Enum.find(rows(ctx, child.id), &(Tape.payload(&1)["request_id"] == request_id))
+
+    row && row.turn_id
+  end
+
+  defp await_status(ctx, turn_id, status) do
+    wait_until(fn -> match?({:ok, %{status: ^status}}, Tape.turn(ctx, turn_id)) end, 60_000)
+  end
+
+  # A request as `crew.ask` writes it, committed and never broadcast.
+  defp soul_request!(ctx, room, member, task) do
+    {:ok, %{message: row}} =
+      TurnStorage.accept_message(actor(ctx), room.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: member,
+          status: "pending",
+          content: task
+        },
+        request: %{
+          member: member,
+          task: task,
+          tools: nil,
+          options: %{},
+          person_id: ctx.user_id,
+          origin: :interactive
+        }
+      })
+
+    row
+  end
+
+  defp room_turns(ctx, room) do
+    Arca.Repo.all(
+      from(t in Arca.Schemas.Turn,
+        where: t.athanor_id == ^ctx.athanor_id and t.thread_id == ^room.id,
+        order_by: [asc: t.accepted_at]
+      )
+    )
+  end
+
+  defp pending_records(ctx) do
+    for kind <- ~w(crew_request crew_reply),
+        record <- elem(Arca.Outbox.pending(actor(ctx), "crew_delivery", kind), 1),
+        do: record
+  end
+
+  # The planner asks before it keeps a note, so its turn raises a card.
+  defp planner_asks!(ctx) do
+    {:ok, agent} = Compendium.AquaAgent.get(ctx, "planner")
+
+    :ok =
+      Arca.put(
+        actor(ctx),
+        Compendium.AquaPath.agent_file("planner"),
+        Compendium.AquaAgent.serialize(%{
+          agent
+          | tool_policy: Map.put(agent.tool_policy, "notes.keep", "ask")
+        })
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, _} = Bootstrap.run(ctx)
+  end
+
+  test "a person's @name is a request their member answers in its own thread, and the reply lands under it, waking nobody",
+       %{ctx: ctx, room: room} do
+    script!([reply("Plan: read, then write.")])
+
+    assert {:ok, %{admitted: :request, turn_id: nil, message_id: request_id}} =
+             Runner.send_message(ctx, room.id, "@planner plan the move")
+
+    assert %{addressee: "planner", sent_by: "person", status: "pending"} = row(ctx, request_id)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    assert %{kind: "crew", parent_id: parent} = child
+    assert parent == room.id
+
+    turn_id = delivered_turn(ctx, child, request_id)
+    await_status(ctx, turn_id, "completed")
+
+    assert {:ok, %{sent_by: "person", asking_thread_id: asking, request_id: ^request_id}} =
+             Tape.turn(ctx, turn_id)
+
+    assert asking == room.id
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request_id))
+
+    assert %{
+             sent_by: "planner",
+             addressee: "person",
+             outcome: "done",
+             content: "Plan: read, then write."
+           } = reply
+
+    assert %{status: "answered", resolved_by: resolved_by} = row(ctx, request_id)
+    assert resolved_by == reply.id
+    assert_receive %ThreadEvent{kind: :reply, data: %{id: reply_id}}, 5_000
+    assert reply_id == reply.id
+
+    # Room content: the person's own request's answer opens no turn.
+    assert room_turns(ctx, room) == []
+    assert pending_records(ctx) == []
+  end
+
+  test "a request committed by a runner that died before it broadcast is delivered by the tick",
+       %{ctx: ctx, room: room} do
+    script!([reply("done here"), reply("noted")])
+    request = soul_request!(ctx, room, "planner", "check the logs")
+
+    assert %{} = Map.new(Crew.drain_all())
+    assert {:ok, "applied"} = outcome(ctx, "message", request.id)
+
+    child = child!(ctx, room, "planner")
+    await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
+
+    # The reply to the soul's request opens the soul's turn on the room.
+    assert %{} = Crew.drain_all()
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+    assert %{sent_by: "planner", addressee: "aqua", outcome: "done", turn_id: soul} = reply
+    await_status(ctx, soul, "completed")
+
+    assert {:ok, %{agent: "aqua", sent_by: "planner", message_id: opened_by}} =
+             Tape.turn(ctx, soul)
+
+    assert opened_by == reply.id
+  end
+
+  test "the soul's crew.ask writes the request in its turn and answers its id; the turn goes on",
+       %{ctx: ctx, room: room} do
+    script!([
+      call("c1", "crew", %{"action" => "ask", "member" => "planner", "task" => "list the risks"}),
+      reply("Asked the planner."),
+      reply("Two risks."),
+      reply("The planner found two risks.")
+    ])
+
+    {:ok, %{turn_id: soul}} = Runner.send_message(ctx, room.id, "what could go wrong?")
+    await_status(ctx, soul, "completed")
+
+    request = Enum.find(rows(ctx, room.id), &(&1.addressee == "planner" and &1.status))
+
+    assert %{sent_by: "aqua", author: "aqua", status: "pending", content: "list the risks"} =
+             request
+
+    assert %{"from_turn" => ^soul} = Tape.payload(request)
+
+    {:ok, steps} = Tape.steps(ctx, elem(Tape.turn(ctx, soul), 1))
+    assert %{outcome: "ok"} = Enum.find(steps, &(&1.tool == "crew" and &1.action == "ask"))
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+    await_status(ctx, reply.turn_id, "completed")
+    assert reply.turn_id != soul
+  end
+
+  test "a request from another sender queues as its own turn while the same sender steers, and one reply answers every request it steered",
+       %{ctx: ctx, room: room} do
+    script!([
+      {:probe, self()},
+      reply("first, and also"),
+      reply("the soul's")
+    ])
+
+    {:ok, %{message_id: first}} = Runner.send_message(ctx, room.id, "@planner first")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert_receive {:scripted_probe, worker, _}, 60_000
+
+    child = child!(ctx, room, "planner")
+    opened = delivered_turn(ctx, child, first)
+
+    soul = soul_request!(ctx, room, "planner", "from the soul")
+    {:ok, %{message_id: also}} = Runner.send_message(ctx, room.id, "@planner also")
+    assert {:ok, %{"applied" => 2}} = drain(ctx)
+
+    queued = delivered_turn(ctx, child, soul.id)
+    assert queued != opened
+    assert delivered_turn(ctx, child, also) == opened
+    assert %{running: true, queued: 1} = Runner.state(child.id, ctx.athanor_id)
+
+    send(worker, :continue)
+    await_status(ctx, opened, "completed")
+    await_status(ctx, queued, "completed")
+
+    assert {:ok, %{"applied" => 2}} = drain(ctx)
+    room_rows = rows(ctx, room.id)
+    one = Enum.find(room_rows, &(&1.reply_to == first))
+    assert %{outcome: "done", content: "first, and also"} = one
+    assert Tape.payload(one)["answers"] == [first, also]
+    assert %{status: "answered", resolved_by: by_one} = row(ctx, first)
+    assert %{status: "answered", resolved_by: ^by_one} = row(ctx, also)
+    assert by_one == one.id
+    refute Enum.any?(room_rows, &(&1.reply_to == also))
+
+    assert %{status: "answered"} = row(ctx, soul.id)
+  end
+
+  test "a card in a child turn writes a notice on the room; its sender steers the paused turn, and the person's decision continues it",
+       %{ctx: ctx, room: room} do
+    planner_asks!(ctx)
+
+    script!([
+      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
+      reply("kept, and the rest")
+    ])
+
+    {:ok, %{message_id: first}} = Runner.send_message(ctx, room.id, "@planner keep the plan")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    turn_id = delivered_turn(ctx, child, first)
+    await_status(ctx, turn_id, "paused")
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    notice = Enum.find(rows(ctx, room.id), &(&1.reply_to == first))
+    assert %{outcome: "needs_you", sent_by: "planner", addressee: "person"} = notice
+    assert %{"from_thread" => from, "approval_id" => approval_id} = Tape.payload(notice)
+    assert from == child.id
+    assert %{status: "pending"} = row(ctx, first)
+
+    {:ok, %{message_id: more}} = Runner.send_message(ctx, room.id, "@planner and the rest")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert delivered_turn(ctx, child, more) == turn_id
+
+    assert {:ok, %{decision: "approved"}} =
+             Approvals.resolve(ctx, approval_id, %{decision: :approved})
+
+    await_status(ctx, turn_id, "completed")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == first and &1.outcome == "done"))
+    assert Tape.payload(reply)["answers"] == [first, more]
+    assert %{status: "answered"} = row(ctx, more)
+  end
+
+  test "a busy child thread leaves the request pending, and the next tick delivers it",
+       %{ctx: ctx, room: room} do
+    script!([:hang, reply("after the wait")])
+    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
+
+    {:ok, %{admitted: :turn}} = Runner.send_message(ctx, child.id, "hold the floor")
+    wait_until(fn -> match?(%{running: true}, Runner.state(child.id, ctx.athanor_id)) end)
+
+    for n <- 1..8 do
+      assert {:ok, %{admitted: :turn}} =
+               Runner.send_message(%{ctx | origin: :programmatic}, child.id, "wait #{n}")
+    end
+
+    request = soul_request!(ctx, room, "planner", "after the queue")
+    assert {:ok, %{"pending" => 1}} = drain(ctx)
+    assert :none = outcome(ctx, "message", request.id)
+    assert delivered_turn(ctx, child, request.id) == nil
+
+    :ok = Runner.stop_turn(ctx, child.id)
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
+  end
+
+  test "a dead member's claim is taken over once its lease lapsed", %{ctx: ctx, room: room} do
+    script!([reply("taken over")])
+    request = soul_request!(ctx, room, "planner", "go")
+
+    {:ok, _} = Arca.JobClaims.claim("crew_delivery", ctx.athanor_id, "boot_dead", 60_000)
+    assert :busy = drain(ctx)
+
+    past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.JobClaim,
+          where: c.kind == "crew_delivery" and c.key == ^ctx.athanor_id
+        ),
+        set: [lease_until: past]
+      )
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert {:ok, "applied"} = outcome(ctx, "message", request.id)
+    assert {:ok, %{owner: owner, fence: 2}} = Arca.JobClaims.read("crew_delivery", ctx.athanor_id)
+    assert owner == Prima.Boot.id()
+  end
+
+  test "the admission rule refuses a member posting anywhere but the thread and request that asked it",
+       %{ctx: ctx, room: room} do
+    request = soul_request!(ctx, room, "planner", "go")
+    {:ok, elsewhere} = Threads.create(actor(ctx))
+
+    assert {:error, :not_addressable} =
+             Runner.send_message(ctx, elsewhere.id, "posted elsewhere",
+               sent_by: "planner",
+               reply: %{request: request, outcome: "done", answers: [request.id]}
+             )
+
+    assert {:error, :not_addressable} =
+             Runner.send_message(ctx, room.id, "posted as another",
+               sent_by: "builder",
+               reply: %{request: request, outcome: "done", answers: [request.id]}
+             )
+
+    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
+
+    assert {:error, :not_addressable} =
+             Runner.send_message(ctx, child.id, "@builder over there")
+
+    # A member's turn asks nobody: crew.ask from a child thread is refused.
+    {:ok, %{turn: turn}} =
+      TurnStorage.accept_message(actor(ctx), child.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "hi"},
+        turn: %{agent: "planner", requested_by: ctx.user_id, origin: :interactive}
+      })
+
+    assert {:error, :not_addressable} =
+             Crew.ask(ctx, %{
+               "member" => "builder",
+               "task" => "help",
+               "thread_id" => child.id,
+               "root_execution_id" => turn.root_execution_id || "none"
+             })
+
+    assert [%{id: id}] = Threads.pending_requests(actor(ctx), thread_id: room.id)
+    assert id == request.id
+    refute Enum.any?(rows(ctx, elsewhere.id), &(&1.content == "posted elsewhere"))
+  end
+
+  test "an archived child thread admits nothing, and the next request opens a new one",
+       %{ctx: ctx, room: room} do
+    script!([reply("in the new thread")])
+    {:ok, old} = Threads.crew_thread(actor(ctx), room.id, "planner")
+    {:ok, _} = Tape.archive(ctx, old.id)
+
+    assert {:error, :archived} = Runner.send_message(ctx, old.id, "still there?")
+
+    request = soul_request!(ctx, room, "planner", "anew")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    [_old, new] = Threads.children(actor(ctx), room.id)
+    assert new.id != old.id and is_nil(new.archived_at)
+    await_status(ctx, delivered_turn(ctx, new, request.id), "completed")
+  end
+
+  defp outcome(ctx, source_kind, source_id) do
+    from(c in Arca.Schemas.ConsumerReceipt,
+      where: c.athanor_id == ^ctx.athanor_id and c.consumer == "crew_delivery",
+      where: c.source_kind == ^source_kind and c.source_id == ^source_id,
+      select: c.outcome
+    )
+    |> Arca.Repo.one()
+    |> case do
+      nil -> :none
+      outcome -> {:ok, outcome}
+    end
+  end
+end
