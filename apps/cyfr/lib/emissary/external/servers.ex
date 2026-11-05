@@ -46,13 +46,21 @@ defmodule Emissary.External.Servers do
       url: url,
       headers: config["headers"] || %{},
       backends: config["backends"] || [],
+      login_entry_id: stdio_entry(server),
       timeout_ms: config["timeout_ms"] || @default_timeout_ms,
       athanor_id: ctx.athanor_id
     ]
   end
 
   defp transport(%{transport: "stdio"}), do: :stdio
+  defp transport(%{transport: "pipe"}), do: :pipe
   defp transport(_server), do: :http
+
+  # A kept stdio row's sessions run in its login entry's home.
+  defp stdio_entry(%{transport: "stdio", home: "kept"} = server),
+    do: Map.get(server, :login_entry_id)
+
+  defp stdio_entry(_server), do: nil
 
   @doc """
   Start the server if it is not running, and return its tool catalogue.

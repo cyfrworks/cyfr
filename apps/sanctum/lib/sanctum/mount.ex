@@ -282,7 +282,7 @@ defmodule Sanctum.Mount do
   @spec home_of(String.t(), String.t()) :: {:ok, home_id()} | :none | {:error, :unavailable}
   def home_of(athanor_id, entry_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(entry_id) do
-    case Arca.VaultStorage.get(%Prima.Actor{athanor_id: athanor_id}, entry_id) do
+    case Arca.VaultStorage.get(Prima.Actor.in_athanor(athanor_id), entry_id) do
       {:ok, %{kind: @login, id: id}} -> {:ok, id}
       {:ok, _another_kind} -> :none
       {:error, :not_found} -> :none
@@ -297,7 +297,7 @@ defmodule Sanctum.Mount do
   """
   @spec login_entries(String.t()) :: {:ok, [home_id()]} | {:error, :unavailable}
   def login_entries(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    case Arca.VaultStorage.list(%Prima.Actor{athanor_id: athanor_id}) do
+    case Arca.VaultStorage.list(Prima.Actor.in_athanor(athanor_id)) do
       {:ok, entries} -> {:ok, for(%{kind: @login, id: id} <- entries, do: id)}
       {:error, _unanswered} -> {:error, :unavailable}
     end

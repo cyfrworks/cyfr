@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.External.StatusRedaction do
+defmodule Opus.Programs.StatusRedaction do
   @moduledoc """
-  What the backends controller (`Emissary.External.Backends`) and a server
-  process (`Emissary.External.Server`) show of themselves in
+  What a programs controller (`Opus.Programs.Box`), a sign-in relay and a
+  server process (`Emissary.External.Server`) show of themselves in
   `:sys.get_status/1` and in crash reports.
 
   `format_status/1` redacts a `format_status/1` callback's state, last

@@ -28,6 +28,7 @@ func init() {
 	mcpCmd.AddCommand(mcpDisableCmd)
 	mcpCmd.AddCommand(mcpRefreshCmd)
 	mcpCmd.AddCommand(mcpRestartCmd)
+	mcpCmd.AddCommand(mcpResetHomeCmd)
 
 	mcpUpdateCmd.Flags().Int("epoch", 0, "The epoch `cyfr mcp get` showed (required)")
 	_ = mcpUpdateCmd.MarkFlagRequired("epoch")
@@ -35,7 +36,7 @@ func init() {
 
 var mcpCmd = &cobra.Command{
 	Use:     "mcp",
-	Short:   "Manage external MCP server connections",
+	Short:   "Manage external MCP server connections and programs",
 	GroupID: "admin",
 	Long: `Connect to external MCP servers (Notion, GitHub, custom servers) via the
 standard MCP protocol. External server tools appear alongside built-in
@@ -46,7 +47,12 @@ Header values can reference a stored vault entry with the vault: prefix.
 
 A stdio server ({"transport":"stdio","backends":[...]}) runs its backends
 on the backends service: each backend is a command and an env whose
-credentials are vault: templates.`,
+credentials are vault: templates. A pipe program ({"transport":"pipe"},
+one backend) is driven by a catalyst instead. A program may keep its home
+("home":"kept"), bound its memory ("memory_bytes") and a kept home's disk
+("home_max_bytes"), and name the command a sign-in runs ("login_command");
+a kept stdio server names its login entry ("login_entry_id"). Signing a
+program in runs on a terminal, which the console's Programs page shows.`,
 }
 
 var mcpAddCmd = &cobra.Command{
@@ -409,8 +415,8 @@ var mcpRefreshCmd = &cobra.Command{
 
 var mcpRestartCmd = &cobra.Command{
 	Use:     "restart <name>",
-	Short:   "Restart a stdio MCP server's backends",
-	Long:    "Release a stdio server's backends on the backends service and start them again at the server's next epoch.",
+	Short:   "Restart a program's backends",
+	Long:    "Release a program's backends on the backends service and start them again at the server's next epoch.",
 	Example: "  cyfr mcp restart gh",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -433,6 +439,27 @@ var mcpRestartCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			fmt.Printf("Server '%s' restarted (%v, epoch %v).\n", name, result["status"], result["epoch"])
+		}
+		return nil
+	},
+}
+
+var mcpResetHomeCmd = &cobra.Command{
+	Use:     "reset-home <login-entry-id>",
+	Short:   "Empty a login entry's kept home",
+	Long:    "End every program session in a login entry's kept home and make it again empty, under the same uid: the program signs in afresh.",
+	Example: "  cyfr mcp reset-home vlt_01a1ab7d-6f24-7dce-b322-419062c54cb2",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client := newClient()
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersResetHomeArgs{Entry: args[0]})
+		if err != nil {
+			return handleToolError(err)
+		}
+		if flagJSON {
+			output.JSON(result)
+		} else {
+			fmt.Printf("The kept home of '%s' is empty.\n", args[0])
 		}
 		return nil
 	},

@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.External.BackendDefinition do
+defmodule Opus.Programs.Definition do
   @moduledoc """
-  The backends of a `stdio` MCP server: what `config.backends` may hold.
+  A program row's definition: what `config.backends` may hold, the program
+  settings a row carries beside it (`validate_row/1`), and the programs a
+  sync defines (`programs/2`, `wire/1`).
 
-  A stdio server runs its backends on the backends service Locus serves
-  (`Emissary.External.Backends`), each a shell command with an environment:
+  A `stdio` or `pipe` row runs its backends on the backends service Locus
+  serves (`Opus.Programs`), each a shell command with an environment:
 
       [%{"name" => "github", "command" => "npx -y @modelcontextprotocol/server-github",
          "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}}]
@@ -42,7 +44,7 @@ defmodule Emissary.External.BackendDefinition do
   program that passes the value to a child puts it on a command line too.
   """
 
-  alias Prima.{LocusBackends, VaultRef}
+  alias Prima.{KeeperProtocol, LocusBackends, VaultRef}
 
   @name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/
@@ -143,6 +145,156 @@ defmodule Emissary.External.BackendDefinition do
     "Backend '#{backend}' has #{inspect(form)} in its command beside the vault-bound " <>
       "#{Enum.join(vars, ", ")}: a command substitution, arithmetic expansion or " <>
       "indirection can place the value #{@exposed}."
+  end
+
+  @typedoc "One program a sync defines, its environment as stored (templates unresolved)."
+  @type program :: %{
+          name: String.t(),
+          command: String.t(),
+          env: %{String.t() => String.t()},
+          login_command: String.t() | nil,
+          home: :scratch | :kept,
+          memory_bytes: pos_integer() | nil,
+          home_max_bytes: pos_integer() | nil
+        }
+
+  @doc """
+  The program settings a row carries beside its backends, checked: a
+  `transport` of `stdio` or `pipe` (an `http` row has none); a `pipe` row
+  has exactly one backend, the program its catalyst drives; `home` is
+  `"scratch"` or `"kept"`, and a kept `stdio` row names the login entry its
+  sessions run in (`login_entry_id`; whether it is one is the caller's to
+  check); `memory_bytes` lies in the keeper's range; `home_max_bytes` is a
+  kept home's alone, at least 1 MiB; `login_command` meets
+  `Prima.LocusBackends.check_command/1`. Answers the columns to store, every
+  one named (nil when absent), or `{:error, {:invalid_argument, message}}`.
+  """
+  @spec validate_row(map()) :: {:ok, map()} | {:error, {:invalid_argument, String.t()}}
+  def validate_row(%{"transport" => transport} = config) when transport in ["stdio", "pipe"] do
+    home = Map.get(config, "home") || "scratch"
+
+    with :ok <- one_program(transport, config["backends"]),
+         :ok <- check_home(home),
+         :ok <- check_memory(config["memory_bytes"]),
+         :ok <- check_home_max(home, config["home_max_bytes"]),
+         :ok <- check_login_command(config["login_command"]),
+         {:ok, entry} <- check_login_entry(transport, home, config["login_entry_id"]) do
+      {:ok,
+       %{
+         home: home,
+         memory_bytes: config["memory_bytes"],
+         home_max_bytes: config["home_max_bytes"],
+         login_command: config["login_command"],
+         login_entry_id: entry
+       }}
+    end
+  end
+
+  def validate_row(_config), do: invalid("Only a stdio or pipe server is a program")
+
+  @program_keys ~w(home memory_bytes home_max_bytes login_command login_entry_id)
+
+  @doc "The config keys that are a program's settings, stored as columns rather than in `config_json`."
+  @spec program_keys() :: [String.t()]
+  def program_keys, do: @program_keys
+
+  defp one_program("pipe", backends) when is_list(backends) and length(backends) != 1,
+    do: invalid("A pipe server is one program: it defines exactly one backend")
+
+  defp one_program(_transport, _backends), do: :ok
+
+  defp check_home(home) when home in ["scratch", "kept"], do: :ok
+  defp check_home(_home), do: invalid("config.home must be scratch or kept")
+
+  defp check_memory(nil), do: :ok
+
+  defp check_memory(bytes) when is_integer(bytes) do
+    if bytes >= KeeperProtocol.min_memory_bytes() and bytes <= KeeperProtocol.max_memory_bytes(),
+      do: :ok,
+      else:
+        invalid(
+          "config.memory_bytes must be from #{KeeperProtocol.min_memory_bytes()} to " <>
+            "#{KeeperProtocol.max_memory_bytes()} bytes"
+        )
+  end
+
+  defp check_memory(_bytes), do: invalid("config.memory_bytes must be a whole number of bytes")
+
+  @min_home_bytes 1_048_576
+
+  defp check_home_max(_home, nil), do: :ok
+
+  defp check_home_max("kept", bytes) when is_integer(bytes) do
+    max = KeeperProtocol.request_bounds().max_home_bytes
+
+    if bytes >= @min_home_bytes and bytes <= max,
+      do: :ok,
+      else: invalid("config.home_max_bytes must be from #{@min_home_bytes} to #{max} bytes")
+  end
+
+  defp check_home_max("kept", _bytes),
+    do: invalid("config.home_max_bytes must be a whole number of bytes")
+
+  defp check_home_max(_home, _bytes),
+    do: invalid("config.home_max_bytes bounds a kept home: set config.home to kept")
+
+  defp check_login_command(nil), do: :ok
+
+  defp check_login_command(command) do
+    case LocusBackends.check_command(command) do
+      :ok -> :ok
+      {:error, :vault_reference} -> invalid("config.login_command names a vault entry")
+      {:error, _} -> invalid("config.login_command is not a command a program may run")
+    end
+  end
+
+  # A kept stdio row's sessions run in its login entry's home; a pipe row's
+  # catalyst names its entry by its need, so the row names none.
+  defp check_login_entry("stdio", "kept", entry) when is_binary(entry) and entry != "",
+    do: {:ok, entry}
+
+  defp check_login_entry("stdio", "kept", _entry),
+    do: invalid("A kept stdio server names the login entry its home is: config.login_entry_id")
+
+  defp check_login_entry(_transport, _home, nil), do: {:ok, nil}
+
+  defp check_login_entry("pipe", _home, _entry),
+    do: invalid("A pipe server names no login entry: its catalyst's need binds one")
+
+  defp check_login_entry(_transport, _home, _entry),
+    do: invalid("config.login_entry_id names the entry of a kept home: set config.home to kept")
+
+  @doc """
+  The programs a stored row defines: one per validated backend, each with
+  the row's program settings.
+  """
+  @spec programs(map(), [backend()]) :: [program()]
+  def programs(row, backends) do
+    for backend <- backends do
+      %{
+        name: backend["name"],
+        command: backend["command"],
+        env: backend["env"],
+        login_command: Map.get(row, :login_command),
+        home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
+        memory_bytes: Map.get(row, :memory_bytes),
+        home_max_bytes: Map.get(row, :home_max_bytes)
+      }
+    end
+  end
+
+  @doc "A program as a sync names it on the wire (`Prima.LocusBackends`): its env names, never its values."
+  @spec wire(program()) :: LocusBackends.program()
+  def wire(program) do
+    %{
+      name: program.name,
+      command: program.command,
+      login_command: program.login_command,
+      env_names: program.env |> Map.keys() |> Enum.sort(),
+      home: program.home,
+      memory_bytes: program.memory_bytes,
+      home_max_bytes: program.home_max_bytes
+    }
   end
 
   defp backend(%{"name" => name, "command" => command} = backend) do

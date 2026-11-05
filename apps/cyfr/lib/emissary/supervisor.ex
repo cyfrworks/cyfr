@@ -18,13 +18,11 @@ defmodule Emissary.Supervisor do
   def init(_opts) do
     Supervisor.init(
       [
-        # The external-server registry, the backends controller, servers
-        # and reconciler restart from the registry down: a failure restarts
-        # its dependents. The controller starts before the servers and
-        # stops after them, because a stopping stdio server releases its
-        # owner through it. The controller's 5 s is its stop, after which
-        # the backend claims it held lapse on their lease; the
-        # reconciler's is its stop, which holds no work in flight.
+        # The external-server registry, servers and reconciler restart from
+        # the registry down: a failure restarts its dependents. The programs
+        # controller a stdio server releases its owner through is Opus's
+        # (`Opus.Programs`), started before this tree and stopped after it.
+        # The reconciler's 5 s is its stop, which holds no work in flight.
         %{
           id: Emissary.External.ServerTree,
           start:
@@ -32,7 +30,6 @@ defmodule Emissary.Supervisor do
              [
                [
                  {Registry, keys: :unique, name: Emissary.External.ServerRegistry},
-                 Supervisor.child_spec(Emissary.External.Backends, shutdown: 5_000),
                  {DynamicSupervisor,
                   name: Emissary.External.ServerSupervisor, strategy: :one_for_one},
                  Supervisor.child_spec(Emissary.External.Reconciler, shutdown: 5_000)

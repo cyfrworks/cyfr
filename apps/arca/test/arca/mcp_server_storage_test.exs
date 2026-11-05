@@ -109,48 +109,71 @@ defmodule Arca.McpServerStorageTest do
                memory_bytes: nil,
                home_max_bytes: nil,
                login_command: nil,
+               login_entry_id: nil,
                hosts: nil
              } = server
 
       assert {:ok, ^server} = McpServerStorage.get(actor, "plain")
     end
 
-    test "a pipe transport and a kept home are not built, and nothing is written",
+    test "a pipe program and a kept home are stored with their settings, and update writes them",
          %{actor: actor} do
-      assert {:error, {:not_built, :pipe}} =
+      assert {:ok, %{epoch: 1} = piped} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
-                 name: "piped",
+                 name: "claude",
                  transport: "pipe",
-                 url: nil
+                 url: nil,
+                 home: "kept",
+                 memory_bytes: 1_073_741_824,
+                 home_max_bytes: 2_147_483_648,
+                 login_command: "claude auth login"
                })
 
-      assert {:error, {:not_built, :kept_home}} =
+      assert %{transport: "pipe", home: "kept", login_entry_id: nil} = piped
+      assert {:ok, ^piped} = McpServerStorage.get(actor, "claude")
+
+      assert {:ok, %{epoch: 1}} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
-                 name: "kept",
+                 name: "gh",
                  transport: "stdio",
                  url: nil,
-                 home: "kept"
+                 home: "kept",
+                 login_entry_id: "vlt_gh",
+                 login_command: "gh auth login"
                })
 
-      assert {:ok, []} = McpServerStorage.list(actor)
+      assert {:ok, updated} =
+               McpServerStorage.update(
+                 actor,
+                 "gh",
+                 %{
+                   home: "scratch",
+                   memory_bytes: 268_435_456,
+                   home_max_bytes: nil,
+                   login_command: nil,
+                   login_entry_id: nil
+                 },
+                 1
+               )
 
-      assert {:ok, %{epoch: 1} = stored} =
+      assert %{
+               epoch: 2,
+               home: "scratch",
+               memory_bytes: 268_435_456,
+               login_command: nil,
+               login_entry_id: nil
+             } = updated
+
+      # A store-level constraint still holds: a program has no url.
+      assert {:error, _} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
-                 name: "program",
-                 transport: "stdio",
-                 url: nil
+                 name: "bad",
+                 transport: "pipe",
+                 url: "https://x"
                })
-
-      assert {:error, {:not_built, :pipe}} =
-               McpServerStorage.update(actor, "program", %{transport: "pipe"})
-
-      assert {:error, {:not_built, :kept_home}} =
-               McpServerStorage.update(actor, "program", %{home: "kept"})
-
-      assert {:ok, ^stored} = McpServerStorage.get(actor, "program")
     end
 
     test "the athanor's servers stop at the caller's cap, counting no other athanor's",
