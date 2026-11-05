@@ -66,6 +66,12 @@ defmodule Locus.Runtime.HostClient do
   itself, and connects to the address the answer names
   (`Locus.Runtime.Egress.pin/3`).
 
+  `pipe_open/4`, `pipe_send/3`, `pipe_recv/4` and `pipe_close/2` carry a
+  catalyst's session on the program its `login` need is bound to
+  (`c:Prima.HostAPI.pipe_open/4`); a pipe call is also answered `:denied`,
+  CYFR's refusal of a need, a binding or a session that is not the
+  caller's.
+
   `attached_fetch/3` posts a guest's request naming a connection, which
   CYFR makes itself with the credential attached, and hands the answer's
   sealed frames to its caller as they arrive, unopened: the worker
@@ -153,6 +159,9 @@ defmodule Locus.Runtime.HostClient do
     "claim_expired" => :claim_expired,
     "not_found" => :not_found
   }
+
+  # The refusal only a pipe call's answer names beside those.
+  @pipe_ops [:pipe_open, :pipe_send, :pipe_recv, :pipe_close]
 
   # The refusals only an `egress_pin` answer names.
   @pin_refusals Map.new(PinnedTarget.refusals(), &{Atom.to_string(&1), &1})
@@ -471,6 +480,97 @@ defmodule Locus.Runtime.HostClient do
   end
 
   defp pin_args(_url, _purpose, _from), do: {:error, :malformed}
+
+  @doc """
+  Open a session on the program the attempt's `login` need `need` is bound
+  to, under the guest's `key`, with `argv` appended to its command:
+  `{:ok, %{session: id, resumed: boolean}}`. Idempotent: a lost answer is
+  asked once more.
+  """
+  @spec pipe_open(t(), String.t(), String.t(), [String.t()]) ::
+          {:ok, Prima.HostAPI.pipe_opened()} | {:error, term()}
+  def pipe_open(%__MODULE__{} = client, need, key, argv)
+      when is_binary(need) and is_binary(key) and is_list(argv) do
+    case request(client, :pipe_open, %{"need" => need, "key" => key, "argv" => argv}) do
+      {:ok, %{"session" => session, "resumed" => resumed}}
+      when is_binary(session) and session != "" and is_boolean(resumed) ->
+        {:ok, %{session: session, resumed: resumed}}
+
+      {:ok, _other} ->
+        {:error, :lost}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Write `lines` to the program of `session`, in order. Never asked again:
+  a lost answer is `{:error, {:uncertain, sentence}}`.
+  """
+  @spec pipe_send(t(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  def pipe_send(%__MODULE__{} = client, session, lines)
+      when is_binary(session) and is_list(lines) do
+    case request(client, :pipe_send, %{"session" => session, "lines" => lines}) do
+      {:ok, true} -> :ok
+      {:ok, _other} -> {:error, :lost}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  The lines of `session` past `after_seq`, waiting at most `max_wait_ms`
+  (at most `Prima.HostAPI.max_pipe_wait_ms/0`) for one:
+  `{:ok, %{lines: [%{seq, text}], dropped, running}}`. Idempotent: a lost
+  answer is asked once more by the same `after_seq`.
+  """
+  @spec pipe_recv(t(), String.t(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, Prima.HostAPI.pipe_recv()} | {:error, term()}
+  def pipe_recv(%__MODULE__{} = client, session, after_seq, max_wait_ms)
+      when is_binary(session) and is_integer(after_seq) and after_seq >= 0 and
+             is_integer(max_wait_ms) and max_wait_ms >= 0 do
+    args = %{
+      "session" => session,
+      "after" => after_seq,
+      "max_wait_ms" => min(max_wait_ms, HostAPI.max_pipe_wait_ms())
+    }
+
+    with {:ok, wire} <- request(client, :pipe_recv, args) do
+      case pipe_received(wire) do
+        {:ok, received} -> {:ok, received}
+        :error -> {:error, :lost}
+      end
+    end
+  end
+
+  @doc "End `session` and its program. Idempotent."
+  @spec pipe_close(t(), String.t()) :: :ok | {:error, term()}
+  def pipe_close(%__MODULE__{} = client, session) when is_binary(session) do
+    case request(client, :pipe_close, %{"session" => session}) do
+      {:ok, true} -> :ok
+      {:ok, _other} -> {:error, :lost}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp pipe_received(%{"lines" => lines, "dropped" => dropped, "running" => running})
+       when is_list(lines) and is_integer(dropped) and dropped >= 0 and is_boolean(running) do
+    lines
+    |> Enum.reduce_while({:ok, []}, fn
+      %{"seq" => seq, "text" => text}, {:ok, acc}
+      when is_integer(seq) and seq >= 0 and is_binary(text) ->
+        {:cont, {:ok, [%{seq: seq, text: text} | acc]}}
+
+      _unreadable, _acc ->
+        {:halt, :error}
+    end)
+    |> case do
+      {:ok, read} -> {:ok, %{lines: Enum.reverse(read), dropped: dropped, running: running}}
+      :error -> :error
+    end
+  end
+
+  defp pipe_received(_wire), do: :error
 
   @doc """
   Report, for the worker service `credentials` name on its boot `boot`,
@@ -1003,6 +1103,9 @@ defmodule Locus.Runtime.HostClient do
 
       {:error, refusal, _fields} when is_map_key(@refusals, refusal) ->
         {:ok, {:error, Map.fetch!(@refusals, refusal)}}
+
+      {:error, "denied", _fields} when op in @pipe_ops ->
+        {:ok, {:error, :denied}}
 
       {:error, refusal, _fields} when op == :egress_pin and is_map_key(@pin_refusals, refusal) ->
         {:ok, {:error, Map.fetch!(@pin_refusals, refusal)}}
