@@ -156,7 +156,7 @@ async function turn(message) {
   if (text.includes('hello')) {
     const { decision } = await ask('Bash', { command: 'cat canary.txt' });
     const ran = decision.behavior === 'allow' ? 'allowed' : 'refused';
-    reply(`Hello from the fake harness: model ${model}, effort ${flag('--effort') || 'unset'}, tools ${flag('--tools') ?? 'all'}, Bash ${ran}, prompt "${appended}".`);
+    reply(`Hello from the fake harness: session ${sessionId}, model ${model}, effort ${flag('--effort') || 'unset'}, tools ${flag('--tools') ?? 'all'}, Bash ${ran}, prompt "${appended}".`);
   } else if (text.includes('read')) {
     const input = { action: 'read', path: 'notes.txt' };
     out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'Reading it.' }, { type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: 'mcp__cyfr__files', input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });

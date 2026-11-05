@@ -27,6 +27,9 @@ CYFR's tools as the harness starts an MCP server.
   `Bash` ask is allowed and shown as a `tool_call.start`/`end` pair by name;
   the reply streams as `text.delta` and answers `end_turn` with usage and
   the session.
+- Changed options: a chat on the running session with other tools and
+  another model closes its program and starts it again resuming the same
+  session with the new flags, which the harness's reply names.
 - A held ask: a message that makes the harness call one of CYFR's tools
   answers a `tool_call` named as the request named the tool, carrying the
   ask's id, and leaves the ask pending in the running session; the next
@@ -234,14 +237,16 @@ def main():
         answers.append((output, events))
         data = output["data"]
         session = data["session"]
+        harness_id = session.split(".")[0]
         argv = bridge.calls[0][1]["argv"]
-        expect(argv[argv.index("--session-id") + 1] == session and "--resume" not in argv
+        expect(argv[argv.index("--session-id") + 1] == harness_id and "--resume" not in argv
                and argv[argv.index("--model") + 1] == "fake-haiku" and argv[argv.index("--effort") + 1] == "high"
                and argv[argv.index("--tools") + 1] == "Bash,Read",
                "a first chat opens a new session under the id it answers, with the request's options as flags", argv)
         expect(output["status"] == 200 and data["stop_reason"] == "end_turn" and data["model"] == "fake-haiku"
-               and data["content"] == [{"type": "text", "text": 'Hello from the fake harness: model fake-haiku, '
-                                        f'effort high, tools Bash,Read, Bash allowed, prompt "{SYSTEM}".'}],
+               and data["content"] == [{"type": "text", "text": f'Hello from the fake harness: session {harness_id}, '
+                                        'model fake-haiku, effort high, tools Bash,Read, Bash allowed, '
+                                        f'prompt "{SYSTEM}".'}],
                "the harness answers end_turn, its own Bash allowed and the system prompt appended to its own", output)
         expect(data["usage"] == {"input_tokens": 12, "output_tokens": len(data["content"][0]["text"]),
                                  "cache_read_tokens": 5, "cache_write_tokens": 2},
@@ -253,11 +258,31 @@ def main():
                "the harness's own ask is shown as a start and end pair, by name only", shown)
         expect(events[-1] == {"type": "stop", "stop_reason": "end_turn"}, "the stream ends with its stop", events[-1])
 
+        # ————— changed options: the session restarts with them —————
+        bridge.calls.clear()
+        changed = {"model": "fake-opus", "system": SYSTEM, "session": session, "tools": [FILES],
+                   "messages": [{"role": "user", "content": "say hello again"}], "options": {"tools": ""}}
+        output, events = run_catalyst(rt, plane, wasm, "chat", changed, "a chat with changed tools and model")
+        answers.append((output, events))
+        data = output["data"]
+        ops = [op for op, _ in bridge.calls if op in ("open", "close")]
+        argv = [args for op, args in bridge.calls if op == "open"][-1]["argv"]
+        expect(ops == ["open", "close", "open"] and argv[argv.index("--resume") + 1] == harness_id
+               and argv[argv.index("--model") + 1] == "fake-opus" and argv[argv.index("--tools") + 1] == ""
+               and "--effort" not in argv,
+               "changed options close the running harness and start it again resuming its session with the new flags",
+               [ops, argv])
+        expect(data["content"][0]["text"].startswith(f"Hello from the fake harness: session {harness_id}, "
+                                                     "model fake-opus, effort unset, tools , ")
+               and data["session"].split(".")[0] == harness_id and data["session"] != session,
+               "the harness ran the turn with the new tools and model in the same session", data)
+        session = data["session"]
+
         # ————— a held ask, answered by the next chat —————
         bridge.calls.clear()
-        history = [{"role": "user", "content": "say hello"}, {"role": "assistant", "content": data["content"]},
+        history = [{"role": "user", "content": "say hello again"}, {"role": "assistant", "content": data["content"]},
                    {"role": "user", "content": "read notes.txt"}]
-        ask = {"model": "fake-haiku", "session": session, "tools": [FILES], "messages": history}
+        ask = {"model": "fake-opus", "session": session, "tools": [FILES], "messages": history, "options": {"tools": ""}}
         output, events = run_catalyst(rt, plane, wasm, "chat", ask, "a chat that calls a tool of CYFR's")
         answers.append((output, events))
         data = output["data"]
@@ -294,12 +319,12 @@ def main():
         eventually(lambda: c.program(OWNER, PROGRAM["name"])["sessions"] == 0 and not fakes(backends),
                    "the idle session's program to be retired", timeout_s=IDLE_MS / 1000 + 30)
         bridge.calls.clear()
-        later = {"model": "fake-haiku", "session": session,
+        later = {"model": "fake-opus", "session": session, "options": {"tools": ""},
                  "messages": [{"role": "user", "content": "what was my first message?"}]}
         output, events = run_catalyst(rt, plane, wasm, "chat", later, "a chat after the program retired")
         answers.append((output, events))
         argv = bridge.calls[0][1]["argv"]
-        expect(argv[argv.index("--resume") + 1] == session and "--session-id" not in argv,
+        expect(argv[argv.index("--resume") + 1] == harness_id and "--session-id" not in argv,
                "the next chat starts the harness again resuming its session", argv)
         expect(output["data"]["content"] == [{"type": "text", "text": "Your first message was: say hello"}]
                and output["data"]["session"] == session,

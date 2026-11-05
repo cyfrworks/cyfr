@@ -64,19 +64,26 @@ pub fn argv(start: Start, flags: &Flags) -> Vec<String> {
         Start::New(id) => argv.extend(["--session-id".into(), id.to_string()]),
         Start::Resume(id) => argv.extend(["--resume".into(), id.to_string()]),
     }
+    argv.extend(flag_args(flags));
+    argv
+}
+
+/// The request's options as the flags a session starts with.
+pub fn flag_args(flags: &Flags) -> Vec<String> {
     let pairs = [
         ("--model", &flags.model),
         ("--effort", &flags.effort),
         ("--permission-mode", &flags.permission_mode),
         ("--tools", &flags.tools),
     ];
+    let mut args = Vec::new();
     for (flag, value) in pairs {
         if let Some(value) = value {
-            argv.push(flag.to_string());
-            argv.push(value.clone());
+            args.push(flag.to_string());
+            args.push(value.clone());
         }
     }
-    argv
+    args
 }
 
 /// The `initialize` request, carrying CYFR's system prompt to be appended

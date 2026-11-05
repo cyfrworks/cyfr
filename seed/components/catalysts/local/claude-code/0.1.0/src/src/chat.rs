@@ -203,7 +203,11 @@ pub struct Request {
     pub model: String,
     pub system: Option<String>,
     pub tools: Vec<Tool>,
+    /// The harness's session id the request names, and the flags its
+    /// process was started with, as the session this catalyst answered
+    /// records them.
     pub session: Option<String>,
+    pub started: Option<String>,
     pub flags: Flags,
     pub input: Input,
 }
@@ -217,9 +221,13 @@ pub fn parse_request(params: &Value) -> Result<Request, String> {
     if let Err(member) = check_chat_request(params, &chat_options()) {
         return Err(format!("'{member}' is not one this brain takes as it was set"));
     }
-    let session = match params.get("session") {
-        None => None,
-        Some(Value::String(id)) if session_id(id) => Some(id.clone()),
+    let (session, started) = match params.get("session") {
+        None => (None, None),
+        Some(Value::String(answered)) => match answered.split_once('.') {
+            None if session_id(answered) => (Some(answered.clone()), None),
+            Some((id, print)) if session_id(id) && fingerprint_text(print) => (Some(id.into()), Some(print.into())),
+            _ => return Err("'session' is not a session this brain answered".into()),
+        },
         Some(_) => return Err("'session' is not a session this brain answered".into()),
     };
     let system = match params.get("system") {
@@ -258,6 +266,7 @@ pub fn parse_request(params: &Value) -> Result<Request, String> {
         system,
         tools,
         session,
+        started,
         flags,
         input: input(messages)?,
     })
@@ -388,6 +397,24 @@ pub fn session_id(id: &str) -> bool {
             8 | 13 | 18 | 23 => c == '-',
             _ => c.is_ascii_hexdigit() && !c.is_ascii_uppercase(),
         })
+}
+
+/// The flags a session's process was started with, as 16 hex digits
+/// (FNV-1a, 64 bits): what the session this catalyst answers records
+/// beside its id, so a request whose options differ is seen to.
+pub fn fingerprint(flags: &Flags) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for arg in harness::flag_args(flags) {
+        for byte in arg.bytes().chain([0]) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    format!("{hash:016x}")
+}
+
+fn fingerprint_text(print: &str) -> bool {
+    print.len() == 16 && print.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 /// A UUID (version 4) from `bits`.
@@ -756,9 +783,19 @@ pub fn chat<P: Pipe, S: Sink>(
     let tools = carried_tools(&request.tools)?;
     let id = request.session.clone().unwrap_or(fresh);
     let start = if request.session.is_some() { Start::Resume(&id) } else { Start::New(&id) };
-    let opened = pipe
-        .open(NEED, &id, &harness::argv(start, &request.flags))
-        .map_err(|code| pipe_refusal(&code))?;
+    let argv = harness::argv(start, &request.flags);
+    let mut opened = pipe.open(NEED, &id, &argv).map_err(|code| pipe_refusal(&code))?;
+    // A running process keeps the flags it was started with, and the box
+    // attaches without applying new ones: when the request's options are
+    // not those the session records, the process is closed and started
+    // again resuming the session, whose transcript its folder keeps.
+    if opened.resumed && request.started.as_deref() != Some(fingerprint(&request.flags).as_str()) {
+        let _ = pipe.close(&opened.session);
+        opened = pipe.open(NEED, &id, &argv).map_err(|code| pipe_refusal(&code))?;
+        if opened.resumed {
+            return Err(Refusal::new(502, "provider_error", "Claude Code's session could not be restarted with the new options."));
+        }
+    }
     let session = opened.session.as_str();
     let mut reader = Reader::new(session, 0);
     let send = |pipe: &mut P, line: String| pipe.send(session, &[line]).map_err(|code| pipe_refusal(&code));
@@ -823,7 +860,8 @@ fn turn<P: Pipe, S: Sink>(
             content.push(json!({"type": "text", "text": text}));
         }
         content.extend(call);
-        json!({"model": model, "content": content, "stop_reason": stop, "usage": usage, "session": id})
+        json!({"model": model, "content": content, "stop_reason": stop, "usage": usage,
+               "session": format!("{id}.{}", fingerprint(&request.flags))})
     };
 
     loop {
@@ -979,6 +1017,7 @@ mod tests {
         }
         fn close(&mut self, session: &str) -> Result<(), String> {
             self.log.push(format!("close {session}"));
+            self.resumed = false;
             Ok(())
         }
     }
@@ -1048,7 +1087,7 @@ mod tests {
         let answer = chat(&mut pipe, &mut deltas, &req, ID.into(), far()).unwrap();
         assert_eq!(answer["content"], json!([{"type": "text", "text": "Hello there."}]));
         assert_eq!(answer["stop_reason"], "end_turn");
-        assert_eq!(answer["session"], ID);
+        assert!(answer["session"].as_str().unwrap().starts_with(&format!("{ID}.")));
         assert_eq!(answer["model"], "claude-haiku-5-5");
         assert_eq!(answer["usage"]["input_tokens"], 5);
         assert!(pipe.log[0].starts_with(&format!("open claude {ID} -p ")));
@@ -1102,7 +1141,7 @@ mod tests {
         let mut messages = vec![json!({"role": "user", "content": "Read a.txt"})];
         messages.push(json!({"role": "assistant", "content": answer["content"]}));
         messages.push(json!({"role": "tool", "content": [{"type": "tool_result", "tool_call_id": "toolu_1", "name": "files", "content": "hi"}]}));
-        let req = request(json!({"model": "default", "session": ID, "messages": messages}));
+        let req = request(json!({"model": "default", "session": answer["session"], "messages": messages}));
         let mut deltas = Deltas::new(Vec::new());
         let answer = chat(&mut pipe, &mut deltas, &req, "unused".into(), far()).unwrap();
         assert_eq!(answer["stop_reason"], "end_turn");
@@ -1208,8 +1247,49 @@ mod tests {
         pipe.resumed = true;
         pipe.dropped = VecDeque::from([7]);
         let mut deltas = Deltas::new(Vec::new());
-        let req = request(json!({"model": "haiku", "session": ID, "messages": [{"role": "user", "content": "hi"}]}));
+        let session = started(&Flags { model: Some("haiku".into()), ..Flags::default() });
+        let req = request(json!({"model": "haiku", "session": session, "messages": [{"role": "user", "content": "hi"}]}));
         assert_eq!(chat(&mut pipe, &mut deltas, &req, ID.into(), far()).unwrap()["stop_reason"], "end_turn");
+    }
+
+    /// The session this catalyst answers for a process started with `flags`.
+    fn started(flags: &Flags) -> String {
+        format!("{ID}.{}", fingerprint(flags))
+    }
+
+    fn result_line() -> String {
+        r#"{"type":"result","subtype":"success","is_error":false,"usage":{}}"#.into()
+    }
+
+    #[test]
+    fn changed_options_restart_the_session_resuming_it_with_the_new_flags() {
+        let hi = json!([{"role": "user", "content": "hi"}]);
+        let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+        let mut deltas = Deltas::new(Vec::new());
+        let first = request(json!({"model": "haiku", "messages": hi, "options": {"tools": "Bash,Read"}}));
+        let session = chat(&mut pipe, &mut deltas, &first, ID.into(), far()).unwrap()["session"].clone();
+        assert!(session.as_str().unwrap().starts_with(&format!("{ID}.")), "{session}");
+
+        // The same options again: the running session is used as it is.
+        let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+        pipe.resumed = true;
+        let same = request(json!({"model": "haiku", "session": session, "messages": hi, "options": {"tools": "Bash,Read"}}));
+        let again = chat(&mut pipe, &mut deltas, &same, "unused".into(), far()).unwrap();
+        assert_eq!(again["session"], session);
+        assert!(!pipe.log.iter().any(|l| l.starts_with("close")), "{:?}", pipe.log);
+
+        // Changed tools and model: the running process is closed and the
+        // session started again resuming the same id, with the new flags.
+        let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+        pipe.resumed = true;
+        let changed = request(json!({"model": "opus", "session": session, "messages": hi, "options": {"tools": ""}}));
+        let answer = chat(&mut pipe, &mut deltas, &changed, "unused".into(), far()).unwrap();
+        assert_eq!(pipe.log.len(), 3, "{:?}", pipe.log);
+        assert_eq!(pipe.log[1], "close pipe-1");
+        assert!(pipe.log[2].ends_with(&format!("--resume {ID} --model opus --tools ")), "{}", pipe.log[2]);
+        assert!(pipe.sent.iter().any(|l| l.contains("\"initialize\"")), "the new process is initialized");
+        let now = answer["session"].as_str().unwrap();
+        assert!(now.starts_with(&format!("{ID}.")) && now != session, "{now}");
     }
 
     #[test]
