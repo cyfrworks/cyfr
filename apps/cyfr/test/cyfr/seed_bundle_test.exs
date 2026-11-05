@@ -30,7 +30,11 @@ defmodule Cyfr.Test.SeedBundleTest do
   # A model catalyst is an API catalyst, which CYFR attaches a key for, or
   # a harness adapter, which runs a program on the person's own sign-in.
   defp adapter?(unit),
-    do: Enum.any?(Prima.Manifest.Needs.from_manifest(unit.manifest) || [], &Prima.Manifest.Needs.mount_only?/1)
+    do:
+      Enum.any?(
+        Prima.Manifest.Needs.from_manifest(unit.manifest) || [],
+        &Prima.Manifest.Needs.mount_only?/1
+      )
 
   test "each API model catalyst's newest version has CYFR attach its key, to its egress hosts" do
     for unit <- SeedBundle.model_chat_units(), not adapter?(unit) do
@@ -51,7 +55,8 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert [_ | _] = adapters
 
     for unit <- adapters do
-      assert [%{kind: "login", program: program}] = Prima.Manifest.Needs.from_manifest(unit.manifest),
+      assert [%{kind: "login", program: program}] =
+               Prima.Manifest.Needs.from_manifest(unit.manifest),
              unit.rel
 
       assert is_binary(program), unit.rel
@@ -64,6 +69,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     units =
       Enum.reject(SeedBundle.model_chat_units(), &adapter?/1) ++
         [SeedBundle.local_unit!("catalysts", "http")]
+
     ledger = Enum.map(Prima.Source.classes(), &Prima.Source.new/1)
 
     for unit <- units do

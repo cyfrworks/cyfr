@@ -103,7 +103,9 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
       [need] = Prima.Manifest.Needs.from_manifest(unit.manifest)
       {:ok, plan} = Compendium.Component.setup_plan(ctx, unit.ref)
       refute plan.ready, unit.ref
-      assert Enum.any?(plan.consent.needs, &(&1[:need] == need.name and not &1.satisfied)), unit.ref
+
+      assert Enum.any?(plan.consent.needs, &(&1[:need] == need.name and not &1.satisfied)),
+             unit.ref
     end
 
     claude = Enum.find(models, &(&1.name == "claude"))
