@@ -8,14 +8,16 @@
 // keeps its sessions in its HOME, the kept folder, as the harness does.
 //
 // - It refuses to start without the arguments every session takes
-//   (`-p`, stream-json both ways, `--verbose`, partial messages,
-//   `--strict-mcp-config`, `--permission-prompt-tool stdio`), and with
+//   (`-p`, stream-json both ways, `--verbose`, partial messages, the
+//   echo of user messages, `--strict-mcp-config`,
+//   `--permission-prompt-tool stdio`), and with
 //   `--resume` of a session its folder does not hold.
 // - `initialize` is answered with a model listing, and the system prompt it
 //   carries is kept; `mcp_set_servers` starts each stdio server it names
 //   (the image's `cyfr-stub`), lists its tools over MCP and answers
 //   `added`.
-// - A user message is a turn: `system/init`, then by its words: `hello`
+// - A user message is a turn: `system/init`, its echo under its `uuid`
+//   (`isReplay`), then by its words: `hello`
 //   asks to run its own `Bash` and replies naming its flags and prompt;
 //   `read` makes an `assistant` `tool_use` of `mcp__cyfr__files`, asks
 //   `can_use_tool` and holds until the driver's `control_response`, calls
@@ -36,7 +38,7 @@ const flag = (name) => {
   const at = args.indexOf(name);
   return at >= 0 ? args[at + 1] : undefined;
 };
-const BASE = ['-p', '--verbose', '--include-partial-messages', '--strict-mcp-config'];
+const BASE = ['-p', '--verbose', '--include-partial-messages', '--replay-user-messages', '--strict-mcp-config'];
 const PAIRS = [['--input-format', 'stream-json'], ['--output-format', 'stream-json'], ['--permission-prompt-tool', 'stdio']];
 const missing = BASE.filter((a) => !args.includes(a)).concat(PAIRS.filter(([f, v]) => flag(f) !== v).map(([f]) => f));
 if (missing.length) {
@@ -152,6 +154,8 @@ async function turn(message) {
   transcript.push({ role: 'user', text });
   save();
   out({ type: 'system', subtype: 'init', session_id: sessionId, model, tools: [...OWN_TOOLS, ...mcpTools()], mcp_servers: [...servers.keys()].map((name) => ({ name, status: 'connected' })), permissionMode: flag('--permission-mode') || 'default' });
+  // --replay-user-messages: the message, echoed under the uuid it came with.
+  out({ type: 'user', message: message.message, parent_tool_use_id: null, session_id: sessionId, uuid: message.uuid, isReplay: true });
 
   if (text.includes('hello')) {
     const { decision } = await ask('Bash', { command: 'cat canary.txt' });

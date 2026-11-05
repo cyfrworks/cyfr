@@ -34,8 +34,12 @@ CYFR's tools as the harness starts an MCP server.
   answers a `tool_call` named as the request named the tool, carrying the
   ask's id, and leaves the ask pending in the running session; the next
   chat, carrying the `tool_result`, attaches to that session and sends only
-  the ask's allow, with the result in its input, and the harness's call
-  through `cyfr-stub` returns that result, which its reply quotes.
+  the ask's allow, with the result in its input. The read after it is
+  answered unavailable (overloaded, which the loop retries); the same chat
+  made again finds the turn the harness completed meanwhile in the
+  session's buffer and answers it without sending the allow again: the
+  harness's call through `cyfr-stub` returned the result, which its reply
+  quotes.
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the harness again with `--resume`,
   which finds the session in the kept folder.
@@ -98,6 +102,10 @@ class Bridge:
         self.sessions = {}
         self.calls = []
         self.refuse_next_open = None
+        # Armed, the first read after an allow is sent answers unavailable,
+        # as a box that could not answer does.
+        self.fail_read_after_allow = False
+        self.failing = False
 
     def install(self, plane):
         plane.script("pipe_open", self.open)
@@ -132,6 +140,8 @@ class Bridge:
         self.calls.append(("send", args))
         if not self.held(entry, args["session"]):
             return {"error": "denied"}
+        if self.fail_read_after_allow and any('"behavior":"allow"' in line for line in args["lines"]):
+            self.fail_read_after_allow, self.failing = False, True
         status, answer = self.c.send(OWNER, args["session"], args["lines"])
         if status == 200 and answer.get("status") == "running":
             return {"ok": True}
@@ -140,6 +150,9 @@ class Bridge:
     def recv(self, args, _caller, entry):
         if not self.held(entry, args["session"]):
             return {"error": "denied"}
+        if self.failing:
+            self.failing = False
+            return {"error": "unavailable"}
         status, answer = self.c.recv(OWNER, args["session"], args["after"], args["max_wait_ms"])
         if status != 200:
             return {"error": "unavailable"}
@@ -299,21 +312,28 @@ def main():
             {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": call["id"], "name": "files", "content": body}]},
         ]}
         bridge.calls.clear()
+        bridge.fail_read_after_allow = True
         output, events = run_catalyst(rt, plane, wasm, "chat", answered, "the chat carrying the tool's result")
+        answers.append((output, events))
+        expect(output["status"] == 503 and output["error"]["type"] == "overloaded",
+               "a read that the box could not answer after the allow answers overloaded, which the loop retries",
+               output)
+        output, events = run_catalyst(rt, plane, wasm, "chat", answered, "the same chat, retried")
         answers.append((output, events))
         data = output["data"]
         opened = [args for op, args in bridge.calls if op == "open"]
         sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
         allow = [line for line in sent if line.get("type") == "control_response"]
-        expect(len(opened) == 1 and sent == allow,
-               "the next chat attaches to the running session and sends the ask's answer alone: no initialize, no "
-               "new tools", sent)
+        expect(len(opened) == 2 and sent == allow,
+               "each run attaches to the running session, and between them only the ask's answer was sent: no "
+               "initialize, no new tools", sent)
         expect(len(allow) == 1 and allow[0]["response"]["request_id"] == call["provider_data"]["request_id"]
                and allow[0]["response"]["response"] == {"behavior": "allow", "updatedInput": {
                    "action": "read", "path": "notes.txt", "result": body}},
                "the ask is allowed with CYFR's result in its input", allow)
         expect(data["stop_reason"] == "end_turn" and data["content"] == [{"type": "text", "text": f"The file says: {body}"}],
-               "the harness's call through cyfr-stub returned the result, which its reply quotes", data)
+               "the retry answers the turn the harness completed meanwhile: its call through cyfr-stub returned the "
+               "result, which its reply quotes, and the allow was sent once", data)
 
         # ————— resume after retirement —————
         eventually(lambda: c.program(OWNER, PROGRAM["name"])["sessions"] == 0 and not fakes(backends),

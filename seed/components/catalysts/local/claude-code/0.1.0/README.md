@@ -12,7 +12,7 @@ The manifest declares one need, `claude`, of type `login` for the program `claud
 
 ```
 -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages
---strict-mcp-config --permission-prompt-tool stdio
+--replay-user-messages --strict-mcp-config --permission-prompt-tool stdio
 ```
 
 and the request's options as `--model`, `--effort`, `--permission-mode` and `--tools`. A running process keeps the flags it started with, and the box attaches to it without applying new ones, so the `session` a response answers records them: `<id>.<fingerprint of the flags>`. A request whose options differ from the ones its session records closes the running process and starts it again with `--resume <id>` and the new flags; the transcript in the kept folder carries the session across. A new process is sent an `initialize` control request carrying the request's `system` as `appendSystemPrompt`, so the harness keeps its own prompt. Each new turn then sets CYFR's tools with an `mcp_set_servers` control request (the answer to a pending ask continues a turn whose tools are set) naming one stdio server, `cyfr`, run as `cyfr-stub` with one tool per argument (a pipe argument is at most 4096 bytes, so the tool list cannot ride on `--mcp-config`). The harness names those tools `mcp__cyfr__<name>`.
@@ -24,6 +24,8 @@ The catalyst sends the newest user message and streams the reply's text as `text
 - an ask (`control_request` `can_use_tool`) to run one of CYFR's tools: a `tool_call` named as AQUA names the tool, with `provider_data: {request_id}`, and `stop_reason: tool_call`. The ask stays pending in the harness while CYFR runs the call through its gate. The next `chat`, carrying the `tool_result`, answers the ask with an allow whose `updatedInput` holds CYFR's answer as `result` (or `error` for a refusal), and `cyfr-stub` returns it as the tool's content;
 - the turn's `result`: `end_turn` with its usage;
 - an error, typed by the contract's refusals.
+
+A run whose answer was lost (a read the box could not answer is `overloaded`, which the loop retries) may have sent its message or its allow already, so every run that attaches to a running session first reads what the session holds unread. Each user message goes under a `uuid` derived from its request, and the harness echoes it back (`--replay-user-messages`). An ask's allow shows in what the harness did after it: it ran the call (a `tool_result` for the call's `tool_use` id), or wrote anything past the ask. When the held lines show the message or the allow arrived, the turn is answered from them and on, and nothing is sent twice: a `control_response` goes for each ask at most once.
 
 The harness's asks for its own tools are answered allow inside its box and shown as a `tool_call.start` and `tool_call.end` pair, by name only. If the program that held an ask has ended when the answer comes, the resumed session receives CYFR's answer as a message instead.
 
