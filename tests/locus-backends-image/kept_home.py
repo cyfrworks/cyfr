@@ -148,9 +148,18 @@ def main():
         capped = whoami(c, OWNER, "capped", home_id=CAPPED)
         expect(capped["uid"] != a["uid"] and KEPT_FIRST <= capped["uid"] <= KEPT_LAST,
                "another entry's home has a uid of its own", [a["uid"], capped["uid"]])
-        wrote = sh(c, OWNER, f'head -c {CAP * 4} /dev/zero > "$HOME/big"; sync; echo written', program="capped",
-                   home_id=CAPPED)
-        expect(wrote["stdout"] == "written\n", "a session writes past its home's cap", wrote)
+        # The keeper measures every MEASURE_S and ends an over-cap home's sessions, so the write past the cap either
+        # answers first or, on a slower machine, has its session ended at the cap while it writes. Either way what
+        # follows holds: the home is over its cap, its sessions are ended, opens are refused until a reset.
+        writer = c.mcp(OWNER, "capped", home_id=CAPPED)
+        status, wrote = writer.call("run", {"argv": ["/bin/sh", "-c",
+                                                     f'head -c {CAP * 4} /dev/zero > "$HOME/big"; sync; echo written']})
+        result = (wrote or {}).get("result") or {}
+        answered = (status == 200 and not result.get("isError") and "content" in result
+                    and json.loads(result["content"][0]["text"])["stdout"] == "written\n")
+        ended = status == 200 and (wrote or {}).get("ended") == "before_answer"
+        expect(answered or ended, "a session writes past its home's cap, answering or ended at the cap mid-write",
+               [status, wrote])
         started = time.monotonic()
         over = eventually(lambda: (lambda p: p if p["over_cap"] and p["sessions"] == 0 else None)(
             c.program(OWNER, "capped")), "the home's sessions to be ended at its cap", timeout_s=MEASURE_S + 20)
