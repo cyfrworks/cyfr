@@ -206,7 +206,9 @@ defmodule Locus.Keeper do
   place of fd 3; `:attach_dir`, a directory only this node's user can
   enter (default `#{@attach_dir}`); `:kept_homes`, the kept-homes root and
   uid range as `KEEPER_KEPT_HOMES` names them (default that variable, which
-  cyfr-locus sets for a keeper given `--kept-homes`); `:name`.
+  cyfr-locus sets for a keeper given `--kept-homes`); `:proc_root`, where
+  the processes whose uids a new home's draw skips are read (`/proc`);
+  `:name`.
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -420,8 +422,11 @@ defmodule Locus.Keeper do
   @doc """
   Make the kept home `id` if it is absent and answer its uid. A home's uid
   is its folder's owner, read with a stat; a new home draws the lowest uid
-  of the range no home under the root owns, which cyfr-locus's helper,
-  running as that uid, then makes it under. `{:refused, "unavailable"}`
+  of the range that no home under the root owns, no home request in
+  flight is making and no live process holds (read from `/proc` as the
+  keeper's pool reads it), which cyfr-locus's helper, running as that
+  uid, then makes it under: a home whose folder vanished while a process
+  of its uid still runs keeps that uid from every other home. `{:refused, "unavailable"}`
   without a kept-homes root, `{:refused, "capacity"}` with every uid of the
   range taken.
   """
@@ -439,6 +444,10 @@ defmodule Locus.Keeper do
   @doc "End every process of the kept home `id`'s uid and remove the home, freeing its uid."
   @impl Locus.Launcher
   def home_retire(server, id) when is_binary(id), do: home_call(server, {:home_retire, id})
+
+  @doc "The id of every kept home under the root: each folder of a home id owned by a uid of the range."
+  @impl Locus.Launcher
+  def home_list(server), do: home_call(server, :home_list)
 
   defp home_call(server, request) do
     GenServer.call(server, request, @home_timeout_ms)
@@ -668,7 +677,8 @@ defmodule Locus.Keeper do
          conns: %{},
          pools: %{},
          homes: %{},
-         kept: kept_homes(opts)
+         kept: kept_homes(opts),
+         proc_root: Keyword.get(opts, :proc_root, "/proc")
        }}
     else
       {:error, reason} -> {:stop, {:keeper_unavailable, reason}}
@@ -815,6 +825,7 @@ defmodule Locus.Keeper do
           case free_uid(state, kept) do
             {:ok, uid} -> home_request(state, :home_make, path, uid, {:ensure, from, uid})
             :error -> {:reply, {:error, {:refused, "capacity"}}, state}
+            :unreadable -> {:reply, {:error, {:refused, "unavailable"}}, state}
           end
 
         :error ->
@@ -822,6 +833,26 @@ defmodule Locus.Keeper do
       end
     else
       {:error, code} -> {:reply, {:error, {:refused, code}}, state}
+    end
+  end
+
+  def handle_call(:home_list, _from, %{kept: nil} = state),
+    do: {:reply, {:error, {:refused, "unavailable"}}, state}
+
+  def handle_call(:home_list, _from, %{kept: kept} = state) do
+    case File.ls(kept.root) do
+      {:ok, names} ->
+        ids =
+          for name <- names,
+              Regex.match?(@home_id, name),
+              {:ok, _uid} <- [home_uid(kept, Path.join(kept.root, name))],
+              do: name
+
+        {:reply, {:ok, Enum.sort(ids)}, state}
+
+      {:error, reason} ->
+        Logger.error("[Locus.Keeper] listing the kept-homes root: #{inspect(reason)}")
+        {:reply, {:error, {:refused, "unavailable"}}, state}
     end
   end
 
@@ -1254,11 +1285,13 @@ defmodule Locus.Keeper do
     end
   end
 
-  # The lowest uid of the range no home under the root owns and no home
-  # request in flight is making: the client lists the root, which its group
-  # may, and reads each entry's owner.
+  # The lowest uid of the range no home under the root owns, no home
+  # request in flight is making and no live process holds: the client
+  # lists the root, which its group may, and reads each entry's owner, then
+  # every process's uids. A root or a /proc that cannot be read draws none.
   defp free_uid(state, kept) do
-    with {:ok, names} <- File.ls(kept.root) do
+    with {:ok, names} <- listed(File.ls(kept.root), "the kept-homes root"),
+         {:ok, live} <- live_uids(state.proc_root, kept) do
       owned =
         for name <- names,
             {:ok, %File.Stat{uid: uid}} <- [File.lstat(Path.join(kept.root, name))],
@@ -1266,16 +1299,46 @@ defmodule Locus.Keeper do
             do: uid
 
       making = for {_id, %{uid: uid}} <- state.homes, into: MapSet.new(), do: uid
-      taken = MapSet.union(owned, making)
+      taken = owned |> MapSet.union(making) |> MapSet.union(live)
 
       case Enum.find(kept.first..kept.last, &(not MapSet.member?(taken, &1))) do
         nil -> :error
         uid -> {:ok, uid}
       end
-    else
-      {:error, reason} ->
-        Logger.error("[Locus.Keeper] listing the kept-homes root: #{inspect(reason)}")
-        :error
+    end
+  end
+
+  defp listed({:ok, names}, _what), do: {:ok, names}
+
+  defp listed({:error, reason}, what) do
+    Logger.error("[Locus.Keeper] listing #{what}: #{inspect(reason)}")
+    :unreadable
+  end
+
+  # The uids of the range any live process holds as its real, effective,
+  # saved or filesystem uid, from each process's status. A process that
+  # ends while it is read is no holder.
+  defp live_uids(proc_root, kept) do
+    with {:ok, entries} <- listed(File.ls(proc_root), proc_root) do
+      uids =
+        for entry <- entries,
+            Regex.match?(~r/\A[0-9]+\z/, entry),
+            {:ok, status} <- [File.read(Path.join([proc_root, entry, "status"]))],
+            uid <- status_uids(status),
+            uid >= kept.first and uid <= kept.last,
+            into: MapSet.new(),
+            do: uid
+
+      {:ok, uids}
+    end
+  end
+
+  defp status_uids(status) do
+    case Regex.run(~r/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/m, status,
+           capture: :all_but_first
+         ) do
+      nil -> []
+      uids -> Enum.map(uids, &String.to_integer/1)
     end
   end
 

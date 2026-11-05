@@ -343,6 +343,25 @@ defmodule Locus.DirectLauncher do
     end
   end
 
+  @impl Locus.Launcher
+  def home_list(opts) do
+    root = if Keyword.keyword?(opts), do: Keyword.get(opts, :kept_root)
+
+    case root && File.ls(root) do
+      nil ->
+        {:error, {:refused, "unavailable"}}
+
+      {:ok, names} ->
+        {:ok,
+         names
+         |> Enum.filter(&(Prima.LocusBackends.home_id?(&1) and File.dir?(Path.join(root, &1))))
+         |> Enum.sort()}
+
+      {:error, reason} ->
+        {:error, {:spawn_failed, reason}}
+    end
+  end
+
   defp home_path(opts, id) do
     root = if Keyword.keyword?(opts), do: Keyword.get(opts, :kept_root)
 
