@@ -1506,6 +1506,14 @@ jobs:
       - name: A program's pipe
         run: python3 tests/locus-backends-image/pipe.py cyfr-locus:backends
 
+      # The Claude Code catalyst, run by the runtime under a scripted host,
+      # driving a fake harness over the pipe in a kept folder: describe's
+      # options from the harness's listing, a chat round trip, a held ask of
+      # CYFR's tool answered by the next chat through cyfr-stub, a resume
+      # after the program retired, a pipe refusal as the contract's.
+      - name: The Claude Code catalyst over a program's pipe
+        run: python3 tests/locus-backends-image/claude_code.py cyfr-locus:backends
+
       # The Compose proof (tests/compose-proof/run.sh) on the app image
       # built above, as the proof's own build would make it: the shipped
       # docker-compose.yml brought up as a project of its own by the `cyfr`

@@ -550,6 +550,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "model_chat.json" => [
       {"apps/prima/test/prima/model_test.exs",
+       ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
+      {"seed/components/catalysts/local/claude-code/0.1.0/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)}
     ],
     "person_assertion.json" => [
@@ -666,6 +668,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       ".go" -> [~r/json:"#{key}"/]
       ext when ext in [".py", ".sh"] -> [~r/\["#{key}"\]/, ~r/\.get\("#{key}"/]
       ".mjs" -> [~r/\.#{key}\b/, ~r/\["#{key}"\]/]
+      ".rs" -> [~r/\["#{key}"\]/]
       _elixir -> [~r/\["#{key}"\]/, ~r/"#{key}" =>/, ~r/"#{key}"\)/]
     end
   end

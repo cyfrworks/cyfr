@@ -1,0 +1,208 @@
+{
+  "name": "claude-code",
+  "type": "catalyst",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "Claude Code as a brain of the model/chat@1 contract: the harness runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
+  "contracts": [
+    "model/chat@1"
+  ],
+  "needs": {
+    "claude": {
+      "type": "login",
+      "program": "claude",
+      "reason": "to run Claude Code in its own folder, signed in to your own plan",
+      "required": true,
+      "install": {
+        "command": "npx -y @anthropic-ai/claude-code@2.1.318",
+        "login_command": "npx -y @anthropic-ai/claude-code@2.1.318 auth login"
+      }
+    }
+  },
+  "caps": {
+    "limits": {
+      "timeout": "30m",
+      "max_memory_bytes": 67108864,
+      "max_request_size": 1048576,
+      "max_response_size": 5242880,
+      "rate_limit": {
+        "requests": 100,
+        "window": "1m"
+      }
+    }
+  },
+  "schema": {
+    "input": {
+      "properties": {
+        "operation": {
+          "enum": [
+            "chat",
+            "describe",
+            "models"
+          ]
+        },
+        "params": {
+          "description": "Operation-specific parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "type": "object"
+    },
+    "output": {
+      "type": "object"
+    }
+  },
+  "examples": [
+    {
+      "name": "Chat (model/chat@1)",
+      "description": "One turn: the newest message goes to the harness's session, its reply streams as contract events, and the response names the session the next turn continues",
+      "input": {
+        "operation": "chat",
+        "params": {
+          "model": "claude-opus-5-5",
+          "system": "You are a crew member of this athanor's AQUA.",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Read notes/todo.md and say what is left."
+            }
+          ],
+          "tools": [
+            {
+              "name": "files",
+              "description": "Read the athanor's files",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "read"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "path"
+                ]
+              }
+            }
+          ],
+          "options": {
+            "effort": "high"
+          }
+        }
+      },
+      "output": {
+        "data": {
+          "model": "claude-opus-5-5",
+          "content": [
+            {
+              "type": "tool_call",
+              "id": "toolu_...",
+              "name": "files",
+              "arguments": {
+                "action": "read",
+                "path": "notes/todo.md"
+              },
+              "provider_data": {
+                "request_id": "..."
+              }
+            }
+          ],
+          "stop_reason": "tool_call",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "session": "0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b"
+        },
+        "status": 200
+      }
+    },
+    {
+      "name": "Describe (model/chat@1)",
+      "description": "What this brain can do, and the options the harness lets a caller set",
+      "input": {
+        "operation": "describe",
+        "params": {}
+      },
+      "output": {
+        "data": {
+          "contracts": [
+            "model/chat@1"
+          ],
+          "provider": "claude-code",
+          "tools": true,
+          "provider_tools": [],
+          "streaming": true,
+          "options": [
+            {
+              "name": "model",
+              "kind": "enum",
+              "values": [
+                "default",
+                "opus",
+                "sonnet",
+                "haiku"
+              ]
+            },
+            {
+              "name": "effort",
+              "kind": "enum",
+              "values": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            },
+            {
+              "name": "permission_mode",
+              "kind": "enum",
+              "values": [
+                "default",
+                "acceptEdits",
+                "plan"
+              ],
+              "default": "default"
+            },
+            {
+              "name": "tools",
+              "kind": "string"
+            }
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "name": "Models (model/chat@1)",
+      "description": "The models the harness lists for its sign-in",
+      "input": {
+        "operation": "models",
+        "params": {}
+      },
+      "output": {
+        "data": {
+          "models": [
+            {
+              "id": "opus",
+              "name": "Opus 5.5"
+            }
+          ]
+        },
+        "status": 200
+      }
+    }
+  ]
+}
