@@ -30,9 +30,9 @@ CYFR's tools as the harness starts an MCP server.
 - A held ask: a message that makes the harness call one of CYFR's tools
   answers a `tool_call` named as the request named the tool, carrying the
   ask's id, and leaves the ask pending in the running session; the next
-  chat, carrying the `tool_result`, attaches to that session, allows the ask
-  with the result in its input, and the harness's call through `cyfr-stub`
-  returns that result, which its reply quotes.
+  chat, carrying the `tool_result`, attaches to that session and sends only
+  the ask's allow, with the result in its input, and the harness's call
+  through `cyfr-stub` returns that result, which its reply quotes.
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the harness again with `--resume`,
   which finds the conversation in the kept folder.
@@ -280,8 +280,9 @@ def main():
         opened = [args for op, args in bridge.calls if op == "open"]
         sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
         allow = [line for line in sent if line.get("type") == "control_response"]
-        expect(len(opened) == 1 and not any(line.get("request", {}).get("subtype") == "initialize" for line in sent),
-               "the next chat attaches to the running session and starts nothing again", sent)
+        expect(len(opened) == 1 and sent == allow,
+               "the next chat attaches to the running session and sends the ask's answer alone: no initialize, no "
+               "new tools", sent)
         expect(len(allow) == 1 and allow[0]["response"]["request_id"] == call["provider_data"]["request_id"]
                and allow[0]["response"]["response"] == {"behavior": "allow", "updatedInput": {
                    "action": "read", "path": "notes.txt", "result": body}},
