@@ -670,15 +670,15 @@ defmodule Prima.LocusBackendsTest do
     end
 
     test "a program's hosts are carried under the keeper's rule, and a refusal for them reads back" do
+      # The accepted sync names them, and writes back to its own bytes.
       {:ok, sync} = LocusBackends.read_control(@vectors["sync"]["body"])
       [program] = sync.programs
-      assert program.hosts == nil
+      assert program.hosts == ["api.example.com", "registry.npmjs.org"]
+      assert {:ok, @vectors["sync"]["body"]} == LocusBackends.encode_control(sync)
 
-      listed = %{sync | programs: [%{program | hosts: ["api.example.com", "registry.npmjs.org"]}]}
-      assert {:ok, body} = LocusBackends.encode_control(listed)
-
-      assert {:ok, %{programs: [%{hosts: ["api.example.com", "registry.npmjs.org"]}]}} =
-               LocusBackends.read_control(body)
+      unlisted = %{sync | programs: [%{program | hosts: nil}]}
+      assert {:ok, body} = LocusBackends.encode_control(unlisted)
+      refute body =~ "hosts"
 
       for hosts <- [[], ["*.example.com"], ["api.example.com:443"], ["a.example", "a.example"]] do
         refute Prima.KeeperProtocol.valid_hosts?(hosts)

@@ -404,7 +404,9 @@ def check_vectors():
 
     sync_program = json.loads(WIRE["sync"]["body"])["programs"][0]
     compare("sync.program", program_wire({"name": sync_program["name"], "command": sync_program["command"],
-                                          "env": {name: "" for name in sync_program["env_names"]}}), sync_program)
+                                          "env": {name: "" for name in sync_program["env_names"]},
+                                          "hosts": sync_program.get("hosts")}), sync_program)
+    compare("sync.program.hosts", sync_program.get("hosts"), ["api.example.com", "registry.npmjs.org"])
 
     vector = WIRE["seal"]
     sealed = seal(seal_key(key), owner, vector["boot"], vector["plaintext"].encode(), bytes.fromhex(vector["iv_hex"]))
