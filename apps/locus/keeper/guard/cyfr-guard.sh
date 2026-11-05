@@ -60,7 +60,14 @@
 #   cyfr-guard         install the rules, write the ready file, then serve
 #                      the island's keeper its control on the socket
 #                      CYFR_GUARD_CONTROL names (`cyfr-locus guard-control`,
-#                      apps/locus/keeper/guard), or sleep where it names none
+#                      apps/locus/keeper/guard), or sleep where it names none.
+#                      The control greets each connection naming the
+#                      network namespace these rules judge (as
+#                      /proc/self/ns/net links to it), and a keeper in
+#                      another namespace takes no answer from it and refuses
+#                      every spawn: a guard that restarted took a new
+#                      namespace while the service still runs in the old
+#                      one, where no admission of its would hold.
 #   cyfr-guard admit <uid> [address…]
 #                      the control's: give the spawn uid exactly these
 #                      addresses under rule 5, replacing what it held (no

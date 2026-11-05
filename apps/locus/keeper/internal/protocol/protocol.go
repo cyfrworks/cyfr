@@ -102,7 +102,12 @@
 // before the command starts: a name that resolves to no address refuses
 // the spawn as CodeHostsUnresolved, and a guard that does not confirm, or
 // a keeper given no `--guard` for a spawn naming hosts, as
-// CodeGuardUnavailable.
+// CodeGuardUnavailable; no such spawn is ever started open. A guard
+// confirms only once its greeting names the keeper's own network
+// namespace: one that names another (a guard restarted into a new
+// namespace while the keeper's still runs in the old) confirms nothing,
+// and every spawn of a keeper given `--guard` is refused until the service
+// is recreated behind it.
 //
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
