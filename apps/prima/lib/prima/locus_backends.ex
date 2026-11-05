@@ -30,8 +30,10 @@ defmodule Prima.LocusBackends do
 
   ## Control messages (`encode_control/1`, `read_control/1`)
 
-  Every body and every answer, the health probe's included, carries
-  `"version"` (`version/0`); a body at another version, or without one, is
+  A member marked `?` is optional: absent when it has no value, and never
+  `null`, the presence rule of every wire of the island; a present member
+  holds a value of its form. Every body and every answer, the health
+  probe's included, carries `"version"` (`version/0`); a body at another version, or without one, is
   read as `{:error, {:version, presented}}` before its `type` is, and
   refused `version` (`refusal_for/1`). Each type has exactly its members:
 
@@ -45,27 +47,27 @@ defmodule Prima.LocusBackends do
   | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, lease_ms_left, programs[]}]` |
   | `home` | `op`, `athanor`, `home_id` | `home_id`, `state` |
 
-  A sync's program is `{name, command, login_command, env_names, home,
-  memory_bytes, home_max_bytes}`: a `name` of lowercase letters, digits
-  and hyphens, a `command` and an optional `login_command` (`null` when
-  absent) each meeting `check_command/1`, the `env_names` its sealed
+  A sync's program is `{name, command, login_command?, env_names, home,
+  memory_bytes?, home_max_bytes?}`: a `name` of lowercase letters, digits
+  and hyphens, a `command` and an optional `login_command` each meeting
+  `check_command/1`, the `env_names` its sealed
   environment carries (each an uppercase variable name, none reserved:
   `reserved_env_names/0`, `reserved_env_prefixes/0`), its `home`
   (`"scratch"`, scrubbed at retirement, or `"kept"`, one folder per login
-  entry that survives retirement), its `memory_bytes` (`null`: the
+  entry that survives retirement), its `memory_bytes` (absent: the
   service's own bound, `LOCUS_BACKENDS_MEMORY_BYTES`, bounds each process)
-  and, for a kept home only, its `home_max_bytes` (`null`: the homes
+  and, for a kept home only, its `home_max_bytes` (absent: the homes
   volume is the only bound). `sealed` is the environment `seal/5` sealed
   to the owner and the service's lifetime.
 
-  A status reports each program as `{name, status, restarts, error,
-  stderr_tail, home, home_bytes, over_cap, sessions}`: its status
+  A status reports each program as `{name, status, restarts, error?,
+  stderr_tail, home, home_bytes?, over_cap, sessions}`: its status
   (`program_statuses/0`: `idle` with no process running, `running` with
   one, `failed` once `max_crashes/0` processes crashed within
   `crash_window_ms/0`), the processes that crashed since its sync, the
-  last crash, the masked tail of its stderr, its home mode, the bytes its
-  kept homes last measured (`null` for a scratch home or one never
-  measured), whether one of them is over its cap, and its running
+  last crash (absent before one), the masked tail of its stderr, its home
+  mode, the bytes its kept homes last measured (absent for a scratch home
+  or one never measured), whether one of them is over its cap, and its running
   sessions.
 
   A `home` message acts on one kept home of one athanor: `op` `reset` ends
@@ -92,7 +94,7 @@ defmodule Prima.LocusBackends do
 
   | Type | Members | Answer (`encode_session_answer/2`, `read_session_answer/2`) |
   |---|---|---|
-  | `open` | `owner`, `e`, `program`, `home_id`, `key`, `mode`, `argv[]` | `status`, `session`, `resumed`, `pty` |
+  | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `argv[]` | `status`, `session`, `resumed`, `pty` |
   | `send` | `owner`, `e`, `session`, `lines[]` | `status` |
   | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running` |
   | `close` | `owner`, `e`, `session` | `status` |
@@ -104,8 +106,8 @@ defmodule Prima.LocusBackends do
   in mode `sign_in` runs the program's `login_command` on a
   pseudo-terminal (`pty: true`), takes no `argv`, and is one session per
   key. `home_id` names the kept home the process runs in (the login
-  entry's id: `home_id_pattern/0`), required for a program whose home is
-  kept and `null` for any other. A `sign_in` open needs a kept home.
+  entry's id: `home_id_pattern/0`), present for a program whose home is
+  kept and absent for any other. A `sign_in` open needs a kept home.
 
   A line is at most `max_line_bytes/0` bytes; a process that writes a
   longer one is killed. The buffer keeps every line until a later `recv`
@@ -282,7 +284,7 @@ defmodule Prima.LocusBackends do
     home: ~w(version home_id state)
   }
   @session_fields %{
-    open: ~w(version type owner e program home_id key mode argv),
+    open: ~w(version type owner e program key mode argv),
     send: ~w(version type owner e session lines),
     recv: ~w(version type owner e session after max_wait_ms),
     close: ~w(version type owner e session)
@@ -293,8 +295,11 @@ defmodule Prima.LocusBackends do
     recv: ~w(version lines dropped running),
     close: ~w(version status)
   }
-  @program_fields ~w(name command login_command env_names home memory_bytes home_max_bytes)
-  @program_report_fields ~w(name status restarts error stderr_tail home home_bytes over_cap sessions)
+  @session_optional %{open: ~w(home_id)}
+  @program_fields ~w(name command env_names home)
+  @program_optional ~w(login_command memory_bytes home_max_bytes)
+  @program_report_fields ~w(name status restarts stderr_tail home over_cap sessions)
+  @program_report_optional ~w(error home_bytes)
   @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @session_id ~r/\Ass_[0-9a-f]{32}\z/
@@ -1023,17 +1028,14 @@ defmodule Prima.LocusBackends do
   defp read_control_typed(:home, wire) do
     with {:ok, op} <- roster(wire, "op", @home_ops, ""),
          {:ok, athanor} <- field_text(wire, "athanor", ""),
-         {:ok, home_id} <- home_id_member(wire, "home_id", "", false) do
+         {:ok, home_id} <- home_id_member(wire, "home_id", "") do
       {:ok, %{type: :home, op: op, athanor: athanor, home_id: home_id}}
     end
   end
 
-  # A home id, or `null` where `nullable?`.
-  defp home_id_member(wire, name, at, nullable?) do
-    case wire[name] do
-      nil when nullable? -> {:ok, nil}
-      value -> if home_id?(value), do: {:ok, value}, else: {:error, {:invalid_field, at <> name}}
-    end
+  defp home_id_member(wire, name, at) do
+    value = wire[name]
+    if home_id?(value), do: {:ok, value}, else: {:error, {:invalid_field, at <> name}}
   end
 
   defp period(wire, name, max) do
@@ -1074,17 +1076,17 @@ defmodule Prima.LocusBackends do
   defp programs(_list), do: {:error, {:invalid_field, "programs"}}
 
   defp program(%{} = wire, at) do
-    with :ok <- exact(wire, @program_fields, at <> "."),
+    with :ok <- exact(wire, @program_fields, @program_optional, at <> "."),
          {:ok, name} <- program_name(wire["name"], at <> ".name"),
          {:ok, command} <- command(wire["command"], at <> ".command"),
          {:ok, login_command} <-
-           nullable(wire["login_command"], &command(&1, at <> ".login_command")),
+           optional(wire, "login_command", &command(&1, at <> ".login_command")),
          {:ok, env_names} <- env_names(wire["env_names"], at <> ".env_names"),
          {:ok, home} <- roster(wire, "home", @homes, at <> "."),
          {:ok, memory_bytes} <-
-           nullable(wire["memory_bytes"], &memory_bytes(&1, at <> ".memory_bytes")),
+           optional(wire, "memory_bytes", &memory_bytes(&1, at <> ".memory_bytes")),
          {:ok, home_max_bytes} <-
-           home_max_bytes(wire["home_max_bytes"], home, at <> ".home_max_bytes") do
+           optional(wire, "home_max_bytes", &home_max_bytes(&1, home, at <> ".home_max_bytes")) do
       {:ok,
        %{
          name: name,
@@ -1100,9 +1102,6 @@ defmodule Prima.LocusBackends do
 
   defp program(_wire, at), do: {:error, {:invalid_field, at}}
 
-  defp nullable(nil, _read), do: {:ok, nil}
-  defp nullable(value, read), do: read.(value)
-
   defp memory_bytes(value, at) do
     if is_integer(value) and value >= KeeperProtocol.min_memory_bytes() and
          value <= KeeperProtocol.max_memory_bytes(),
@@ -1111,8 +1110,6 @@ defmodule Prima.LocusBackends do
   end
 
   # A disk bound is a kept home's alone.
-  defp home_max_bytes(nil, _home, _at), do: {:ok, nil}
-
   defp home_max_bytes(value, :kept, at) do
     if is_integer(value) and value >= 1 and
          value <= KeeperProtocol.request_bounds().max_home_bytes,
@@ -1237,7 +1234,7 @@ defmodule Prima.LocusBackends do
   end
 
   defp read_answer_typed(:home, wire) do
-    with {:ok, home_id} <- home_id_member(wire, "home_id", "", false),
+    with {:ok, home_id} <- home_id_member(wire, "home_id", ""),
          {:ok, state} <- roster(wire, "state", @home_states, "") do
       {:ok, %{home_id: home_id, state: state}}
     end
@@ -1266,14 +1263,14 @@ defmodule Prima.LocusBackends do
   defp program_report(%{} = wire, at) do
     p = at <> "."
 
-    with :ok <- exact(wire, @program_report_fields, p),
+    with :ok <- exact(wire, @program_report_fields, @program_report_optional, p),
          {:ok, name} <- program_name(wire["name"], p <> "name"),
          {:ok, status} <- roster(wire, "status", @program_statuses, p),
          {:ok, restarts} <- count(wire, "restarts", p),
-         {:ok, error} <- nullable_text(wire, "error", p),
+         {:ok, error} <- optional(wire, "error", &text_value(&1, p <> "error")),
          {:ok, stderr_tail} <- text(wire, "stderr_tail", p),
          {:ok, home} <- roster(wire, "home", @homes, p),
-         {:ok, home_bytes} <- nullable_count(wire, "home_bytes", p),
+         {:ok, home_bytes} <- optional(wire, "home_bytes", &count_value(&1, p <> "home_bytes")),
          {:ok, over_cap} <- boolean(wire, "over_cap", p),
          {:ok, sessions} <- count(wire, "sessions", p) do
       {:ok,
@@ -1383,7 +1380,13 @@ defmodule Prima.LocusBackends do
   defp read_session_wire(wire) do
     with :ok <- current_version(wire),
          {:ok, type} <- typed(wire, @session_types),
-         :ok <- exact(wire, Map.fetch!(@session_fields, type), ""),
+         :ok <-
+           exact(
+             wire,
+             Map.fetch!(@session_fields, type),
+             Map.get(@session_optional, type, []),
+             ""
+           ),
          {:ok, owner} <- owner(wire["owner"], "owner", []),
          {:ok, e} <- positive(wire, "e", "") do
       read_session_typed(type, wire, %{type: type, owner: owner, e: e})
@@ -1392,7 +1395,7 @@ defmodule Prima.LocusBackends do
 
   defp read_session_typed(:open, wire, message) do
     with {:ok, program} <- program_name(wire["program"], "program"),
-         {:ok, home_id} <- home_id_member(wire, "home_id", "", true),
+         {:ok, home_id} <- optional(wire, "home_id", &home_id_value/1),
          {:ok, key} <- key(wire["key"]),
          {:ok, mode} <- roster(wire, "mode", @modes, ""),
          {:ok, argv} <- argv(wire["argv"], mode) do
@@ -1678,10 +1681,13 @@ defmodule Prima.LocusBackends do
   defp current_version(%{"version" => @version}), do: :ok
   defp current_version(wire), do: {:error, {:version, wire["version"]}}
 
-  # Exactly the named fields: anything else is refused before a value is read.
-  defp exact(wire, names, at) do
+  defp exact(wire, names, at), do: exact(wire, names, [], at)
+
+  # Exactly the named fields, and the optional ones present or absent:
+  # anything else is refused before a value is read.
+  defp exact(wire, names, optional, at) do
     cond do
-      extra = Enum.find(Map.keys(wire) |> Enum.sort(), &(&1 not in names)) ->
+      extra = Enum.find(Map.keys(wire) |> Enum.sort(), &(&1 not in names and &1 not in optional)) ->
         {:error, {:unknown_field, at <> extra}}
 
       missing = Enum.find(names, &(not is_map_key(wire, &1))) ->
@@ -1717,12 +1723,24 @@ defmodule Prima.LocusBackends do
       else: {:error, {:invalid_field, at <> name}}
   end
 
-  defp nullable_count(wire, name, at) do
-    case wire[name] do
-      nil -> {:ok, nil}
-      _value -> count(wire, name, at)
-    end
+  # An optional member: absent is `nil`; a present one, `null` included,
+  # must read as its form.
+  defp optional(wire, name, read) do
+    if is_map_key(wire, name), do: read.(wire[name]), else: {:ok, nil}
   end
+
+  defp home_id_value(value),
+    do: if(home_id?(value), do: {:ok, value}, else: {:error, {:invalid_field, "home_id"}})
+
+  defp count_value(value, at),
+    do:
+      if(MacEnvelope.valid_value?(:integer, value),
+        do: {:ok, value},
+        else: {:error, {:invalid_field, at}}
+      )
+
+  defp text_value(value, _at) when is_binary(value), do: {:ok, value}
+  defp text_value(_value, at), do: {:error, {:invalid_field, at}}
 
   defp boolean(wire, name, at) do
     case wire[name] do
@@ -1744,13 +1762,6 @@ defmodule Prima.LocusBackends do
     case wire[name] do
       value when is_binary(value) -> {:ok, value}
       _ -> {:error, {:invalid_field, at <> name}}
-    end
-  end
-
-  defp nullable_text(wire, name, at) do
-    case wire[name] do
-      nil -> {:ok, nil}
-      _value -> text(wire, name, at)
     end
   end
 
@@ -1787,9 +1798,9 @@ defmodule Prima.LocusBackends do
   end
 
   # A typed message or answer as its wire map: atom keys and atom values as
-  # strings, `nil` and booleans as they are.
+  # strings, booleans as they are, and a member whose value is `nil` absent.
   defp wire(%{} = map) when not is_struct(map),
-    do: Map.new(map, fn {key, value} -> {to_string(key), wire(value)} end)
+    do: for({key, value} <- map, value != nil, into: %{}, do: {to_string(key), wire(value)})
 
   defp wire(list) when is_list(list), do: Enum.map(list, &wire/1)
 

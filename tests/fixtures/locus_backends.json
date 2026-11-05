@@ -257,15 +257,15 @@
       "refusal": "stale_boot",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_boot body=bda527ce88c4ad4f1b7ad50a96cfc106f29730da2b9cbfd48b849250faf4c5ca mac=PUbjjDTlL1wB3AfCYe6wl_Wd6avKTKbU0qs8nN9PiSc",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_0000000000000000000000000000dead ts=1789305250001 nonce=n_fence_boot body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=qdiEZ7TenTeGdefD2xyav9YOUIYPAR-Hy8PogZH5Njs",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -338,15 +338,15 @@
       "refusal": "stale_epoch",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"e\":6,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6SlpqeoqaqrS19wn43mJSkMPrdUJItGYRe2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=972931b1e0041b4ef3df56f8d6449e7938211b15aedc9d3d2c3f1085eccc2d8c mac=etBlbOI_5zB4kAyTIQuRb9x3Mv1DYB4E0LC5ON-1TwY",
+          "body": "{\"e\":6,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6SlpqeoqaqrS19wn43mJSkMPrdUJItGYRe2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=f99e9c68c3684acfe110439123d6d493d5dabf3da01127efa9a1185b8f6ed660 mac=462-F6WDQmnAZxbpczWLNY9GG8fdAarG3TBMwc7ChdY",
           "now": 1789305250001,
           "read_body": true,
           "route": "control"
@@ -358,15 +358,15 @@
       "refusal": "stale_epoch",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":6,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=6 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_stale body=777eb4c009328d384c985e0402756d4a4e5166f024b16b4f4fc2a99ece4fa0f1 mac=tr9tx7QrG1Pln5HjtTTPhoh7Vc0TloACRH1ypE4w4qM",
+          "body": "{\"argv\":[],\"e\":6,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=6 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_stale body=fab3110f3a83b2014a63b8f323157746fe52f8e0d0cb8788d077b62e46b89968 mac=IS3v8lH-ZktHPsmAcxpTZ-8bIKCXgZB5nshPds98u7A",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -378,15 +378,15 @@
       "refusal": "epoch_ahead",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":8,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_ahead body=3c386ae9630ccdda8211fb7621b678bc616aba932b0adc8c96a43ea07d49dbbf mac=WuwpdPvS2Z00QjNZRzCj2TD6WBrGbF6n5e8NnjXBM5k",
+          "body": "{\"argv\":[],\"e\":8,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_ahead body=30f31f53791b0cd7d3989690834ffc372d09dbe91ec3bb3c1b844d15d972b43a mac=_1gkWIC_t-ttVpeQxg4uGJnp1CTJ4AzYQE9tfY1bQw8",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -398,15 +398,15 @@
       "refusal": "conflict",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"one\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"two\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=55b8c8fab4f554fd78ceb877177769cc435c3d48c90b8316e7c1c7a7a5c33844 mac=yRocp4nSroCF1IU7fayDeA-SU0mCQPZ_BFYAI9xm5VY",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"two\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 body=196ec2c31aa74d617a5991ce0a813c01f2f15684f165615f905fa6bceed16dfc mac=g1keu580vx1dG79x5jUpr_hM5z4cnoBcG0yG9c1T7JU",
           "now": 1789305250001,
           "read_body": true,
           "route": "control"
@@ -418,8 +418,8 @@
       "refusal": "lapsed",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=48ec695f8ef734098c4f69bb36bc28ddd15f790debe82891ff65efabd00790d9 mac=wZMfUJUSBYXzryCfiiUb0Ed_t7PiT1oiNzJwqqJ3s3U",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4790cc2a0b6e8da53d61461fe8250bf075c5cb6ccee5154fcbaa138fa5c8ca40 mac=VWIXbnRQS1YnyeNHf5RrcGPnefUJRtZKfgRqsXiiai8",
           "now": 1789305250000,
           "route": "control",
           "status": 200
@@ -428,8 +428,8 @@
           "advance_ms": 1000
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapsed body=bda527ce88c4ad4f1b7ad50a96cfc106f29730da2b9cbfd48b849250faf4c5ca mac=Qzq6aB9wmbJp-UT1-rjXjuCTGV3oyo7AIT_B72OIz-M",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapsed body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=RSy-kSruI2KuhhVdnqiMQ-FZ7wAuoCuvswtn1Dc4mPo",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -441,8 +441,8 @@
       "refusal": "lapsed",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=48ec695f8ef734098c4f69bb36bc28ddd15f790debe82891ff65efabd00790d9 mac=wZMfUJUSBYXzryCfiiUb0Ed_t7PiT1oiNzJwqqJ3s3U",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=4790cc2a0b6e8da53d61461fe8250bf075c5cb6ccee5154fcbaa138fa5c8ca40 mac=VWIXbnRQS1YnyeNHf5RrcGPnefUJRtZKfgRqsXiiai8",
           "now": 1789305250000,
           "route": "control",
           "status": 200
@@ -451,15 +451,15 @@
           "advance_ms": 1000
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapse body=bda527ce88c4ad4f1b7ad50a96cfc106f29730da2b9cbfd48b849250faf4c5ca mac=-WXmUCjbYiggJKGXPJ-CsFXus76sgeZz4w2A29_Txe8",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_lapse body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=4mJPaQd3YQPsgOwu74ZXTukpIT5JVal4-odsVxq92AQ",
           "now": 1789305250001,
           "route": "session",
           "status": 409
         },
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250002 body=48ec695f8ef734098c4f69bb36bc28ddd15f790debe82891ff65efabd00790d9 mac=1CPW-jwDY5nkVGJ950w3phMUXzFwx3R4Kxre-Ae9XgI",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":1000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=2 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250002 body=4790cc2a0b6e8da53d61461fe8250bf075c5cb6ccee5154fcbaa138fa5c8ca40 mac=GhYpTbYoEzBkMCDZwCALyaQ9rV74jjB0BrpWD5bS-ns",
           "now": 1789305250002,
           "read_body": true,
           "route": "control"
@@ -471,8 +471,8 @@
       "refusal": "unknown_owner",
       "sequence": [
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_fence_unknown body=bda527ce88c4ad4f1b7ad50a96cfc106f29730da2b9cbfd48b849250faf4c5ca mac=giRADaKte5ugub2EVWZAZYjrVPxrtLu8lzKI2CMG3W0",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_fence_unknown body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=aeZ5RHDV0xUkaHAWUxjye6YMtY3Y7Za9Myna7lKyfFs",
           "now": 1789305250000,
           "read_body": false,
           "route": "session"
@@ -484,22 +484,22 @@
       "refusal": "replay",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=bda527ce88c4ad4f1b7ad50a96cfc106f29730da2b9cbfd48b849250faf4c5ca mac=JVsrb8dT0mCdqjAesPCkiP6RIevOcZ9qNi2n87MdtAY",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=o_4JzW8f7p7lyIf9YhwnF8G6F_SiI7PeKmgqKuAOn2Q",
           "now": 1789305250001,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=bda527ce88c4ad4f1b7ad50a96cfc106f29730da2b9cbfd48b849250faf4c5ca mac=JVsrb8dT0mCdqjAesPCkiP6RIevOcZ9qNi2n87MdtAY",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_replay body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=o_4JzW8f7p7lyIf9YhwnF8G6F_SiI7PeKmgqKuAOn2Q",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -514,15 +514,15 @@
       "refusal": "nonce_cache_full",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_full body=bda527ce88c4ad4f1b7ad50a96cfc106f29730da2b9cbfd48b849250faf4c5ca mac=Vo7qXIb62QfRv2TJ1GWKvVBIKXREqzBE5PEnj4fw6wk",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250001 nonce=n_fence_full body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=ITPHx7PGHLLmVCeFN66P3tFh3cD-BDI4jey69kvX1js",
           "now": 1789305250001,
           "read_body": false,
           "route": "session"
@@ -541,22 +541,22 @@
       "refusal": "capacity",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"one\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=756d09415891a43c2f58c81a3fa72eb4894524d61eb04c7d7f96422f9adf580c mac=sWe8fNjZqPJAVnE1ycvv-QfZZs_wlcikKR9fECOUAHM",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=28d4afbb0388f7544a37dcb3c4b41b378347ea2a15fe70e40d3fa9d2ea45eaea mac=kHz5-IKIHF5IR0X9_XPE65gHf8m2yGwqmQlyNiZ99hU",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=4f61f4e8f785d05ad0c731ef723f09b74743d75496e04fa7684e38302f45ecbf mac=6FziOkB6LJ0T-XWPRPP_lA0KDl_T5lzpj0W3mHFtKmU",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=xn5a-EWtSypL0v0bsVdrQFvQV8GUwJOjiaYOVdc14oE",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=7b782306974f66021d10372f097b8e5dae4c44ba07f1f9dcf0a8812a2b02b77a mac=qHvmQGWQhcKhRmVFwHYBnaRgIpgvWuQ4VyIl0hRZBtQ",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=38Okt8uS2Eq2ZmE8nXt3d0NrDH0dXkBB9ZoqDCqUGbA",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -575,22 +575,22 @@
       "refusal": "capacity",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"one\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=756d09415891a43c2f58c81a3fa72eb4894524d61eb04c7d7f96422f9adf580c mac=sWe8fNjZqPJAVnE1ycvv-QfZZs_wlcikKR9fECOUAHM",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=28d4afbb0388f7544a37dcb3c4b41b378347ea2a15fe70e40d3fa9d2ea45eaea mac=kHz5-IKIHF5IR0X9_XPE65gHf8m2yGwqmQlyNiZ99hU",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=4f61f4e8f785d05ad0c731ef723f09b74743d75496e04fa7684e38302f45ecbf mac=6FziOkB6LJ0T-XWPRPP_lA0KDl_T5lzpj0W3mHFtKmU",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=xn5a-EWtSypL0v0bsVdrQFvQV8GUwJOjiaYOVdc14oE",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=7b782306974f66021d10372f097b8e5dae4c44ba07f1f9dcf0a8812a2b02b77a mac=qHvmQGWQhcKhRmVFwHYBnaRgIpgvWuQ4VyIl0hRZBtQ",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=38Okt8uS2Eq2ZmE8nXt3d0NrDH0dXkBB9ZoqDCqUGbA",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -605,8 +605,8 @@
       "refusal": "unavailable",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=FmYACYIc5O666Mn1qxgj9NEfGVKK-n9HNyXhUoe4HdU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
           "read_body": true,
           "route": "control"
@@ -650,120 +650,120 @@
       "refusal": "status_too_large",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b1\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b2\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b3\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b4\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b5\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b6\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b7\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b8\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b9\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b10\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b11\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b12\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b13\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b14\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b15\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b16\"}],\"sealed\":\"oKGio6Slpqeoqaqr99iBCcEtcxwy12ooKHO2Rxe2oTzh8nxzsKE8fsKUN9AyYv2hLEGqTX6NqYC1TbYtvUf0Z2Z74m-zKDRORAe0N04VQhk_0CPDTgpUnjbWvfhg2Y-MwN51mEuBbxz1WqGcWxwO2eQdhFu6vDyPBRtRB3SeAzdWvaX6imEW3TggdW6WATWS2VqPipZaeoEyyK0wb2V8GhyBE-I\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=d40431b85d8f99bd821cd3ac637e85ee105928ffec87833d5b066cc07d8c0284 mac=7xQjSCHyBwkyMkbuK6wv6C0bKjLVVv1q42aY6DvPcpg",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b1\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b2\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b3\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b4\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b5\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b6\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b7\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b8\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b9\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b10\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b11\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b12\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b13\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b14\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b15\"},{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b16\"}],\"sealed\":\"oKGio6Slpqeoqaqr99iBCcEtcxwy12ooKHO2Rxe2oTzh8nxzsKE8fsKUN9AyYv2hLEGqTX6NqYC1TbYtvUf0Z2Z74m-zKDRORAe0N04VQhk_0CPDTgpUnjbWvfhg2Y-MwN51mEuBbxz1WqGcWxwO2eQdhFu6vDyPBRtRB3SeAzdWvaX6imEW3TggdW6WATWS2VqPipZaeoEyyK0wb2V8GhyBE-I\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=7d26f9ab9df93d007137ece1d7e7858a5b65dc281f6ffec479cc4d4a1043c4f0 mac=TKMILqaH1oLUy01OwGk_4-pejeKK2MIQdJETtELiaEM",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k0\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b1\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=564863f37d35cda7f04a8960bb6c0a59365f91634963073bc71e542dde1ddabc mac=knfZ9ZJaivYIaNdRL97B1rMuSCvNXFl5wtggp63AzEw",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k0\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b1\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=2e9da1651b562850265bb0258b059dd47a6610a39eb6ba2dfd82a46ce9feb0e8 mac=46AzAqPbcshcwBYt1FEmSNHDOPPuiW-00To1joeUUMw",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b2\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=445bc81a4138a45ee0170031d376cfa2c8737a8aa70e92ca8e48bea1dec887a3 mac=CUycfjZCEFoEnSxEpuHu3TfPGkESlUvgdz-71BoHhR0",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k1\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b2\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=c2a4f89e114b231a937724f832b6acc693760271d2541c1ef4f461b33f9bcb06 mac=i_jFQTO8cm_Eu8vg5Dl8lS9jzzyXLDE64LktIVIqVI0",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k2\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b3\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_2 body=de091a85c0c711394a594b8c7b80a6550c8c303e2084b515e7b6a6ac3865aaba mac=avomqSPNBvET7BRjG4Qzecxj3rEijjmYF3cuudaDPbo",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k2\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b3\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_2 body=bdb520c1764f9912646b7fc681f758a1bb48bdbf3ffa33e5dbfbf2f9d3ac0524 mac=sLQ--dWMm6nExfKnGPUNq1mQdsPh0eljTOXFMVO34VA",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k3\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b4\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_3 body=7e7ffb553e496bb1fbdf764257070a91808d2386458621dee9c4d5f5ccdb8760 mac=Ksbh24k5fyDayde-YqZynoiKYDzDc3OkevSAZRZIzh0",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k3\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b4\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_3 body=45dea2cd2d90712961fae6084cd67be123f65295e8193058829cd1c2a53d5893 mac=vdziVigU_alLiQZKFbnLbHN1kKLaKSznFD8ycZFeGCA",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k4\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b5\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_4 body=5219342ed9a639335a7e31e2fd6005ef1d69181536c399ac8dfefd2f7e51b0bf mac=MXME138sW8B_uaZfhJyP4bTw1mjkdlnCCNeOBdJ1wpg",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k4\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b5\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_4 body=448e83ffb7680f8e8c09f2c32010abc943c71bbbfe5bf712748342e64e9a510c mac=U8gVjXnoRm0ZSpwCxnl4XssPwGydTIqSZZNMG6xRq2A",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k5\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b6\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_5 body=fe68793ca992945ac100a25afffb32f551e64c16b331cf8b411ea8bde5d05045 mac=AHc_X3eEIbFuIJolDXRvEMbY_OWOIvQYY6FSzXWB4DI",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k5\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b6\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_5 body=0b1611a41d069ad332029d6d30a47fa0efaec69f7ebf1be7fc52162aa48ef3c6 mac=zFK1o__mNJ5xyyP-Ongl34bXZF6pEJKQjl7n1-k6zN8",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k6\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b7\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_6 body=bbdaf51d5404f2aede299ec60495da346e36fd8b79b673893da69b3696136cfd mac=JkVr2N4i3ijqfP49FGMIdMhvwpW4QNjgULUosudmCyY",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k6\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b7\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_6 body=f4e1457f254032bf2c9869b9ba73ed2b6770d8388e40718db4d915f49e9e1c96 mac=mojVLgcDgfj3UMu33qmJao-sqsDobXoUIj71c6VN0qE",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k7\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b8\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_7 body=0937544bc208dfb979f971cf32fdcbb63108bf68be63d9c29f84e3b8261caf51 mac=L5KTRv0JgY1IJNcLEfUt_rvBSSh9PQSAYxnFjwVZSaU",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k7\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b8\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_7 body=415dfaf88a6c76ffd83a4de5bcf5fa3b55306cf6429d785acab17629373fe0eb mac=LO9PEt-aABn_fWEiMx5o_9VJ3DapAhwNi7zXD-afym0",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k8\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b9\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_8 body=64255a9899cd8701700b8befa6467d3a4e13551690713542066c9fbdf0e5a7b8 mac=ajXWSQb2fKawiMfAcdi90dYyVuPnEmCme6TxWJDnTsc",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k8\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b9\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_8 body=c1bf8025610dc01afe17a85ebd61f37412384692fe37dea15f45449075129105 mac=amHU3VZb_OF-s2D4ejIeC9rrXtew37a1sBdW1HtXFp0",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k9\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b10\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_9 body=1b36f7576e5db5573ef1f8d1505a5f06ff7e8c3409eb6f3a7828d6c800dee7fc mac=TteCdnlG0xDP6qZgQ81LA8C7Pk4CDTeLCX1YRjD8oCY",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k9\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b10\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_9 body=61aca059229c9c6ab8f7a5f096d5b3df52a46befa4f7f6b705e0e8a2990ab8da mac=l5jCDMAxivTBG2W3aAkhRC321eUzyOQoywlXaHNeCMM",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k10\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b11\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_10 body=2d095b62e39f96191d544e0112e67e35475b4c53f3850f98c2a38d7676b4c546 mac=wz1jNtYzoyLJaQEaLvbvwjTgt1OopjM9oaPj3C0NB1k",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k10\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b11\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_10 body=2b7e1d189c2158caac5a056577b908d2e5fb63870f6e0810cd7a14a1fa6990b1 mac=rO6nIdBeloz3JJlHgRciuNs_GO7Ui2ypJxSoBc8gfRw",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k11\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b12\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_11 body=4e2ff92ec98b4e6a122a11f8263ad54100636fe49b3aa65145018dddcc37fe7c mac=YFFJPbPYd6OBqrAoqgCaD-FTSd_vBQ3GAERRjXLvLlg",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k11\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b12\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_11 body=b64f05168c66807aaa09aaccd9334a303688f67b7225a027f3e4aab39cb34a62 mac=Wjpo4OObo25FvHjNeecx2jTlxZaNLP68FsTnbL-l9Aw",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k12\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b13\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_12 body=8662fb064807e93eb5436c233e65554f1e614b3e4496b3430803dc3083fec526 mac=ffbbN4BChxWR6NdIOHu31VzXntzYXTC5JnChjFKdV5g",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k12\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b13\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_12 body=fd7d2c3c902a770254e0e1d72efcbc842670aa84064ba649efb09d73f3193239 mac=66ZRniQ2OSqgEML4LNxhMNt1XiaFKjXJ0YNIInfE89Y",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k13\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b14\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_13 body=cb7bb1fe7c2237af468224dd158bbfa465a32eafb0ce096789b7452f17c2b814 mac=foEx5XxHKOg7Ln64Bhk8rj0ctK2_Gv3pqjNfHMADsmQ",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k13\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b14\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_13 body=e22166c42f3756da63987cc59a44f44c5cdc90755b36b6c44bbf06f8d504a755 mac=7Xaf2eEJ-zBpm1n6119bE2nvDsyW7P1Hx_EcHlx1XzY",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k14\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b15\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_14 body=df67a134a0305af82cbf6a24d9ed75c083032aaa35b7d279f60ebb4f4346b8a3 mac=_F2VYb7MoAEUbDLsm3ABB3kW42XDj5inOWPyN_yKhbU",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k14\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b15\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_14 body=d05fec87f8cb26f5f015f63423e7246209ee9dbec14682d0a2793ee7186bcee9 mac=RzH8uRAFwugjBo1TLSGtmooA8xhMpjZkp9Bp9jyp670",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
-          "body": "{\"argv\":[],\"e\":7,\"home_id\":null,\"key\":\"k15\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b16\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_15 body=5fa40dd098910e57d2299f08b00883e03c399e40560b3ecae32c2d6a6caf42c4 mac=_-xxsxsd001wAkWst7OhfaQu1QP9dyT7e_86kXQ_D8E",
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"k15\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"b16\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_15 body=eeaa13a39a5d791644c3f4b2e656e20505bb527b2e927693845af3af03e8974b mac=Vu4Rc5WtKIYOj2UwCBPYp6ME4znwVQrtgmVgmv2ubac",
           "now": 1789305250000,
           "route": "session",
           "status": 200
@@ -1109,13 +1109,13 @@
       "refusal": "too_many_owners"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":60001,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":60001,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "out_of_range",
       "name": "oversize_lease",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":86400001,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":86400001,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "out_of_range",
       "name": "oversize_idle",
       "refusal": "bad_request"
@@ -1127,13 +1127,13 @@
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"Fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"Fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "invalid_field",
       "name": "bad_program_definition",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env\":{},\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env\":{},\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "unknown_field",
       "name": "program_extra_field",
       "refusal": "bad_request"
@@ -1145,97 +1145,97 @@
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b1\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b2\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b3\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b4\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b5\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b6\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b7\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b8\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b9\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b10\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b11\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b12\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b13\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b14\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b15\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b16\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"b17\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b1\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b2\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b3\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b4\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b5\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b6\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b7\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b8\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b9\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b10\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b11\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b12\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b13\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b14\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b15\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b16\"},{\"command\":\"run\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"b17\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "too_many",
       "name": "too_many_programs",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"},{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"},{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "duplicate",
       "name": "duplicate_program",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx server --token vault:api_token\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx server --token vault:api_token\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "vault_reference",
       "name": "vault_command",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "too_large",
       "name": "long_command",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"api_token\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"api_token\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "invalid_field",
       "name": "env_name_form",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\",\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\",\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "duplicate",
       "name": "duplicate_env_name",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"PATH\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"PATH\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "reserved_env_name",
       "name": "reserved_env_name",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"CYFR_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"CYFR_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "reserved_env_name",
       "name": "reserved_env_prefix",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"not base64!\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"not base64!\",\"type\":\"sync\",\"version\":2}",
       "error": "invalid_field",
       "name": "bad_sealed",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":1048576,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":1048576,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "invalid_field",
       "name": "scratch_disk_bound",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"shared\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"shared\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "invalid_field",
       "name": "unknown_home",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":1024,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"memory_bytes\":1024,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "invalid_field",
       "name": "small_memory_bound",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":\"login --token vault:t\",\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"login_command\":\"login --token vault:t\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "vault_reference",
       "name": "vault_login_command",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
       "error": "missing_field",
       "name": "program_without_home",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"mode\":\"attach\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"attach\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
       "error": "invalid_field",
       "name": "open_unknown_mode",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--force\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"mode\":\"sign_in\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "body": "{\"argv\":[\"--force\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"sign_in\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
       "error": "invalid_field",
       "name": "sign_in_with_argv",
       "refusal": "bad_request"
@@ -1247,13 +1247,31 @@
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"has space\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "open_null_home_id",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"login_command\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "null_login_command",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "null_memory_bound",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"has space\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
       "error": "invalid_field",
       "name": "open_bad_key",
       "refusal": "bad_request"
     },
     {
-      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"attach\",\"version\":2}",
+      "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"attach\",\"version\":2}",
       "error": "unknown_type",
       "name": "open_session_type_unknown",
       "refusal": "bad_request"
@@ -1355,8 +1373,8 @@
   },
   "open": {
     "answer": "{\"pty\":false,\"resumed\":false,\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"status\":\"running\",\"version\":2}",
-    "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"home_id\":null,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
-    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_open_7d3e9a\nd1060ae0a8c8b82d5aba52833a069b90f2000f5ecb173598d8aaccc1349ad1aa",
+    "body": "{\"argv\":[\"--stdio\"],\"e\":7,\"key\":\"mcp\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_open_7d3e9a\ndb84b4baccea1397e0479baae8a5a8ad35ba5814f501bebda48897b80acdf153",
     "fields": {
       "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
       "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
@@ -1366,8 +1384,8 @@
       "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
       "ts": 1789305249602
     },
-    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_open_7d3e9a body=d1060ae0a8c8b82d5aba52833a069b90f2000f5ecb173598d8aaccc1349ad1aa mac=oieIhDw-5mm5trLq5MD2C1iDrEkVe3wvbf0SgJkFoiw",
-    "mac": "oieIhDw-5mm5trLq5MD2C1iDrEkVe3wvbf0SgJkFoiw"
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_open_7d3e9a body=db84b4baccea1397e0479baae8a5a8ad35ba5814f501bebda48897b80acdf153 mac=AAd2S2hZNgsUJsyOqnM2ZV0SO3ANFb19qVbRwDvNxqE",
+    "mac": "AAd2S2hZNgsUJsyOqnM2ZV0SO3ANFb19qVbRwDvNxqE"
   },
   "owner": {
     "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
@@ -1584,7 +1602,7 @@
   },
   "service": "backends",
   "status": {
-    "answer": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"lease_ms_left\":28500,\"programs\":[{\"error\":\"exited code=1 signal=null\",\"home\":\"scratch\",\"home_bytes\":null,\"name\":\"fetch\",\"over_cap\":false,\"restarts\":1,\"sessions\":1,\"status\":\"running\",\"stderr_tail\":\"token [REDACTED] accepted\\n\"}],\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"version\":2}",
+    "answer": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"e\":7,\"g\":3,\"lease_ms_left\":28500,\"programs\":[{\"error\":\"exited code=1 signal=null\",\"home\":\"scratch\",\"name\":\"fetch\",\"over_cap\":false,\"restarts\":1,\"sessions\":1,\"status\":\"running\",\"stderr_tail\":\"token [REDACTED] accepted\\n\"}],\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"state\":\"running\"}],\"version\":2}",
     "body": "{\"owners\":[{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"}],\"type\":\"status\",\"version\":2}",
     "canonical": "cyfr-locus/v1/backends/control\n3\n6\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249706\na42d9e93817ed27a8217503a700d8dfbe6f399e919390fd2c2eb5c7db38d35a3",
     "fields": {
@@ -1624,8 +1642,8 @@
   },
   "sync": {
     "answer": "{\"programs\":[{\"name\":\"fetch\",\"status\":\"idle\"}],\"status\":\"running\",\"version\":2}",
-    "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"home_max_bytes\":null,\"login_command\":null,\"memory_bytes\":null,\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
-    "canonical": "cyfr-locus/v1/backends/control\n3\n3\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249703\na3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca",
+    "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+    "canonical": "cyfr-locus/v1/backends/control\n3\n3\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249703\n2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b",
     "fields": {
       "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
       "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
@@ -1633,8 +1651,8 @@
       "seq": 3,
       "ts": 1789305249703
     },
-    "header": "v1 kind=control gen=3 seq=3 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249703 body=a3e1d492051a67fd6d9bd84f090e72a5919b897624f8ee8084dabe41684b90ca mac=EGAa_3tJ7590spvEcnJZ-j5aqZxcUL0gvSYFVRjt3ew",
-    "mac": "EGAa_3tJ7590spvEcnJZ-j5aqZxcUL0gvSYFVRjt3ew",
+    "header": "v1 kind=control gen=3 seq=3 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249703 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=DYBjcDTdT0B_EBMR1hbWmBJu0ZjWEqVltXyuCLz4Qhs",
+    "mac": "DYBjcDTdT0B_EBMR1hbWmBJu0ZjWEqVltXyuCLz4Qhs",
     "ts": 1789305249703
   },
   "valid_fields": [
