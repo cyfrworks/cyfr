@@ -635,6 +635,11 @@ impl Reader {
         let first = std::mem::replace(&mut self.first, false);
         if let Some((seq, _)) = got.lines.last() {
             self.after = *seq;
+        } else if first {
+            // The lines an empty first read counts are behind every line
+            // the session holds: its place moves past them, or each later
+            // read would count them again and take them for a loss.
+            self.after += u64::from(got.dropped);
         }
         if got.dropped > 0 && !first {
             return Err(Refusal {
@@ -1190,7 +1195,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the next commit"]
     fn an_empty_first_read_carries_the_sequence_past_lines_read_before() {
         // Seven lines an earlier run read past. The first read is empty and
         // counts them; the next line, the tools' answer at 8, is counted
@@ -1375,7 +1379,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the next commit"]
     fn a_run_s_first_read_counts_no_loss_since_an_earlier_run_let_those_lines_go() {
         // On a session already running, the first read starts at 0 and the
         // buffer no longer holds what an earlier run read past: not a loss.
