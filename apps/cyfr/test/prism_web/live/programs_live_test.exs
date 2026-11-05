@@ -406,6 +406,20 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert Terminal.max_lines() == 500
   end
 
+  # What `gh auth login` wrote on the pty in the S1 hand check: a terminal
+  # query (OSC 11, ended by ST), then its first prompt between cursor saves.
+  test "the terminal strips OSC sequences as well as CSI, on gh's query and prompt" do
+    alias PrismWeb.SignInTerminalComponent, as: Terminal
+
+    assert Terminal.text("\e]11;?\e\\") == ""
+    assert Terminal.text("\e]11;?\a") == ""
+
+    assert Terminal.text(
+             "\e7\e8\e[0;1;92m?\e[0m \e[0;1;39mWhere do you use GitHub?\e[0m  " <>
+               "\e[0;36m[Use arrows to move, type to filter]\e[0m\r"
+           ) == "? Where do you use GitHub?  [Use arrows to move, type to filter]"
+  end
+
   alias Cyfr.Test.ScriptedBackends, as: Scripted
 
   # The programs controller on a scripted backends service, put back
