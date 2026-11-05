@@ -187,10 +187,13 @@ func (a Accounts) PoolWritable(mode fs.FileMode, uid, gid int) bool {
 // CheckMounts refuses a mount table under which a pooled uid could leave
 // something where the next holder of the uid finds it outside the scope of
 // Find, or where Find would not look: a writable root filesystem, a writable
-// mount other than the home root whose directory the pool can write (a
-// shared /tmp, /var/tmp, /run or /dev/shm), a home root that is not on a
-// writable mount, or no mqueue mount to list message queues from.
-func CheckMounts(mounts []Mount, homeRoot string, accounts Accounts) error {
+// mount other than the home root and the kept-homes root whose directory the
+// pool can write (a shared /tmp, /var/tmp, /run or /dev/shm), a home root or
+// kept-homes root that is not on a writable mount, or no mqueue mount to list
+// message queues from. keptRoot is empty for a keeper that keeps no homes;
+// Find walks it like any writable mount, so what a pooled uid leaves there
+// is found.
+func CheckMounts(mounts []Mount, homeRoot, keptRoot string, accounts Accounts) error {
 	roots := RootsOf(mounts)
 	for _, m := range mounts {
 		if m.Point == "/" && m.Writable {
@@ -198,7 +201,7 @@ func CheckMounts(mounts []Mount, homeRoot string, accounts Accounts) error {
 		}
 	}
 	for _, dir := range roots.Dirs {
-		if dir == homeRoot {
+		if dir == homeRoot || (keptRoot != "" && dir == keptRoot) {
 			continue
 		}
 		info, err := os.Lstat(dir)
@@ -215,6 +218,9 @@ func CheckMounts(mounts []Mount, homeRoot string, accounts Accounts) error {
 	}
 	if !roots.Contains(homeRoot) && !contains(roots.Dirs, homeRoot) {
 		return fmt.Errorf("home root %s is not on a writable mount; mount a tmpfs there", homeRoot)
+	}
+	if keptRoot != "" && !roots.Contains(keptRoot) && !contains(roots.Dirs, keptRoot) {
+		return fmt.Errorf("kept-homes root %s is not on a writable mount; mount the homes volume there", keptRoot)
 	}
 	if roots.Queues == "" {
 		return errors.New("no mqueue filesystem is mounted, so message queues a pooled uid leaves cannot be found; mount one at /dev/mqueue")

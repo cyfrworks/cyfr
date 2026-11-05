@@ -26,7 +26,9 @@
 # uid of its own — runners as locus-runner01…locus-runner08 (30101-30108),
 # builds as locus-build01…locus-build16 (30001-30016), backends as
 # locus-backend01…locus-backend32 (20001-20032) — with a 0700 home under
-# /var/lib/locus/homes, inside a memory bound of its own
+# /var/lib/locus/homes, or a program's kept home under /var/lib/locus/kept
+# owned by a uid of its own (40001-49999, no user entry), inside a memory
+# bound of its own
 # (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB, LOCUS_BUILDS_MEMORY_BYTES, 1 GiB,
 # and LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB, unless set). When a runner, a
 # build or a backend ends every process of its uid is killed and
@@ -207,7 +209,11 @@ RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 # backend pool: each user is alone in its own group and belongs to no
 # other. /run/locus holds the release's temporary files and the attach
 # socket spawns' relays connect to; the home root holds each spawn's 0700
-# home, on a tmpfs mounted with mode=1733.
+# home, on a tmpfs mounted with mode=1733. /var/lib/locus/kept is the kept
+# homes' root, the backends service's `homes` volume, which takes this
+# directory's owner and mode when it is first made: root's and the locus
+# group's, 1773, so the release lists it and a kept home's uid, which has
+# no user entry, makes its own 0700 folder there.
 RUN groupadd -r -g 10001 locus \
     && useradd -r -u 10001 -g locus -d /nonexistent -M -s /usr/sbin/nologin locus \
     && for i in $(seq 1 8); do \
@@ -226,6 +232,7 @@ RUN groupadd -r -g 10001 locus \
          && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
        done \
     && install -d -m 1733 -o root -g root /var/lib/locus/homes \
+    && install -d -m 1773 -o root -g locus /var/lib/locus/kept \
     && install -d -m 0700 -o locus -g locus /run/locus
 
 ENV LANG=en_US.UTF-8

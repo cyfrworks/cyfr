@@ -117,6 +117,37 @@ func TestFindReportsTheOutermostEntriesTheUidOwnsAndItsQueues(t *testing.T) {
 	}
 }
 
+func TestFindExceptSkipsAKeptHomeButFindsTheRest(t *testing.T) {
+	root := realTempDir(t)
+	for _, p := range []string{"kept/vlt_a/notes", "kept/stray", "elsewhere"} {
+		full := filepath.Join(root, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Owned by the uid, the kept root itself would be reported whole; here
+	// it stands for a root another uid owns, so the walk descends into it.
+	home := filepath.Join(root, "kept", "vlt_a")
+	found, err := FindExcept(Roots{Dirs: []string{filepath.Join(root, "kept"), filepath.Join(root, "elsewhere-root")}}, t.TempDir(), os.Getuid(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(found.Paths, []string{filepath.Join(root, "kept", "stray")}) {
+		t.Fatalf("found %+v; the home %s is its uid's and is neither reported nor searched", found, home)
+	}
+	all, err := Find(Roots{Dirs: []string{filepath.Join(root, "kept")}}, t.TempDir(), os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(all.Paths)
+	if !reflect.DeepEqual(all.Paths, []string{filepath.Join(root, "kept", "stray"), home}) {
+		t.Fatalf("without an exception the home is found: %+v", all)
+	}
+}
+
 func TestFindStopsAtItsBounds(t *testing.T) {
 	root := realTempDir(t)
 	for i := 0; i <= MaxPaths; i++ {

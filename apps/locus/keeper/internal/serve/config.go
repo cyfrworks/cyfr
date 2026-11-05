@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/residue"
@@ -29,6 +30,9 @@ type Config struct {
 	HomeRoot   string
 	ClientUser string
 	ClientArgv []string
+	// Kept is the kept-homes root and uid range, nil for a keeper that
+	// keeps no homes.
+	Kept *home.Kept
 }
 
 type poolFlags []pool.Spec
@@ -45,7 +49,7 @@ func (p *poolFlags) Set(value string) error {
 }
 
 // Usage is the command line `serve` accepts.
-const Usage = "cyfr-locus serve --pool <name>:<first>-<last>[:netns] [--pool …] --home-root <dir> --client-user <user> -- <command> [args…]"
+const Usage = "cyfr-locus serve --pool <name>:<first>-<last>[:netns] [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --client-user <user> -- <command> [args…]"
 
 // ParseArgs parses the arguments after `serve`. Pools may repeat but must
 // have distinct names and disjoint ranges.
@@ -57,8 +61,17 @@ func ParseArgs(args []string) (Config, error) {
 	fs.Var(&pools, "pool", "a uid pool, <name>:<first>-<last>, isolated with :netns")
 	fs.StringVar(&cfg.HomeRoot, "home-root", "", "directory holding the spawned processes' homes")
 	fs.StringVar(&cfg.ClientUser, "client-user", "", "user the client command runs as")
+	var kept string
+	fs.StringVar(&kept, "kept-homes", "", "the kept-homes root and the uids its homes own, <dir>:<first>-<last>")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
+	}
+	if kept != "" {
+		k, err := home.ParseKept(kept)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Kept = &k
 	}
 	cfg.Pools = pools
 	cfg.ClientArgv = fs.Args()
@@ -81,6 +94,16 @@ func ParseArgs(args []string) (Config, error) {
 	}
 	if !filepath.IsAbs(cfg.HomeRoot) || filepath.Clean(cfg.HomeRoot) != cfg.HomeRoot {
 		return Config{}, errors.New("--home-root must be a clean absolute path")
+	}
+	if k := cfg.Kept; k != nil {
+		for _, p := range cfg.Pools {
+			if k.First <= p.Last && p.First <= k.Last {
+				return Config{}, fmt.Errorf("the kept-home uids %d-%d overlap pool %s", k.First, k.Last, p.Name)
+			}
+		}
+		if k.Root == cfg.HomeRoot || strings.HasPrefix(k.Root, cfg.HomeRoot+"/") || strings.HasPrefix(cfg.HomeRoot, k.Root+"/") {
+			return Config{}, errors.New("--kept-homes and --home-root must not hold one another")
+		}
 	}
 	if cfg.ClientUser == "" {
 		return Config{}, errors.New("--client-user is required")
@@ -161,7 +184,39 @@ func ResolveAccounts(cfg Config, lookup Lookup) (Account, map[int]Account, error
 			accounts[uid] = acct
 		}
 	}
+	if k := cfg.Kept; k != nil {
+		if err := checkKeptUIDs(*k, client, gids, lookup); err != nil {
+			return Account{}, nil, err
+		}
+	}
 	return client, accounts, nil
+}
+
+// KeptAccount is the account a kept home's uid runs as: no user entry, its
+// own number as its name and as its gid.
+func KeptAccount(uid int) Account {
+	return Account{UID: uid, GID: uid, Name: strconv.Itoa(uid)}
+}
+
+// checkKeptUIDs refuses a kept-home range that holds the client's uid or
+// gid, a pooled gid, or a uid with a user entry: a kept home's uid runs as
+// KeptAccount, so its gid is its own number, which no other account may
+// hold.
+func checkKeptUIDs(k home.Kept, client Account, poolGIDs map[int]int, lookup Lookup) error {
+	if k.Contains(client.UID) || k.Contains(client.GID) {
+		return fmt.Errorf("the kept-home uids %d-%d hold the client's uid or gid", k.First, k.Last)
+	}
+	for gid := range poolGIDs {
+		if k.Contains(gid) {
+			return fmt.Errorf("the kept-home uids %d-%d hold the pooled gid %d", k.First, k.Last, gid)
+		}
+	}
+	for uid := k.First; uid <= k.Last; uid++ {
+		if _, err := lookup.ByID(strconv.Itoa(uid)); err == nil {
+			return fmt.Errorf("kept-home uid %d has a user entry; the range must lie outside the user database", uid)
+		}
+	}
+	return nil
 }
 
 func toAccount(u *user.User) (Account, error) {
@@ -179,10 +234,10 @@ func toAccount(u *user.User) (Account, error) {
 // EnvPrefix is the prefix of the keeper's own variable names.
 const EnvPrefix = "KEEPER_"
 
-// DeclaredEnv are the KEEPER_ names the keeper knows. ChannelEnv is the
-// one it sets for its client; an inherited value is replaced, never read
-// (ClientEnviron).
-var DeclaredEnv = []string{protocol.ChannelEnv}
+// DeclaredEnv are the KEEPER_ names the keeper knows. ChannelEnv and
+// KeptHomesEnv are the ones it sets for its client; an inherited value is
+// replaced, never read (ClientEnviron).
+var DeclaredEnv = []string{protocol.ChannelEnv, protocol.KeptHomesEnv}
 
 // CheckEnviron is the one reader of the keeper's KEEPER_ environment: it
 // refuses every KEEPER_ name DeclaredEnv does not hold, naming each, so a
@@ -205,23 +260,28 @@ func CheckEnviron(environ []string) error {
 }
 
 // ClientEnviron is the client's environment: the keeper's own, with HOME,
-// USER and LOGNAME describing the client user and protocol.ChannelEnv
-// naming the channel socket on fd 3.
-func ClientEnviron(environ []string, client Account, channel string) []string {
-	out := make([]string, 0, len(environ)+4)
+// USER and LOGNAME describing the client user, protocol.ChannelEnv naming
+// the channel socket on fd 3 and, for a keeper that keeps homes,
+// protocol.KeptHomesEnv naming the kept-homes root and uid range.
+func ClientEnviron(environ []string, client Account, channel string, kept *home.Kept) []string {
+	out := make([]string, 0, len(environ)+5)
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		switch name {
-		case "HOME", "USER", "LOGNAME", protocol.ChannelEnv:
+		case "HOME", "USER", "LOGNAME", protocol.ChannelEnv, protocol.KeptHomesEnv:
 			continue
 		}
 		out = append(out, kv)
 	}
-	home := client.Home
-	if home == "" {
-		home = "/"
+	dir := client.Home
+	if dir == "" {
+		dir = "/"
 	}
-	return append(out, "HOME="+home, "USER="+client.Name, "LOGNAME="+client.Name, protocol.ChannelEnv+"="+channel)
+	out = append(out, "HOME="+dir, "USER="+client.Name, "LOGNAME="+client.Name, protocol.ChannelEnv+"="+channel)
+	if kept != nil {
+		out = append(out, protocol.KeptHomesEnv+"="+kept.String())
+	}
+	return out
 }
 
 // PoolAccounts is the set of pooled uids and gids.

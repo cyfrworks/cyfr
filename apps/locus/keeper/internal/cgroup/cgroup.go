@@ -41,6 +41,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -63,13 +64,20 @@ const (
 	removeInterval = 20 * time.Millisecond
 )
 
-var namePattern = regexp.MustCompile(`^keeper-[1-9][0-9]{0,9}$`)
+var namePattern = regexp.MustCompile(`^keeper-([1-9][0-9]{0,9}|s-[0-9a-f]{32})$`)
 
 // pause waits between two passes over the namespace root.
 var pause = time.Sleep
 
-// Name is the group of the spawn running under uid.
+// Name is the group of the spawn running under the pooled uid.
 func Name(uid int) string { return "keeper-" + strconv.Itoa(uid) }
+
+// SpawnName is the group of the kept-home spawn id: several spawns of one
+// kept home share its uid, so each is grouped by its own id.
+func SpawnName(id string) string { return "keeper-s-" + id }
+
+// ValidName reports whether name is a spawn's group, by uid or by spawn id.
+func ValidName(name string) bool { return namePattern.MatchString(name) }
 
 // Manager makes groups under the root of the keeper's cgroup namespace.
 type Manager struct {
@@ -301,6 +309,64 @@ func parseEvents(raw []byte) (map[string]uint64, error) {
 		}
 	}
 	return events, sc.Err()
+}
+
+// Procs lists the processes in the group.
+func (g *Group) Procs() ([]int, error) {
+	raw, err := os.ReadFile(filepath.Join(g.path, "cgroup.procs"))
+	if err != nil {
+		return nil, err
+	}
+	var pids []int
+	for _, field := range strings.Fields(string(raw)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, fmt.Errorf("cgroup.procs: %q", field)
+		}
+		pids = append(pids, pid)
+	}
+	return pids, nil
+}
+
+// Signal sends sig to every process in the group. A process may leave its
+// group only by a write its uid cannot make, so the group is every process
+// the spawn started.
+func (g *Group) Signal(sig syscall.Signal) error {
+	pids, err := g.Procs()
+	if err != nil {
+		return err
+	}
+	for _, pid := range pids {
+		_ = syscall.Kill(pid, sig)
+	}
+	return nil
+}
+
+// Kill ends every process in the group: sig to each, grace for them to
+// exit, then the kernel's group kill (cgroup.kill) until the group is empty
+// or the bound passes. It reports whether the group is empty.
+func (g *Group) Kill(grace time.Duration) bool {
+	empty := func() bool {
+		pids, err := g.Procs()
+		return err == nil && len(pids) == 0
+	}
+	if grace > 0 {
+		_ = g.Signal(syscall.SIGTERM)
+		deadline := time.Now().Add(grace)
+		for !empty() && time.Now().Before(deadline) {
+			time.Sleep(removeInterval)
+		}
+	}
+	for attempt := 0; attempt < removeAttempts; attempt++ {
+		if empty() {
+			return true
+		}
+		if err := os.WriteFile(filepath.Join(g.path, "cgroup.kill"), []byte("1"), 0o644); err != nil {
+			_ = g.Signal(syscall.SIGKILL)
+		}
+		time.Sleep(removeInterval)
+	}
+	return empty()
 }
 
 // Remove removes the group once its processes are gone, waiting briefly for

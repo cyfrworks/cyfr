@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -158,10 +160,7 @@ func Main() int {
 	}
 
 	syscall.Umask(0o077)
-	if err := os.Mkdir(spec.Home, 0o700); err != nil {
-		return fail("home: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(spec.Home, "tmp"), 0o700); err != nil {
+	if err := makeHome(spec); err != nil {
 		return fail("home: %v", err)
 	}
 	if err := setLimits(spec.Limits); err != nil {
@@ -373,6 +372,26 @@ func checkSocket(fd int) error {
 		return fmt.Errorf("fd %d is not a stream socket", fd)
 	}
 	return nil
+}
+
+// makeHome makes a scratch home and its tmp directory, which must not
+// exist yet; a kept home must exist, be the uid's and 0700, and its tmp
+// directory is made again when it is gone.
+func makeHome(spec Spec) error {
+	tmp := filepath.Join(spec.Home, "tmp")
+	if spec.Kept {
+		if err := home.CheckKeptHome(spec.Home, spec.UID); err != nil {
+			return err
+		}
+		if err := os.Mkdir(tmp, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.Mkdir(spec.Home, 0o700); err != nil {
+		return err
+	}
+	return os.Mkdir(tmp, 0o700)
 }
 
 // checkCgroup refuses to continue unless the process is in the memory-bounded

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 )
 
@@ -139,15 +140,70 @@ func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
 
 func TestClientEnvironDescribesTheClientUserAndItsChannel(t *testing.T) {
 	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_LOCUS_BACKENDS_KEY=t", "KEEPER_CHANNEL=socket:[1]", "LOGNAME=root"},
-		Account{Name: "locus", Home: "/nonexistent"}, "socket:[4242]")
+		Account{Name: "locus", Home: "/nonexistent"}, "socket:[4242]", nil)
 	want := []string{"PATH=/usr/bin", "CYFR_LOCUS_BACKENDS_KEY=t", "HOME=/nonexistent", "USER=locus", "LOGNAME=locus", "KEEPER_CHANNEL=socket:[4242]"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environ %q", got)
 	}
+
+	// A keeper that keeps homes names them; an inherited value is replaced.
+	kept := &home.Kept{Root: "/var/lib/locus/kept", First: 40001, Last: 49999}
+	got = ClientEnviron([]string{"KEEPER_KEPT_HOMES=/elsewhere:1-2", "PATH=/usr/bin"}, Account{Name: "locus"}, "socket:[1]", kept)
+	want = []string{"PATH=/usr/bin", "HOME=/", "USER=locus", "LOGNAME=locus", "KEEPER_CHANNEL=socket:[1]", "KEEPER_KEPT_HOMES=/var/lib/locus/kept:40001-49999"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("environ with kept homes %q", got)
+	}
+}
+
+func TestParseArgsKeptHomes(t *testing.T) {
+	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032 --home-root /var/lib/locus/homes --kept-homes /var/lib/locus/kept:40001-49999 --client-user locus -- /app/bin/locus start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Kept == nil || *cfg.Kept != (home.Kept{Root: "/var/lib/locus/kept", First: 40001, Last: 49999}) {
+		t.Fatalf("kept homes %+v", cfg.Kept)
+	}
+	for _, kept := range []string{
+		"/var/lib/locus/kept:20030-20040",       // overlaps the pool
+		"/var/lib/locus/homes/kept:40001-40002", // inside the home root
+		"/var/lib/locus:40001-40002",            // holds the home root
+		"kept:40001-40002",                      // relative
+		"/var/lib/locus/kept:40002-40001",       // falling
+		"/var/lib/locus/kept:1-70000",           // too many
+		"/var/lib/locus/kept",                   // no range
+	} {
+		args := "--pool backends:20001-20032 --home-root /var/lib/locus/homes --kept-homes " + kept + " --client-user locus -- run"
+		if _, err := ParseArgs(strings.Fields(args)); err == nil {
+			t.Errorf("--kept-homes %s accepted", kept)
+		}
+	}
+}
+
+func TestResolveAccountsRefusesAKeptRangeSharingAnIdentity(t *testing.T) {
+	pools := []pool.Spec{{Name: "backends", First: 20001, Last: 20002}}
+	kept := func(first, last int) *home.Kept { return &home.Kept{Root: "/k", First: first, Last: last} }
+	ok := Config{Pools: pools, ClientUser: "locus", Kept: kept(40001, 40010)}
+	if _, _, err := ResolveAccounts(ok, fakeLookup(locusUser)); err != nil {
+		t.Fatalf("a kept range outside every identity: %v", err)
+	}
+	cases := map[string]struct {
+		kept  *home.Kept
+		users []user.User
+	}{
+		"the client's uid": {kept(10000, 10002), []user.User{locusUser}},
+		"a pooled gid":     {kept(40001, 40010), []user.User{locusUser, poolUser(20001, 40005)}},
+		"a user entry":     {kept(40001, 40010), []user.User{locusUser, poolUser(40007, 40007)}},
+	}
+	for name, c := range cases {
+		cfg := Config{Pools: pools, ClientUser: "locus", Kept: c.kept}
+		if _, _, err := ResolveAccounts(cfg, fakeLookup(c.users...)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
 }
 
 func TestCheckEnvironRefusesEveryUndeclaredKeeperVariableByName(t *testing.T) {
-	accepted := []string{"PATH=/usr/bin", "CYFR_LOG_FORMAT=json", "LOCUS_BUILDS_KEY=secret", "KEEPERS=1", "KEEPER_CHANNEL=socket:[1]"}
+	accepted := []string{"PATH=/usr/bin", "CYFR_LOG_FORMAT=json", "LOCUS_BUILDS_KEY=secret", "KEEPERS=1", "KEEPER_CHANNEL=socket:[1]", "KEEPER_KEPT_HOMES=/k:1-2"}
 	if err := CheckEnviron(accepted); err != nil {
 		t.Fatalf("refused %q: %v", accepted, err)
 	}
