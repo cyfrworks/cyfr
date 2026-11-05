@@ -23,7 +23,41 @@ defmodule PrismWeb.SignInTerminalComponent do
   what passes: the program keeps its own sign-in in its home. What the
   person types is sent and never kept here; its field, `sign_in_line`, is
   one `Prima.Sanitizer.filter_parameters/0` names, so no event log shows it.
+  The lines the frame shows are held in a `Lines` struct that inspects as
+  their count alone, and rendered as one expression rather than a
+  comprehension (whose per-line variables LiveView keeps), so the page's
+  state in a crash report or LiveView's termination log carries none of
+  their text.
   """
+
+  defmodule Lines do
+    @moduledoc """
+    A sign-in terminal's lines, the text a program wrote on its terminal,
+    which may be a credential: inspected as how many there are, never
+    what they say, so a crash report that prints the page's assigns
+    prints none of them.
+    """
+
+    defstruct lines: []
+
+    @type t :: %__MODULE__{lines: [String.t()]}
+
+    @doc """
+    The lines as the frame's one text, each ended by a newline. The frame
+    renders this one expression, never a comprehension over the lines,
+    whose per-line variables LiveView keeps for change tracking and a
+    crash report would print.
+    """
+    @spec text(t()) :: String.t()
+    def text(%__MODULE__{lines: lines}), do: Enum.map_join(lines, &(&1 <> "\n"))
+
+    defimpl Inspect do
+      use Boundary, classify_to: PrismWeb
+
+      def inspect(%{lines: lines}, _opts),
+        do: "#PrismWeb.SignInTerminalComponent.Lines<#{length(lines)} lines>"
+    end
+  end
 
   use PrismWeb, :live_component
 
@@ -51,7 +85,7 @@ defmodule PrismWeb.SignInTerminalComponent do
     {:ok,
      socket
      |> assign(:token, nil)
-     |> assign(:lines, [])
+     |> assign(:lines, %Lines{})
      |> assign(:state, :starting)
      |> assign(:reason, nil)
      |> assign(:sent, 0)}
@@ -111,8 +145,8 @@ defmodule PrismWeb.SignInTerminalComponent do
   end
 
   defp relay(socket, {:lines, lines}) when is_list(lines) do
-    kept = (socket.assigns.lines ++ Enum.map(lines, &text/1)) |> Enum.take(-@max_lines)
-    assign(socket, :lines, kept)
+    kept = (socket.assigns.lines.lines ++ Enum.map(lines, &text/1)) |> Enum.take(-@max_lines)
+    assign(socket, :lines, %Lines{lines: kept})
   end
 
   defp relay(socket, {:ended, reason}), do: ended(socket, reason)
@@ -156,8 +190,7 @@ defmodule PrismWeb.SignInTerminalComponent do
         phx-hook="ScrollBottom"
         class="max-h-96 min-h-32 overflow-y-auto whitespace-pre-wrap break-all px-4 py-3 font-mono text-xs text-gray-200"
         data-test="terminal-lines"
-      ><%= for line <- @lines do %><%= line %>
-    <% end %></pre>
+      >{Lines.text(@lines)}</pre>
       <p :if={@state == :starting} class="px-4 pb-2 text-xs text-gray-500">Starting…</p>
       <p :if={@state == :ended} class="px-4 pb-2 text-xs text-amber-400" data-test="terminal-ended">
         {@reason}
