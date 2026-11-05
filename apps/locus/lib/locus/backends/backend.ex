@@ -340,10 +340,15 @@ defmodule Locus.Backends.Backend do
   defp on_event(state, :released), do: released(state)
   defp on_event(state, _event), do: state
 
-  defp exit_end(0, nil), do: %{crash: false, error: nil}
+  # Only an exit of the process's own accord with a status carries one.
+  defp exit_end(0, nil), do: %{crash: false, error: nil, exit_code: 0}
 
   defp exit_end(code, signal),
-    do: %{crash: true, error: "exited code=#{spelled(code)} signal=#{spelled(signal)}"}
+    do: %{
+      crash: true,
+      error: "exited code=#{spelled(code)} signal=#{spelled(signal)}",
+      exit_code: if(signal == nil and is_integer(code) and code in 0..255, do: code)
+    }
 
   defp spelled(nil), do: "null"
   defp spelled(value), do: to_string(value)
@@ -455,7 +460,11 @@ defmodule Locus.Backends.Backend do
   defp answer(state, after_seq) do
     {lines, dropped, relay} = Relay.take(state.relay, after_seq, state.budget)
     lines = Enum.map(lines, &%{&1 | text: LocusBackends.mask(&1.text, state.secrets)})
-    {%{lines: lines, dropped: dropped, running: state.status != :ended}, %{state | relay: relay}}
+    running = state.status != :ended
+    exit_code = if running, do: nil, else: Map.get(state.ending || %{}, :exit_code)
+
+    {%{lines: lines, dropped: dropped, running: running, exit_code: exit_code},
+     %{state | relay: relay}}
   end
 
   defp used(state), do: %{state | last_used: state.clock.()}

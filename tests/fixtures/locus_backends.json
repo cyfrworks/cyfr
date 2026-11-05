@@ -1425,6 +1425,7 @@
   },
   "recv": {
     "answer": "{\"dropped\":1,\"lines\":[{\"seq\":2,\"text\":\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"result\\\":{\\\"tools\\\":[]}}\"}],\"running\":true,\"version\":2}",
+    "answer_ended": "{\"dropped\":0,\"exit_code\":0,\"lines\":[{\"seq\":3,\"text\":\"Login successful.\"}],\"running\":false,\"version\":2}",
     "body": "{\"after\":0,\"e\":7,\"max_wait_ms\":25000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"session\":\"ss_5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"type\":\"recv\",\"version\":2}",
     "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249604\nn_recv_7d3e9a\na9c071ac45c823975c1e507cef2c923f0847c0002ebf97412af1d8c6bb93bc86",
     "fields": {
