@@ -277,6 +277,29 @@ defmodule Sanctum.Consent.PlanTest do
       # Nothing was staged for it.
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
     end
+
+    test "in a dependency's manifest is refused alike, though the source declares none",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount-dep", "1.0.0", %{
+        "needs" => %{
+          "claude" => %{
+            "type" => "login",
+            "program" => "claude",
+            "reason" => "to run Claude Code on your own plan"
+          }
+        }
+      })
+
+      publish!(ctx, "plan-mount-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-mount-dep"}]}
+      })
+
+      ref = "reagent:local.plan-mount-app"
+
+      assert {:error, {:not_built, :mount}} = Plan.plan(ctx, %{ref: ref})
+      assert {:error, {:not_built, :mount}} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
   end
 
   describe "what the head holds" do

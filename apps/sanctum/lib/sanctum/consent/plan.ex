@@ -256,8 +256,9 @@ defmodule Sanctum.Consent.Plan do
   with that dependency's needs missing; one not installed leaves it
   unresolved as missing.
 
-  A source declaring a need met by mounting a login entry
-  (`Prima.Manifest.Needs.mount_only?/1`) is refused `{:not_built, :mount}`
+  A source whose closure declares a need met by mounting a login entry
+  (`Prima.Manifest.Needs.mount_only?/1`), in its own manifest or a
+  dependency's, is refused `{:not_built, :mount}`
   as its shape is derived (`Sanctum.Consent.ShapeDerivation.shape_input/3`),
   before any profile, head or binding is read.
   """
