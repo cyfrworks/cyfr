@@ -1630,6 +1630,25 @@ defmodule Opus.ProgramsTest do
       assert {:error, :ended} = Programs.pipe_send(ctx.athanor_id, "att_1", mine, ["gone"])
     end
 
+    test "a sweep ends a session whose entry changed with no signal said, and no other",
+         %{ctx: ctx, fake: fake, row: row, entry: entry} do
+      start_controller(fake)
+      other = login_entry(ctx, "claude-second", "claude")
+      assert {:ok, %{session: mine}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert {:ok, %{session: kept}} = Programs.pipe_open(row, other, "pipe-k", [], "att_1")
+
+      assert [{ctx.athanor_id, entry, "claude"}, {ctx.athanor_id, other, "claude"}] |> Enum.sort() ==
+               Enum.sort(Programs.mounts())
+
+      flush_sessions()
+      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry, "needs_reauth")
+      assert :ok = Emissary.External.Reconciler.sweep_mounts()
+
+      assert_receive {:session, "close", %{"session" => ^mine}, _}, 3_000
+      refute_received {:session, "close", %{"session" => ^kept}, _}
+      assert [{_athanor, ^other, "claude"}] = Programs.mounts()
+    end
+
     test "a row that is disabled stands its sessions down", %{
       ctx: ctx,
       fake: fake,
