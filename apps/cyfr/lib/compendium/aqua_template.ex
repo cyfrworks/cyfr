@@ -240,6 +240,7 @@ defmodule Compendium.AquaTemplate do
         entries
         |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
         |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
+        |> Enum.filter(&AquaPath.valid_name?/1)
         |> Enum.reduce_while({:ok, []}, fn name, {:ok, acc} ->
           case seed_member(ctx, name) do
             {:ok, member} -> {:cont, {:ok, [member | acc]}}

@@ -69,6 +69,30 @@ defmodule Compendium.AgentSourceTest do
     assert {:error, :not_found} = Registry.get_latest(ctx, "nobody", "local", "agent")
   end
 
+  # The tree's grammar is the roster: a Markdown file whose name the path
+  # grammar refuses is plain storage, and never a crew member under the
+  # soul's policy.
+  test "a crew file whose name the path grammar refuses is plain storage, never crew", %{
+    ctx: ctx
+  } do
+    junk = ["aqua", "crew", "bad name.md"]
+    assert AquaPath.locate(junk) == :above_unit
+
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        junk,
+        "---\ntitle: Bad\ncatalyst_ref: catalyst:local.claude\nmodel: m\n---\n\nbad\n"
+      )
+
+    assert {:ok, agents, errors} = AquaAgent.list(ctx)
+    refute "bad name" in Enum.map(agents, & &1.name)
+    assert errors == []
+
+    {:ok, rows} = AgentSource.rows(ctx)
+    refute "bad name" in Enum.map(rows, & &1.name)
+  end
+
   test "snapshot keeps the bytes and parses the same ones", %{ctx: ctx} do
     {:ok, snap} = Compendium.AgentIndex.snapshot(ctx, "aqua")
     assert snap.agent.name == "aqua"

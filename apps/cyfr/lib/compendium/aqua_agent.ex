@@ -259,6 +259,9 @@ defmodule Compendium.AquaAgent do
           entries
           |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
           |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
+          # The tree's grammar is the roster: a file whose name the path
+          # grammar refuses is plain storage, never a crew member.
+          |> Enum.filter(&AquaPath.valid_name?/1)
           |> Enum.reject(&AquaPath.soul?/1)
           |> Enum.reduce({[], errors}, fn name, {ok, errs} ->
             case read(ctx, name) do
