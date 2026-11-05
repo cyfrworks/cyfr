@@ -643,11 +643,12 @@ defmodule Arca.TurnStorage do
       Arca.Repo.locking_transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
+        grant = granted!(athanor_id, turn, status, attrs)
 
         if status == "completed" and steer_rows(athanor_id, turn) != [],
           do: Arca.Repo.rollback(:steer_pending)
 
-        ended!(athanor_id, turn, status, attrs, :reply)
+        ended!(athanor_id, turn, status, grant, attrs, :reply)
       end)
     end)
     |> Arca.Data.project()
@@ -655,16 +656,24 @@ defmodule Arca.TurnStorage do
 
   def finish(%Prima.Actor{}, _turn_id, _status, _attrs), do: {:error, :no_athanor}
 
-  # The one terminal write of a turn whose row the caller's transaction has
-  # taken: the root attempt closed with the matching outcome, the root
-  # execution out of `running`/`paused` and its reservation released, the
-  # turn ended, its reply recorded (`:reply`; `:silent` when the room it
-  # would answer is going), and the thread's claim given up before the
-  # commit, so the thread is free the moment the end is visible.
+  # The turn's root locked and the grant its end runs under judged, before
+  # anything else the end checks.
   # arca:db-raise-ok inside the caller's transaction
-  defp ended!(athanor_id, %Turn{} = turn, status, attrs, reply) when reply in [:reply, :silent] do
+  defp granted!(athanor_id, %Turn{} = turn, status, attrs) do
     lock_root!(athanor_id, turn)
-    grant = standing!(athanor_id, turn, attrs, required_for(status))
+    standing!(athanor_id, turn, attrs, required_for(status))
+  end
+
+  # The one terminal write of a turn whose row the caller's transaction has
+  # taken and whose grant it judged (`granted!/4`): the root attempt closed
+  # with the matching outcome, the root execution out of `running`/`paused`
+  # and its reservation released, the turn ended, its reply recorded
+  # (`:reply`; `:silent` when the room it would answer is going), and the
+  # thread's claim given up before the commit, so the thread is free the
+  # moment the end is visible.
+  # arca:db-raise-ok inside the caller's transaction
+  defp ended!(athanor_id, %Turn{} = turn, status, grant, attrs, reply)
+       when reply in [:reply, :silent] do
     ended_at = DateTime.utc_now()
 
     ran =
@@ -768,7 +777,9 @@ defmodule Arca.TurnStorage do
       |> Enum.each(&settle_unresolved!(actor, athanor_id, turn, &1, reason))
 
       _skipped = skip_proposed!(actor, athanor_id, turn, reason)
-      ended!(athanor_id, turn!(athanor_id, turn_id), "cancelled", attrs, reply).id
+      turn = turn!(athanor_id, turn_id)
+      grant = granted!(athanor_id, turn, "cancelled", attrs)
+      ended!(athanor_id, turn, "cancelled", grant, attrs, reply).id
     end)
   end
 
