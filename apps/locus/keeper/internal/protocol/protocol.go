@@ -162,6 +162,12 @@ const (
 	// CodeHomeOverCap refuses a kept spawn whose home already holds its
 	// home_max_bytes.
 	CodeHomeOverCap = "home_over_cap"
+	// CodeUIDBusy refuses a home_make or a kept spawn on a kept home's uid
+	// that is not free for it: retiring (its last spawn released, its
+	// processes not yet all ended), quarantined (a retirement that could not
+	// finish), or live under another home. A client drawing a uid for a new
+	// home takes another.
+	CodeUIDBusy = "uid_busy"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors

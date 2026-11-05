@@ -376,9 +376,17 @@ type server struct {
 	// keptLive counts the live spawns of each kept home's uid; keptOps
 	// holds each such uid's lock, which a spawn's start, the uid's full
 	// retirement and a home request take, so none of them interleaves
-	// with another of the same uid.
-	keptLive map[int]int
-	keptOps  map[int]*sync.Mutex
+	// with another of the same uid. A kept uid follows a pooled uid's
+	// discipline: keptHomes names the home a live uid runs in; from the
+	// release of its last spawn until every process of it is ended and
+	// nothing it left remains, it is retiring (keptRetiring, its channel
+	// closed at the end); a retirement that cannot finish quarantines it
+	// (keptQuarantined, naming its home) until the sweeper's retry does.
+	keptLive        map[int]int
+	keptOps         map[int]*sync.Mutex
+	keptHomes       map[int]string
+	keptRetiring    map[int]chan struct{}
+	keptQuarantined map[int]string
 
 	channel  *os.File
 	writeMu  sync.Mutex
@@ -1183,6 +1191,7 @@ func (s *server) sweeper() {
 			}
 		}
 		s.mu.Unlock()
+		s.sweepKept()
 		for _, e := range todo {
 			if !s.scrub(s.accounts[e.uid], 0, nil, "") {
 				continue

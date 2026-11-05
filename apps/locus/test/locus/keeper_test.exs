@@ -959,6 +959,22 @@ defmodule Locus.KeeperTest do
       assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(full, "vlt_c")
     end
 
+    test "a uid cyfr-locus refuses as busy is set aside and the next free uid drawn",
+         %{root: root, uid: uid} do
+      %{fake: fake, name: name} = kept_client(root, uid, uid + 1)
+      FakeKeeper.mode(fake, {:uid_busy, %{uid => true}})
+
+      assert {:ok, drawn} = Keeper.home_ensure(name, "vlt_busy")
+      assert drawn == uid + 1
+
+      assert [%{"type" => "home_make", "uid" => ^uid}, %{"type" => "home_make", "uid" => ^drawn}] =
+               home_requests(fake)
+
+      # With every uid of the range busy, none is drawn.
+      FakeKeeper.mode(fake, {:uid_busy, %{uid => true, (uid + 1) => true}})
+      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(name, "vlt_none")
+    end
+
     test "a uid a live process holds is no free uid, even with no home folder; home_list names the homes",
          %{root: root, uid: uid} do
       proc = FakeKeeper.short_tmp_dir()
@@ -998,6 +1014,20 @@ defmodule Locus.KeeperTest do
         )
 
       assert {:error, {:refused, "unavailable"}} = Keeper.home_ensure(blind, "vlt_d")
+
+      # A process whose status cannot be read holds a uid it does not name,
+      # so none is drawn; one gone with its whole entry holds none.
+      unread = FakeKeeper.short_tmp_dir()
+      on_exit(fn -> File.rm_rf!(unread) end)
+      File.mkdir_p!(Path.join([unread, "4244", "status"]))
+
+      %{name: unreadable} =
+        FakeKeeper.start_client!(kept_homes: "#{root}:#{uid}-#{uid + 1}", proc_root: unread)
+
+      assert {:error, {:refused, "unavailable"}} = Keeper.home_ensure(unreadable, "vlt_e")
+      File.rm_rf!(Path.join(unread, "4244"))
+      assert {:ok, _uid} = Keeper.home_ensure(unreadable, "vlt_e")
+      File.rm_rf!(Path.join(root, "vlt_e"))
 
       File.write!(Path.join(root, "not-a-home.txt"), "x")
       assert {:ok, ["vlt_b"]} = Keeper.home_list(name)

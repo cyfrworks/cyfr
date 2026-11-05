@@ -30,6 +30,9 @@ const (
 	// homeRetireGrace is the grace a home's processes get before a
 	// home_retire kills them.
 	homeRetireGrace = time.Second
+	// keptRetireWait bounds how long a kept spawn of a home waits for its
+	// uid's retirement to finish before it is refused as CodeUIDBusy.
+	keptRetireWait = 30 * time.Second
 	// ptyRows and ptyCols are a pseudo-terminal's size.
 	ptyRows = 40
 	ptyCols = 120
@@ -45,6 +48,60 @@ func (s *server) keptLock(uid int) *sync.Mutex {
 		s.keptOps[uid] = l
 	}
 	return l
+}
+
+// keptMaps makes the kept uids' state maps; s.mu is held.
+func (s *server) keptMaps() {
+	if s.keptLive == nil {
+		s.keptLive = map[int]int{}
+	}
+	if s.keptHomes == nil {
+		s.keptHomes = map[int]string{}
+	}
+	if s.keptRetiring == nil {
+		s.keptRetiring = map[int]chan struct{}{}
+	}
+	if s.keptQuarantined == nil {
+		s.keptQuarantined = map[int]string{}
+	}
+}
+
+// keptState is why a kept home's uid cannot take the home at path now,
+// with s.mu held: the channel its retirement closes when it is retiring,
+// busy when it is quarantined or live under another home.
+func (s *server) keptState(uid int, path string) (retiring chan struct{}, busy bool) {
+	s.keptMaps()
+	if _, q := s.keptQuarantined[uid]; q {
+		return nil, true
+	}
+	if ch := s.keptRetiring[uid]; ch != nil {
+		return ch, false
+	}
+	return nil, s.keptLive[uid] > 0 && s.keptHomes[uid] != path
+}
+
+// sweepKept retries the retirement of every quarantined kept uid, as the
+// sweeper retries a pooled one, and frees each once nothing of it remains.
+func (s *server) sweepKept() {
+	s.mu.Lock()
+	s.keptMaps()
+	todo := make(map[int]string, len(s.keptQuarantined))
+	for uid, path := range s.keptQuarantined {
+		todo[uid] = path
+	}
+	s.mu.Unlock()
+	for uid, path := range todo {
+		lock := s.keptLock(uid)
+		lock.Lock()
+		clean := s.scrub(KeptAccount(uid), 0, nil, path)
+		if clean {
+			s.mu.Lock()
+			delete(s.keptQuarantined, uid)
+			s.mu.Unlock()
+			s.log.Info("kept uid %d retired after its quarantine", uid)
+		}
+		lock.Unlock()
+	}
 }
 
 // keptHome checks a kept home's path and uid against --kept-homes.
@@ -79,7 +136,37 @@ func (s *server) handleKeptSpawn(req *protocol.Request) {
 	}
 	acct := KeptAccount(uid)
 	lock := s.keptLock(uid)
-	lock.Lock()
+	deadline := time.Now().Add(keptRetireWait)
+	// A uid whose last spawn was released is retiring until every process
+	// of it is gone: a spawn of the same home waits for that; one on a uid
+	// quarantined or live under another home is refused.
+	for {
+		s.mu.Lock()
+		retiring, busy := s.keptState(uid, req.HomePath)
+		s.mu.Unlock()
+		if retiring == nil && !busy {
+			lock.Lock()
+			s.mu.Lock()
+			retiring, busy = s.keptState(uid, req.HomePath)
+			s.mu.Unlock()
+			if retiring == nil && !busy {
+				break
+			}
+			lock.Unlock()
+		}
+		if busy {
+			s.log.Warn("spawn %s refused: kept uid %d is quarantined or live under another home", req.ID, uid)
+			s.send(protocol.NewError(req.ID, "", protocol.CodeUIDBusy))
+			return
+		}
+		select {
+		case <-retiring:
+		case <-time.After(time.Until(deadline)):
+			s.log.Warn("spawn %s refused: kept uid %d is still retiring", req.ID, uid)
+			s.send(protocol.NewError(req.ID, "", protocol.CodeUIDBusy))
+			return
+		}
+	}
 	if err := home.CheckKeptHome(req.HomePath, uid); err != nil {
 		lock.Unlock()
 		s.log.Warn("spawn %s refused: the kept home of uid %d is not made: %v", req.ID, uid, err)
@@ -102,7 +189,9 @@ func (s *server) handleKeptSpawn(req *protocol.Request) {
 		}
 	}
 	s.mu.Lock()
+	s.keptMaps()
 	s.keptLive[uid]++
+	s.keptHomes[uid] = req.HomePath
 	s.mu.Unlock()
 	lock.Unlock()
 
@@ -133,9 +222,23 @@ func (s *server) handleKeptSpawn(req *protocol.Request) {
 // left on the writable mounts but its home. The uid stays its home's.
 func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 	sp.retireOnce.Do(func() {
+		uid := sp.account.UID
+		// The uid is retiring from this moment when this spawn is its last:
+		// no home_make and no other spawn takes it until every process of it
+		// is gone, however a child of the spawn hides from its group's kill.
+		s.mu.Lock()
+		s.keptMaps()
+		s.keptLive[uid]--
+		last := s.keptLive[uid] <= 0
+		var done chan struct{}
+		if last {
+			delete(s.keptLive, uid)
+			done = make(chan struct{})
+			s.keptRetiring[uid] = done
+		}
+		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
-			uid := sp.account.UID
 			if sp.group != nil && !sp.group.Kill(grace) {
 				s.log.Warn("spawn %s: processes of kept uid %d outlived their group's kill", sp.id, uid)
 			}
@@ -146,22 +249,26 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 					s.signalChild(sp.relay, unix.SIGKILL)
 				}
 			}
-			s.mu.Lock()
-			s.keptLive[uid]--
-			s.mu.Unlock()
-
-			lock := s.keptLock(uid)
-			lock.Lock()
-			s.mu.Lock()
-			last := s.keptLive[uid] == 0
 			if last {
-				delete(s.keptLive, uid)
+				// Every process of the uid is killed (SIGKILL until none is
+				// left) and what it left outside its home removed before the
+				// uid is free; one that survives quarantines it.
+				lock := s.keptLock(uid)
+				lock.Lock()
+				clean := s.scrub(sp.account, 0, nil, sp.home)
+				lock.Unlock()
+				s.mu.Lock()
+				delete(s.keptRetiring, uid)
+				delete(s.keptHomes, uid)
+				if !clean {
+					s.keptQuarantined[uid] = sp.home
+				}
+				close(done)
+				s.mu.Unlock()
+				if !clean {
+					s.log.Warn("spawn %s: kept uid %d quarantined: a process or something it left outside its home outlived retirement", sp.id, uid)
+				}
 			}
-			s.mu.Unlock()
-			if last && !s.scrub(sp.account, 0, nil, sp.home) {
-				s.log.Warn("spawn %s: kept uid %d: a process or something it left outside its home outlived retirement", sp.id, uid)
-			}
-			lock.Unlock()
 
 			if sp.group != nil {
 				if err := sp.group.Remove(); err != nil {
@@ -196,6 +303,14 @@ func (s *server) handleHome(req *protocol.Request) {
 	defer lock.Unlock()
 	switch req.Type {
 	case protocol.TypeHomeMake:
+		s.mu.Lock()
+		retiring, busy := s.keptState(uid, req.Path)
+		s.mu.Unlock()
+		if retiring != nil || busy {
+			s.log.Warn("home_make %s refused: kept uid %d is retiring, quarantined or live under another home", req.ID, uid)
+			s.send(protocol.NewError(req.ID, "", protocol.CodeUIDBusy))
+			return
+		}
 		if _, err := s.runHomeHelper(acct, home.HelperSpec{Op: home.OpMake, Path: req.Path, UID: uid}); err != nil {
 			s.log.Error("home_make %s: uid %d: %v", req.ID, uid, err)
 			s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
@@ -221,6 +336,10 @@ func (s *server) handleHome(req *protocol.Request) {
 			s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
 			return
 		}
+		s.mu.Lock()
+		s.keptMaps()
+		delete(s.keptQuarantined, uid)
+		s.mu.Unlock()
 		s.log.Info("kept uid %d retired with its home", uid)
 		s.send(protocol.NewHomeRetired(req.ID))
 	}
