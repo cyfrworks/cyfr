@@ -406,6 +406,17 @@ defmodule Prima.SanitizerTest do
     end
   end
 
+  # What a person types into a program's sign-in terminal: a pasted code or
+  # a password.
+  describe "a sign-in terminal's line" do
+    test "is redacted, and Phoenix's event log filters it" do
+      assert Prima.Sanitizer.sanitize(%{"sign_in_line" => "code-1234", "_target" => ["x"]}) ==
+               %{"sign_in_line" => "[REDACTED]", "_target" => ["x"]}
+
+      assert "sign_in_line" in Prima.Sanitizer.filter_parameters()
+    end
+  end
+
   # A pending confirmation's secret travels as a context's `confirmation_id`
   # and as the MCP request metadata key `cyfr/confirmationId`.
   describe "a pending confirmation's secret" do
