@@ -100,6 +100,15 @@ impl Sink for Host {
 /// The host's pipe import.
 struct HostPipe;
 
+/// A read as the host's import answers it, every member kept.
+fn received(got: pipe::RecvResult) -> Received {
+    Received {
+        lines: got.lines.into_iter().map(|line| (line.seq, line.text)).collect(),
+        dropped: got.dropped,
+        running: got.running,
+    }
+}
+
 impl Pipe for HostPipe {
     fn open(&mut self, need: &str, key: &str, argv: &[String]) -> Result<Opened, String> {
         pipe::open(need, key, argv).map(|opened| Opened {
@@ -113,13 +122,69 @@ impl Pipe for HostPipe {
     }
 
     fn recv(&mut self, session: &str, after: u64, max_wait_ms: u32) -> Result<Received, String> {
-        pipe::recv(session, after, max_wait_ms).map(|got| Received {
-            lines: got.lines.into_iter().map(|line| (line.seq, line.text)).collect(),
-            running: got.running,
-        })
+        pipe::recv(session, after, max_wait_ms).map(received)
     }
 
     fn close(&mut self, session: &str) -> Result<(), String> {
         pipe::close(session)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// A pipe whose reads come as the host's import answers them, through
+    /// the adapter (`received`).
+    struct Wire {
+        reads: VecDeque<pipe::RecvResult>,
+        closed: Vec<String>,
+    }
+
+    impl Pipe for Wire {
+        fn open(&mut self, _need: &str, _key: &str, _argv: &[String]) -> Result<Opened, String> {
+            Ok(Opened { session: "pipe-1".into(), resumed: false })
+        }
+        fn send(&mut self, _session: &str, _lines: &[String]) -> Result<(), String> {
+            Ok(())
+        }
+        fn recv(&mut self, _session: &str, _after: u64, _wait: u32) -> Result<Received, String> {
+            let empty = pipe::RecvResult { lines: Vec::new(), dropped: 0, running: false };
+            Ok(received(self.reads.pop_front().unwrap_or(empty)))
+        }
+        fn close(&mut self, session: &str) -> Result<(), String> {
+            self.closed.push(session.into());
+            Ok(())
+        }
+    }
+
+    fn read(seq: u64, text: &str, dropped: u32) -> pipe::RecvResult {
+        pipe::RecvResult { lines: vec![pipe::Line { seq, text: text.into() }], dropped, running: true }
+    }
+
+    #[test]
+    fn lines_the_buffer_dropped_mid_turn_are_a_typed_loss_and_the_session_closes() {
+        let answered = |id: &str| {
+            format!(r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"{id}","response":{{"errors":{{}}}}}}}}"#)
+        };
+        let mut wire = Wire {
+            reads: VecDeque::from([
+                read(1, &answered("cyfr-initialize"), 0),
+                read(2, &answered("cyfr-tools"), 0),
+                // One line between 2 and 4 is gone: it may have been an ask.
+                read(4, r#"{"type":"result","subtype":"success","is_error":false,"usage":{}}"#, 1),
+            ]),
+            closed: Vec::new(),
+        };
+        let request = chat::parse_request(&json!({"model": "haiku", "messages": [{"role": "user", "content": "hi"}]})).unwrap();
+        let mut deltas = Deltas::new(Vec::<Value>::new());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let refusal = chat::chat(&mut wire, &mut deltas, &request, fresh_id(), deadline).unwrap_err();
+        assert_eq!(refusal.kind, "incomplete_stream");
+        assert!(refusal.message.contains("lost"), "{}", refusal.message);
+        assert_eq!(wire.closed, ["pipe-1"], "the session closes, so the next chat resumes from the folder");
     }
 }

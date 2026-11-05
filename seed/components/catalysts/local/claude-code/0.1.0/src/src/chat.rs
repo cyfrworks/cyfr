@@ -86,10 +86,12 @@ pub struct Opened {
     pub resumed: bool,
 }
 
-/// What one read answers: lines with their sequence numbers, and whether
-/// the program still runs.
+/// What one read answers: lines with their sequence numbers, how many
+/// lines between the read's `after` and its first line the session's buffer
+/// no longer held, and whether the program still runs.
 pub struct Received {
     pub lines: Vec<(u64, String)>,
+    pub dropped: u32,
     pub running: bool,
 }
 
@@ -575,14 +577,24 @@ pub fn models(listing: &[Value]) -> Value {
 // ---------------------------------------------------------------------------
 
 /// The session's lines, read in order past `after`.
+///
+/// A read names the lines its buffer no longer held between its `after`
+/// and its first line (`dropped`). A run's first read starts where no read
+/// of its own stood, so the lines an earlier run read past count there too,
+/// and it counts no loss. Every later read is past this run's own: a gap
+/// there is output the harness wrote and no one read (an ask or the turn's
+/// result among it, perhaps), so the turn cannot be answered from what is
+/// left. The session is closed, and the next chat starts the program again
+/// resuming from the transcript its folder keeps.
 struct Reader {
     session: String,
     after: u64,
+    first: bool,
 }
 
 impl Reader {
     fn new(session: &str, after: u64) -> Self {
-        Reader { session: session.to_string(), after }
+        Reader { session: session.to_string(), after, first: true }
     }
 
     /// The next lines, waiting at most `wait_ms`; `None` once the program
@@ -591,6 +603,18 @@ impl Reader {
         let got = pipe
             .recv(&self.session, self.after, wait_ms)
             .map_err(|code| pipe_refusal(&code))?;
+        let first = std::mem::replace(&mut self.first, false);
+        if got.dropped > 0 && !first {
+            let _ = pipe.close(&self.session);
+            return Err(Refusal::new(
+                502,
+                "incomplete_stream",
+                format!(
+                    "{} lines of the harness's output were lost unread past the pipe's buffer; its session restarts from its folder on the next turn.",
+                    got.dropped
+                ),
+            ));
+        }
         if let Some((seq, _)) = got.lines.last() {
             self.after = *seq;
         }
@@ -905,6 +929,7 @@ mod tests {
         seq: u64,
         respond: Respond,
         open_error: Option<String>,
+        dropped: VecDeque<u32>,
     }
 
     impl Scripted {
@@ -918,6 +943,7 @@ mod tests {
                 seq: 0,
                 respond: Box::new(respond),
                 open_error: None,
+                dropped: VecDeque::new(),
             }
         }
     }
@@ -948,7 +974,8 @@ mod tests {
                     (self.seq, text)
                 })
                 .collect();
-            Ok(Received { running: self.running || !lines.is_empty(), lines })
+            let dropped = self.dropped.pop_front().unwrap_or(0);
+            Ok(Received { running: self.running || !lines.is_empty(), lines, dropped })
         }
         fn close(&mut self, session: &str) -> Result<(), String> {
             self.log.push(format!("close {session}"));
@@ -1170,6 +1197,19 @@ mod tests {
         stream::error(&mut deltas, refusal.kind, &refusal.message);
         let events = deltas.into_sink();
         assert!(!events.iter().any(|e| e.to_string().contains("/login")), "{events:?}");
+    }
+
+    #[test]
+    fn a_run_s_first_read_counts_no_loss_since_an_earlier_run_let_those_lines_go() {
+        // On a session already running, the first read starts at 0 and the
+        // buffer no longer holds what an earlier run read past: not a loss.
+        let turn = vec![r#"{"type":"result","subtype":"success","is_error":false,"usage":{}}"#.into()];
+        let mut pipe = Scripted::new(harness_answers(turn));
+        pipe.resumed = true;
+        pipe.dropped = VecDeque::from([7]);
+        let mut deltas = Deltas::new(Vec::new());
+        let req = request(json!({"model": "haiku", "session": ID, "messages": [{"role": "user", "content": "hi"}]}));
+        assert_eq!(chat(&mut pipe, &mut deltas, &req, ID.into(), far()).unwrap()["stop_reason"], "end_turn");
     }
 
     #[test]

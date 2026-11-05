@@ -29,6 +29,8 @@ The harness's asks for its own tools are answered allow inside its box and shown
 
 A result past 50,000 characters is cut, with a note naming what was left out: Claude Code takes at most that much from one tool call through `updatedInput` (measured on 2.1.318 for plain and dense text alike: 50,000 characters arrive whole, 50,625 are replaced by its own note that the output was saved to a file).
 
+Lines the session's buffer dropped while unread (past its 8 MiB) may have held an ask or the turn's result, so a read that reports them is a typed `incomplete_stream` naming the loss. The catalyst then closes the session, and the next chat starts the program again resuming from the transcript its folder keeps. A run's first read cannot tell those lines from the ones an earlier run read past, so it counts no loss.
+
 What the pipe answers maps to the contract's refusals: `denied` and `setup_required` (no login entry granted, or the entry, its row or its grant no longer serves, or the folder is past its cap) to `secret_denied`; `busy` and `unavailable` to `overloaded`; a session that ended to `incomplete_stream`; `lost` to `provider_error`; `invalid_request` and `too_large` to `invalid_request`. An error the harness types an assistant message with maps by its type (`authentication_failed` and the account's other refusals to `authentication`, `rate_limit` to `rate_limited`, and so on). No line of the harness's, nothing of its stderr, its folder or its sign-in, reaches the answer.
 
 ## What Claude Code answers, and the fallback
