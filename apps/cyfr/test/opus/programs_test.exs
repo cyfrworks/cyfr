@@ -1165,6 +1165,63 @@ defmodule Opus.ProgramsTest do
   end
 
   describe "sessions" do
+    # The scripted service keys, ends and idles sessions as Locus does.
+    defp held(ctx, fake, name) do
+      start_controller(fake)
+      row = stdio_row(ctx, name, %{"NODE_ENV" => "production"})
+
+      {:ok, grant} =
+        Programs.hold(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch})
+
+      grant
+    end
+
+    defp opened(grant, home_id, mode) do
+      {:ok, answer} =
+        Opus.Programs.Session.open(grant, %{
+          program: "github",
+          home_id: home_id,
+          key: "k",
+          mode: mode,
+          argv: []
+        })
+
+      answer
+    end
+
+    test "the service keys a session by its program, home, key and mode", %{ctx: ctx, fake: fake} do
+      grant = held(ctx, fake, "keyed")
+      run = opened(grant, "vlt_keyed", :run)
+      assert %{resumed: true, session: same} = opened(grant, "vlt_keyed", :run)
+      assert same == run.session
+
+      assert %{resumed: false, session: sign_in} = opened(grant, "vlt_keyed", :sign_in)
+      assert %{resumed: false, session: other_home} = opened(grant, "vlt_other", :run)
+      assert Enum.uniq([run.session, sign_in, other_home]) == [run.session, sign_in, other_home]
+    end
+
+    test "a reset of a home ends every session of that home", %{ctx: ctx, fake: fake} do
+      grant = held(ctx, fake, "reset")
+      %{session: in_home} = opened(grant, "vlt_reset", :run)
+      %{session: elsewhere} = opened(grant, "vlt_spared", :run)
+
+      assert :ok = Programs.home(ctx.athanor_id, "vlt_reset", :reset)
+
+      assert {:ok, %{running: false}} = Opus.Programs.Session.recv(grant, in_home, 0, 0)
+      assert {:ok, %{running: true}} = Opus.Programs.Session.recv(grant, elsewhere, 0, 0)
+    end
+
+    test "a waiting recv counts as use at its arrival alone, so idle ends the session it waits on",
+         %{ctx: ctx, fake: fake} do
+      grant = held(ctx, fake, "waiting")
+      %{session: session} = opened(grant, nil, :run)
+      Scripted.set(fake, :idle_ms, 300)
+
+      started = System.monotonic_time(:millisecond)
+      assert {:ok, %{running: false}} = Opus.Programs.Session.recv(grant, session, 0, 3_000)
+      assert System.monotonic_time(:millisecond) - started < 2_500
+    end
+
     test "a stdio session is read only while a call is outstanding, so idle ends it and the next call initializes it again",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)

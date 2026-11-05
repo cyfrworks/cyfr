@@ -29,9 +29,11 @@ defmodule Cyfr.Test.ScriptedBackends do
   (`found`), each answer a line in its buffer that `recv` reads past
   `after`, waiting up to its `max_wait_ms`; a method the test sets
   `:silent` is never answered. A session the script ends
-  (`end_sessions/2`, or an idle period set with `set(fake, :idle_ms, ms)`:
-  no `send` or `recv` within it) answers `running: false`, and the next
-  `open` of its key starts it afresh (`resumed: false`).
+  (`end_sessions/2`, a reset or retire of its home, or an idle period set
+  with `set(fake, :idle_ms, ms)`: no `send` and no `recv` arriving within
+  it, a waiting recv counting at its arrival alone) answers `running:
+  false`, and the next `open` of its key starts it afresh (`resumed:
+  false`). A session's key is Locus's: its program, home, key and mode.
 
   A `homes` message answers the kept homes the script holds (`homes`, a
   set: each an open names, until its retire; `set(fake, :homes, …)`).
@@ -447,8 +449,26 @@ defmodule Cyfr.Test.ScriptedBackends do
     control_answer(conn, st, %{"owners" => owners})
   end
 
-  defp handle(conn, agent, %{"type" => "home", "op" => op, "home_id" => home_id}, _fields) do
-    if op == "retire", do: Agent.update(agent, &%{&1 | homes: MapSet.delete(&1.homes, home_id)})
+  # As Locus does, a reset or a retire ends every session of the home among
+  # the athanor's owners first.
+  defp handle(
+         conn,
+         agent,
+         %{"type" => "home", "op" => op, "athanor" => athanor, "home_id" => home_id},
+         _fields
+       ) do
+    Agent.update(agent, fn st ->
+      sessions =
+        Map.new(st.sessions, fn {id, s} ->
+          if s.home_id == home_id and elem(s.owner, 0) == athanor,
+            do: {id, %{s | running: false}},
+            else: {id, s}
+        end)
+
+      homes = if op == "retire", do: MapSet.delete(st.homes, home_id), else: st.homes
+      %{st | sessions: sessions, homes: homes}
+    end)
+
     st = Agent.get(agent, & &1)
     state = if op == "reset", do: "empty", else: "absent"
     control_answer(conn, st, %{"home_id" => home_id, "state" => state})
@@ -545,7 +565,9 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp handle_session(conn, agent, fields, %{type: :open} = message) do
-    key = {fields.athanor, fields.server, message.program, message.key}
+    # A session's key is Locus's: its program, home, key and mode.
+    key =
+      {fields.athanor, fields.server, message.program, message.home_id, message.key, message.mode}
 
     answer =
       Agent.get_and_update(agent, fn st ->
@@ -619,7 +641,11 @@ defmodule Cyfr.Test.ScriptedBackends do
     end
   end
 
+  # A recv counts as the session's use when it arrives, as Locus counts it,
+  # not while it waits: a session no line reaches is ended by its idle
+  # period even with a recv waiting on it.
   defp handle_session(conn, agent, _fields, %{type: :recv} = message) do
+    Agent.update(agent, &touch(&1, message.session))
     deadline = now() + message.max_wait_ms
     recv(conn, agent, message.session, message.after, deadline)
   end
@@ -649,7 +675,6 @@ defmodule Cyfr.Test.ScriptedBackends do
               do: %{"seq" => seq, "text" => text}
 
         if lines != [] or not s.running or now() >= deadline do
-          Agent.update(agent, &touch(&1, id))
           answer = %{"lines" => lines, "dropped" => 0, "running" => s.running}
 
           answer =
@@ -660,6 +685,7 @@ defmodule Cyfr.Test.ScriptedBackends do
           session_answer(conn, st, answer)
         else
           Process.sleep(10)
+          expire_idle(agent)
           recv(conn, agent, id, after_seq, deadline)
         end
     end
