@@ -58,7 +58,8 @@ defmodule Prima.CargoToml do
         ~s("cyfr:vault" = { path = "wit/deps/cyfr-vault" }),
         ~s("cyfr:http" = { path = "wit/deps/cyfr-http" }),
         ~s("cyfr:storage" = { path = "wit/deps/cyfr-storage" }),
-        ~s("cyfr:emit" = { path = "wit/deps/cyfr-emit" })
+        ~s("cyfr:emit" = { path = "wit/deps/cyfr-emit" }),
+        ~s("cyfr:process" = { path = "wit/deps/cyfr-process" })
       ] ++
         if Keyword.get(opts, :include_oauth_wit, true),
           do: [~s("cyfr:oauth" = { path = "wit/deps/cyfr-oauth" })],

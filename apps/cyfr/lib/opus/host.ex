@@ -6,8 +6,9 @@ defmodule Opus.Host do
   Where a runner's host calls reach CYFR: `attach`, `renew`, `complete`,
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
   `fetch_artifact`, `record_denial`, `admit_child`, `tool_call`,
-  `release_child`, `egress_pin` and `attached_fetch`, as `Prima.HostAPI`
-  describes them.
+  `release_child`, `egress_pin`, `attached_fetch`, `pipe_open`,
+  `pipe_send`, `pipe_recv` and `pipe_close`, as `Prima.HostAPI` describes
+  them.
 
   `call/3` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`), its JSON body,
@@ -67,7 +68,8 @@ defmodule Opus.Host do
        under what the attempt holds (`Opus.Host.Children`,
        `Opus.Host.Egress`, `Opus.Host.AttachedFetch`), and need
        the row live as well: no cancel asked of it and its execution
-       running.
+       running. A pipe call runs nothing yet: once its args read it is
+       answered `not_built`, with no check of the row.
 
   A grant stands while its athanor is active at the generation the run was
   admitted under (`Sanctum.ExecutionStanding.verify/1`). An archive
@@ -98,6 +100,7 @@ defmodule Opus.Host do
       (`Prima.PinnedTarget.read_request/1`), and `denied`, `metadata`,
       `resolution`, `redirect_credentials` or `flow` for a pin CYFR does not grant
       (`Opus.Host.Egress`);
+    * `not_built`, for every pipe call: a program's pipe is not built yet;
     * `guest_error` with its `type` and `message`, and a `remediation` for
       a `setup_required` one, a refusal the runner hands its guest; for
       `attached_fetch`, beside them the request's `call_id`, so the runner
@@ -124,6 +127,10 @@ defmodule Opus.Host do
   | `tool_call` | `name`, `args` (object), `guest_fn` (`call` or `spawn`) | the tool's result |
   | `egress_pin` | `url`, `purpose` (`fetch`, `stream` or `redirect`), `from` for a redirect | the pin (`Prima.PinnedTarget`) |
   | `attached_fetch` | `Prima.AttachedRequest`'s members | sealed frames |
+  | `pipe_open` | `need`, `key`, `argv` (strings) | not built |
+  | `pipe_send` | `session`, `lines` (strings) | not built |
+  | `pipe_recv` | `session`, `after` (a sequence number), `max_wait_ms` (at most `Prima.HostAPI.max_pipe_wait_ms/0`) | not built |
+  | `pipe_close` | `session` | not built |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Opus.Host.Storage`'s;
@@ -180,7 +187,8 @@ defmodule Opus.Host do
     :metadata,
     :resolution,
     :redirect_credentials,
-    :flow
+    :flow,
+    :not_built
   ]
 
   @doc """
@@ -348,6 +356,14 @@ defmodule Opus.Host do
   defp dispatch(caller, {:egress_pin, request}),
     do: egress_pin(caller, request.url, purpose: request.purpose, from: request.from)
 
+  defp dispatch(caller, {:pipe_open, need, key, argv}), do: pipe_open(caller, need, key, argv)
+  defp dispatch(caller, {:pipe_send, session, lines}), do: pipe_send(caller, session, lines)
+
+  defp dispatch(caller, {:pipe_recv, session, after_seq, max_wait_ms}),
+    do: pipe_recv(caller, session, after_seq, max_wait_ms)
+
+  defp dispatch(caller, {:pipe_close, session}), do: pipe_close(caller, session)
+
   defp dispatch(_caller, {:attached_refusal, call_id, refusal}),
     do: {:attached, call_id, {:error, refusal}}
 
@@ -435,6 +451,20 @@ defmodule Opus.Host do
   @impl HostAPI
   def attached_fetch(caller, %AttachedRequest{} = request, emit) when is_function(emit, 1),
     do: AttachedFetch.run(caller, request, emit)
+
+  # A program's pipe is not built yet: a call that reads is refused as such,
+  # and nothing runs.
+  @impl HostAPI
+  def pipe_open(_caller, _need, _key, _argv), do: {:error, :not_built}
+
+  @impl HostAPI
+  def pipe_send(_caller, _session, _lines), do: {:error, :not_built}
+
+  @impl HostAPI
+  def pipe_recv(_caller, _session, _after_seq, _max_wait_ms), do: {:error, :not_built}
+
+  @impl HostAPI
+  def pipe_close(_caller, _session), do: {:error, :not_built}
 
   # Reached from `runner_exited/2` once the report has verified and names
   # this member: `report` is the verified report header.
@@ -588,7 +618,33 @@ defmodule Opus.Host do
     end
   end
 
+  defp operation("pipe_open", %{"need" => need, "key" => key, "argv" => argv}) do
+    if name?(need) and name?(key) and strings?(argv),
+      do: {:ok, {:pipe_open, need, key, argv}},
+      else: {:error, :lost}
+  end
+
+  defp operation("pipe_send", %{"session" => session, "lines" => lines}) do
+    if name?(session) and strings?(lines),
+      do: {:ok, {:pipe_send, session, lines}},
+      else: {:error, :lost}
+  end
+
+  defp operation("pipe_recv", %{"session" => session, "after" => after_seq, "max_wait_ms" => wait})
+       when is_integer(after_seq) and after_seq >= 0 and is_integer(wait) and wait >= 0 do
+    if name?(session) and wait <= HostAPI.max_pipe_wait_ms(),
+      do: {:ok, {:pipe_recv, session, after_seq, wait}},
+      else: {:error, :lost}
+  end
+
+  defp operation("pipe_close", %{"session" => session}) do
+    if name?(session), do: {:ok, {:pipe_close, session}}, else: {:error, :lost}
+  end
+
   defp operation(_op, _args), do: {:error, :lost}
+
+  defp name?(value), do: is_binary(value) and value != ""
+  defp strings?(values), do: is_list(values) and Enum.all?(values, &is_binary/1)
 
   defp attached_refusal(:credential_header_refused),
     do:

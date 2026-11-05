@@ -29,6 +29,10 @@ defmodule Prima.HostAPITest do
   call id; every frame case reads frame by frame to its expected frames
   and refusal; and an `egress_pin` naming the purpose CYFR alone takes is
   refused `malformed`.
+
+  A program's pipe is opened, read and closed again freely and never sent
+  twice; a `pipe_recv` waits at most less than its request timeout; and
+  each pipe call of the vectors pins its args and is answered `not_built`.
   """
 
   use ExUnit.Case, async: true
@@ -38,6 +42,8 @@ defmodule Prima.HostAPITest do
   @vectors Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
            |> File.read!()
            |> Jason.decode!()
+
+  @pipe_calls ~w(pipe_open pipe_send pipe_recv pipe_close)
 
   @call_fields ~w(athanor_id execution_id attempt fence generation service boot runner member ts nonce)a
   @dispatch_fields ~w(service boot ts nonce)a
@@ -140,10 +146,13 @@ defmodule Prima.HostAPITest do
       for call <- @vectors["calls"] do
         assert {_fields, _args, answer} = reproduces(call)
 
-        # An attached request's success is its frames, not one answer.
-        if call["callback"] == "attached_fetch",
-          do: assert(answer == nil),
-          else: assert(match?({:ok, _value}, answer), call["callback"])
+        # An attached request's success is its frames, not one answer, and
+        # a program's pipe is not built yet.
+        cond do
+          call["callback"] == "attached_fetch" -> assert answer == nil
+          call["callback"] in @pipe_calls -> assert answer == {:error, "not_built", %{}}
+          true -> assert match?({:ok, _value}, answer), call["callback"]
+        end
 
         assert call["refusals"] != [], call["callback"]
 
@@ -396,6 +405,7 @@ defmodule Prima.HostAPITest do
   defp refusal_of?("attach", name),
     do: name in ~w(replayed claim_expired bad_mac unknown_version malformed setup_required)
 
+  defp refusal_of?(callback, name) when callback in @pipe_calls, do: name == "not_built"
   defp refusal_of?("complete", name), do: name == "failed"
   defp refusal_of?("fetch_artifact", name), do: name == "not_found"
 
@@ -594,6 +604,47 @@ defmodule Prima.HostAPITest do
   test "a field denial is secret_denied or disclosure_refused, each naming a field" do
     assert HostAPI.field_denials() == ["secret_denied", "disclosure_refused"]
     assert HostAPI.retry(:record_denial) == :never
+  end
+
+  describe "a program's pipe" do
+    test "is opened, read and closed again freely, and never sent twice" do
+      assert HostAPI.retry(:pipe_open) == :idempotent
+      assert HostAPI.retry(:pipe_send) == :never
+      assert HostAPI.retry(:pipe_recv) == :idempotent
+      assert HostAPI.retry(:pipe_close) == :idempotent
+
+      for callback <- [:pipe_open, :pipe_send, :pipe_recv, :pipe_close] do
+        assert callback in HostAPI.callbacks()
+        assert HostAPI.request_timeout_ms(callback) == WorkerAuth.window_ms()
+        assert WorkerWire.host_route(callback) == "/host/v1/#{callback}"
+      end
+    end
+
+    test "a recv waits at most less than its request timeout" do
+      assert HostAPI.max_pipe_wait_ms() == 20_000
+      assert HostAPI.max_pipe_wait_ms() < HostAPI.request_timeout_ms(:pipe_recv)
+    end
+
+    test "each call's body pins the args CYFR reads, and each is answered not_built" do
+      args =
+        for call <- @vectors["calls"], call["callback"] in @pipe_calls, into: %{} do
+          {_fields, args, answer} = reproduces(call)
+          assert answer == {:error, "not_built", %{}}, call["callback"]
+          {call["callback"], args}
+        end
+
+      assert %{
+               "pipe_open" => %{"need" => need, "key" => key, "argv" => argv},
+               "pipe_send" => %{"session" => session, "lines" => lines},
+               "pipe_recv" => %{"session" => session, "after" => after_seq, "max_wait_ms" => wait},
+               "pipe_close" => %{"session" => session}
+             } = args
+
+      assert Enum.all?([need, key, session], &(is_binary(&1) and &1 != ""))
+      assert Enum.all?(argv ++ lines, &is_binary/1)
+      assert is_integer(after_seq) and after_seq >= 0
+      assert wait == HostAPI.max_pipe_wait_ms()
+    end
   end
 
   test "a pin is asked again freely, within the window" do

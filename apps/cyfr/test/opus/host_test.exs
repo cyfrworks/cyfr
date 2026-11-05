@@ -1024,6 +1024,47 @@ defmodule Opus.HostTest do
     end
   end
 
+  describe "a program's pipe" do
+    @tag :capture_log
+    test "every pipe call that reads is refused not_built, and the attempt keeps running" do
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+
+      calls = [
+        {"pipe_open", %{"need" => "claude", "key" => "chat_1", "argv" => ["--print"]}},
+        {"pipe_send", %{"session" => "ses_1", "lines" => ["hello"]}},
+        {"pipe_recv",
+         %{"session" => "ses_1", "after" => 0, "max_wait_ms" => Prima.HostAPI.max_pipe_wait_ms()}},
+        {"pipe_close", %{"session" => "ses_1"}}
+      ]
+
+      for {op, args} <- calls do
+        assert %{"v" => 1, "error" => "not_built"} == AttemptFixtures.call(fixture, op, args), op
+      end
+
+      assert Process.alive?(fixture.pid)
+    end
+
+    @tag :capture_log
+    test "pipe args that do not read are lost, a wait past the bound among them" do
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      over = Prima.HostAPI.max_pipe_wait_ms() + 1
+
+      calls = [
+        {"pipe_open", %{"need" => "", "key" => "chat_1", "argv" => []}},
+        {"pipe_open", %{"need" => "claude", "key" => "chat_1", "argv" => [1]}},
+        {"pipe_send", %{"session" => "ses_1", "lines" => "hello"}},
+        {"pipe_recv", %{"session" => "ses_1", "after" => -1, "max_wait_ms" => 0}},
+        {"pipe_recv", %{"session" => "ses_1", "after" => 0, "max_wait_ms" => over}},
+        {"pipe_close", %{}}
+      ]
+
+      for {op, args} <- calls do
+        assert %{"v" => 1, "error" => "lost"} == AttemptFixtures.call(fixture, op, args),
+               "#{op} #{inspect(args)}"
+      end
+    end
+  end
+
   describe "the vectors of tests/fixtures/host_api.json" do
     @tag :capture_log
     test "every call's body reads, and its answer is written as the vector writes it" do
@@ -1505,6 +1546,7 @@ defmodule Opus.HostTest do
 
   defp expected("fetch_artifact"), do: "not_found"
   defp expected("release_child"), do: "lost"
+  defp expected(op) when op in ~w(pipe_open pipe_send pipe_recv pipe_close), do: "not_built"
 
   defp expected(op) when op in ~w(oauth_token storage admit_child tool_call attached_fetch),
     do: "guest_error"
