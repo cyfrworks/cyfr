@@ -393,12 +393,13 @@ defmodule Opus.Programs do
 
   @doc """
   The calling holder's key's session ends: the box closes it, and owes the
-  close until the backend confirms it.
+  close until the backend confirms it. Answers once the backend has
+  answered the close, or the close window has passed, so the holder's
+  release of the owner after it never outruns it.
   """
   @spec pipe_box_close(map(), String.t(), String.t()) :: :ok | {:error, term()}
   def pipe_box_close(owner, home_id, key),
-    do:
-      call(box_of(owner.athanor_id), {:pipe_close, owner, home_id, key}, Box.control_timeout_ms())
+    do: call(box_of(owner.athanor_id), {:pipe_close, owner, home_id, key}, Box.close_timeout_ms())
 
   @doc """
   Write `lines` to the pipe session `session` of the athanor, for the

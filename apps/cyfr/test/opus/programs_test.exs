@@ -1521,6 +1521,21 @@ defmodule Opus.ProgramsTest do
     end
   end
 
+  # The session's close reaches the service, and only then its owner's
+  # release: whichever of the two came first is the one received first.
+  defp assert_closed_then_released(row, session, wait \\ 3_000) do
+    first =
+      receive do
+        {:session, "close", %{"session" => ^session}, _fields} -> :close
+        {:control, "release", _message, _fields} -> :release
+      after
+        wait -> flunk("neither the session's close nor its owner's release arrived")
+      end
+
+    assert first == :close, "the owner's release outran the session's close"
+    assert_released(row, 1)
+  end
+
   describe "pipes" do
     setup %{ctx: ctx} do
       row = pipe_row(ctx, "claude")
@@ -1595,8 +1610,7 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
 
       assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
-      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
-      assert_released(row, 1)
+      assert_closed_then_released(row, session)
       assert :ok = Programs.pipe_close(ctx.athanor_id, "att_1", session)
 
       assert {:ok, %{lines: [], running: false}} =
@@ -1606,11 +1620,8 @@ defmodule Opus.ProgramsTest do
     test "a session no attempt uses for the idle period ends, and its owner is released",
          %{fake: fake, row: row, entry: entry} do
       start_controller(fake, idle_ms: 200)
-      assert {:ok, %{session: _session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
-
-      # The holder's close and its owner's release go out together; the
-      # release alone ends every session of the owner.
-      assert_released(row, 1)
+      assert {:ok, %{session: session}} = Programs.pipe_open(row, entry, "pipe-k", [], "att_1")
+      assert_closed_then_released(row, session, 5_000)
       assert Programs.mounts() == []
     end
 

@@ -124,7 +124,11 @@ defmodule Opus.Programs.Box do
   A close is an obligation the box keeps until the backend confirms it:
   one that fails is sent again on every tick, a holder's release never
   drops it, and it is forgotten only when the backend confirms it or no
-  longer knows the session or its owner, or when the owner is released.
+  longer knows the session or its owner. A holder closing its key's
+  session is answered once the backend has answered the close, or its
+  close window has passed, and only then releases its share; and the box
+  sends no release of an owner while a close for it is out, so a release
+  never outruns a close the box owes.
 
   ## Shares
 
@@ -268,6 +272,10 @@ defmodule Opus.Programs.Box do
   @spec release_timeout_ms() :: pos_integer()
   def release_timeout_ms, do: @release_wait_ms
 
+  @doc "How long a holder waits on the box's close of its session: the close window and a margin."
+  @spec close_timeout_ms() :: pos_integer()
+  def close_timeout_ms, do: @close_ms + 2_000
+
   @doc "How long a status or a home message waits on a box."
   @spec control_timeout_ms() :: pos_integer()
   def control_timeout_ms, do: 2 * @control_timeout_ms
@@ -346,14 +354,16 @@ defmodule Opus.Programs.Box do
   end
 
   # A holder ends its key's session: closing it is the box's obligation
-  # from here until the backend confirms it.
-  def handle_call({:pipe_close, owner, home_id, pipe_key}, {pid, _tag}, state) do
+  # from here until the backend confirms it. The holder is answered once
+  # the backend has answered the close, or the close window has passed, so
+  # its release of the owner never outruns the close.
+  def handle_call({:pipe_close, owner, home_id, pipe_key}, {pid, _tag} = from, state) do
     pk = {owner.athanor_id, owner.server_id, home_id, pipe_key}
 
     case state.pipes[pk] do
       %{holder: ^pid, session: session} ->
         state = %{state | pipes: Map.delete(state.pipes, pk)}
-        {:reply, :ok, closing(state, {owner.athanor_id, owner.server_id}, session)}
+        {:noreply, closing(state, {owner.athanor_id, owner.server_id}, session, nil, from)}
 
       _another_or_none ->
         {:reply, :ok, state}
@@ -475,8 +485,9 @@ defmodule Opus.Programs.Box do
 
   def handle_info({:pipe_deadline, _ref}, state), do: {:noreply, state}
 
+  # A close answered lets a release it held back go.
   def handle_info({:pipe_closed, session, result}, state),
-    do: {:noreply, pipe_closed(state, session, result)}
+    do: {:noreply, state |> pipe_closed(session, result) |> enqueue_release() |> dispatch()}
 
   # An open's process that died before it answered: its open is settled
   # as one the box could not make.
@@ -1008,21 +1019,25 @@ defmodule Opus.Programs.Box do
     end
   end
 
+  # A release never outruns a close the box has out for the same owner: it
+  # waits for the close's answer (`pipe_closed/3` enqueues it again).
   defp prepare({:release}, state) do
-    giving_up = giving_up(state)
+    held = closes_out(state)
+    releases = Map.drop(state.releases, MapSet.to_list(held))
+    giving_up = Map.drop(giving_up(state), MapSet.to_list(held))
 
-    if state.releases == %{} and giving_up == %{} do
+    if releases == %{} and giving_up == %{} do
       :skip
     else
       owners =
-        for {{athanor, server}, epoch} <- state.releases,
+        for {{athanor, server}, epoch} <- releases,
             do: %{athanor: athanor, server: server, e: epoch}
 
       spec =
         state
         |> base_spec(:release)
         |> Map.merge(%{
-          releases: state.releases,
+          releases: releases,
           giving_up: giving_up,
           body: %{type: :release, owners: owners}
         })
@@ -1830,10 +1845,23 @@ defmodule Opus.Programs.Box do
   # A close records the grant it is signed with when the open that made
   # the session left one: a late answer is closed even once its owner was
   # released, whose service then refuses it as unknown and so confirms it.
-  defp closing(state, owner_key, session, grant \\ nil) do
-    record = Map.get(state.closing, session, %{owner: owner_key, grant: grant, inflight: false})
+  defp closing(state, owner_key, session, grant \\ nil, waiter \\ nil) do
+    record =
+      Map.get(state.closing, session, %{
+        owner: owner_key,
+        grant: grant,
+        inflight: false,
+        waiters: []
+      })
+
+    record = if waiter, do: %{record | waiters: [waiter | record.waiters]}, else: record
     send_close(%{state | closing: Map.put(state.closing, session, record)}, session)
   end
+
+  # Whoever waits on a close is answered once it was answered, whatever it
+  # answered: a close still owed is sent again on the sweep.
+  defp answer_waiters(record),
+    do: Enum.each(record.waiters, &GenServer.reply(&1, :ok))
 
   defp send_close(state, session) do
     record = state.closing[session]
@@ -1855,36 +1883,53 @@ defmodule Opus.Programs.Box do
 
       true ->
         # An owner released, or never synced, runs no session.
+        answer_waiters(record)
         %{state | closing: Map.delete(state.closing, session)}
     end
   end
 
   defp pipe_closed(state, session, result) do
-    case {state.closing[session], result} do
-      {nil, _result} ->
+    case state.closing[session] do
+      nil ->
         state
 
-      {_record, :ok} ->
-        %{state | closing: Map.delete(state.closing, session)}
+      record ->
+        answer_waiters(record)
 
-      {_record, {:error, {:refused, code, _boot}}}
-      when code in [:unknown_session, :unknown_owner] ->
-        %{state | closing: Map.delete(state.closing, session)}
-
-      {record, {:error, _not_yet}} ->
-        %{state | closing: Map.put(state.closing, session, %{record | inflight: false})}
+        if closed?(result),
+          do: %{state | closing: Map.delete(state.closing, session)},
+          else: %{
+            state
+            | closing: Map.put(state.closing, session, %{record | inflight: false, waiters: []})
+          }
     end
+  end
+
+  # The backend confirmed the close, or knows neither the session nor its
+  # owner any more: nothing of it runs.
+  defp closed?(:ok), do: true
+
+  defp closed?({:error, {:refused, code, _boot}}) when code in [:unknown_session, :unknown_owner],
+    do: true
+
+  defp closed?(_not_yet), do: false
+
+  # The owners a close is out for: their release waits for its answer.
+  defp closes_out(state) do
+    for {_session, %{inflight: true, owner: owner}} <- state.closing,
+        into: MapSet.new(),
+        do: owner
   end
 
   defp retry_closing(state),
     do: Enum.reduce(Map.keys(state.closing), state, &send_close(&2, &1))
 
-  # A released owner runs no program: its sessions and the closes owed for
-  # them are forgotten with it. Its opens in flight settle as they answer.
-  defp forget_pipes(state, {athanor, server} = key) do
+  # An owner dropped holds no session any more. The closes owed for it stay
+  # until the backend answers them: its release waits for those out, and a
+  # released owner's service confirms the rest by not knowing it.
+  defp forget_pipes(state, {athanor, server}) do
     pipes = Map.reject(state.pipes, fn {{a, s, _h, _k}, _} -> a == athanor and s == server end)
-    closing = Map.reject(state.closing, fn {_session, %{owner: owner}} -> owner == key end)
-    %{state | pipes: pipes, closing: closing}
+    %{state | pipes: pipes}
   end
 
   defp now_ms, do: System.system_time(:millisecond)
