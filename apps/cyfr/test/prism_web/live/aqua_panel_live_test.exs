@@ -367,6 +367,44 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "the panel lists the requests waiting on the crew, and one turns the panel to the thread it was asked in",
+       %{conn: conn, me: me, team: team} do
+    actor = Sanctum.Context.actor(me)
+    {:ok, room} = Threads.create(actor)
+    {:ok, child} = Threads.crew_thread(actor, room.id, "builder")
+
+    {:ok, %{message: request}} =
+      Aqua.Tape.accept(me, room.id, %{
+        message: %{
+          author: me.user_id,
+          sent_by: "person",
+          addressee: "builder",
+          status: "pending",
+          content: "Build the site\nand test it"
+        }
+      })
+
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))
+    settled_render(view)
+    {panel, _html} = open_panel(view)
+
+    waiting = "#aqua-panel-pending-#{request.id}"
+    assert has_element?(panel, waiting, "builder")
+    assert has_element?(panel, waiting, "from You")
+    assert has_element?(panel, waiting, "Build the site")
+    refute has_element?(panel, waiting, "and test it")
+
+    # A crew member's thread is reached from its room, never listed.
+    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{room.id}"]))
+    refute has_element?(panel, ~s(#aqua-panel-threads option[value="#{child.id}"]))
+
+    panel |> element("#{waiting} button") |> render_click()
+    on_thread!(child!(panel, "aqua-panel-pane"), room.id)
+    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{room.id}"][selected]))
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "⌘. in the panel halts the panel's turn",
        %{conn: conn, mine: mine, me: me, team: team} do
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.shared_path(team.id))

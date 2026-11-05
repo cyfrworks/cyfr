@@ -14,7 +14,10 @@ defmodule PrismWeb.AquaPanelLive do
   person's own seat, into the private thread only, never kept — and an
   answer can be pasted onto the shared thread, attributed to the person.
   The pane does both; the panel names the shared thread and holds the
-  list.
+  list: the athanor's own threads, and the requests still waiting on a
+  crew member, each with its member, who asked, how long ago and the
+  task's first line, which turn the panel to the thread it was asked in.
+  A crew member's thread is reached from its room, as in the chat.
 
   The panel is an overlay: it takes no room from the page. From the
   bottom, the page draws: the canvas's frames (the canvas z-0, column
@@ -82,6 +85,7 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:docked, false)
       |> assign(:threads, [])
       |> assign(:thread, nil)
+      |> assign(:pending, [])
       |> assign(:pane, nil)
       |> assign(:room, session["room"])
       |> assign(:room_feed, room_feed)
@@ -172,17 +176,25 @@ defmodule PrismWeb.AquaPanelLive do
 
   defp placement(_params), do: :error
 
-  # The list is read when the panel opens, not on every page: closed, the
+  # The lists are read when the panel opens, not on every page: closed, the
   # panel costs the page nothing. `nil` is the blank thread; an id the list
   # no longer holds falls back to it.
   defp open_on(socket, thread_id) do
-    threads = Threads.list(Sanctum.Context.actor(socket.assigns.context))
+    actor = Sanctum.Context.actor(socket.assigns.context)
+    threads = Threads.list(actor)
     thread = Enum.find(threads, &(&1.id == thread_id))
+
+    pending =
+      case Threads.pending_requests(actor) do
+        requests when is_list(requests) -> requests
+        {:error, _} -> []
+      end
 
     socket
     |> assign(:open, true)
-    |> assign(:threads, threads)
+    |> assign(:threads, Enum.filter(threads, &(&1.kind == "own")))
     |> assign(:thread, thread)
+    |> assign(:pending, pending)
     |> switch_pane(thread)
   end
 
@@ -372,6 +384,9 @@ defmodule PrismWeb.AquaPanelLive do
               >
                 {thread.title}
               </option>
+              <option :if={match?(%{kind: "crew"}, @thread)} value={@thread.id} selected>
+                {@thread.agent}'s thread
+              </option>
             </select>
             <span
               class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-text-muted"
@@ -442,6 +457,29 @@ defmodule PrismWeb.AquaPanelLive do
           Reading {PrismWeb.RoomFeed.label(@room)}
         </p>
 
+        <ul
+          :if={@pending != []}
+          id="aqua-panel-pending"
+          aria-label="Waiting on the crew"
+          class="max-h-28 shrink-0 overflow-y-auto border-b border-border-default py-0.5"
+        >
+          <li :for={request <- @pending} id={"aqua-panel-pending-" <> request.id}>
+            <button
+              type="button"
+              phx-click="select"
+              phx-value-id={request.thread_id}
+              title={request.content}
+              class="flex min-h-6 w-full min-w-0 items-center gap-1.5 px-3 text-left text-xs text-text-secondary hover:text-text-primary"
+            >
+              <span class="shrink-0 font-semibold">{request.addressee}</span>
+              <span class="shrink-0 text-text-muted">
+                from {asker(request, @context)} · {relative_time(request.inserted_at)}
+              </span>
+              <span class="min-w-0 truncate">{first_line(request.content)}</span>
+            </button>
+          </li>
+        </ul>
+
         {live_render(@socket, PrismWeb.ThreadPaneLive,
           id: "aqua-panel-pane",
           container: {:div, class: "flex min-h-0 flex-1 flex-col"},
@@ -470,6 +508,14 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   defp close_and_return, do: JS.push("close") |> JS.focus(to: "#aqua-panel-button")
+
+  # Who asked: the person by the console's name for them, the soul as AQUA.
+  defp asker(%{sent_by: "person", author: author}, ctx), do: PrismWeb.People.label(author, ctx)
+
+  defp asker(%{sent_by: agent}, _ctx),
+    do: if(Prima.AgentRef.soul?(agent), do: "AQUA", else: agent)
+
+  defp first_line(text), do: text |> String.trim() |> String.split("\n", parts: 2) |> hd()
 
   @doc "The id of the panel's own system layer, beside the page's."
   @spec layer_id() :: String.t()
