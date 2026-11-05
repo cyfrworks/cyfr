@@ -822,11 +822,7 @@ defmodule Locus.Keeper do
           {:reply, {:ok, uid}, state}
 
         :absent ->
-          case free_uid(state, kept) do
-            {:ok, uid} -> home_request(state, :home_make, path, uid, {:ensure, from, uid})
-            :error -> {:reply, {:error, {:refused, "capacity"}}, state}
-            :unreadable -> {:reply, {:error, {:refused, "unavailable"}}, state}
-          end
+          draw_home(state, kept, path, from, MapSet.new())
 
         :error ->
           {:reply, {:error, {:refused, "bad_request"}}, state}
@@ -1285,11 +1281,24 @@ defmodule Locus.Keeper do
     end
   end
 
+  # Makes the home at `path` under a uid drawn for it. cyfr-locus is the
+  # authority on a uid's state: one it refuses `uid_busy` (retiring,
+  # quarantined, or live under another home) is set aside and the next free
+  # uid drawn, so a home never waits on another's retirement.
+  defp draw_home(state, kept, path, from, busy) do
+    case free_uid(state, kept, busy) do
+      {:ok, uid} -> home_request(state, :home_make, path, uid, {:ensure, from, uid, busy})
+      :error -> {:reply, {:error, {:refused, "capacity"}}, state}
+      :unreadable -> {:reply, {:error, {:refused, "unavailable"}}, state}
+    end
+  end
+
   # The lowest uid of the range no home under the root owns, no home
-  # request in flight is making and no live process holds: the client
-  # lists the root, which its group may, and reads each entry's owner, then
-  # every process's uids. A root or a /proc that cannot be read draws none.
-  defp free_uid(state, kept) do
+  # request in flight is making, no live process holds and cyfr-locus has
+  # not refused as busy: the client lists the root, which its group may,
+  # and reads each entry's owner, then every process's uids. A root or a
+  # /proc that cannot be read draws none.
+  defp free_uid(state, kept, busy) do
     with {:ok, names} <- listed(File.ls(kept.root), "the kept-homes root"),
          {:ok, live} <- live_uids(state.proc_root, kept) do
       owned =
@@ -1299,7 +1308,7 @@ defmodule Locus.Keeper do
             do: uid
 
       making = for {_id, %{uid: uid}} <- state.homes, into: MapSet.new(), do: uid
-      taken = owned |> MapSet.union(making) |> MapSet.union(live)
+      taken = owned |> MapSet.union(making) |> MapSet.union(live) |> MapSet.union(busy)
 
       case Enum.find(kept.first..kept.last, &(not MapSet.member?(taken, &1))) do
         nil -> :error
@@ -1316,20 +1325,41 @@ defmodule Locus.Keeper do
   end
 
   # The uids of the range any live process holds as its real, effective,
-  # saved or filesystem uid, from each process's status. A process that
-  # ends while it is read is no holder.
+  # saved or filesystem uid, from each process's status. A status that
+  # cannot be read is a holder of an unknown uid, so nothing is drawn; only
+  # a process gone with its whole /proc entry holds none.
   defp live_uids(proc_root, kept) do
     with {:ok, entries} <- listed(File.ls(proc_root), proc_root) do
-      uids =
-        for entry <- entries,
-            Regex.match?(~r/\A[0-9]+\z/, entry),
-            {:ok, status} <- [File.read(Path.join([proc_root, entry, "status"]))],
-            uid <- status_uids(status),
-            uid >= kept.first and uid <= kept.last,
-            into: MapSet.new(),
-            do: uid
+      entries
+      |> Enum.filter(&Regex.match?(~r/\A[0-9]+\z/, &1))
+      |> Enum.reduce_while({:ok, MapSet.new()}, fn entry, {:ok, uids} ->
+        case process_uids(Path.join(proc_root, entry)) do
+          {:ok, held} ->
+            in_range = Enum.filter(held, &(&1 >= kept.first and &1 <= kept.last))
+            {:cont, {:ok, MapSet.union(uids, MapSet.new(in_range))}}
 
-      {:ok, uids}
+          :unreadable ->
+            Logger.error("[Locus.Keeper] a process's status under #{proc_root} could not be read")
+            {:halt, :unreadable}
+        end
+      end)
+    end
+  end
+
+  # A process's uids from its status; none for one gone with its /proc entry.
+  defp process_uids(dir) do
+    case File.read(Path.join(dir, "status")) do
+      {:ok, status} ->
+        case status_uids(status) do
+          [] -> :unreadable
+          uids -> {:ok, uids}
+        end
+
+      {:error, _reason} ->
+        case File.lstat(dir) do
+          {:error, :enoent} -> {:ok, []}
+          _present -> :unreadable
+        end
     end
   end
 
@@ -1378,12 +1408,33 @@ defmodule Locus.Keeper do
     end
   end
 
+  # A uid cyfr-locus will not give this home now is set aside and another
+  # drawn.
+  defp home_done(
+         state,
+         %{pending: {:ensure, from, uid, busy}, path: path},
+         {:refused, "uid_busy"}
+       ) do
+    case draw_home(state, state.kept, path, from, MapSet.put(busy, uid)) do
+      {:noreply, state} ->
+        state
+
+      {:reply, answer, state} ->
+        GenServer.reply(from, answer)
+        state
+
+      {:stop, _reason, answer, state} ->
+        GenServer.reply(from, answer)
+        state
+    end
+  end
+
   defp home_done(state, %{pending: pending}, outcome) do
     GenServer.reply(elem(pending, 1), home_answer(pending, outcome))
     state
   end
 
-  defp home_answer({:ensure, _from, uid}, :made), do: {:ok, uid}
+  defp home_answer({:ensure, _from, uid, _busy}, :made), do: {:ok, uid}
   defp home_answer({:made, _from}, :made), do: :ok
   defp home_answer({:measure, _from}, {:measured, bytes}), do: {:ok, bytes}
   defp home_answer({:retire, _from}, :retired), do: :ok

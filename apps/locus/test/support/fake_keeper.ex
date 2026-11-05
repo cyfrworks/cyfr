@@ -30,6 +30,9 @@ defmodule Locus.Test.FakeKeeper do
   - `:home_over_cap` — every spawn is refused with `home_over_cap`, as a
     keeper refuses a kept spawn whose home holds its bound
   - `:home_refused` — every home request is refused with `internal`
+  - `{:uid_busy, uids}` — a `home_make` on one of `uids` is refused with
+    `uid_busy`, as cyfr-locus refuses a kept uid that is retiring,
+    quarantined or live under another home
 
   A spawn in any pool but `build` is long-lived: its relay carries stdin
   frames to the command as they arrive and its stdout and stderr, apart,
@@ -255,6 +258,15 @@ defmodule Locus.Test.FakeKeeper do
 
   defp handle_request(%{"type" => "home_" <> _, "id" => id}, %{mode: :home_refused} = state) do
     send(self(), {:send, %{type: "error", id: id, code: "internal"}})
+    state
+  end
+
+  defp handle_request(
+         %{"type" => "home_make", "id" => id, "uid" => uid},
+         %{mode: {:uid_busy, uids}} = state
+       )
+       when is_map_key(uids, uid) do
+    send(self(), {:send, %{type: "error", id: id, code: "uid_busy"}})
     state
   end
 

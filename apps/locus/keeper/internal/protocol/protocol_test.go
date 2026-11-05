@@ -343,6 +343,7 @@ func TestSharedHomeRepliesMatchTheEncoders(t *testing.T) {
 		NewHomeMeasured("23", 1<<20),
 		NewHomeRetired("24"),
 		NewError("20", "", CodeHomeOverCap),
+		NewError("21", "", CodeUIDBusy),
 	}
 	want := loadVectors(t).HomeReplies
 	if len(want) != len(built) {

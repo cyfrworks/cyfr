@@ -403,10 +403,11 @@ defmodule Prima.KeeperProtocolTest do
       end
 
       assert @vectors["home_replies"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
-               ~w(error home_made home_measured home_retired)
+               ~w(error error home_made home_measured home_retired)
 
-      assert %{"code" => "home_over_cap"} =
-               Enum.find(@vectors["home_replies"], &(&1["type"] == "error"))
+      assert @vectors["home_replies"]
+             |> Enum.filter(&(&1["type"] == "error"))
+             |> Enum.map(& &1["code"]) == ~w(home_over_cap uid_busy)
     end
   end
 

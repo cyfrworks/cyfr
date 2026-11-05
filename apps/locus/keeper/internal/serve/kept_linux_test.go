@@ -302,3 +302,117 @@ func TestAKeptSpawnWritesPastTheFileSizeCeilingAndAPooledOneCannot(t *testing.T)
 		t.Fatalf("home_retire: %v", retired)
 	}
 }
+
+// A kept uid follows a pooled uid's discipline: from the release of its
+// last spawn it is retiring, and no home_make takes it, until every process
+// of it is gone, a child that ignores SIGTERM included; then it is free.
+func TestAKeptUIDIsRetiringUntilEveryProcessOfItIsGone(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	a := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn-a")
+	b := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn-b")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", a, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+
+	// While the uid runs a's spawn, it is no other home's.
+	spawned, rc := k.spawnKept(t, "turn", `(trap "" TERM; exec sleep 600) & echo forked; sleep 600`, a, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "forked\n") })
+	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m2", b, uid); busy["code"] != protocol.CodeUIDBusy {
+		t.Fatalf("home_make of another home on a live uid: %v", busy)
+	}
+
+	// Released, it is retiring at once: its child outlives the grace of a
+	// SIGTERM it ignores, and the uid is no home's until it is killed.
+	grace := int64(2000)
+	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawned, GraceMs: &grace})
+	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m3", b, uid); busy["code"] != protocol.CodeUIDBusy {
+		t.Fatalf("home_make on a retiring uid: %v", busy)
+	}
+	k.releasedPair(t, spawned)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		k.s.mu.Lock()
+		retiring := k.s.keptRetiring[uid]
+		k.s.mu.Unlock()
+		if retiring == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the uid is still retiring")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if c, err := procfs.ScanUID("/proc", uid, 0); err != nil || c.Total() != 0 {
+		t.Fatalf("processes of kept uid %d once it retired: %+v %v", uid, c, err)
+	}
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m4", b, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make on the retired uid: %v", made)
+	}
+	for i, path := range []string{a, b} {
+		if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r"+strconv.Itoa(i), path, uid); retired["type"] != protocol.TypeHomeRetired {
+			t.Fatalf("home_retire: %v", retired)
+		}
+	}
+}
+
+// A kept uid whose retirement cannot finish (something it left outside its
+// home that it cannot remove) is quarantined: no home_make and no spawn
+// takes it, until the sweeper's retry finds nothing left.
+func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-quarantine")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	pinned := filepath.Join(k.s.roots.Dirs[0], "pinned")
+	if err := os.Mkdir(pinned, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(pinned, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	spawned, rc := k.spawnKept(t, "left", `echo x > `+pinned+`/left; echo wrote; sleep 600`, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "wrote\n") })
+	// The uid can no longer remove what it left there.
+	if err := os.Chmod(pinned, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	k.release(t, spawned)
+	k.releasedPair(t, spawned)
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		k.s.mu.Lock()
+		_, quarantined := k.s.keptQuarantined[uid]
+		k.s.mu.Unlock()
+		if quarantined {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the uid was not quarantined")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m2", filepath.Join(k.s.cfg.Kept.Root, "vlt_home-other"), uid); busy["code"] != protocol.CodeUIDBusy {
+		t.Fatalf("home_make on a quarantined uid: %v", busy)
+	}
+	k.s.handleSpawn(keptRequest(t, k.attach, "again", "true", path, uid, nil, false))
+	if busy := k.reply(t); busy["code"] != protocol.CodeUIDBusy {
+		t.Fatalf("a spawn on a quarantined uid: %v", busy)
+	}
+
+	if err := os.Chmod(pinned, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	k.s.sweepKept()
+	k.s.mu.Lock()
+	_, quarantined := k.s.keptQuarantined[uid]
+	k.s.mu.Unlock()
+	if quarantined {
+		t.Fatal("the sweeper's retry left the uid quarantined")
+	}
+	if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r1", path, uid); retired["type"] != protocol.TypeHomeRetired {
+		t.Fatalf("home_retire: %v", retired)
+	}
+}
