@@ -1375,13 +1375,14 @@ value, it refuses to boot. `.env.locus.example` documents the builder's own
 
 ### Stdio MCP servers
 
-Stdio MCP servers run on the Locus backends service (the `locus-backends`
-compose service), which CYFR reaches over a signed wire; every compose
-deploy starts it. Each backend runs under a pooled uid of its own, started
-by `cyfr-locus`, with a private home directory, an environment built only from its
-server's definition and a memory bound of its own; the service keeps no
-state, and CYFR sends each server's definition again when the service
-restarts. With the URL or the key unset CYFR refuses stdio servers; with a
+Stdio MCP servers run as programs on the Locus backends service (the
+`locus-backends` compose service), which CYFR reaches over a signed wire;
+every compose deploy starts it. CYFR's MCP client speaks to each backend
+over the lines of a session the service runs for it. Each backend's process
+runs under a pooled uid of its own, started by `cyfr-locus`, with a private
+home directory, an environment built only from its server's definition and
+a memory bound of its own; the service keeps nothing of CYFR's, and CYFR
+sends each server's definition again when the service restarts. With the URL or the key unset CYFR refuses stdio servers; with a
 malformed value it refuses to boot. Stdio servers are not available in a
 cluster. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
 side.
