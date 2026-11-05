@@ -1029,7 +1029,16 @@ defmodule Sanctum.SharesTest do
 
       for {secret, resource, details} <- [
             {created, entry.name,
-             %{"audience" => "thread", "person_daily" => "5", "total_daily" => "no limit"}},
+             %{
+               "audience" => "thread",
+               "person_daily" => "5",
+               "total_daily" => "no limit",
+               "warnings" => [
+                 "You are responsible for following the provider's terms when sharing this entry.",
+                 "What recipients send reaches the provider as you.",
+                 "Recipients use your provider limits up to the caps you set and never see the credential. You can revoke the share at any time."
+               ]
+             }},
             {widened, share.id, %{"audience" => "everyone"}}
           ] do
         record = confirmation!(terry, secret)
