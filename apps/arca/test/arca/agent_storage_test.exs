@@ -63,7 +63,7 @@ defmodule Arca.AgentStorageTest do
       id: Prima.UUID7.generate_id("agt"),
       athanor_id: athanor_id,
       name: name,
-      kind: "role",
+      kind: "crew",
       revision_digest: "sha256:#{name}",
       capability_digest: "sha256:cap-#{name}",
       disabled: false,
@@ -86,10 +86,10 @@ defmodule Arca.AgentStorageTest do
     standing
   end
 
-  # A role edited in the tree: its pending generation, then a ready one.
+  # A crew member edited in the tree: its pending generation, then a ready one.
   defp edited!(actor, name) do
-    {:ok, pending} = StorageProjectionChanges.begin_edit(actor, @root, "roles/#{name}.md")
-    {:ok, ready} = StorageProjectionChanges.finish_edit(actor, @root, "roles/#{name}.md", pending)
+    {:ok, pending} = StorageProjectionChanges.begin_edit(actor, @root, "crew/#{name}.md")
+    {:ok, ready} = StorageProjectionChanges.finish_edit(actor, @root, "crew/#{name}.md", pending)
     ready
   end
 

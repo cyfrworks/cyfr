@@ -46,7 +46,7 @@ defmodule Prima.AgentRef do
 
   @doc """
   The soul's reserved name: the one assistant an athanor has, the file at
-  the root of its tree and never a role.
+  the root of its tree and never a crew member.
 
   ## Examples
 
@@ -70,7 +70,7 @@ defmodule Prima.AgentRef do
   def soul_ref, do: ref(@soul)
 
   @doc """
-  Whether `name` is the soul's — reserved, never a role.
+  Whether `name` is the soul's — reserved, never a crew member.
 
   ## Examples
 

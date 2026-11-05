@@ -18,7 +18,7 @@ defmodule Arca.Files do
     * `:shaped` (`components/`, `aqua/`) — files are read and edited in
       place, but only inside a unit the root's grammar recognises: a
       component version directory of the `local` publisher, the soul, a
-      role or a scroll. Units are made and removed by their own verbs
+      crew member or a scroll. Units are made and removed by their own verbs
       (scaffold, pull, fork, the AQUA page); a unit the server ships is
       restored, never deleted. The storage layer stamps a write here with
       a pending projection generation (`Arca.StorageProjectionChanges`),
@@ -386,12 +386,12 @@ defmodule Arca.Files do
   end
 
   defp above_unit_message(["aqua" | _], segments) do
-    "'#{join(segments)}' is outside any AQUA unit: the soul is aqua/aqua.md, a role is " <>
-      "aqua/roles/{name}.md, a scroll is aqua/skills/{name}/SKILL.md — create one from the AQUA page"
+    "'#{join(segments)}' is outside any AQUA unit: the soul is aqua/aqua.md, a crew member is " <>
+      "aqua/crew/{name}.md, a scroll is aqua/skills/{name}/SKILL.md — create one from the AQUA page"
   end
 
   defp inside_file_message(segments),
-    do: "'#{join(segments)}' is below a file — a role is one file, not a folder"
+    do: "'#{join(segments)}' is below a file — a crew member is one file, not a folder"
 
   defp read_only_message([folder | _]),
     do: "'#{folder}/' is read here and written on its own page"

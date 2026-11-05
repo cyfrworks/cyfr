@@ -247,7 +247,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the thread's menu carries the model override, the soul or role and the counts, and a model chosen there is the one the next send asks",
+  test "the thread's menu carries the model override, the soul or crew member and the counts, and a model chosen there is the one the next send asks",
        %{conn: conn, mine: mine, me: me} do
     :ok = PrismWeb.ModelCatalog.remember(mine.id, %{"models" => %{"kept" => ["kept-model-1"]}})
     on_exit(fn -> PrismWeb.ModelCatalog.forget(mine.id) end)
@@ -271,7 +271,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
       "the catalogue in the panel's menu"
     )
 
-    assert has_element?(pane, menu, "Soul or role")
+    assert has_element?(pane, menu, "Soul or crew member")
     assert has_element?(pane, menu, "0 in · 0 out")
 
     pane

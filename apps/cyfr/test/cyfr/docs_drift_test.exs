@@ -1828,17 +1828,17 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # ==========================================================================
-  # The tincture lists: tincture-guide.md and the Artisan role, from the
+  # The tincture lists: tincture-guide.md and the artisan scroll, from the
   # frame's rules and the wire
   #
   # Each list is a block between `<!-- tincture:NAME -->` and
   # `<!-- /tincture:NAME -->`, written as `tincture_list/1` renders it from
   # `Compendium`'s tincture rules and `Prima.TinctureWire`. A block that
   # differs fails with the rendering to paste, so a list the rules grow
-  # reaches the guide and the role before any reader meets a stale one.
+  # reaches the guide and the scroll before any reader meets a stale one.
   # ==========================================================================
 
-  @tincture_list_files ["tincture-guide.md", "seed/aqua/roles/artisan.md"]
+  @tincture_list_files ["tincture-guide.md", "seed/aqua/skills/artisan/SKILL.md"]
   @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk canvas)
 
   # The SDK's call for each request kind, and the arguments of each shell
@@ -1958,7 +1958,7 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  test "the tincture guide's and the Artisan role's lists are the rules' and the wire's" do
+  test "the tincture guide's and the artisan scroll's lists are the rules' and the wire's" do
     for file <- @tincture_list_files, name <- @tincture_lists do
       text = File.read!(Path.join(@repo_root, file))
       expected = Enum.join(tincture_list(name), "\n")

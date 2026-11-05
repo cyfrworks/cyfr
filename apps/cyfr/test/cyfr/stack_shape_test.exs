@@ -2070,7 +2070,7 @@ defmodule Cyfr.StackShapeTest do
 
     # Seed only when the shipped soul file is absent; later boots must preserve operator edits.
     soul = Compendium.AquaPath.soul_file() |> Enum.drop(1) |> Enum.join("/")
-    roles = Compendium.AquaPath.roles_dirname()
+    crew = Compendium.AquaPath.crew_dirname()
 
     code =
       entrypoint
@@ -2080,7 +2080,7 @@ defmodule Cyfr.StackShapeTest do
 
     assert code =~ "[ ! -f /app/seed/aqua/#{soul} ]"
     assert File.regular?(Path.join(@root, "seed/aqua/#{soul}"))
-    assert File.dir?(Path.join(@root, "seed/aqua/#{roles}"))
+    assert File.dir?(Path.join(@root, "seed/aqua/#{crew}"))
 
     # Prima.WIT embeds the WIT tree at compile time, so the builder stage
     # carries it.

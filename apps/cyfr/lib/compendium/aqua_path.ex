@@ -7,17 +7,17 @@ defmodule Compendium.AquaPath do
   scope's one spelling, as `Compendium.ComponentPath` is for `components/`
   and `Arca.ThreadStorage.blob_root/1` for `threads/`.
 
-  The tree holds one soul, a flat closet of roles, and the scrolls
-  (`locate/1` is the grammar the overlay consults, via
-  `Arca.Storage.UnitLocator`):
+  The tree holds one soul, the crew, and the scrolls (`locate/1` is the
+  grammar the overlay consults, via `Arca.Storage.UnitLocator`):
 
       aqua/
       ├── aqua.md                 # the soul — the one assistant an athanor has
-      ├── roles/<name>.md         # one frontmatter-markdown file per role
+      ├── crew/<name>.md          # one frontmatter-markdown file per crew member
       └── skills/<name>/SKILL.md  # one Agent Skills package per scroll
 
   The soul's name is reserved: `aqua` is the file at the root and never a
-  role, so `agent_file/1` is the one router from a name to its file.
+  crew member, so `agent_file/1` is the one router from a name to its
+  file.
   Layout only — the file format is `Compendium.AquaAgent`'s, the reset and
   drift surfaces `Compendium.AquaTemplate`'s.
   """
@@ -30,16 +30,16 @@ defmodule Compendium.AquaPath do
   # `agent:local.aqua` and the file at the root of the tree are one name.
   @soul Prima.AgentRef.soul_name()
   @soul_file @soul <> ".md"
-  @roles "roles"
+  @crew "crew"
   @skills "skills"
   @skill_manifest "SKILL.md"
-  # The one grammar for role and scroll names — the tool boundary
+  # The one grammar for crew and scroll names — the tool boundary
   # (`Compendium.Providers.Aqua.validate_name`) and the unit locator both
   # speak it, so a name the tools refuse can never mint a unit.
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
 
   @doc """
-  Whether `name` is a valid role or scroll name.
+  Whether `name` is a valid crew member or scroll name.
 
   ## Examples
 
@@ -70,7 +70,7 @@ defmodule Compendium.AquaPath do
   defdelegate soul_name(), to: Prima.AgentRef
 
   @doc """
-  Whether `name` is the soul's — reserved, never a role.
+  Whether `name` is the soul's — reserved, never a crew member.
 
   ## Examples
 
@@ -97,59 +97,59 @@ defmodule Compendium.AquaPath do
   def soul_file, do: @root ++ [@soul_file]
 
   @doc """
-  The roles directory — the closet.
+  The crew directory.
 
   ## Examples
 
-      iex> Compendium.AquaPath.roles_root()
-      ["aqua", "roles"]
+      iex> Compendium.AquaPath.crew_root()
+      ["aqua", "crew"]
 
   """
-  @spec roles_root() :: [String.t()]
-  def roles_root, do: @root ++ [@roles]
+  @spec crew_root() :: [String.t()]
+  def crew_root, do: @root ++ [@crew]
 
   @doc """
-  The bare roles directory name — for consumers rooted elsewhere (the
-  seed side reads `seed_prefix("aqua") ++ [roles_dirname()]`).
+  The bare crew directory name — for consumers rooted elsewhere (the
+  seed side reads `seed_prefix("aqua") ++ [crew_dirname()]`).
 
   ## Examples
 
-      iex> Compendium.AquaPath.roles_dirname()
-      "roles"
+      iex> Compendium.AquaPath.crew_dirname()
+      "crew"
 
   """
-  @spec roles_dirname() :: String.t()
-  def roles_dirname, do: @roles
+  @spec crew_dirname() :: String.t()
+  def crew_dirname, do: @crew
 
   @doc """
-  One role's file — a shadow unit of its own.
+  One crew member's file — a shadow unit of its own.
 
   ## Examples
 
-      iex> Compendium.AquaPath.role_file("web")
-      ["aqua", "roles", "web.md"]
+      iex> Compendium.AquaPath.crew_file("explorer")
+      ["aqua", "crew", "explorer.md"]
 
   """
-  @spec role_file(String.t()) :: [String.t()]
-  def role_file(name) when is_binary(name), do: @root ++ [@roles, name <> ".md"]
+  @spec crew_file(String.t()) :: [String.t()]
+  def crew_file(name) when is_binary(name), do: @root ++ [@crew, name <> ".md"]
 
   @doc """
   The file an agent name lives in: the soul at the root for `aqua`, a
-  role under `roles/` for any other name. One router, so a read of the
-  soul cannot miss it by looking in the closet.
+  crew member under `crew/` for any other name. One router, so a read of
+  the soul cannot miss it by looking in the crew.
 
   ## Examples
 
       iex> Compendium.AquaPath.agent_file("aqua")
       ["aqua", "aqua.md"]
 
-      iex> Compendium.AquaPath.agent_file("web")
-      ["aqua", "roles", "web.md"]
+      iex> Compendium.AquaPath.agent_file("explorer")
+      ["aqua", "crew", "explorer.md"]
 
   """
   @spec agent_file(String.t()) :: [String.t()]
   def agent_file(@soul), do: soul_file()
-  def agent_file(name) when is_binary(name), do: role_file(name)
+  def agent_file(name) when is_binary(name), do: crew_file(name)
 
   @doc """
   The skills directory — the scrolls.
@@ -193,37 +193,37 @@ defmodule Compendium.AquaPath do
 
   @doc """
   The overlay's unit grammar for `aqua/` (`Arca.Storage.UnitLocator`):
-  the soul and each role are file-shaped units (a valid-named `.md`
-  file), a skill a valid-named directory unit sentinel'd by `SKILL.md`. A
-  unit is a claim the storage layer acts on — the shipped copy, the
-  lock, status — so only the grammar mints one: a
-  stray `roles/notes.txt` or a junk-named skill dir stays plain storage,
-  outside the roster and the reset bookkeeping.
+  the soul and each crew member are file-shaped units (a valid-named
+  `.md` file), a skill a valid-named directory unit sentinel'd by
+  `SKILL.md`. A unit is a claim the storage layer acts on — the shipped
+  copy, the lock, status — so only the grammar mints one: a stray
+  `crew/notes.txt` or a junk-named skill dir stays plain storage, outside
+  the roster and the reset bookkeeping.
 
   ## Examples
 
       iex> Compendium.AquaPath.locate(["aqua", "aqua.md"])
       {:file, ["aqua", "aqua.md"]}
 
-      iex> Compendium.AquaPath.locate(["aqua", "roles", "web.md"])
-      {:file, ["aqua", "roles", "web.md"]}
+      iex> Compendium.AquaPath.locate(["aqua", "crew", "explorer.md"])
+      {:file, ["aqua", "crew", "explorer.md"]}
 
       iex> Compendium.AquaPath.locate(["aqua", "skills", "pdf-forms", "helpers", "fill.md"])
       {:dir, ["aqua", "skills", "pdf-forms"], "SKILL.md"}
 
-      iex> Compendium.AquaPath.locate(["aqua", "roles"])
+      iex> Compendium.AquaPath.locate(["aqua", "crew"])
       :above_unit
 
-      iex> Compendium.AquaPath.locate(["aqua", "roles", "notes.txt"])
+      iex> Compendium.AquaPath.locate(["aqua", "crew", "notes.txt"])
       :above_unit
 
   """
   @impl Arca.Storage.UnitLocator
   def locate([@root_name, @soul_file | _rest]), do: {:file, soul_file()}
 
-  def locate([@root_name, @roles, file | _rest]) do
+  def locate([@root_name, @crew, file | _rest]) do
     if String.ends_with?(file, ".md") and valid_name?(Path.basename(file, ".md")) do
-      {:file, @root ++ [@roles, file]}
+      {:file, @root ++ [@crew, file]}
     else
       :above_unit
     end
@@ -239,7 +239,7 @@ defmodule Compendium.AquaPath do
 
   def locate(_path), do: :above_unit
 
-  # A role, the soul or a scroll is created by writing its own file: the
+  # A crew member, the soul or a scroll is created by writing its own file: the
   # write of the unit's one file, or of a scroll's SKILL.md, is its commit.
   @impl Arca.Storage.UnitLocator
   def creates_by_write?(_unit), do: true

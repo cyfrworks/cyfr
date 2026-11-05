@@ -46,55 +46,29 @@ defmodule Compendium.ProviderTest do
       %{
         title: "A.Q.U.A.",
         catalyst_ref: "catalyst:moonmoon69.claude",
-        model: "claude-opus-4-6"
-      },
-      "# A.Q.U.A.\n\nYou are A.Q.U.A."
-    )
-
-    write.(
-      "builder",
-      %{
-        title: "Builder",
-        description: "WASM component builder sub-agent prompt",
+        model: "claude-opus-4-6",
         tool_policy: %{"component.list" => "auto", "build.compile" => "auto"}
       },
-      "# Builder Agent\n\nYou are the Builder."
-    )
-
-    write.(
-      "artisan",
-      %{
-        title: "Artisan",
-        description: "Tincture app/dashboard sub-agent prompt",
-        tool_policy: %{"files.read" => "auto", "storage.get" => "auto"}
-      },
-      "# Artisan Agent\n\nYou are the Artisan."
+      "# A.Q.U.A.\n\nYou are A.Q.U.A."
     )
 
     write.(
       "explorer",
       %{
         title: "Explorer",
-        description: "Research and web search sub-agent prompt",
-        tool_policy: %{"native_search" => "auto"}
+        description: "Research and web search",
+        avoid: "Changing files"
       },
       "# Explorer Agent\n\nYou are the Explorer."
     )
 
     write.(
-      "planner",
-      %{title: "Planner", description: "Planning and analysis sub-agent prompt"},
-      "# Planner Agent\n\nYou are the Planner."
-    )
-
-    write.(
-      "web",
+      "claude-code",
       %{
-        title: "Web",
-        description: "HTTP interaction sub-agent prompt",
-        tool_policy: %{"http.get" => "auto"}
+        title: "Claude Code",
+        description: "Coding work in a workspace of its own"
       },
-      "# Web Agent\n\nYou are the Web agent."
+      "# Claude Code Agent\n\nYou are Claude Code."
     )
   end
 
@@ -1574,20 +1548,17 @@ defmodule Compendium.ProviderTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "list"})
 
-      # the soul + 5 roles + 3 doc guides = 9
-      assert result.count == 9
-      assert length(result.guides) == 9
+      # the soul + 2 crew members + 3 doc guides = 6
+      assert result.count == 6
+      assert length(result.guides) == 6
 
       names = Enum.map(result.guides, & &1.name)
       assert "component-guide" in names
       assert "tincture-guide" in names
       assert "integration-guide" in names
       assert "aqua" in names
-      assert "builder" in names
-      assert "artisan" in names
       assert "explorer" in names
-      assert "planner" in names
-      assert "web" in names
+      assert "claude-code" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1600,12 +1571,12 @@ defmodule Compendium.ProviderTest do
       end
     end
 
-    test "list types the roles as roles, flat", %{ctx: ctx} do
+    test "list types the crew as crew, flat", %{ctx: ctx} do
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "list"})
-      roles = Enum.filter(result.guides, &(&1.type == "role"))
+      crew = Enum.filter(result.guides, &(&1.type == "crew"))
 
-      assert length(roles) == 5
-      refute Enum.any?(roles, &Map.has_key?(&1, :parent))
+      assert length(crew) == 2
+      refute Enum.any?(crew, &Map.has_key?(&1, :parent))
     end
 
     test "list puts the soul first", %{ctx: ctx} do
@@ -1659,22 +1630,26 @@ defmodule Compendium.ProviderTest do
       assert result.model == "claude-opus-4-6"
     end
 
-    test "get builder returns a role with metadata", %{ctx: ctx} do
+    test "get explorer returns a crew member with metadata, under the soul's policy", %{ctx: ctx} do
       {:ok, result} =
-        Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+        Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
 
-      assert result.name == "builder"
-      assert result.type == "role"
+      {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+
+      assert result.name == "explorer"
+      assert result.type == "crew"
       refute Map.has_key?(result, :parent)
       assert result.format == "markdown"
-      assert result.content =~ "Builder Agent"
-      assert is_map(result.tool_policy)
+      assert result.content =~ "Explorer Agent"
+      assert result.avoid == "Changing files"
+      assert result.options == %{}
+      assert result.tool_policy == soul.tool_policy
     end
 
     test "get returns the athanor's declared policy — one allowlist for every member", %{
       ctx: ctx
     } do
-      {:ok, before} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      {:ok, before} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
       assert before.tool_policy["build.compile"] == "auto"
 
       # Editing declared policy goes through the tool — the agents page's
@@ -1688,23 +1663,27 @@ defmodule Compendium.ProviderTest do
       {:ok, _} =
         Provider.handle("aqua", ctx, %{
           "action" => "update",
-          "name" => "builder",
+          "name" => "aqua",
           "tool_policy" => edited
         })
 
-      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
 
       refute Map.has_key?(result.tool_policy, "build.compile")
       assert result.tool_policy["files.write"] == "auto"
       assert result.tool_policy["component.list"] == "auto"
       refute Map.has_key?(result, :effective_tool_policy)
+
+      # Every crew member runs under it.
+      {:ok, member} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
+      assert member.tool_policy == result.tool_policy
     end
 
     test "update refuses a tool_policy value other than ask or auto", %{ctx: ctx} do
       assert {:error, msg} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "builder",
+                 "name" => "aqua",
                  "tool_policy" => %{"files.delete" => "sometimes"}
                })
 
@@ -1715,28 +1694,34 @@ defmodule Compendium.ProviderTest do
       assert {:error, msg} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "builder",
+                 "name" => "aqua",
                  "tool_policy" => %{"no-dot-here" => "auto"}
                })
 
       assert err_msg(msg) =~ "Invalid tool_policy key"
     end
 
-    test "the door refuses execution.run on a role at any value, with why it has no effect",
+    test "the door refuses any policy for a crew member — whole, patched or on create",
          %{ctx: ctx} do
       sentence =
-        "execution.run has no effect on a role — a role launches nothing and every " <>
-          "launch asks; leave it out"
+        "A crew member runs under the soul's tool policy and has none of its own — " <>
+          "edit the soul's"
 
-      # A whole policy on update or create, at any value.
-      for mode <- ["auto", "ask", "never"] do
-        policy = %{"build.compile" => "auto", "execution.run" => mode}
+      for mode <- ["auto", "ask"] do
+        policy = %{"build.compile" => mode}
 
         assert {:error, {:invalid_argument, ^sentence}} =
                  Provider.handle("aqua", ctx, %{
                    "action" => "update",
-                   "name" => "builder",
+                   "name" => "explorer",
                    "tool_policy" => policy
+                 })
+
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Provider.handle("aqua", ctx, %{
+                   "action" => "update",
+                   "name" => "explorer",
+                   "tool_policy_patch" => %{"execution.run" => mode}
                  })
 
         assert {:error, {:invalid_argument, ^sentence}} =
@@ -1747,74 +1732,63 @@ defmodule Compendium.ProviderTest do
                  })
       end
 
-      # A patch that adds the key, at either value a patch may carry.
-      for mode <- ["auto", "ask"] do
-        assert {:error, {:invalid_argument, ^sentence}} =
-                 Provider.handle("aqua", ctx, %{
-                   "action" => "update",
-                   "name" => "builder",
-                   "tool_policy_patch" => %{"execution.run" => mode}
-                 })
-      end
+      # The member's file holds no policy still.
+      {:ok, bytes} =
+        Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("explorer"))
 
-      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
-      refute Map.has_key?(result.tool_policy, "execution.run")
+      refute bytes =~ "tool_policy"
 
       # Nothing was created either.
       assert {:error, _} =
                Provider.handle("aqua", ctx, %{"action" => "get", "name" => "launcher"})
 
-      # The soul's own key is still the soul's to write.
+      # The soul's own key is still the soul's to write, and the crew runs
+      # under it.
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "aqua",
                  "tool_policy_patch" => %{"execution.run" => "ask"}
                })
+
+      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
+      assert result.tool_policy["execution.run"] == "ask"
     end
 
-    test "a role file holding execution.run is refused as damage, and a patch cannot reach it",
+    test "a crew file holding a policy is refused as damage, and a patch cannot reach it",
          %{ctx: ctx} do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          Compendium.AquaPath.agent_file("builder"),
-          Compendium.AquaAgent.serialize(%{
-            name: "builder",
-            title: "builder",
-            description: "",
-            disabled: false,
-            catalyst_ref: nil,
-            model: nil,
-            tool_policy: %{"build.compile" => "auto", "execution.run" => "auto"},
-            prompt: "# builder"
-          })
+          Compendium.AquaPath.agent_file("explorer"),
+          "---\ntitle: explorer\ntool_policy:\n  build.compile: auto\n---\n\n# explorer\n"
         )
 
-      assert {:error, _} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      assert {:error, _} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
 
       assert {:error, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "builder",
-                 "tool_policy_patch" => %{"execution.run" => nil}
+                 "name" => "explorer",
+                 "title" => "Explorer"
                })
     end
 
     test "a patch value outside ask, auto and null is the patch's own refusal, whatever the key",
          %{ctx: ctx} do
-      # The patch's shape is checked before any policy is merged, so a
-      # role's execution.run at an unknown value is refused as a patch value.
+      # The patch's shape is checked before any policy is merged, so an
+      # unknown value is refused as a patch value.
       assert {:error,
               {:invalid_argument,
                ~s{tool_policy_patch: "execution.run" must be ask, auto or null}}} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "builder",
+                 "name" => "aqua",
                  "tool_policy_patch" => %{"execution.run" => "never"}
                })
 
-      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
       refute Map.has_key?(result.tool_policy, "execution.run")
     end
 
@@ -1837,7 +1811,7 @@ defmodule Compendium.ProviderTest do
 
     test "the door refuses what no agent may hold: destructive auto, a UI event at ask",
          %{ctx: ctx} do
-      # Kind always wins — on the soul as on a role.
+      # Kind always wins.
       assert {:error, {:invalid_argument, msg}} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
@@ -1851,7 +1825,7 @@ defmodule Compendium.ProviderTest do
       assert {:error, {:invalid_argument, msg}} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "builder",
+                 "name" => "aqua",
                  "tool_policy" => %{"files.*" => "auto"}
                })
 
@@ -1867,50 +1841,32 @@ defmodule Compendium.ProviderTest do
 
       assert msg =~ "runs on its own"
 
-      # What a role may hold is written whole, an action at ask among it.
+      # What the soul may hold is written whole, an action at ask among it.
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "builder",
+                 "name" => "aqua",
                  "tool_policy" => %{"files.write" => "ask", "files.read" => "auto"}
                })
 
       assert {:ok, %{tool_policy: %{"files.write" => "ask"}}} =
-               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
     end
 
-    test "get artisan returns a role prompt", %{ctx: ctx} do
+    test "get claude-code returns a crew member prompt", %{ctx: ctx} do
       {:ok, result} =
-        Provider.handle("aqua", ctx, %{"action" => "get", "name" => "artisan"})
+        Provider.handle("aqua", ctx, %{"action" => "get", "name" => "claude-code"})
 
-      assert result.name == "artisan"
-      assert result.type == "role"
-      assert result.content =~ "Artisan Agent"
-    end
-
-    test "get web returns a role prompt", %{ctx: ctx} do
-      {:ok, result} =
-        Provider.handle("aqua", ctx, %{"action" => "get", "name" => "web"})
-
-      assert result.name == "web"
-      assert result.type == "role"
-      assert result.content =~ "Web Agent"
-    end
-
-    test "get planner returns a role prompt", %{ctx: ctx} do
-      {:ok, result} =
-        Provider.handle("aqua", ctx, %{"action" => "get", "name" => "planner"})
-
-      assert result.name == "planner"
-      assert result.type == "role"
-      assert result.content =~ "Planner Agent"
+      assert result.name == "claude-code"
+      assert result.type == "crew"
+      assert result.content =~ "Claude Code Agent"
     end
 
     test "get with unknown name returns error", %{ctx: ctx} do
       {:error, msg} =
         Provider.handle("aqua", ctx, %{"action" => "get", "name" => "nonexistent"})
 
-      assert err_msg(msg) =~ "role or guide not found"
+      assert err_msg(msg) =~ "crew member or guide not found"
       assert err_msg(msg) =~ "nonexistent"
     end
   end
@@ -2022,7 +1978,7 @@ defmodule Compendium.ProviderTest do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          ["aqua", "roles", "keeper.md"],
+          ["aqua", "crew", "keeper.md"],
           "---\ntitle: Keeper\n---\n\nkeeper\n"
         )
 
@@ -2037,15 +1993,15 @@ defmodule Compendium.ProviderTest do
       {:ok, %{reset: true, reverted: reverted, kept: kept}} =
         Provider.handle("aqua", ctx, %{"action" => "reset"})
 
-      assert "aqua/roles/keeper.md" in kept
+      assert "aqua/crew/keeper.md" in kept
       assert "aqua/skills/pdf" in kept
-      assert "aqua/roles/web.md" in reverted
-      assert Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "roles", "keeper.md"])
+      assert "aqua/crew/explorer.md" in reverted
+      assert Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "crew", "keeper.md"])
 
       {:ok, %{reset: true, kept: []}} =
         Provider.handle("aqua", ctx, %{"action" => "reset", "all" => true})
 
-      refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "roles", "keeper.md"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "crew", "keeper.md"])
       refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "skills", "pdf", "SKILL.md"])
     end
 
@@ -2053,13 +2009,13 @@ defmodule Compendium.ProviderTest do
       # The shipped scrolls are read in place from the seed.
       {:ok, shipped} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
 
-      assert [
-               %{name: "canvas", description: canvas},
-               %{name: "capability-acquisition", description: line}
-             ] = shipped.skills
+      assert ~w(artisan builder canvas capability-acquisition planner web) ==
+               Enum.map(shipped.skills, & &1.name)
 
-      assert canvas =~ "canvas"
-      assert line =~ "registry"
+      by_name = Map.new(shipped.skills, &{&1.name, &1.description})
+      assert by_name["canvas"] =~ "canvas"
+      assert by_name["capability-acquisition"] =~ "registry"
+      assert by_name["builder"] =~ "WASM component"
       refute Map.has_key?(shipped, :hint)
 
       {:ok, %{created: "pdf"}} =
@@ -2079,7 +2035,9 @@ defmodule Compendium.ProviderTest do
         )
 
       {:ok, listing} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
-      assert Enum.map(listing.skills, & &1.name) == ["canvas", "capability-acquisition", "pdf"]
+
+      assert Enum.map(listing.skills, & &1.name) ==
+               ~w(artisan builder canvas capability-acquisition pdf planner web)
 
       {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
       assert skill.description == "fills PDF forms"
@@ -2237,33 +2195,37 @@ defmodule Compendium.ProviderTest do
                Provider.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
     end
 
-    test "a shipped role refuses delete, edited or not, and points at disable", %{ctx: ctx} do
-      # The fixture edited the athanor's copy of web: still shipped,
+    test "a shipped crew member refuses delete, edited or not, and points at disable", %{ctx: ctx} do
+      # The fixture edited the athanor's copy of explorer: still shipped,
       # still not deletable — disable is the verb, and reset the way back.
-      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "web"})
+      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "explorer"})
       assert err_msg(msg) =~ "cannot be deleted"
       assert err_msg(msg) =~ "disabled=true"
 
-      {:ok, %{restored: "web"}} =
-        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "web"})
+      {:ok, %{restored: "explorer"}} =
+        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "explorer"})
 
       {:ok, %{files: files}} = Provider.handle("aqua", ctx, %{"action" => "status"})
-      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/roles/web.md"))
+      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/crew/explorer.md"))
 
-      {:ok, %{restored: "web"}} =
-        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "web"})
+      {:ok, %{restored: "explorer"}} =
+        Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "explorer"})
 
-      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "web"})
+      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "delete", "name" => "explorer"})
       assert err_msg(msg) =~ "cannot be deleted"
 
       {:ok, _} =
-        Provider.handle("aqua", ctx, %{"action" => "update", "name" => "web", "disabled" => true})
+        Provider.handle("aqua", ctx, %{
+          "action" => "update",
+          "name" => "explorer",
+          "disabled" => true
+        })
 
       {:ok, listing} = Provider.handle("aqua", ctx, %{"action" => "list"})
-      refute Enum.any?(listing.guides, &(&1.name == "web"))
+      refute Enum.any?(listing.guides, &(&1.name == "explorer"))
 
       # get still answers (so it can be re-enabled), flagged.
-      {:ok, got} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "web"})
+      {:ok, got} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
       assert got.disabled == true
     end
 
@@ -2289,17 +2251,21 @@ defmodule Compendium.ProviderTest do
                Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
     end
 
-    test "an athanor-made role deletes outright", %{ctx: ctx} do
+    test "an athanor-made crew member deletes outright", %{ctx: ctx} do
       {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
 
       # The create answers what it created, and the soul is left as it was.
-      assert {:ok, %{created: "my_agent", type: "role"} = created} =
+      assert {:ok, %{created: "my_agent", type: "crew"} = created} =
                Provider.handle("aqua", ctx, %{
                  "action" => "create",
                  "name" => "my_agent",
                  "content" => "You are mine.",
-                 "tool_policy" => %{"component.pull" => "ask"}
+                 "avoid" => "Anything risky",
+                 "options" => %{"effort" => "high"}
                })
+
+      assert {:ok, %{avoid: "Anything risky", options: %{"effort" => "high"}}} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "my_agent"})
 
       assert map_size(created) == 2
       assert {:ok, ^soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
@@ -2310,7 +2276,7 @@ defmodule Compendium.ProviderTest do
       refute Map.has_key?(result, :restored)
 
       {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "my_agent"})
-      assert err_msg(msg) =~ "role or guide not found"
+      assert err_msg(msg) =~ "crew member or guide not found"
     end
   end
 

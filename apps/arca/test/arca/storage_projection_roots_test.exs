@@ -61,7 +61,7 @@ defmodule Arca.StorageProjectionRootsTest do
       other = %{actor | athanor_id: actor.athanor_id <> "_other"}
 
       a = advance(actor, "components", change("catalysts/local/a/1.0.0"))
-      aqua = advance(actor, "aqua", change("roles/a.md"))
+      aqua = advance(actor, "aqua", change("crew/a.md"))
       theirs = advance(other, "components", change("catalysts/local/a/1.0.0"))
 
       assert aqua == a
@@ -133,13 +133,13 @@ defmodule Arca.StorageProjectionRootsTest do
     test "a unit created after the snapshot invalidates the replacement it never named", %{
       actor: actor
     } do
-      key = "roles/scribe.md"
+      key = "crew/scribe.md"
       advance(actor, "aqua", change(key, %{ready: true}))
       {:ok, token} = StorageProjectionChanges.snapshot(actor, "aqua")
       assert Enum.map(token.units, & &1.unit_key) == [key]
 
       # A new unit, after the snapshot and absent from it.
-      created = advance(actor, "aqua", change("roles/latecomer.md", %{ready: true}))
+      created = advance(actor, "aqua", change("crew/latecomer.md", %{ready: true}))
 
       assert {:error, :generation_conflict} =
                StorageProjectionChanges.replace(actor, "aqua", token, fn -> :written end)
@@ -157,7 +157,7 @@ defmodule Arca.StorageProjectionRootsTest do
       {:ok, token} = StorageProjectionChanges.snapshot(actor, "aqua")
       assert %{epoch: 0, units: []} = token
 
-      advance(actor, "aqua", change("roles/first.md", %{ready: true}))
+      advance(actor, "aqua", change("crew/first.md", %{ready: true}))
 
       assert {:error, :generation_conflict} =
                StorageProjectionChanges.replace(actor, "aqua", token, fn -> :written end)
@@ -188,7 +188,7 @@ defmodule Arca.StorageProjectionRootsTest do
       actor: actor
     } do
       test = self()
-      first = unboxed(fn -> advance(actor, "aqua", change("roles/a.md", %{ready: true})) end)
+      first = unboxed(fn -> advance(actor, "aqua", change("crew/a.md", %{ready: true})) end)
       {:ok, token} = unboxed(fn -> StorageProjectionChanges.snapshot(actor, "aqua") end)
 
       replacement =
@@ -208,7 +208,7 @@ defmodule Arca.StorageProjectionRootsTest do
 
       writer =
         Task.async(fn ->
-          unboxed(fn -> advance(actor, "aqua", change("roles/b.md", %{ready: true})) end)
+          unboxed(fn -> advance(actor, "aqua", change("crew/b.md", %{ready: true})) end)
         end)
 
       refute Task.yield(writer, 300), "the advance landed while the replacement held the root"

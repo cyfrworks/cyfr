@@ -69,7 +69,7 @@ defmodule Aqua.PromptTest do
   end
 
   describe "the crew and the open requests" do
-    test "the crew is listed when the agent may ask it, and the open requests with their age, before the clock",
+    test "the crew index lists each member's name, brain, good at and avoid, and the open requests with their age, before the clock",
          %{ctx: ctx} do
       asked = DateTime.add(DateTime.utc_now(), -300, :second)
 
@@ -77,11 +77,19 @@ defmodule Aqua.PromptTest do
         Prompt.compose(ctx,
           agent: agent(%{"crew.ask" => "auto"}),
           authority: nil,
-          crew: [%{"name" => "planner", "title" => "Planner", "description" => "Plans."}],
+          crew: [
+            %{
+              "name" => "explorer",
+              "brain" => "gemini (gemini-pro-latest)",
+              "description" => "Deep web research.",
+              "avoid" => "Changing files."
+            },
+            %{"name" => "quiet", "brain" => "claude", "description" => "", "avoid" => ""}
+          ],
           requests: [
             %{
               id: "msg_r1",
-              addressee: "planner",
+              addressee: "explorer",
               sent_by: "person",
               inserted_at: asked,
               content: "plan the move\nwith every step"
@@ -90,8 +98,13 @@ defmodule Aqua.PromptTest do
         ).text
 
       assert prompt =~ "## Crew"
-      assert prompt =~ "- planner — Planner: Plans."
-      assert prompt =~ "- msg_r1 to planner, asked by the person 5m ago: plan the move\n"
+
+      assert prompt =~
+               "- explorer — brain: gemini (gemini-pro-latest). Good at: Deep web research. " <>
+                 "Avoid: Changing files\n"
+
+      assert prompt =~ "- quiet — brain: claude\n"
+      assert prompt =~ "- msg_r1 to explorer, asked by the person 5m ago: plan the move\n"
       refute prompt =~ "with every step"
 
       {crew_at, _} = :binary.match(prompt, "## Crew")

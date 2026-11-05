@@ -14,7 +14,7 @@ defmodule Arca.StaleMemberUnitRemovalTest do
   the entry gate the removal passed on its way in.
 
   The refusal reaches the person as itself: a component's deletion, an
-  AQUA role's and a file's each answer `:not_owner`, so the console and
+  AQUA crew member's and a file's each answer `:not_owner`, so the console and
   an MCP caller read the ownership refusal's class and sentence, never a
   storage failure.
   """
@@ -222,34 +222,34 @@ defmodule Arca.StaleMemberUnitRemovalTest do
       assert {:ok, _} = Compendium.Registry.get(api, name, "1.0.0", "local")
     end
 
-    test "an AQUA role's deletion answers the ownership refusal and keeps the role",
+    test "an AQUA crew member's deletion answers the ownership refusal and keeps the member",
          %{ctx: ctx, api: api, actor: actor} do
       slot = claimant!("aqua")
-      name = "fence-role-#{System.unique_integer([:positive])}"
-      role = Compendium.AquaPath.role_file(name)
-      assert :ok = Arca.put(actor, role, "# #{name}\n")
+      name = "fence-member-#{System.unique_integer([:positive])}"
+      member = Compendium.AquaPath.crew_file(name)
+      assert :ok = Arca.put(actor, member, "# #{name}\n")
       :ok = take_over!(slot)
 
       args = %{"action" => "delete", "name" => name}
       assert {:error, :not_owner} = Compendium.Providers.Aqua.handle(api, args)
       assert_ownership_refusal(ctx, "aqua", args)
 
-      assert Arca.get(actor, role) == {:ok, "# #{name}\n"}
+      assert Arca.get(actor, member) == {:ok, "# #{name}\n"}
     end
 
     test "a file's removal through the file tool answers the ownership refusal and keeps the file",
          %{ctx: ctx, actor: actor} do
       slot = claimant!("file")
       name = "fence-file-#{System.unique_integer([:positive])}"
-      role = Compendium.AquaPath.role_file(name)
-      assert :ok = Arca.put(actor, role, "# #{name}\n")
+      member = Compendium.AquaPath.crew_file(name)
+      assert :ok = Arca.put(actor, member, "# #{name}\n")
       :ok = take_over!(slot)
 
-      path = Enum.join(role, "/")
+      path = Enum.join(member, "/")
       assert {:error, :not_owner} = Arca.Files.delete(actor, path)
       assert_ownership_refusal(ctx, "file", %{"action" => "delete", "path" => path})
 
-      assert Arca.get(actor, role) == {:ok, "# #{name}\n"}
+      assert Arca.get(actor, member) == {:ok, "# #{name}\n"}
     end
   end
 

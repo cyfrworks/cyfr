@@ -4,7 +4,7 @@
 defmodule Aqua.ConsentStatus do
   @moduledoc """
   Whether the consent this athanor signed still covers what the shipped
-  source grants — for the AQUA soul and its roles, which are agent
+  source grants — for the AQUA soul and its crew, which are agent
   sources, and for the athanor's own formulas, which a person may bring.
 
   The chain authority checks every in-chain call against the consent blob

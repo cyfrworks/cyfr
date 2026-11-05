@@ -1,40 +1,14 @@
 ---
-title: Artisan
-description: "Put on the Artisan role to create, fix or improve tinctures — apps, dashboards, viewers, readers, tools, games and 3D scenes (Canvas 2D or an npm engine such as Three.js, Pixi.js or Phaser), vanilla or React; not for WASM components."
-catalyst_ref: catalyst:local.claude
-model: claude-sonnet-4-6
-tool_policy:
-  aqua.get: auto
-  aqua.list: auto
-  build.compile: auto
-  build.toolchains: auto
-  component.create: auto
-  component.inspect: auto
-  component.list: auto
-  component.pull: auto
-  component.search: auto
-  component.setup_plan: auto
-  files.edit: auto
-  files.grep: auto
-  files.list: auto
-  files.read: auto
-  files.search: auto
-  files.tree: auto
-  files.write: auto
-  request_setup.open: auto
-  source.edit: auto
-  source.grep: auto
-  source.read: auto
-  source.tree: auto
-  source.write: auto
+name: "artisan"
+description: "Create, fix or improve a tincture — apps, dashboards, viewers, readers, tools, games and 3D scenes, vanilla or React; not a WASM component"
 ---
 
 # Artisan
 
-You are AQUA in the Artisan role: you create, fix and improve tincture
-frontends — dashboards, viewers, readers, tools and data displays, and
-games and 3D scenes (Canvas 2D, or an npm engine such as Three.js,
-Pixi.js or Phaser, with a game loop, physics and input).
+How to create, fix and improve a tincture frontend — dashboards, viewers,
+readers, tools and data displays, and games and 3D scenes (Canvas 2D, or
+an npm engine such as Three.js, Pixi.js or Phaser, with a game loop,
+physics and input). A WASM component is the `builder` scroll's.
 
 ## Working Style
 

@@ -1,26 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# A store that cannot give the AQUA roles listing; every other read is the
+# A store that cannot give the AQUA crew listing; every other read is the
 # local adapter's.
-defmodule Compendium.Providers.AquaListTest.UnreadableRoles do
+defmodule Compendium.Providers.AquaListTest.UnreadableCrew do
   @moduledoc false
   use Arca.Storage.TestDouble
 
-  @roles Compendium.AquaPath.roles_root()
+  @crew Compendium.AquaPath.crew_root()
 
-  def list_typed(_actor, @roles), do: {:error, :eacces}
+  def list_typed(_actor, @crew), do: {:error, :eacces}
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
-# A store that refuses the AQUA roles listing with a typed refusal.
-defmodule Compendium.Providers.AquaListTest.TypedRefusalRoles do
+# A store that refuses the AQUA crew listing with a typed refusal.
+defmodule Compendium.Providers.AquaListTest.TypedRefusalCrew do
   @moduledoc false
   use Arca.Storage.TestDouble
 
-  @roles Compendium.AquaPath.roles_root()
+  @crew Compendium.AquaPath.crew_root()
 
-  def list_typed(_actor, @roles), do: {:error, :database_error}
+  def list_typed(_actor, @crew), do: {:error, :database_error}
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
@@ -54,23 +54,23 @@ defmodule Compendium.Providers.AquaListTest.UnreadableRole do
   end
 end
 
-# A store that answers, and holds no soul and no role.
+# A store that answers, and holds no soul and no crew member.
 defmodule Compendium.Providers.AquaListTest do
   @moduledoc """
-  The `aqua` tool's list answers the agents it read or refuses: a roles
+  The `aqua` tool's list answers the agents it read or refuses: a crew
   listing the store refuses, or a soul it holds but cannot give, is refused
   (a raw storage answer as `{:unavailable, "Storage"}`, as the tool's other
   reads refuse it), never the guides alone, which would read as an athanor
-  with no assistant. A role that cannot be read stays out of the
-  closet, and an athanor that holds no agents answers its guides.
+  with no assistant. A crew member that cannot be read stays out of the
+  crew, and an athanor that holds no agents answers its guides.
   """
 
   use ExUnit.Case, async: false
 
   alias Compendium.Providers.AquaListTest.{
-    TypedRefusalRoles,
+    TypedRefusalCrew,
     UnreadableRole,
-    UnreadableRoles,
+    UnreadableCrew,
     UnreadableSoul
   }
 
@@ -121,22 +121,22 @@ defmodule Compendium.Providers.AquaListTest do
 
   @guides ["component-guide", "tincture-guide", "integration-guide"]
 
-  test "the list answers the soul, the roles and the guides", %{ctx: ctx} do
+  test "the list answers the soul, the crew and the guides", %{ctx: ctx} do
     assert {:ok, listed} = list(ctx)
     assert ["aqua" | _] = names(listed)
-    assert "planner" in names(listed)
+    assert "explorer" in names(listed)
     assert Enum.take(names(listed), -3) == @guides
   end
 
   @tag :capture_log
-  test "a roles listing the store refuses is refused as storage unavailable, never the guides alone",
+  test "a crew listing the store refuses is refused as storage unavailable, never the guides alone",
        %{ctx: ctx} do
-    storage!(UnreadableRoles)
+    storage!(UnreadableCrew)
     assert {:error, {:unavailable, "Storage"}} = list(ctx)
   end
 
   test "a typed refusal from the store passes as it came", %{ctx: ctx} do
-    storage!(TypedRefusalRoles)
+    storage!(TypedRefusalCrew)
     assert {:error, :database_error} = list(ctx)
   end
 

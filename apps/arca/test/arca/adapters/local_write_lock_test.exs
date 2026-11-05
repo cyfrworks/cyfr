@@ -108,7 +108,7 @@ defmodule Arca.Adapters.LocalWriteLockTest do
   test "a plain put waits for a conditional replace that has read its precondition, and " <>
          "lands after it",
        %{actor: actor} do
-    path = ["aqua", "roles", "a.md"]
+    path = ["aqua", "crew", "a.md"]
     :ok = Local.put(actor, path, "original")
     {:ok, "original", precondition} = Local.get_for_update(actor, path)
 
@@ -173,7 +173,7 @@ defmodule Arca.Adapters.LocalWriteLockTest do
   test "a conditional replace that waited for a plain put reads what the put wrote", %{
     actor: actor
   } do
-    path = ["aqua", "roles", "b.md"]
+    path = ["aqua", "crew", "b.md"]
     :ok = Local.put(actor, path, "original")
     {:ok, "original", stale} = Local.get_for_update(actor, path)
     :ok = Local.put(actor, path, "reset")

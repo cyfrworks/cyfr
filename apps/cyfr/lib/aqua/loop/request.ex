@@ -368,7 +368,7 @@ defmodule Aqua.Loop.Request do
   # ---------------------------------------------------------------------------
 
   # `tool => [actions]` for every key that is auto or ask, tools with a
-  # colon (an external server's) and role globs excluded.
+  # colon (an external server's) and globs excluded.
   defp offered_actions(policy) do
     policy
     |> Enum.filter(fn {_key, mode} -> mode in ["auto", "ask"] end)

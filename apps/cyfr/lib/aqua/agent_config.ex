@@ -5,8 +5,9 @@ defmodule Aqua.AgentConfig do
   require Logger
 
   @moduledoc """
-  The soul's and the roles' definitions, and the catalysts they run on,
-  as a turn reads them.
+  The soul's and the crew's definitions, and the catalysts they run on,
+  as a turn reads them. A crew member's `"tool_policy"` is the soul's,
+  which it runs under (`Compendium.AquaAgent.under_soul/2`).
 
   `roster/1` reads the athanor's `aqua/` tree in-process through the
   `Compendium` facade — the same files the `aqua` tool serves, without the
@@ -29,15 +30,16 @@ defmodule Aqua.AgentConfig do
   @unavailable {:unavailable, "The athanor's AQUA tree"}
 
   @doc """
-  The athanor's agents, read once: the soul first, then the roles by name,
+  The athanor's agents, read once: the soul first, then the crew by name,
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
-  `"type"`, `"content"`, `"tool_policy"`, `"catalyst_ref"`, `"model"`).
+  `"avoid"`, `"type"`, `"content"`, `"tool_policy"`, `"catalyst_ref"`,
+  `"model"`, `"options"`).
 
   Fails as it reads: a tree that cannot be listed is
   `{:error, {:unavailable, _}}`, never an empty roster a turn would
   quietly run without a crew. A single file that fails to parse is skipped
-  and logged — one broken role must not take the soul down
+  and logged — one broken crew member must not take the soul down
   (`Compendium.agents/1`).
 
   The read is also where an athanor gets its bundle on first need
@@ -74,11 +76,13 @@ defmodule Aqua.AgentConfig do
       "name" => agent.name,
       "title" => agent.title,
       "description" => agent.description,
+      "avoid" => agent.avoid,
       "type" => Compendium.agent_type_of(agent),
       "content" => agent.prompt,
       "tool_policy" => agent.tool_policy,
       "catalyst_ref" => agent.catalyst_ref,
       "model" => agent.model,
+      "options" => agent.options,
       "disabled" => agent.disabled
     }
   end

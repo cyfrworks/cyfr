@@ -41,10 +41,10 @@ defmodule Arca.RevisionStoreReservedTest do
     Application.put_env(:arca, :base_path, Path.join(base, "data"))
     Application.put_env(:arca, :seed_path, seed)
 
-    roles = Path.join([seed, "aqua", "roles"])
-    File.mkdir_p!(roles)
+    crew = Path.join([seed, "aqua", "crew"])
+    File.mkdir_p!(crew)
     File.write!(Path.join([seed, "aqua", "aqua.md"]), "---\ntitle: A\n---\n\nsoul\n")
-    File.write!(Path.join(roles, "scribe.md"), "---\ntitle: Scribe\n---\n\nscribe\n")
+    File.write!(Path.join(crew, "scribe.md"), "---\ntitle: Scribe\n---\n\nscribe\n")
 
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
@@ -53,25 +53,25 @@ defmodule Arca.RevisionStoreReservedTest do
     {:ok, ctx: ctx, actor: actor}
   end
 
-  # The own role's committed revision object, as a path in the staging area.
-  defp own_role!(actor) do
-    assert {:ok, _} = Files.write(actor, "aqua/roles/mine.md", @mine)
+  # The own crew member's committed revision object, as a path in the staging area.
+  defp own_member!(actor) do
+    assert {:ok, _} = Files.write(actor, "aqua/crew/mine.md", @mine)
 
     assert {:ok, %{entries: [%{name: revision}]}} =
-             Files.list(actor, "aqua/.staging/roles/mine.md")
+             Files.list(actor, "aqua/.staging/crew/mine.md")
 
     revision
   end
 
-  defp assert_own_role_intact(actor) do
-    assert {:ok, %{content: @mine}} = Files.read(actor, "aqua/roles/mine.md")
-    assert {:ok, :own} = Arca.Overlay.unit_status(actor, ["aqua", "roles", "mine.md"])
-    assert {:ok, @mine} = Arca.get(actor, ["aqua", "roles", "mine.md"])
+  defp assert_own_member_intact(actor) do
+    assert {:ok, %{content: @mine}} = Files.read(actor, "aqua/crew/mine.md")
+    assert {:ok, :own} = Arca.Overlay.unit_status(actor, ["aqua", "crew", "mine.md"])
+    assert {:ok, @mine} = Arca.get(actor, ["aqua", "crew", "mine.md"])
   end
 
   describe "a delete in the revision store is refused" do
     test "the whole aqua staging area, through the athanor's files", %{actor: actor} do
-      own_role!(actor)
+      own_member!(actor)
 
       # Listing never shows the area; naming it is the only way to reach it.
       assert {:ok, %{tier: :shaped, entries: entries}} = Files.list(actor, "aqua")
@@ -85,7 +85,7 @@ defmodule Arca.RevisionStoreReservedTest do
 
       assert message == @reserved_sentence
 
-      assert_own_role_intact(actor)
+      assert_own_member_intact(actor)
     end
 
     test "the whole components staging area, through the athanor's files",
@@ -109,8 +109,8 @@ defmodule Arca.RevisionStoreReservedTest do
 
     test "one committed object under a revision prefix, through the files and the facade",
          %{actor: actor} do
-      revision = own_role!(actor)
-      object = ["aqua", ".staging", "roles", "mine.md", revision, "mine.md"]
+      revision = own_member!(actor)
+      object = ["aqua", ".staging", "crew", "mine.md", revision, "mine.md"]
 
       assert {:error, {:reserved_path, ^object}} =
                Files.delete(actor, Enum.join(object, "/"))
@@ -123,18 +123,18 @@ defmodule Arca.RevisionStoreReservedTest do
                Arca.delete_tree(actor, ["aqua", ".staging"])
 
       # Refused for what it is, not answered by what happens to be there.
-      assert {:error, {:reserved_path, ["aqua", ".staging", "roles", "none.md"]}} =
-               Files.delete(actor, "aqua/.staging/roles/none.md")
+      assert {:error, {:reserved_path, ["aqua", ".staging", "crew", "none.md"]}} =
+               Files.delete(actor, "aqua/.staging/crew/none.md")
 
-      assert_own_role_intact(actor)
+      assert_own_member_intact(actor)
     end
   end
 
   describe "a write or an edit in the revision store is refused" do
     test "a write through the athanor's files and the facade", %{actor: actor} do
-      revision = own_role!(actor)
-      object = ["aqua", ".staging", "roles", "mine.md", revision, "mine.md"]
-      planted = ["aqua", ".staging", "roles", "mine.md", "rev_planted", "mine.md"]
+      revision = own_member!(actor)
+      object = ["aqua", ".staging", "crew", "mine.md", revision, "mine.md"]
+      planted = ["aqua", ".staging", "crew", "mine.md", "rev_planted", "mine.md"]
 
       assert {:error, {:reserved_path, ^object}} =
                Files.write(actor, Enum.join(object, "/"), "overwritten")
@@ -152,12 +152,12 @@ defmodule Arca.RevisionStoreReservedTest do
                Arca.ensure_dir(actor, ["components", ".staging"])
 
       assert {:error, :not_found} = Arca.get(actor, planted)
-      assert_own_role_intact(actor)
+      assert_own_member_intact(actor)
     end
 
     test "an edit through the athanor's files and the facade", %{actor: actor} do
-      revision = own_role!(actor)
-      object = ["aqua", ".staging", "roles", "mine.md", revision, "mine.md"]
+      revision = own_member!(actor)
+      object = ["aqua", ".staging", "crew", "mine.md", revision, "mine.md"]
 
       assert {:error, {:reserved_path, ^object}} =
                Files.update(actor, Enum.join(object, "/"), fn text -> {:ok, text <> "edited"} end)
@@ -174,26 +174,26 @@ defmodule Arca.RevisionStoreReservedTest do
       assert {:error, {:reserved_path, ^prefix}} =
                Arca.replace_tree(actor, prefix, [{["mine.md"], "swapped"}], cap: :exempt)
 
-      assert_own_role_intact(actor)
+      assert_own_member_intact(actor)
     end
   end
 
   describe "the reserved-path refusal at every door" do
     test "an overlay edit names the reserved path before any rewrite", %{actor: actor} do
-      revision = own_role!(actor)
-      object = ["aqua", ".staging", "roles", "mine.md", revision, "mine.md"]
+      revision = own_member!(actor)
+      object = ["aqua", ".staging", "crew", "mine.md", revision, "mine.md"]
       rewrite = fn _bytes -> flunk("a reserved path reached the rewrite") end
 
       assert {:error, {:reserved_path, ^object}} = Arca.Overlay.update(actor, object, rewrite)
 
-      planted = ["aqua", ".staging", "roles", "mine.md", "rev_planted", "mine.md"]
+      planted = ["aqua", ".staging", "crew", "mine.md", "rev_planted", "mine.md"]
       assert {:error, {:reserved_path, ^planted}} = Arca.Overlay.update(actor, planted, rewrite)
 
-      assert_own_role_intact(actor)
+      assert_own_member_intact(actor)
     end
 
     test "the console and MCP show a person the same sentence", %{ctx: ctx} do
-      args = %{"action" => "write", "path" => "aqua/.staging/roles/no-unit.md", "content" => "x"}
+      args = %{"action" => "write", "path" => "aqua/.staging/crew/no-unit.md", "content" => "x"}
 
       assert {:error, reason} = PrismWeb.Ops.call_tool(ctx, "file", args)
       assert %Prima.Refusal{class: :invalid_argument} = Sanctum.Refusals.classify(reason)
@@ -217,8 +217,8 @@ defmodule Arca.RevisionStoreReservedTest do
 
   test "the internal-write scope still writes and deletes in the revision store",
        %{actor: actor} do
-    own_role!(actor)
-    scratch = ["aqua", ".staging", "roles", "scratch.md", "rev_scratch", "scratch.md"]
+    own_member!(actor)
+    scratch = ["aqua", ".staging", "crew", "scratch.md", "rev_scratch", "scratch.md"]
 
     Arca.Overlay.with_internal_writes(fn ->
       assert :ok = Arca.put(actor, scratch, "scratch", cap: :exempt)
@@ -227,6 +227,6 @@ defmodule Arca.RevisionStoreReservedTest do
     end)
 
     assert {:error, :not_found} = Arca.get(actor, scratch)
-    assert_own_role_intact(actor)
+    assert_own_member_intact(actor)
   end
 end

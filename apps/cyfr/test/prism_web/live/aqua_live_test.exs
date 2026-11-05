@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# A store that cannot give the AQUA roles listing; every other read is the
+# A store that cannot give the AQUA crew listing; every other read is the
 # local adapter's.
-defmodule PrismWeb.AquaLiveTest.UnreadableRoles do
+defmodule PrismWeb.AquaLiveTest.UnreadableCrew do
   @moduledoc false
   use Arca.Storage.TestDouble
 
-  @roles Compendium.AquaPath.roles_root()
+  @crew Compendium.AquaPath.crew_root()
 
-  def list_typed(_actor, @roles), do: {:error, :eacces}
+  def list_typed(_actor, @crew), do: {:error, :eacces}
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
@@ -184,7 +184,7 @@ defmodule PrismWeb.AquaLiveTest do
                URI.decode_query(URI.parse(href).query)
     end
 
-    test "the soul offers no Delete; a shipped role is disabled and enabled from its card",
+    test "the soul offers no Delete; a shipped crew member is disabled and enabled from its card",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
 
@@ -192,33 +192,37 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-aqua button[phx-click=editor_set_disabled]")
 
       # Shipped and unedited: no Delete, a Disable.
-      assert has_element?(view, "#aqua-card-planner", "shipped")
-      refute has_element?(view, "#aqua-card-planner button[phx-click=editor_delete]")
+      assert has_element?(view, "#aqua-card-explorer", "shipped")
+      refute has_element?(view, "#aqua-card-explorer button[phx-click=editor_delete]")
 
       view
-      |> element("#aqua-card-planner button[phx-click=editor_set_disabled]", "Disable")
+      |> element("#aqua-card-explorer button[phx-click=editor_set_disabled]", "Disable")
       |> render_click()
 
-      assert {:ok, %{"disabled" => true}} = get_agent(ctx, "planner")
+      assert {:ok, %{"disabled" => true}} = get_agent(ctx, "explorer")
 
       # Still on the page — `list` drops it, the page does not — as
       # disabled, edited, and with the way back. The write answers before
       # the section re-reads, so the card is awaited.
-      settled(fn -> has_element?(view, "#aqua-card-planner", "disabled") end, "the disabled card")
-      assert has_element?(view, "#aqua-card-planner", "disabled")
-      assert has_element?(view, "#aqua-card-planner", "edited")
+      settled(
+        fn -> has_element?(view, "#aqua-card-explorer", "disabled") end,
+        "the disabled card"
+      )
+
+      assert has_element?(view, "#aqua-card-explorer", "disabled")
+      assert has_element?(view, "#aqua-card-explorer", "edited")
 
       assert has_element?(
                view,
-               "#aqua-card-planner button[phx-click=editor_revert]",
+               "#aqua-card-explorer button[phx-click=editor_revert]",
                "Revert to shipped"
              )
 
       view
-      |> element("#aqua-card-planner button[phx-click=editor_set_disabled]", "Enable")
+      |> element("#aqua-card-explorer button[phx-click=editor_set_disabled]", "Enable")
       |> render_click()
 
-      assert {:ok, %{"disabled" => false}} = get_agent(ctx, "planner")
+      assert {:ok, %{"disabled" => false}} = get_agent(ctx, "explorer")
     end
 
     test "restoring the shipped files reverts an edited soul and keeps what the athanor made",
@@ -245,11 +249,11 @@ defmodule PrismWeb.AquaLiveTest do
 
       html = render(view)
       assert html =~ "aqua/aqua.md"
-      assert html =~ "aqua/roles/scout.md"
+      assert html =~ "aqua/crew/scout.md"
       assert has_element?(view, "#aqua-restore-result", "Kept (1)")
     end
 
-    test "removing everything the athanor made deletes a member-made role too",
+    test "removing everything the athanor made deletes a crew member it made too",
          %{conn: conn, ctx: ctx} do
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
@@ -266,32 +270,37 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:error, _} = get_agent(ctx, "scout")
       settled(fn -> not has_element?(view, "#aqua-card-scout") end, "the scout card to go")
       refute has_element?(view, "#aqua-card-scout")
-      assert has_element?(view, "#aqua-restore-result", "aqua/roles/scout.md")
+      assert has_element?(view, "#aqua-restore-result", "aqua/crew/scout.md")
     end
 
-    test "a new role starts with a role's hands and leaves the soul's policy alone",
+    test "a new crew member is a name: it runs under the soul's policy and holds none of its own",
          %{conn: conn, ctx: ctx} do
-      {:ok, %{"tool_policy" => planner_policy}} = get_agent(ctx, "planner")
-      assert map_size(planner_policy) > 0
       {:ok, %{"tool_policy" => soul_policy}} = get_agent(ctx, "aqua")
 
-      {view, html} = mount_athanor(conn, "/aqua")
-
-      # The most restrictive role is the default start.
-      assert html =~ ~s(<option value="planner" selected)
+      {view, _html} = mount_athanor(conn, "/aqua")
 
       html =
         view
-        |> form("form[phx-submit=editor_create_role]", %{
-          "name" => "scout",
-          "start_from" => "planner"
-        })
+        |> form("form[phx-submit=editor_create_member]", %{"name" => "scout"})
         |> render_submit()
 
-      assert html =~ "Created the role"
-      refute has_element?(view, "#aqua-clone-strip")
-      assert {:ok, %{"tool_policy" => ^planner_policy}} = get_agent(ctx, "scout")
+      assert html =~ "Added &#39;scout&#39; to the crew"
+      assert {:ok, %{"type" => "crew", "tool_policy" => ^soul_policy}} = get_agent(ctx, "scout")
       assert {:ok, %{"tool_policy" => ^soul_policy}} = get_agent(ctx, "aqua")
+
+      {:ok, bytes} =
+        Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.crew_file("scout"))
+
+      refute bytes =~ "tool_policy"
+
+      # Its card says what it is good at and what to avoid, and edits no
+      # capabilities: those are the soul's.
+      settled(fn -> has_element?(view, "#aqua-card-scout") end, "the scout card")
+      assert has_element?(view, "#aqua-card-scout-description")
+      assert has_element?(view, "#aqua-card-scout-avoid")
+      assert has_element?(view, "#aqua-card-scout", "Runs under the soul's capabilities")
+      refute has_element?(view, "#aqua-card-scout input[phx-click=editor_toggle_capability]")
+      assert has_element?(view, "#aqua-card-aqua input[phx-click=editor_toggle_capability]")
     end
 
     test "the pinned page is written from the page and is what the soul reads",
@@ -510,8 +519,7 @@ defmodule PrismWeb.AquaLiveTest do
             "Nothing kept yet.",
             "No scrolls here.",
             "Shipped files",
-            "start with no hands",
-            "+ New role"
+            "+ New crew member"
           ] do
         refute html =~ line, "the dead render says #{inspect(line)}"
       end
@@ -522,17 +530,17 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-about")
       assert has_element?(view, "#aqua-notes")
       assert has_element?(view, "#aqua-scrolls")
-      assert has_element?(view, "form[phx-submit=editor_create_role]")
+      assert has_element?(view, "form[phx-submit=editor_create_member]")
     end
 
     # A store that cannot give the agents: the page says so in place of the
-    # cards, the new-role form and the missing soul's note, and offers no
+    # cards, the new-member form and the missing soul's note, and offers no
     # model to install or connect. One that answers with no agents is an
     # athanor with no soul, as before.
     @tag :capture_log
     test "an agents list that cannot be read says so, and offers nothing to create or connect",
          %{conn: conn} do
-      storage!(PrismWeb.AquaLiveTest.UnreadableRoles)
+      storage!(PrismWeb.AquaLiveTest.UnreadableCrew)
       {view, _html} = mount_athanor(conn, "/aqua")
 
       assert has_element?(
@@ -542,7 +550,7 @@ defmodule PrismWeb.AquaLiveTest do
              )
 
       refute render(view) =~ "No soul here"
-      refute has_element?(view, "form[phx-submit=editor_create_role]")
+      refute has_element?(view, "form[phx-submit=editor_create_member]")
       refute has_element?(view, "button[phx-click=install_catalyst]")
       refute has_element?(view, "button[phx-click=open_consent]")
     end
@@ -579,9 +587,11 @@ defmodule PrismWeb.AquaLiveTest do
           else: Application.delete_env(:cyfr, :registry_url)
       end)
 
-      {view, html} = mount_athanor(conn, "/aqua")
-      assert html =~ "not installed here yet"
-      assert has_element?(view, "button[phx-click=install_catalyst]")
+      # The soul's card: a crew member whose brain is not here says so on
+      # its own card.
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, "#aqua-card-aqua", "not installed here yet")
+      assert has_element?(view, "#aqua-card-aqua button[phx-click=install_catalyst]")
 
       # With no registry the refusal is the outcome, and it never became a
       # request: `Compendium.Pull` asks before it resolves a tag.
@@ -591,7 +601,7 @@ defmodule PrismWeb.AquaLiveTest do
       before = Task.Supervisor.children(Prism.TaskSupervisor)
 
       view
-      |> element("button[phx-click=install_catalyst]")
+      |> element("#aqua-card-aqua button[phx-click=install_catalyst]")
       |> render_click()
 
       fetch = page_tasks(view, before)
@@ -612,7 +622,11 @@ defmodule PrismWeb.AquaLiveTest do
       # The button comes back: a refused fetch must not leave the page
       # showing "Installing…" with nothing to click.
       refute html =~ "Installing…"
-      assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
+
+      assert has_element?(
+               view,
+               "#aqua-card-aqua button[phx-click=install_catalyst]:not([disabled])"
+             )
 
       # The fetch has answered; it is gone before the registry setting it
       # read is restored and before the sandbox it queried is released.
@@ -628,8 +642,8 @@ defmodule PrismWeb.AquaLiveTest do
       ref = "catalyst:local.newmodel"
       :ok = soul_names_catalyst!(ctx, ref)
 
-      {view, html} = mount_athanor(conn, "/aqua")
-      assert html =~ "not installed here yet"
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, "#aqua-card-aqua", "not installed here yet")
 
       # What a pull that succeeds leaves behind: the row, with a required
       # need and no consent bound to it yet.
@@ -660,14 +674,14 @@ defmodule PrismWeb.AquaLiveTest do
 
       html = settled_render(view)
       assert html =~ "Installed #{ref}."
-      refute html =~ "not installed here yet"
-      assert html =~ "the model has no key yet"
-      refute has_element?(view, "button[phx-click=install_catalyst]")
+      refute has_element?(view, "#aqua-card-aqua", "not installed here yet")
+      assert has_element?(view, "#aqua-card-aqua", "the model has no key yet")
+      refute has_element?(view, "#aqua-card-aqua button[phx-click=install_catalyst]")
 
       # And the way on is live: the grant opens on the release that landed,
       # in the page's system layer and nowhere on the page.
       view
-      |> element("button[phx-click=open_consent]", "Connect a model")
+      |> element("#aqua-card-aqua button[phx-click=open_consent]", "Connect a model")
       |> render_click()
 
       html = render(view)
@@ -916,83 +930,172 @@ defmodule PrismWeb.AquaLiveTest do
       {view, _html} = mount_athanor(conn, "/aqua")
       agents = with_target(view, "#aqua-agents")
 
-      render_click(agents, "editor_edit_prompt", %{"name" => "planner"})
+      render_click(agents, "editor_edit_prompt", %{"name" => "explorer"})
       html = view |> form("#prompt-editor form", %{"content" => "# Mine"}) |> render_submit()
 
       refute html =~ "Save failed"
-      assert {:ok, %{"content" => "# Mine"}} = get_agent(ctx, "planner")
+      assert {:ok, %{"content" => "# Mine"}} = get_agent(ctx, "explorer")
       refute has_element?(view, "#prompt-editor")
 
-      render_click(agents, "editor_edit_prompt", %{"name" => "planner"})
+      render_click(agents, "editor_edit_prompt", %{"name" => "explorer"})
       assert has_element?(view, "#prompt-editor textarea[name=content]", "# Mine")
 
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
-          "name" => "planner",
+          "name" => "explorer",
           "content" => "# Theirs"
         })
 
       html = view |> form("#prompt-editor form", %{"content" => "# Again"}) |> render_submit()
 
       assert html =~ "The prompt changed since you opened it"
-      assert {:ok, %{"content" => "# Theirs"}} = get_agent(ctx, "planner")
+      assert {:ok, %{"content" => "# Theirs"}} = get_agent(ctx, "explorer")
       assert has_element?(view, "#prompt-editor textarea[name=content]")
     end
 
-    test "the page writes what an agent can hold, a role as the soul, never a destructive auto",
+    test "the page writes the soul's policy, never a destructive auto; a crew member holds none",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
       agents = with_target(view, "#aqua-agents")
+      {:ok, %{"tool_policy" => before}} = get_agent(ctx, "aqua")
+      refute Map.has_key?(before, "storage.write")
 
-      # A write-kind hand starts at ask on a role as on the soul, and a
-      # destructive one is offered to a role too, at ask.
-      for {name, key} <- [
-            {"web", "files.write"},
-            {"aqua", "files.write"},
-            {"web", "files.delete"}
-          ] do
-        render_click(agents, "editor_toggle_capability", %{"name" => name, "key" => key})
-        assert {:ok, %{"tool_policy" => %{^key => "ask"}}} = get_agent(ctx, name)
-      end
+      # A write-kind hand starts at ask, and moves between ask and auto.
+      render_click(agents, "editor_toggle_capability", %{
+        "name" => "aqua",
+        "key" => "storage.write"
+      })
 
-      # A role's hand moves between ask and auto.
+      assert {:ok, %{"tool_policy" => %{"storage.write" => "ask"}}} = get_agent(ctx, "aqua")
+
       for mode <- ["auto", "ask"] do
         render_click(agents, "editor_set_capability_mode", %{
-          "name" => "web",
-          "key" => "files.write",
+          "name" => "aqua",
+          "key" => "storage.write",
           "mode" => mode
         })
 
-        assert {:ok, %{"tool_policy" => %{"files.write" => ^mode}}} = get_agent(ctx, "web")
+        assert {:ok, %{"tool_policy" => %{"storage.write" => ^mode}}} = get_agent(ctx, "aqua")
       end
 
-      # A destructive hand is never auto, on a role or the soul.
-      for name <- ["web", "aqua"] do
-        html =
-          render_click(agents, "editor_set_capability_mode", %{
-            "name" => name,
-            "key" => "files.delete",
-            "mode" => "auto"
-          })
+      # A destructive hand is never auto.
+      html =
+        render_click(agents, "editor_set_capability_mode", %{
+          "name" => "aqua",
+          "key" => "files.delete",
+          "mode" => "auto"
+        })
 
-        assert html =~ "always asks"
-        assert {:ok, %{"tool_policy" => %{"files.delete" => "ask"}}} = get_agent(ctx, name)
-      end
+      assert html =~ "always asks"
+      assert {:ok, %{"tool_policy" => %{"files.delete" => "ask"}}} = get_agent(ctx, "aqua")
+
+      # A crew member runs under the soul's policy: the soul's edit is its
+      # too, and a write of its own is refused.
+      assert {:ok, %{"tool_policy" => %{"storage.write" => "ask"}}} = get_agent(ctx, "explorer")
+
+      html =
+        render_click(agents, "editor_toggle_capability", %{
+          "name" => "explorer",
+          "key" => "storage.list"
+        })
+
+      assert html =~ "runs under the soul&#39;s tool policy"
     end
 
-    test "the matrix offers a role what it offers the soul: the ask/auto pill and the destructive row",
-         %{conn: conn} do
-      {view, html} = mount_athanor(conn, "/aqua")
+    # A brain's options are what its `describe` declares: the card offers
+    # each by its kind and writes the value cast to that kind, and an empty
+    # one takes the option off.
+    test "a brain's declared options are edited on the card, each as its kind",
+         %{conn: conn, ctx: ctx} do
+      # No brain here is ready, so the page reads no options of its own;
+      # the explorer's are given as a ready brain's `describe` declares
+      # them, again after each write's re-read of the section.
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, "#aqua-card-explorer")
+      refute has_element?(view, "[id$=-options]")
 
-      refute html =~ "runs in this role"
+      declared = [
+        %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]},
+        %{"name" => "budget", "kind" => "integer", "default" => 4}
+      ]
+
+      change = fn option, value ->
+        send_update_agents(view, brain_options: %{"explorer" => declared})
+
+        view
+        |> element("#aqua-card-explorer-option-#{option}")
+        |> render_change(%{"name" => "explorer", "option" => option, "value" => value})
+      end
+
+      send_update_agents(view, brain_options: %{"explorer" => declared})
+      assert has_element?(view, "#aqua-card-explorer-options select[aria-label=effort]")
 
       assert has_element?(
                view,
-               ~s(#aqua-card-builder button[phx-click=editor_set_capability_mode][phx-value-key="files.write"])
+               ~s{#aqua-card-explorer-options input[aria-label=budget][placeholder="default (4)"]}
              )
 
-      assert has_element?(view, ~s(#aqua-card-builder input[phx-value-key="files.delete"]))
+      for {option, value, want} <- [{"effort", "high", "high"}, {"budget", "8", 8}] do
+        change.(option, value)
+        assert {:ok, %{"options" => %{^option => ^want}}} = get_agent(ctx, "explorer")
+      end
+
+      change.("effort", "")
+      assert {:ok, %{"options" => %{"budget" => 8} = options}} = get_agent(ctx, "explorer")
+      refute Map.has_key?(options, "effort")
+
+      # A value outside what the brain declares is refused on the page.
+      assert change.("budget", "many") =~ "That option takes a whole number"
+      assert {:ok, %{"options" => %{"budget" => 8}}} = get_agent(ctx, "explorer")
+    end
+
+    # Each page sends the one option it changed; neither writes back the
+    # options it read, so two people editing different options of one
+    # brain at once keep both.
+    test "two pages editing different brain options at once keep both",
+         %{conn: conn, ctx: ctx} do
+      declared = [
+        %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]},
+        %{"name" => "budget", "kind" => "integer"}
+      ]
+
+      edits = [{"effort", "high"}, {"budget", "8"}]
+
+      views =
+        for _edit <- edits do
+          {view, _html} = mount_athanor(conn, "/aqua")
+          assert has_element?(view, "#aqua-card-explorer")
+          send_update_agents(view, brain_options: %{"explorer" => declared})
+          view
+        end
+
+      views
+      |> Enum.zip(edits)
+      |> Enum.map(fn {view, {option, value}} ->
+        Task.async(fn ->
+          view
+          |> element("#aqua-card-explorer-option-#{option}")
+          |> render_change(%{"name" => "explorer", "option" => option, "value" => value})
+        end)
+      end)
+      |> Task.await_many(30_000)
+
+      assert {:ok, %{"options" => %{"effort" => "high", "budget" => 8}}} =
+               get_agent(ctx, "explorer")
+    end
+
+    test "the capability matrix is the soul's alone: the ask/auto pill and the destructive row",
+         %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-card-aqua button[phx-click=editor_set_capability_mode][phx-value-key="files.write"])
+             )
+
+      assert has_element?(view, ~s(#aqua-card-aqua input[phx-value-key="files.delete"]))
+      refute has_element?(view, ~s(#aqua-card-explorer input[phx-value-key="files.delete"]))
     end
 
     test "an allowlist edit lands on the policy as it is now, not on the copy the page loaded",
@@ -1013,9 +1116,10 @@ defmodule PrismWeb.AquaLiveTest do
       # A toggle on the soul's card keeps it…
       view
       |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "files.write"})
+      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "storage.write"})
 
-      assert {:ok, %{"tool_policy" => %{"files.write" => "ask", "vault.list" => "ask"} = policy}} =
+      assert {:ok,
+              %{"tool_policy" => %{"storage.write" => "ask", "vault.list" => "ask"} = policy}} =
                get_agent(ctx, "aqua")
 
       # …and another, after yet another edit, keeps both.
@@ -1028,10 +1132,10 @@ defmodule PrismWeb.AquaLiveTest do
 
       view
       |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "files.write"})
+      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "storage.write"})
 
       {:ok, %{"tool_policy" => after_toggle}} = get_agent(ctx, "aqua")
-      refute Map.has_key?(after_toggle, "files.write")
+      refute Map.has_key?(after_toggle, "storage.write")
       assert after_toggle["vault.list"] == "ask"
       assert after_toggle["vault.get"] == "ask"
     end
