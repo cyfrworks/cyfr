@@ -6,7 +6,7 @@
 // the keeper names, for one spawn uid, the only addresses it may reach,
 // and the guard installs that uid's rules or clears them.
 //
-// The guard serves it as `cyfr-locus guard-control <socket>` once its
+// The guard serves it as `cyfr-locus guard-control <socket> <ranges>` once its
 // rules are in, on a Unix socket in a directory of root's own, mode 0700,
 // on a volume the island's service mounts read-only: only root reaches
 // it, and in the service that is the keeper alone. Each message is one
@@ -25,7 +25,7 @@
 // service still runs in the old one) and takes none of its answers.
 //
 // `admit` gives the uid, which must lie in one of the guard's spawn
-// ranges (CYFR_GUARD_POOL), exactly the addresses named, 1..MaxAddresses
+// ranges (its <ranges>), exactly the addresses named, 1..MaxAddresses
 // canonical IP addresses with no zone, and refuses it every other public
 // address; it replaces whatever the uid held. `clear` returns the uid to
 // the island's rule. Each is answered once its rules are installed and
@@ -166,7 +166,8 @@ func CanonicalAddress(text string) (netip.Addr, error) {
 // Range is one spawn range of the guard's, inclusive.
 type Range struct{ First, Last uint64 }
 
-// ParseRanges reads CYFR_GUARD_POOL: comma-separated `<first>-<last>`.
+// ParseRanges reads the guard's spawn ranges: comma-separated
+// `<first>-<last>`.
 func ParseRanges(text string) ([]Range, error) {
 	var out []Range
 	for _, part := range strings.Split(text, ",") {

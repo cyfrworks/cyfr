@@ -55,6 +55,8 @@ defmodule Locus.KeeperVectorsTest do
     {"spawned", nil},
     {"error", "capacity"},
     {"error", "memory_unavailable"},
+    {"error", "hosts_unresolved"},
+    {"error", "guard_unavailable"},
     {"error", "unknown_spawn"},
     {"exited", :status},
     {"exited", :signal},

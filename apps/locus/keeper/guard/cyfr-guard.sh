@@ -569,7 +569,7 @@ case "${1:-}" in
   "")
     install_rules
     if [ -n "${CYFR_GUARD_CONTROL:-}" ]; then
-      exec cyfr-locus guard-control "$CYFR_GUARD_CONTROL"
+      exec cyfr-locus guard-control "$CYFR_GUARD_CONTROL" "$CYFR_GUARD_POOL"
     fi
     exec sleep infinity
     ;;

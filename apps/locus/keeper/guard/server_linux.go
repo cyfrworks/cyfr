@@ -34,18 +34,19 @@ const (
 // (cyfr-guard.sh, installed under this name on PATH).
 const Script = "cyfr-guard"
 
-// Main runs `cyfr-locus guard-control <socket>`, which the guard execs once
-// its rules are installed: it serves the control on socket until it is
-// stopped. CYFR_GUARD_POOL names the uids it may act on.
+// Main runs `cyfr-locus guard-control <socket> <ranges>`, which the guard
+// execs once its rules are installed: it serves the control on socket
+// until it is stopped, acting on the uids of ranges alone, the spawn ranges
+// the guard was given (`<first>-<last>`, comma-separated).
 func Main(args []string) int {
 	log := logx.New("cyfr-guard")
-	if len(args) != 1 || !filepath.IsAbs(args[0]) || filepath.Clean(args[0]) != args[0] {
-		log.Error("usage: cyfr-locus guard-control <socket>, a clean absolute path")
+	if len(args) != 2 || !filepath.IsAbs(args[0]) || filepath.Clean(args[0]) != args[0] {
+		log.Error("usage: cyfr-locus guard-control <socket> <ranges>, the socket a clean absolute path")
 		return ExitUsage
 	}
-	ranges, err := ParseRanges(os.Getenv("CYFR_GUARD_POOL"))
+	ranges, err := ParseRanges(args[1])
 	if err != nil {
-		log.Error("refusing to serve: CYFR_GUARD_POOL: %v", err)
+		log.Error("refusing to serve: the spawn ranges: %v", err)
 		return ExitConfig
 	}
 	netns, err := os.Readlink("/proc/self/ns/net")

@@ -7,7 +7,7 @@
 // an unprivileged client.
 //
 //	cyfr-locus serve --pool <name>:<first>-<last>[:netns] --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]
-//	cyfr-locus guard-control <socket>
+//	cyfr-locus guard-control <socket> <ranges>
 //
 // `serve` is the only subcommand an operator runs; `guard-control` is the
 // one an island's egress guard runs once its rules are in (package guard). It needs exactly the
