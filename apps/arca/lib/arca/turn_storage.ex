@@ -33,8 +33,10 @@ defmodule Arca.TurnStorage do
   `turns.sources` is every source the turn has read (`Prima.Source`), a
   set that only grows. It grows in the transaction that writes the step
   a read belongs to, after the turn row is taken: `put_step/3` joins the
-  sources the step opens with (`:sources`) and the sources of the earlier
-  turns whose rows it sends (`:sources_from`), and `close_step/4` joins
+  sources the step opens with (`:sources`) and the sources of the turns
+  whose words the rows it sends carry (`:sources_from`): the thread's
+  earlier turns, and a crew member's turn whose reply, or the soul's turn
+  whose request, a row brings across threads. `close_step/4` joins
   the sources of its result (`:sources`), and of a component it launched
   (`:launched`): outside, named by its reference, unless the launch's
   completion result says no run of its tree was admitted with egress.
@@ -1257,8 +1259,8 @@ defmodule Arca.TurnStorage do
   list), `:message_id`, `:child_execution_id`, `:dispatch_state`
   (`Prima.TurnState.opening_states/0`, default `proposed`), `:fence`,
   and the sources the step opens with: `:sources` (`Prima.Source`s) and
-  `:sources_from` (the ids of earlier turns of the thread whose rows the
-  step sends, each turn's sources joined as it stands). A step is
+  `:sources_from` (the ids of the athanor's turns whose words the rows the
+  step sends carry, each turn's sources joined as it stands). A step is
   recorded on a running turn only; any other state or turn is
   `{:error, :illegal_transition}`.
   """
@@ -2378,9 +2380,11 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # What a step opens with: the sources it names and those of the earlier
-  # turns of the same thread whose rows it sends, as each turn stands. A
-  # turn of another thread or athanor joins nothing.
+  # What a step opens with: the sources it names and those of the turns
+  # whose words its rows carry, as each turn stands — of any thread of the
+  # athanor, since a reply or a request carries a turn's words across
+  # threads; a join only ever adds. A turn of another athanor joins
+  # nothing.
   # arca:db-raise-ok inside the caller's transaction
   defp opened_sources!(athanor_id, %Turn{} = turn, attrs) do
     sources!(Map.get(attrs, :sources, [])) ++
@@ -2390,7 +2394,7 @@ defmodule Arca.TurnStorage do
 
         ids when is_list(ids) ->
           from(t in Turn,
-            where: t.athanor_id == ^athanor_id and t.thread_id == ^turn.thread_id,
+            where: t.athanor_id == ^athanor_id,
             where: t.id in ^ids and t.id != ^turn.id,
             select: t.sources
           )

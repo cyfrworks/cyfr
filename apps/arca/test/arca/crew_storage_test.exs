@@ -440,6 +440,41 @@ defmodule Arca.CrewStorageTest do
       assert drained == reply.id
     end
 
+    test "a step joins the sources of the member turn whose reply its rows carry, across threads",
+         %{actor: actor, room: room} do
+      request = request!(actor, room, "planner", "read the news")
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      member = actor |> delivered!(room, child, request) |> then(&start!(actor, &1))
+      news = Prima.Source.outside("news.example")
+      :ok = TurnStorage.join_sources(actor, member.id, [news], %{fence: member.fence})
+
+      {:ok, %{turn: soul}} =
+        TurnStorage.accept_message(actor, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "planner",
+            addressee: "aqua",
+            reply_to: request.id,
+            outcome: "done",
+            content: "The news says x.",
+            payload: %{"from_turn" => member.id}
+          },
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      soul = start!(actor, soul)
+
+      {:ok, _} =
+        TurnStorage.put_step(actor, soul.id, %{
+          kind: "model",
+          idempotency_key: "model:1",
+          sources_from: [member.id],
+          fence: soul.fence
+        })
+
+      assert news in Prima.Source.decode(Arca.Repo.get!(Arca.Schemas.Turn, soul.id).sources)
+    end
+
     test "a response's session is kept on the thread for its next request", %{
       actor: actor,
       room: room
