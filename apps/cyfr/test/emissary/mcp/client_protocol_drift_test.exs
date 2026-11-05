@@ -48,10 +48,10 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
   end
 
   describe "outbound legacy support names one revision" do
-    @legacy_sources [
-      "apps/cyfr/lib/emissary/external/server.ex",
-      "apps/locus/lib/locus/backends/backend.ex"
-    ]
+    # The one outbound MCP client: Emissary's, which speaks to an http server
+    # and, over a program's session, to a stdio one. Locus carries lines and
+    # speaks no MCP of its own.
+    @legacy_sources ["apps/cyfr/lib/emissary/external/server.ex"]
 
     # The one definition, read by name: the alias spelling and the full one.
     @legacy_call ~r/\b(?:Prima\.MCP\.)?Protocol\.legacy_version\(\)/
@@ -95,14 +95,14 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
         String.replace(
           source,
           "Protocol.legacy_version()",
-          ~s("#{Protocol.legacy_version()}"),
-          global: false
+          ~s("#{Protocol.legacy_version()}")
         )
 
-      assert legacy_drift(planted) == [
-               :no_legacy_version_call,
-               {:date_literal, ~s("#{Protocol.legacy_version()}")}
-             ]
+      # Every read spelled back as the date: the client reads it at its
+      # initialize and at its legacy fallback.
+      assert [:no_legacy_version_call | literals] = legacy_drift(planted)
+      assert literals != []
+      assert Enum.uniq(literals) == [{:date_literal, ~s("#{Protocol.legacy_version()}")}]
 
       assert legacy_drift(source <> ~s(\n@legacy "2025-03-26"\n)) == [
                {:date_literal, ~s("2025-03-26")}

@@ -82,6 +82,7 @@ defmodule Cyfr.Test.Sandbox do
     Opus.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.External.ServerSupervisor,
+    Opus.Programs.Relays,
     Opus.Attempt.Supervisor,
     Locus.Runtime.RunnerPool.Runners,
     Opus.Events.Supervisor,

@@ -182,6 +182,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Invitations),
        "the invitation page's read of who invited and to which athanor, before any " <>
          "ceremony, rostered for it in `Cyfr.Boundaries`' surface rows"},
+      {~w(Mount),
+       "a login entry's mount and its home, which the programs controller and Emissary's " <>
+         "stdio servers and reconciler read, never material, each rostered for its " <>
+         "callers in `Cyfr.Boundaries`' surface rows"},
       {~w(SharedThreads),
        "a shared thread read under the person's own seat: the download's seat check, the " <>
          "assistant's excerpt and say-aloud, and the people a person shares a thread with, " <>
@@ -195,7 +199,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Opus => [
       {~w(Keys Schedules.Scheduler Supervisor),
        "the worker root the composition root mints and the trees it starts"},
-      {~w(Host.Children), "an admission entry `Cyfr.Boundaries` rosters"}
+      {~w(Host.Children), "an admission entry `Cyfr.Boundaries` rosters"},
+      {~w(Programs Programs.Definition Programs.Session Programs.StatusRedaction),
+       "the programs controller and its session client, which Emissary's servers and " <>
+         "the console's sign-in terminal call downward, rostered in `Cyfr.Boundaries`"}
     ],
     Aqua => [{~w(Supervisor), "the tree the composition root starts"}]
   }

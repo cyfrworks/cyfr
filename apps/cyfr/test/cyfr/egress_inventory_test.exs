@@ -112,6 +112,13 @@ defmodule Cyfr.EgressInventoryTest do
   @operator_targets [":operator", "private_egress_targets", "private_allowed?"]
   @guest_side ~w(apps/locus/lib/locus/runtime/**/*.ex apps/cyfr/lib/opus/**/*.ex apps/cyfr/lib/opus.ex)
 
+  # The programs controller lives in the execution domain but decides no
+  # guest's target: it is the control plane's own caller of its backends
+  # service, which the operator's private targets name (compose's
+  # `locus-backends`), as its controller did from Emissary before S1 moved
+  # it. Exactly these files, and only for that call.
+  @control_plane_callers ~w(apps/cyfr/lib/opus/programs/box.ex apps/cyfr/lib/opus/programs/session.ex)
+
   defp root, do: Path.expand("../../../..", __DIR__)
 
   # The files under `globs` whose code (docs and comment lines aside) names
@@ -169,8 +176,13 @@ defmodule Cyfr.EgressInventoryTest do
   end
 
   test "a guest's outbound target is never decided under the operator's private targets" do
-    assert sites(@operator_targets, @guest_side) == [],
+    guest_side = sites(@operator_targets, @guest_side)
+
+    assert guest_side -- @control_plane_callers == [],
            "the guest side names the operator's private targets"
+
+    assert @control_plane_callers -- guest_side == [],
+           "a programs controller file no longer names the operator's targets: drop it"
 
     # The scan sees the control plane's own reader, so its silence above is
     # a finding rather than a pattern that matches nothing.

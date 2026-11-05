@@ -808,7 +808,9 @@ defmodule Cyfr.DocsDriftTest do
     assert "LOCUS_RUNTIME_KEY" in variables and "LOCUS_RUNTIME_BIND" in variables
     assert "LOCUS_BUILDS_KEY" in variables and "LOCUS_BUILDS_MEMORY_BYTES" in variables
     assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_MEMORY_BYTES" in variables
-    assert length(variables) >= 27, "the scan found only #{inspect(variables)}"
+    # S1 removed the backends' in-flight and timeout settings, which only
+    # their MCP handshake read.
+    assert length(variables) >= 24, "the scan found only #{inspect(variables)}"
     assert "LOCUS_LOG_LEVEL" in variables
     assert services["locus-runtime"].env_files == [".env.locus"]
     assert "LOCUS_RUNTIME_BIND" in services["locus-runtime"].environment
@@ -1203,6 +1205,10 @@ defmodule Cyfr.DocsDriftTest do
     # The keeper sets it for the client it starts; an inherited value is
     # replaced, never read.
     "KEEPER_CHANNEL" => :keeper,
+    # The keeper hands its client the kept homes' root and uid range from
+    # its own `--kept-homes` flag, which compose's entrypoint sets; an
+    # inherited value is replaced, never read.
+    "KEEPER_KEPT_HOMES" => :keeper,
     # The worker service hands each runner its role and identities
     # (`Locus.Runtime.Settings.runner_environment/1`). cyfr-locus places
     # the control channel and the relay on file descriptors 3 and 4, which
