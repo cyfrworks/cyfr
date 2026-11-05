@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn lines_the_buffer_dropped_mid_turn_are_a_typed_loss_and_the_session_closes() {
+    fn lines_the_buffer_dropped_mid_turn_interrupt_the_session_and_close_it() {
         let answered = |id: &str| {
             format!(r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"{id}","response":{{"errors":{{}}}}}}}}"#)
         };
@@ -183,8 +183,8 @@ mod tests {
         let mut deltas = Deltas::new(Vec::<Value>::new());
         let deadline = Instant::now() + Duration::from_secs(30);
         let refusal = chat::chat(&mut wire, &mut deltas, &request, fresh_id(), deadline).unwrap_err();
-        assert_eq!(refusal.kind, "incomplete_stream");
-        assert!(refusal.message.contains("lost"), "{}", refusal.message);
+        assert_eq!(refusal.kind, "provider_error");
+        assert!(refusal.message.contains("interrupted"), "{}", refusal.message);
         assert_eq!(wire.closed, ["pipe-1"], "the session closes, so the next chat resumes from the folder");
     }
 }

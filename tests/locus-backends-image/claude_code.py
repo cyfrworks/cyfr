@@ -34,12 +34,13 @@ CYFR's tools as the harness starts an MCP server.
   answers a `tool_call` named as the request named the tool, carrying the
   ask's id, and leaves the ask pending in the running session; the next
   chat, carrying the `tool_result`, attaches to that session and sends only
-  the ask's allow, with the result in its input. The read after it is
-  answered unavailable (overloaded, which the loop retries); the same chat
-  made again finds the turn the harness completed meanwhile in the
-  session's buffer and answers it without sending the allow again: the
-  harness's call through `cyfr-stub` returned the result, which its reply
-  quotes.
+  the ask's allow, with the result in its input, and the harness's call
+  through `cyfr-stub` returns that result, which its reply quotes.
+- An interruption: when the read after the next ask's allow is answered
+  unavailable, the chat answers provider_error (which the loop does not
+  retry) saying the session was interrupted, closes the session with its
+  harness and sends nothing more; the next message resumes the session
+  with `--resume` and the same id, sending no allow again.
 - Resume after retirement: once the session's program is retired idle, the
   next chat naming the session starts the harness again with `--resume`,
   which finds the session in the kept folder.
@@ -312,28 +313,58 @@ def main():
             {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": call["id"], "name": "files", "content": body}]},
         ]}
         bridge.calls.clear()
-        bridge.fail_read_after_allow = True
         output, events = run_catalyst(rt, plane, wasm, "chat", answered, "the chat carrying the tool's result")
-        answers.append((output, events))
-        expect(output["status"] == 503 and output["error"]["type"] == "overloaded",
-               "a read that the box could not answer after the allow answers overloaded, which the loop retries",
-               output)
-        output, events = run_catalyst(rt, plane, wasm, "chat", answered, "the same chat, retried")
         answers.append((output, events))
         data = output["data"]
         opened = [args for op, args in bridge.calls if op == "open"]
         sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
         allow = [line for line in sent if line.get("type") == "control_response"]
-        expect(len(opened) == 2 and sent == allow,
-               "each run attaches to the running session, and between them only the ask's answer was sent: no "
-               "initialize, no new tools", sent)
+        expect(len(opened) == 1 and sent == allow,
+               "the next chat attaches to the running session and sends the ask's answer alone: no initialize, no "
+               "new tools", sent)
         expect(len(allow) == 1 and allow[0]["response"]["request_id"] == call["provider_data"]["request_id"]
                and allow[0]["response"]["response"] == {"behavior": "allow", "updatedInput": {
                    "action": "read", "path": "notes.txt", "result": body}},
                "the ask is allowed with CYFR's result in its input", allow)
         expect(data["stop_reason"] == "end_turn" and data["content"] == [{"type": "text", "text": f"The file says: {body}"}],
-               "the retry answers the turn the harness completed meanwhile: its call through cyfr-stub returned the "
-               "result, which its reply quotes, and the allow was sent once", data)
+               "the harness's call through cyfr-stub returned the result, which its reply quotes", data)
+
+        # ————— a pipe that fails after the allow interrupts the session —————
+        output, events = run_catalyst(rt, plane, wasm, "chat", {**ask, "messages": history[:-1] + [
+            {"role": "user", "content": "read notes.txt again"}]}, "a chat that calls the tool again")
+        answers.append((output, events))
+        again = output["data"]["content"][-1]
+        expect(output["data"]["stop_reason"] == "tool_call", "the harness asks for CYFR's tool again", output)
+        bridge.calls.clear()
+        bridge.fail_read_after_allow = True
+        answered_again = {**ask, "messages": history + [
+            {"role": "assistant", "content": output["data"]["content"]},
+            {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": again["id"], "name": "files", "content": body}]},
+        ]}
+        output, events = run_catalyst(rt, plane, wasm, "chat", answered_again, "a chat whose read after the allow fails")
+        answers.append((output, events))
+        sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
+        expect(output["status"] == 502 and output["error"]["type"] == "provider_error"
+               and "interrupted" in output["error"]["message"] and "next message" in output["error"]["message"],
+               "a read the box could not answer after the allow answers provider_error, which the loop does not "
+               "retry, saying the session was interrupted", output)
+        expect([op for op, _ in bridge.calls if op == "close"] == ["close"]
+               and [line["type"] for line in sent] == ["control_response"],
+               "the session is closed, the allow sent once and nothing else", [bridge.calls, sent])
+        eventually(lambda: not fakes(backends), "the interrupted session's harness to end with it")
+        bridge.calls.clear()
+        resumed = {"model": "fake-opus", "session": session, "options": {"tools": ""},
+                   "messages": [{"role": "user", "content": "what was my first message?"}]}
+        output, events = run_catalyst(rt, plane, wasm, "chat", resumed, "the next message after the interruption")
+        answers.append((output, events))
+        argv = [args for op, args in bridge.calls if op == "open"][0]["argv"]
+        sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
+        expect(argv[argv.index("--resume") + 1] == harness_id
+               and output["data"]["session"].split(".")[0] == harness_id
+               and output["data"]["content"] == [{"type": "text", "text": "Your first message was: say hello"}]
+               and not any(line.get("type") == "control_response" for line in sent),
+               "the next message resumes the session with --resume and the same id, and no allow is sent again",
+               [argv, output, sent])
 
         # ————— resume after retirement —————
         eventually(lambda: c.program(OWNER, PROGRAM["name"])["sessions"] == 0 and not fakes(backends),

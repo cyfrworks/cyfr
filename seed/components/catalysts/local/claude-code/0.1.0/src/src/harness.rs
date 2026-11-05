@@ -14,10 +14,8 @@
 use serde_json::{json, Map, Value};
 
 /// The arguments every session starts with: stream-json both ways, partial
-/// messages for streaming, each user message echoed back with the `uuid`
-/// it was sent with (so a run tells whether a message it sends again was
-/// received already), no MCP server but the ones this catalyst sets, and
-/// every permission ask of the harness's put to this catalyst.
+/// messages for streaming, no MCP server but the ones this catalyst sets,
+/// and every permission ask of the harness's put to this catalyst.
 pub const BASE_ARGV: &[&str] = &[
     "-p",
     "--input-format",
@@ -26,7 +24,6 @@ pub const BASE_ARGV: &[&str] = &[
     "stream-json",
     "--verbose",
     "--include-partial-messages",
-    "--replay-user-messages",
     "--strict-mcp-config",
     "--permission-prompt-tool",
     "stdio",
@@ -122,11 +119,10 @@ pub fn set_tools(tools: &[String]) -> String {
 }
 
 /// A user message of content blocks, in the harness's (the Messages API's)
-/// block shapes, under the `uuid` its echo carries back.
-pub fn user(content: Vec<Value>, uuid: &str) -> String {
+/// block shapes.
+pub fn user(content: Vec<Value>) -> String {
     json!({
         "type": "user",
-        "uuid": uuid,
         "message": {"role": "user", "content": content},
         "parent_tool_use_id": null,
         "session_id": ""
@@ -185,10 +181,6 @@ pub enum Event {
     },
     /// The turn's start, naming the model it runs on.
     Init { model: Option<String> },
-    /// The echo of a user message the harness received, by its `uuid`.
-    Replay { uuid: String },
-    /// The results of tool calls the harness ran, by their `tool_use` ids.
-    ToolResults { ids: Vec<String> },
     /// The turn's end.
     Result {
         ok: bool,
@@ -232,21 +224,6 @@ pub fn read(line: &str) -> Event {
             let error = value.get("error").and_then(Value::as_str).map(str::to_string);
             Event::Assistant { text, error }
         }
-        Some("user") if main && value.get("isReplay").and_then(Value::as_bool) == Some(true) => Event::Replay {
-            uuid: str_of(&value["uuid"]),
-        },
-        Some("user") if main => Event::ToolResults {
-            ids: value["message"]["content"]
-                .as_array()
-                .map(|blocks| {
-                    blocks
-                        .iter()
-                        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
-                        .map(|b| str_of(&b["tool_use_id"]))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        },
         Some("control_request") => {
             let request_id = str_of(&value["request_id"]);
             let request = &value["request"];
@@ -288,15 +265,6 @@ pub fn read(line: &str) -> Event {
             usage: value.get("usage").cloned().unwrap_or(Value::Null),
         },
         _ => Event::Other,
-    }
-}
-
-impl Event {
-    /// Whether the harness's turn moved: anything it writes once the line
-    /// it waited on arrived. An answer to a control request, a request this
-    /// catalyst refuses and a line it does not read are not.
-    pub fn progress(&self) -> bool {
-        !matches!(self, Event::Answer { .. } | Event::Request { .. } | Event::Other)
     }
 }
 
@@ -376,7 +344,7 @@ mod tests {
 
     #[test]
     fn lines_are_single_lines() {
-        let line = user(vec![json!({"type": "text", "text": "two\nlines"})], "u-1");
+        let line = user(vec![json!({"type": "text", "text": "two\nlines"})]);
         assert!(!line.contains('\n'));
         let line = initialize(Some("a\nprompt"));
         assert!(!line.contains('\n'));
