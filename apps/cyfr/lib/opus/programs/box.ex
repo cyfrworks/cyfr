@@ -124,8 +124,17 @@ defmodule Opus.Programs.Box do
   @control_timeout_ms 10_000
   @release_wait_ms 3_000
 
-  @typedoc "One program row of one athanor at one epoch."
-  @type owner :: %{athanor_id: String.t(), server_id: String.t(), epoch: pos_integer()}
+  @typedoc """
+  One program row of one athanor at one epoch, as a holder names it; `sign_in: true` says the holder is a
+  sign-in relay, which renewal admits while the row's login entry waits to
+  be signed in again.
+  """
+  @type owner :: %{
+          required(:athanor_id) => String.t(),
+          required(:server_id) => String.t(),
+          required(:epoch) => pos_integer(),
+          optional(:sign_in) => boolean()
+        }
 
   @typedoc "What a holder signs its session messages to the service with."
   @type grant :: %{
@@ -269,11 +278,11 @@ defmodule Opus.Programs.Box do
         # refused by the service under its grant, so the owner is synced
         # again.
         entry = state.owners[key]
-        state = put_owner(state, key, add_holder(entry, pid))
+        state = put_owner(state, key, add_holder(entry, pid, owner))
         {:reply, {:ok, grant(state, key, entry)}, state}
 
       true ->
-        state = state |> register(key, epoch, pid, from) |> enqueue({:sync, key})
+        state = state |> register(key, epoch, pid, from, owner) |> enqueue({:sync, key})
         {:noreply, dispatch(state)}
     end
   end
@@ -436,10 +445,10 @@ defmodule Opus.Programs.Box do
   # A higher epoch replaces the owner: its holders, which hold a version
   # nothing will run again, are told to stand down, and a live one is
   # released.
-  defp register(state, key, epoch, pid, from) do
+  defp register(state, key, epoch, pid, from, owner) do
     case state.owners[key] do
       %{epoch: ^epoch} = entry ->
-        put_owner(state, key, %{add_holder(entry, pid) | waiters: [from | entry.waiters]})
+        put_owner(state, key, %{add_holder(entry, pid, owner) | waiters: [from | entry.waiters]})
 
       previous ->
         state =
@@ -458,6 +467,7 @@ defmodule Opus.Programs.Box do
 
         put_owner(state, key, %{
           holders: %{pid => Process.monitor(pid)},
+          sign_ins: if(sign_in?(owner), do: MapSet.new([pid]), else: MapSet.new()),
           epoch: epoch,
           generation: nil,
           live?: false,
@@ -468,11 +478,19 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  defp add_holder(entry, pid) do
-    if Map.has_key?(entry.holders, pid),
-      do: entry,
-      else: %{entry | holders: Map.put(entry.holders, pid, Process.monitor(pid))}
+  # A holder whose owner map says `sign_in: true` holds the owner for a
+  # sign-in session (`Opus.Programs.SignIn`): renewal admits it while the
+  # row's login entry waits to be signed in again (`mount/2`).
+  defp add_holder(entry, pid, owner) do
+    entry =
+      if Map.has_key?(entry.holders, pid),
+        do: entry,
+        else: %{entry | holders: Map.put(entry.holders, pid, Process.monitor(pid))}
+
+    if sign_in?(owner), do: %{entry | sign_ins: MapSet.put(entry.sign_ins, pid)}, else: entry
   end
+
+  defp sign_in?(owner), do: Map.get(owner, :sign_in) == true
 
   defp remove_holder(entry, pid) do
     case Map.pop(entry.holders, pid) do
@@ -481,7 +499,23 @@ defmodule Opus.Programs.Box do
 
       {ref, holders} ->
         Process.demonitor(ref, [:flush])
-        %{entry | holders: holders}
+        %{entry | holders: holders, sign_ins: MapSet.delete(entry.sign_ins, pid)}
+    end
+  end
+
+  # The owner's entry is admitted for its sign-ins alone: every other
+  # holder is told to stand down and holds it no more.
+  defp stand_down_all_but_sign_ins(state, key) do
+    case state.owners[key] do
+      nil ->
+        state
+
+      entry ->
+        others =
+          for {pid, _ref} <- entry.holders, not MapSet.member?(entry.sign_ins, pid), do: pid
+
+        Enum.each(others, &send(&1, {Opus.Programs, :stand_down, key}))
+        put_owner(state, key, Enum.reduce(others, entry, &remove_holder(&2, &1)))
     end
   end
 
@@ -862,7 +896,12 @@ defmodule Opus.Programs.Box do
 
       keys ->
         owners = Map.new(keys, &{&1, state.owners[&1].epoch})
-        {:send, state |> base_spec(:renew) |> Map.put(:owners, owners)}
+        signing = for key <- keys, MapSet.size(state.owners[key].sign_ins) > 0, do: key
+
+        {:send,
+         state
+         |> base_spec(:renew)
+         |> Map.merge(%{owners: owners, signing: MapSet.new(signing)})}
     end
   end
 
@@ -950,13 +989,20 @@ defmodule Opus.Programs.Box do
 
     case Arca.McpServerStorage.fenced(pairs) do
       {:ok, rows} ->
-        {kept, fenced_out} =
-          Enum.split_with(pairs, fn key ->
-            passes_fence?(rows[key], spec.owners[key]) and mount_live?(rows[key])
+        verdicts =
+          Map.new(pairs, fn key ->
+            verdict =
+              if passes_fence?(rows[key], spec.owners[key]),
+                do: mount(rows[key], MapSet.member?(spec.signing, key)),
+                else: :out
+
+            {key, verdict}
           end)
 
+        {kept, fenced_out} = Enum.split_with(pairs, &(verdicts[&1] != :out))
+        signing_only = Enum.filter(pairs, &(verdicts[&1] == :sign_in_only))
         answer = if kept == [], do: :nothing_to_renew, else: renew(spec, keys.control, kept)
-        {:renewed, answer, fenced_out}
+        {:renewed, answer, fenced_out, signing_only}
 
       {:error, _} ->
         {:error, :store_unavailable}
@@ -1099,16 +1145,29 @@ defmodule Opus.Programs.Box do
   # renewal asks again that the entry is an active login entry of the
   # row's athanor naming the row: one revoked, suspended by a restore or
   # deleted releases the owner. A vault that cannot answer releases it too:
-  # nothing runs in a home whose entry cannot be shown live. A pipe row's
-  # entry is its catalyst's need's, checked where the need is resolved.
-  defp mount_live?(%{row: %{transport: "stdio", home: "kept"} = row}) do
+  # nothing runs in a home whose entry cannot be shown live. An entry a
+  # restore left needs_reauth is admitted for a sign-in alone, as
+  # `Sanctum.Mount.login_entry/4` with `for: :sign_in` admits it: an owner
+  # held by a sign-in keeps it (`:sign_in_only`), and its other holders, an
+  # MCP server's sessions, stand down. A pipe row's entry is its catalyst's
+  # need's, checked where the need is resolved.
+  defp mount(%{row: %{transport: "stdio", home: "kept"} = row}, signing?) do
     ctx = Sanctum.Context.internal(athanor_id: row.athanor_id, scope: :athanor)
 
-    is_binary(row.login_entry_id) and
-      match?({:ok, _entry}, Sanctum.Mount.login_entry(ctx, row.login_entry_id, row.name))
+    with true <- is_binary(row.login_entry_id) || :out,
+         {:ok, entry} <-
+           Sanctum.Mount.login_entry(ctx, row.login_entry_id, row.name, for: :sign_in) do
+      cond do
+        entry.status == "active" -> :live
+        signing? -> :sign_in_only
+        true -> :out
+      end
+    else
+      _refused -> :out
+    end
   end
 
-  defp mount_live?(_fenced), do: true
+  defp mount(_fenced, _signing?), do: :live
 
   defp within_share(%{share: nil}, _count), do: :ok
 
@@ -1296,7 +1355,7 @@ defmodule Opus.Programs.Box do
 
   defp answer_boot({:http, _status, boot, _body}), do: boot
   defp answer_boot({:synced, answer, _names, _count}), do: answer_boot(answer)
-  defp answer_boot({:renewed, answer, _fenced_out}), do: answer_boot(answer)
+  defp answer_boot({:renewed, answer, _fenced_out, _signing_only}), do: answer_boot(answer)
   defp answer_boot({:claimed, _claim, result}), do: answer_boot(result)
   defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
   defp answer_boot(_result), do: nil
@@ -1408,8 +1467,9 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  defp settle_job(state, {:renew}, _spec, {:renewed, answer, fenced_out}) do
+  defp settle_job(state, {:renew}, _spec, {:renewed, answer, fenced_out, signing_only}) do
     state = Enum.reduce(fenced_out, state, &revoke(&2, &1))
+    state = Enum.reduce(signing_only, state, &stand_down_all_but_sign_ins(&2, &1))
 
     state =
       case answer do
@@ -1584,7 +1644,7 @@ defmodule Opus.Programs.Box do
   def refusal_name(code), do: Map.get(@renamed_refusals, code, code)
 
   defp refusal({:synced, answer, _names, _count}), do: refusal(answer)
-  defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
+  defp refusal({:renewed, answer, _fenced_out, _signing_only}), do: refusal(answer)
   defp refusal({:claimed, _claim, result}), do: refusal(result)
   defp refusal({:released, answer, _given_up}), do: refusal(answer)
   defp refusal({:http, 401, _boot, _body}), do: :backends_refused_signature

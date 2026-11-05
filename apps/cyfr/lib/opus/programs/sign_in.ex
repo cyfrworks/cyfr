@@ -48,7 +48,7 @@ defmodule Opus.Programs.SignIn do
     Process.flag(:trap_exit, true)
     owner = Keyword.fetch!(args, :owner)
 
-    with {:ok, grant} <- Opus.Programs.hold(owner),
+    with {:ok, grant} <- Opus.Programs.hold(Map.put(owner, :sign_in, true)),
          {:ok, %{session: session}} <-
            Session.open(grant, %{
              program: Keyword.fetch!(args, :program),
