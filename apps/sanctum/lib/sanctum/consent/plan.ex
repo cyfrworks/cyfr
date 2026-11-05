@@ -611,7 +611,10 @@ defmodule Sanctum.Consent.Plan do
       Enum.join(scope_set(need.scopes), ", ")
   end
 
-  defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts, ", ")}"
+  defp kind_words(%{kind: "login"} = need),
+    do: "login entry for the program #{Map.get(need, :program)}"
+
+  defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts || [], ", ")}"
 
   defp newer_words(%{newer_shipped: version}) when is_binary(version),
     do: ", or update to version #{version}, which the release ships"

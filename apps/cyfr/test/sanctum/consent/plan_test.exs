@@ -292,6 +292,17 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.suggested.entry_id == claude.id
     end
 
+    test "a required login need no entry meets says to create one for its program",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
+
+      assert {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-mount"})
+      assert [%{need: "claude", candidates: []}] = plan.needs
+
+      assert ("need 'claude' wants login entry for the program claude, and none can yet. " <>
+                "Create one first.") in plan.warnings
+    end
+
     test "commits to a login entry, attach-only and projecting nothing", %{ctx: ctx} do
       publish!(ctx, "plan-mount", "1.0.0", %{"needs" => %{"claude" => @login_need}})
       ref = "reagent:local.plan-mount"
