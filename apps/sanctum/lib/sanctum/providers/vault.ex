@@ -20,7 +20,9 @@ defmodule Sanctum.Providers.Vault do
   nothing ever returns them. Every entry names its `destination`, where
   its material may go, and is attach-only unless `disclose` is true:
   `create` requires the destination, `authorize` requires it of a new
-  entry, and `rebind` moves it, its disclosure or its field schema.
+  entry, and `rebind` moves it, its disclosure or its field schema. A
+  `login` entry instead names its `program`, holds no material and stays
+  attach-only (`Sanctum.Vault.create/2`).
   """
 
   alias Sanctum.Context
@@ -148,12 +150,18 @@ defmodule Sanctum.Providers.Vault do
                ]}
             ),
             destination.(
-              required: true,
-              description: "Binding field: where the material may go — required, never defaulted"
+              description:
+                "Binding field: where the material may go — required of every kind but " <>
+                  "login, never defaulted"
             ),
             disclose.(
               "Binding field: true lets a component read the fields; " <>
                 "otherwise they are never handed to a component"
+            ),
+            Arg.new("program", :string,
+              description:
+                "A login entry's program: the program row (mcp_servers name) whose own " <>
+                  "sign-in the entry points at; its kept home is mounted into that program alone"
             )
           ],
           kind: :write,
@@ -330,6 +338,7 @@ defmodule Sanctum.Providers.Vault do
       |> Prima.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
       |> Prima.MapUtil.put_present(:destination, args["destination"])
       |> Prima.MapUtil.put_present(:disclose, args["disclose"])
+      |> Prima.MapUtil.put_present(:program, args["program"])
 
     case Vault.create(ctx, params) do
       {:ok, view} -> {:ok, %{entry: view}}
@@ -540,8 +549,18 @@ defmodule Sanctum.Providers.Vault do
 
   defp fmt(:invalid_disclose), do: "invalid_disclose: disclose is true or false"
 
-  defp fmt({:not_built, :login}),
-    do: "not_built: login entries, and the program destination they name, are not built yet"
+  defp fmt(:program_required),
+    do: "program_required: a login entry names its program (the program row it signs in to)"
+
+  defp fmt(:program_destination_login_only),
+    do:
+      "program_destination_login_only: a program destination is a login entry's; " <>
+        "another kind names hosts"
+
+  defp fmt(:login_binding_fixed),
+    do:
+      "login_binding_fixed: a login entry holds no material and points at its program " <>
+        "alone, so it takes no fields, destination or disclosure, and has nothing to rotate or rebind"
 
   defp fmt(:no_binding_changes),
     do: "no_binding_changes: rebind needs at least one field to change"
