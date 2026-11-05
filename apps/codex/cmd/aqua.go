@@ -76,7 +76,7 @@ var aquaGetCmd = &cobra.Command{
 	Long:  "Retrieve and display the soul (name aqua), one of its crew, or a guide by name. Run without arguments for interactive selection. Scrolls are read with `cyfr aqua skills get`.",
 	Example: `  cyfr aqua get aqua
   cyfr aqua get component-guide
-  cyfr aqua get builder --json`,
+  cyfr aqua get explorer --json`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := pickTarget(cmd.Context(), args, selector{

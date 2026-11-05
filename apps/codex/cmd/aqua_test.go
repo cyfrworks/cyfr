@@ -6,6 +6,8 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,6 +69,38 @@ func TestAquaHelpVocabulary(t *testing.T) {
 		if !strings.Contains(long, word) {
 			t.Errorf("aqua's Long should name the %s it manages, got:\n%s", word, long)
 		}
+	}
+}
+
+// TestAquaGetExamplesNameWhatShips holds the help's `cyfr aqua get`
+// examples to names the command can retrieve on a shipped tree: the soul,
+// a guide or a crew member the seed ships (seed/aqua/crew). A skill is read
+// with `cyfr aqua skills get`, never `get`.
+func TestAquaGetExamplesNameWhatShips(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Join("..", "..", "..", "seed", "aqua", "crew"))
+	if err != nil {
+		t.Fatalf("cannot read the shipped crew: %v", err)
+	}
+	names := map[string]bool{"aqua": true, "component-guide": true, "tincture-guide": true, "integration-guide": true}
+	for _, entry := range entries {
+		if name, ok := strings.CutSuffix(entry.Name(), ".md"); ok {
+			names[name] = true
+		}
+	}
+
+	examples := 0
+	for _, line := range strings.Split(findCommand(t, "aqua get").Example, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[0] != "cyfr" || fields[1] != "aqua" || fields[2] != "get" {
+			continue
+		}
+		examples++
+		if !names[fields[3]] {
+			t.Errorf("`cyfr aqua get` example names %q, which a shipped tree cannot answer: %q", fields[3], line)
+		}
+	}
+	if examples == 0 {
+		t.Fatal("found no `cyfr aqua get` example to check")
 	}
 }
 
