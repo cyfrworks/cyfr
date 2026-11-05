@@ -21,18 +21,18 @@ defmodule Compendium.AgentSource do
       **revision**, kept by `Arca.AgentRevisions` for a turn to pin.
     * `caps.tools` are the policy keys that name tool actions
       (`tool.action`, `tool.*`), which consent expands against the live
-      catalog. `native_search` is a provider tool, not a catalog action,
-      and a role's clone glob (`<role>.*`) is an edge, not a tool.
-    * `dependencies.static` are the model catalyst the agent runs on
-      (required), the catalysts behind the tool families it names — its
-      hands — (required), and every role its policy lets it clone into
-      (optional: a role that cannot resolve is simply not clonable).
+      catalog: a key no catalogued action matches expands to nothing
+      (`Prima.ToolPattern.expand/2`). `native_search` is a provider tool,
+      not a catalog action.
+    * `dependencies.static` are the model catalyst the agent runs on and
+      the catalysts behind the tool families it names — its hands. An
+      agent has no edge into another agent: a role consents and runs as
+      its own source.
     * `agent` is the model target and the policy modes (`auto` / `ask`
       sets), which the shape digest reads. The flat `"model"` key is not
       written.
 
-  A disabled agent has no row: it is out of the roster, and a soul's
-  clone edge to it resolves to nothing.
+  A disabled agent has no row: it is out of the roster.
   """
 
   alias Compendium.{AquaAgent, AquaPath}
@@ -51,17 +51,7 @@ defmodule Compendium.AgentSource do
   @spec rows(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def rows(%Context{} = ctx) do
     with {:ok, agents, _errors} <- AquaAgent.list(ctx) do
-      enabled = Enum.reject(agents, & &1.disabled)
-      roster = MapSet.new(enabled, & &1.name)
-      {:ok, Enum.map(enabled, &row(&1, roster))}
-    end
-  end
-
-  @doc "The names of the athanor's enabled agents — the roster that decides clone edges."
-  @spec enabled_roster(Context.t()) :: {:ok, MapSet.t(String.t())} | {:error, term()}
-  def enabled_roster(%Context{} = ctx) do
-    with {:ok, agents, _errors} <- AquaAgent.list(ctx) do
-      {:ok, agents |> Enum.reject(& &1.disabled) |> MapSet.new(& &1.name)}
+      {:ok, agents |> Enum.reject(& &1.disabled) |> Enum.map(&row/1)}
     end
   end
 
@@ -76,43 +66,25 @@ defmodule Compendium.AgentSource do
     end
   end
 
-  @doc """
-  The consent manifest of an agent, given the names of the athanor's
-  enabled agents (which decide which policy globs are clone edges).
-  """
-  @spec manifest(AquaAgent.t(), MapSet.t(String.t())) :: map()
-  def manifest(%{name: name} = agent, roster) do
-    clone_globs =
-      roster
-      |> MapSet.delete(name)
-      |> Enum.map(&AquaAgent.clone_glob/1)
-      |> MapSet.new()
-
-    {clones, tools} =
+  @doc "The consent manifest of an agent."
+  @spec manifest(AquaAgent.t()) :: map()
+  def manifest(%{name: name} = agent) do
+    tools =
       (agent.tool_policy || %{})
       |> Map.keys()
       |> Enum.reject(&(&1 == "native_search"))
-      |> Enum.split_with(&MapSet.member?(clone_globs, &1))
 
     hands =
       tools
       |> Enum.map(&tool_family/1)
-      |> Enum.uniq()
       |> Enum.map(&Sanctum.VirtualTools.catalyst_for/1)
       |> Enum.reject(&is_nil/1)
 
-    required =
-      Enum.map(List.wrap(agent.catalyst_ref) ++ hands, &%{"ref" => &1})
-
-    optional =
-      Enum.map(clones, fn glob ->
-        %{"ref" => Prima.AgentRef.ref(String.trim_trailing(glob, ".*")), "optional" => true}
-      end)
-
     dependencies =
-      (required ++ optional)
-      |> Enum.uniq_by(& &1["ref"])
-      |> Enum.sort_by(& &1["ref"])
+      (List.wrap(agent.catalyst_ref) ++ hands)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.map(&%{"ref" => &1})
 
     {auto, ask} =
       (agent.tool_policy || %{})
@@ -144,30 +116,10 @@ defmodule Compendium.AgentSource do
   @spec unit(String.t()) :: Arca.Storage.path()
   def unit(name) when is_binary(name), do: AquaPath.agent_file(name)
 
-  @doc """
-  The consent row of an agent file — the soul or a role — under `roster`,
-  the names of the athanor's enabled agents (which decide clone edges).
-  """
-  @spec row(AquaAgent.t(), MapSet.t(String.t())) :: map()
-  def row(%{name: _} = agent, %MapSet{} = roster), do: do_row(agent, roster)
-
-  @doc """
-  The consent row the seed file would project under the athanor's enabled
-  roster. A prose-only edit of the athanor's copy does not change this
-  row; a policy, model or catalyst edit of the seed file does. A
-  disabled seed agent has no row.
-  """
-  @spec shipped_row(String.t(), binary(), MapSet.t(String.t())) ::
-          {:ok, map()} | {:error, term()}
-  def shipped_row(name, bytes, %MapSet{} = roster)
-      when is_binary(name) and is_binary(bytes) do
-    with {:ok, agent} <- AquaAgent.parse(name, bytes) do
-      if agent.disabled, do: {:error, :disabled}, else: {:ok, row(agent, roster)}
-    end
-  end
-
-  defp do_row(agent, roster) do
-    manifest = manifest(agent, roster)
+  @doc "The consent row of an agent file — the soul or a role."
+  @spec row(AquaAgent.t()) :: map()
+  def row(%{name: _} = agent) do
+    manifest = manifest(agent)
     {:ok, digest} = AquaAgent.capability_digest(agent)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
 
@@ -182,6 +134,18 @@ defmodule Compendium.AgentSource do
       digest: digest,
       release_digest: release_digest
     }
+  end
+
+  @doc """
+  The consent row the seed file projects. A prose-only edit of the
+  athanor's copy does not change this row; a policy, model or catalyst
+  edit of the seed file does. A disabled seed agent has no row.
+  """
+  @spec shipped_row(String.t(), binary()) :: {:ok, map()} | {:error, term()}
+  def shipped_row(name, bytes) when is_binary(name) and is_binary(bytes) do
+    with {:ok, agent} <- AquaAgent.parse(name, bytes) do
+      if agent.disabled, do: {:error, :disabled}, else: {:ok, row(agent)}
+    end
   end
 
   defp tool_family(key) do

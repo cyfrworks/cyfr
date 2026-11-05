@@ -244,7 +244,7 @@ defmodule Arca.ToolGrantStorageTest do
 
       {:ok, %{turn: turn}} =
         Arca.TurnStorage.accept_message(actor, thread.id, %{
-          message: %{author: "user_tg", content: "go"},
+          message: %{author: "user_tg", sent_by: "person", content: "go"},
           turn: %{agent: "aqua", requested_by: "user_tg", origin: :interactive}
         })
 

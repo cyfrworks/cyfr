@@ -43,6 +43,8 @@ defmodule Arca.OneFenceTest do
       "a row write under an attempt's provisioning claim, which holds the claim row and verifies its slot (`Arca.ProvisioningClaims.hold?/4`)",
     {"arca/consumer_receipts.ex", "record/4"} =>
       "a receipt under a job claim: the claim judged before and after the slot check, each loss refused as itself",
+    {"arca/turn_storage.ex", "accept_message/3"} =>
+      "a crew delivery's acceptance carries the consumer's receipt, judged under its job claim and slot as `record/4` judges one (`Arca.ConsumerReceipts.record!/4`), so the receipt lands exactly when the row does; any other acceptance checks no slot",
     {"arca/cron_schedule.ex", "guarded/4"} =>
       "a generic schedule writer: the row locked tenant-scoped first, then the slot checked (`slot_fence/0`)",
     {"arca/execution.ex", "admit/4"} =>

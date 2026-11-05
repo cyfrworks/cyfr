@@ -1474,10 +1474,10 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.AquaPanelLive",
       into: "Arca.ThreadStorage",
-      functions: [:list],
+      functions: [:list, :pending_requests],
       reason:
-        "the panel lists the caller's athanor's threads under the caller's actor; the " <>
-          "assistant owns every thread write."
+        "the panel lists the caller's athanor's threads and the crew requests still " <>
+          "waiting under the caller's actor; the assistant owns every thread write."
     },
     %{
       from: "PrismWeb.AttachmentController",
@@ -1607,11 +1607,11 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.ThreadPaneLive",
       into: "Arca.ThreadStorage",
-      functions: [:get, :get_message, :latest_messages, :payload, :resolution],
+      functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
       reason:
-        "the pane opens a thread and its latest messages under the pane's actor, and " <>
-          "decodes a message's stored payload and resolution with the store's own " <>
-          "projections, which read no row; the assistant owns every thread write."
+        "the pane opens a thread, its latest messages and a room's crew threads under the " <>
+          "pane's actor, and decodes a message's stored payload and resolution with the " <>
+          "store's own projections, which read no row; the assistant owns every thread write."
     },
     # --- the MCP surface's web adapters ---
     %{
@@ -2582,6 +2582,7 @@ defmodule Cyfr.Boundaries do
     # Boot switches with an in-code default; flipping one is a code change.
     cron_scheduler_enabled: :default,
     schedule_notes_enabled: :default,
+    crew_delivery_enabled: :default,
     execution_sweeper_enabled: :default,
     execution_archive_watch_enabled: :default,
     worker_watch_enabled: :default,

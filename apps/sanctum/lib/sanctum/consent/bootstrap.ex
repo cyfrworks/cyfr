@@ -133,7 +133,6 @@ defmodule Sanctum.Consent.Bootstrap do
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
-  alias Prima.AgentRef
   alias Prima.ComponentRow
   alias Prima.JCS
 
@@ -143,8 +142,7 @@ defmodule Sanctum.Consent.Bootstrap do
           skipped: [{String.t(), term()}]
         }
 
-  # Dependencies before the sources that select them; roles before the
-  # soul that clones into them.
+  # Dependencies before the sources that select them.
   @type_rank %{"catalyst" => 0, "reagent" => 1, "tincture" => 2, "formula" => 3, "agent" => 4}
 
   # The profile a shipped source's selection names on a shipped dependency.
@@ -247,7 +245,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp sources(ctx, agents) do
     (executable_local_components(ctx) ++ agents)
     |> Enum.sort_by(fn row ->
-      {Map.get(@type_rank, to_string(row.component_type), 9), soul?(row), row.name}
+      {Map.get(@type_rank, to_string(row.component_type), 9), row.name}
     end)
   end
 
@@ -295,9 +293,6 @@ defmodule Sanctum.Consent.Bootstrap do
         {:ok, []}
     end
   end
-
-  defp agent?(row), do: to_string(row.component_type) == AgentRef.type()
-  defp soul?(row), do: agent?(row) and AgentRef.soul?(row.name)
 
   defp executable_local_components(ctx) do
     # Every valid type is profile-bearing: tinctures are not executable,

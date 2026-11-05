@@ -304,6 +304,7 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
         author: bob.user_id,
+        sent_by: "person",
         content: "secret plan"
       })
 
@@ -802,6 +803,38 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "the rail lists the athanor's own threads and leaves its crew members' out, which open at their own address",
+       %{conn: conn} do
+    alice = person()
+    conn = log_in_user(conn, alice)
+    home = athanor()
+    actor = Sanctum.Context.actor(member_ctx(alice, home))
+    {:ok, room} = Threads.create(actor)
+    {:ok, child} = Threads.crew_thread(actor, room.id, "builder")
+
+    {view, _html} = mount_chat(conn, home, room.id)
+    assert has_element?(view, "#thread-#{room.id}")
+    refute has_element?(view, "#thread-#{child.id}")
+
+    # Opened at its address, it is the pane's thread, and a row heard on it
+    # leaves the rail as it was.
+    render_patch(view, chat_path(home, child.id))
+    settled_render(view)
+    assert pane_thread(view).id == child.id
+
+    send(view.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: home.id,
+      thread_id: child.id,
+      kind: :message,
+      data: nil
+    })
+
+    refute has_element?(view, "#thread-#{child.id}")
+    assert has_element?(view, "#thread-#{room.id}")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   describe "threads with people" do
     test "the rail lists your athanor's threads, your pairs by the other's name and your shared threads by title, and ?s= opens one under your seat",
          %{conn: conn} do
@@ -975,7 +1008,13 @@ defmodule PrismWeb.ChatLiveTest do
       {:ok, :added} = Sanctum.SharedThreads.add(alice.user_id, plans.id, user_id: bob.user_id)
       actor = Sanctum.Context.actor(member_ctx(alice, athanor()))
       {:ok, own} = Threads.create(actor)
-      {:ok, line} = Threads.append(actor, own.id, %{author: alice.user_id, content: "Say this"})
+
+      {:ok, line} =
+        Threads.append(actor, own.id, %{
+          author: alice.user_id,
+          sent_by: "person",
+          content: "Say this"
+        })
 
       {view, _html} = mount_chat(conn, athanor(), own.id)
       html = render_click(view, "aloud_open", %{"id" => line.id})

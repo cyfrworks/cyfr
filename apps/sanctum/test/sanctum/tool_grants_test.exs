@@ -517,7 +517,7 @@ defmodule Sanctum.ToolGrantsTest do
 
       {:ok, %{turn: turn}} =
         Arca.TurnStorage.accept_message(actor, thread.id, %{
-          message: %{author: ctx.user_id, content: "go"},
+          message: %{author: ctx.user_id, sent_by: "person", content: "go"},
           turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
         })
 

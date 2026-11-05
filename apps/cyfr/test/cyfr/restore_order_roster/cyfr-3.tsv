@@ -15,7 +15,6 @@ apps/cyfr/test/arca/revision_store_reserved_test.exs	2	pending
 apps/cyfr/test/arca/stale_member_unit_removal_test.exs	3	pending
 apps/cyfr/test/arca/subtree_read_revision_test.exs	6	pending
 apps/cyfr/test/arca/tenant_isolation_test.exs	1	pending
-apps/cyfr/test/arca/thread_storage_test.exs	2	pending
 apps/cyfr/test/arca/unit_holder_killed_test.exs	5	pending
 apps/cyfr/test/arca/unit_successor_members_backends_test.exs	5	pending
 apps/cyfr/test/arca/unit_successor_members_test.exs	5	pending

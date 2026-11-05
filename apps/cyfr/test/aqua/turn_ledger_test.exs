@@ -8,7 +8,7 @@ defmodule Aqua.TurnLedgerTest do
 
   A child of the turn's root is seeded with its own step's turn as it
   stands when the child is admitted — a source the turn read after its
-  root was admitted included, on a clone's turn too — and the capability
+  root was admitted included — and the capability
   probe, which runs under no step, with every turn on the root.
 
   A model adds no source of its own and never drops one: what a model or
@@ -112,34 +112,6 @@ defmodule Aqua.TurnLedgerTest do
       assert host in ledger!(actor, second)
       assert host in ledger!(actor, step!(ctx, turn, "f1"))
       refute host in ledger!(actor, first)
-    end
-
-    test "a source a clone's turn read reaches the clone's next model and hand children",
-         %{ctx: ctx, thread: thread, actor: actor} do
-      script!([
-        calls([{"r1", "planner", %{"task" => "look into data/x"}}]),
-        calls([read("p1")]),
-        %{"lines" => ["a line"]},
-        calls([{"p2", "files", %{"action" => "list", "path" => "data"}}]),
-        %{"entries" => []},
-        reply("found it"),
-        reply("done")
-      ])
-
-      turn = accept!(ctx, thread, "@aqua plan it")
-      assert :completed = run!(ctx, turn)
-
-      [clone] =
-        Arca.Repo.all(from(t in Arca.Schemas.Turn, where: t.parent_turn_id == ^turn.id))
-
-      {:ok, clone} = Tape.turn(ctx, clone.id)
-      assert clone.root_execution_id == turn_row(ctx, turn).root_execution_id
-      files = Source.new(:files_by_grant)
-
-      [first, second, _third] = model_steps(ctx, clone)
-      refute files in ledger!(actor, first)
-      assert files in ledger!(actor, second)
-      assert files in ledger!(actor, step!(ctx, clone, "p2"))
     end
 
     test "the capability probe, under no step, is seeded with every turn on the root",
@@ -442,7 +414,7 @@ defmodule Aqua.TurnLedgerTest do
   defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: text},
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 

@@ -5,9 +5,9 @@ defmodule Compendium.AgentSourceTest do
   @moduledoc """
   An agent is a consent source: its row projects from its file with the
   capability digest as artifact, tool actions as caps, and the model
-  catalyst, hands and clonable roles as dependencies; the same lookups
-  that serve component nodes serve it, its activation walks the closure,
-  and only what it may do moves its digests.
+  catalyst and hands as dependencies, never another agent; the same
+  lookups that serve component nodes serve it, its activation walks the
+  closure, and only what it may do moves its digests.
   """
 
   use ExUnit.Case, async: false
@@ -83,14 +83,13 @@ defmodule Compendium.AgentSourceTest do
     assert {:ok, snap.agent} == AquaAgent.parse("aqua", bytes)
   end
 
-  test "the soul's manifest names its tools, its model, its hands and its roles", %{ctx: ctx} do
+  test "the soul's manifest names its tools, its model and its hands, never a role", %{ctx: ctx} do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
     {:ok, agent} = AquaAgent.get(ctx, "aqua")
     manifest = soul.manifest
 
     tools = manifest["caps"]["tools"]
     assert "files.read" in tools and "component.list" in tools
-    refute Enum.any?(tools, &String.ends_with?(&1, "artisan.*"))
     refute "native_search" in tools
     assert tools == Enum.sort(tools)
     assert manifest["agent"]["model"] == agent.model
@@ -102,15 +101,9 @@ defmodule Compendium.AgentSourceTest do
     assert by_ref[agent.catalyst_ref] == %{"ref" => agent.catalyst_ref}
     assert by_ref["catalyst:local.files"] == %{"ref" => "catalyst:local.files"}
     assert by_ref["catalyst:local.http"] == %{"ref" => "catalyst:local.http"}
+    refute Enum.any?(deps, &String.starts_with?(&1["ref"], "agent:"))
 
-    for role <- ~w(artisan builder explorer planner web) do
-      assert by_ref["agent:local.#{role}"] == %{
-               "ref" => "agent:local.#{role}",
-               "optional" => true
-             }
-    end
-
-    # A role's manifest: its own model, its hands, no clone edges.
+    # A role's manifest: its own model and its hands.
     {:ok, web} = AgentSource.latest_row(ctx, "web")
 
     assert web.manifest["dependencies"]["static"] |> Enum.map(& &1["ref"]) |> Enum.sort() ==
@@ -120,19 +113,16 @@ defmodule Compendium.AgentSourceTest do
              ])
   end
 
-  test "the soul's activation walks the roles, their models and the hands", %{ctx: ctx} do
+  test "the soul's activation walks its model and its hands, and no role", %{ctx: ctx} do
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
     {:ok, live} = Activation.resolve_verified(ctx, soul)
 
     keys = Map.keys(live.graph) |> Enum.sort()
     assert @soul in keys
-
-    for role <- ~w(artisan builder explorer planner web),
-        do: assert("agent:local.#{role}" in keys)
-
+    assert Enum.filter(keys, &String.starts_with?(&1, "agent:")) == [@soul]
     assert "catalyst:local.claude" in keys
-    # The explorer runs on gemini: its model is in the soul's closure.
-    assert "catalyst:local.gemini" in keys
+    # The explorer runs on gemini, and the soul's closure holds no role.
+    refute "catalyst:local.gemini" in keys
     assert "catalyst:local.files" in keys and "catalyst:local.http" in keys
     assert Enum.all?(live.nodes, fn {_key, node} -> node.integrity == :ok end)
 
@@ -147,9 +137,7 @@ defmodule Compendium.AgentSourceTest do
              })
   end
 
-  test "the prompt moves nothing; the policy, the model and a disabled role move the digests", %{
-    ctx: ctx
-  } do
+  test "the prompt moves nothing; the policy and the model move the digests", %{ctx: ctx} do
     {:ok, before} = AgentSource.latest_row(ctx, "web")
     {:ok, soul_before} = AgentSource.latest_row(ctx, "aqua")
 
@@ -173,27 +161,33 @@ defmodule Compendium.AgentSourceTest do
     refute retargeted.digest == widened.digest
     refute retargeted.release_digest == widened.release_digest
 
+    # A disabled role has no row, and the soul's row does not move with it.
     write_agent!(ctx, "web", &%{&1 | disabled: true})
     assert {:error, :not_found} = AgentSource.latest_row(ctx, "web")
-    {:ok, soul_after} = AgentSource.latest_row(ctx, "aqua")
+    assert {:ok, ^soul_before} = AgentSource.latest_row(ctx, "aqua")
+  end
 
-    refute "agent:local.web" in Enum.map(
-             soul_after.manifest["dependencies"]["static"],
+  test "a role's glob on the soul is a tool pattern, not an edge into the role", %{ctx: ctx} do
+    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "builder.*", "auto")})
+    {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
+
+    assert "builder.*" in soul.manifest["caps"]["tools"]
+    assert "builder.*" in soul.manifest["agent"]["policy"]["auto"]
+
+    refute "agent:local.builder" in Enum.map(
+             soul.manifest["dependencies"]["static"],
              & &1["ref"]
            )
 
-    refute soul_after.release_digest == soul_before.release_digest
-    {:ok, live} = Activation.resolve_verified(ctx, soul_after)
-    refute Map.has_key?(live.graph, "agent:local.web")
+    {:ok, live} = Activation.resolve_verified(ctx, soul)
+    refute Map.has_key?(live.graph, "agent:local.builder")
   end
 
-  test "shipped_row/3 equals the tenant row while the seed file is unchanged", %{ctx: ctx} do
+  test "shipped_row/2 equals the tenant row while the seed file is unchanged", %{ctx: ctx} do
     {:ok, tenant} = AgentSource.latest_row(ctx, "web")
-    {:ok, rows} = AgentSource.rows(ctx)
-    roster = MapSet.new(rows, & &1.name)
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
     {:ok, bytes} = Arca.get(Prima.Actor.system(), path)
-    assert {:ok, ^tenant} = AgentSource.shipped_row("web", bytes, roster)
+    assert {:ok, ^tenant} = AgentSource.shipped_row("web", bytes)
   end
 
   test "a policy edit of the tenant copy does not change the seed row", %{ctx: ctx} do
@@ -202,11 +196,9 @@ defmodule Compendium.AgentSourceTest do
     {:ok, edited} = AgentSource.latest_row(ctx, "web")
     refute edited.release_digest == before.release_digest
 
-    {:ok, rows} = AgentSource.rows(ctx)
-    roster = MapSet.new(rows, & &1.name)
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
     {:ok, bytes} = Arca.get(Prima.Actor.system(), path)
-    assert {:ok, seed} = AgentSource.shipped_row("web", bytes, roster)
+    assert {:ok, seed} = AgentSource.shipped_row("web", bytes)
     assert seed.release_digest == before.release_digest
     refute seed.release_digest == edited.release_digest
   end

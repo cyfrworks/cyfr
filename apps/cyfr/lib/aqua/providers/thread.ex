@@ -10,9 +10,11 @@ defmodule Aqua.Providers.Thread do
 
   `turn` is the second tool this provider serves: `suspend` sets a turn
   down with every row kept, its runtime released and the thread's claim
-  given up, and `recover` takes a suspended or abandoned turn back. The
-  provider's `service/0` is `"aqua"` for both, so `system.status`
-  and the request log's `routed_to` read one label.
+  given up, and `recover` takes a suspended or abandoned turn back.
+  `crew` is the third: `ask` and `list`, the soul's hand-off to a crew
+  member from inside its turn (`Aqua.Crew`). The provider's `service/0`
+  is `"aqua"` for all three, so `system.status` and the request log's
+  `routed_to` read one label.
 
   Every turn-shaped action here **wraps `Aqua.Runner`** — there
   is no second implementation of a turn, and no path that starts one
@@ -76,7 +78,7 @@ defmodule Aqua.Providers.Thread do
   # (`Opus.Provider` answers `"opus"`, `Emissary.External.Provider`
   # answers `"emissary"`).
   @impl true
-  def tools, do: [definition(), turn_definition()]
+  def tools, do: [definition(), turn_definition(), crew_definition()]
 
   @doc false
   def definition do
@@ -385,6 +387,20 @@ defmodule Aqua.Providers.Thread do
         ),
         Operation.new(
           "thread",
+          "archive",
+          "Archive thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
           "delete",
           "Delete thread",
           [
@@ -399,7 +415,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, and say one of your own private lines aloud into a shared thread you sit in. Every send starts a turn: @<role> names one of the athanor's roles, else the thread's agent, else the athanor's assistant. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in. A send in your own thread starts a turn of the athanor's assistant, or with @<role> asks that crew member, who works in a thread of its own under yours and replies here; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -463,9 +479,63 @@ defmodule Aqua.Providers.Thread do
     )
   end
 
+  @doc false
+  def crew_definition do
+    alias Prima.{Arg, Operation}
+    # In a chain only: the soul's turn hands a job to a crew member, and a
+    # person's own ask is an `@name` in `thread.send`. The answer is the
+    # request's id and the roster the athanor's own files hold, so
+    # neither carries outside material.
+    Operation.tool(
+      [
+        Operation.new(
+          "crew",
+          "ask",
+          "Ask crew",
+          [
+            Arg.new("member", :string,
+              required: true,
+              description: "ask: the crew member to hand the job to (crew.list names them)"
+            ),
+            Arg.new("task", :string,
+              required: true,
+              description:
+                "ask: the job, with everything the member needs to do it (at most 32 KiB)",
+              max: 32768
+            ),
+            Arg.new("tools", {:array, Arg.new(nil, :string)},
+              description:
+                "ask: narrow the member's tools for this job to these (a tool, or tool.action); omit for all it holds"
+            ),
+            Arg.new("options", {:map, Arg.new(nil, :json)},
+              description: "ask: options for the member's brain, those it declares"
+            )
+          ],
+          kind: :write,
+          sources: [],
+          planes: [:in_chain]
+        ),
+        Operation.new("crew", "list", "List crew", [],
+          kind: :read,
+          sources: [],
+          planes: [:in_chain],
+          recovery: :replay_safe
+        )
+      ],
+      description:
+        "Hand a job to a crew member: ask sends it, and the member works it in a thread of its own under this one and replies here when it is done, failed or stopped, or when it needs the person; nothing waits for the reply, which arrives as a message of its own. list names the members and what each is for.",
+      title: "Crew"
+    )
+  end
+
   @impl true
   def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle("turn", %Context{} = ctx, args), do: turn(ctx, args)
+  def handle("crew", %Context{} = ctx, %{"action" => "ask"} = args), do: Aqua.Crew.ask(ctx, args)
+  def handle("crew", %Context{} = ctx, %{"action" => "list"}), do: Aqua.Crew.list(ctx)
+
+  def handle("crew", _ctx, _args),
+    do: {:error, {:invalid_argument, "crew takes the action ask or list"}}
 
   # ---------------------------------------------------------------------------
   # `turn`
@@ -663,19 +733,47 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A thread is deleted whole — its rows and its blobs —
-  # and never under a running turn.
+  # A thread is deleted whole — its rows and its blobs, and a room's crew
+  # threads with it, their open turns cancelled and the runtime still
+  # holding them stopped after — and never under a running turn, nor while
+  # a crew thread of the room waits on a card.
   defp act("delete", ctx, id, _args) do
     cond do
       Runner.turn_running?(ctx, id) ->
         {:error, {:conflict, "a turn is running in this thread — stop it first"}}
 
       true ->
-        case Arca.ThreadStorage.delete(Sanctum.Context.actor(ctx), id) do
-          :ok -> {:ok, %{deleted: true, thread: id}}
-          {:error, :not_found} -> {:error, {:not_found, "thread", id}}
-          {:error, reason} -> {:error, refusal(reason, id)}
+        case Tape.delete_thread(ctx, id) do
+          # The rows are gone either way; a runner that cannot stop its
+          # work retires with it.
+          {:ok, %{cancelled: cancelled}} ->
+            _ = Runner.stop_cancelled(cancelled)
+            {:ok, %{deleted: true, thread: id}}
+
+          {:error, :not_found} ->
+            {:error, {:not_found, "thread", id}}
+
+          {:error, reason} ->
+            {:error, refusal(reason, id)}
         end
+    end
+  end
+
+  # A crew member's thread is retired: it admits nothing more, its open
+  # turns end cancelled with their replies in the archive's own
+  # transaction, the runtime still holding them is stopped after, and the
+  # next request to the member opens a new one.
+  defp act("archive", ctx, id, _args) do
+    with {:ok, %{thread: archived, cancelled: cancelled}} <- Tape.archive(ctx, id),
+         :ok <- Runner.stop_cancelled(cancelled) do
+      {:ok, Map.put(render_thread(archived), :archived, true)}
+    else
+      {:error, :not_crew} ->
+        {:error,
+         {:conflict, "only a crew member's thread is archived; delete a thread of your own"}}
+
+      {:error, reason} ->
+        {:error, refusal(reason, id)}
     end
   end
 
@@ -922,6 +1020,10 @@ defmodule Aqua.Providers.Thread do
     %{
       id: thread.id,
       title: thread.title,
+      kind: thread.kind,
+      parent_id: thread.parent_id,
+      agent: if(thread.kind == "crew", do: thread.agent),
+      archived_at: thread.archived_at,
       created_by: thread.created_by,
       last_message_at: thread.last_message_at,
       at: thread.inserted_at

@@ -269,27 +269,24 @@ defmodule Aqua.RunnerTest do
     assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "steered"))
   end
 
-  test "the sender's line to another agent waits behind the running turn", %{
-    ctx: ctx,
-    thread: thread
-  } do
-    script!([{:probe, self()}, reply("first"), reply("second")])
+  test "the sender's line to a crew member is a request beside the running turn, never a steer of it",
+       %{ctx: ctx, thread: thread} do
+    script!([{:probe, self()}, reply("first")])
 
     {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
     assert_receive {:scripted_probe, worker, _}, 30_000
 
-    assert {:ok, %{admitted: :turn, turn_id: second}} =
+    assert {:ok, %{admitted: :request, turn_id: nil, message_id: request}} =
              Runner.send_message(ctx, thread.id, "also this", agent: "planner")
 
-    assert second != first
-    assert %{running: true, queued: 1} = Runner.state(thread.id, ctx.athanor_id)
+    assert %{running: true, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
 
     send(worker, :continue)
     assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
-    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
-
     assert {:ok, %{status: "completed", agent: "aqua"}} = Tape.turn(ctx, first)
-    assert {:ok, %{status: "completed", agent: "planner"}} = Tape.turn(ctx, second)
+
+    assert {:ok, %{addressee: "planner", status: "pending", turn_id: nil}} =
+             Tape.message(ctx, request)
   end
 
   test "a viewer joining mid-answer reads the text streamed so far, until the step's row lands",
@@ -414,7 +411,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua keep it"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua keep it"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -474,7 +471,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -505,7 +502,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -514,7 +511,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, _} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "go on"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "go on"},
         steer_turn_id: turn.id
       })
 
@@ -559,7 +556,7 @@ defmodule Aqua.RunnerTest do
   } do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -582,7 +579,7 @@ defmodule Aqua.RunnerTest do
   } do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@ghost go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@ghost go"},
         turn: %{agent: "ghost", requested_by: ctx.user_id}
       })
 
@@ -601,24 +598,28 @@ defmodule Aqua.RunnerTest do
                    5_000
   end
 
-  test "a role addressed directly runs as its own source, with its own consent and key", %{
-    ctx: ctx,
-    thread: thread
-  } do
+  test "a crew member asked by name works in its child thread as its own source, with its own consent and key",
+       %{ctx: ctx, thread: thread} do
     entry =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
 
     script!([reply("Step one.")])
 
-    {:ok, %{admitted: :turn, turn_id: turn_id}} =
+    {:ok, %{admitted: :request, message_id: request}} =
       Runner.send_message(ctx, thread.id, "@planner plan")
 
-    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+    [child] = Threads.children(Sanctum.Context.actor(ctx), thread.id)
+    :ok = Runner.subscribe(child.id, ctx.athanor_id)
+    [%{turn_id: turn_id} | _] = Threads.messages(Sanctum.Context.actor(ctx), child.id)
+
+    wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, turn_id)) end, 60_000)
 
     {:ok, [planner_profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.planner")
 
     {:ok, turn} = Tape.turn(ctx, turn_id)
+    assert turn.request_id == request and turn.asking_thread_id == thread.id
     assert turn.status == "completed" and turn.agent == "planner"
     assert turn.profile_id == planner_profile.id
     assert {:ok, bytes} = Tape.agent_revision(ctx, turn)
@@ -722,7 +723,7 @@ defmodule Aqua.RunnerTest do
     # A turn accepted by a runner that is gone.
     {:ok, %{turn: accepted}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua later"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua later"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -740,7 +741,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, other_thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua carry on"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua carry on"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -1126,7 +1127,7 @@ defmodule Aqua.RunnerTest do
 
       assert {:error, :no_origin} =
                Tape.accept(%{ctx | origin: nil}, thread.id, %{
-                 message: %{author: ctx.user_id, content: "@aqua never"},
+                 message: %{author: ctx.user_id, sent_by: "person", content: "@aqua never"},
                  turn: %{agent: "aqua", requested_by: ctx.user_id}
                })
 
@@ -1136,7 +1137,7 @@ defmodule Aqua.RunnerTest do
       # writer stores, as a hand edit or a restored row carries it.
       {:ok, %{turn: accepted}} =
         Tape.accept(ctx, thread.id, %{
-          message: %{author: ctx.user_id, content: "@aqua later"},
+          message: %{author: ctx.user_id, sent_by: "person", content: "@aqua later"},
           turn: %{agent: "aqua", requested_by: ctx.user_id}
         })
 
@@ -1162,7 +1163,7 @@ defmodule Aqua.RunnerTest do
       # the vocabulary holds.
       {:ok, %{turn: turn}} =
         Tape.accept(ctx, thread.id, %{
-          message: %{author: ctx.user_id, content: "@aqua keep it"},
+          message: %{author: ctx.user_id, sent_by: "person", content: "@aqua keep it"},
           turn: %{agent: "aqua", requested_by: ctx.user_id}
         })
 
@@ -1515,7 +1516,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua held"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua held"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -1776,7 +1777,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 

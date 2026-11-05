@@ -13,21 +13,25 @@ defmodule Aqua.Loop.Request do
   schema the guest offered; a catalog tool keeps its own, but for the
   account an `execution.run` names (`connection`), which lists the apps
   whose own profile binds named accounts and their names, never an
-  entry or a value; a role the soul
-  may clone into is a tool of its own; an external server's tool rides
-  under its wire name; the `ui` event and `request_setup` are always
-  offered.
+  entry or a value; an external server's tool rides under its wire
+  name; the `ui` event and `request_setup` are always offered.
 
-  The messages are the projection shaped for the contract: a person's row
-  is a `user` message (named when several people write), an agent's
-  reply and the tool calls of one step are one `assistant` message with
-  the stored typed blocks, tool results ride a `tool` message with the
-  call's name, a compaction stands in for the rows before its boundary,
-  an aborted mark tells the model what happened, and a call that never
-  got its result carries a synthetic one saying so. The room excerpt is
-  a transient block on this request's last `user` message; the turn's
-  attachments are typed blocks on its initiating message. Cards, notes
-  in the server's voice and errors are not the model's to read.
+  The messages are the projection shaped for the contract, read by the
+  agent the turn runs (`:me`): what that agent said (`sent_by`) and the
+  tool calls of one step are one `assistant` message with the stored
+  typed blocks; anything anyone else said is a `user` message — a
+  person's (named when several people write), another agent's under its
+  name, a crew member's reply under the request it answers. A request the
+  reading agent made itself is its tool call's to show, and is read as a
+  row only once a compaction summarized that call away while the
+  request still waits (`Aqua.Loop.Planner.pinned?/1`). Tool results ride
+  a `tool` message with the call's name, a compaction stands in for the
+  rows before its boundary, an aborted mark tells the model what
+  happened, and a call that never got its result carries a synthetic one
+  saying so. The room excerpt is a transient block on this request's
+  last `user` message; the turn's attachments are typed blocks on its
+  initiating message. Cards, notes in the server's voice and errors are
+  not the model's to read.
   """
 
   alias Aqua.Tape
@@ -155,12 +159,10 @@ defmodule Aqua.Loop.Request do
 
   @doc """
   The tools a turn offers, from the agent's effective policy (the guest
-  spelling, `"tool.action" => "auto" | "ask" | "deny"`, `"role.*" =>
-  "auto"`). `opts`: `:roles` (the roster entries the soul may clone into,
-  `%{"name", "title", "description"}`), `:external` (the external servers'
-  tools as `%{name, description, input_schema}`), `:soul?` (whether roles
-  may be offered at all), `:accounts` (the apps a launch may name an
-  account of, `t:Aqua.Hands.launch_accounts/0`, which the `connection`
+  spelling, `"tool.action" => "auto" | "ask" | "deny"`). `opts`:
+  `:external` (the external servers' tools as `%{name, description,
+  input_schema}`), `:accounts` (the apps a launch may name an account
+  of, `t:Aqua.Hands.launch_accounts/0`, which the `connection`
   argument's description lists; absent or nil, as when they could not be
   read, the declared description stands). Answers the contract's `tools`
   list.
@@ -172,15 +174,6 @@ defmodule Aqua.Loop.Request do
     hands =
       for {tool, actions} <- offered, Aqua.Hands.hand?(tool), tool != "request_setup" do
         hand_tool(tool, actions, policy)
-      end
-
-    roles =
-      if Keyword.get(opts, :soul?, true) do
-        for role <- Keyword.get(opts, :roles, []),
-            Map.get(policy, "#{role["name"]}.*") == "auto",
-            do: role_tool(role)
-      else
-        []
       end
 
     external =
@@ -196,9 +189,7 @@ defmodule Aqua.Loop.Request do
 
     catalog = with_accounts(catalog_tools(policy), Keyword.get(opts, :accounts))
 
-    hands ++
-      catalog ++
-      roles ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"], policy)]
+    hands ++ catalog ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"], policy)]
   end
 
   # The account a launch names, described by the apps that bind one: the
@@ -278,12 +269,15 @@ defmodule Aqua.Loop.Request do
 
   @doc """
   The request: `model`, `system`, `messages`, `tools`, `provider_tools`
-  and `max_tokens`. `opts`: `:model`, `:system`, `:tools`, `:messages`,
-  `:capabilities` (for the output ceiling and the provider tools),
+  and `max_tokens`, and `session` and `options` when given. `opts`:
+  `:model`, `:system`, `:tools`, `:messages`, `:capabilities` (for the
+  output ceiling, the provider tools and the options the brain declares),
   `:native_search?` (the policy grants `native_search: auto`),
-  `:max_tokens`. Any other option raises: a request's `session` and
-  `options` (`Prima.Model`) are not built yet, and one given here is
-  refused rather than sent or dropped.
+  `:max_tokens`, `:session` (the brain's session a response named) and
+  `:options` (the brain options a crew request set). An option the brain
+  does not declare, or a value not of its kind, is refused
+  (`Prima.Model.check_chat_request/2`), never sent or dropped: the
+  request raises, and the turn fails on it.
   """
   @spec build(keyword()) :: map()
   def build(opts) do
@@ -295,7 +289,9 @@ defmodule Aqua.Loop.Request do
         :tools,
         :capabilities,
         :native_search?,
-        :max_tokens
+        :max_tokens,
+        :session,
+        :options
       ])
 
     caps = Keyword.get(opts, :capabilities, %{})
@@ -307,15 +303,31 @@ defmodule Aqua.Loop.Request do
          do: ["web_search"],
          else: []
 
-    %{
-      "model" => Keyword.fetch!(opts, :model),
-      "system" => Keyword.get(opts, :system, ""),
-      "messages" => Keyword.fetch!(opts, :messages),
-      "tools" => Keyword.get(opts, :tools, []),
-      "provider_tools" => provider_tools,
-      "max_tokens" => max_tokens
-    }
+    request =
+      %{
+        "model" => Keyword.fetch!(opts, :model),
+        "system" => Keyword.get(opts, :system, ""),
+        "messages" => Keyword.fetch!(opts, :messages),
+        "tools" => Keyword.get(opts, :tools, []),
+        "provider_tools" => provider_tools,
+        "max_tokens" => max_tokens
+      }
+      |> Prima.MapUtil.put_present("session", Keyword.get(opts, :session))
+      |> put_options(Keyword.get(opts, :options))
+
+    case Prima.Model.check_chat_request(request, Map.get(caps, :options) || []) do
+      :ok ->
+        request
+
+      {:error, {:invalid, member}} ->
+        raise ArgumentError, "the brain does not take #{member} as it is set"
+    end
   end
+
+  defp put_options(request, options) when is_map(options) and map_size(options) > 0,
+    do: Map.put(request, "options", options)
+
+  defp put_options(request, _none), do: request
 
   @doc """
   The output ceiling a request asks for under `caps`: the caller's, else
@@ -330,7 +342,8 @@ defmodule Aqua.Loop.Request do
   end
 
   @doc """
-  The projection shaped for the contract. `opts`: `:names` (a map of
+  The projection shaped for the contract. `opts`: `:me` (the agent the
+  turn runs, whose rows are its own speech), `:names` (a map of
   user id to display name, used when `:multi_author?` is true),
   `:excerpt` (the room excerpt, a transient block), `:attachments` (typed
   blocks for the initiating message), `:task_message_id` (which message
@@ -410,27 +423,6 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp role_tool(role) do
-    name = role["name"]
-
-    %{
-      "name" => name,
-      "description" =>
-        "Hand a task to the #{role["title"] || name} role, which works with its own hands and answers " <>
-          "with a summary. " <> (role["description"] || ""),
-      "parameters" => %{
-        "type" => "object",
-        "required" => ["task"],
-        "properties" => %{
-          "task" => %{
-            "type" => "string",
-            "description" => "The task for the #{name} role. Be specific and include context."
-          }
-        }
-      }
-    }
-  end
-
   defp asks(tool, actions, policy) do
     case Enum.filter(actions, &(Map.get(policy, "#{tool}.#{&1}") == "ask")) do
       [] ->
@@ -445,8 +437,10 @@ defmodule Aqua.Loop.Request do
   # Messages
   # ---------------------------------------------------------------------------
 
-  # The latest compaction stands in for the rows before its boundary;
-  # every compaction row is dropped from the model's reading.
+  # The latest compaction stands in for the rows before its boundary,
+  # but for the requests there still waiting on a reply, which stay
+  # pinned after it; every compaction row is dropped from the model's
+  # reading.
   defp apply_compaction(rows) do
     case rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last() do
       nil ->
@@ -454,6 +448,9 @@ defmodule Aqua.Loop.Request do
 
       %{} = compaction ->
         %{"first_kept_seq" => first} = Tape.payload(compaction)
+
+        pinned =
+          for row <- rows, row.seq < first, Aqua.Loop.Planner.pinned?(row), do: {:pinned, row}
 
         kept = Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))
 
@@ -468,43 +465,30 @@ defmodule Aqua.Loop.Request do
           step: nil
         }
 
-        [{:shaped, summary} | kept]
+        [{:shaped, summary} | pinned ++ kept]
     end
   end
 
   defp shape({:shaped, message}, acc, _opts), do: [message | acc]
 
+  defp shape({:pinned, row}, acc, _opts) do
+    said(
+      "[Request #{row.id} to #{row.addressee}, still waiting on its reply]\n#{row.content}",
+      row,
+      acc
+    )
+  end
+
   defp shape(%{kind: "text"} = row, acc, opts) do
-    # A clone's task is the soul speaking to the role: the role reads it
-    # as the person's words.
-    task? = Tape.payload(row)["as"] == "task"
+    me = Keyword.get(opts, :me)
 
-    if row.author in Prima.Author.reserved() and not task? do
-      step = step_of(row)
-      block = %{"type" => "text", "text" => row.content || ""}
-
-      case acc do
-        [%{role: "assistant", step: ^step} = current | rest] when not is_nil(step) ->
-          [%{current | blocks: current.blocks ++ [block]} | rest]
-
-        _ ->
-          [%{role: "assistant", blocks: [block], step: step} | acc]
-      end
-    else
-      text =
-        if Keyword.get(opts, :multi_author?, false),
-          do: "#{display(row.author, opts)}: #{row.content}",
-          else: row.content || ""
-
-      [
-        %{
-          role: "user",
-          blocks: [%{"type" => "text", "text" => text}],
-          step: nil,
-          message_id: row.id
-        }
-        | acc
-      ]
+    cond do
+      is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
+      request?(row) and own?(row, me) -> acc
+      request?(row) -> said(request_text(row, opts), row, acc)
+      own?(row, me) -> spoken(row, acc)
+      agent?(row) -> said("[#{row.sent_by}]\n#{row.content}", row, acc)
+      true -> said(person_text(row, opts), row, acc)
     end
   end
 
@@ -561,6 +545,62 @@ defmodule Aqua.Loop.Request do
 
   # Cards, notes in the server's voice and errors are not the model's.
   defp shape(%{}, acc, _opts), do: acc
+
+  defp spoken(row, acc) do
+    step = step_of(row)
+    block = %{"type" => "text", "text" => row.content || ""}
+
+    case acc do
+      [%{role: "assistant", step: ^step} = current | rest] when not is_nil(step) ->
+        [%{current | blocks: current.blocks ++ [block]} | rest]
+
+      _ ->
+        [%{role: "assistant", blocks: [block], step: step} | acc]
+    end
+  end
+
+  defp said(text, row, acc) do
+    [
+      %{
+        role: "user",
+        blocks: [%{"type" => "text", "text" => text}],
+        step: nil,
+        message_id: row.id
+      }
+      | acc
+    ]
+  end
+
+  # The reading agent's own speech: a row it sent. A row written before
+  # rows named their sender is read by its author.
+  defp own?(%{sent_by: sent_by}, me) when is_binary(sent_by) and is_binary(me), do: sent_by == me
+  defp own?(row, _me), do: row.author in Prima.Author.reserved()
+
+  defp agent?(%{sent_by: sent_by}), do: is_binary(sent_by) and sent_by != "person"
+  defp agent?(_row), do: false
+
+  defp request?(row),
+    do: is_binary(Map.get(row, :addressee)) and Map.get(row, :status) in ["pending", "answered"]
+
+  defp request_text(row, opts) do
+    asker = if row.sent_by == "person", do: display(row.author, opts), else: row.sent_by
+
+    "[#{asker} asked #{row.addressee} (request #{row.id}, #{row.status})]\n#{row.content}"
+  end
+
+  defp reply_text(%{outcome: "needs_you"} = row) do
+    "[#{row.sent_by} needs the person on request #{row.reply_to}: a card waits for them " <>
+      "in #{row.sent_by}'s thread]\n#{row.content}"
+  end
+
+  defp reply_text(row),
+    do: "[#{row.sent_by} replied to request #{row.reply_to}: #{row.outcome}]\n#{row.content}"
+
+  defp person_text(row, opts) do
+    if Keyword.get(opts, :multi_author?, false),
+      do: "#{display(row.author, opts)}: #{row.content}",
+      else: row.content || ""
+  end
 
   defp finish_message(%{role: role, blocks: blocks} = message) do
     %{"role" => role, "content" => blocks}

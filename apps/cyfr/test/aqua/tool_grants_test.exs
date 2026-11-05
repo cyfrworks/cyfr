@@ -143,7 +143,7 @@ defmodule Aqua.ToolGrantsTest do
       assert inverted["component.search"] == "auto"
     end
 
-    test "a role's delegation glob and the search gate pass through composition untouched" do
+    test "a key for a tool nobody catalogues and the search gate pass through composition untouched" do
       composed = ToolGrants.resolve(%{"builder.*" => "auto", "native_search" => "auto"}, [])
       assert composed == %{"builder.*" => "auto", "native_search" => "auto"}
     end

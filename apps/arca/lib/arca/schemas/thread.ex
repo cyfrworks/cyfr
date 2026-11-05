@@ -17,10 +17,11 @@ defmodule Arca.Schemas.Thread do
   node is a lookup, never evidence of ownership.
 
   `kind` is `"own"`, a person's thread, or `"crew"`, a child thread a crew
-  member works in under the room thread `parent_id` names; `brain_session`
-  is the brain's own opaque session for the thread. Crew threads are not
-  built yet: `changeset/2` casts none of the three, so every thread it
-  writes is `own`.
+  member (`agent`) works in under the room thread `parent_id` names, one
+  per member per room while it stands; `archived_at` is when a child
+  thread was retired, after which it admits nothing and the next request
+  to its member opens a new one. `brain_session` is the brain's own
+  opaque session for the thread.
   """
 
   use Ecto.Schema
@@ -41,6 +42,7 @@ defmodule Arca.Schemas.Thread do
     field :kind, :string, default: "own"
     field :parent_id, :string
     field :brain_session, :string
+    field :archived_at, :utc_datetime_usec
     field :title, :string, default: "New thread"
     field :created_by, :string
     field :agent, :string
@@ -53,6 +55,8 @@ defmodule Arca.Schemas.Thread do
   @fields [
     :id,
     :athanor_id,
+    :kind,
+    :parent_id,
     :title,
     :created_by,
     :agent,
@@ -64,7 +68,8 @@ defmodule Arca.Schemas.Thread do
   def changeset(row, attrs) do
     row
     |> cast(attrs, @fields)
-    |> validate_required([:id, :athanor_id, :title, :created_by])
+    |> validate_required([:id, :athanor_id, :kind, :title, :created_by])
+    |> validate_inclusion(:kind, @kinds)
     |> validate_length(:title, max: 200)
   end
 end

@@ -102,6 +102,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     {Aqua.Supervisor,
      [
        Aqua.ScheduleNotes,
+       Aqua.Crew,
        {Aqua.WorkerTree, [Aqua.Loop.Worker, Aqua.TaskSupervisor]},
        {Aqua.RunnerTree, [Aqua.RunnerRegistry, Aqua.RunnerSupervisor, Aqua.RunnerRecovery]}
      ]},
@@ -162,6 +163,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Aqua.RunnerRegistry,
     Aqua.TaskSupervisor,
     Aqua.Loop.Worker,
+    Aqua.Crew,
     Aqua.ScheduleNotes,
     Opus.HostListener,
     Opus.Host.Egress.Pins,
@@ -981,7 +983,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 

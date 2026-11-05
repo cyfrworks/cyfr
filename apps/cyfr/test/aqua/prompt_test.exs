@@ -68,6 +68,45 @@ defmodule Aqua.PromptTest do
     end
   end
 
+  describe "the crew and the open requests" do
+    test "the crew is listed when the agent may ask it, and the open requests with their age, before the clock",
+         %{ctx: ctx} do
+      asked = DateTime.add(DateTime.utc_now(), -300, :second)
+
+      prompt =
+        Prompt.compose(ctx,
+          agent: agent(%{"crew.ask" => "auto"}),
+          authority: nil,
+          crew: [%{"name" => "planner", "title" => "Planner", "description" => "Plans."}],
+          requests: [
+            %{
+              id: "msg_r1",
+              addressee: "planner",
+              sent_by: "person",
+              inserted_at: asked,
+              content: "plan the move\nwith every step"
+            }
+          ]
+        ).text
+
+      assert prompt =~ "## Crew"
+      assert prompt =~ "- planner — Planner: Plans."
+      assert prompt =~ "- msg_r1 to planner, asked by the person 5m ago: plan the move\n"
+      refute prompt =~ "with every step"
+
+      {crew_at, _} = :binary.match(prompt, "## Crew")
+      {open_at, _} = :binary.match(prompt, "## Open requests")
+      {now_at, _} = :binary.match(prompt, "## Now")
+      assert crew_at < open_at and open_at < now_at
+    end
+
+    test "no crew and no open request is no section", %{ctx: ctx} do
+      prompt = Prompt.compose(ctx, agent: agent(), authority: nil).text
+      refute prompt =~ "## Crew"
+      refute prompt =~ "## Open requests"
+    end
+  end
+
   test "the console prelude is part of the one composition, and lists no approvals", %{ctx: ctx} do
     prompt = Prompt.compose(ctx, agent: agent(%{"component.pull" => "ask"}), authority: nil).text
 

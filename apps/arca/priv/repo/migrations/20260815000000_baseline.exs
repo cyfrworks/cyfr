@@ -2848,6 +2848,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :parent_id, :string
       # The brain's own session for the thread, opaque.
       add :brain_session, :text
+      # When a child thread was retired: it admits nothing more, and the
+      # next request to its member opens a new one.
+      add :archived_at, :utc_datetime_usec
       add :title, :string, null: false, default: "New thread"
       # Attribution: the person who opened it. The athanor owns it.
       add :created_by, :string, null: false
@@ -2976,7 +2979,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :error, :text
       add :accepted_at, :utc_datetime_usec, null: false
       add :ended_at, :utc_datetime_usec
-      add :parent_turn_id, :string
       add :message_id, :string
       add :root_execution_id, :string
       add :attempt, :string
@@ -3018,12 +3020,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:turns, [:id, :athanor_id])
     create index(:turns, [:athanor_id, :thread_id, :accepted_at])
     create index(:turns, [:athanor_id, :status])
-    create index(:turns, [:athanor_id, :parent_turn_id])
     create unique_index(:turns, [:thread_id, :message_id], where: "message_id IS NOT NULL")
 
-    create unique_index(:turns, [:root_execution_id],
-             where: "root_execution_id IS NOT NULL AND parent_turn_id IS NULL"
-           )
+    create unique_index(:turns, [:root_execution_id], where: "root_execution_id IS NOT NULL")
 
     create table(:turn_steps, primary_key: false) do
       add :id, :string, primary_key: true, null: false
@@ -3038,7 +3037,7 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :seq, :integer, null: false
-      # model | tool | ui | approval | clone | launch
+      # model | tool | ui | approval | launch
       add :kind, :string, null: false
       # chat | flush | compaction — what the step serves, set by the host
       add :purpose, :string, null: false

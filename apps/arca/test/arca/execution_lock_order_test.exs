@@ -6,10 +6,13 @@ defmodule Arca.ExecutionLockOrderTest do
   Every execution write takes the execution row before any attempt row,
   so two writes of one run wait on each other in one order and never
   deadlock: a lapse of a run against the run's own terminal write, and a
-  lapse of a turn's root against the turn's end. These run outside the
-  sandbox, on connections of their own, with the run's attempt held by a
-  third transaction so both writes are seen waiting before either goes
-  on; a PostgreSQL deadlock would abort one of them with a database error.
+  lapse of a turn's root against the turn's end. A turn's writers take
+  the turn before its thread, an archive of the thread among them, and a
+  room's deletion holds the athanor's lock a child's creation waits on.
+  These run outside the sandbox, on connections of their own, with the
+  run's attempt held by a third transaction so both writes are seen
+  waiting before either goes on; a PostgreSQL deadlock would abort one of
+  them with a database error.
   """
 
   use ExUnit.Case, async: false
@@ -196,7 +199,7 @@ defmodule Arca.ExecutionLockOrderTest do
 
         {:ok, %{turn: turn}} =
           TurnStorage.accept_message(actor, thread.id, %{
-            message: %{author: actor.user_id, content: "@aqua go"},
+            message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
             turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
           })
 
@@ -277,5 +280,125 @@ defmodule Arca.ExecutionLockOrderTest do
 
     refute log =~ "deadlock", log
     assert %Execution{status: "cancelled"} = unboxed(fn -> Arca.Repo.get!(Execution, root_id) end)
+  end
+
+  # A member's turn running in its child thread of a fresh room.
+  defp running_child_turn!(actor) do
+    budget_id = "bgt_lock_order_#{System.unique_integer([:positive])}"
+    root_id = "exec_lock_order_child_#{System.unique_integer([:positive])}"
+
+    {room, child, turn} =
+      unboxed(fn ->
+        {:ok, room} = Threads.create(actor)
+        {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+
+        {:ok, %{turn: turn}} =
+          TurnStorage.accept_message(actor, child.id, %{
+            message: %{author: actor.user_id, sent_by: "person", content: "go"},
+            turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
+          })
+
+        {room, child, turn}
+      end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        for thread <- [child, room], do: delete_thread!(actor.athanor_id, thread.id)
+        delete_run!(root_id)
+      end)
+    end)
+
+    unboxed(fn ->
+      {:ok, %{attempt: attempt}} =
+        Arca.Execution.admit(
+          %{
+            id: root_id,
+            reference: "agent:local.planner",
+            user_id: actor.user_id,
+            athanor_id: actor.athanor_id,
+            component_type: "agent",
+            kind: "turn",
+            turn_id: turn.id,
+            origin: :interactive
+          },
+          reservation: %{budget_id: budget_id, cap: 4},
+          grant: Arca.Test.Actor.grant(actor.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
+        )
+
+      {:ok, started} =
+        TurnStorage.start(actor, turn.id, %{
+          root_execution_id: root_id,
+          attempt: attempt.attempt,
+          budget_id: budget_id,
+          recovery_limit: 3,
+          fence: turn.fence
+        })
+
+      %{room: room, child: child, turn: started, attempt: attempt.attempt}
+    end)
+  end
+
+  @stored %{grant: :stored, verify: &Arca.Test.Actor.admits/1}
+
+  test "an archive and the end of a turn it would cancel take the turn first and never deadlock" do
+    actor = Arca.Test.Actor.local()
+    %{child: child, turn: turn, attempt: attempt} = running_child_turn!(actor)
+
+    log =
+      capture_log(fn ->
+        blocker = hold_attempt(attempt)
+
+        # The end holds its turn and waits on the root.
+        {finish, finish_backend} =
+          waiting(:finish, fn ->
+            TurnStorage.finish(actor, turn.id, "completed", Map.put(@stored, :fence, turn.fence))
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(finish_backend, ["execution_attempts"])
+
+        {archive, archive_backend} =
+          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+        release(blocker)
+
+        # The end took the turn first, so the archive finds it ended.
+        assert {:ok, %{status: "completed"}} = Task.await(finish, 10_000)
+
+        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: []}} =
+                 Task.await(archive, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+  end
+
+  test "a child made while its room is deleted waits for the deletion and finds no room" do
+    actor = Arca.Test.Actor.local()
+    %{room: room, turn: turn, attempt: attempt} = running_child_turn!(actor)
+    turn_id = turn.id
+
+    log =
+      capture_log(fn ->
+        blocker = hold_attempt(attempt)
+
+        # The deletion holds the athanor and waits on the child turn's root.
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["execution_attempts"])
+
+        {creation, creation_backend} =
+          waiting(:creation, fn -> Threads.crew_thread(actor, room.id, "builder") end)
+
+        Arca.Test.LockWait.await_lock_wait!(creation_backend, ["athanors"])
+        release(blocker)
+
+        assert {:ok, %{cancelled: [%{turn_id: ^turn_id}]}} = Task.await(deletion, 10_000)
+        assert {:error, :not_found} = Task.await(creation, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert unboxed(fn -> Threads.children(actor, room.id) end) == []
   end
 end

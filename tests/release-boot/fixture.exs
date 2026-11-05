@@ -716,8 +716,13 @@ fn args ->
       actor = Sanctum.Context.actor(ctx)
       {:ok, thread} = Arca.ThreadStorage.create(actor)
 
+      # The person's own message, sent as a person's send is.
       {:ok, _message} =
-        Arca.ThreadStorage.append(actor, thread.id, %{author: user_id, content: text})
+        Arca.ThreadStorage.append(actor, thread.id, %{
+          author: user_id,
+          sent_by: Aqua.Runner.Admission.person(),
+          content: text
+        })
 
       answer.(%{thread_id: thread.id, athanor_id: ctx.athanor_id})
   end

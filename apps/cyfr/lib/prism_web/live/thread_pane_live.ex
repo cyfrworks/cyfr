@@ -34,6 +34,17 @@ defmodule PrismWeb.ThreadPaneLive do
   read by its id from this thread) again, as a new turn, or says that
   the turn ended when it has no such message to offer.
 
+  Every line is named by who sent it (`sent_by`): a person as the console
+  names them, the soul as AQUA, a crew member by its name. A request to a
+  crew member says who asked whom and whether it is answered, with the
+  replies to it beneath it; a reply whose request is not on screen stands
+  on its own, and a notice says the member needs the person. A room lists
+  its crew members' threads; a member's thread names its member, leads
+  back to its room and, while it stands, can be archived
+  (`thread.archive`). The pane opens neither: it asks its host to open
+  the thread, `{:open_thread, id}`, as it does for an assistant's
+  navigate in the panel.
+
   In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
   the pane sits beside the shared thread the host page shows, when it
   shows one (`PrismWeb.RoomFeed`): it reads that thread into each send as
@@ -59,6 +70,8 @@ defmodule PrismWeb.ThreadPaneLive do
 
   @agent_author Prima.Author.agent()
   @system_author Prima.Author.system()
+  # The `sent_by` of a person's line; any other names an agent.
+  @person "person"
 
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
@@ -193,6 +206,9 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:assistant, nil)
       |> assign(:input, "")
       |> stream(:messages, [], reset: true)
+      |> assign(:requests, %{})
+      |> assign(:children, [])
+      |> assign(:parent, nil)
       |> assign(:pending_approvals, [])
       |> assign(:run_schedules, %{})
       |> assign(:any_messages, false)
@@ -216,17 +232,59 @@ defmodule PrismWeb.ThreadPaneLive do
             {:error, _} -> []
           end
 
+        {shown, requests} = file_replies(rows)
+
         socket
-        |> stream(:messages, rows, reset: true)
+        |> stream(:messages, shown, reset: true)
+        |> assign(:requests, requests)
         |> assign(:pending_approvals, pending_in(rows))
         |> note_schedules(pending_in(rows))
         |> assign(:any_messages, rows != [])
         |> apply_live(live)
+        |> relatives(thread)
 
       _ ->
         socket
     end
   end
+
+  # A request is shown with the replies to it beneath it, and kept by id
+  # so a reply heard later files under it too; a reply whose request is
+  # not among the rows shown stands on its own.
+  defp file_replies(rows) do
+    asked = for row <- rows, crew(row) == :request, into: MapSet.new(), do: row.id
+
+    {nested, shown} =
+      Enum.split_with(rows, &(crew(&1) == :reply and MapSet.member?(asked, &1.reply_to)))
+
+    replies = Enum.group_by(nested, & &1.reply_to)
+
+    shown =
+      Enum.map(shown, fn row ->
+        if crew(row) == :request,
+          do: Map.put(row, :replies, Map.get(replies, row.id, [])),
+          else: row
+      end)
+
+    {shown, for(row <- shown, crew(row) == :request, into: %{}, do: {row.id, row})}
+  end
+
+  # A room's crew threads, or a crew thread's room.
+  defp relatives(socket, %{kind: "crew", parent_id: room_id}),
+    do: assign(socket, :parent, thread_of(socket.assigns.context, room_id))
+
+  defp relatives(socket, _room), do: read_children(socket)
+
+  # Read again on each crew row the room hears: a reply or notice names a
+  # thread the room may not have listed yet.
+  defp read_children(%{assigns: %{thread: %{kind: "own", id: id}}} = socket) do
+    case Threads.children(Sanctum.Context.actor(socket.assigns.context), id) do
+      children when is_list(children) -> assign(socket, :children, children)
+      {:error, _} -> socket
+    end
+  end
+
+  defp read_children(socket), do: socket
 
   defp unsubscribe_thread(%{assigns: %{thread: %{id: id, athanor_id: athanor_id}}} = socket) do
     unfollow_thread(id, athanor_id)
@@ -428,6 +486,21 @@ defmodule PrismWeb.ThreadPaneLive do
     tell_host(socket, {:aloud_open, msg_id})
     {:noreply, socket}
   end
+
+  # A crew thread, or its room: the host opens it, as it opens any thread.
+  def handle_event("open_thread", %{"id" => id}, socket) do
+    tell_host(socket, {:open_thread, id})
+    {:noreply, socket}
+  end
+
+  # Retiring a crew thread stops its member's work there; the row read
+  # again says whether it took.
+  def handle_event("archive", _params, %{assigns: %{thread: %{kind: "crew"} = thread}} = socket) do
+    socket = run(socket, &PrismWeb.Ops.call_tool(&1, "thread/archive", %{"thread" => thread.id}))
+    {:noreply, assign(socket, :thread, thread_of(socket.assigns.context, thread.id) || thread)}
+  end
+
+  def handle_event("archive", _params, socket), do: {:noreply, socket}
 
   # The list beside the thread is the host's drawer on a phone.
   def handle_event("toggle_rail", _params, socket) do
@@ -692,6 +765,31 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:partials, Aqua.stream_landed(socket.assigns.partials, row))
   end
 
+  defp handle_thread_event(socket, :request, row) do
+    replies = get_in(socket.assigns.requests, [row.id, :replies]) || []
+    socket |> put_request(Map.put(row, :replies, replies)) |> read_children()
+  end
+
+  # A reply answers every request its payload names, as its write did, and
+  # is shown beneath the one it replies to when that one is shown.
+  defp handle_thread_event(socket, :reply, row) do
+    requests = socket.assigns.requests
+    answered = Enum.uniq([row.reply_to | List.wrap(Threads.payload(row)["answers"])])
+
+    socket =
+      for id <- answered, %{} = request <- [requests[id]], reduce: socket do
+        acc -> put_request(acc, answered_by(request, row))
+      end
+
+    socket =
+      if Map.has_key?(requests, row.reply_to), do: socket, else: upsert_message(socket, row)
+
+    read_children(socket)
+  end
+
+  defp handle_thread_event(socket, :notice, row),
+    do: socket |> upsert_message(row) |> read_children()
+
   # A turn may start for a message queued earlier — the sender's draft of
   # a newer message stays where it is (`send_message/3` clears on send).
   defp handle_thread_event(socket, :turn_starting, user_id) do
@@ -822,6 +920,24 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:pending_approvals, pending)
     |> note_schedules(pending_in([row]))
     |> assign(:any_messages, true)
+  end
+
+  defp put_request(socket, request) do
+    socket
+    |> assign(:requests, Map.put(socket.assigns.requests, request.id, request))
+    |> upsert_message(request)
+  end
+
+  # A request already answered stays as its first reply left it.
+  defp answered_by(request, reply) do
+    request =
+      if request.status == "pending",
+        do: %{request | status: "answered", resolved_by: reply.id},
+        else: request
+
+    if request.id == reply.reply_to,
+      do: %{request | replies: Enum.reject(request.replies, &(&1.id == reply.id)) ++ [reply]},
+      else: request
   end
 
   # Whether each pending card's run was started by a schedule, read once
@@ -1035,6 +1151,12 @@ defmodule PrismWeb.ThreadPaneLive do
 
       :archived ->
         put_flash(socket, :error, "This athanor has been archived.")
+
+      :thread_archived ->
+        put_flash(socket, :error, "This thread has been archived.")
+
+      :not_addressable ->
+        put_flash(socket, :error, "Only this thread's crew member can be addressed here.")
 
       :no_agent ->
         put_flash(socket, :error, "This athanor has no assistant — see AQUA.")
@@ -1571,6 +1693,52 @@ defmodule PrismWeb.ThreadPaneLive do
       <div id={@dom <> "-announcer"} class="sr-only" aria-live="polite" aria-atomic="true">
         {@announcement}
       </div>
+
+      <nav
+        :if={@children != []}
+        id={@dom <> "-crew"}
+        aria-label="Crew threads"
+        class="flex flex-wrap items-center gap-1.5 border-b border-gray-800 px-4 py-1.5 text-xs text-gray-500"
+      >
+        <span>Crew</span>
+        <button
+          :for={child <- @children}
+          id={@dom <> "-crew-" <> child.id}
+          type="button"
+          phx-click="open_thread"
+          phx-value-id={child.id}
+          class="min-h-6 rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
+        >
+          {child.agent}<span :if={child.archived_at} class="text-gray-500"> · archived</span>
+        </button>
+      </nav>
+
+      <div
+        :if={match?(%{kind: "crew"}, @thread)}
+        id={@dom <> "-crew-thread"}
+        class="flex items-center gap-2 border-b border-gray-800 px-4 py-1.5 text-xs text-gray-500"
+      >
+        <span class="shrink-0">{@thread.agent}'s thread</span>
+        <button
+          type="button"
+          phx-click="open_thread"
+          phx-value-id={@thread.parent_id}
+          class="min-h-6 min-w-0 truncate text-blue-400 hover:text-blue-300"
+        >
+          Back to {(@parent && @parent.title) || "its thread"}
+        </button>
+        <span :if={@thread.archived_at} class="ml-auto shrink-0">Archived</span>
+        <button
+          :if={is_nil(@thread.archived_at)}
+          type="button"
+          phx-click="archive"
+          data-confirm={"Archive #{@thread.agent}'s thread? Its work here stops."}
+          class="ml-auto min-h-6 shrink-0 rounded px-2 py-0.5 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+        >
+          Archive
+        </button>
+      </div>
+
       <div
         id={@dom <> "-thread"}
         phx-hook="ScrollBottom"
@@ -1687,59 +1855,91 @@ defmodule PrismWeb.ThreadPaneLive do
         >
           <%= for {dom_id, msg} <- @streams.messages do %>
             <div id={dom_id}>
-              <%= if msg.kind == "approval" do %>
-                <% intent = Threads.payload(msg)["intent"] || %{} %>
-                <% resolution = Threads.resolution(msg) %>
-                <.live_component
-                  module={PrismWeb.AquaApprovalCard}
-                  id={@dom <> "-card-" <> msg.id}
-                  message_id={msg.id}
-                  approval_id={msg.approval_id}
-                  scheduled={Map.get(@run_schedules, msg.execution_id, false)}
-                  bounds={Map.take(resolution, ~w(lifecycle until constraint sources))}
-                  payload={intent}
-                  status={msg.status}
-                  decided_at={msg.resolved_at}
-                  reason={resolution["reason"]}
-                  result_summary={resolution["summary"]}
-                  scope={scope_atom(resolution["scope"])}
-                  resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
-                  agent_label={@assistant && @assistant["title"]}
-                />
-              <% else %>
-                <div class="group/aloud">
+              <%= cond do %>
+                <% crew(msg) == :request -> %>
                   <.message_bubble
                     id={@dom <> "-msg-" <> msg.id}
                     role={role_of(msg)}
                     content={msg.content}
-                    author={author_label(msg, @members, @context)}
-                    attachments={Threads.payload(msg)["attachments"] || []}
-                    attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
+                    author={"#{speaker(msg, @members, @context)} asked #{msg.addressee} · #{msg.status}"}
                   />
-                  <%!-- A line you may say aloud: yours, or your assistant's
+                  <.reply
+                    :for={reply <- msg.replies}
+                    id={@dom <> "-reply-" <> reply.id}
+                    dom={@dom}
+                    reply={reply}
+                  />
+                <% crew(msg) == :reply -> %>
+                  <.reply id={@dom <> "-reply-" <> msg.id} dom={@dom} reply={msg} />
+                <% crew(msg) == :notice -> %>
+                  <div class="flex flex-col items-start">
+                    <span class="text-xs text-gray-500 mb-0.5 px-1">{msg.sent_by} needs you</span>
+                    <div class="max-w-[85%] space-y-1 rounded-lg border border-amber-800/50 bg-amber-900/30 px-3 py-1.5 text-sm text-amber-200 break-words">
+                      <p class="whitespace-pre-wrap">{String.trim(msg.content || "")}</p>
+                      <button
+                        :if={from = Threads.payload(msg)["from_thread"]}
+                        type="button"
+                        phx-click="open_thread"
+                        phx-value-id={from}
+                        class="min-h-6 text-xs text-amber-100 underline hover:text-white"
+                      >
+                        Open {msg.sent_by}'s thread
+                      </button>
+                    </div>
+                  </div>
+                <% msg.kind == "approval" -> %>
+                  <% intent = Threads.payload(msg)["intent"] || %{} %>
+                  <% resolution = Threads.resolution(msg) %>
+                  <.live_component
+                    module={PrismWeb.AquaApprovalCard}
+                    id={@dom <> "-card-" <> msg.id}
+                    message_id={msg.id}
+                    approval_id={msg.approval_id}
+                    scheduled={Map.get(@run_schedules, msg.execution_id, false)}
+                    bounds={Map.take(resolution, ~w(lifecycle until constraint sources))}
+                    payload={intent}
+                    status={msg.status}
+                    decided_at={msg.resolved_at}
+                    reason={resolution["reason"]}
+                    result_summary={resolution["summary"]}
+                    scope={scope_atom(resolution["scope"])}
+                    resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
+                    agent_label={@assistant && @assistant["title"]}
+                  />
+                <% true -> %>
+                  <div class="group/aloud">
+                    <.message_bubble
+                      id={@dom <> "-msg-" <> msg.id}
+                      role={role_of(msg)}
+                      content={msg.content}
+                      author={author_label(msg, @members, @context)}
+                      attachments={Threads.payload(msg)["attachments"] || []}
+                      attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
+                    />
+                    <%!-- A line you may say aloud: yours, or your assistant's
                         in your own athanor. The host owns the picker — in
                         the panel the target is the room beside it. --%>
-                  <div :if={sayable?(msg, @context, @own?)} class="flex justify-end">
-                    <button
-                      :if={not @panel?}
-                      type="button"
-                      phx-click="aloud_open"
-                      phx-value-id={msg.id}
-                      class={aloud_button_class()}
-                    >
-                      Say aloud…
-                    </button>
-                    <button
-                      :if={@panel? and reads_room?(@room)}
-                      type="button"
-                      phx-click="paste"
-                      phx-value-id={msg.id}
-                      class={aloud_button_class()}
-                    >
-                      Paste to {PrismWeb.RoomFeed.label(@room)}
-                    </button>
+                    <div :if={sayable?(msg, @context, @own?)} class="flex justify-end">
+                      <button
+                        :if={not @panel?}
+                        type="button"
+                        phx-click="aloud_open"
+                        phx-value-id={msg.id}
+                        class={aloud_button_class()}
+                      >
+                        Say aloud…
+                      </button>
+                      <button
+                        :if={@panel? and reads_room?(@room)}
+                        type="button"
+                        phx-click="paste"
+                        phx-value-id={msg.id}
+                        class={aloud_button_class()}
+                      >
+                        Paste to {PrismWeb.RoomFeed.label(@room)}
+                      </button>
+                    </div>
                   </div>
-                </div>
               <% end %>
             </div>
           <% end %>
@@ -1760,7 +1960,7 @@ defmodule PrismWeb.ThreadPaneLive do
           id={@dom <> "-streaming-" <> partial.step_id}
           role="assistant"
           content={partial.text}
-          author={partial.role}
+          author={agent_name(partial.role || Prima.AgentRef.soul_name())}
         />
 
         <div
@@ -2063,6 +2263,59 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
+  attr :id, :string, required: true
+  attr :dom, :string, required: true
+  attr :reply, :map, required: true
+
+  # A crew member's reply, by its member and outcome. A reply cut short
+  # says where the whole of it is: the member's thread.
+  defp reply(assigns) do
+    assigns = assign(assigns, :payload, Threads.payload(assigns.reply))
+
+    ~H"""
+    <div id={@id}>
+      <.message_bubble
+        id={@dom <> "-msg-" <> @reply.id}
+        role="assistant"
+        content={@reply.content}
+        author={"#{agent_name(@reply.sent_by)} · #{@reply.outcome}"}
+      />
+      <button
+        :if={@payload["truncated"] == true and is_binary(@payload["from_thread"])}
+        type="button"
+        phx-click="open_thread"
+        phx-value-id={@payload["from_thread"]}
+        class="min-h-6 px-1 text-xs text-blue-400 hover:text-blue-300"
+      >
+        The whole answer is in {agent_name(@reply.sent_by)}'s thread
+      </button>
+    </div>
+    """
+  end
+
+  # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
+  # crew member, a reply to one, a notice that a member needs the person,
+  # or none of these.
+  defp crew(%{reply_to: id, outcome: "needs_you"}) when is_binary(id), do: :notice
+  defp crew(%{reply_to: id}) when is_binary(id), do: :reply
+
+  defp crew(%{addressee: addressee, status: status})
+       when is_binary(addressee) and status in ["pending", "answered"],
+       do: :request
+
+  defp crew(_row), do: nil
+
+  # Who sent a line: a person as the console names them, an agent by
+  # `agent_name/1`.
+  defp speaker(%{sent_by: @person, author: author}, members, ctx),
+    do: label_for(members, author, ctx)
+
+  defp speaker(%{sent_by: agent}, _members, _ctx), do: agent_name(agent)
+
+  defp agent_name(name) do
+    if Prima.AgentRef.soul?(name), do: "AQUA", else: name
+  end
+
   # A line the person may say aloud: their own, or their assistant's in
   # their own athanor — the same rule `Aqua.Aloud` enforces, shown here so
   # the button is offered only where the verb would accept it. Whether this
@@ -2083,13 +2336,12 @@ defmodule PrismWeb.ThreadPaneLive do
   defp role_of(%{author: @agent_author}), do: "assistant"
   defp role_of(_), do: "user"
 
-  defp author_label(%{author: @agent_author}, _members, _ctx), do: nil
   defp author_label(%{author: @system_author}, _members, _ctx), do: nil
   defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system"], do: nil
 
   # A copy of an assistant's line is the person's, and says so.
-  defp author_label(%{author: author} = msg, members, ctx) do
-    label = label_for(members, author, ctx)
+  defp author_label(msg, members, ctx) do
+    label = speaker(msg, members, ctx)
 
     if Threads.payload(msg)["shared_agent"] == true,
       do: "shared from AQUA by #{label}",

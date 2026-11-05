@@ -19,8 +19,7 @@ defmodule Aqua.SeedContractTest do
 
   Hands (`files`, `storage`, `http`, `request_setup`) and the
   `native_search` gate are the loop's own and not MCP actions — they must
-  not appear in caps, and are not checked here. Role globs (`builder.*`)
-  are clone edges the loop resolves itself.
+  not appear in caps, and are not checked here.
   """
   use ExUnit.Case, async: true
 
@@ -63,22 +62,6 @@ defmodule Aqua.SeedContractTest do
     assert unasked == [], "caps grant actions no shipped file names: #{inspect(unasked)}"
   end
 
-  test "no role holds an action at ask — a cloned role has no card to raise" do
-    # On the clone path a role's answer is a tool result the soul reads,
-    # never a turn of its own, so an `ask` on it is a verb nothing can
-    # fire. (A role addressed by `@mention` runs as a turn and could raise
-    # a card; the shipped roles are only ever cloned, and the `aqua` door
-    # refuses `ask` on any role —
-    # `Compendium.AquaAgent.validate_tool_policy/2`.)
-    asking =
-      for {name, key, mode} <- seed_policy(),
-          name != Compendium.AquaPath.soul_name(),
-          mode == "ask",
-          do: "#{name}: #{key}"
-
-    assert asking == [], Enum.join(asking, "\n")
-  end
-
   test "nothing shipped is automatic where the kind ceiling says it asks" do
     # Kind always wins: a destructive or external action is never `auto`
     # on any agent — the soul asks for it, and a role never holds it.
@@ -103,8 +86,8 @@ defmodule Aqua.SeedContractTest do
   end
 
   test "no shipped role declares execution.run — a role launches nothing" do
-    # Every launch asks and a role has no card to raise, so the key has no
-    # effect on a role at any value, and the `aqua` door refuses it
+    # A role launches nothing, so the key has no effect on a role at any
+    # value, and the `aqua` door refuses it
     # (`Compendium.AquaAgent.validate_tool_policy/2`). The shipped soul's
     # own `execution.run` is what lets it launch, and stays.
     roles = for agent <- seed_agents(), agent.name != Compendium.AquaPath.soul_name(), do: agent
@@ -140,19 +123,17 @@ defmodule Aqua.SeedContractTest do
     assert asking == [], Enum.join(asking, "\n")
   end
 
-  test "the shipped soul composes with its role globs and search gate intact" do
-    # `Aqua.ToolGrants.effective/2` expands a catalogued tool's glob to exact
-    # keys and drops the glob; a role's delegation glob and `native_search`
-    # are not tool actions and must pass through untouched, or the soul's
-    # clones vanish from the model's surface.
+  test "the shipped soul asks its crew on its own, and the search gate survives composition" do
+    # The soul hands work to a role with `crew.ask` and reads who there is
+    # with `crew.list`, both without a card; no role glob stands in for
+    # them. `native_search` is not a tool action and passes through
+    # `Aqua.ToolGrants.effective/2` untouched.
     {:ok, soul} =
       Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
 
     composed = Aqua.ToolGrants.resolve(soul.tool_policy, [])
-
-    for {key, mode} <- soul.tool_policy, String.ends_with?(key, ".*") do
-      assert composed[key] == mode, "#{key} did not survive composition"
-    end
+    assert composed["crew.ask"] == "auto" and composed["crew.list"] == "auto"
+    assert Enum.filter(Map.keys(soul.tool_policy), &String.ends_with?(&1, ".*")) == []
 
     for {name, key, mode} <- seed_policy(), key == "native_search" do
       {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(seed_file(name)))
@@ -392,7 +373,7 @@ defmodule Aqua.SeedContractTest do
 
     soul_tools =
       soul
-      |> Compendium.AgentSource.manifest(MapSet.new(seed_agents(), & &1.name))
+      |> Compendium.AgentSource.manifest()
       |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
       |> Map.fetch!(:tools)
 
@@ -420,16 +401,12 @@ defmodule Aqua.SeedContractTest do
   end
 
   # What every shipped agent's manifest grants, as one list: each agent's
-  # `caps.tools` is derived from its own policy over the roster it clones
-  # into.
+  # `caps.tools` is derived from its own policy.
   defp caps do
-    agents = seed_agents()
-    roster = MapSet.new(agents, & &1.name)
-
-    agents
+    seed_agents()
     |> Enum.flat_map(fn agent ->
       agent
-      |> Compendium.AgentSource.manifest(roster)
+      |> Compendium.AgentSource.manifest()
       |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
       |> Map.fetch!(:tools)
     end)

@@ -3,8 +3,8 @@
 
 defmodule PrismWeb.AquaLive.AgentsComponent do
   @moduledoc """
-  The soul and the roles it clones into — each with a prompt, a model and a
-  capability allowlist — and the form a new role starts from. Every write
+  The soul and its roles — each with a prompt, a model and a capability
+  allowlist — and the form a new role starts from. Every write
   goes through the `aqua` tool, the gate a card in chat goes through; a
   write that changes a file's provenance asks the page to re-read it
   (`{:refresh, :agents}`), since the chips and the removal verbs come off
@@ -97,13 +97,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # A new role gets its hands in the same flow: the policy it starts from
-  # (a role in the roster, or none), and leave for the soul to clone into
-  # it — the `<name>.*` glob on the soul's own allowlist. A role without
-  # the glob can be mentioned but never cloned into, which is the one
-  # thing a person creating one cannot see from the card.
+  # (a role in the roster, or none).
   #
-  # Before the roster is read there is no role to start from and no soul
-  # to give leave: a submit that arrives first is refused, not half-done.
+  # Before the roster is read there is no role to start from: a submit
+  # that arrives first is refused, not half-done.
   def handle_event("editor_create_role", _params, %{assigns: %{loading: true}} = socket) do
     {:noreply, put_flash(socket, :error, "Still loading — try again in a moment.")}
   end
@@ -122,28 +119,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
              "action" => "create",
              "name" => name,
              "title" => name,
-             "description" => "Clone into #{name} for…",
+             "description" => "Ask #{name} for…",
              "content" => "# #{name}\n\nYou are AQUA in the #{name} role.",
              "tool_policy" => policy
            }) do
-        {:ok, result} ->
+        {:ok, _created} ->
           hands = if start, do: "the #{start.title} role's hands", else: "no hands yet"
-
-          socket =
-            case result do
-              %{cloneable: true} ->
-                put_flash(
-                  socket,
-                  :info,
-                  "Created the role '#{name}' with #{hands} — the soul may now clone into it."
-                )
-
-              %{note: note} ->
-                put_flash(socket, :error, "Created the role '#{name}' with #{hands}. #{note}")
-            end
-
           send(self(), {:refresh, :agents})
-          {:noreply, socket}
+          {:noreply, put_flash(socket, :info, "Created the role '#{name}' with #{hands}.")}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
@@ -231,18 +214,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # Add/remove a `tool.action` from an allowlist. On add, the default is
-  # what the agent CAN hold: on the soul, "auto" for a read (they never
-  # ask) and "ask" for everything else; on a role, "auto" — a cloned role's
-  # answer is a tool result, never a turn, so it has no card to raise and
-  # an "ask" on it is a hand it silently loses. A destructive or external
-  # action is never added to a role at all: it always asks, and only the
-  # soul can ask. The kind is DERIVED here from the action's own
-  # annotation (`Aqua.tool_kind/2`), never taken off the wire. A
-  # key that resolves to no known action is refused.
+  # "auto" for a read (they never ask) and "ask" for everything else. The
+  # kind is DERIVED here from the action's own annotation
+  # (`Aqua.tool_kind/2`), never taken off the wire. A key that resolves to
+  # no known action is refused.
   def handle_event("editor_toggle_capability", %{"name" => name, "key" => key}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      soul? = soul_name?(socket, name)
-
       {:noreply,
        update_tool_policy(socket, name, fn policy ->
          cond do
@@ -251,13 +228,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
            resolved_kind(key) == nil ->
              {:refused, "Unknown capability: #{key}"}
-
-           not soul? and not auto_permitted?(key) ->
-             {:refused,
-              "#{key} always asks, and a role has no card to raise — the soul asks for it"}
-
-           not soul? ->
-             {:ok, %{key => "auto"}}
 
            resolved_kind(key) == :read ->
              {:ok, %{key => "auto"}}
@@ -270,12 +240,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # Toggle a write/execute capability between "ask" (request approval) and
-  # "auto" (run without asking) — on the soul only: a role holds every
-  # hand at "auto" (it has no card to raise), and a destructive or
-  # external action, or one declared to take no standing allow at agent
-  # scope, is never "auto" anywhere. Both rules are enforced here, on the
-  # action's declaration, whatever the client sent; the `aqua` door holds
-  # the same rule for every other writer.
+  # "auto" (run without asking). A destructive or external action, or one
+  # declared to take no standing allow at agent scope, is never "auto":
+  # enforced here, on the action's declaration, whatever the client sent;
+  # the `aqua` door holds the same rule for every other writer.
   def handle_event(
         "editor_set_capability_mode",
         %{"name" => name, "key" => key, "mode" => mode},
@@ -286,14 +254,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       cond do
         mode == "auto" and not auto_permitted?(key) ->
           {:noreply, put_flash(socket, :error, "#{key} always asks — it cannot be set to auto")}
-
-        mode == "ask" and not soul_name?(socket, name) ->
-          {:noreply,
-           put_flash(
-             socket,
-             :error,
-             "A role has no card to raise — #{key} runs in the role or not at all"
-           )}
 
         true ->
           {:noreply, update_tool_policy(socket, name, fn _policy -> {:ok, %{key => mode}} end)}
@@ -307,26 +267,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   def handle_event("editor_toggle_native", %{"name" => name}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       {:noreply, update_tool_policy(socket, name, &{:ok, toggle_key(&1, "native_search")})}
-    end)
-  end
-
-  # Which roles the soul may clone into: one `<role>.*` glob each on the
-  # soul's allowlist. Only a role the roster holds can be named — the glob
-  # is a policy key, and a key for a role that does not exist is noise
-  # the runtime would carry forever.
-  def handle_event("editor_toggle_clone", %{"role" => role_name}, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      with %{"name" => soul_name} <- socket.assigns.soul,
-           %{"name" => _} <- find_role(socket, role_name) do
-        {:noreply,
-         update_tool_policy(
-           socket,
-           soul_name,
-           &{:ok, toggle_key(&1, Compendium.agent_clone_glob(role_name))}
-         )}
-      else
-        _ -> {:noreply, put_flash(socket, :error, "Unknown role: #{role_name}")}
-      end
     end)
   end
 
@@ -523,13 +463,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  defp soul_name?(socket, name) do
-    case socket.assigns.soul do
-      %{"name" => soul_name} -> soul_name == name
-      _ -> Compendium.soul_agent_file?(name)
-    end
-  end
-
   # An allowlist edit is one key's. `change` reads the policy as it is
   # NOW — again, just before the write, never the copy this page loaded —
   # to decide the direction, and answers the one-key patch
@@ -558,9 +491,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         put_flash(socket, :error, "Update failed: #{error_message(reason)}")
     end
   end
-
-  defp find_role(_socket, name) when not is_binary(name) or name == "", do: nil
-  defp find_role(socket, name), do: Enum.find(socket.assigns.roles, &(&1["name"] == name))
 
   defp fresh_role(_ctx, name) when not is_binary(name) or name == "", do: nil
 
@@ -661,26 +591,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # the approval-card colour ramp: read = calm green, write = near-neutral
   # slate, execute = amber, destructive = red, external = amber + ring).
   # Tuple: {atom_kind, label, pill-classes, summary-strip-classes}.
-  # A role is offered no destructive row: it always asks, and only the
-  # soul can ask.
-  defp kind_sections(soul?) do
-    sections = [
+  defp kind_sections do
+    [
       {:read, "Read", "bg-emerald-900/60 text-emerald-200", "bg-emerald-900/10"},
       {:write, "Write", "bg-slate-700/70 text-slate-200", "bg-slate-800/20"},
       {:execute, "Execute", "bg-amber-900/60 text-amber-200", "bg-amber-900/10"},
       {:destructive, "Destructive", "bg-red-900/60 text-red-200", "bg-red-900/10"}
     ]
-
-    if soul?, do: sections, else: Enum.reject(sections, &(elem(&1, 0) == :destructive))
   end
-
-  defp capabilities_hint(true),
-    do:
-      "reads run without asking; writes and executes ask unless you mark them \"auto\"; destructive always asks."
-
-  defp capabilities_hint(false),
-    do:
-      "a role runs every hand it holds without a card — the soul asks before cloning when it must; destructive actions stay with the soul."
 
   # Flatten `[{tool, [{action, kind}]}]` to `[{tool, action}]` for a given kind.
   defp rows_for_kind(tool_actions, target_kind) do
@@ -704,8 +622,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     <div id="aqua-agents" phx-target={@myself} class="space-y-6">
       <.section_flash flash={@flash} target={@myself} />
 
-      <%!-- Offered once the roster is read: the roles to start from and
-            the soul's leave are what the form is about. --%>
+      <%!-- Offered once the roster is read: the roles to start from are
+            what the form is about. --%>
       <div class="flex justify-end">
         <form
           :if={@loaded and not @agents_unread}
@@ -743,9 +661,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
               + New role
             </button>
           </div>
-          <p class="text-[10px] text-gray-600">
-            The soul is given leave to clone into the new role in the same step.
-          </p>
         </form>
       </div>
 
@@ -771,7 +686,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         models_by_provider={@models_by_provider}
         tool_actions={@tool_actions || []}
         is_soul={true}
-        roles={@roles}
         model_status={Map.get(@model_status, @soul["catalyst_ref"])}
         installing={@installing}
         athanor={@athanor}
@@ -847,7 +761,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :models_by_provider, :map, required: true
   attr :tool_actions, :list, required: true
   attr :is_soul, :boolean, default: false
-  attr :roles, :list, default: []
   attr :model_status, :any, default: nil
   attr :installing, :any, default: nil
   attr :athanor, :any, default: nil
@@ -1043,39 +956,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </select>
       </form>
 
-      <%!-- Which roles the soul may clone into: one glob each on its allowlist. --%>
-      <div :if={@is_soul} id="aqua-clone-strip">
-        <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">
-          Roles this soul can clone into
-        </p>
-        <p :if={@roles == []} class="text-[11px] text-gray-600">
-          No roles yet — add one above.
-        </p>
-        <div :if={@roles != []} class="flex flex-wrap gap-x-4 gap-y-1">
-          <label
-            :for={role <- @roles}
-            class="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer"
-          >
-            <input
-              type="checkbox"
-              checked={Map.has_key?(@tool_policy, Compendium.agent_clone_glob(role["name"]))}
-              phx-click="editor_toggle_clone"
-              phx-target={@myself}
-              phx-value-role={role["name"]}
-              class="rounded bg-gray-900 border-gray-600"
-            />
-            {role["title"]}
-            <code class="text-gray-600 font-mono">{role["name"]}</code>
-          </label>
-        </div>
-      </div>
-
       <div>
         <div class="flex items-center justify-between mb-1">
           <p class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
             <span class="normal-case text-gray-600">
-              — {capabilities_hint(@is_soul)}
+              — reads run without asking; writes and executes ask unless you mark them "auto"; destructive always asks.
             </span>
           </p>
           <% auto_count = count_auto(@tool_policy, @tool_actions) %>
@@ -1083,7 +969,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </div>
 
         <div class="border border-gray-800 rounded divide-y divide-gray-800/60 max-h-[28rem] overflow-y-auto">
-          <%= for {kind, kind_label, kind_chip, kind_strip} <- kind_sections(@is_soul) do %>
+          <%= for {kind, kind_label, kind_chip, kind_strip} <- kind_sections() do %>
             <% rows = rows_for_kind(@tool_actions, kind) %>
             <%= if rows != [] do %>
               <details class="group" open={kind == :write}>
@@ -1128,8 +1014,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                         <span class="text-[10px] text-emerald-400/70">runs without asking</span>
                       <% kind == :destructive -> %>
                         <span class="text-[10px] text-gray-500">always asks</span>
-                      <% not @is_soul -> %>
-                        <span class="text-[10px] text-amber-300/70">runs in this role</span>
                       <% true -> %>
                         <.auto_ask_toggle
                           myself={@myself}

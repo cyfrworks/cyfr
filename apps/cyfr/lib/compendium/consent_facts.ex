@@ -59,16 +59,9 @@ defmodule Compendium.ConsentFacts do
 
   @impl Sanctum.Consent.Components
   def shipped_nodes(%Context{} = ctx, rows) do
-    # The roster the seed's own agent files project against: an agent's
-    # row names its clone edges, and which roles exist decides them.
-    roster =
-      rows
-      |> Enum.filter(&(to_string(Map.get(&1, :component_type)) == agent_type()))
-      |> MapSet.new(&Map.get(&1, :name))
-
     {:ok,
      Enum.reduce(rows, %{}, fn row, acc ->
-       case shipped_digest(ctx, row, roster) do
+       case shipped_digest(ctx, row) do
          {:ok, digest} when is_binary(digest) ->
            Map.put(acc, Prima.ComponentRow.node_key(row), digest)
 
@@ -108,25 +101,25 @@ defmodule Compendium.ConsentFacts do
 
   defp agent_type, do: Prima.AgentRef.type()
 
-  defp shipped_digest(ctx, row, roster) do
+  defp shipped_digest(ctx, row) do
     type = to_string(Map.get(row, :component_type))
 
     cond do
-      type == agent_type() -> seed_agent_digest(Map.get(row, :name), roster)
+      type == agent_type() -> seed_agent_digest(Map.get(row, :name))
       type == "tincture" -> pristine_tincture_digest(ctx, row)
       type in @wasm_types -> Provenance.shipped_release_digest(row)
       true -> :error
     end
   end
 
-  # The seed's own agent file, projected under the athanor's roster: a
-  # prose-only edit of the athanor's copy leaves this digest alone, a
-  # policy, model or catalyst edit of the seed file moves it.
-  defp seed_agent_digest(name, roster) do
+  # The seed's own agent file, projected: a prose-only edit of the
+  # athanor's copy leaves this digest alone, a policy, model or catalyst
+  # edit of the seed file moves it.
+  defp seed_agent_digest(name) do
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit(name), 1)
 
     with {:ok, bytes} <- Arca.get(Prima.Actor.system(), path),
-         {:ok, row} <- AgentSource.shipped_row(name, bytes, roster) do
+         {:ok, row} <- AgentSource.shipped_row(name, bytes) do
       {:ok, Map.get(row, :release_digest)}
     end
   end

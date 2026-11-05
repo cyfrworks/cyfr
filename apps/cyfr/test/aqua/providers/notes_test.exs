@@ -255,7 +255,7 @@ defmodule Aqua.Providers.NotesTest do
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: actor.user_id, content: "@aqua go"},
+        message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
@@ -438,20 +438,11 @@ defmodule Aqua.Providers.NotesTest do
     refute "aqua.skill_delete" in granted
   end
 
-  # The shipped soul's manifest, derived from its own file over the roster
-  # it ships with.
+  # The shipped soul's manifest, derived from its own file.
   defp shipped_soul_manifest do
     seed = Path.expand("../../../../../seed/aqua", __DIR__)
-    roles = Path.join(seed, Compendium.AquaPath.roles_dirname())
-
-    names =
-      roles
-      |> Path.join("*.md")
-      |> Prima.Test.SourceTree.files!()
-      |> Enum.map(&Path.basename(&1, ".md"))
-
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(seed, "aqua.md")))
-    Compendium.AgentSource.manifest(soul, MapSet.new(["aqua" | names]))
+    Compendium.AgentSource.manifest(soul)
   end
 
   test "the annotations say what a person may pre-answer" do

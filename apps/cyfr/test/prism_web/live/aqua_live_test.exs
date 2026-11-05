@@ -224,58 +224,29 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-restore-result", "aqua/roles/scout.md")
     end
 
-    test "a new role starts with a role's hands, and the soul is given leave to clone into it",
+    test "a new role starts with a role's hands and leaves the soul's policy alone",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"tool_policy" => planner_policy}} = get_agent(ctx, "planner")
       assert map_size(planner_policy) > 0
+      {:ok, %{"tool_policy" => soul_policy}} = get_agent(ctx, "aqua")
 
       {view, html} = mount_athanor(conn, "/aqua")
 
       # The most restrictive role is the default start.
       assert html =~ ~s(<option value="planner" selected)
 
-      view
-      |> form("form[phx-submit=editor_create_role]", %{
-        "name" => "scout",
-        "start_from" => "planner"
-      })
-      |> render_submit()
+      html =
+        view
+        |> form("form[phx-submit=editor_create_role]", %{
+          "name" => "scout",
+          "start_from" => "planner"
+        })
+        |> render_submit()
 
+      assert html =~ "Created the role"
+      refute has_element?(view, "#aqua-clone-strip")
       assert {:ok, %{"tool_policy" => ^planner_policy}} = get_agent(ctx, "scout")
-      assert {:ok, %{"tool_policy" => %{"scout.*" => "auto"}}} = get_agent(ctx, "aqua")
-      assert render(view) =~ "the soul may now clone into it"
-
-      # The soul card shows the leave, and the toggle takes it back.
-      settled(
-        fn -> has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]") end,
-        "the clone strip to show scout"
-      )
-
-      assert has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
-
-      view
-      |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_clone", %{"role" => "scout"})
-
-      {:ok, %{"tool_policy" => soul_policy}} = get_agent(ctx, "aqua")
-      refute Map.has_key?(soul_policy, "scout.*")
-
-      settled(
-        fn ->
-          not has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
-        end,
-        "the clone strip to drop scout"
-      )
-
-      refute has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
-
-      # A role the roster does not hold cannot be named.
-      assert view
-             |> with_target("#aqua-agents")
-             |> render_click("editor_toggle_clone", %{
-               "role" => "nobody"
-             }) =~
-               "Unknown role: nobody"
+      assert {:ok, %{"tool_policy" => ^soul_policy}} = get_agent(ctx, "aqua")
     end
 
     test "the pinned page is written from the page and is what the soul reads",
@@ -924,106 +895,59 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#prompt-editor textarea[name=content]")
     end
 
-    test "the page writes what an agent can hold: auto on a role, ask on the soul, never a destructive auto",
+    test "the page writes what an agent can hold, a role as the soul, never a destructive auto",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
+      agents = with_target(view, "#aqua-agents")
 
-      # A write-kind hand: a role holds it at auto (it has no card to
-      # raise), the soul at ask.
-      view
-      |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{
-        "name" => "web",
-        "key" => "files.write"
-      })
+      # A write-kind hand starts at ask on a role as on the soul, and a
+      # destructive one is offered to a role too, at ask.
+      for {name, key} <- [
+            {"web", "files.write"},
+            {"aqua", "files.write"},
+            {"web", "files.delete"}
+          ] do
+        render_click(agents, "editor_toggle_capability", %{"name" => name, "key" => key})
+        assert {:ok, %{"tool_policy" => %{^key => "ask"}}} = get_agent(ctx, name)
+      end
 
-      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "web")
-
-      view
-      |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{
-        "name" => "aqua",
-        "key" => "files.write"
-      })
-
-      assert {:ok, %{"tool_policy" => %{"files.write" => "ask"}}} = get_agent(ctx, "aqua")
-
-      # A destructive hand is never a role's, and never auto on the soul.
-      html =
-        view
-        |> with_target("#aqua-agents")
-        |> render_click("editor_toggle_capability", %{
-          "name" => "web",
-          "key" => "files.delete"
-        })
-
-      assert html =~ "no card to raise"
-      assert {:ok, %{"tool_policy" => policy}} = get_agent(ctx, "web")
-      refute Map.has_key?(policy, "files.delete")
-
-      html =
-        view
-        |> with_target("#aqua-agents")
-        |> render_click("editor_set_capability_mode", %{
-          "name" => "aqua",
-          "key" => "files.delete",
-          "mode" => "auto"
-        })
-
-      assert html =~ "always asks"
-      assert {:ok, %{"tool_policy" => %{"files.delete" => "ask"}}} = get_agent(ctx, "aqua")
-
-      # And a role is never demoted to ask.
-      html =
-        view
-        |> with_target("#aqua-agents")
-        |> render_click("editor_set_capability_mode", %{
+      # A role's hand moves between ask and auto.
+      for mode <- ["auto", "ask"] do
+        render_click(agents, "editor_set_capability_mode", %{
           "name" => "web",
           "key" => "files.write",
-          "mode" => "ask"
+          "mode" => mode
         })
 
-      assert html =~ "no card to raise"
-      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "web")
+        assert {:ok, %{"tool_policy" => %{"files.write" => ^mode}}} = get_agent(ctx, "web")
+      end
+
+      # A destructive hand is never auto, on a role or the soul.
+      for name <- ["web", "aqua"] do
+        html =
+          render_click(agents, "editor_set_capability_mode", %{
+            "name" => name,
+            "key" => "files.delete",
+            "mode" => "auto"
+          })
+
+        assert html =~ "always asks"
+        assert {:ok, %{"tool_policy" => %{"files.delete" => "ask"}}} = get_agent(ctx, name)
+      end
     end
 
-    test "a shipped role's policy round-trips through untick and tick unchanged", %{
-      conn: conn,
-      ctx: ctx
-    } do
-      {view, _html} = mount_athanor(conn, "/aqua")
-      {:ok, %{"tool_policy" => shipped}} = get_agent(ctx, "builder")
-      assert shipped["files.write"] == "auto"
-
-      view
-      |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{
-        "name" => "builder",
-        "key" => "files.write"
-      })
-
-      assert {:ok, %{"tool_policy" => without}} = get_agent(ctx, "builder")
-      refute Map.has_key?(without, "files.write")
-
-      view
-      |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{
-        "name" => "builder",
-        "key" => "files.write"
-      })
-
-      assert {:ok, %{"tool_policy" => ^shipped}} = get_agent(ctx, "builder")
-    end
-
-    test "the matrix tells the truth: a role's hands run in the role, and it is offered no destructive row",
+    test "the matrix offers a role what it offers the soul: the ask/auto pill and the destructive row",
          %{conn: conn} do
-      {view, _html} = mount_athanor(conn, "/aqua")
-      html = render(view)
+      {view, html} = mount_athanor(conn, "/aqua")
 
-      # The builder's card says its hands run in the role; the soul's card
-      # keeps the ask/auto pill and says destructive always asks.
-      assert html =~ "runs in this role"
-      assert html =~ "always asks"
+      refute html =~ "runs in this role"
+
+      assert has_element?(
+               view,
+               ~s(#aqua-card-builder button[phx-click=editor_set_capability_mode][phx-value-key="files.write"])
+             )
+
+      assert has_element?(view, ~s(#aqua-card-builder input[phx-value-key="files.delete"]))
     end
 
     test "an allowlist edit lands on the policy as it is now, not on the copy the page loaded",
@@ -1041,15 +965,15 @@ defmodule PrismWeb.AquaLiveTest do
           "tool_policy" => theirs
         })
 
-      # Creating a role gives the soul leave to clone into it…
+      # A toggle on the soul's card keeps it…
       view
-      |> form("form[phx-submit=editor_create_role]", %{"name" => "scout", "start_from" => ""})
-      |> render_submit()
+      |> with_target("#aqua-agents")
+      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "files.write"})
 
-      assert {:ok, %{"tool_policy" => %{"scout.*" => "auto", "vault.list" => "ask"} = policy}} =
+      assert {:ok, %{"tool_policy" => %{"files.write" => "ask", "vault.list" => "ask"} = policy}} =
                get_agent(ctx, "aqua")
 
-      # …and a toggle on the soul's card, after yet another edit, keeps both.
+      # …and another, after yet another edit, keeps both.
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
@@ -1059,10 +983,10 @@ defmodule PrismWeb.AquaLiveTest do
 
       view
       |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_clone", %{"role" => "scout"})
+      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "files.write"})
 
       {:ok, %{"tool_policy" => after_toggle}} = get_agent(ctx, "aqua")
-      refute Map.has_key?(after_toggle, "scout.*")
+      refute Map.has_key?(after_toggle, "files.write")
       assert after_toggle["vault.list"] == "ask"
       assert after_toggle["vault.get"] == "ask"
     end

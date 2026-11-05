@@ -9,20 +9,20 @@ defmodule Aqua.Loop.Binding do
   that is — a hand (`Aqua.Hands`, run as a child of the pinned authority
   on a local catalyst), a catalog action (dispatched in-chain through the
   one gate), an external server's tool (`server__tool` on the wire,
-  `server:tool` in the catalog), a role to clone into, the `ui` event, or
-  an application launch — with the canonical operation every policy
-  decision is made on: a `files` call inside the storage boundary is the
-  storage operation of the same effect, an `execution.run` of a wrapped
-  catalyst is the hand it aliases, an `execution.run` of an agent is
-  refused (a role is cloned, never launched), and any other
+  `server:tool` in the catalog), the `ui` event, or an application
+  launch — with the canonical operation every policy decision is made
+  on: a `files` call inside the storage boundary is the storage
+  operation of the same effect, an `execution.run` of a wrapped catalyst
+  is the hand it aliases, an `execution.run` of an agent is refused (a
+  crew member is asked with `crew.ask`, never launched), and any other
   `execution.run` is a launch the loop hands to `Aqua.Launch` after a
   card, its arguments as the model wrote them, the account it names
   (`connection`) among them.
 
   `dispatch/2` runs a hand, a catalog call or an external call under the
   turn's authority from a worker of the loop's, with the turn root as
-  lineage and the step's charge identity; a launch, a clone and the `ui`
-  event are the loop's to handle. `render/2` turns a result into the text
+  lineage and the step's charge identity; a launch and the `ui` event are
+  the loop's to handle. `render/2` turns a result into the text
   the model reads.
   """
 
@@ -31,7 +31,7 @@ defmodule Aqua.Loop.Binding do
   defmodule Call do
     @moduledoc "One model-visible call, resolved to what runs it."
 
-    @type kind :: :hand | :catalog | :external | :clone | :ui | :launch
+    @type kind :: :hand | :catalog | :external | :ui | :launch
 
     @type t :: %__MODULE__{
             kind: kind(),
@@ -59,20 +59,16 @@ defmodule Aqua.Loop.Binding do
   def host_name(name) when is_binary(name), do: String.replace(name, "__", ":")
 
   @doc """
-  Resolve one model call. `opts`: `:roles` (the role names the soul may
-  clone into), `:tool_call_id`. Answers the call with its canonical
-  operation, or a refusal the loop records as the call's result.
+  Resolve one model call. `opts`: `:tool_call_id`. Answers the call with
+  its canonical operation, or a refusal the loop records as the call's
+  result.
   """
   @spec resolve(String.t(), map(), keyword()) :: {:ok, Call.t()} | {:error, String.t()}
   def resolve(name, args, opts \\ []) when is_binary(name) and is_map(args) do
-    roles = Keyword.get(opts, :roles, [])
     tool_call_id = Keyword.get(opts, :tool_call_id)
 
     result =
       cond do
-        name in roles ->
-          {:ok, %Call{kind: :clone, tool: name, action: "clone", args: args, target: name}}
-
         name == @ui_tool ->
           {:ok, %Call{kind: :ui, tool: @ui_tool, action: str(args, "action"), args: args}}
 
@@ -113,7 +109,7 @@ defmodule Aqua.Loop.Binding do
 
     cond do
       Prima.AgentRef.agent_ref?(reference) ->
-        {:error, "an agent is cloned as a role, never run: name the role instead"}
+        {:error, "an agent is never run: ask a crew member with crew.ask instead"}
 
       true ->
         case Hands.canonical(reference, if(is_map(input), do: input, else: %{})) do
@@ -213,8 +209,8 @@ defmodule Aqua.Loop.Binding do
   (the admission the root's row was started under, the parent call of a
   catalog or external call; nil when none was recorded). A hand runs
   as a child of the root on its catalyst; a catalog or external call goes
-  in-chain through the one gate. A launch, a clone and the `ui` event are
-  not dispatched here.
+  in-chain through the one gate. A launch and the `ui` event are not
+  dispatched here.
   """
   @spec dispatch(Call.t(), map()) :: {:ok, term()} | {:error, term()}
   def dispatch(%Call{kind: :hand} = call, dispatch) do

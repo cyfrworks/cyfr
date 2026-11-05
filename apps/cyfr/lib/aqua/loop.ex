@@ -102,7 +102,8 @@ defmodule Aqua.Loop do
       :spec,
       :claim,
       :turn,
-      :parent,
+      # The brain's session for the thread, as its last response named it.
+      :session,
       steps: 0,
       usage: %{input: 0, output: 0},
       activity: [],
@@ -114,7 +115,6 @@ defmodule Aqua.Loop do
       # was a count of.
       observed_seq: 0,
       sent_upto: 0,
-      clone?: false,
       excerpt_sent?: false,
       # A call's outcome is unknown: only replay-safe reads run from here.
       restricted?: false
@@ -242,6 +242,7 @@ defmodule Aqua.Loop do
           spec: spec,
           claim: claim,
           turn: turn,
+          session: spec.thread.brain_session,
           since: now(),
           active_ms: turn.active_ms
         }
@@ -291,15 +292,14 @@ defmodule Aqua.Loop do
   @doc """
   Abort a turn from outside its process: the fence of the turn is raised;
   then `stop` is called, with which the caller stops the turn's process if
-  one still runs, and with it every worker and clone loop under it
-  (`Aqua.Loop.Worker`); then the dispatched steps of the turn and of its
-  open clones are cancel-marked, every child execution and every
-  in-process catalog handler is cancelled, dispatched steps settle by
+  one still runs, and with it every worker under it
+  (`Aqua.Loop.Worker`); then the dispatched steps of the turn are
+  cancel-marked, every child execution and every in-process catalog
+  handler is cancelled, dispatched steps settle by
   `Prima.TurnStep.unresolved/1` — a call whose effect is unknown is
   marked `uncertain`, since a cancel does not prove the effect never
-  happened — unstarted steps are skipped, each open clone ends
-  `cancelled`, and the aborted mark is written. The caller then ends the
-  turn.
+  happened — unstarted steps are skipped, and the aborted mark is
+  written. The caller then ends the turn.
 
   `stop` runs after the fence is raised and before any child is cancelled,
   since a cancelled child answers the call waiting on it. The local holder
@@ -316,11 +316,31 @@ defmodule Aqua.Loop do
          {:ok, superseded} <- Tape.supersede(guest, turn),
          :ok <- stop_aborted(stop, holder),
          :ok <- held(),
-         {:ok, clones} <- Tape.open_clones(guest, superseded),
-         :ok <- settle_clones(ctx, clones, reason),
          :ok <- settle_aborted(ctx, superseded, reason),
          {:ok, _} <- Tape.append_aborted(guest, superseded, reason) do
       {:ok, superseded}
+    end
+  end
+
+  @doc """
+  Stop what still runs of a turn storage has already ended, as an archive
+  or a room's deletion ends it (`Arca.TurnStorage.cancel_open!/4`): `stop`
+  and the turn's holder on this boot as `abort/4` stops them, then the
+  child execution and the in-process catalog handler of each step in
+  `steps`, the ones it had dispatched. Storage settled those steps and
+  wrote the end; nothing here writes the turn. The first failure is
+  answered after every step was tried.
+  """
+  @spec abort_ended(Context.t(), String.t(), [map()], (-> term())) :: :ok | {:error, term()}
+  def abort_ended(%Context{} = ctx, turn_id, steps, stop \\ fn -> :ok end)
+      when is_binary(turn_id) and is_list(steps) and is_function(stop, 0) do
+    with :ok <- stop_aborted(stop, holder(turn_id)) do
+      Enum.reduce(steps, :ok, fn step, result ->
+        case cancel_dispatched(ctx, %{id: turn_id}, step) do
+          :ok -> result
+          error -> if result == :ok, do: error, else: result
+        end
+      end)
     end
   end
 
@@ -329,23 +349,6 @@ defmodule Aqua.Loop do
       {:error, _} = error -> error
       _ -> Aqua.Loop.Worker.stop(holder)
     end
-  end
-
-  defp settle_clones(ctx, clones, reason) do
-    Enum.reduce_while(clones, :ok, fn clone, :ok ->
-      result =
-        with :ok <- settle_aborted(ctx, clone, reason),
-             {:ok, _} <-
-               Tape.close_clone_turn(Context.enter_guest(ctx), clone, "cancelled", %{
-                 error: reason
-               }),
-             do: :ok
-
-      case result do
-        :ok -> {:cont, :ok}
-        error -> {:halt, error}
-      end
-    end)
   end
 
   defp settle_aborted(ctx, turn, reason) do
@@ -364,8 +367,7 @@ defmodule Aqua.Loop do
     |> Enum.filter(&(&1.dispatch_state == "dispatched"))
     |> Enum.reduce_while(:ok, fn step, :ok ->
       with :ok <- held(),
-           :ok <- cancel_aborted_child(ctx, cancellable(step)) do
-        Aqua.Ops.cancel_call(handle(turn, step))
+           :ok <- cancel_dispatched(ctx, turn, step) do
         guest = Context.enter_guest(ctx)
 
         result =
@@ -392,6 +394,15 @@ defmodule Aqua.Loop do
   defp cancellable(%{kind: "launch"}), do: nil
   defp cancellable(%{child_execution_id: id}), do: id
 
+  # What runs for a dispatched step outside the turn's own process: its
+  # child execution and its in-process catalog handler.
+  defp cancel_dispatched(ctx, turn, step) do
+    with :ok <- cancel_aborted_child(ctx, cancellable(step)) do
+      Aqua.Ops.cancel_call(handle(turn, step))
+      :ok
+    end
+  end
+
   defp cancel_aborted_child(_ctx, nil), do: :ok
 
   defp cancel_aborted_child(ctx, id) do
@@ -414,7 +425,7 @@ defmodule Aqua.Loop do
              envelope: %{"turn" => turn.id}
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
-           :ok <- consented_release(ctx, claim.authority, turn, snapshot),
+           :ok <- consented_release(claim.authority, turn, snapshot),
            {:ok, started} <-
              Tape.start_turn(ctx, turn, %{
                root_execution_id: claim.execution_id,
@@ -433,6 +444,7 @@ defmodule Aqua.Loop do
            spec: Turn.with_turn(spec, started),
            claim: claim,
            turn: started,
+           session: spec.thread.brain_session,
            since: now(),
            active_ms: started.active_ms
          }}
@@ -487,15 +499,12 @@ defmodule Aqua.Loop do
   # The file the turn pins must be the release the loaded consent names
   # for its own node; a file edited past its consent is refused, never
   # run under the old grant.
-  defp consented_release(ctx, %{activation: activation}, turn, %{agent: agent}) do
-    with {:ok, roster} <- Compendium.enabled_agent_roster(ctx) do
-      consented = Map.get(activation, source_ref(turn))
-      projected = Compendium.agent_row(agent, roster).release_digest
+  defp consented_release(%{activation: activation}, turn, %{agent: agent}) do
+    consented = Map.get(activation, source_ref(turn))
 
-      if is_binary(consented) and consented == projected,
-        do: :ok,
-        else: {:error, :agent_changed}
-    end
+    if is_binary(consented) and consented == Compendium.agent_row(agent).release_digest,
+      do: :ok,
+      else: {:error, :agent_changed}
   end
 
   # ---------------------------------------------------------------------------
@@ -507,8 +516,6 @@ defmodule Aqua.Loop do
   # keeper is suspended before the write, so no renewal finds the root
   # ended and exits this process before the release stops it; a steer that
   # keeps the turn going resumes it.
-  defp conclude(%State{clone?: true}, {result, _state}), do: result
-
   defp conclude(%State{} = state, {result, ended}) do
     case result do
       {:paused, _} ->
@@ -632,6 +639,7 @@ defmodule Aqua.Loop do
 
     messages =
       Request.messages(rows,
+        me: spec.agent["name"],
         names: names,
         multi_author?: multi?,
         excerpt: excerpt,
@@ -643,13 +651,11 @@ defmodule Aqua.Loop do
       model: spec.model,
       system: spec.system,
       messages: messages,
-      tools:
-        if(state.clone?,
-          do: Enum.reject(spec.tools, &(&1["name"] in Turn.role_names(spec))),
-          else: spec.tools
-        ),
+      tools: spec.tools,
       capabilities: spec.capabilities,
-      native_search?: Map.get(spec.policy, "native_search") == "auto"
+      native_search?: Map.get(spec.policy, "native_search") == "auto",
+      session: state.session,
+      options: spec.brain_options
     )
   end
 
@@ -707,10 +713,20 @@ defmodule Aqua.Loop do
         "web_search" in (Map.get(spec.capabilities || %{}, :provider_tools) || [])
 
   # The earlier turns whose rows a request sends: every row's turn but
-  # this one's. An unattached row is a person's and names none.
+  # this one's, and the turn a crew row came from — a delivered request's
+  # asking turn, a reply's member turn — whose words it carries. An
+  # unattached row of a person's names none.
   defp earlier_turns(%State{turn: turn}, rows) do
     rows
-    |> Enum.map(&Map.get(&1, :turn_id))
+    |> Enum.flat_map(fn row ->
+      from =
+        case Tape.payload(row) do
+          %{"from_turn" => id} when is_binary(id) -> [id]
+          _ -> []
+        end
+
+      [Map.get(row, :turn_id) | from]
+    end)
     |> Enum.reject(&(is_nil(&1) or &1 == turn.id))
     |> Enum.uniq()
   end
@@ -852,22 +868,17 @@ defmodule Aqua.Loop do
 
   defp read_ledger(_state, _no_id), do: [Prima.Source.outside(nil)]
 
-  # A clone's text streams under the soul's turn and fence, from its own
-  # turn and named by its role.
+  # A turn's text streams under its own fence, named by its agent when
+  # that is not the soul.
   defp stream_attrs(%State{} = state, %{purpose: "chat"} = step) do
-    {soul, role} =
-      if state.clone?,
-        do: {state.parent.turn, state.spec.agent["name"]},
-        else: {state.turn, nil}
-
     %{
       thread_id: state.turn.thread_id,
-      turn_id: soul.id,
-      fence: soul.fence,
+      turn_id: state.turn.id,
+      fence: state.turn.fence,
       source: state.turn.id,
       step_id: step.id,
       ordinal: state.steps,
-      role: role
+      role: if(state.spec.soul?, do: nil, else: state.spec.agent["name"])
     }
   end
 
@@ -889,22 +900,24 @@ defmodule Aqua.Loop do
     {resolved, tool_calls} = resolve_calls(state, step, content)
     usage = data["usage"] || %{}
 
-    case Tape.record_response(guest(state), state.turn, step, %{
-           text: if(text == "", do: nil, else: text),
-           usage: usage,
-           stop_reason: data["stop_reason"],
-           tool_calls: tool_calls
-         }) do
-      {:ok, %{calls: recorded}} ->
-        state = count_usage(state, usage)
+    with {:ok, session} <- Prima.Model.response_session(data),
+         {:ok, %{calls: recorded}} <-
+           Tape.record_response(guest(state), state.turn, step, %{
+             text: if(text == "", do: nil, else: text),
+             usage: usage,
+             stop_reason: data["stop_reason"],
+             session: session,
+             tool_calls: tool_calls
+           }) do
+      state = count_usage(%{state | session: session || state.session}, usage)
 
-        items =
-          Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-            %{step: call_step, call: call, approval: nil}
-          end)
+      items =
+        Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
+          %{step: call_step, call: call, approval: nil}
+        end)
 
-        if items == [], do: {:halt, :completed, state}, else: dispatch(state, items)
-
+      if items == [], do: {:halt, :completed, state}, else: dispatch(state, items)
+    else
       {:error, :superseded} ->
         {:halt, :cancelled, state}
 
@@ -919,11 +932,7 @@ defmodule Aqua.Loop do
         name = block["name"] || ""
         args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
 
-        {block,
-         Binding.resolve(name, args,
-           roles: Turn.role_names(state.spec),
-           tool_call_id: block["id"]
-         )}
+        {block, Binding.resolve(name, args, tool_call_id: block["id"])}
       end
 
     {resolved, Enum.map(resolved, fn {block, call} -> call_attrs(state, step, block, call) end)}
@@ -979,7 +988,6 @@ defmodule Aqua.Loop do
   defp child_id_for(_call), do: nil
 
   defp step_kind(%Call{kind: :launch}), do: "launch"
-  defp step_kind(%Call{kind: :clone}), do: "clone"
   defp step_kind(%Call{kind: :ui}), do: "ui"
   defp step_kind(_call), do: "tool"
 
@@ -1086,15 +1094,6 @@ defmodule Aqua.Loop do
   end
 
   defp decide_open(
-         %State{clone?: true} = state,
-         %{step: step, call: {:ok, %Call{kind: :clone}}},
-         acc
-       ) do
-    close(state, step, nil, {:error, "a role works with its own hands and clones nobody"})
-    acc
-  end
-
-  defp decide_open(
          state,
          %{step: step, call: {:ok, %Call{} = call}} = item,
          {runnable, cards, setup}
@@ -1109,10 +1108,6 @@ defmodule Aqua.Loop do
     case decision do
       :auto ->
         {[item | runnable], cards, setup}
-
-      # A role launches nothing, whatever account it names.
-      {:setup_required, _app, _account} when state.clone? ->
-        ask(state, step, call, [], {runnable, cards, setup})
 
       # Closed before it ran, as the policy closes a call it refuses.
       {:setup_required, app, {need, account}} ->
@@ -1135,19 +1130,7 @@ defmodule Aqua.Loop do
     end
   end
 
-  # A call that asks opens its card; a role has no card to raise.
-  defp ask(%State{clone?: true} = state, step, %Call{} = call, _card_opts, acc) do
-    close(
-      state,
-      step,
-      call,
-      {:error,
-       "#{call.tool}.#{call.action} needs the person's approval, which a role cannot ask for"}
-    )
-
-    acc
-  end
-
+  # A call that asks opens its card.
   defp ask(%State{} = state, step, %Call{} = call, card_opts, {runnable, cards, setup}) do
     case open_card(state, step, call, card_opts) do
       :ok ->
@@ -1390,9 +1373,16 @@ defmodule Aqua.Loop do
   # answered is their decision about this exact call, and a standing grant's
   # withdrawal does not retract it. A call a bounded allow let run is asked
   # again whether the allow still covers it, from the rows as they stand.
-  defp still_granted(_state, %{approval: %{}}, _call), do: :ok
+  # A call outside the tools its job was narrowed to runs on no answer.
+  defp still_granted(%State{spec: spec} = state, item, %Call{} = call) do
+    cond do
+      not Policy.within?(call, spec.narrowed) -> {:denied, Policy.outside(call)}
+      match?(%{approval: %{}}, item) -> :ok
+      true -> still_allowed(state, call)
+    end
+  end
 
-  defp still_granted(%State{} = state, _item, %Call{} = call) do
+  defp still_allowed(%State{} = state, %Call{} = call) do
     case Turn.current_policy(state.spec) do
       {:ok, policy} ->
         if Policy.auto?(call, policy, place(state)),
@@ -1413,6 +1403,7 @@ defmodule Aqua.Loop do
   # (`Aqua.Loop.Policy`), so a source a concurrent call joined counts.
   defp place(%State{spec: spec, turn: turn}) do
     [
+      narrowed: spec.narrowed,
       ctx: spec.ctx,
       agent: spec.agent["name"],
       thread_id: turn.thread_id,
@@ -1484,9 +1475,6 @@ defmodule Aqua.Loop do
         {:error, message}
     end
   end
-
-  defp execute(%State{} = state, step, %Call{kind: :clone} = call),
-    do: Aqua.Loop.Clone.run(state, step, call)
 
   defp execute(%State{spec: spec} = state, step, %Call{} = call) do
     Binding.dispatch(call, %{
@@ -1675,16 +1663,7 @@ defmodule Aqua.Loop do
   # — the step's mark, the cancel-marks, the skips, the covering aborted
   # row and the pause in one transaction — then the siblings still
   # running are cancelled and settled against it, and the pause rides out
-  # of the dispatch. A clone marks its own step and halts; its parent's
-  # stop covers the clone step.
-  defp stop_uncertain(%State{clone?: true} = state, step, reason, rest) do
-    guest = guest(state)
-    _ = Tape.mark_uncertain(guest, state.turn, step, reason)
-    cancel_rest(state, rest)
-    _ = Tape.skip_steps(guest, state.turn, "the role stopped: a call's outcome is unknown")
-    {:halt, {:uncertain, reason}, state}
-  end
-
+  # of the dispatch.
   defp stop_uncertain(%State{} = state, step, reason, rest) do
     case pause_uncertain(state, step, reason) do
       {:ok, state} ->
@@ -1761,12 +1740,20 @@ defmodule Aqua.Loop do
   # Launches: the root is let go around the application's own root
   # ---------------------------------------------------------------------------
 
-  defp run_launch(%State{clone?: true} = state, %{step: step, call: call}) do
-    close(state, step, unwrap(call), {:error, "a role launches nothing"})
-    {:ok, state}
+  # A launch outside the tools its job was narrowed to is refused as it
+  # dispatches, its approval notwithstanding.
+  defp run_launch(%State{spec: spec} = state, %{step: step, call: {:ok, %Call{} = launch}} = item) do
+    if Policy.within?(launch, spec.narrowed) do
+      launch_within(state, item)
+    else
+      close(state, step, launch, {:error, {:denied, Policy.outside(launch)}})
+      {:ok, state}
+    end
   end
 
-  defp run_launch(%State{} = state, %{step: step, call: call}) do
+  defp run_launch(%State{} = state, item), do: launch_within(state, item)
+
+  defp launch_within(%State{} = state, %{step: step, call: call}) do
     guest = guest(state)
 
     case Tape.mark_dispatched(guest, state.turn, step) do
@@ -2073,7 +2060,6 @@ defmodule Aqua.Loop do
       payload = Tape.payload(row)
 
       Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
-        roles: Turn.role_names(state.spec),
         tool_call_id: payload["tool_call_id"]
       )
     else
@@ -2346,7 +2332,7 @@ defmodule Aqua.Loop do
   defp highest_seq(rows), do: rows |> Enum.map(& &1.seq) |> Enum.max()
 
   # What has arrived since the response whose token count we are reusing —
-  # a steer, a tool result, a clone's summary. Counting the estimate alone
+  # a steer, a tool result, a reply. Counting the estimate alone
   # would price the request as it stood one round ago.
   defp appended_bytes(rows, since) do
     rows
@@ -2394,8 +2380,6 @@ defmodule Aqua.Loop do
 
   defp replay_safe?(%Call{} = call), do: Policy.replay_safe?(call)
 
-  defp over_deadline?(%State{parent: %State{} = parent}), do: over_deadline?(parent)
-
   defp over_deadline?(%State{since: since, active_ms: active_ms, spec: %Turn{deadline_ms: limit}}) do
     running = if since, do: now() - since, else: 0
     active_ms + running >= limit
@@ -2441,6 +2425,7 @@ defmodule Aqua.Loop do
   defp system_row(%State{} = state, text) do
     Tape.append(guest(state), state.turn.thread_id, %{
       author: Prima.Author.system(),
+      sent_by: state.turn.agent,
       kind: "system",
       content: text,
       turn_id: state.turn.id,

@@ -1767,7 +1767,7 @@ defmodule Cyfr.BoundariesTest do
 
            def agent(ctx, name), do: Compendium.agent(ctx, name)
            def snapshot(ctx, name), do: Compendium.AgentIndex.snapshot(ctx, name)
-           def roster(ctx), do: AgentSource.enabled_roster(ctx)
+           def rows(ctx), do: AgentSource.rows(ctx)
            def skills(ctx), do: Compendium.AquaSkills.index(ctx, 10)
          end
          ''')}

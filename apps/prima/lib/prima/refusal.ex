@@ -182,7 +182,6 @@ defmodule Prima.Refusal do
     :attempt_not_paused,
     :already_finished,
     :steer_pending,
-    :clone,
     :no_root,
     :turn_over,
     :turn_exists,
@@ -191,9 +190,6 @@ defmodule Prima.Refusal do
     :not_proposed,
     :not_dispatched,
     :proposal_digest_required,
-    :parent_not_running,
-    :clone_depth,
-    :not_a_clone,
     :consent_moved,
     :agent_changed,
     :no_pin,
@@ -594,6 +590,21 @@ defmodule Prima.Refusal do
 
   defp row(:no_agent),
     do: {:setup_required, "This athanor has no assistant to address — reset its AQUA tree"}
+
+  # Who may post where (`Aqua.Runner.Admission`), and a crew member's
+  # retired thread.
+  defp row(:not_addressable),
+    do:
+      {:forbidden,
+       "That cannot be addressed from here — a crew member answers only the thread that asked it"}
+
+  defp row(:thread_archived),
+    do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
+
+  defp row({:child_awaits_card, member}) when is_binary(member),
+    do:
+      {:conflict,
+       "#{member}'s thread waits on a card — decide it there before deleting this thread"}
 
   # A shared thread's rules (`Sanctum.SharedThreads`).
   defp row({:shared_thread, :archived}),

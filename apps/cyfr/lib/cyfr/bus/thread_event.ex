@@ -9,6 +9,10 @@ defmodule Cyfr.Bus.ThreadEvent do
   `data` is plain data by kind:
 
     * `:message` — a tape row as a plain map, after its write committed;
+    * `:request`, `:reply`, `:notice` — the same for a request to a crew
+      member, a reply answering one, and a notice (a reply whose outcome
+      is `needs_you`), each told apart so a view can file it under what
+      it answers;
     * `:turn_suspended`, `:turn_started` — the turn's id;
     * `:turn_finished` — nil;
     * `:turn_starting` — the id of the person whose turn is starting;
@@ -36,6 +40,9 @@ defmodule Cyfr.Bus.ThreadEvent do
 
   @kinds [
     :message,
+    :request,
+    :reply,
+    :notice,
     :turn_suspended,
     :turn_finished,
     :turn_starting,
@@ -60,6 +67,9 @@ defmodule Cyfr.Bus.ThreadEvent do
 
   @type kind ::
           :message
+          | :request
+          | :reply
+          | :notice
           | :turn_suspended
           | :turn_finished
           | :turn_starting

@@ -81,7 +81,7 @@ defmodule Aqua.ApprovalsTest do
   defp started!(ctx, thread, pins) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, content: "@aqua go"},
+        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 

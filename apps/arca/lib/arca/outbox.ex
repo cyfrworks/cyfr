@@ -35,8 +35,6 @@ defmodule Arca.Outbox do
   alias Arca.Repo.Errors
   alias Arca.Schemas.{ConsumerReceipt, OutboxRecord}
 
-  # `crew_delivery` (`Aqua.Crew`) is not built yet: no source writes a
-  # crew record, and no process works them.
   @consumers %{
     "schedule_outcome" => ["schedule_notes"],
     "crew_request" => ["crew_delivery"],

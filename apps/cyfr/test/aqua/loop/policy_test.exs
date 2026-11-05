@@ -13,8 +13,8 @@ defmodule Aqua.Loop.PolicyTest do
 
   alias Aqua.Loop.{Binding, Policy}
 
-  defp resolve!(name, args, opts \\ []) do
-    {:ok, call} = Binding.resolve(name, args, opts)
+  defp resolve!(name, args) do
+    {:ok, call} = Binding.resolve(name, args)
     call
   end
 
@@ -22,7 +22,6 @@ defmodule Aqua.Loop.PolicyTest do
     "files.read" => "auto",
     "files.write" => "ask",
     "notes.read" => "auto",
-    "builder.*" => "auto",
     "execution.run" => "auto"
   }
 
@@ -39,13 +38,38 @@ defmodule Aqua.Loop.PolicyTest do
     assert text =~ "files.delete"
     assert :auto = Policy.decide(resolve!("ui", %{"kind" => "ui.navigate"}), @policy, [])
 
-    assert :auto =
-             Policy.decide(resolve!("builder", %{"task" => "x"}, roles: ["builder"]), @policy, [])
-
-    assert {:deny, _} =
-             Policy.decide(resolve!("web", %{"task" => "x"}, roles: ["web"]), @policy, [])
-
     assert :ask = Policy.decide(resolve!("github__search", %{}), @policy, [])
+  end
+
+  test "a job narrowed to some tools refuses every other call before any card, whatever its kind" do
+    policy = Map.merge(@policy, %{"github:search" => "ask", "notes.keep" => "ask"})
+    narrowed = [narrowed: ["files.read"]]
+
+    assert :auto =
+             Policy.decide(
+               resolve!("files", %{"action" => "read", "path" => "a"}),
+               policy,
+               narrowed
+             )
+
+    for {name, args} <- [
+          {"files", %{"action" => "write", "path" => "a"}},
+          {"notes", %{"action" => "keep"}},
+          {"github__search", %{}},
+          {"execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"}}
+        ] do
+      assert {:deny, sentence} = Policy.decide(resolve!(name, args), policy, narrowed)
+      assert sentence =~ "outside the tools this job was narrowed to"
+    end
+
+    assert :ask =
+             Policy.decide(resolve!("github__search", %{}), policy, narrowed: ["github:search"])
+
+    assert :ask =
+             Policy.decide(resolve!("notes", %{"action" => "keep"}), policy, narrowed: ["notes"])
+
+    assert :auto = Policy.decide(resolve!("ui", %{"kind" => "ui.navigate"}), policy, narrowed)
+    assert Policy.within?(resolve!("request_setup.open", %{}), ["files.read"])
   end
 
   test "a launch always asks, consented or not, touched or not, unless it is denied or no component" do
@@ -172,7 +196,6 @@ defmodule Aqua.Loop.PolicyTest do
     assert :concurrent = Policy.overlap(resolve!("files", %{"action" => "read"}))
     assert :concurrent = Policy.overlap(resolve!("notes", %{"action" => "read"}))
     assert :exclusive = Policy.overlap(resolve!("files", %{"action" => "write"}))
-    assert :exclusive = Policy.overlap(resolve!("builder", %{}, roles: ["builder"]))
     assert :exclusive = Policy.overlap(resolve!("github__search", %{}))
   end
 

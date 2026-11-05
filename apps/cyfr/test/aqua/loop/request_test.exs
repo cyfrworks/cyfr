@@ -37,15 +37,13 @@ defmodule Aqua.Loop.RequestTest do
       "notes.read" => "auto",
       "notes.keep" => "ask",
       "http.get" => "deny",
-      "builder.*" => "auto",
       "native_search" => "auto"
     }
 
-    tools =
-      Request.tool_definitions(policy, roles: [%{"name" => "builder", "title" => "Builder"}])
+    tools = Request.tool_definitions(policy)
 
     names = Enum.map(tools, & &1["name"])
-    assert names == ["files", "notes", "builder", "ui", "request_setup"]
+    assert names == ["files", "notes", "ui", "request_setup"]
 
     files = Enum.find(tools, &(&1["name"] == "files"))
     assert files["parameters"]["properties"]["action"]["enum"] == ["read", "write"]
@@ -55,15 +53,7 @@ defmodule Aqua.Loop.RequestTest do
     notes = Enum.find(tools, &(&1["name"] == "notes"))
     assert notes["parameters"]["properties"]["action"]["enum"] == ["keep", "read"]
 
-    builder = Enum.find(tools, &(&1["name"] == "builder"))
-    assert builder["parameters"]["required"] == ["task"]
-
-    # A role rides only for the soul, external tools under their wire name.
-    refute "builder" in Enum.map(
-             Request.tool_definitions(policy, roles: [%{"name" => "builder"}], soul?: false),
-             & &1["name"]
-           )
-
+    # External tools ride under their wire name.
     [ext] =
       Request.tool_definitions(%{},
         external: [
@@ -257,6 +247,72 @@ defmodule Aqua.Loop.RequestTest do
     assert synthetic["content"] =~ "partially executed"
   end
 
+  describe "crew rows" do
+    defp crew(seq, sent_by, content, fields) do
+      struct(row(seq, "text", if(sent_by == "person", do: "usr_a", else: @agent), content), [
+        {:sent_by, sent_by} | fields
+      ])
+    end
+
+    test "the reading agent's own speech is its own; a request, a reply, a notice and another agent's words are said to it" do
+      rows = [
+        crew(1, "person", "what next?", addressee: "aqua"),
+        crew(2, "aqua", "Asking the planner.", payload: Jason.encode!(%{"step_id" => "s1"})),
+        crew(3, "aqua", "plan it", addressee: "planner", status: "pending"),
+        crew(4, "person", "check the logs", addressee: "builder", status: "answered"),
+        crew(5, "builder", "Logs are clean.",
+          addressee: "person",
+          reply_to: "msg_4",
+          outcome: "done"
+        ),
+        crew(6, "planner", "Write the plan?",
+          addressee: "aqua",
+          reply_to: "msg_3",
+          outcome: "needs_you"
+        )
+      ]
+
+      assert [
+               %{"role" => "user", "content" => [%{"text" => "what next?"}]},
+               %{"role" => "assistant", "content" => [%{"text" => "Asking the planner."}]},
+               %{"role" => "user", "content" => said}
+             ] = Request.messages(rows, me: "aqua")
+
+      texts = Enum.map(said, & &1["text"])
+
+      # The soul's own request is its tool call's to show, not a row's.
+      refute Enum.any?(texts, &(&1 =~ "plan it"))
+      assert Enum.any?(texts, &(&1 =~ "usr_a asked builder (request msg_4, answered)"))
+      assert Enum.any?(texts, &(&1 =~ "builder replied to request msg_4: done]\nLogs are clean."))
+      assert Enum.any?(texts, &(&1 =~ "planner needs the person on request msg_3"))
+
+      # In the member's thread the soul's task is said to the member.
+      assert [%{"role" => "user", "content" => [%{"text" => "[aqua]\nplan it"}]}] =
+               Request.messages([crew(1, "aqua", "plan it", addressee: "planner")], me: "planner")
+    end
+
+    test "a request the reader made still shows once a compaction summarized its call away, while it waits" do
+      rows = [
+        crew(1, "aqua", "plan it", addressee: "planner", status: "pending"),
+        crew(2, "aqua", "check it", addressee: "builder", status: "answered"),
+        row(3, "compaction", @system, "Earlier work.", %{
+          "first_kept_seq" => 4,
+          "summarized_through_seq" => 3
+        }),
+        crew(4, "person", "and now?", addressee: "aqua")
+      ]
+
+      [%{"role" => "user", "content" => blocks}] = Request.messages(rows, me: "aqua")
+      texts = Enum.map(blocks, & &1["text"])
+
+      assert [
+               "[Summary of the thread so far]\nEarlier work.",
+               "[Request msg_1 to planner, still waiting on its reply]\nplan it",
+               "and now?"
+             ] = texts
+    end
+  end
+
   test "a compaction stands in for the rows before its boundary, and the excerpt is transient" do
     rows = [
       row(1, "text", "usr_a", "old"),
@@ -325,17 +381,40 @@ defmodule Aqua.Loop.RequestTest do
     assert Request.build(model: "m", messages: [])["max_tokens"] == 16_384
   end
 
-  test "a session or options for the brain is refused, never sent or dropped: not built yet" do
-    for {key, value} <- [session: "s1", options: %{"effort" => "high"}] do
+  test "a session rides the request, and an option rides only when the brain declares it, of its kind" do
+    effort = %{"name" => "effort", "kind" => "enum", "values" => ["low", "high"]}
+    caps = %{options: [effort]}
+
+    request =
+      Request.build(
+        model: "m",
+        messages: [],
+        capabilities: caps,
+        session: "s1",
+        options: %{"effort" => "high"}
+      )
+
+    assert request["session"] == "s1"
+    assert request["options"] == %{"effort" => "high"}
+
+    for {options, member} <- [
+          {%{"effort" => "max"}, "options.effort"},
+          {%{"temperature" => 1}, "options.temperature"}
+        ] do
       error =
         assert_raise ArgumentError, fn ->
-          Request.build([{:model, "m"}, {:messages, []}, {key, value}])
+          Request.build(model: "m", messages: [], capabilities: caps, options: options)
         end
 
-      assert error.message =~ inspect(key)
+      assert error.message =~ member
     end
 
-    request = Request.build(model: "m", messages: [])
+    # A brain that declares none takes none.
+    assert_raise ArgumentError, fn ->
+      Request.build(model: "m", messages: [], options: %{"effort" => "high"})
+    end
+
+    request = Request.build(model: "m", messages: [], options: %{})
     refute Map.has_key?(request, "session")
     refute Map.has_key?(request, "options")
   end
