@@ -13,7 +13,7 @@ defmodule PrismWeb.McpServersLive do
       `npx -y @modelcontextprotocol/server-github` and its env) that the
       backends service runs under a uid of its own. Env values are `vault:ENTRY`
       templates naming disclosed entries; only the non-secret names
-      `Emissary.External.BackendDefinition` lists may hold a literal. More
+      `Opus.Programs.Definition` lists may hold a literal. More
       backends for one server go through the config form.
     * **Add server** — the config as JSON: an http server's `url` and
       `headers`, whose `vault:ENTRY` templates name entries whose

@@ -514,7 +514,7 @@ defmodule Emissary.External.ProviderTest do
     }
 
     test "are refused while no backends service is configured", %{ctx: ctx} do
-      refute Emissary.External.Backends.running?()
+      refute Opus.Programs.running?()
 
       assert {:error, {:invalid_argument, message}} =
                Provider.handle("mcp_servers", ctx, %{

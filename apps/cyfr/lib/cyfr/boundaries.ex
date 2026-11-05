@@ -774,8 +774,9 @@ defmodule Cyfr.Boundaries do
           "model listing or a consent status derives an authority there; nothing of " <>
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
-          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
-          "lists it, so no declaration can say it."
+          "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
+          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "root to every boundary that lists it, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
@@ -822,15 +823,20 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/emissary.ex"
       ],
       into: "Opus",
-      allow: ~w(Opus),
+      allow:
+        ~w(Opus Opus.Programs Opus.Programs.Definition Opus.Programs.Session Opus.Programs.StatusRedaction),
       reason:
         "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
           "lease, reports health and reads an athanor's feeds for a canvas's " <>
           "validation answers (`Opus.feeds/1`) through the execution domain's " <>
-          "root facade. " <>
+          "root facade; a stdio server holds its row's owner and speaks MCP over its " <>
+          "sessions through the programs controller (`Opus.Programs`, its session " <>
+          "client and the row definition it syncs), and the provider asks it for a " <>
+          "row's status, a sign-in and a kept home's reset. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
-          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
-          "lists it, so no declaration can say it."
+          "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
+          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "root to every boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -840,14 +846,17 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web.ex"
       ],
       into: "Opus",
-      allow: ~w(Opus),
+      allow: ~w(Opus Opus.Programs),
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
+          "relays a sign-in's terminal through the programs controller under the " <>
+          "context that started it (`Opus.Programs.sign_in_attach/3`), and " <>
           "names none of its internals. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
-          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
-          "lists it, so no declaration can say it."
+          "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
+          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "root to every boundary that lists it, so no declaration can say it."
     },
     %{
       from: [

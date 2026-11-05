@@ -15,7 +15,7 @@ defmodule Emissary.External.Reconciler do
 
     1. in memory first, the backends controller releases every live stdio
        owner of the athanor whose env templates reference a changed name
-       (`Emissary.External.Backends.release_referencing/2`), which needs no store;
+       (`Opus.Programs.release_referencing/2`), which needs no store;
     2. then the tenant's servers whose header or env templates reference one
        (`Prima.VaultRef.names/1`) have their processes stopped —
        which ends their calls in flight and releases their backends — and
@@ -38,6 +38,13 @@ defmodule Emissary.External.Reconciler do
 
   An archived athanor (`Cyfr.Bus.athanor_archived_global/0`) has every one
   of its server processes stopped.
+
+  A kept home goes with its login entry: a deleted login entry's home is
+  retired (`Opus.Programs.home/3`), and so is every login entry's home of an
+  archived athanor (`Sanctum.Mount.login_entries/1`). The programs
+  controller sends a retire again on every tick until the backends service
+  acknowledges it; a vault that cannot say whether an entry was a login
+  entry is asked again after the fast retries' backoff.
 
   Reconcile failures are **not** swallowed: a raise or transient storage error
   emits `[:cyfr, :emissary, :external_server, :reconcile_failed]` telemetry and is
@@ -91,6 +98,9 @@ defmodule Emissary.External.Reconciler do
   @impl GenServer
   def handle_info(%VaultEntryChanged{kind: verb} = changed, state)
       when verb in @relevant_verbs do
+    if verb == :delete and is_binary(changed.entry_id),
+      do: send(self(), {:retire_home, changed.athanor_id, changed.entry_id, 0})
+
     meta = %{name: changed.name, old_name: changed.old_name}
     {:noreply, attempt(state, {changed.athanor_id, changed.entry_id}, meta, 0)}
   end
@@ -99,8 +109,45 @@ defmodule Emissary.External.Reconciler do
   # ignore without the catch-all's warning.
   def handle_info(%VaultEntryChanged{}, state), do: {:noreply, state}
 
+  # A deleted entry's kept home, when it was a login entry's.
+  def handle_info({:retire_home, athanor_id, entry_id, attempt_no}, state) do
+    case Sanctum.Mount.home_of(athanor_id, entry_id) do
+      {:ok, home_id} ->
+        retire_homes(athanor_id, [home_id])
+
+      :none ->
+        :ok
+
+      {:error, _unavailable} when attempt_no < @max_fast_retries ->
+        Process.send_after(
+          self(),
+          {:retire_home, athanor_id, entry_id, attempt_no + 1},
+          @retry_backoff_ms
+        )
+
+      {:error, _unavailable} ->
+        Logger.error(
+          "[Emissary.External.Reconciler] the kept home of a deleted entry of #{athanor_id} " <>
+            "could not be looked up; it stays on the backends service"
+        )
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info(%AthanorArchived{athanor_id: athanor_id}, state) do
     Emissary.External.ServerSupervisor.stop_athanor(athanor_id)
+
+    case Sanctum.Mount.login_entries(athanor_id) do
+      {:ok, entries} ->
+        retire_homes(athanor_id, entries)
+
+      {:error, _unavailable} ->
+        Logger.error(
+          "[Emissary.External.Reconciler] the login entries of archived #{athanor_id} could " <>
+            "not be read; their kept homes stay on the backends service"
+        )
+    end
 
     Emissary.External.Proxy.invalidate_external_tools_cache(
       Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
@@ -132,6 +179,20 @@ defmodule Emissary.External.Reconciler do
   def handle_info(message, state) do
     Prima.LoggerContext.unexpected(__MODULE__, message)
     {:noreply, state}
+  end
+
+  # Each retire waits on the backends service, so they run in a task of
+  # their own; the programs controller keeps an unacknowledged one and sends
+  # it again until it lands.
+  defp retire_homes(_athanor_id, []), do: :ok
+
+  defp retire_homes(athanor_id, home_ids) do
+    {:ok, _task} =
+      Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+        for home_id <- home_ids, do: Opus.Programs.home(athanor_id, home_id, :retire)
+      end)
+
+    :ok
   end
 
   # A reconcile stops server processes and raises epochs, which is work a
@@ -176,7 +237,7 @@ defmodule Emissary.External.Reconciler do
     ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
     names = changed_names(meta)
 
-    _released = Emissary.External.Backends.release_referencing(athanor_id, names)
+    _released = Opus.Programs.release_referencing(athanor_id, names)
 
     with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       stop_affected(servers, names, athanor_id, entry_id, ctx)
@@ -269,7 +330,7 @@ defmodule Emissary.External.Reconciler do
          [_ | _] = moved <- moved(held, current) do
       ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       moved_names = moved |> Enum.flat_map(&elem(&1, 1)) |> Enum.uniq()
-      _released = Emissary.External.Backends.release_referencing(athanor_id, moved_names)
+      _released = Opus.Programs.release_referencing(athanor_id, moved_names)
 
       with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
         server_names = MapSet.new(moved, &elem(&1, 0))
@@ -315,7 +376,7 @@ defmodule Emissary.External.Reconciler do
         _ -> []
       end
 
-    referenced = headers ++ Emissary.External.BackendDefinition.entry_names(config["backends"])
+    referenced = headers ++ Opus.Programs.Definition.entry_names(config["backends"])
 
     case names do
       :any -> referenced != []

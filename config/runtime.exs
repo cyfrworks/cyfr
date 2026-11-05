@@ -234,7 +234,7 @@ if config_env() != :test do
   end
 
   # The Locus backends service that runs stdio MCP servers
-  # (`Emissary.External.Backends`): CYFR_LOCUS_BACKENDS_URL, the base URL
+  # (`Opus.Programs`): CYFR_LOCUS_BACKENDS_URL, the base URL
   # of its listener (compose: http://locus-backends:4101), and
   # CYFR_LOCUS_BACKENDS_KEY, the service key as 64 hexadecimal digits, the
   # value the service holds as LOCUS_BACKENDS_KEY (`cyfr init` generates

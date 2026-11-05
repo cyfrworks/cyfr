@@ -534,6 +534,7 @@ defmodule Cyfr.Application do
     Sanctum.Gate.Supervisor,
     Compendium.Supervisor,
     Opus.Supervisor,
+    Opus.Programs,
     Aqua.Supervisor,
     Emissary.Supervisor
   ]
@@ -760,12 +761,19 @@ defmodule Cyfr.Application do
       # (`CYFR_HOST_API_BIND`, `CYFR_HOST_API_PORT`) are read here and
       # handed down: a domain's subtree reads no configuration. The
       # listener's drain is the time an open host call has to finish once
-      # it stops accepting.
+      # it stops accepting. The programs controller's local box is the
+      # backends service `.env` names (`CYFR_LOCUS_BACKENDS_URL`,
+      # `CYFR_LOCUS_BACKENDS_KEY`); a cluster runs none.
       {Opus.Supervisor,
        slot_caps: execution_slot_caps(),
        bind: Cyfr.RuntimeConfig.host_api_bind(),
        port: Cyfr.RuntimeConfig.host_api_port(),
-       drain_ms: 5_000},
+       drain_ms: 5_000,
+       programs: [
+         url: Application.get_env(:cyfr, :locus_backends_url),
+         root: Application.get_env(:cyfr, :locus_backends_key),
+         cluster: Application.get_env(:cyfr, :cluster, false) == true
+       ]},
       # Off in the test env: suites drive runners directly.
       {Aqua.Supervisor, thread_recovery: Application.get_env(:cyfr, :thread_recovery, true)},
       Emissary.Supervisor,
