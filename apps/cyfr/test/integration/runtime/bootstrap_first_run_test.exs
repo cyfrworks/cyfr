@@ -95,13 +95,17 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
     assert list_models.ref in minted
     for ref <- model_refs, do: assert(ref in minted, "#{ref} not minted")
 
-    # Each model catalyst's need reads not ready until an entry is bound,
-    # and an attach-only entry, which the catalyst is never handed, meets
-    # it: CYFR attaches the key.
-    for ref <- model_refs do
-      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
-      refute plan.ready, ref
-      assert Enum.any?(plan.consent.needs, &(&1[:need] == "api_key" and not &1.satisfied)), ref
+    # Each model catalyst's need, an API catalyst's key or an adapter's
+    # login, reads not ready until an entry is bound, and an attach-only
+    # entry, which the catalyst is never handed, meets a key: CYFR
+    # attaches it.
+    for unit <- models do
+      [need] = Prima.Manifest.Needs.from_manifest(unit.manifest)
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, unit.ref)
+      refute plan.ready, unit.ref
+
+      assert Enum.any?(plan.consent.needs, &(&1[:need] == need.name and not &1.satisfied)),
+             unit.ref
     end
 
     claude = Enum.find(models, &(&1.name == "claude"))

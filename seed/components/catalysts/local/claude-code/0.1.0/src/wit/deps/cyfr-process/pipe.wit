@@ -1,0 +1,54 @@
+package cyfr:process@0.1.0;
+
+/// A session on a program: lines in, sequence-numbered lines out.
+/// The program is the one a `login` need of the catalyst's manifest is
+/// bound to by consent; it runs in its own box, never in the component.
+/// A session belongs to the program and the catalyst's key, not to one
+/// run: a later run opening the same key attaches to it while its program
+/// runs. Each run opens before it sends, reads or closes. An error is a
+/// code: `denied`, `setup_required`, `busy`, `ended`, `invalid_request`,
+/// `too_large`, `unavailable` or `lost`.
+interface pipe {
+    /// An open session, and whether its program was already running for
+    /// the key (`resumed`) or was started for this open, in which case a
+    /// catalyst speaking a protocol over it starts that protocol again.
+    record opened {
+        session: string,
+        resumed: bool,
+    }
+
+    /// One line the program wrote, numbered in its session's sequence.
+    record line {
+        seq: u64,
+        text: string,
+    }
+
+    /// The lines past the sequence number a `recv` named, how many lines
+    /// the session's buffer dropped, and whether its program still runs.
+    record recv-result {
+        lines: list<line>,
+        dropped: u32,
+        running: bool,
+    }
+
+    /// Open a session on the program the `login` need `need` is bound to,
+    /// under the catalyst's `key` for it (the chat request's session or a
+    /// fresh id), running the program's command with `argv` appended.
+    /// Returns ok(opened) or err(code). An open with a key whose session
+    /// still runs attaches to it.
+    open: func(need: string, key: string, argv: list<string>) -> result<opened, string>;
+
+    /// Write `lines` to the session's program, in order.
+    send: func(session: string, lines: list<string>) -> result<_, string>;
+
+    /// Read the lines past the sequence number `after`, waiting at most
+    /// `max-wait-ms` for one when there is none. A line is kept until a
+    /// later call names a higher `after`, so a repeat answers the same
+    /// lines; an answer carries as many as fit, and the next call names
+    /// the last one it got. A session no longer held answers no lines and
+    /// `running: false`.
+    recv: func(session: string, after: u64, max-wait-ms: u32) -> result<recv-result, string>;
+
+    /// End the session and its program.
+    close: func(session: string) -> result<_, string>;
+}

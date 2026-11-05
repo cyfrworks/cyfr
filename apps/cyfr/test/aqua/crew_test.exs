@@ -186,10 +186,10 @@ defmodule Aqua.CrewTest do
     assert roster |> Enum.map(& &1["name"]) |> Enum.sort() ==
              ~w(aqua claude-code explorer planner)
 
-    # The harness's catalyst ships later, and the explorer's key is not
-    # bound: neither is told of.
+    # The harness's catalyst ships, with no login entry bound to its
+    # program, and the explorer's key is not bound: neither is told of.
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:missing, "catalyst:local.claude-code"}
+    assert status["claude-code"] == {:needs_sign_in, "catalyst:local.claude-code:0.1.0"}
     assert {:needs_key, _} = status["explorer"]
 
     assert Crew.index(ctx, roster) ==
@@ -273,10 +273,10 @@ defmodule Aqua.CrewTest do
 
   # Readiness holds at every way a job reaches a member, not only in the
   # index: the shipped explorer has no key bound here, and claude-code's
-  # catalyst is not installed.
+  # program has no login entry signed in.
   @unready [
     {"explorer", :no_key, "no key bound"},
-    {"claude-code", :not_installed, "not installed"}
+    {"claude-code", :not_signed_in, "not signed in"}
   ]
 
   test "a person's @name of a member that is not ready is refused with why, and writes nothing",

@@ -1,0 +1,19 @@
+package cyfr:emit@0.1.0;
+
+/// Events a running component pushes to its execution's event stream
+/// before it answers. The host checks each event's size and the
+/// execution's emit budget, masks every credential the execution was
+/// handed out of it, and numbers it on the stream. A refused event never
+/// stops the run.
+///
+/// A `model/chat@1` catalyst's `chat` emits the contract's stream events:
+/// `text.delta {text}`, `tool_call.start {index, id, name}`,
+/// `tool_call.delta {index, arguments}`, `tool_call.end {index}`,
+/// `usage {usage}`, `stop {stop_reason}` and `error {error}`.
+interface events {
+    /// Push one event, a JSON object.
+    /// Response: {"ok": true, "sequence": "N.n"} naming the last event the
+    /// host released, {"ok": true} when a delta's text is held back to mask
+    /// a credential across deltas, or {"error": {"type": "...", "message": "..."}}.
+    emit: func(json-event: string) -> string;
+}

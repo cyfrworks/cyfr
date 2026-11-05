@@ -44,9 +44,10 @@ defmodule Prima.Manifest.SeedManifestsTest do
       assert Provides.validate(manifest) == :ok
 
       for need <- Needs.from_manifest(manifest) || [] do
-        # A shipped need that names no attach rule is disclose-only.
+        # A shipped need that names no attach rule is disclose-only, or a
+        # login need, which is mounted.
         if not Map.has_key?(manifest["needs"][need.name], "attach") do
-          assert Needs.disclose_only?(need), need.name
+          assert Needs.disclose_only?(need) or Needs.mount_only?(need), need.name
         end
       end
     end

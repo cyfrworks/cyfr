@@ -1,0 +1,12 @@
+package cyfr:catalyst@0.1.0;
+
+interface run {
+    /// Execute the catalyst with JSON input, returning JSON output.
+    run: func(input: string) -> string;
+}
+
+world catalyst {
+    export run;
+    import cyfr:emit/events@0.1.0;
+    import cyfr:process/pipe@0.1.0;
+}

@@ -64,14 +64,15 @@
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
-# ---- The process helper, cyfr-locus: a static Go binary, pinned to the Go
-# release apps/locus/keeper/go.mod names ----
+# ---- The process helper, cyfr-locus, and cyfr-stub: static Go binaries,
+# pinned to the Go release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS keeper
 WORKDIR /src
 COPY apps/locus/keeper/go.mod apps/locus/keeper/go.sum ./
 RUN go mod download
 COPY apps/locus/keeper/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus . \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-stub ./cmd/cyfr-stub
 
 # ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
@@ -243,6 +244,10 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 WORKDIR /app
 
 COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
+# The MCP stdio server a harness the backends service runs reaches CYFR's
+# tools through (catalyst:local.claude-code): it answers each call from the
+# answer CYFR puts in the call's input, and holds nothing.
+COPY --from=keeper /out/cyfr-stub /usr/local/bin/cyfr-stub
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,

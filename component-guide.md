@@ -585,7 +585,7 @@ A **login need** names a program the component runs with the person's own sign-i
     "type": "login",
     "program": "claude",
     "reason": "to run Claude Code on your own plan",
-    "install": {"command": "npx -y @anthropic-ai/claude-code@2.1.316", "login_command": "claude auth login"}
+    "install": {"command": "npx -y @anthropic-ai/claude-code@2.1.318", "login_command": "npx -y @anthropic-ai/claude-code@2.1.318 auth login"}
   }
 }
 ```
