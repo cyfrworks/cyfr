@@ -447,19 +447,19 @@ defmodule PrismWeb.ProgramsLiveTest do
         authenticated: true
       )
 
-  defp pipe_row!(athanor) do
+  defp pipe_row!(athanor, name \\ "claude") do
     {:ok, row} =
       Arca.McpServerStorage.insert(ctx(athanor), %{
         cap: 0,
-        name: "claude",
+        name: name,
         transport: "pipe",
         url: nil,
         home: "kept",
-        login_command: "claude auth login",
+        login_command: "#{name} auth login",
         config_json:
           Jason.encode!(%{
             "backends" => [
-              %{"name" => "claude", "command" => "npx -y @anthropic-ai/claude-code", "env" => %{}}
+              %{"name" => name, "command" => "npx -y @anthropic-ai/#{name}", "env" => %{}}
             ]
           })
       })
@@ -513,7 +513,10 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     refute render(view) =~ "\e[1m"
 
-    view |> form("#sign-in-input", %{"line" => "code-1234"}) |> render_submit()
+    view
+    |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-1234"})
+    |> render_submit()
+
     assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
 
     Scripted.end_sessions(fake, row.id, 0)
@@ -522,10 +525,62 @@ defmodule PrismWeb.ProgramsLiveTest do
              has_element?(view, ~s([data-test="terminal-ended"]), "Signed in.")
            end)
 
-    refute has_element?(view, "#sign-in-input")
+    refute has_element?(view, ~s([data-test="terminal-input"]))
   end
 
-  test "Reset home empties the chosen login entry's home", %{
+  # One terminal, one session: selecting another target closes the session
+  # running, the new terminal sends to its own, and its heading names it.
+  test "selecting another program's sign-in closes the one running and sends to the new one",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    claude = pipe_row!(athanor)
+    codex = pipe_row!(athanor, "codex")
+    a = login!(user, athanor, "claude-login", "claude")
+    b = login!(user, athanor, "codex-login", "codex")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    sign_in(view, "claude", a)
+    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
+    Scripted.write(fake, claude.id, "first")
+    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), "first") end)
+    assert_receive {:session, "recv", %{"session" => session_a}, _fields}, 2_000
+
+    sign_in(view, "codex", b)
+    assert_receive {:session, "close", %{"session" => ^session_a}, _fields}, 2_000
+    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
+    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
+
+    assert length(Regex.scan(~r/data-test="sign-in-terminal"/, render(view))) == 1
+    assert has_element?(view, ~s([data-test="sign-in-terminal"]), "codex")
+    refute has_element?(view, ~s([data-test="terminal-lines"]), "first")
+
+    view
+    |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-b"})
+    |> render_submit()
+
+    assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
+    assert session_b != session_a
+
+    # After its session ended, selecting the same sign-in again starts afresh.
+    Scripted.end_sessions(fake, codex.id, 0)
+    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-ended"])) end)
+    sign_in(view, "codex", b)
+    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
+    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
+    refute has_element?(view, ~s([data-test="terminal-ended"]))
+  end
+
+  # Signs `name` in with `entry`, its row expanded first unless it is.
+  defp sign_in(view, name, entry) do
+    unless has_element?(view, ~s([data-test="home-actions"] input[name="name"][value="#{name}"])),
+      do: view |> element("tr[phx-value-name=#{name}]") |> render_click()
+
+    view
+    |> form(~s([data-test="home-actions"] form[phx-submit="sign_in"]), %{"entry" => entry})
+    |> render_submit()
+  end
+
+  test "Reset folder empties the chosen login entry's folder", %{
     conn: conn,
     athanor: athanor,
     user: user
@@ -542,7 +597,9 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> render_submit()
 
     assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^entry}, _fields}, 2_000
-    assert flash(view, "info") == "The home is empty again."
+    assert flash(view, "info") == "The folder is empty again."
+    assert render(view) =~ "Reset folder"
+    refute render(view) =~ "Reset home"
   end
 
   test "the program form defines a kept pipe row with its bounds, and makes its login entry once confirmed",
