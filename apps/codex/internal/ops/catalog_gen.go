@@ -162,7 +162,9 @@ const (
 	McpServersGet            = "get"
 	McpServersList           = "list"
 	McpServersRefresh        = "refresh"
+	McpServersResetHome      = "reset_home"
 	McpServersRestart        = "restart"
+	McpServersSignIn         = "sign_in"
 	McpServersTest           = "test"
 	McpServersUpdate         = "update"
 	NotesEndorse             = "endorse"
@@ -337,7 +339,7 @@ var Actions = map[string][]string{
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
-	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
+	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
@@ -2117,8 +2119,18 @@ type McpServersCreateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: backends the backends service runs.
+	// http (default): a URL. stdio: a program whose backends Emissary drives as MCP servers. pipe: a program with one backend a catalyst drives.
 	Transport Field[string] `json:"transport,omitzero"`
+	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
+	Home Field[string] `json:"home,omitzero"`
+	// A program's memory bound in bytes (default: the backends service's own bound).
+	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
+	// A kept home's disk bound in bytes (default: none beyond the homes volume).
+	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
+	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
+	LoginCommand Field[string] `json:"login_command,omitzero"`
+	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
+	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`
 }
@@ -2239,6 +2251,21 @@ func (args McpServersRefreshArgs) MarshalJSON() ([]byte, error) {
 	}{Action: McpServersRefresh, fields: fields(args)})
 }
 
+// McpServersResetHomeArgs carries arguments for mcp_servers.reset_home.
+type McpServersResetHomeArgs struct {
+	// The id of the login entry whose kept home is emptied, under the same uid
+	Entry string `json:"entry"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args McpServersResetHomeArgs) MarshalJSON() ([]byte, error) {
+	type fields McpServersResetHomeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: McpServersResetHome, fields: fields(args)})
+}
+
 // McpServersRestartArgs carries arguments for mcp_servers.restart.
 type McpServersRestartArgs struct {
 	// Server name (required for every action but list; refresh without one refreshes every enabled server)
@@ -2252,6 +2279,23 @@ func (args McpServersRestartArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: McpServersRestart, fields: fields(args)})
+}
+
+// McpServersSignInArgs carries arguments for mcp_servers.sign_in.
+type McpServersSignInArgs struct {
+	// The program's server name
+	Name string `json:"name"`
+	// The id of the login entry whose kept home the sign-in runs in; a kept stdio server's own entry
+	Entry string `json:"entry"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args McpServersSignInArgs) MarshalJSON() ([]byte, error) {
+	type fields McpServersSignInArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: McpServersSignIn, fields: fields(args)})
 }
 
 // McpServersTestArgs carries arguments for mcp_servers.test.
@@ -2299,8 +2343,18 @@ type McpServersUpdateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: backends the backends service runs.
+	// http (default): a URL. stdio: a program whose backends Emissary drives as MCP servers. pipe: a program with one backend a catalyst drives.
 	Transport Field[string] `json:"transport,omitzero"`
+	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
+	Home Field[string] `json:"home,omitzero"`
+	// A program's memory bound in bytes (default: the backends service's own bound).
+	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
+	// A kept home's disk bound in bytes (default: none beyond the homes volume).
+	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
+	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
+	LoginCommand Field[string] `json:"login_command,omitzero"`
+	// A kept stdio server's login entry, whose home its backends run in (a pipe server's catalyst names its own).
+	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`
 }
