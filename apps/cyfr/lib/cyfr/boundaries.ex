@@ -2042,6 +2042,7 @@ defmodule Cyfr.Boundaries do
       login_entries: 1,
       login_entry: 3,
       login_entry: 4,
+      orphaned_homes: 1,
       signed_in: 2
     ],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
