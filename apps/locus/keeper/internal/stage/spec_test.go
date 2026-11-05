@@ -119,6 +119,17 @@ func TestKeptSpecValidation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	// A kept spawn's file size may be unlimited; a pooled spawn's may not.
+	unbounded := kept
+	unbounded.Limits.Fsize = protocol.Unlimited
+	if err := unbounded.Validate(); err != nil {
+		t.Fatalf("a kept spawn with no file-size limit: %v", err)
+	}
+	scratch := validSpec()
+	scratch.Limits.Fsize = protocol.Unlimited
+	if err := scratch.Validate(); err == nil {
+		t.Fatal("a pooled spawn with no file-size limit was accepted")
+	}
 	pooled := validSpec()
 	pooled.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
 	if err := pooled.Validate(); err == nil {

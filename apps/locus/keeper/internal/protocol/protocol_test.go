@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -37,6 +38,7 @@ type vectors struct {
 		Least uint64 `json:"least"`
 		Most  uint64 `json:"most"`
 	} `json:"rlimits"`
+	KeptUnbounded   []string          `json:"kept_unbounded_rlimits"`
 	Frames          []frameVector     `json:"frames"`
 	ControlFrames   []frameVector     `json:"control_frames"`
 	RelayFrames     []frameVector     `json:"relay_frames"`
@@ -152,6 +154,9 @@ func TestSharedRequestBounds(t *testing.T) {
 		if got, ok := limits[name]; !ok || got != [2]uint64{r.Least, r.Most} {
 			t.Fatalf("rlimits.%s is %v here, the vectors pin %d..%d", name, got, r.Least, r.Most)
 		}
+	}
+	if !slices.Equal(v.KeptUnbounded, KeptUnbounded) {
+		t.Fatalf("KeptUnbounded = %q, the vectors say %q", KeptUnbounded, v.KeptUnbounded)
 	}
 }
 
@@ -437,6 +442,25 @@ func TestMemoryBoundIsDecodedForEveryPool(t *testing.T) {
 	}
 	if refused < 10 {
 		t.Fatalf("%d vectors refuse a malformed memory bound, want absent, null, zero, below, above, negative, fractional, not a number, misplaced and on another request", refused)
+	}
+}
+
+func TestAKeptSpawnTakesNoFileSizeLimitUnlessItAsks(t *testing.T) {
+	var none *Rlimits
+	kept := none.ResolveKept()
+	if kept.Fsize != Unlimited || kept.Nofile != Ceilings.Nofile || kept.Nproc != Ceilings.Nproc {
+		t.Fatalf("a kept spawn's defaults %+v", kept)
+	}
+	fsize := uint64(1 << 20)
+	if got := (&Rlimits{Fsize: &fsize}).ResolveKept(); got.Fsize != 1<<20 {
+		t.Fatalf("a kept spawn's own fsize is %d", got.Fsize)
+	}
+	nproc := uint64(8)
+	if got := (&Rlimits{Nproc: &nproc}).ResolveKept(); got.Fsize != Unlimited || got.Nproc != 8 {
+		t.Fatalf("a kept spawn lowering nproc alone: %+v", got)
+	}
+	if none.Resolve().Fsize != Ceilings.Fsize {
+		t.Fatal("a scratch spawn lost its file-size ceiling")
 	}
 }
 

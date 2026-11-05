@@ -269,3 +269,36 @@ func TestAPtySpawnRunsOnATerminal(t *testing.T) {
 	}
 	k.releasedPair(t, spawned["spawn_id"].(string))
 }
+
+// A kept spawn takes no file-size limit of its own (protocol.KeptUnbounded):
+// its home grows past the 256 MiB ceiling, which a pooled spawn still has.
+// The file is made sparse, so neither spawn's memory bound is reached.
+func TestAKeptSpawnWritesPastTheFileSizeCeilingAndAPooledOneCannot(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-big")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	grow := `truncate -s 300M "$HOME/big" && echo grew || echo refused; sleep 60`
+
+	kept, rc := k.spawnKept(t, "big", grow, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "\n") })
+	if out := string(rc.got[frame.StreamStdout]); out != "grew\n" {
+		t.Fatalf("a kept spawn growing a file past 256 MiB printed %q", out)
+	}
+	k.release(t, kept)
+	k.releasedPair(t, kept)
+
+	pooled, _, rcP := k.spawn(t, "small", grow, map[string]string{}, false)
+	rcP.readUntil(t, func() bool { return strings.Contains(string(rcP.got[frame.StreamStdout]), "\n") })
+	if out := string(rcP.got[frame.StreamStdout]); out != "refused\n" {
+		t.Fatalf("a pooled spawn growing a file past 256 MiB printed %q", out)
+	}
+	k.release(t, pooled)
+	k.releasedPair(t, pooled)
+
+	if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r1", path, uid); retired["type"] != protocol.TypeHomeRetired {
+		t.Fatalf("home_retire: %v", retired)
+	}
+}

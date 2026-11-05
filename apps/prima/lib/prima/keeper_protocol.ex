@@ -331,6 +331,15 @@ defmodule Prima.KeeperProtocol do
   @spec rlimits() :: [{atom(), {non_neg_integer(), non_neg_integer()}}]
   def rlimits, do: @rlimits
 
+  @doc """
+  The limits a kept spawn takes no default for: its file size, since its
+  disk is held by its `home_max_bytes` and the kept homes' volume. Every
+  other spawn's default is the ceiling `rlimits/0` names, and a kept spawn
+  may still lower these within it.
+  """
+  @spec kept_unbounded_rlimits() :: [atom()]
+  def kept_unbounded_rlimits, do: [:fsize]
+
   @doc "The variable names no spawn's `env` may carry."
   @spec reserved_env_names() :: [String.t()]
   def reserved_env_names, do: @reserved_env

@@ -74,7 +74,9 @@ func (s Spec) Validate() error {
 	}
 	c := protocol.Ceilings
 	l := s.Limits
-	if l.Nofile == 0 || l.Nofile > c.Nofile || l.Nproc == 0 || l.Nproc > c.Nproc || l.Core > c.Core || l.Fsize == 0 || l.Fsize > c.Fsize {
+	// A kept spawn's file size may be unlimited (protocol.KeptUnbounded).
+	fsizeOK := l.Fsize != 0 && (l.Fsize <= c.Fsize || (s.Kept && l.Fsize == protocol.Unlimited))
+	if l.Nofile == 0 || l.Nofile > c.Nofile || l.Nproc == 0 || l.Nproc > c.Nproc || l.Core > c.Core || !fsizeOK {
 		return fmt.Errorf("limits %+v are outside the ceilings %+v", l, c)
 	}
 	// A pooled uid's group is named for its uid; a kept spawn's for the

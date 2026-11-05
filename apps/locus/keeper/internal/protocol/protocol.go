@@ -224,6 +224,15 @@ type Limits struct {
 // Ceilings are the default limits and the most a request may ask for.
 var Ceilings = Limits{Nofile: 1024, Nproc: 128, Core: 0, Fsize: 256 << 20}
 
+// Unlimited is RLIM_INFINITY: no limit at all.
+const Unlimited = ^uint64(0)
+
+// KeptUnbounded names the limits a kept spawn takes no default for: its
+// file size, since its disk is bounded by its home_max_bytes and the kept
+// homes' volume, and a program a person installs may write a file past
+// the ceiling. A request may still lower each to the ceilings' range.
+var KeptUnbounded = []string{"fsize"}
+
 // Floors are the least a request may lower each limit to.
 var Floors = Limits{Nofile: 16, Nproc: 1, Core: 0, Fsize: 1}
 
@@ -233,6 +242,16 @@ type Rlimits struct {
 	Nproc  *uint64 `json:"nproc,omitempty"`
 	Core   *uint64 `json:"core,omitempty"`
 	Fsize  *uint64 `json:"fsize,omitempty"`
+}
+
+// ResolveKept is Resolve for a kept spawn: a limit KeptUnbounded names
+// that r does not set is Unlimited.
+func (r *Rlimits) ResolveKept() Limits {
+	out := r.Resolve()
+	if r == nil || r.Fsize == nil {
+		out.Fsize = Unlimited
+	}
+	return out
 }
 
 // Resolve returns the ceilings lowered by whatever r sets. r may be nil.

@@ -30,7 +30,7 @@ defmodule Prima.KeeperProtocolTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies home_requests home_replies)
+  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies home_requests home_replies)
 
   @request_types %{
     "spawn" => :spawn,
@@ -181,6 +181,14 @@ defmodule Prima.KeeperProtocolTest do
                Map.new(KeeperProtocol.rlimits(), fn {k, {least, most}} ->
                  {to_string(k), %{"least" => least, "most" => most}}
                end)
+
+      assert @vectors["kept_unbounded_rlimits"] ==
+               Enum.map(KeeperProtocol.kept_unbounded_rlimits(), &to_string/1)
+
+      assert Enum.all?(
+               KeeperProtocol.kept_unbounded_rlimits(),
+               &Keyword.has_key?(KeeperProtocol.rlimits(), &1)
+             )
 
       # What the codec does with them, not only what it names.
       for name <- @vectors["reserved_env"] do

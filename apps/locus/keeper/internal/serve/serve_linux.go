@@ -844,7 +844,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		Kept:     sp.kept,
 		Argv:     req.Argv,
 		Env:      req.Env,
-		Limits:   req.Rlimits.Resolve(),
+		Limits:   limits(sp.kept, req.Rlimits),
 		Control:  req.Control,
 		Cgroup:   group.Path(),
 	})
@@ -1234,4 +1234,14 @@ func lookPathIn(file, path string) (string, error) {
 		}
 	}
 	return "", errors.New(file + ": not found in PATH")
+}
+
+// limits are a spawn's resource limits: the ceilings lowered by its
+// request, with no file-size limit of its own for a kept spawn, whose disk
+// its home's bound and the kept homes' volume hold.
+func limits(kept bool, r *protocol.Rlimits) protocol.Limits {
+	if kept {
+		return r.ResolveKept()
+	}
+	return r.Resolve()
 }
