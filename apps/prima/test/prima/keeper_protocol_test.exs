@@ -106,7 +106,11 @@ defmodule Prima.KeeperProtocolTest do
     "hosts that is not a list" => "hosts",
     "hosts that is null" => "hosts",
     "hosts on an isolated spawn" => "hosts",
-    "hosts on a request that is not a spawn" => "hosts"
+    "hosts on a request that is not a spawn" => "hosts",
+    "hosts naming an IPv4 address" => "hosts",
+    "hosts naming an IPv4 address beside a hostname" => "hosts",
+    "hosts naming an IPv6 address" => "hosts",
+    "hosts naming a bracketed IPv6 address" => "hosts"
   }
 
   # Every member name the vectors' requests carry, at every depth, as the

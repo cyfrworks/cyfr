@@ -93,7 +93,8 @@
 // A spawn's `hosts` names the only hosts its command may reach beyond
 // the resolver and the deployment's private hosts: 1..MaxHosts distinct
 // exact hostnames (ValidHost: lowercase, no wildcard, scheme, port or
-// trailing dot), never on an isolated spawn, which reaches nothing.
+// trailing dot, and no address literal), never on an isolated spawn, which
+// reaches nothing.
 // Absent keeps the island's public-hosts rule. A keeper given `--guard`
 // resolves the names at the spawn, and only then, and has the island's
 // egress guard admit those addresses for the spawn's uid and refuse it
@@ -254,9 +255,16 @@ var (
 // MaxHostBytes is the longest a host may be.
 const MaxHostBytes = 253
 
-// ValidHost reports whether host is an exact hostname a spawn may name.
+// ValidHost reports whether host is an exact hostname a spawn may name:
+// never an address literal, so a name whose last label is all digits
+// (1.1.1.1, 10.0.0.1) is refused, as the pattern refuses IPv6's colons and
+// brackets.
 func ValidHost(host string) bool {
-	return len(host) <= MaxHostBytes && hostPattern.MatchString(host)
+	if len(host) > MaxHostBytes || !hostPattern.MatchString(host) {
+		return false
+	}
+	last := host[strings.LastIndexByte(host, '.')+1:]
+	return strings.Trim(last, "0123456789") != ""
 }
 
 // Limits are the resource limits applied to a spawned process; each is set

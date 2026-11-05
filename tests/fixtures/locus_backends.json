@@ -1366,6 +1366,18 @@
       "error": "invalid_field",
       "name": "null_hosts",
       "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"hosts\":[\"1.1.1.1\"],\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "hosts_ipv4_literal",
+      "refusal": "bad_request"
+    },
+    {
+      "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"hosts\":[\"2606:4700::1111\"],\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
+      "error": "invalid_field",
+      "name": "hosts_ipv6_literal",
+      "refusal": "bad_request"
     }
   ],
   "key_hex": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",

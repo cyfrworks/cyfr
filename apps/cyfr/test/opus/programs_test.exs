@@ -1361,6 +1361,8 @@ defmodule Opus.ProgramsTest do
             ["https://api.anthropic.com"],
             ["api.anthropic.com:443"],
             ["API.anthropic.com"],
+            ["1.1.1.1"],
+            ["2606:4700::1111"],
             ["a.example", "a.example"],
             "api.anthropic.com"
           ] do
