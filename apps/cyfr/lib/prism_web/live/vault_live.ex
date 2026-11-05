@@ -811,6 +811,9 @@ defmodule PrismWeb.VaultLive do
 
   # Where an entry's material may go, in one line: scheme and hosts, the
   # port, and the methods and paths it is held to when it names them.
+  defp destination_line(%{"program" => program}) when is_binary(program),
+    do: "program #{program}"
+
   defp destination_line(%{} = destination) do
     hosts = Enum.join(Map.get(destination, "hosts", []), ", ")
 
@@ -1042,7 +1045,19 @@ defmodule PrismWeb.VaultLive do
             <div class="font-mono text-xs" data-test="entry-destination">
               {destination_line(entry.destination)}
             </div>
-            <div class="text-xs text-gray-500" data-test="entry-disclosure">
+            <div
+              :if={entry.kind == "login"}
+              class="text-xs text-gray-500"
+              data-test="entry-disclosure"
+            >
+              login: holds nothing secret; it mounts the program's kept home, where the
+              program keeps its own sign-in. Sign in and reset it on the Programs page.
+            </div>
+            <div
+              :if={entry.kind != "login"}
+              class="text-xs text-gray-500"
+              data-test="entry-disclosure"
+            >
               {if entry.attach_only == false,
                 do: "disclosed: components read it",
                 else:

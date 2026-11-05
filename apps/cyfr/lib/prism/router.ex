@@ -346,7 +346,7 @@ defmodule Prism.Router do
             live "/webhooks", WebhooksLive, :index, metadata: %{auth: :browser_authenticated}
             live "/schedules", SchedulesLive, :index, metadata: %{auth: :browser_authenticated}
             live "/settings", SettingsLive, :index, metadata: %{auth: :browser_authenticated}
-            live "/mcp-servers", McpServersLive, :index, metadata: %{auth: :browser_authenticated}
+            live "/programs", ProgramsLive, :index, metadata: %{auth: :browser_authenticated}
             # /canvas: the Canvas mode, the person's canvases and the apps over
             # them (PrismWeb.ShellLive); every other page is the Dashboard.
             live "/canvas", ShellLive, :index, metadata: %{auth: :browser_authenticated}

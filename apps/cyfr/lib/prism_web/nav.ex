@@ -7,7 +7,7 @@ defmodule PrismWeb.Nav do
   modes) and the command palette list, and in which mode.
 
   `lite` is the chat and a drawer off it — AQUA, files, the Vault,
-  schedules, webhooks, MCP servers, settings, legal. `dev` adds the
+  schedules, webhooks, programs, settings, legal. `dev` adds the
   ops surfaces, sectioned. Keys are the pages' `active_nav` values; the
   DOM id a surface renders is `<prefix>-<key>` with underscores as hyphens.
   These are the Dashboard's pages; the Canvas (`canvas_path/0`) is no page
@@ -131,9 +131,9 @@ defmodule PrismWeb.Nav do
       modes: @both
     },
     %{
-      key: "mcp_servers",
-      label: "MCP Servers",
-      path: "/mcp-servers",
+      key: "programs",
+      label: "Programs",
+      path: "/programs",
       icon: "globe",
       section: :configuration,
       modes: @both
@@ -164,7 +164,7 @@ defmodule PrismWeb.Nav do
     }
   ]
 
-  @lite_order ~w(chat aqua files vault schedules webhooks mcp_servers settings legal)
+  @lite_order ~w(chat aqua files vault schedules webhooks programs settings legal)
 
   @sections [
     {:top, nil},

@@ -24,7 +24,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     RootRedirectLive ChatRedirectLive ChatLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
     MyReportsLive BuildsLive VaultLive ApiKeysLive WebhooksLive
-    SchedulesLive SettingsLive McpServersLive ShellLive LegalLive CarryLive DeviceAddLive
+    SchedulesLive SettingsLive ProgramsLive ShellLive LegalLive CarryLive DeviceAddLive
     HomeConfirmLive
   )
 
@@ -43,7 +43,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # Each `handle_event` and `update` that acts on the context runs inside `guard/2`.
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
-    AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent
+    AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent SignInTerminalComponent
     CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive IdentityCard
   )
 

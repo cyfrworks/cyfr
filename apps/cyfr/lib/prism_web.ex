@@ -51,7 +51,7 @@ defmodule PrismWeb do
       Layouts,
       LegalLive,
       LoginLive,
-      McpServersLive,
+      ProgramsLive,
       MyReportsLive,
       PairLive,
       PasskeyController,
