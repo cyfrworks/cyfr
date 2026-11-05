@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -101,14 +102,23 @@ func listen(path string) (*net.UnixListener, error) {
 }
 
 // server applies requests one at a time: mu is held across each run of the
-// guard script, whichever connection asked.
+// guard script, whichever connection asked, and over setter.
 type server struct {
 	log    *logx.Logger
 	ranges []Range
 	netns  string
 	mu     sync.Mutex
+	// setter names, for each uid, the connection whose request last set its
+	// rules, admit or clear: an ended connection's cleanup refuses a uid
+	// only while it is still the setter, so it never touches what a newer
+	// connection set.
+	setter map[uint64]uint64
+	// conns numbers the connections as they are accepted.
+	conns atomic.Uint64
 	// apply runs the guard script with its arguments.
 	apply func(args ...string) error
+	// onEnd, when set, is called once a connection's cleanup is done.
+	onEnd func()
 }
 
 func runScript(args ...string) error {
@@ -134,6 +144,7 @@ func runScript(args ...string) error {
 // admitted and did not clear since every public address.
 func (s *server) serve(conn *net.UnixConn) {
 	defer conn.Close()
+	id := s.conns.Add(1)
 	admitted := map[uint64]bool{}
 	defer func() {
 		uids := make([]uint64, 0, len(admitted))
@@ -141,13 +152,21 @@ func (s *server) serve(conn *net.UnixConn) {
 			uids = append(uids, uid)
 		}
 		sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
+		var refused []uint64
 		for _, uid := range uids {
-			if err := s.do(Message{Type: TypeAdmit, UID: &uid}); err != nil {
+			done, err := s.doAs(id, Message{Type: TypeAdmit, UID: &uid}, true)
+			if err != nil {
 				s.log.Error("control: uid %d, admitted over a connection that ended, could not be refused: %v", uid, err)
 			}
+			if done {
+				refused = append(refused, uid)
+			}
 		}
-		if len(uids) > 0 {
-			s.log.Warn("control: a connection ended; uids %v are refused every public address until their next spawn", uids)
+		if len(refused) > 0 {
+			s.log.Warn("control: a connection ended; uids %v are refused every public address until their next spawn", refused)
+		}
+		if s.onEnd != nil {
+			s.onEnd()
 		}
 	}()
 	hello, err := Encode(Message{Type: TypeHello, Netns: s.netns})
@@ -166,7 +185,7 @@ func (s *server) serve(conn *net.UnixConn) {
 			}
 			return
 		}
-		reply := s.answer(line, admitted)
+		reply := s.answer(id, line, admitted)
 		out, err := Encode(reply)
 		if err == nil {
 			_, err = conn.Write(out)
@@ -180,7 +199,7 @@ func (s *server) serve(conn *net.UnixConn) {
 // answer applies one request and names the outcome. A request that names
 // a uid outside the guard's ranges, or that the guard script could not
 // apply, is refused.
-func (s *server) answer(line []byte, admitted map[uint64]bool) Message {
+func (s *server) answer(id uint64, line []byte, admitted map[uint64]bool) Message {
 	req, err := ParseRequest(line)
 	if err != nil {
 		s.log.Warn("control: refused a request: %v", err)
@@ -194,7 +213,7 @@ func (s *server) answer(line []byte, admitted map[uint64]bool) Message {
 	if req.Type == TypeAdmit {
 		admitted[uid] = true
 	}
-	if err := s.do(req); err != nil {
+	if _, err := s.doAs(id, req, false); err != nil {
 		s.log.Error("control: %s of uid %d: %v", req.Type, uid, err)
 		return Message{Type: TypeRefused, UID: &uid, Reason: "the guard could not install the uid's rules"}
 	}
@@ -205,14 +224,24 @@ func (s *server) answer(line []byte, admitted map[uint64]bool) Message {
 	return Message{Type: TypeAdmitted, UID: &uid}
 }
 
-// do runs the guard script for one request: `admit <uid> [address…]`,
-// where no address refuses the uid every public one, or `clear <uid>`.
-func (s *server) do(req Message) error {
-	args := []string{req.Type, strconv.FormatUint(*req.UID, 10)}
+// doAs runs the guard script for one request of connection id: `admit
+// <uid> [address…]`, where no address refuses the uid every public one, or
+// `clear <uid>`, and makes id the uid's setter. A cleanup (onlySetter) runs
+// it only while id is still the uid's setter, and answers whether it ran.
+func (s *server) doAs(id uint64, req Message, onlySetter bool) (bool, error) {
+	uid := *req.UID
+	args := []string{req.Type, strconv.FormatUint(uid, 10)}
 	if req.Type == TypeAdmit {
 		args = append(args, req.Addresses...)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.apply(args...)
+	if s.setter == nil {
+		s.setter = map[uint64]uint64{}
+	}
+	if onlySetter && s.setter[uid] != id {
+		return false, nil
+	}
+	s.setter[uid] = id
+	return true, s.apply(args...)
 }

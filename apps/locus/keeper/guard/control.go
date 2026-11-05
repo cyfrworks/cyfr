@@ -36,7 +36,8 @@
 // A connection that ends leaves every uid it admitted, and did not clear
 // since, refused every public address: the keeper that spoke over it is
 // gone, and with it every spawn it admitted, so nothing is opened by its
-// loss. The uid's next spawn sets its rules again.
+// loss. A uid whose rules a newer connection set since is left as that
+// connection set it. The uid's next spawn sets its rules again.
 package guard
 
 import (

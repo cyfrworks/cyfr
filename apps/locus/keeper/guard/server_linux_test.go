@@ -26,11 +26,13 @@ type fakeGuard struct {
 	mu   sync.Mutex
 	runs [][]string
 	fail bool
+	// ended receives once each connection's cleanup is done.
+	ended chan struct{}
 }
 
 func startFake(t *testing.T, netns string) *fakeGuard {
 	t.Helper()
-	f := &fakeGuard{path: filepath.Join(t.TempDir(), "guard.sock")}
+	f := &fakeGuard{path: filepath.Join(t.TempDir(), "guard.sock"), ended: make(chan struct{}, 16)}
 	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: f.path, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +47,8 @@ func startFake(t *testing.T, netns string) *fakeGuard {
 				return errors.New("forced failure")
 			}
 			return nil
-		}}
+		},
+		onEnd: func() { f.ended <- struct{}{} }}
 	go func() {
 		for {
 			conn, err := l.AcceptUnix()
@@ -149,5 +152,33 @@ func TestLostConnectionRefusesItsUIDs(t *testing.T) {
 	// The client dials again.
 	if err := c.Clear(40001); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A connection that ends refuses only the uids whose latest admission it
+// made: one a newer connection admitted since keeps that admission.
+func TestALostConnectionLeavesANewerConnectionsAdmissions(t *testing.T) {
+	f := startFake(t, "net:[1]")
+	old, newer := NewClient(f.path, "net:[1]"), NewClient(f.path, "net:[1]")
+	one := []netip.Addr{netip.MustParseAddr("1.2.3.4")}
+	for _, uid := range []int{40001, 40002} {
+		if err := old.Admit(uid, one); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := newer.Admit(40001, []netip.Addr{netip.MustParseAddr("5.6.7.8")}); err != nil {
+		t.Fatal(err)
+	}
+	old.mu.Lock()
+	old.drop()
+	old.mu.Unlock()
+	select {
+	case <-f.ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ended connection's cleanup did not finish")
+	}
+	got := f.taken()[3:]
+	if want := [][]string{{"admit", "40002"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the older connection ended the guard ran %v, want only uid 40002 refused", got)
 	}
 }
