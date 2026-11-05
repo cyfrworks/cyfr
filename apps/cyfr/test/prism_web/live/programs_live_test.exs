@@ -570,6 +570,100 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute has_element?(view, ~s([data-test="terminal-ended"]))
   end
 
+  # A program's terminal text may be a credential: the page shows it, and
+  # its state, printed by a crash report or LiveView's termination log,
+  # carries only how many lines there are.
+  test "the terminal's text is in no crash report of the page, only its count",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = pipe_row!(athanor)
+    entry = login!(user, athanor, "claude-login", "claude")
+    canary = "sk-canary-" <> Base.encode16(:crypto.strong_rand_bytes(8))
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    sign_in(view, "claude", entry)
+    assert_receive {:session, "open", %{"home_id" => ^entry}, _fields}, 2_000
+    Scripted.write(fake, row.id, canary)
+    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), canary) end)
+
+    # What LiveView's termination formatter hands a crash report: the
+    # page's whole state, components included, before a logger cuts it.
+    terminated =
+      Phoenix.LiveView.Channel.format_status(:terminate, [%{}, :sys.get_state(view.pid)])
+
+    state = inspect(terminated, limit: :infinity, printable_limit: :infinity)
+    refute state =~ canary
+    assert state =~ "#PrismWeb.SignInTerminalComponent.Lines<1 lines>"
+
+    # A call the page does not take (it defines no handle_call) crashes it;
+    # its termination report prints its state.
+    # The test's own process is linked to the page through its client.
+    Process.flag(:trap_exit, true)
+    ref = Process.monitor(view.pid)
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :error], fn ->
+        catch_exit(GenServer.call(view.pid, :crash_the_page, 5_000))
+        assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 5_000
+        Process.sleep(200)
+      end)
+
+    assert log =~ "terminating"
+    refute log =~ canary
+  end
+
+  # Two sign-ins chosen before the first one's start was heard: the first
+  # session, whose terminal is gone, is closed when its start arrives, and
+  # the second is the one Send reaches.
+  test "a sign-in started for a terminal no longer open is closed",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    pipe_row!(athanor)
+    pipe_row!(athanor, "codex")
+    a = login!(user, athanor, "claude-login", "claude")
+    b = login!(user, athanor, "codex-login", "codex")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+    # Both choices queue before the page handles either, as two quick clicks
+    # do: A's start, sent from its terminal's first update, lands after B's.
+    :sys.suspend(view.pid)
+
+    first =
+      Task.async(fn -> render_submit(view, "sign_in", %{"name" => "claude", "entry" => a}) end)
+
+    Process.sleep(100)
+
+    second =
+      Task.async(fn -> render_submit(view, "sign_in", %{"name" => "codex", "entry" => b}) end)
+
+    Process.sleep(100)
+    :sys.resume(view.pid)
+    Task.await(first)
+    Task.await(second)
+
+    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
+    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
+    assert_receive {:session, "recv", %{"session" => _}, _fields}, 2_000
+
+    session_a =
+      receive do
+        {:session, "close", %{"session" => session}, _fields} -> session
+      after
+        2_000 -> flunk("the first sign-in's session was never closed")
+      end
+
+    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
+    assert has_element?(view, ~s([data-test="sign-in-terminal"]), "codex")
+
+    view
+    |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-b"})
+    |> render_submit()
+
+    assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
+    assert session_b != session_a
+  end
+
   # Signs `name` in with `entry`, its row expanded first unless it is.
   defp sign_in(view, name, entry) do
     unless has_element?(view, ~s([data-test="home-actions"] input[name="name"][value="#{name}"])),
