@@ -42,7 +42,16 @@ defmodule Locus.Backends.OwnersTest do
     end
 
     def home_ensure(agent, id), do: Locus.DirectLauncher.home_ensure(root(agent), id)
-    def home_measure(agent, id), do: Locus.DirectLauncher.home_measure(root(agent), id)
+    # A measure the test makes fail stands for one the keeper could not
+    # take over the whole home.
+    def home_measure(agent, id) do
+      case Agent.get(agent, &Map.get(&1, :measure)) do
+        :fail -> {:error, {:refused, "internal"}}
+        _ -> Locus.DirectLauncher.home_measure(root(agent), id)
+      end
+    end
+
+    def home_list(agent), do: Locus.DirectLauncher.home_list(root(agent))
     def home_reset(agent, id), do: Locus.DirectLauncher.home_reset(root(agent), id)
     def home_retire(agent, id), do: Locus.DirectLauncher.home_retire(root(agent), id)
 
@@ -455,6 +464,24 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{programs: [%{status: :idle}]}} = sync(owners, "a", {1, 2}, crash)
     end
 
+    test "a key's crashes fail that key alone: another key of the program still opens", ctx do
+      owners = start_owners(ctx)
+      crash = [program("crash", "exit 1")]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, crash)
+
+      for _ <- 1..3 do
+        advance(ctx, 1_000)
+        assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "crash", key: "bad")
+        pid = session_pid(owners, "a", {1, 1}, id)
+        wait_until(fn -> Backend.recv(pid, 0, 0).running == false end, 10_000)
+      end
+
+      wait_until(fn -> hd(Map.values(held(owners))).programs["crash"].restarts == 3 end, 10_000)
+      assert {:error, :program_failed} = open(owners, "a", {1, 1}, "crash", key: "bad")
+      assert {:ok, %{resumed: false}} = open(owners, "a", {1, 1}, "crash", key: "good")
+      assert [%{status: :failed}] = status(owners, "a").programs
+    end
+
     test "an owner holds its bound of sessions: the oldest ended one forgotten, capacity with all running",
          ctx do
       owners = start_owners(ctx)
@@ -591,6 +618,42 @@ defmodule Locus.Backends.OwnersTest do
                open(owners, "a", {1, 1}, "kept", home_id: @home, key: "after")
     end
 
+    test "a measure that fails ends the home's sessions and refuses opens until a reset", ctx do
+      owners = start_owners(ctx, measure_interval_ms: 10_000)
+      kept = [program("kept", ~s(echo up; exec cat), home: :kept, home_max_bytes: 1_048_576)]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+      pid = session_pid(owners, "a", {1, 1}, id)
+      assert lines(pid, 1) == ["up"]
+
+      Agent.update(ctx.stub, &Map.put(&1, :measure, :fail))
+      :ok = LeaseSweeper.sweep(owners)
+      wait_until(fn -> Backend.recv(pid, 1, 0).running == false end, 10_000)
+      assert {:error, :home_over_cap} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+
+      Agent.update(ctx.stub, &Map.delete(&1, :measure))
+      reset = %{type: :home, op: :reset, athanor: @athanor, home_id: @home}
+      assert {:ok, %{state: :empty}} = control(owners, 1, reset)
+      assert {:ok, _} = open(owners, "a", {1, 1}, "kept", home_id: @home, key: "after")
+    end
+
+    test "a session whose home's folder vanished is ended, and homes lists what is kept", ctx do
+      owners = start_owners(ctx, measure_interval_ms: 10_000)
+      kept = [program("kept", ~s(echo up; exec cat), home: :kept)]
+      assert {:ok, _} = sync(owners, "a", {1, 1}, kept)
+      assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "kept", home_id: @home)
+      pid = session_pid(owners, "a", {1, 1}, id)
+      assert lines(pid, 1) == ["up"]
+
+      assert {:ok, %{homes: [@home]}} = control(owners, 1, %{type: :homes})
+
+      File.rm_rf!(Path.join(ctx.root, @home))
+      :ok = LeaseSweeper.sweep(owners)
+      wait_until(fn -> Backend.recv(pid, 1, 0).running == false end, 10_000)
+      assert {:ok, %{homes: []}} = control(owners, 1, %{type: :homes})
+    end
+
     test "a home already past its bound refuses the open before anything starts", ctx do
       owners = start_owners(ctx)
       home = Path.join(ctx.root, @home)
@@ -691,15 +754,19 @@ defmodule Locus.Backends.OwnersTest do
         program("cat", ~s(echo "noise secret-token-x" >&2; exec cat),
           env: %{"TOKEN" => "secret-token-x"}
         ),
-        program("kept", @idle, home: :kept)
+        program("kept", ~s(echo "a line of the home's" >&2; exec cat), home: :kept)
       ]
 
       assert {:ok, _} = sync(owners, "a", {1, 1}, programs, lease_ms: 10_000)
       assert {:ok, _} = open(owners, "a", {1, 1}, "cat")
+      assert {:ok, _} = open(owners, "a", {1, 1}, "kept", home_id: @home)
       advance(ctx, 2_500)
 
       wait_until(
-        fn -> hd(status(owners, "a").programs).stderr_tail =~ "noise" end,
+        fn ->
+          [cat, kept] = status(owners, "a").programs
+          cat.stderr_tail =~ "noise" and kept.stderr_bytes > 0
+        end,
         10_000
       )
 
@@ -723,8 +790,19 @@ defmodule Locus.Backends.OwnersTest do
                  sessions: 1,
                  stderr_tail: tail
                },
-               %{name: "kept", status: :idle, home: :kept, home_bytes: nil, sessions: 0}
+               %{
+                 name: "kept",
+                 status: :running,
+                 home: :kept,
+                 home_bytes: nil,
+                 sessions: 1,
+                 stderr_tail: nil,
+                 stderr_bytes: kept_bytes
+               }
              ] = owner.programs
+
+      # A kept program's stderr is its home's, the person's: its length alone.
+      assert kept_bytes == byte_size("a line of the home's\n")
 
       assert tail =~ "noise [REDACTED]"
       assert {:ok, _body} = LocusBackends.encode_answer(:status, %{owners: [owner]})

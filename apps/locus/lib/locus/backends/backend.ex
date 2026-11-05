@@ -89,8 +89,8 @@ defmodule Locus.Backends.Backend do
     * `:delay_ms`, the wait before the spawn (0);
     * `:stop_grace_ms` (2 s), `:flush_ms` (200 ms), `:release_timeout_ms`;
     * `:bounds`, overriding `Prima.LocusBackends.bounds/0` by name
-      (`:max_line_bytes`, `:max_buffer_bytes`, `:stderr_tail_bytes`,
-      `:max_session_bytes`);
+      (`:max_line_bytes`, `:max_buffer_bytes`, `:max_buffer_lines`,
+      `:line_charge_bytes`, `:stderr_tail_bytes`, `:max_session_bytes`);
     * `:clock`, the milliseconds idleness is read on (monotonic).
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -118,8 +118,16 @@ defmodule Locus.Backends.Backend do
   @spec retire_if_idle(GenServer.server(), non_neg_integer()) :: :ok
   def retire_if_idle(server, idle_ms), do: GenServer.cast(server, {:retire_if_idle, idle_ms})
 
-  @doc "Whether the session runs, and its stderr tail, masked."
-  @spec status(GenServer.server(), timeout()) :: %{running: boolean(), stderr_tail: String.t()}
+  @doc """
+  Whether the session runs, and its stderr: the masked tail of a scratch
+  session's, and only the length of a kept session's, whose stderr may
+  carry its home's contents, which are the person's.
+  """
+  @spec status(GenServer.server(), timeout()) :: %{
+          running: boolean(),
+          stderr_tail: String.t() | nil,
+          stderr_bytes: non_neg_integer()
+        }
   def status(server, timeout), do: GenServer.call(server, :status, timeout)
 
   @doc "End the session and answer once nothing of its process is left, or its bound passes."
@@ -153,7 +161,15 @@ defmodule Locus.Backends.Backend do
         clock: clock,
         last_used: clock.(),
         relay:
-          Relay.new(Map.take(bounds, [:max_line_bytes, :max_buffer_bytes, :stderr_tail_bytes])),
+          Relay.new(
+            Map.take(bounds, [
+              :max_line_bytes,
+              :max_buffer_bytes,
+              :max_buffer_lines,
+              :line_charge_bytes,
+              :stderr_tail_bytes
+            ])
+          ),
         status: :starting,
         handle: nil,
         released: false,
@@ -208,7 +224,12 @@ defmodule Locus.Backends.Backend do
     {:reply,
      %{
        running: state.status != :ended,
-       stderr_tail: Relay.stderr_tail(state.relay, state.secrets)
+       stderr_tail:
+         if(Map.has_key?(state.spec, :home),
+           do: nil,
+           else: Relay.stderr_tail(state.relay, state.secrets)
+         ),
+       stderr_bytes: Relay.stderr_bytes(state.relay)
      }, state}
   end
 

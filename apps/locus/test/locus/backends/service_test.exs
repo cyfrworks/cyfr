@@ -75,6 +75,13 @@ defmodule Locus.Backends.ServiceTest do
     def home_measure(_agent, _id), do: {:ok, 0}
     def home_reset(_agent, _id), do: :ok
     def home_retire(_agent, _id), do: :ok
+
+    # The homes the vectors' `homes` answer names, in another order: the
+    # service answers them sorted.
+    def home_list(_agent),
+      do:
+        {:ok,
+         ["vlt_01a09fee-3d4e-7f50-9b6c-7d8e9f0a1b2c", "vlt_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b"]}
   end
 
   setup context do
@@ -370,7 +377,7 @@ defmodule Locus.Backends.ServiceTest do
 
       assert seeded.status == 200
 
-      for type <- ~w(hello reconcile sync renew release status home) do
+      for type <- ~w(hello reconcile sync renew release status home homes) do
         v = @vectors[type]
         at(ctx, v["ts"])
         answer = post(ctx.port, route("control"), v["body"], [{"x-cyfr-auth", v["header"]}])
@@ -380,7 +387,7 @@ defmodule Locus.Backends.ServiceTest do
 
         case type do
           # What a live service answers of these is the vectors' own bytes.
-          t when t in ~w(hello reconcile sync release home) ->
+          t when t in ~w(hello reconcile sync release home homes) ->
             assert answer.body == v["answer"], type
 
           "renew" ->
