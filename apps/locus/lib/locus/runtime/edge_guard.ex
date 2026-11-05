@@ -191,6 +191,58 @@ defmodule Locus.Runtime.EdgeGuard do
     end
   end
 
+  @doc """
+  Check the lines a guest sends down its program pipe before they cross:
+  each a line of text (no newline and no NUL, which the backends wire
+  refuses) of at most `Prima.LocusBackends.max_line_bytes/0` bytes, as
+  `invalid_request`, and the encoded lines within the node's
+  `max_request_size`, as `too_large`. Returns `:ok` or
+  `{:error, code, message}`.
+  """
+  @spec check_pipe_lines(Limits.t(), [String.t()]) ::
+          :ok | {:error, String.t(), String.t()}
+  def check_pipe_lines(%Limits{} = limits, lines) when is_list(lines) do
+    max_line = Prima.LocusBackends.max_line_bytes()
+
+    cond do
+      not Enum.all?(lines, &pipe_text?/1) ->
+        {:error, "invalid_request", "A pipe line holds no newline and no NUL."}
+
+      Enum.any?(lines, &(byte_size(&1) > max_line)) ->
+        {:error, "invalid_request", "A pipe line is at most #{max_line} bytes."}
+
+      byte_size(Jason.encode!(lines)) > limits.max_request_size ->
+        {:error, "too_large",
+         "The lines exceed the consented max_request_size (#{limits.max_request_size} bytes)."}
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc """
+  Check the arguments a guest opens a program pipe with: at most
+  `Prima.LocusBackends.max_argv/0` of them, none holding a NUL. Returns
+  `:ok` or `{:error, "invalid_request", message}`.
+  """
+  @spec check_pipe_argv([String.t()]) :: :ok | {:error, String.t(), String.t()}
+  def check_pipe_argv(argv) when is_list(argv) do
+    max_argv = Prima.LocusBackends.max_argv()
+
+    cond do
+      length(argv) > max_argv ->
+        {:error, "invalid_request", "A pipe opens with at most #{max_argv} arguments."}
+
+      Enum.any?(argv, &String.contains?(&1, <<0>>)) ->
+        {:error, "invalid_request", "A pipe argument holds no NUL."}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp pipe_text?(line), do: not String.contains?(line, ["\n", <<0>>])
+
   defp refuse_over(%Limits{} = limits, size, what) do
     if size > limits.max_request_size do
       {:error, :request_too_large,
