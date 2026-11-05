@@ -49,19 +49,12 @@ defmodule Locus.Runtime.PipeTest do
     run_dir = Path.join(System.tmp_dir!(), "pipe_e2e_#{System.unique_integer([:positive])}")
     kept = Path.join(run_dir, "kept")
     File.mkdir_p!(kept)
-    previous = Application.fetch_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, Path.join(run_dir, "arca"))
+    Prima.Test.Env.put_app_env(:arca, :base_path, Path.join(run_dir, "arca"))
 
     {ctx, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
 
     on_exit(fn ->
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
-
-      case previous do
-        {:ok, value} -> Application.put_env(:arca, :base_path, value)
-        :error -> Application.delete_env(:arca, :base_path)
-      end
-
       File.rm_rf!(run_dir)
     end)
 
