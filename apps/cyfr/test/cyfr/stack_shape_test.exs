@@ -134,14 +134,21 @@ defmodule Cyfr.StackShapeTest do
     Enum.sort(
       for role <- LocusRoles.roles(),
           merged = Map.get(services, role.service, %{}),
-          violation <- service_violations(merged, service_hardening(release, role)),
+          violation <- service_violations(merged, service_hardening(release, role), role),
           do: {role.service, violation}
     )
   end
 
-  defp service_violations(merged, expected) do
+  defp service_violations(merged, expected, role) do
     wrong = for {key, value} <- expected, Map.get(merged, key) != value, do: key
-    forbidden = for key <- @forbidden_keys, Map.has_key?(merged, key), do: key
+
+    # The one volume a Locus service holds: the backends role's kept
+    # folders, at their root and nowhere else.
+    forbidden =
+      for key <- @forbidden_keys,
+          Map.has_key?(merged, key),
+          not (key == "volumes" and Map.get(merged, key) == kept_volumes(role)),
+          do: key
 
     unbounded =
       case merged do
@@ -155,6 +162,9 @@ defmodule Cyfr.StackShapeTest do
 
     wrong ++ forbidden ++ unbounded
   end
+
+  defp kept_volumes(%{kept_root: nil}), do: nil
+  defp kept_volumes(%{kept_root: root, kept_volume: volume}), do: ["#{volume}:#{root}"]
 
   # An island's egress guard as compose runs it, whole: the Locus image
   # running cyfr-guard, NET_ADMIN alone, the ready file's tmpfs its only
@@ -290,8 +300,15 @@ defmodule Cyfr.StackShapeTest do
   # starting the release as its user.
   defp keeper_argv(release, role) do
     ["cyfr-locus", "serve", "--pool", pool_spec(role), "--home-root", release.home_root] ++
-      ["--client-user", release.user, "--", release.bin, "start"]
+      kept_argv(role) ++ ["--client-user", release.user, "--", release.bin, "start"]
   end
+
+  # A role whose programs keep their folders names their root and uid range
+  # to the keeper, which takes its uid bounds from no client.
+  defp kept_argv(%{kept_root: nil}), do: []
+
+  defp kept_argv(%{kept_root: root, kept_uids: uids}),
+    do: ["--kept-homes", "#{root}:#{uids.first}-#{uids.last}"]
 
   # The one entrypoint line of a service's block, decoded.
   defp entrypoint(block) do
@@ -393,7 +410,10 @@ defmodule Cyfr.StackShapeTest do
         ) == [[uid, user, user]] and
         Regex.scan(~r/\binstall -d -m (\d+) -o (\S+) -g (\S+) (\S+)/, dockerfile,
           capture: :all_but_first
-        ) == [["1733", "root", "root", home_root], ["0700", user, user, run_dir]] and
+        ) ==
+          [["1733", "root", "root", home_root]] ++
+            for(%{kept_root: root} <- roles, root != nil, do: ["1773", "root", user, root]) ++
+            [["0700", user, user, run_dir]] and
         Regex.scan(~r/\bRELEASE_TMP=(\S+)/, dockerfile, capture: :all_but_first) == [[run_dir]]
 
     if release_spelled?, do: pools, else: [{@dockerfile, :users, :release} | pools]
@@ -706,7 +726,14 @@ defmodule Cyfr.StackShapeTest do
     spec =
       Enum.join([role.pool, "${#{variable}:?set #{variable}}" | List.wrap(role.isolation)], ":")
 
-    List.replace_at(keeper_argv(release, role), 3, spec)
+    argv = List.replace_at(keeper_argv(release, role), 3, spec)
+
+    # An overlay chooses the kept folders' root and range as it chooses the
+    # pool's (the image suites run several stacks side by side).
+    case Enum.find_index(argv, &(&1 == "--kept-homes")) do
+      nil -> argv
+      at -> List.replace_at(argv, at + 1, "${KEPT_HOMES:?set KEPT_HOMES}")
+    end
   end
 
   # Where an overlay differs from the one expected: `:port` for any of its

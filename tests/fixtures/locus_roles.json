@@ -1,5 +1,5 @@
 {
-  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, the network, subnet, dynamic range and fixed address cyfr's endpoint binds its loopback listener to under compose, and the edge network's name, subnet and dynamic range with the fixed addresses of cyfr's proxy listener, Caddy and Tailscale on it. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none).",
+  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, the network, subnet, dynamic range and fixed address cyfr's endpoint binds its loopback listener to under compose, and the edge network's name, subnet and dynamic range with the fixed addresses of cyfr's proxy listener, Caddy and Tailscale on it. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none). A role whose programs keep their folders names their root, the compose volume mounted there and the uid range the keeper's --kept-homes flag draws from (kept_root, kept_volume, kept_first_uid, kept_last_uid); every other role names none (null).",
   "release": {
     "user": "locus",
     "uid": 10001,
@@ -33,7 +33,11 @@
       "container": "cyfr-locus-runtime",
       "network": "locus-runtime",
       "profile": null,
-      "guard": null
+      "guard": null,
+      "kept_root": null,
+      "kept_volume": null,
+      "kept_first_uid": null,
+      "kept_last_uid": null
     },
     {
       "name": "builds",
@@ -48,7 +52,11 @@
       "container": "cyfr-locus-builds",
       "network": "locus-builds",
       "profile": "locus-builds",
-      "guard": "locus-builds-guard"
+      "guard": "locus-builds-guard",
+      "kept_root": null,
+      "kept_volume": null,
+      "kept_first_uid": null,
+      "kept_last_uid": null
     },
     {
       "name": "backends",
@@ -63,7 +71,11 @@
       "container": "cyfr-locus-backends",
       "network": "locus-backends",
       "profile": null,
-      "guard": "locus-backends-guard"
+      "guard": "locus-backends-guard",
+      "kept_root": "/var/lib/locus/kept",
+      "kept_volume": "homes",
+      "kept_first_uid": 40001,
+      "kept_last_uid": 49999
     }
   ]
 }
