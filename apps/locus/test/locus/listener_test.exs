@@ -7,7 +7,7 @@ defmodule Locus.ListenerTest do
   request runs, as one table: the runtime's worker listener
   (`Locus.Runtime.WorkerListener`, cases R), the builds service
   (`Locus.BuilderService`, cases B and BH) and the backends service's
-  control and MCP routes (`Locus.Backends.Service`, cases C, M and MH).
+  control and session routes (`Locus.Backends.Service`, cases C, S and SH).
   Each case is driven against the real plug on a loopback port and asserts
   the answer's status, its exact body and its connection handling: "close"
   is a `connection: close` header and a socket the listener closed, "open"
@@ -33,7 +33,6 @@ defmodule Locus.ListenerTest do
   alias Locus.Test.Wire
   alias Prima.{BuilderProtocol, HostAPI, WorkerAuth, WorkerWire}
   alias Prima.LocusBackends, as: LB
-  alias Prima.MCP.Protocol, as: MCPProtocol
 
   @vectors Path.expand("../../../../tests/fixtures/locus_backends.json", __DIR__)
            |> File.read!()
@@ -920,13 +919,10 @@ defmodule Locus.ListenerTest do
   end
 
   defp control_route, do: LB.route(:control)
-  defp mcp_route, do: LB.route(:mcp)
+  defp session_route, do: LB.route(:session)
   defp backends_health_route, do: LB.route(:health)
 
-  defp lb(code), do: ~s({"error":"#{code}","version":1})
-
-  defp rpc(code, message),
-    do: ~s({"error":{"code":#{code},"message":"#{message}"},"id":null,"jsonrpc":"2.0"})
+  defp lb(code), do: ~s({"error":"#{code}","version":2})
 
   defp seq, do: System.unique_integer([:positive, :monotonic]) + 1_000
 
@@ -965,7 +961,17 @@ defmodule Locus.ListenerTest do
       e: @e,
       lease_ms: @lease_ms,
       idle_ms: 600_000,
-      backends: [%{name: "fetch", command: "exec cat", env_names: []}],
+      programs: [
+        %{
+          name: "fetch",
+          command: "exec cat",
+          login_command: nil,
+          env_names: [],
+          home: :scratch,
+          memory_bytes: nil,
+          home_max_bytes: nil
+        }
+      ],
       sealed: sealed
     }
 
@@ -981,24 +987,22 @@ defmodule Locus.ListenerTest do
     :ok
   end
 
-  defp tools_list, do: mcp_message("tools/list")
+  # An open of the synced program, under a key of its own.
+  defp open_body do
+    {:ok, body} =
+      LB.encode_session(%{
+        type: :open,
+        owner: %{athanor: @athanor, server: @server},
+        e: @e,
+        program: "fetch",
+        home_id: nil,
+        key: "k#{System.unique_integer([:positive])}",
+        mode: :run,
+        argv: []
+      })
 
-  defp mcp_message(method) do
-    meta = %{
-      MCPProtocol.meta_protocol_version_key() => MCPProtocol.version(),
-      MCPProtocol.meta_client_capabilities_key() => %{}
-    }
-
-    Jason.encode!(%{
-      "jsonrpc" => "2.0",
-      "id" => 1,
-      "method" => method,
-      "params" => %{"_meta" => meta}
-    })
+    body
   end
-
-  defp mcp_headers(method),
-    do: [{"mcp-protocol-version", MCPProtocol.version()}, {"mcp-method", method}]
 
   defp invoke_header(ctx, body, opts \\ []) do
     owner = %{
@@ -1022,7 +1026,7 @@ defmodule Locus.ListenerTest do
   end
 
   defp assert_backends_health_answered(client) do
-    client = send_request(client, "POST", backends_health_route(), [], ~s({"version":1}))
+    client = send_request(client, "POST", backends_health_route(), [], LB.health_body())
     {answer, client} = answer(client)
     assert answer.status == 200
     assert answer.headers["x-cyfr-boot"] == @boot
@@ -1156,7 +1160,7 @@ defmodule Locus.ListenerTest do
     end
 
     test "C9: a body at another version is version", ctx do
-      body = ~s({"owners":[],"type":"status","version":2})
+      body = ~s({"owners":[],"type":"status","version":1})
 
       client =
         ctx.port
@@ -1213,38 +1217,31 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 401, lb(:unauthorized), :close, @unread_ms)
     end
 
-    test "M2: an MCP request is -33001 before its header is read", ctx do
-      body = tools_list()
-      headers = [{"x-cyfr-auth", invoke_header(ctx, body)} | mcp_headers("tools/list")]
+    test "S2: a session message is unauthorized before its header is read", ctx do
+      body = open_body()
+      headers = [{"x-cyfr-auth", invoke_header(ctx, body)}]
 
-      client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body, :none)
-      assert_refused(client, 401, rpc(-33_001, "unauthorized"), :close, @unread_ms)
+      client =
+        ctx.port |> connect() |> send_request("POST", session_route(), headers, body, :none)
+
+      assert_refused(client, 401, lb(:unauthorized), :close, @unread_ms)
     end
   end
 
-  describe "the backends service's MCP route" do
+  describe "the backends service's session route" do
     setup context do
       ctx = backends(context)
       :ok = sync!(ctx)
       {:ok, ctx}
     end
 
-    test "M1: a method other than POST is 405, allowing POST", ctx do
-      client = ctx.port |> connect() |> send_request("GET", mcp_route(), [], "")
-
-      {answer, _client} =
-        assert_refused(
-          client,
-          405,
-          rpc(-32_600, "GET is not supported on the MCP endpoint."),
-          :close
-        )
-
-      assert answer.headers["allow"] == "POST"
+    test "S1: a method other than POST is bad_request", ctx do
+      client = ctx.port |> connect() |> send_request("GET", session_route(), [], "")
+      assert_refused(client, 400, lb(:bad_request), :close)
     end
 
-    test "M3: a header that does not verify is -33001, answered before the body", ctx do
-      body = tools_list()
+    test "S3: a header that does not verify is unauthorized, answered before the body", ctx do
+      body = open_body()
       header = invoke_header(ctx, body)
       "v1 " <> rest = header
 
@@ -1256,25 +1253,26 @@ defmodule Locus.ListenerTest do
             [{"x-cyfr-auth", invoke_header(ctx, body, ts: @instant - LB.window_ms() - 1)}]
           ] do
         client =
-          ctx.port
-          |> connect()
-          |> send_request("POST", mcp_route(), auth ++ mcp_headers("tools/list"), body, :none)
+          ctx.port |> connect() |> send_request("POST", session_route(), auth, body, :none)
 
-        assert_refused(client, 401, rpc(-33_001, "unauthorized"), :close, @unread_ms)
+        assert_refused(client, 401, lb(:unauthorized), :close, @unread_ms)
       end
     end
 
-    test "M4: an invoke naming another lifetime is stale_boot", ctx do
-      body = tools_list()
+    test "S4: a session message naming another lifetime is stale_boot", ctx do
+      body = open_body()
       header = invoke_header(ctx, body, boot: "bb_" <> String.duplicate("0", 32))
-      headers = [{"x-cyfr-auth", header} | mcp_headers("tools/list")]
 
-      client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body, :none)
+      client =
+        ctx.port
+        |> connect()
+        |> send_request("POST", session_route(), [{"x-cyfr-auth", header}], body, :none)
+
       assert_refused(client, 409, lb(:stale_boot), :close, @unread_ms)
     end
 
-    test "M5: an owner the invoke does not reach is refused with its code", ctx do
-      body = tools_list()
+    test "S5: an owner the message does not reach is refused with its code", ctx do
+      body = open_body()
       other = "mcp_01a09fee-1b2c-7d3e-8f40-5a6b7c8d9e0f"
 
       for {opts, code} <- [
@@ -1282,28 +1280,35 @@ defmodule Locus.ListenerTest do
             {[epoch: @e - 1], :stale_epoch},
             {[epoch: @e + 1], :epoch_ahead}
           ] do
-        headers = [{"x-cyfr-auth", invoke_header(ctx, body, opts)} | mcp_headers("tools/list")]
-        client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body, :none)
+        headers = [{"x-cyfr-auth", invoke_header(ctx, body, opts)}]
+
+        client =
+          ctx.port |> connect() |> send_request("POST", session_route(), headers, body, :none)
+
         assert_refused(client, 409, lb(code), :close, @unread_ms)
       end
 
       Agent.update(ctx.clock, &(&1 + @lease_ms))
-      headers = [{"x-cyfr-auth", invoke_header(ctx, body)} | mcp_headers("tools/list")]
-      client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body, :none)
+      headers = [{"x-cyfr-auth", invoke_header(ctx, body)}]
+
+      client =
+        ctx.port |> connect() |> send_request("POST", session_route(), headers, body, :none)
+
       assert_refused(client, 409, lb(:lapsed), :close, @unread_ms)
     end
 
-    test "M6: a recorded nonce is replay, and an owner at its nonce cap nonce_cache_full", ctx do
-      body = tools_list()
-      header = invoke_header(ctx, body)
-      headers = [{"x-cyfr-auth", header} | mcp_headers("tools/list")]
+    test "S6: a recorded nonce is replay, and an owner at its nonce cap nonce_cache_full", ctx do
+      body = open_body()
+      headers = [{"x-cyfr-auth", invoke_header(ctx, body)}]
 
       {answer, _client} =
-        ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body) |> answer()
+        ctx.port |> connect() |> send_request("POST", session_route(), headers, body) |> answer()
 
-      assert answer.status == 200
+      assert answer.status == 200, answer.body
 
-      client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body, :none)
+      client =
+        ctx.port |> connect() |> send_request("POST", session_route(), headers, body, :none)
+
       assert_refused(client, 409, lb(:replay), :close, @unread_ms)
 
       live = System.system_time(:millisecond) * 2
@@ -1313,71 +1318,67 @@ defmodule Locus.ListenerTest do
 
       true = :ets.insert(Service.Nonces, rows)
 
-      headers = [{"x-cyfr-auth", invoke_header(ctx, body)} | mcp_headers("tools/list")]
-      client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body, :none)
+      headers = [{"x-cyfr-auth", invoke_header(ctx, body)}]
+
+      client =
+        ctx.port |> connect() |> send_request("POST", session_route(), headers, body, :none)
+
       assert_refused(client, 503, lb(:nonce_cache_full), :close, @unread_ms)
     end
 
-    test "M7: a body past its bound, declared or chunked, is -32600 at 413", ctx do
-      max = LB.max_mcp_bytes()
-      body = tools_list()
+    test "S7: a body past its bound, declared or chunked, is too_large", ctx do
+      max = LB.max_session_bytes()
+      body = open_body()
 
-      headers =
-        [{"content-length", "#{max + 1}"}, {"x-cyfr-auth", invoke_header(ctx, body)}] ++
-          mcp_headers("tools/list")
-
-      client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, "", :none)
-      assert_refused(client, 413, rpc(-32_600, "Request body too large"), :close, @unread_ms)
+      headers = [{"content-length", "#{max + 1}"}, {"x-cyfr-auth", invoke_header(ctx, body)}]
+      client = ctx.port |> connect() |> send_request("POST", session_route(), headers, "", :none)
+      assert_refused(client, 413, lb(:too_large), :close, @unread_ms)
 
       over = String.duplicate(" ", max + 1)
-
-      headers =
-        [{"transfer-encoding", "chunked"}, {"x-cyfr-auth", invoke_header(ctx, over)}] ++
-          mcp_headers("tools/list")
+      headers = [{"transfer-encoding", "chunked"}, {"x-cyfr-auth", invoke_header(ctx, over)}]
 
       client =
         ctx.port
         |> connect()
-        |> send_request("POST", mcp_route(), headers, "", :none)
+        |> send_request("POST", session_route(), headers, "", :none)
         |> send_bytes([Integer.to_string(max + 1, 16), "\r\n", over, "\r\n0\r\n\r\n"])
 
-      assert_refused(client, 413, rpc(-32_600, "Request body too large"), :close)
+      assert_refused(client, 413, lb(:too_large), :close)
     end
 
-    test "M8: a body that cannot be read is -32600", ctx do
-      body = tools_list()
-      headers = [{"x-cyfr-auth", invoke_header(ctx, body)} | mcp_headers("tools/list")]
-      answer = unread(Service, ctx.opts, mcp_route(), headers)
-      assert_answer(answer, 400, rpc(-32_600, "The request body could not be read"), :close)
+    test "S8: a body that cannot be read is bad_request", ctx do
+      body = open_body()
+      headers = [{"x-cyfr-auth", invoke_header(ctx, body)}]
+      answer = unread(Service, ctx.opts, session_route(), headers)
+      assert_answer(answer, 400, lb(:bad_request), :close)
     end
 
-    test "M9: a nonce is recorded only once its body was the one signed", ctx do
-      body = tools_list()
-      headers = [{"x-cyfr-auth", invoke_header(ctx, body)} | mcp_headers("tools/list")]
+    test "S9: a nonce is recorded only once its body was the one signed", ctx do
+      body = open_body()
+      headers = [{"x-cyfr-auth", invoke_header(ctx, body)}]
 
-      client = ctx.port |> connect() |> send_request("POST", mcp_route(), headers, body <> " ")
-      {_answer, client} = assert_refused(client, 401, rpc(-33_001, "unauthorized"), :open)
+      client =
+        ctx.port |> connect() |> send_request("POST", session_route(), headers, body <> " ")
 
-      client = send_request(client, "POST", mcp_route(), headers, body)
+      {_answer, client} = assert_refused(client, 401, lb(:unauthorized), :open)
+
+      client = send_request(client, "POST", session_route(), headers, body)
       {answer, client} = answer(client)
       assert answer.status == 200
       assert answer.headers["connection"] == nil
 
-      client = send_request(client, "POST", mcp_route(), headers, body)
+      client = send_request(client, "POST", session_route(), headers, body)
       assert_refused(client, 409, lb(:replay), :close)
     end
 
-    test "M10: an owner whose lease passes while its body arrives is lapsed", ctx do
-      body = tools_list()
-
-      headers =
-        [{"expect", "100-continue"}, {"x-cyfr-auth", invoke_header(ctx, body)}] ++
-          mcp_headers("tools/list")
+    test "S10: an owner whose lease passes while its body arrives is lapsed", ctx do
+      body = open_body()
+      headers = [{"expect", "100-continue"}, {"x-cyfr-auth", invoke_header(ctx, body)}]
 
       client =
         ctx.port
         |> connect()
-        |> send_request("POST", mcp_route(), headers, body, :none)
+        |> send_request("POST", session_route(), headers, body, :none)
         |> continued()
 
       Agent.update(ctx.clock, &(&1 + @lease_ms))
@@ -1386,28 +1387,19 @@ defmodule Locus.ListenerTest do
       assert_backends_health_answered(client)
     end
 
-    test "M11: a body that is not JSON, or a batch, is a JSON-RPC error at 400", ctx do
-      batch = "[" <> tools_list() <> "]"
-
+    test "S11: a body that is no session message is bad_request", ctx do
       client =
-        Enum.reduce(
-          [
-            {"{nope", rpc(-32_700, "Parse error: body is not valid JSON")},
-            {batch, rpc(-32_600, "Expected a single JSON-RPC message")}
-          ],
-          connect(ctx.port),
-          fn {body, expected}, client ->
-            headers = [{"x-cyfr-auth", invoke_header(ctx, body)} | mcp_headers("tools/list")]
-            client = send_request(client, "POST", mcp_route(), headers, body)
-            {_answer, client} = assert_refused(client, 400, expected, :open)
-            client
-          end
-        )
+        Enum.reduce(["{nope", "[]", status_message()], connect(ctx.port), fn body, client ->
+          headers = [{"x-cyfr-auth", invoke_header(ctx, body)}]
+          client = send_request(client, "POST", session_route(), headers, body)
+          {_answer, client} = assert_refused(client, 400, lb(:bad_request), :open)
+          client
+        end)
 
       assert_backends_health_answered(client)
     end
 
-    test "MH: health past its bound, at another version or none, or with a field it lacks",
+    test "SH: health past its bound, at another version or none, or with a field it lacks",
          ctx do
       over = String.duplicate(" ", 4_097)
 
@@ -1417,9 +1409,9 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 413, lb(:too_large), :close, @unread_ms)
 
       for {body, status, code} <- [
-            {~s({"version":2}), 409, :version},
+            {~s({"version":1}), 409, :version},
             {~s({}), 409, :version},
-            {~s({"version":1,"x":1}), 400, :bad_request}
+            {~s({"version":2,"x":1}), 400, :bad_request}
           ] do
         client = ctx.port |> connect() |> send_request("POST", backends_health_route(), [], body)
         {_answer, client} = assert_refused(client, status, lb(code), :open)

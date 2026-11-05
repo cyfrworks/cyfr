@@ -5,9 +5,9 @@ defmodule Locus.Backends.LeaseSweeper do
   @moduledoc """
   The backends service's tick, once a second: it asks the owners
   (`Locus.Backends.Owners.sweep/1`) to retire every owner whose lease has
-  passed and every ready backend no call has used within its owner's idle
-  period (a backend with a call awaiting it, or waking, is not idle), and
-  forgets the nonces whose window has passed
+  passed, to end every running session no send and no recv has used
+  within its owner's idle period, and to measure the capped kept homes a
+  session runs in, and forgets the nonces whose window has passed
   (`Locus.Backends.Service.forget_expired_nonces/1`). It is a process of
   its own so the owners' process never waits on a timer, and it holds no
   state but its timer.

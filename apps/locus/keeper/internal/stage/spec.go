@@ -30,14 +30,18 @@ const Path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 // Spec is what the keeper hands a stage process over its spec pipe.
 type Spec struct {
-	UID      int               `json:"uid"`
-	GID      int               `json:"gid"`
-	User     string            `json:"user"`
-	HomeRoot string            `json:"home_root"`
-	Home     string            `json:"home"`
-	Argv     []string          `json:"argv"`
-	Env      map[string]string `json:"env"`
-	Limits   protocol.Limits   `json:"limits"`
+	UID      int    `json:"uid"`
+	GID      int    `json:"gid"`
+	User     string `json:"user"`
+	HomeRoot string `json:"home_root"`
+	Home     string `json:"home"`
+	// Kept says Home is a kept home, made by its uid before the spawn and
+	// kept after it: the stage uses it as it is, under HomeRoot, the
+	// kept-homes root, and makes only its tmp directory when it is gone.
+	Kept   bool              `json:"kept"`
+	Argv   []string          `json:"argv"`
+	Env    map[string]string `json:"env"`
+	Limits protocol.Limits   `json:"limits"`
 	// Control says the keeper handed the control channel's socket on
 	// ControlFD, to become the command's fd 3.
 	Control bool `json:"control"`
@@ -58,7 +62,11 @@ func (s Spec) Validate() error {
 	if s.User == "" || strings.ContainsAny(s.User, "\x00\n=") {
 		return errors.New("user must be a plain name")
 	}
-	if err := home.Validate(s.HomeRoot, s.Home, s.UID); err != nil {
+	if s.Kept {
+		if err := (home.Kept{Root: s.HomeRoot, First: s.UID, Last: s.UID}).Validate(s.Home, s.UID); err != nil {
+			return err
+		}
+	} else if err := home.Validate(s.HomeRoot, s.Home, s.UID); err != nil {
 		return err
 	}
 	if err := protocol.ValidateCommand(s.Argv, s.Env); err != nil {
@@ -69,7 +77,10 @@ func (s Spec) Validate() error {
 	if l.Nofile == 0 || l.Nofile > c.Nofile || l.Nproc == 0 || l.Nproc > c.Nproc || l.Core > c.Core || l.Fsize == 0 || l.Fsize > c.Fsize {
 		return fmt.Errorf("limits %+v are outside the ceilings %+v", l, c)
 	}
-	if s.Cgroup != "" && s.Cgroup != "/"+cgroup.Name(s.UID) {
+	// A pooled uid's group is named for its uid; a kept spawn's for the
+	// spawn, since the spawns of one kept home share its uid.
+	if s.Cgroup != "" && s.Cgroup != "/"+cgroup.Name(s.UID) &&
+		!(s.Kept && strings.HasPrefix(s.Cgroup, "/"+cgroup.SpawnName("")) && cgroup.ValidName(strings.TrimPrefix(s.Cgroup, "/"))) {
 		return fmt.Errorf("cgroup %q is not the group of uid %d", s.Cgroup, s.UID)
 	}
 	return nil

@@ -80,17 +80,8 @@ defmodule Sanctum.Consent.Components do
   # The port's own term, written once at boot.
   @key {__MODULE__, :impl}
 
-  @typedoc """
-  The activation of a component row's static closure: its `digest`, its
-  `graph` (node key to release digest) and `manifests`, each node's
-  decoded manifest by node key, the source's among them, as the
-  resolution read it.
-  """
-  @type activation :: %{
-          digest: String.t(),
-          graph: %{String.t() => String.t()},
-          manifests: %{String.t() => map()}
-        }
+  @typedoc "The activation of a component and its static closure."
+  @type activation :: %{digest: String.t(), graph: %{String.t() => String.t()}}
 
   @typedoc "An activation with each node's stored release digest verified."
   @type verified :: %{

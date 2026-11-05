@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -39,8 +40,8 @@ import (
 )
 
 // TestMain lets the test binary stand in for cyfr-locus's helpers, which
-// the keeper under test starts as `<self> stage`, `<self> relay` and
-// `<self> retire`, dispatched as main.go dispatches them. `<self> hold` is
+// the keeper under test starts as `<self> stage`, `<self> relay`,
+// `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` is
 // the memory tests' command.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
@@ -51,6 +52,8 @@ func TestMain(m *testing.M) {
 			os.Exit(relay.Main())
 		case "retire":
 			os.Exit(retire.Main())
+		case "home":
+			os.Exit(home.HelperMain())
 		case "hold":
 			os.Exit(hold(os.Args[2:]))
 		case "dial":
@@ -204,6 +207,8 @@ func newKeeperOf(t *testing.T, isolated bool) *keeper {
 		pools:    map[string]*pool.Pool{spec.Name: pool.New(spec)},
 		spawns:   map[string]*spawn{},
 		waiters:  map[int]*child{},
+		keptLive: map[int]int{},
+		keptOps:  map[int]*sync.Mutex{},
 		channel:  os.NewFile(uintptr(fds[0]), "channel"),
 	}
 	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{}), isolated: isolated}
@@ -561,20 +566,19 @@ func TestIsolationMustMatchThePool(t *testing.T) {
 	}
 }
 
-// A request the keeper parses but does not act on yet is answered
-// not_built on the channel and logged, and never reaches a handler: the
-// server has no pool, so a handled spawn or home request would be answered
-// otherwise. A request after them is still handled.
-func TestNotBuiltRequestsAreAnsweredNotBuilt(t *testing.T) {
+// A keeper given no --kept-homes refuses every home request as a bad
+// request on the channel, before any helper runs, and a request after them
+// is still handled.
+func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var v struct {
-		NotBuilt []json.RawMessage `json:"not_built_requests"`
+		Home []json.RawMessage `json:"home_requests"`
 	}
-	if err := json.Unmarshal(data, &v); err != nil || len(v.NotBuilt) == 0 {
-		t.Fatalf("not_built_requests: %d, %v", len(v.NotBuilt), err)
+	if err := json.Unmarshal(data, &v); err != nil || len(v.Home) == 0 {
+		t.Fatalf("home_requests: %d, %v", len(v.Home), err)
 	}
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -584,22 +588,28 @@ func TestNotBuiltRequestsAreAnsweredNotBuilt(t *testing.T) {
 	defer theirs.Close()
 	var logged strings.Builder
 	s := &server{
-		log:     logx.NewWriter(&logged, "cyfr-locus", false),
-		pools:   map[string]*pool.Pool{},
-		spawns:  map[string]*spawn{},
-		waiters: map[int]*child{},
-		channel: ours,
+		log:      logx.NewWriter(&logged, "cyfr-locus", false),
+		pools:    map[string]*pool.Pool{},
+		spawns:   map[string]*spawn{},
+		waiters:  map[int]*child{},
+		keptLive: map[int]int{},
+		keptOps:  map[int]*sync.Mutex{},
+		channel:  ours,
 	}
 	done := make(chan struct{})
 	go func() { s.serveChannel(); close(done) }()
 
 	var ids []string
-	for _, raw := range v.NotBuilt {
+	for _, raw := range v.Home {
 		var req struct {
-			ID string `json:"id"`
+			ID   string `json:"id"`
+			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(raw, &req); err != nil {
 			t.Fatal(err)
+		}
+		if req.Type == protocol.TypeSpawn {
+			continue
 		}
 		ids = append(ids, req.ID)
 		var line bytes.Buffer
@@ -614,25 +624,31 @@ func TestNotBuiltRequestsAreAnsweredNotBuilt(t *testing.T) {
 		t.Fatal(err)
 	}
 	lr := protocol.NewLineReader(theirs)
-	for _, id := range append(ids, "after") {
+	got := map[string]protocol.ErrorReply{}
+	for range append(ids, "after") {
 		line, _, err := lr.Next()
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := protocol.NewError(id, "", protocol.CodeNotBuilt)
-		if id == "after" {
-			want = protocol.NewError(id, "", protocol.CodeUnknownPool)
+		var reply protocol.ErrorReply
+		if err := json.Unmarshal(line, &reply); err != nil {
+			t.Fatalf("reply %s: %v", line, err)
 		}
-		var got protocol.ErrorReply
-		if err := json.Unmarshal(line, &got); err != nil || got != want {
-			t.Fatalf("request %s answered %s, want %+v", id, line, want)
+		got[reply.ID] = reply
+	}
+	for _, id := range ids {
+		if want := protocol.NewError(id, "", protocol.CodeBadRequest); got[id] != want {
+			t.Fatalf("request %s answered %+v, want %+v", id, got[id], want)
 		}
+	}
+	if want := protocol.NewError("after", "", protocol.CodeUnknownPool); got["after"] != want {
+		t.Fatalf("the request after answered %+v", got["after"])
 	}
 	theirs.Close()
 	<-done
 	ours.Close()
-	if n := strings.Count(logged.String(), "not built yet"); n != len(ids) {
-		t.Fatalf("logged %d not-built refusals, want %d: %q", n, len(ids), logged.String())
+	if n := strings.Count(logged.String(), "no --kept-homes"); n != len(ids) {
+		t.Fatalf("logged %d refusals naming --kept-homes, want %d: %q", n, len(ids), logged.String())
 	}
 }
 

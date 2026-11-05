@@ -3,78 +3,50 @@
 
 defmodule Locus.Backends.Backend do
   @moduledoc """
-  One stdio MCP backend of one owner (an athanor's server row at a
-  generation and epoch): its process, started through a `Locus.Launcher`,
-  and the calls it answers.
+  One session of a program of one owner (an athanor's `mcp_servers` row at
+  a generation and epoch): its process, started through a
+  `Locus.Launcher`, and the sequence-numbered buffer of the lines it
+  writes (`Locus.Backends.Relay`). It knows no protocol: lines go in with
+  `send_lines/2` and come out with `recv/3`, and what they mean is the
+  owner's.
 
-  ## Starting
+  ## Its life
 
-  The backend's command runs as `["/bin/sh", "-c", command]` in the uid
-  pool `backends`, its environment the definition's `env` block alone
-  (the launcher adds its own `HOME`, `TMPDIR`, `USER`, `LOGNAME` and
-  `PATH`). Once spawned it is initialized at the legacy protocol revision
-  (`Prima.MCP.Protocol.legacy_version/0`), told `notifications/initialized`,
-  and asked `tools/list`; its answer is the backend's tools and the
-  backend is `ready`. Until then it is `starting`. A handshake refused or
-  not answered within its bound ends the process, whose exit is then a
-  crash.
+  A session starts its process at once, or after `:delay_ms` when its
+  owners hold it back for a crash's backoff, and tells its owners
+  `:started` once the launcher answers the spawn. It is `running` until
+  its process ends, and then `ended`: its buffered lines stay readable,
+  every later `recv/3` answers `running: false`, and every later
+  `send_lines/2` answers `:ended`. The process stays its until it is gone
+  and its owners hear `{:ended, end}`, `end` saying whether the end was a
+  crash (`crash: true`: the process exited of its own accord with a
+  status other than 0 or by a signal, wrote a line past
+  `Prima.LocusBackends.max_line_bytes/0`, or its spawn was refused) and
+  why; once nothing of its process is left (the launcher's `:released`),
+  `:vacated`, after which it holds no uid.
 
-  ## Crashes
+  `close/1`, `retire_if_idle/2` (no `send_lines/2` and no `recv/3` within
+  the idle period), `end_session/2` (its owners ending it: the cap of its
+  home, its home's reset or retirement) and `stop/2` (its owner retired)
+  end the process with the stop grace; none of them is a crash. A session
+  ended this way answers `running: false` at once, however long its
+  process takes to go.
 
-  A process that exits, or that a launcher refuses, is a crash: its tools
-  are withdrawn, every call awaiting it fails, and it is started again
-  after the next wait of `Prima.LocusBackends.restart_backoff_ms/0`,
-  `starting` meanwhile with the crash as its `error`. The
-  `max_crashes/0`-th crash within `crash_window_ms/0` marks it `failed`,
-  and it is not started again. A stdout line longer than
-  `max_frame_bytes/0` kills the process; that exit is a crash like any
-  other.
+  ## Lines
 
-  ## Idle
+  A session on a pseudo-terminal (`:pty`) makes the part of a line with
+  no newline a line of its own once `:flush_ms` (200 ms) pass with no
+  more bytes, so a prompt that waits for its answer is read. Everything a
+  session answers — its lines and the stderr tail of its status — passes
+  through `Prima.LocusBackends.mask/2` with its owner's secret values.
+  Nothing of a process's stdout or stderr is logged.
 
-  `retire_if_idle/2` ends a `ready` backend with no call awaiting it and
-  none having used it within a period: its process is released with the
-  stop grace, its tools stay listed, and it is `idle`. It leaves any other
-  backend as it is. The next call
-  wakes it: the process is started again once the last one is retired,
-  and every call that arrives meanwhile shares that one start, then goes
-  to the backend once it is ready.
+  ## Recv
 
-  ## Its owner's accounting
-
-  A backend started with `:notify` tells that process of each change its
-  owner accounts for, as `{Locus.Backends.Backend, pid, event}`:
-  `{:view, view}` when it starts a process, begins its handshake or goes
-  idle; `{:ready, tools_changed?, view}`; `{:crashed, tools_withdrawn?,
-  view}`; `{:failed, view}`; and `:vacated` once it no longer holds a uid
-  of the pool — its idle retirement or the release after its last crash
-  done — and holds none until it wakes. A backend started with `:claim`
-  asks it, before a wake's process is started with no uid held, for one:
-  a refusal leaves it idle and fails the calls waiting on it.
-
-  ## Stopping
-
-  `stop/2` releases the process with a grace, fails every call awaiting
-  it and answers once the launcher reports the process retired, or the
-  grace and the release bound pass. A stopped backend stays `stopped`.
-
-  ## Calls
-
-  `call_tool/4` writes a `tools/call` under an id the backend's relay
-  (`Locus.Backends.Relay`) minted, and answers the result, the backend's
-  own error, or a refusal once the call's timeout passes. At most
-  `max_in_flight/0` calls await one backend. The backend's own requests
-  are answered `-32601` and never answer a call. A backend that is
-  `failed`, `stopped` or still `starting` refuses a call, in the MCP
-  backends service's words.
-
-  ## Masking
-
-  Everything this process answers — a result, an error, a refusal, the
-  tools, the stderr tail — passes through `Prima.LocusBackends.mask/2`
-  with the owner's secret values: every value of its environment but
-  those `literal_env_names/0` names, unless the owner hands its own.
-  Nothing of a backend's stdout or stderr is logged.
+  `recv/3` answers at once when a line past `after` is buffered or the
+  session has ended, and otherwise waits up to `max_wait_ms` for either;
+  the session holds the wait, so nothing else does. A wait counts as a use
+  when it is asked, not while it waits.
   """
 
   use GenServer, restart: :temporary
@@ -84,177 +56,117 @@ defmodule Locus.Backends.Backend do
   alias Locus.Backends.Relay
   alias Prima.LocusBackends
 
-  @pool "backends"
-
-  # The bounds its starter sets: a call's and each handshake step's, and
-  # the grace a process is released with.
-  @required_timeouts [:rpc_timeout_ms, :init_timeout_ms, :stop_grace_ms]
-
-  # The bounds of its own, which no deployment sets: a launcher's spawn and
-  # a release the launcher never reports.
-  @own_timeouts %{spawn_timeout_ms: 15_000, release_timeout_ms: 15_000}
-
+  @flush_ms 200
+  # A release the launcher never reports is taken as done after the grace
+  # and this bound, as the owners take one.
+  @release_timeout_ms 15_000
   # A stop answers once its process is retired, within the grace and the
   # release bound; the caller's wait covers both.
   @call_margin_ms 60_000
+  # An answer's room for its members beside its lines.
+  @answer_margin_bytes 4_096
 
-  @typedoc "The owner a backend runs for."
-  @type owner :: %{athanor: String.t(), server: String.t(), g: pos_integer(), e: pos_integer()}
+  @typedoc "How a session ended: a crash or not, and why."
+  @type ended :: %{crash: boolean(), error: String.t() | nil}
 
-  @typedoc "A backend as its sync defines it, its environment resolved."
-  @type definition :: %{
-          name: String.t(),
-          command: String.t(),
-          env: %{optional(String.t()) => String.t()}
+  @typedoc "What `recv/3` answers."
+  @type received :: %{
+          lines: [LocusBackends.line()],
+          dropped: non_neg_integer(),
+          running: boolean()
         }
 
-  @type status :: :starting | :ready | :idle | :failed | :stopped
-
-  @typedoc """
-  Where a `starting` backend is: its process being started, its handshake
-  under way (or ending, refused), or waiting to restart after a crash.
-  """
-  @type phase :: :spawning | :initializing | :crashed | nil
-
-  @typedoc "What `status/2` answers, masked, with the last time a call used the backend."
-  @type report :: %{
-          status: status(),
-          phase: phase(),
-          restarts: non_neg_integer(),
-          tools: non_neg_integer(),
-          error: String.t() | nil,
-          stderr_tail: String.t(),
-          last_used: integer()
-        }
-
-  @typedoc "What `:notify` hears of the backend's state."
-  @type view :: %{status: status(), phase: phase(), tools: non_neg_integer()}
-
   @doc """
-  Starts a backend. Options:
+  Starts a session. Options:
 
-    * `:owner` (`t:owner/0`) and `:definition` (`t:definition/0`), required;
-    * `:secrets`, the owner's secret values, every backend's; by default
-      the values of this backend's `env` but the literal ones;
-    * `:launcher`, a `Locus.Launcher` (default `Locus.Executor.executor/0`'s),
-      and `:launcher_server`, the server it is reached at (default the
-      module's registered name);
-    * `:memory_bytes`, the bound each process is spawned under, required;
-    * `:bounds`, overriding `Prima.LocusBackends.bounds/0` by name;
-    * `:notify`, the process told of each change its owner accounts for;
-    * `:claim`, a function answering `:ok` or `{:error, :capacity}` (or
-      another reason) for a uid of the pool a wake needs;
-    * `:clock`, the milliseconds `last_used` and `retire_if_idle/2` are
-      read on (default monotonic);
-    * `:rpc_timeout_ms`, `:init_timeout_ms` and `:stop_grace_ms`,
-      required, and `:spawn_timeout_ms` (15 s) and `:release_timeout_ms`
-      (15 s);
-    * `:name`.
+    * `:owner` (`%{athanor, server, g, e}`), `:session` (its id),
+      `:program` (its program's name) and `:spec` (the
+      `t:Locus.Launcher.spec/0` its process is spawned with), required;
+    * `:secrets`, the owner's secret values;
+    * `:launcher` and `:launcher_server`;
+    * `:notify`, the process told of `:started`, `{:ended, end}` and
+      `:vacated`;
+    * `:delay_ms`, the wait before the spawn (0);
+    * `:stop_grace_ms` (2 s), `:flush_ms` (200 ms), `:release_timeout_ms`;
+    * `:bounds`, overriding `Prima.LocusBackends.bounds/0` by name
+      (`:max_line_bytes`, `:max_buffer_bytes`, `:stderr_tail_bytes`,
+      `:max_session_bytes`);
+    * `:clock`, the milliseconds idleness is read on (monotonic).
   """
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
-  end
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "The backend's state, masked, answered within `timeout_ms`."
-  @spec status(GenServer.server(), timeout()) :: report()
-  def status(server, timeout_ms), do: GenServer.call(server, :status, timeout_ms)
+  @doc "Write `lines` to the session's process, each with a newline: `:running` or `:ended`."
+  @spec send_lines(GenServer.server(), [String.t()]) :: :running | :ended
+  def send_lines(server, lines) when is_list(lines),
+    do: GenServer.call(server, {:send, lines}, @call_margin_ms)
 
-  @doc "The tools the backend last listed, as it listed them, masked."
-  @spec list_tools(GenServer.server()) :: [map()]
-  def list_tools(server), do: GenServer.call(server, :list_tools)
+  @doc "The lines past `after`, waiting up to `max_wait_ms` for one or the session's end."
+  @spec recv(GenServer.server(), non_neg_integer(), non_neg_integer()) :: received()
+  def recv(server, after_seq, max_wait_ms),
+    do: GenServer.call(server, {:recv, after_seq, max_wait_ms}, max_wait_ms + @call_margin_ms)
 
-  @doc """
-  Calls the backend's tool `tool` with `arguments`, waking it first when
-  it is idle. Options: `:timeout_ms`, the call's own bound (the
-  backend's `:rpc_timeout_ms` by default). A refusal is
-  `{:error, {:tool_error, sentence}}`, answered as a tool's error.
-  """
-  # The backend answers every call within bounds of its own: the call's
-  # timeout, a wake's spawn and handshake, a stop. Its death ends the wait,
-  # so the caller waits on those bounds and sets none shorter than them.
-  @spec call_tool(GenServer.server(), String.t(), map() | nil, keyword()) ::
-          {:ok, term()} | {:error, {:tool_error, String.t()}}
-  def call_tool(server, tool, arguments, opts \\ []) when is_binary(tool) do
-    timeout = Keyword.get(opts, :timeout_ms)
-    GenServer.call(server, {:call_tool, tool, arguments || %{}, timeout}, :infinity)
-  end
+  @doc "End the session's process: answered at once, the process going within its grace."
+  @spec close(GenServer.server()) :: :ok
+  def close(server), do: GenServer.call(server, {:end, :closed, nil}, @call_margin_ms)
 
-  @doc """
-  Retires the backend if it is `ready`, no call awaits it and none has
-  used it within the last `idle_ms`: its process is released with the
-  stop grace and it is `idle`, its tools kept. Anything else is left as it
-  is. Answers at once.
-  """
+  @doc "End the session for `reason` (its owners' reason, no crash), at once."
+  @spec end_session(GenServer.server(), String.t()) :: :ok
+  def end_session(server, reason) when is_binary(reason),
+    do: GenServer.cast(server, {:end, :ended, reason})
+
+  @doc "End the session if no send and no recv used it within `idle_ms`."
   @spec retire_if_idle(GenServer.server(), non_neg_integer()) :: :ok
-  def retire_if_idle(server, idle_ms) when is_integer(idle_ms) and idle_ms >= 0,
-    do: GenServer.cast(server, {:retire_if_idle, idle_ms})
+  def retire_if_idle(server, idle_ms), do: GenServer.cast(server, {:retire_if_idle, idle_ms})
 
-  @doc """
-  Stops the backend: its process released with `grace_ms`, answered once
-  it is retired or its bound passes.
-  """
+  @doc "Whether the session runs, and its stderr tail, masked."
+  @spec status(GenServer.server(), timeout()) :: %{running: boolean(), stderr_tail: String.t()}
+  def status(server, timeout), do: GenServer.call(server, :status, timeout)
+
+  @doc "End the session and answer once nothing of its process is left, or its bound passes."
   @spec stop(GenServer.server(), non_neg_integer()) :: :ok
-  def stop(server, grace_ms) when is_integer(grace_ms) and grace_ms >= 0,
+  def stop(server, grace_ms),
     do: GenServer.call(server, {:stop, grace_ms}, grace_ms + @call_margin_ms)
 
   # ————— the server —————
 
   @impl GenServer
   def init(opts) do
-    %{name: name, command: command, env: env} = Keyword.fetch!(opts, :definition)
-    %{athanor: _, server: _, g: _, e: _} = owner = Keyword.fetch!(opts, :owner)
+    bounds = Map.merge(LocusBackends.bounds(), Map.new(Keyword.get(opts, :bounds, [])))
+    clock = Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end)
+    spec = Keyword.fetch!(opts, :spec)
 
-    case launcher(opts) do
-      {:ok, launcher} ->
-        bounds = Map.merge(LocusBackends.bounds(), Map.new(Keyword.get(opts, :bounds, [])))
+    with {:ok, launcher} <- launcher(opts) do
+      state = %{
+        owner: Keyword.fetch!(opts, :owner),
+        session: Keyword.fetch!(opts, :session),
+        program: Keyword.fetch!(opts, :program),
+        spec: spec,
+        pty: Map.get(spec, :pty) == true,
+        secrets: Keyword.get(opts, :secrets, []),
+        launcher: launcher,
+        launcher_server: Keyword.get(opts, :launcher_server, launcher),
+        notify: Keyword.get(opts, :notify),
+        stop_grace_ms: Keyword.get(opts, :stop_grace_ms, 2_000),
+        flush_ms: Keyword.get(opts, :flush_ms, @flush_ms),
+        release_timeout_ms: Keyword.get(opts, :release_timeout_ms, @release_timeout_ms),
+        budget: bounds.max_session_bytes - @answer_margin_bytes,
+        clock: clock,
+        last_used: clock.(),
+        relay:
+          Relay.new(Map.take(bounds, [:max_line_bytes, :max_buffer_bytes, :stderr_tail_bytes])),
+        status: :starting,
+        handle: nil,
+        released: false,
+        ending: nil,
+        ended: nil,
+        flush_timer: nil,
+        waiters: [],
+        stoppers: []
+      }
 
-        clock = Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end)
-
-        state = %{
-          owner: owner,
-          name: name,
-          command: command,
-          env: env,
-          secrets: Keyword.get_lazy(opts, :secrets, fn -> secret_values(env) end),
-          launcher: launcher,
-          launcher_server: Keyword.get(opts, :launcher_server, launcher),
-          memory_bytes: Keyword.fetch!(opts, :memory_bytes),
-          bounds: bounds,
-          timeouts: timeouts(opts),
-          status: :starting,
-          phase: :spawning,
-          handle: nil,
-          retiring: %{},
-          relay: Relay.new(Map.take(bounds, [:max_frame_bytes, :stderr_tail_bytes])),
-          relay_dead: false,
-          tools: [],
-          error: nil,
-          init_error: nil,
-          restarts: 0,
-          crashes: [],
-          restart_timer: nil,
-          waking: false,
-          waiters: [],
-          wake_timer: nil,
-          stoppers: [],
-          notify: Keyword.get(opts, :notify),
-          claim: Keyword.get(opts, :claim),
-          clock: clock,
-          slot: true,
-          last_used: clock.()
-        }
-
-        {:ok, state, {:continue, :spawn}}
-
-      {:error, reason} ->
-        {:stop, reason}
+      Process.send_after(self(), :spawn, Keyword.get(opts, :delay_ms, 0))
+      {:ok, state}
     end
-  end
-
-  defp timeouts(opts) do
-    required = Map.new(@required_timeouts, &{&1, Keyword.fetch!(opts, &1)})
-    own = Map.merge(@own_timeouts, Map.new(Keyword.take(opts, Map.keys(@own_timeouts))))
-    Map.merge(own, required)
   end
 
   defp launcher(opts) do
@@ -264,125 +176,134 @@ defmodule Locus.Backends.Backend do
     end
   end
 
-  defp secret_values(env) do
-    literal = LocusBackends.literal_env_names()
-    for {name, value} <- env, name not in literal, do: value
-  end
-
   @impl GenServer
-  def handle_continue(:spawn, state), do: {:noreply, spawn_process(state)}
+  def handle_call({:send, _lines}, _from, %{status: status} = state) when status != :running,
+    do: {:reply, :ended, used(state)}
 
-  @impl GenServer
-  def handle_call(:status, _from, state) do
-    {:reply,
-     %{
-       status: state.status,
-       phase: phase(state),
-       restarts: state.restarts,
-       tools: length(state.tools),
-       error: mask(state.error, state),
-       stderr_tail: Relay.stderr_tail(state.relay, state.secrets),
-       last_used: state.last_used
-     }, state}
-  end
+  def handle_call({:send, lines}, _from, state) do
+    data = Enum.map(lines, &[&1, ?\n])
 
-  def handle_call(:list_tools, _from, state), do: {:reply, mask(state.tools, state), state}
-
-  def handle_call({:call_tool, tool, arguments, timeout}, from, state) do
-    call = %{from: from, tool: tool, arguments: arguments, timeout: timeout}
-    state = used(state)
-
-    cond do
-      state.status == :idle or state.waking -> {:noreply, wake(state, call)}
-      state.status == :ready -> {:noreply, send_call(state, call)}
-      true -> {:reply, refusal(state, not_ready(state)), state}
+    case state.launcher.send(state.handle, data) do
+      :ok -> {:reply, :running, used(state)}
+      {:error, _reason} -> {:reply, :ended, used(state)}
     end
   end
 
-  def handle_call({:stop, grace_ms}, from, state) do
-    state = stop_backend(state, grace_ms)
+  def handle_call({:recv, after_seq, max_wait_ms}, from, state) do
+    state = used(state)
 
-    if map_size(state.retiring) == 0,
+    if state.status == :ended or max_wait_ms == 0 or Relay.past?(state.relay, after_seq) do
+      {answer, state} = answer(state, after_seq)
+      {:reply, answer, state}
+    else
+      timer = Process.send_after(self(), {:recv_timeout, from}, max_wait_ms)
+      {:noreply, %{state | waiters: [{from, after_seq, timer} | state.waiters]}}
+    end
+  end
+
+  def handle_call({:end, kind, reason}, _from, state),
+    do: {:reply, :ok, finish(state, kind, reason)}
+
+  def handle_call(:status, _from, state) do
+    {:reply,
+     %{
+       running: state.status != :ended,
+       stderr_tail: Relay.stderr_tail(state.relay, state.secrets)
+     }, state}
+  end
+
+  def handle_call({:stop, grace_ms}, from, state) do
+    state = finish(%{state | stop_grace_ms: grace_ms}, :stopped, nil)
+
+    if state.released,
       do: {:reply, :ok, state},
       else: {:noreply, %{state | stoppers: [from | state.stoppers]}}
   end
 
   @impl GenServer
-  def handle_cast({:retire_if_idle, idle_ms}, %{status: :ready} = state) do
-    if state.waking or Relay.pending_count(state.relay) > 0 or
-         state.clock.() - state.last_used < idle_ms,
-       do: {:noreply, state},
-       else: {:noreply, retire_idle_process(state)}
+  def handle_cast({:end, kind, reason}, state), do: {:noreply, finish(state, kind, reason)}
+
+  def handle_cast({:retire_if_idle, idle_ms}, %{status: :running} = state) do
+    if state.clock.() - state.last_used >= idle_ms,
+      do: {:noreply, finish(state, :idle, nil)},
+      else: {:noreply, state}
   end
 
   def handle_cast({:retire_if_idle, _idle_ms}, state), do: {:noreply, state}
 
   @impl GenServer
-  def handle_info({launcher, ref, event}, %{launcher: launcher} = state) do
-    cond do
-      state.handle != nil and ref == state.handle.ref -> {:noreply, on_event(state, event)}
-      is_map_key(state.retiring, ref) -> {:noreply, on_retiring_event(state, ref, event)}
-      true -> {:noreply, state}
+  def handle_info(:spawn, %{status: :starting, ending: nil} = state) do
+    case state.launcher.spawn(state.launcher_server, state.spec) do
+      {:ok, handle} ->
+        notify(state, :started)
+        {:noreply, %{state | handle: handle, status: :running}}
+
+      {:error, reason} ->
+        state = %{state | released: true}
+        state = ended(state, %{crash: true, error: "spawn refused: #{refusal(reason)}"})
+        notify(state, :vacated)
+        {:noreply, reply_stoppers(state)}
     end
   end
 
-  def handle_info({:rpc_timeout, ref, id}, %{handle: %{ref: ref}} = state) do
-    case Relay.cancel(state.relay, id) do
-      {nil, _relay} -> {:noreply, state}
-      {tag, relay} -> {:noreply, timed_out(%{state | relay: relay}, tag)}
+  # Ended before its process was asked for: nothing of it was started.
+  def handle_info(:spawn, state) do
+    state = ended(%{state | released: true}, state.ending)
+    notify(state, :vacated)
+    {:noreply, reply_stoppers(state)}
+  end
+
+  def handle_info({launcher, ref, event}, %{launcher: launcher, handle: %{ref: ref}} = state),
+    do: {:noreply, on_event(state, event)}
+
+  def handle_info({:recv_timeout, from}, state) do
+    case List.keytake(state.waiters, from, 0) do
+      {{^from, after_seq, _timer}, waiters} ->
+        {answer, state} = answer(%{state | waiters: waiters}, after_seq)
+        GenServer.reply(from, answer)
+        {:noreply, state}
+
+      nil ->
+        {:noreply, state}
     end
   end
 
-  def handle_info({:rpc_timeout, _ref, _id}, state), do: {:noreply, state}
+  def handle_info({:flush, timer}, %{flush_timer: timer} = state),
+    do: {:noreply, %{state | flush_timer: nil, relay: Relay.flush(state.relay)} |> wake()}
 
-  def handle_info({:restart, timer}, %{restart_timer: timer} = state) do
-    {:noreply, spawn_process(%{state | restart_timer: nil, restarts: state.restarts + 1})}
-  end
+  def handle_info({:flush, _timer}, state), do: {:noreply, state}
 
-  def handle_info({:restart, _timer}, state), do: {:noreply, state}
+  def handle_info(:release_timeout, %{released: false} = state),
+    do: {:noreply, released(state)}
 
-  def handle_info({:wake_timeout, timer}, %{wake_timer: timer} = state) do
-    {:noreply, fail_waiters(%{state | wake_timer: nil}, &did_not_start/1)}
-  end
-
-  def handle_info({:wake_timeout, _timer}, state), do: {:noreply, state}
-
-  # A retirement the launcher never reported within its bound is taken as
-  # done, as the service takes one.
-  def handle_info({:retire_timeout, ref}, state) do
-    if is_map_key(state.retiring, ref),
-      do: {:noreply, retired(state, ref)},
-      else: {:noreply, state}
-  end
+  def handle_info(:release_timeout, state), do: {:noreply, state}
 
   def handle_info(message, state) do
     Prima.LoggerContext.unexpected(__MODULE__, message)
     {:noreply, state}
   end
 
-  # The environment and the owner's secrets are credentials, and a call's
-  # arguments and the backend's stderr may carry one: no status or crash
-  # report shows more of them than their size, and the debug log, which
-  # holds them, is left out.
+  # The owner's secrets and the lines are credentials or may carry one: no
+  # status or crash report shows more of them than their size.
   @impl GenServer
   def format_status(status) do
     Map.new(status, fn
-      {:state, %{env: env, secrets: secrets, relay: relay, waiters: waiters} = state} ->
+      {:state, %{spec: spec, secrets: secrets, relay: relay} = state} ->
         {:state,
          %{
            state
-           | env: Map.new(env, fn {name, value} -> {name, {:redacted, byte_size(value)}} end),
-             secrets: {:redacted, length(secrets)},
-             relay: %{
-               pending: Relay.pending_count(relay),
-               dropped: Relay.dropped(relay),
-               stderr: {:redacted, byte_size(relay.stderr)}
+           | spec: %{
+               spec
+               | env: {:redacted, map_size(spec.env)},
+                 argv: {:redacted, length(spec.argv)}
              },
-             waiters: length(waiters)
+             secrets: {:redacted, length(secrets)},
+             relay: %{bytes: relay.bytes, next_seq: relay.next_seq, dropped: relay.dropped},
+             waiters: length(state.waiters)
          }}
 
-      {:message, {:call_tool, tool, _arguments, timeout}} ->
-        {:message, {:call_tool, tool, :redacted, timeout}}
+      {:message, {:send, lines}} ->
+        {:message, {:send, {:redacted, length(lines)}}}
 
       {:message, {launcher, ref, {stream, bytes}}} when stream in [:stdout, :stderr] ->
         {:message, {launcher, ref, {stream, {:redacted, byte_size(bytes)}}}}
@@ -395,425 +316,152 @@ defmodule Locus.Backends.Backend do
     end)
   end
 
-  # ————— the process —————
+  # ————— the process's events —————
 
-  defp spawn_process(state) do
-    spec = %{
-      argv: ["/bin/sh", "-c", state.command],
-      env: state.env,
-      pool: @pool,
-      memory_bytes: state.memory_bytes
-    }
-
-    state = %{
-      state
-      | status: :starting,
-        phase: :spawning,
-        relay: Relay.restart(state.relay),
-        relay_dead: false
-    }
-
-    notify_view(state)
-
-    case state.launcher.spawn(state.launcher_server, spec) do
-      {:ok, handle} ->
-        state = %{state | handle: handle, phase: :initializing}
-        notify_view(state)
-        initialize(state)
-
-      {:error, reason} ->
-        crashed(%{state | handle: nil}, "spawn refused: #{refusal_code(reason)}")
-    end
-  end
-
-  defp refusal_code({:refused, code}) when is_binary(code), do: code
-  defp refusal_code({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
-  defp refusal_code(kind) when is_atom(kind), do: Atom.to_string(kind)
-  defp refusal_code(_reason), do: "spawn_failed"
-
-  defp initialize(state) do
-    params = %{
-      protocolVersion: Prima.MCP.Protocol.legacy_version(),
-      capabilities: %{},
-      clientInfo: %{name: "cyfr-locus", version: version()}
-    }
-
-    rpc(state, "initialize", params, {:init, "initialize"}, state.timeouts.init_timeout_ms)
-  end
-
-  # The :locus application is loaded wherever a backend runs.
-  defp version do
-    {:ok, vsn} = :application.get_key(:locus, :vsn)
-    to_string(vsn)
-  end
-
-  # Writes a call under a newly minted id, pending until its answer or its
-  # timeout; a call the process cannot be written to fails at once.
-  defp rpc(state, method, params, tag, timeout_ms) do
-    {line, id, relay} = Relay.request(state.relay, method, params, tag)
-    Process.send_after(self(), {:rpc_timeout, state.handle.ref, id}, timeout_ms)
-    state = %{state | relay: relay}
-
-    case state.launcher.send(state.handle, line) do
-      :ok ->
-        state
-
-      {:error, _reason} ->
-        {tag, relay} = Relay.cancel(state.relay, id)
-        failed_write(%{state | relay: relay}, tag, method)
-    end
-  end
-
-  defp failed_write(state, {:init, _method} = tag, method),
-    do: init_failed(state, tag, "backend stdin unavailable: #{method}")
-
-  defp failed_write(state, {:call, call}, method) do
-    reply(call, refusal(state, call_failed(state, "backend stdin unavailable: #{method}")))
-    state
-  end
-
-  defp on_event(state, :attached), do: state
-
-  defp on_event(state, {:stdout, _bytes}) when state.relay_dead, do: state
-
-  defp on_event(state, {:stdout, bytes}) do
+  defp on_event(state, {:stdout, bytes}) when state.status == :running or state.ending != nil do
     case Relay.stdout(state.relay, bytes) do
-      {:ok, events, relay} -> Enum.reduce(events, %{state | relay: relay}, &on_message/2)
-      {:error, :frame_too_large} -> overflow(state)
+      {:ok, relay} -> %{state | relay: relay} |> arm_flush() |> wake()
+      {:error, :line_too_long} -> overflow(state)
     end
   end
+
+  defp on_event(state, {:stdout, _bytes}), do: state
 
   defp on_event(state, {:stderr, bytes}), do: %{state | relay: Relay.stderr(state.relay, bytes)}
 
+  # The leader's end; the session ends once nothing of it is left, so every
+  # line it wrote is read first.
   defp on_event(state, {:exited, code, signal}) do
-    handle = state.handle
-
-    state
-    |> retiring(handle.ref)
-    |> Map.put(:handle, nil)
-    |> crashed("exited code=#{spelled(code)} signal=#{spelled(signal)}")
+    if state.ending,
+      do: state,
+      else: %{state | ending: exit_end(code, signal)}
   end
 
-  # Released without an exit: the launcher retired every spawn it held.
-  defp on_event(state, :released),
-    do: crashed(%{state | handle: nil}, "exited code=null signal=null")
-
+  defp on_event(state, :released), do: released(state)
   defp on_event(state, _event), do: state
+
+  defp exit_end(0, nil), do: %{crash: false, error: nil}
+
+  defp exit_end(code, signal),
+    do: %{crash: true, error: "exited code=#{spelled(code)} signal=#{spelled(signal)}"}
 
   defp spelled(nil), do: "null"
   defp spelled(value), do: to_string(value)
 
-  # A retired process's stderr still belongs to the backend's tail; the
-  # rest of what it says is past.
-  defp on_retiring_event(state, _ref, {:stderr, bytes}),
-    do: %{state | relay: Relay.stderr(state.relay, bytes)}
-
-  defp on_retiring_event(state, ref, :released), do: retired(state, ref)
-  defp on_retiring_event(state, _ref, _event), do: state
+  defp refusal({:refused, code}) when is_binary(code), do: code
+  defp refusal({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp refusal(kind) when is_atom(kind), do: Atom.to_string(kind)
+  defp refusal(_reason), do: "spawn_failed"
 
   defp overflow(state) do
     Logger.error(
-      "[Locus.Backends.Backend] #{label(state)}: a stdout frame exceeded " <>
-        "#{state.bounds.max_frame_bytes} bytes; killing the backend"
+      "[Locus.Backends.Backend] #{label(state)}: a line exceeded " <>
+        "#{state.relay.max_line_bytes} bytes; killing the session"
     )
 
     _ = state.launcher.signal(state.handle, "SIGKILL")
-    %{state | relay_dead: true, error: "stdout frame overflow"}
+
+    finish(state, :crash, "line too long")
   end
 
-  # The backend's own request is answered as one this side does not
-  # serve; its notification is not answered.
-  defp on_message({:child, nil, _method}, state), do: state
+  # The process gone: the part of a line it left is a line, and the
+  # session is ended now if it was not already.
+  defp released(%{released: true} = state), do: state
 
-  defp on_message({:child, id, method}, state) do
-    line =
-      Relay.reply_error(id, -32_601, "method not supported by the backends service: #{method}")
-
-    _ = state.launcher.send(state.handle, line)
-    state
+  defp released(state) do
+    state = %{state | released: true, relay: Relay.flush(state.relay)}
+    # Released with no exit heard: the launcher let every spawn go.
+    state = ended(state, state.ending || %{crash: true, error: "exited code=null signal=null"})
+    notify(state, :vacated)
+    reply_stoppers(state)
   end
 
-  defp on_message({:answer, {:init, "initialize"}, {:result, _result}}, state) do
-    _ = state.launcher.send(state.handle, Relay.notification("notifications/initialized"))
-    rpc(state, "tools/list", nil, {:init, "tools/list"}, state.timeouts.init_timeout_ms)
+  defp reply_stoppers(state) do
+    Enum.each(state.stoppers, &GenServer.reply(&1, :ok))
+    %{state | stoppers: []}
   end
 
-  defp on_message({:answer, {:init, "tools/list"}, {:result, result}}, state) do
-    tools =
-      case result do
-        %{"tools" => tools} when is_list(tools) -> tools
-        _ -> []
+  # ————— ending —————
+
+  # The session's process asked to end, once: the session answers
+  # `running: false` from now on.
+  defp finish(%{ending: ending} = state, _kind, _reason) when ending != nil,
+    do: ended(state, ending)
+
+  defp finish(state, kind, reason) do
+    ending =
+      case kind do
+        :crash -> %{crash: true, error: reason}
+        :ended -> %{crash: false, error: reason}
+        _other -> %{crash: false, error: nil}
       end
 
-    ready(%{state | tools: tools}, tools != state.tools)
-  end
-
-  defp on_message({:answer, {:init, _method} = tag, {:error, error}}, state),
-    do: init_failed(state, tag, "initialize refused: #{error_text(error)}")
-
-  defp on_message({:answer, {:call, call}, {:result, result}}, state) do
-    reply(call, {:ok, mask(result, state)})
-    used(state)
-  end
-
-  defp on_message({:answer, {:call, call}, {:error, error}}, state) do
-    reply(call, refusal(state, error_text(error)))
-    used(state)
-  end
-
-  defp timed_out(state, {:init, method} = tag), do: init_failed(state, tag, "timeout: #{method}")
-
-  defp timed_out(state, {:call, call}) do
-    reply(call, refusal(state, call_failed(state, "timeout: tools/call")))
-    state
-  end
-
-  # A handshake that did not finish ends the process; its exit is the
-  # crash, and names why.
-  defp init_failed(%{phase: :initializing, handle: handle} = state, _tag, text)
-       when handle != nil do
-    Logger.error("[Locus.Backends.Backend] #{label(state)}: initialize failed")
-    :ok = state.launcher.release(state.launcher_server, handle, 0)
-    %{state | init_error: text, phase: :ending}
-  end
-
-  defp init_failed(state, _tag, _text), do: state
-
-  defp ready(state, changed?) do
-    Logger.info("[Locus.Backends.Backend] #{label(state)}: ready, #{length(state.tools)} tools")
-    state = used(%{state | status: :ready, phase: nil, error: nil})
-    notify(state, {:ready, changed?, view(state)})
-
-    calls = Enum.reverse(state.waiters)
-    state = %{state | waking: false, waiters: [], wake_timer: nil}
-    Enum.reduce(calls, state, &send_call(&2, &1))
-  end
-
-  defp crashed(%{status: status} = state, _reason) when status in [:stopped, :failed],
-    do: fail_pending(state, "backend stopped")
-
-  defp crashed(state, reason) do
-    error = if state.init_error, do: "#{state.init_error}; #{reason}", else: reason
-    withdrawn? = state.tools != []
-
-    state =
-      %{state | error: error, init_error: nil, tools: [], phase: :crashed}
-      |> fail_pending(reason)
-      |> fail_waiters(&did_not_start/1)
-
-    now = System.monotonic_time(:millisecond)
-    crashes = [now | Enum.filter(state.crashes, &(now - &1 < state.bounds.crash_window_ms))]
-    state = %{state | crashes: crashes}
-
-    if length(crashes) >= state.bounds.max_crashes do
-      Logger.error(
-        "[Locus.Backends.Backend] #{label(state)}: failed after #{length(crashes)} crashes"
-      )
-
-      state = %{state | status: :failed, phase: nil}
-      notify(state, {:failed, view(state)})
-      maybe_vacate(state)
-    else
-      backoff = state.bounds.restart_backoff_ms
-      delay = Enum.at(backoff, min(length(crashes), length(backoff)) - 1)
-
-      Logger.error("[Locus.Backends.Backend] #{label(state)}: crashed; restarting in #{delay} ms")
-
-      timer = make_ref()
-      Process.send_after(self(), {:restart, timer}, delay)
-      state = %{state | status: :starting, phase: :backoff, restart_timer: timer}
-      notify(state, {:crashed, withdrawn?, view(state)})
-      state
-    end
-  end
-
-  # ————— idle, wake and stop —————
-
-  defp retire_idle_process(state) do
-    Logger.info("[Locus.Backends.Backend] #{label(state)}: idle; retiring until its next call")
-
-    :ok =
-      state.launcher.release(state.launcher_server, state.handle, state.timeouts.stop_grace_ms)
-
-    state =
-      state
-      |> retiring(state.handle.ref)
-      |> Map.merge(%{handle: nil, status: :idle, phase: nil})
-
-    notify_view(state)
-    state
-  end
-
-  # Every call that finds the backend idle, or waking, waits on one start,
-  # made once the process it replaces is retired.
-  defp wake(%{waking: true} = state, call), do: %{state | waiters: [call | state.waiters]}
-
-  defp wake(state, call) do
-    state = %{state | waking: true, waiters: [call]}
-    if map_size(state.retiring) == 0, do: start_wake(state), else: state
-  end
-
-  defp start_wake(state) do
-    case claim_slot(state) do
-      {:ok, state} ->
-        Logger.info("[Locus.Backends.Backend] #{label(state)}: starting for a call")
-        timer = make_ref()
-        wake_ms = state.timeouts.spawn_timeout_ms + state.timeouts.init_timeout_ms
-        Process.send_after(self(), {:wake_timeout, timer}, wake_ms)
-        spawn_process(%{state | wake_timer: timer})
-
-      {:error, sentence} ->
-        fail_waiters(state, fn _state -> sentence end)
-    end
-  end
-
-  # A wake whose backend gave its uid back asks its owner for one first;
-  # one that still holds its uid, or has no owner accounting for it, starts.
-  defp claim_slot(%{slot: true} = state), do: {:ok, state}
-  defp claim_slot(%{claim: nil} = state), do: {:ok, %{state | slot: true}}
-
-  defp claim_slot(state) do
-    case state.claim.() do
-      :ok ->
-        {:ok, %{state | slot: true}}
-
-      {:error, :capacity} ->
-        {:error, "backend '#{state.name}' is idle and no uid of the pool is free to start it"}
-
-      {:error, _reason} ->
-        {:error, "backend '#{state.name}' is idle and cannot be started now"}
-    end
-  end
-
-  # The backend's uid is given back once nothing of its processes is left
-  # and it will not start one of its own accord: idle and not waking, or
-  # failed.
-  defp maybe_vacate(%{slot: true, status: status} = state)
-       when map_size(state.retiring) == 0 and
-              (status == :failed or (status == :idle and not state.waking)) do
-    notify(state, :vacated)
-    %{state | slot: false}
-  end
-
-  defp maybe_vacate(state), do: state
-
-  defp stop_backend(state, grace_ms) do
-    state =
-      %{state | status: :stopped, phase: nil, restart_timer: nil, tools: []}
-      |> fail_pending("backend stopped")
-      |> fail_waiters(&did_not_start/1)
+    state = %{state | ending: ending}
 
     case state.handle do
       nil ->
-        state
+        ended(state, ending)
 
       handle ->
-        :ok = state.launcher.release(state.launcher_server, handle, grace_ms)
-        state |> retiring(handle.ref, grace_ms) |> Map.put(:handle, nil)
+        :ok = state.launcher.release(state.launcher_server, handle, state.stop_grace_ms)
+
+        Process.send_after(
+          self(),
+          :release_timeout,
+          state.stop_grace_ms + state.release_timeout_ms
+        )
+
+        ended(state, ending)
     end
   end
 
-  # A released process holds its uid until the launcher reports it retired,
-  # or its bound passes.
-  defp retiring(state, ref, grace_ms \\ nil) do
-    grace_ms = grace_ms || state.timeouts.stop_grace_ms
-
-    Process.send_after(
-      self(),
-      {:retire_timeout, ref},
-      grace_ms + state.timeouts.release_timeout_ms
-    )
-
-    %{state | retiring: Map.put(state.retiring, ref, true)}
+  defp ended(%{ended: nil} = state, ended) do
+    state = %{state | status: :ended, ended: ended}
+    notify(state, {:ended, ended})
+    wake(state)
   end
 
-  defp retired(state, ref) do
-    state = %{state | retiring: Map.delete(state.retiring, ref)}
+  defp ended(state, _ended), do: state
 
-    cond do
-      map_size(state.retiring) > 0 ->
-        state
+  # ————— lines —————
 
-      state.stoppers != [] ->
-        Enum.each(state.stoppers, &GenServer.reply(&1, :ok))
-        %{state | stoppers: []}
-
-      state.waking and state.status == :idle and state.wake_timer == nil ->
-        start_wake(state)
-
-      true ->
-        maybe_vacate(state)
-    end
-  end
-
-  # ————— calls —————
-
-  defp send_call(state, call) do
-    in_flight = Relay.pending_count(state.relay)
-
-    if in_flight >= state.bounds.max_in_flight do
-      reply(call, refusal(state, "backend busy: #{in_flight} calls in flight"))
-      state
+  defp arm_flush(%{pty: true} = state) do
+    if Relay.partial?(state.relay) do
+      timer = make_ref()
+      Process.send_after(self(), {:flush, timer}, state.flush_ms)
+      %{state | flush_timer: timer}
     else
-      timeout = call.timeout || state.timeouts.rpc_timeout_ms
-      params = %{name: call.tool, arguments: call.arguments}
-      rpc(state, "tools/call", params, {:call, call}, timeout)
+      %{state | flush_timer: nil}
     end
   end
 
-  defp fail_pending(state, reason) do
-    {tags, relay} = Relay.take_pending(state.relay)
+  defp arm_flush(state), do: state
 
-    for {:call, call} <- tags,
-        do: reply(call, refusal(state, call_failed(state, reason)))
+  # Every wait a new line or the end answers.
+  defp wake(state) do
+    {ready, waiting} =
+      Enum.split_with(state.waiters, fn {_from, after_seq, _timer} ->
+        state.status == :ended or Relay.past?(state.relay, after_seq)
+      end)
 
-    %{state | relay: relay}
+    Enum.reduce(ready, %{state | waiters: waiting}, fn {from, after_seq, timer}, state ->
+      Process.cancel_timer(timer)
+      {answer, state} = answer(state, after_seq)
+      GenServer.reply(from, answer)
+      state
+    end)
   end
 
-  defp fail_waiters(%{waiters: []} = state, _sentence), do: %{state | waking: false}
-
-  defp fail_waiters(state, sentence) do
-    text = sentence.(state)
-    for call <- state.waiters, do: reply(call, refusal(state, text))
-    %{state | waking: false, waiters: [], wake_timer: nil}
+  defp answer(state, after_seq) do
+    {lines, dropped, relay} = Relay.take(state.relay, after_seq, state.budget)
+    lines = Enum.map(lines, &%{&1 | text: LocusBackends.mask(&1.text, state.secrets)})
+    {%{lines: lines, dropped: dropped, running: state.status != :ended}, %{state | relay: relay}}
   end
-
-  defp reply(%{from: from}, answer), do: GenServer.reply(from, answer)
-
-  # ————— the refusal sentences —————
-
-  defp not_ready(state), do: "backend '#{state.name}' not ready: #{state.error || state.status}"
-
-  defp did_not_start(state),
-    do: "backend '#{state.name}' did not start: #{state.error || state.status}"
-
-  defp call_failed(state, reason), do: "backend '#{state.name}' call failed: #{reason}"
-
-  defp refusal(state, text), do: {:error, {:tool_error, mask(text, state)}}
-
-  defp error_text(%{"message" => message}) when is_binary(message), do: message
-  defp error_text(error), do: Jason.encode!(error)
-
-  defp mask(value, state), do: LocusBackends.mask(value, state.secrets)
-
-  defp label(state), do: "#{state.owner.athanor}/#{state.owner.server} #{state.name}"
-
-  # ————— the owner's accounting —————
 
   defp used(state), do: %{state | last_used: state.clock.()}
 
-  defp phase(%{status: :starting, phase: phase}) when phase in [:initializing, :ending],
-    do: :initializing
-
-  defp phase(%{status: :starting, phase: phase}) when phase in [:crashed, :backoff],
-    do: :crashed
-
-  defp phase(%{status: :starting}), do: :spawning
-  defp phase(_state), do: nil
-
-  defp view(state), do: %{status: state.status, phase: phase(state), tools: length(state.tools)}
-
-  defp notify_view(state), do: notify(state, {:view, view(state)})
+  defp label(state),
+    do: "#{state.owner.athanor}/#{state.owner.server} #{state.program} #{state.session}"
 
   defp notify(%{notify: nil}, _event), do: :ok
   defp notify(%{notify: pid}, event), do: send(pid, {__MODULE__, self(), event})

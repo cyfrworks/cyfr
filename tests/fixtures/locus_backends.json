@@ -448,6 +448,13 @@
           "status": 200
         },
         {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"held\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_held body=feca3f91ac12da2d19337f57005e2db40f94771121e15bfb7f43141ef5e1c88d mac=tbGi_83eY4sFLwCpP5zZ5VJ9Y-QBuYxqnMhunI6_8_g",
+          "now": 1789305250000,
+          "route": "session",
+          "status": 200
+        },
+        {
           "advance_ms": 1000
         },
         {
@@ -541,22 +548,22 @@
       "refusal": "capacity",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=28d4afbb0388f7544a37dcb3c4b41b378347ea2a15fe70e40d3fa9d2ea45eaea mac=kHz5-IKIHF5IR0X9_XPE65gHf8m2yGwqmQlyNiZ99hU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"BJ9dmO5qewRJhUy026IeZOGFCpRzZRAQqSHfo3aLKURexveqDW0\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=9998be278399f13025e2f8bc2403c5f626b67731399788d524968f87f139530e mac=JWCIIo07uoqm9lL__0CPOqbNkaRUhfwfoGygv21BBEY",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
           "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=xn5a-EWtSypL0v0bsVdrQFvQV8GUwJOjiaYOVdc14oE",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=iBAZTAcZPP-YXbR_E6EpzF--8avZXw76P8oEs29yd2E",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
           "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=38Okt8uS2Eq2ZmE8nXt3d0NrDH0dXkBB9ZoqDCqUGbA",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=j7w0cIyTZ4d-dNqzkQlZg-mENLhveiqqIK5Emprz248",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -575,22 +582,22 @@
       "refusal": "capacity",
       "sequence": [
         {
-          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"oKGio6Slpqeoqaqr8VaIC5mKD6QE_s8Pmh_Cqhe2rGOm6j114a98O4XZL5E0M6I\",\"type\":\"sync\",\"version\":2}",
-          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=28d4afbb0388f7544a37dcb3c4b41b378347ea2a15fe70e40d3fa9d2ea45eaea mac=kHz5-IKIHF5IR0X9_XPE65gHf8m2yGwqmQlyNiZ99hU",
+          "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"exec cat\",\"env_names\":[],\"home\":\"scratch\",\"name\":\"one\"}],\"sealed\":\"NpI84Ubxw_xehcc4s0gGq9TbilQnklHY7JR1xEy0-oUCMAJwuxM\",\"type\":\"sync\",\"version\":2}",
+          "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=27670abce755ea58feac8ceec9c2025e5f690da532a3b053abd81bcaddf607db mac=z9UMA9NCaSF8-ZguK1jWqicNNyW5ZPfOJEpI3-GX1O0",
           "now": 1789305250000,
           "route": "control",
           "status": 200
         },
         {
           "body": "{\"argv\":[],\"e\":7,\"key\":\"a\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_0 body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=xn5a-EWtSypL0v0bsVdrQFvQV8GUwJOjiaYOVdc14oE",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_a body=b7f8b1e7631a0ba6e6a28900162fbc4d96a137847facd8396fa16f67d7103a11 mac=iBAZTAcZPP-YXbR_E6EpzF--8avZXw76P8oEs29yd2E",
           "now": 1789305250000,
           "route": "session",
           "status": 200
         },
         {
           "body": "{\"argv\":[],\"e\":7,\"key\":\"b\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"one\",\"type\":\"open\",\"version\":2}",
-          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_1 body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=38Okt8uS2Eq2ZmE8nXt3d0NrDH0dXkBB9ZoqDCqUGbA",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_b body=595ed67243f14d620ad0251b91d58d017f6394f8d5389a98643108651e10b733 mac=j7w0cIyTZ4d-dNqzkQlZg-mENLhveiqqIK5Emprz248",
           "now": 1789305250000,
           "read_body": true,
           "route": "session"
@@ -608,8 +615,15 @@
           "body": "{\"e\":7,\"idle_ms\":600000,\"lease_ms\":30000,\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"programs\":[{\"command\":\"npx -y @modelcontextprotocol/server-fetch\",\"env_names\":[\"API_TOKEN\"],\"home\":\"scratch\",\"name\":\"fetch\"}],\"sealed\":\"oKGio6Slpqeoqaqr4Z_CbI7SNl21l05G0ZMY9he2pWi3q28spvh8DqL_Uv8ABZqNP0qqBG7d5sO5HfZ2qgy4eXct5mqmKnYRFVg\",\"type\":\"sync\",\"version\":2}",
           "header": "v1 kind=control gen=3 seq=1 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 body=2dc98e3c2c7b7c319633c01cc2a99579088c9ee1d2611ceb35c942721521d30b mac=xFotCMR44gc9OjtGPnffyhHwhZbb2grWsAqgvYUrToQ",
           "now": 1789305250000,
+          "route": "control",
+          "status": 200
+        },
+        {
+          "body": "{\"argv\":[],\"e\":7,\"key\":\"fence\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"open\",\"version\":2}",
+          "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305250000 nonce=n_open_fence body=cdc5087defbdd2acd96200edbd1461a2ba18ac5d81c7afc34a03f492acdc98f5 mac=0yj4E8hjhg6HHIcNMrfw3XZsl92BprK9h0smaGhFIa0",
+          "now": 1789305250000,
           "read_body": true,
-          "route": "control"
+          "route": "session"
         }
       ]
     },

@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The backends suite's listing of its container and its home probe, with docker stubbed.
+"""The backends suite's listing of its container and its home probe, with docker stubbed, and its session client.
 
 A failed `docker exec` is no answer about the processes of the container or
 about whether a home is there: the listing and the probe fail the
 observation. Docker's refusal that the container is not running, or is
 restarting, is the one exception to the listing, and it is read from the call.
+
+The session client signs every session message as the wire's vectors do,
+writes an absent optional member as absent, and its MCP client, against a
+service stood in for here, initializes once, opens the session again and
+initializes afresh when a send finds it ended, and fails a request whose
+session ends before it is answered without sending it again.
 
 Usage: python3 -I tests/locus-backends-image/harness_test.py
 """
@@ -222,6 +228,104 @@ class ImageUserName(unittest.TestCase):
     def test_the_name_that_was_read_is_the_control(self):
         self.assertEqual(harness.image_user_name(self.lookup(0, "cyfr-pool-1:x:30001:30001::/home/x:/bin/sh\n"), 30001),
                          "cyfr-pool-1")
+
+
+OWNER = {"athanor": "ath_unit", "server": "mcp_unit", "e": 3}
+
+
+class Service:
+    """A backends service's session route as data: one program per session that answers MCP's lines."""
+
+    def __init__(self):
+        self.sessions = {}
+        self.opened = 0
+        self.received = []
+        self.end_on = None
+
+    def post(self, url, headers, body, timeout=60):
+        message = json.loads(body)
+        self.received.append(message)
+        kind = message["type"]
+        if kind == "open":
+            self.opened += 1
+            session = "ss_" + f"{self.opened:032x}"
+            self.sessions[session] = {"lines": [], "seq": 0, "running": True}
+            return 200, {"version": 2, "status": "running", "session": session, "resumed": False, "pty": False}, "bb"
+        state = self.sessions[message["session"]]
+        if kind == "send":
+            if not state["running"]:
+                return 200, {"version": 2, "status": "ended"}, "bb"
+            for line in message["lines"]:
+                request = json.loads(line)
+                if self.end_on and request.get("params", {}).get("name") == self.end_on:
+                    state["running"] = False
+                    continue
+                if "id" in request:
+                    state["seq"] += 1
+                    state["lines"].append({"seq": state["seq"], "text": json.dumps(
+                        {"jsonrpc": "2.0", "id": request["id"], "result": {"method": request["method"]}})})
+            return 200, {"version": 2, "status": "running"}, "bb"
+        if kind == "recv":
+            lines = [x for x in state["lines"] if x["seq"] > message["after"]]
+            return 200, {"version": 2, "lines": lines, "dropped": 0, "running": state["running"]}, "bb"
+        return 200, {"version": 2, "status": "closed"}, "bb"
+
+
+class Sessions(unittest.TestCase):
+    def setUp(self):
+        self.service = Service()
+        patch = mock.patch.object(harness, "post", self.service.post)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.c = harness.Controller("http://unit", bytes(32))
+        self.c.boot = "bb"
+
+    def test_a_session_message_names_its_signer_and_leaves_an_absent_member_absent(self):
+        request = self.c.sign_session(OWNER, {"type": "open", "program": "probe", "key": "k", "mode": "run",
+                                              "argv": []}, ts=1, nonce="n_1")
+        body = json.loads(request.body)
+        self.assertEqual((body["owner"], body["e"], body["version"]),
+                         ({"athanor": "ath_unit", "server": "mcp_unit"}, 3, harness.VERSION))
+        self.assertNotIn("home_id", body)
+        self.assertTrue(request.url.endswith(harness.ROUTES["session"]))
+        signing = harness.owner_key(bytes(32), "ath_unit", "mcp_unit", 1, 3)
+        fields = {"athanor": "ath_unit", "server": "mcp_unit", "generation": 1, "epoch": 3, "boot": "bb", "ts": 1,
+                  "nonce": "n_1"}
+        self.assertEqual(request.headers[harness.AUTH_HEADER], harness.invoke_header(signing, fields, request.body))
+
+    def test_a_program_names_only_the_members_it_has(self):
+        self.assertEqual(harness.program_wire(harness.probe()),
+                         {"name": "probe", "command": harness.PROBE, "env_names": [], "home": "scratch"})
+        kept = harness.program_wire(harness.probe(home="kept", home_max_bytes=7, login_command="login"))
+        self.assertEqual((kept["home"], kept["home_max_bytes"], kept["login_command"]), ("kept", 7, "login"))
+        self.assertNotIn("memory_bytes", kept)
+
+    def test_the_mcp_client_initializes_once_and_answers_a_call(self):
+        status, answer = self.c.call(OWNER, "probe__whoami", {})
+        self.assertEqual((status, answer["result"]), (200, {"method": "tools/call"}))
+        self.c.call(OWNER, "probe__whoami", {})
+        client = self.c.mcp(OWNER, "probe")
+        self.assertEqual((client.initializations, self.service.opened), (1, 1))
+        methods = [json.loads(line)["method"] for m in self.service.received if m["type"] == "send"
+                   for line in m["lines"]]
+        self.assertEqual(methods, ["initialize", "notifications/initialized", "tools/call", "tools/call"])
+
+    def test_a_send_that_finds_the_session_ended_opens_it_again_and_initializes_afresh(self):
+        self.c.call(OWNER, "probe__whoami", {})
+        client = self.c.mcp(OWNER, "probe")
+        self.service.sessions[client.session]["running"] = False
+        status, answer = self.c.call(OWNER, "probe__whoami", {})
+        self.assertEqual((status, answer["result"]), (200, {"method": "tools/call"}))
+        self.assertEqual((client.initializations, self.service.opened, client.resumed), (2, 2, False))
+
+    def test_a_session_that_ends_before_it_answers_fails_the_request_once(self):
+        self.service.end_on = "hog"
+        status, answer = self.c.call(OWNER, "probe__hog", {})
+        self.assertEqual((status, answer["ended"]), (200, "before_answer"))
+        calls = [line for m in self.service.received if m["type"] == "send" for line in m["lines"]
+                 if '"hog"' in line]
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(self.c.mcp(OWNER, "probe").session)
 
 
 if __name__ == "__main__":

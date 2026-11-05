@@ -133,7 +133,7 @@ func TestCheckMountsRefusesSharedWritableLocations(t *testing.T) {
 	}
 	good := []string{"/ overlay ro", homes + " tmpfs rw", attach + " tmpfs rw", queues + " mqueue rw"}
 
-	if err := CheckMounts(table(good...), homes, nobody); err != nil {
+	if err := CheckMounts(table(good...), homes, "", nobody); err != nil {
 		t.Fatalf("the compose mount table was refused: %v", err)
 	}
 
@@ -154,12 +154,48 @@ func TestCheckMountsRefusesSharedWritableLocations(t *testing.T) {
 		"a shared pseudo filesystem": {table(append(good, shared+" devpts rw")...), homes, nobody, ""},
 	}
 	for name, c := range cases {
-		err := CheckMounts(c.mounts, c.homeRoot, c.accounts)
+		err := CheckMounts(c.mounts, c.homeRoot, "", c.accounts)
 		switch {
 		case c.want == "" && err != nil:
 			t.Errorf("%s: refused: %v", name, err)
 		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 			t.Errorf("%s: got %v, want an error containing %q", name, err, c.want)
 		}
+	}
+}
+
+func TestCheckMountsExemptsTheKeptRootAndRequiresItWritable(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(name string, mode os.FileMode) string {
+		p := filepath.Join(dir, name)
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	homes := mk("homes", os.ModeSticky|0o733)
+	kept := mk("kept", os.ModeSticky|0o773)
+	queues := mk("mqueue", os.ModeSticky|0o777)
+	defer os.Chmod(kept, 0o700)
+	nobody := Accounts{UIDs: map[int]bool{}, GIDs: map[int]bool{}}
+	mounts := []Mount{
+		{Point: "/", FSType: "overlay"},
+		{Point: homes, FSType: "tmpfs", Writable: true},
+		{Point: kept, FSType: "ext4", Writable: true},
+		{Point: queues, FSType: "mqueue", Writable: true},
+	}
+	if err := CheckMounts(mounts, homes, kept, nobody); err != nil {
+		t.Fatalf("a kept root on its volume was refused: %v", err)
+	}
+	// Without the kept root named, its others-writable mount is a shared one.
+	if err := CheckMounts(mounts, homes, "", nobody); err == nil || !strings.Contains(err.Error(), "writable by pooled uids") {
+		t.Fatalf("an unnamed others-writable mount: %v", err)
+	}
+	// A kept root on no writable mount is refused.
+	if err := CheckMounts([]Mount{mounts[0], mounts[1], mounts[3]}, homes, kept, nobody); err == nil || !strings.Contains(err.Error(), "kept-homes root") {
+		t.Fatalf("a kept root on no mount: %v", err)
 	}
 }

@@ -126,18 +126,10 @@ defmodule Locus.Backends.AuthTest do
     body(socket, buffer <> more, length)
   end
 
-  defp assert_backends_unauthorized({status, body}, kind, name) do
+  # Either route refuses an unauthenticated message alike.
+  defp assert_backends_unauthorized({status, body}, _kind, name) do
     assert status == 401, name
-
-    case kind do
-      "control" ->
-        assert body == LB.encode_refusal(:unauthorized), name
-
-      "invoke" ->
-        assert %{"error" => %{"code" => -33_001, "message" => "unauthorized"}} =
-                 Jason.decode!(body),
-               name
-    end
+    assert body == LB.encode_refusal(:unauthorized), name
   end
 
   test "the backends service refuses every header its vectors reject, the builds ones among them",
@@ -151,7 +143,7 @@ defmodule Locus.Backends.AuthTest do
     for %{"name" => name, "kind" => kind, "header" => header, "body" => body} = vector <-
           @backends["auth_rejected"] do
       at(ctx, vector["now"])
-      route = if kind == "control", do: "control", else: "mcp"
+      route = if kind == "control", do: "control", else: "session"
 
       ctx.backends
       |> post(@backends["routes"][route], body, [{@backends["auth_header"], header}])
@@ -191,7 +183,7 @@ defmodule Locus.Backends.AuthTest do
              ])
 
     # A backends invoke, presented to the builds service.
-    invoke = @backends["invoke"]
+    invoke = @backends["open"]
     at(ctx, invoke["fields"]["ts"])
 
     assert {401, [{:refusal, {:unauthorized, :malformed}, []}]} =
@@ -203,7 +195,7 @@ defmodule Locus.Backends.AuthTest do
     request = @builds["request"]
     at(ctx, request["ts"])
 
-    for {route, kind} <- [{"control", "control"}, {"mcp", "invoke"}] do
+    for {route, kind} <- [{"control", "control"}, {"session", "invoke"}] do
       ctx.backends
       |> post(@backends["routes"][route], request["body"], [{"x-cyfr-auth", request["header"]}])
       |> assert_backends_unauthorized(kind, route)

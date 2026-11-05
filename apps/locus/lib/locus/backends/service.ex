@@ -3,7 +3,6 @@
 
 defmodule Locus.Backends.Service do
   @max_health_bytes 4096
-  @tools_ttl_ms 60_000
 
   @moduledoc """
   The backends service: the listener side of `Prima.LocusBackends`, and
@@ -16,8 +15,9 @@ defmodule Locus.Backends.Service do
   ## Health
 
   `POST /locus/v1/backends/health` answers without authentication: a
-  `{"version": 1}` body, read within #{@max_health_bytes} bytes, is
-  answered with the protocol version and the release.
+  `{"version": 2}` body (`Prima.LocusBackends.read_health/1`), read within
+  #{@max_health_bytes} bytes, is answered with the protocol version and the
+  release; a body at another version is refused `version`.
 
   ## A control message, in order
 
@@ -40,13 +40,10 @@ defmodule Locus.Backends.Service do
      encoded as `encode_answer/2` encodes it, and a status answer past
      `max_status_answer_bytes/0` is refused whole as `status_too_large`.
 
-  ## An MCP request, in order
+  ## A session message, in order
 
-  Every answer carries `mcp-protocol-version` and the request's
-  `x-request-id` (one is minted for a request without one).
-
-  1. **The header**, verified under the key of the owner it names:
-     `unauthorized` is JSON-RPC `-33001` at 401.
+  1. **The header**, verified as an invoke under the key of the owner it
+     names: `unauthorized`.
   2. **The lifetime**: the header's `boot` must be this service's, else
      `stale_boot`.
   3. **The owner**, at exactly the header's generation and epoch
@@ -55,26 +52,21 @@ defmodule Locus.Backends.Service do
   4. **The nonce**: one seen at this owner version within its window is
      `replay`; an owner version holding `max_nonces/0` live nonces is
      `nonce_cache_full` (503).
-  5. **The body**, read within `max_mcp_bytes/0` (JSON-RPC `-32600` at
-     413), must be the one the header hashed (`-33001` at 401).
+  5. **The body**, read within `max_session_bytes/0` (`too_large`, 413),
+     must be the one the header hashed (`unauthorized`).
   6. **The owner and the nonce again**, and the nonce recorded: only a
      request whose body was the one signed records one.
-  7. **The message**: not JSON is `-32700`, not one object `-32600`, both
-     at 400; one without an `id` is a notification, answered `202`.
-  8. **Conformance**: the `mcp-protocol-version` header and the body's
-     `_meta` version present, equal and this revision (`-32020`, or
-     `-32022` naming the supported revision), the client capabilities
-     present (`-32602`), `mcp-method` naming the body's method and, for
-     `tools/call`, `mcp-name` its tool (`-32020`), all at 400.
-  9. **The method**: `server/discover`, `tools/list` (the owner's tools,
-     each `<backend>__<tool>`) and `tools/call`; any other is `-32601` at
-     404. A tool the backend refuses is an `isError` result; a fault of
-     this service's is `-32603` at 500.
+  7. **The message**, read strictly (`read_session/1`), naming the owner
+     and epoch its header names (`bad_request`).
+  8. **The session**: `open` through the owners (`Locus.Backends.Owners.open/3`);
+     `send`, `recv` and `close` to the session the owners name
+     (`unknown_session` for one they do not hold), so a `recv` that waits
+     holds its session and nothing else.
 
   Every refusal made before the body is read closes the connection, so
-  the body is never read. Everything an owner's backends produce is
-  masked with the owner's secret values before it leaves. Nothing a
-  request carries is logged: a refusal is logged by its code.
+  the body is never read. What a session answers is masked with its
+  owner's secret values before it leaves. Nothing a request carries is
+  logged: a refusal is logged by its code.
   """
 
   use Plug.Router, copy_opts_to_assign: :service_opts
@@ -84,11 +76,9 @@ defmodule Locus.Backends.Service do
   alias Locus.Backends.{Backend, Owners}
   alias Locus.Listener
   alias Prima.LocusBackends
-  alias Prima.MCP.Protocol, as: MCPProtocol
 
   @nonces __MODULE__.Nonces
   @json "application/json"
-  @server_name "cyfr-locus"
 
   plug(:match)
   plug(:dispatch)
@@ -124,8 +114,7 @@ defmodule Locus.Backends.Service do
     case {conn.method, LocusBackends.operation(conn.request_path)} do
       {"POST", {:ok, :health}} -> health(conn)
       {"POST", {:ok, :control}} -> control(conn, Listener.now(conn))
-      {"POST", {:ok, :mcp}} -> mcp(conn, Listener.now(conn))
-      {_method, {:ok, :mcp}} -> not_allowed(conn)
+      {"POST", {:ok, :session}} -> session(conn, Listener.now(conn))
       _ -> refuse(closing(conn), :bad_request)
     end
   end
@@ -144,21 +133,18 @@ defmodule Locus.Backends.Service do
   defp health(conn) do
     case read(conn, @max_health_bytes) do
       {:ok, body, conn} ->
-        case Jason.decode(body) do
-          {:ok, %{"version" => 1} = wire} when map_size(wire) == 1 ->
+        case LocusBackends.read_health(body) do
+          :ok ->
             answer(
               conn,
               200,
               Jason.encode!(%{"version" => LocusBackends.version(), "release" => release()})
             )
 
-          {:ok, %{"version" => version}} when version != 1 ->
-            refuse(conn, LocusBackends.refusal_for({:version, version}))
+          {:error, {:version, _presented} = error} ->
+            refuse(conn, LocusBackends.refusal_for(error))
 
-          {:ok, %{} = wire} when not is_map_key(wire, "version") ->
-            refuse(conn, LocusBackends.refusal_for({:version, nil}))
-
-          _ ->
+          {:error, _error} ->
             refuse(conn, :bad_request)
         end
 
@@ -275,102 +261,75 @@ defmodule Locus.Backends.Service do
 
   defp open_env(_key, _fields, _message, _boot), do: nil
 
-  # ————— MCP —————
+  # ————— sessions —————
 
-  defp mcp(conn, now) do
-    request_id =
-      case get_req_header(conn, "x-request-id") do
-        [id | _] when id != "" -> id
-        _ -> request_id()
-      end
-
-    conn =
-      conn
-      |> put_resp_header(MCPProtocol.protocol_version_header(), MCPProtocol.version())
-      |> put_resp_header("x-request-id", request_id)
-
-    with {:ok, key} <- rpc_key(conn),
-         {:ok, invoke, body_hash} <- rpc_verified(conn, key, now),
+  defp session(conn, now) do
+    with {:ok, key} <- known(conn, key(conn)),
+         {:ok, invoke, body_hash} <- verified(conn, :invoke, key, now),
          :ok <- lifetime(conn, invoke.boot == conn.assigns.boot),
-         {:ok, _backends} <- owner(closing(conn), invoke),
+         :ok <- owner(closing(conn), invoke),
          :ok <- nonce(closing(conn), invoke, now, false),
-         {:ok, body, conn} <- rpc_body(conn),
-         :ok <- rpc_hashed(conn, body_hash, body),
-         {:ok, owner} <- owner(conn, invoke),
+         {:ok, body, conn} <- body(conn, LocusBackends.max_session_bytes()),
+         :ok <- hashed(conn, :invoke, body_hash, body),
+         :ok <- owner(conn, invoke),
          :ok <- nonce(conn, invoke, now, true),
-         {:ok, message} <- rpc_message(conn, body) do
-      rpc(conn, owner, message)
+         {:ok, message} <- readable(conn, LocusBackends.read_session(body)),
+         :ok <- named(conn, message, invoke),
+         {:ok, answer} <- served(conn, invoke, message) do
+      case LocusBackends.encode_session_answer(message.type, answer) do
+        {:ok, text} ->
+          answer(conn, 200, text)
+
+        {:error, _unencodable} ->
+          Logger.error("[Locus.Backends.Service] a #{message.type} answer did not encode")
+          refuse(conn, :internal)
+      end
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
-      {:rpc, conn, status, code, text} -> rpc_error(conn, status, nil, code, text)
     end
-  end
-
-  defp request_id do
-    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
-
-    [<<a::32>>, <<b::16>>, <<c::16>>, <<d::16>>, <<e::48>>]
-    |> Enum.map_join("-", &Base.encode16(&1, case: :lower))
-  end
-
-  defp rpc_key(conn) do
-    case key(conn) do
-      {:ok, key} -> {:ok, key}
-      :error -> unauthorized(conn)
-    end
-  end
-
-  defp rpc_verified(conn, key, now) do
-    with {:ok, header} <- Listener.auth_header(conn),
-         {:ok, invoke, body_hash} <- LocusBackends.verify_header(:invoke, key, header, now) do
-      {:ok, invoke, body_hash}
-    else
-      _refused -> unauthorized(conn)
-    end
-  end
-
-  # Refused before its body is read, the connection closes; with the body
-  # read and not the one signed, it need not.
-  defp unauthorized(conn, body \\ :unread) do
-    Logger.warning("[Locus.Backends.Service] an MCP request refused: unauthorized")
-    conn = if body == :unread, do: closing(conn), else: conn
-    {:rpc, conn, 401, -33_001, "unauthorized"}
   end
 
   defp owner(conn, invoke) do
     case Owners.admit(owners(conn), invoke) do
-      {:ok, owner} -> {:ok, owner}
+      :ok -> :ok
       {:error, code} -> {:refused, conn, code}
     end
   end
 
-  defp rpc_body(conn) do
-    case read(conn, LocusBackends.max_mcp_bytes()) do
-      {:ok, body, conn} -> {:ok, body, conn}
-      {:too_large, conn} -> {:rpc, conn, 413, -32_600, "Request body too large"}
-      {:unread, conn} -> {:rpc, conn, 400, -32_600, "The request body could not be read"}
+  # A session message names the owner and epoch its signature names.
+  defp named(conn, %{owner: owner, e: e}, invoke) do
+    if owner == %{athanor: invoke.athanor, server: invoke.server} and e == invoke.epoch,
+      do: :ok,
+      else: {:refused, conn, :bad_request}
+  end
+
+  defp served(conn, invoke, %{type: :open} = message) do
+    case Owners.open(owners(conn), invoke, message) do
+      {:ok, answer} -> {:ok, answer}
+      {:error, code} -> {:refused, conn, code}
     end
   end
 
-  defp rpc_hashed(conn, body_hash, body) do
-    case LocusBackends.verify_body(:invoke, body_hash, body) do
-      :ok -> :ok
-      {:error, :bad_mac} -> unauthorized(conn, :read)
+  defp served(conn, invoke, message) do
+    case Owners.session(owners(conn), invoke, message.session) do
+      {:ok, pid, _secrets} -> reach(conn, pid, message)
+      {:error, code} -> {:refused, conn, code}
     end
   end
 
-  defp rpc_message(conn, body) do
-    case Jason.decode(body) do
-      {:ok, %{} = message} ->
-        {:ok, message}
+  # A session whose process record is gone has ended and holds no line.
+  defp reach(_conn, nil, %{type: :send}), do: {:ok, %{status: :ended}}
+  defp reach(_conn, nil, %{type: :close}), do: {:ok, %{status: :closed}}
+  defp reach(_conn, nil, %{type: :recv}), do: {:ok, %{lines: [], dropped: 0, running: false}}
 
-      {:ok, _other} ->
-        # One JSON-RPC request or notification; a batch has no handler.
-        {:rpc, conn, 400, -32_600, "Expected a single JSON-RPC message"}
-
-      {:error, _} ->
-        {:rpc, conn, 400, -32_700, "Parse error: body is not valid JSON"}
+  defp reach(conn, pid, message) do
+    case message.type do
+      :send -> {:ok, %{status: Backend.send_lines(pid, message.lines)}}
+      :recv -> {:ok, Backend.recv(pid, message.after, message.max_wait_ms)}
+      :close -> with :ok <- Backend.close(pid), do: {:ok, %{status: :closed}}
     end
+  catch
+    :exit, _reason -> reach(conn, nil, message)
   end
 
   # ————— nonces —————
@@ -415,237 +374,6 @@ defmodule Locus.Backends.Service do
     if :ets.insert_new(@nonces, {row, ts + LocusBackends.nonce_window_ms()}),
       do: :ok,
       else: {:error, :replay}
-  end
-
-  # ————— JSON-RPC —————
-
-  defp rpc(conn, owner, message) do
-    if Map.has_key?(message, "id") do
-      id = message["id"]
-
-      case conformance(conn, message) do
-        nil -> method(conn, owner, message, id)
-        {code, text, data} -> rpc_error(conn, 400, id, code, text, data)
-      end
-    else
-      # A notification: answered, with nothing to answer.
-      send_resp(conn, 202, "")
-    end
-  end
-
-  defp method(conn, owner, message, id) do
-    case handle(owner, message) do
-      {:ok, result} ->
-        result = LocusBackends.mask(result, owner.secrets)
-        body = %{"jsonrpc" => "2.0", "id" => id, "result" => stamp(result)}
-        answer(conn, 200, Jason.encode!(body))
-
-      {:unknown, method} ->
-        # 404, not 400: a client that speaks both eras reads the status to
-        # tell a modern server missing one method from a legacy server
-        # missing the endpoint.
-        rpc_error(conn, 404, id, -32_601, "unsupported method: #{spell(method)}")
-
-      {:refused, text} ->
-        error = %{"code" => -32_603, "message" => LocusBackends.mask(text, owner.secrets)}
-        answer(conn, 200, Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "error" => error}))
-    end
-  rescue
-    exception ->
-      Logger.error(
-        "[Locus.Backends.Service] an MCP request failed: " <>
-          Prima.LoggerContext.shape(exception)
-      )
-
-      rpc_error(conn, 500, id, -32_603, "internal error")
-  end
-
-  defp handle(_owner, %{"method" => "server/discover"}) do
-    {:ok,
-     %{
-       "supportedVersions" => MCPProtocol.supported(),
-       "capabilities" => %{"tools" => %{"listChanged" => false}, "extensions" => %{}},
-       "instructions" =>
-         "Runs this server's stdio MCP backends; every backend tool appears as " <>
-           "`<backend>__<tool>`.",
-       "ttlMs" => @tools_ttl_ms,
-       "cacheScope" => "private"
-     }}
-  end
-
-  defp handle(owner, %{"method" => "tools/list"}),
-    do: {:ok, %{"tools" => tools(owner), "ttlMs" => @tools_ttl_ms, "cacheScope" => "private"}}
-
-  defp handle(owner, %{"method" => "tools/call"} = message) do
-    case message["params"] do
-      %{"name" => name} = params when is_binary(name) and name != "" ->
-        {:ok, call(owner, name, params["arguments"])}
-
-      _ ->
-        {:refused, "tools/call: missing 'name'"}
-    end
-  end
-
-  defp handle(_owner, message), do: {:unknown, message["method"]}
-
-  # A ready or idle backend's catalogue, as it last listed it, each tool
-  # named for its backend.
-  defp tools(owner) do
-    for {backend, pid} <- owner.backends, pid != nil, tool <- listed(pid) do
-      description =
-        case tool["description"] do
-          text when is_binary(text) and text != "" -> "[#{backend}] #{text}"
-          _ -> "[#{backend}]"
-        end
-
-      %{
-        "name" => "#{backend}__#{tool["name"]}",
-        "description" => description,
-        "inputSchema" => tool["inputSchema"] || %{"type" => "object"}
-      }
-    end
-  end
-
-  defp listed(pid) do
-    for %{} = tool <- Backend.list_tools(pid), do: tool
-  catch
-    :exit, _reason -> []
-  end
-
-  # A tool's answer, or its refusal as a tool's error.
-  defp call(owner, name, arguments) do
-    with [backend, tool] when backend != "" <- String.split(name, "__", parts: 2),
-         {^backend, pid} <- List.keyfind(owner.backends, backend, 0) do
-      called(backend, pid, tool, arguments)
-    else
-      _ -> tool_error("unknown tool: #{name}")
-    end
-  end
-
-  defp called(backend, nil, _tool, _arguments),
-    do: tool_error("backend '#{backend}' not ready: spawning")
-
-  defp called(_backend, pid, tool, arguments) do
-    case Backend.call_tool(pid, tool, arguments) do
-      {:ok, %{} = result} -> result
-      {:ok, _other} -> %{}
-      {:error, {:tool_error, text}} -> tool_error(text)
-    end
-  catch
-    :exit, _reason -> tool_error("tool call failed")
-  end
-
-  defp tool_error(text),
-    do: %{"content" => [%{"type" => "text", "text" => text}], "isError" => true}
-
-  # Every result declares its type and this service's identity.
-  defp stamp(result) do
-    meta =
-      case result["_meta"] do
-        %{} = meta -> meta
-        _ -> %{}
-      end
-
-    info = %{"name" => @server_name, "version" => release()}
-
-    result
-    |> Map.put("resultType", MCPProtocol.result_type(:complete))
-    |> Map.put("_meta", Map.put(meta, MCPProtocol.meta_server_info_key(), info))
-  end
-
-  # The per-request checks that replace the handshake: nil when the request
-  # is well formed, or the JSON-RPC error to answer with.
-  defp conformance(conn, message) do
-    meta =
-      case message do
-        %{"params" => %{"_meta" => %{} = meta}} -> meta
-        _ -> %{}
-      end
-
-    header = header(conn, MCPProtocol.protocol_version_header())
-    declared = meta[MCPProtocol.meta_protocol_version_key()]
-    version = MCPProtocol.version()
-
-    cond do
-      header == nil ->
-        {-32_020, "Missing required MCP-Protocol-Version header.", nil}
-
-      declared in [nil, "", false] ->
-        {-32_020, "Missing required #{MCPProtocol.meta_protocol_version_key()} in params._meta.",
-         nil}
-
-      header != declared ->
-        {-32_020,
-         "MCP-Protocol-Version header (#{header}) does not match " <>
-           "#{MCPProtocol.meta_protocol_version_key()} (#{spell(declared)}).", nil}
-
-      header != version ->
-        {-32_022, "Unsupported protocol version #{header}.",
-         %{"supported" => MCPProtocol.supported(), "requested" => header}}
-
-      meta[MCPProtocol.meta_client_capabilities_key()] == nil ->
-        {-32_602,
-         "Missing required #{MCPProtocol.meta_client_capabilities_key()} in params._meta.", nil}
-
-      not is_map(meta[MCPProtocol.meta_client_capabilities_key()]) ->
-        {-32_602, "#{MCPProtocol.meta_client_capabilities_key()} must be an object.", nil}
-
-      header(conn, MCPProtocol.method_header()) != message["method"] ->
-        {-32_020,
-         "Mcp-Method header (#{header(conn, MCPProtocol.method_header()) || "absent"}) " <>
-           "does not match the request body.", nil}
-
-      true ->
-        subject(conn, message)
-    end
-  end
-
-  # `tools/call` names its subject in `params.name`; this service serves no
-  # resources or prompts, so nothing else names one.
-  defp subject(conn, %{"method" => "tools/call", "params" => %{"name" => name}})
-       when is_binary(name) do
-    named =
-      case header(conn, MCPProtocol.name_header()) do
-        nil ->
-          nil
-
-        value ->
-          case MCPProtocol.decode_header_value(value) do
-            {:ok, decoded} -> decoded
-            :error -> nil
-          end
-      end
-
-    if named == name,
-      do: nil,
-      else:
-        {-32_020, "Mcp-Name header (#{named || "absent"}) does not match the request body.", nil}
-  end
-
-  defp subject(_conn, _message), do: nil
-
-  defp header(conn, name) do
-    case get_req_header(conn, name) do
-      [value | _] -> value
-      [] -> nil
-    end
-  end
-
-  defp spell(value) when is_binary(value), do: value
-  defp spell(value), do: Jason.encode!(value)
-
-  defp not_allowed(conn) do
-    conn
-    |> put_resp_header(MCPProtocol.protocol_version_header(), MCPProtocol.version())
-    |> put_resp_header("allow", "POST")
-    |> closing()
-    |> rpc_error(405, nil, -32_600, "#{conn.method} is not supported on the MCP endpoint.")
-  end
-
-  defp rpc_error(conn, status, id, code, text, data \\ nil) do
-    error = %{"code" => code, "message" => text}
-    error = if data == nil, do: error, else: Map.put(error, "data", data)
-    answer(conn, status, Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "error" => error}))
   end
 
   # ————— bodies and answers —————

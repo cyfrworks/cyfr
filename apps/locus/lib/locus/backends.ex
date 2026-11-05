@@ -3,9 +3,10 @@
 
 defmodule Locus.Backends do
   @moduledoc """
-  The backends service: the stdio MCP servers CYFR registers, one owner
-  per athanor and server row, each backend a long-lived process under the
-  keeper, served over `Prima.LocusBackends`. This module is its facade:
+  The backends service: the programs CYFR registers, one owner per
+  athanor and `mcp_servers` row, each session of a program a long-lived
+  process under the keeper whose lines go to and from its owner, served
+  over `Prima.LocusBackends`. This module is its facade:
   the children `Locus.Application` starts on a node that holds a backends
   key, and the address its listener serves on as `Locus.Config` reads it.
   Nothing
@@ -14,12 +15,12 @@ defmodule Locus.Backends do
 
   The children, in dependency order under the application's
   `:rest_for_one` tree: the owners (`Locus.Backends.Owners`), the
-  supervisor every backend runs under (`Locus.Backends.BackendSupervisor`,
-  whose children are never restarted: a backend restarts its own process,
-  and an owner that restarts forgets its backends), the tick
+  supervisor every session runs under (`Locus.Backends.BackendSupervisor`,
+  whose children are never restarted: an owner's next open starts a
+  program again, and an owner that restarts forgets its sessions), the tick
   (`Locus.Backends.LeaseSweeper`), and the listener
   (`Locus.Backends.Service`). The owners restarting restart everything
-  after them, so no backend outlives the table that accounts for it.
+  after them, so no session outlives the table that accounts for it.
   """
 
   alias Locus.Backends.{LeaseSweeper, Owners, Service}

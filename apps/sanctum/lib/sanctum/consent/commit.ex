@@ -1946,7 +1946,15 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # A need the component reads itself takes a disclosed entry of the
-  # athanor; a share is never disclosed.
+  # athanor; a share is never disclosed. A need met by mounting is neither
+  # disclosed nor attached: its own login entry is admitted as it is, and a
+  # share of one is refused, since a recipient's use of a shared login
+  # entry is not built.
+  defp check_disclosure(%{source: "share"}, %{kind: "login"}, _need),
+    do: {:error, {:not_built, :shared_login}}
+
+  defp check_disclosure(_bound, %{kind: "login"}, _need), do: :ok
+
   defp check_disclosure(bound, declared_need, need) do
     reads_itself? =
       declared_need == nil or Prima.Manifest.Needs.disclose_only?(declared_need) or
